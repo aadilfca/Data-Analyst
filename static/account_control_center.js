@@ -446,7 +446,24 @@ function accSetTab(tabName) {
     if (tabName === 'financial' && !accFinancialLoaded) accLoadFinancialCategories().catch(function (error) { accSetFinancialGridState(error.message, true); });
     if (tabName === 'notes' && !accNotesLoaded) accLoadNoteCategories().catch(function (error) { accSetNotesGridState(error.message, true); });
 }
+function accSetTreasuryGuidance(isOpen) {
+    const toggle = accElement('accTreasuryGuidanceToggle');
+    const guidance = accElement('accTreasuryGuidance');
+    if (!toggle || !guidance) return;
+    guidance.hidden = !isOpen;
+    toggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+}
+function accBindTreasuryGuidance() {
+    const toggle = accElement('accTreasuryGuidanceToggle');
+    const close = accElement('accTreasuryGuidanceClose');
+    const guidance = accElement('accTreasuryGuidance');
+    if (!toggle || !close || !guidance) return;
+    toggle.addEventListener('click', function () { accSetTreasuryGuidance(guidance.hidden); });
+    close.addEventListener('click', function () { accSetTreasuryGuidance(false); toggle.focus(); });
+    document.addEventListener('keydown', function (event) { if (event.key === 'Escape' && !guidance.hidden) { accSetTreasuryGuidance(false); toggle.focus(); } });
+}
 function accBindEvents() {
+    accBindTreasuryGuidance();
     document.querySelectorAll('[data-acc-tab]').forEach(function (tab) { tab.addEventListener('click', function () { accSetTab(tab.dataset.accTab); }); });
     accElement('accAccountFilter').addEventListener('input', accRenderRows);
     accElement('accAccountRows').addEventListener('change', function (event) { accHandleWorkstreamChange(event); });

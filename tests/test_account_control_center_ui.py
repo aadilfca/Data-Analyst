@@ -121,6 +121,13 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     page.goto("{}/static/account_control_center.html".format(static_server), wait_until="load")
     page.wait_for_selector("#accAccountRows .acc2-workstream")
     assert page.locator("#accSourceInfo").text_content() == "Source: January Trial Balance.xlsx - 2026-01-31"
+    assert page.locator("#accTreasuryGuidance").is_hidden()
+    page.locator("#accTreasuryGuidanceToggle").click()
+    assert page.locator("#accTreasuryGuidance").is_visible()
+    assert "credit" in page.locator("#accTreasuryGuidance").text_content().lower()
+    assert "debit" in page.locator("#accTreasuryGuidance").text_content().lower()
+    page.locator("#accTreasuryGuidanceClose").click()
+    assert page.locator("#accTreasuryGuidance").is_hidden()
     assert page.locator("#accAccountRows tr").count() == 4
     assert page.locator("select[data-acc-code='10-15-115-10-0001']").input_value() == "cash"
     assert page.locator("select[data-acc-code='20-15-50'] option:checked").text_content() == "Mixed assignments - choose one"

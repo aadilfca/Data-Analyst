@@ -4,18 +4,15 @@
 
 // API_BASE is defined globally in client_context.js
 
-// key   - category name exactly as stored/returned by the server (client_voucher_prefixes
-//         .category / GET response keys), e.g. "Cash Payment". Contains spaces.
-// field - Python-identifier-safe field name expected by VoucherPrefixesUpdate on PUT
-//         (routers/clients.py), e.g. "cash_payment".
-// id    - id-safe prefix used to build this category's DOM element ids, e.g. "cashPayment".
+// key   - category name exactly as stored/returned by the server.
+// field - Python-identifier-safe field name expected by VoucherPrefixesUpdate.
+// id    - id-safe prefix used to build this category's DOM element ids.
 const CATEGORIES = [
-    { key: 'Cash Payment', field: 'cash_payment', id: 'cashPayment' },
-    { key: 'Cash Receipt', field: 'cash_receipt', id: 'cashReceipt' },
-    { key: 'Bank Payment', field: 'bank_payment', id: 'bankPayment' },
-    { key: 'Bank Receipt', field: 'bank_receipt', id: 'bankReceipt' },
     { key: 'Journal', field: 'journal', id: 'journal' },
 ];
+
+// Journal is the only voucher-prefix category configured in Client Settings.
+const EDITABLE_CATEGORIES = CATEGORIES.filter(category => category.key === 'Journal');
 
 // In-memory prefix state per category (keyed by category.key), populated by
 // loadClientSettings() and mutated by addPrefix()/removePrefix() — sent to the
@@ -98,7 +95,7 @@ function renderPrefixList(category) {
 }
 
 function renderAllPrefixLists() {
-    CATEGORIES.forEach(renderPrefixList);
+    EDITABLE_CATEGORIES.forEach(renderPrefixList);
 }
 
 // ---------- ADD / REMOVE ----------
@@ -163,7 +160,7 @@ async function loadClientSettings() {
         const client = await clientRes.json();
         const prefixes = await prefixesRes.json();
 
-        clientNameHeading.textContent = 'Voucher prefix configuration for ' + client.client_name;
+        clientNameHeading.textContent = 'Journal voucher prefix configuration for ' + client.client_name;
 
         CATEGORIES.forEach(category => {
             prefixState[category.key] = prefixes[category.key] || [];
@@ -181,9 +178,7 @@ async function saveSettings() {
     try {
         window.LoadingUI.showSpinner(saveBtn, 'Saving');
 
-        // Server expects VoucherPrefixesUpdate field names (category.field, e.g.
-        // "cash_payment"), not the display category names (category.key) prefixState is
-        // keyed by — those contain spaces and aren't valid Pydantic field names.
+        // Server expects the Journal field name used by VoucherPrefixesUpdate.
         const payload = {};
         CATEGORIES.forEach(category => {
             payload[category.field] = prefixState[category.key];
@@ -210,7 +205,7 @@ async function saveSettings() {
 }
 
 // ---------- WIRE UP EVENT LISTENERS ----------
-CATEGORIES.forEach(category => {
+EDITABLE_CATEGORIES.forEach(category => {
     addBtnEl(category.id).addEventListener('click', () => addPrefix(category));
     inputEl(category.id).addEventListener('keydown', function(e) {
         if (e.key === 'Enter') {

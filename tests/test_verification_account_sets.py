@@ -12,46 +12,32 @@ from routers import verification
 
 
 class TreasuryRoutingTests(unittest.TestCase):
-    def test_published_set_is_used_before_prefixes(self):
-        published = {
-            "set_key": "cash_accounts",
-            "version_number": 3,
-            "accounts": [{"account_code": "10-15-115-10-0001", "account_name": "CASH IN HAND"}],
-        }
-        with patch.object(
-            verification,
-            "get_published_account_set_leaf_accounts",
-            return_value=published,
-        ), patch.object(verification, "get_client_voucher_prefixes_pg") as prefixes:
-            routing = verification.get_treasury_routing(7, "cash")
+    def test_cash_and_bank_require_account_control_assignments(self):
+        with patch.object(verification, "get_account_control_routing", return_value=None), patch.object(
+            verification, "get_published_account_set_leaf_accounts"
+        ) as legacy:
+            cash_routing = verification.get_treasury_routing(7, "cash")
+            bank_routing = verification.get_treasury_routing(7, "bank")
 
-        self.assertEqual(routing["mode"], "account_set")
-        self.assertEqual(routing["account_codes"], {"10-15-115-10-0001"})
-        self.assertEqual(routing["version_number"], 3)
-        prefixes.assert_not_called()
+        self.assertEqual(cash_routing, {"mode": "not_configured", "workstream": "cash", "account_codes": set()})
+        self.assertEqual(bank_routing, {"mode": "not_configured", "workstream": "bank", "account_codes": set()})
+        legacy.assert_not_called()
 
-    def test_prefixes_remain_the_safe_fallback_when_no_set_is_published(self):
-        configured = {
-            "Cash Payment": ["CPV"],
-            "Cash Receipt": ["CRV"],
-            "Bank Payment": ["BPV"],
-            "Bank Receipt": ["BRV"],
-        }
-        with patch.object(
-            verification,
-            "get_published_account_set_leaf_accounts",
-            return_value=None,
-        ), patch.object(
-            verification,
-            "get_client_voucher_prefixes_pg",
-            return_value=configured,
+    def test_cashbook_discovery_reports_setup_required_without_an_assignment(self):
+        with patch.object(verification, "execute_query_pg", return_value=[{"id": 7}]), patch.object(
+            verification, "get_account_control_routing", return_value=None
         ):
-            routing = verification.get_treasury_routing(7, "cash")
+            result = verification.get_cashbooks(7, "2026-06-01", "2026-06-30", category_group="cash")
 
-        self.assertEqual(routing, {
-            "mode": "voucher_prefix",
-            "prefixes": {"Cash Payment": ["CPV"], "Cash Receipt": ["CRV"]},
-        })
+        self.assertEqual(result, {"cashbooks": [], "count": 0, "setup_required": True})
+
+    def test_cash_session_cannot_start_without_an_assignment(self):
+        with patch.object(verification, "execute_query_pg", return_value=[{"id": 7}]), patch.object(
+            verification, "get_account_control_routing", return_value=None
+        ), self.assertRaises(verification.HTTPException) as error:
+            verification.start_verification_session(7, "Cash in Hand", "2026-06-01", "2026-06-30", session_type="cash")
+
+        self.assertIn("Account Control Centre", error.exception.detail)
 
     def test_control_centre_lookup_queries_only_published_versions(self):
         calls = []
@@ -199,17 +185,15 @@ class SimplifiedAccountControlRoutingTests(unittest.TestCase):
         self.assertEqual(routing["account_codes"], {"10-15-115-10-0001", "10-15-115-10-0003"})
         query.assert_called_once()
 
-    def test_simplified_cash_assignments_take_priority_over_legacy_sets_and_prefixes(self):
+    def test_simplified_cash_assignments_are_the_only_treasury_source(self):
         assigned = {"mode": "account_control", "account_codes": {"10-15-115-10-0001"}}
         with patch.object(verification, "get_account_control_routing", return_value=assigned), patch.object(
             verification, "get_published_account_set_leaf_accounts"
-        ) as legacy, patch.object(verification, "get_client_voucher_prefixes_pg") as prefixes:
+        ) as legacy:
             routing = verification.get_treasury_routing(7, "cash")
 
         self.assertIs(routing, assigned)
         legacy.assert_not_called()
-        prefixes.assert_not_called()
-
     def test_simplified_vendor_assignments_take_priority_over_legacy_sets(self):
         assigned = {"mode": "account_control", "account_codes": {"20-15-50-0001"}}
         with patch.object(verification, "get_account_control_routing", return_value=assigned), patch.object(
@@ -308,10 +292,9 @@ class VerificationTableAmountTests(unittest.TestCase):
 
 class LocalVendorRoutingFoundationTests(unittest.TestCase):
     def test_local_vendor_requires_a_published_set(self):
-        with patch.object(verification, 'get_published_account_set_leaf_accounts', return_value=None), patch.object(verification, 'get_client_voucher_prefixes_pg') as prefixes:
+        with patch.object(verification, 'get_published_account_set_leaf_accounts', return_value=None):
             routing = verification.get_local_vendor_routing(7)
         self.assertEqual(routing['mode'], 'not_configured')
-        prefixes.assert_not_called()
 
     def test_local_vendor_uses_published_account_codes(self):
         published = {'set_key': 'local_vendors', 'version_number': 1, 'accounts': [{'account_code': '20-15-50-0001'}]}

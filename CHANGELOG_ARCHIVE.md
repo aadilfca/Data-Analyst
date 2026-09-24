@@ -1,5 +1,26 @@
 # Changelog Archive
 
+## Cash/Bank ACC-only routing â€” 2026-09-24
+
+**Scope:** Retire legacy Cash/Bank voucher-prefix and Account Set fallbacks so Account Control Centre is the sole Cash/Bank configuration source.
+
+**Implementation:** Cash/Bank discovery, latest-date lookup, session start, Preview, reconciliation, and Treasury exclusion now require assigned Account Control Centre account codes. Payment/Receipt continues to derive from the selected Treasury account credit/debit leg. The popup now shows setup guidance instead of CPV/CRV/BPV/BRV guidance. New clients receive only the Journal prefix; historic Cash/Bank prefix rows are retained but unused.
+
+**Verification:** Replaced legacy fallback regression coverage with Cash/Bank ACC-only routing tests; syntax and focused verification tests run.
+
+Files: routers/verification.py, routers/clients.py, database.py, static/client_settings.js, static/verification.js, tests/test_verification_account_sets.py.
+
+## Cash/Bank configuration centralization â€” 2026-09-24
+
+**Scope:** Remove Cash/Bank prefix controls from Client Settings and document central Account Control Centre selection without changing working routing.
+
+**Implementation:** Client Settings now edits Journal prefixes only and preserves historic Cash/Bank values on save. Account Control Centre adds an accessible notes popover: payment uses the selected Treasury credit leg, receipt uses its debit leg; Treasury priority and transfers remain unchanged.
+
+**Verification:** Added hermetic Account Control Centre popover coverage; no backend or schema change.
+
+Files: static/client_settings.html, static/client_settings.js, static/account_control_center.html, static/account_control_center.js, static/style.css, tests/test_account_control_center_ui.py.
+
+
 ## Verification workstream accounting rules — Phase 7 — 2026-09-24
 
 **Scope:** Make Export Customer, Payroll, Contractor, Local Vendor, and Import Vendor presentation rules explicit and consistent across Preview and the live verification table.

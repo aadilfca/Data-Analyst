@@ -178,52 +178,8 @@
                  the values here are only the pre-JS default. -->
             <a href="/static/index.html" class="back-link" data-nav-up-link>← Back to Dashboard</a>
             <h1>⚙️ Client Settings</h1>
-            <p id="clientNameHeading">Voucher prefix configuration</p>
+            <p id="clientNameHeading">Journal voucher prefix configuration</p>
         </header>
-
-        <!-- Cash Payment prefixes -->
-        <div class="settings-group">
-            <h3>💵 Cash Payment</h3>
-            <p class="group-hint">Prefixes used to identify Cash Payment vouchers (e.g. CPV).</p>
-            <div id="cashPaymentPrefixList" class="prefix-chip-list"></div>
-            <div class="prefix-input-row">
-                <input type="text" id="cashPaymentPrefixInput" placeholder="Add a prefix, e.g. CPV">
-                <button type="button" id="cashPaymentAddBtn" class="prefix-add-btn">Add</button>
-            </div>
-        </div>
-
-        <!-- Cash Receipt prefixes -->
-        <div class="settings-group">
-            <h3>💵 Cash Receipt</h3>
-            <p class="group-hint">Prefixes used to identify Cash Receipt vouchers (e.g. CRV).</p>
-            <div id="cashReceiptPrefixList" class="prefix-chip-list"></div>
-            <div class="prefix-input-row">
-                <input type="text" id="cashReceiptPrefixInput" placeholder="Add a prefix, e.g. CRV">
-                <button type="button" id="cashReceiptAddBtn" class="prefix-add-btn">Add</button>
-            </div>
-        </div>
-
-        <!-- Bank Payment prefixes -->
-        <div class="settings-group">
-            <h3>🏦 Bank Payment</h3>
-            <p class="group-hint">Prefixes used to identify Bank Payment vouchers (e.g. BPV).</p>
-            <div id="bankPaymentPrefixList" class="prefix-chip-list"></div>
-            <div class="prefix-input-row">
-                <input type="text" id="bankPaymentPrefixInput" placeholder="Add a prefix, e.g. BPV">
-                <button type="button" id="bankPaymentAddBtn" class="prefix-add-btn">Add</button>
-            </div>
-        </div>
-
-        <!-- Bank Receipt prefixes -->
-        <div class="settings-group">
-            <h3>🏦 Bank Receipt</h3>
-            <p class="group-hint">Prefixes used to identify Bank Receipt vouchers (e.g. BRV).</p>
-            <div id="bankReceiptPrefixList" class="prefix-chip-list"></div>
-            <div class="prefix-input-row">
-                <input type="text" id="bankReceiptPrefixInput" placeholder="Add a prefix, e.g. BRV">
-                <button type="button" id="bankReceiptAddBtn" class="prefix-add-btn">Add</button>
-            </div>
-        </div>
 
         <!-- Journal prefixes -->
         <div class="settings-group">
@@ -236,14 +192,13 @@
             </div>
         </div>
 
-        <!-- Read-only explainer: documents the app's voucher-identification logic for this
-             client's staff and the CA reviewing it. No inputs, no save action. -->
+        <!-- Read-only guidance keeps Cash/Bank configuration in one central place. -->
         <div class="settings-group">
-            <h3>📖 How the app identifies voucher types</h3>
+            <h3>📖 Cash and Bank configuration</h3>
             <ul class="explainer-list">
-                <li><strong>Category — including whether it's a Payment or a Receipt — is decided directly by which prefix list the voucher number matches.</strong> For example, if "CPV" is listed under Cash Payment, any voucher number starting with CPV is treated as a Cash Payment voucher. There is no separate debit/credit lookup for this.</li>
+                <li><strong>Cash and Bank accounts are assigned only in Account Control Centre.</strong> Use its Verification accounts tab to map Trial Balance accounts to Cash vouchers or Bank vouchers.</li>
+                <li>The Account Control Centre contains the voucher-selection notes, including the payment and receipt debit/credit treatment.</li>
                 <li><strong>Journal (JV) has no Payment/Receipt split.</strong> Every journal entry is simply tagged as a Journal Voucher, regardless of debit or credit.</li>
-                <li>A voucher number that doesn't match any prefix in any list below is not treated as a Cash, Bank, or Journal voucher.</li>
             </ul>
         </div>
 
@@ -256,7 +211,7 @@
 
     <script src="/static/loading_ui.js?v=2"></script>
     <script src="/static/client_context.js?v=18"></script>
-    <script src="/static/client_settings.js?v=2"></script>
+    <script src="/static/client_settings.js?v=3"></script>
 </body>
 
 </html>

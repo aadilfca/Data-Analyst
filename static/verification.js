@@ -981,7 +981,7 @@ async function loadCashbooks(overrideStart, overrideEnd, overrideCashbook) {
             popupCashbookSelect.innerHTML = '<option value="">' + workstream.title + ' setup required</option>';
             popupCashbookSelect.disabled = true;
             setPopupActionButtonsDisabled(true);
-            showPopupError('Publish the ' + workstream.title + 's Account Set in Account Control Centre before starting verification.');
+            showPopupError('Configure ' + workstream.title + ' accounts in Account Control Centre before starting verification.');
             return;
         }
         const candidates = isNonTreasuryVerification() ? (data.vendors || data.accounts || []) : data.cashbooks;
@@ -1002,7 +1002,7 @@ async function loadCashbooks(overrideStart, overrideEnd, overrideCashbook) {
             setPopupActionButtonsDisabled(true);
             const guidance = isNonTreasuryVerification()
                 ? 'Confirm that Account Control Centre contains ' + workstream.title + ' accounts and that eligible non-Cash/Bank JVs exist in this date range.'
-                : 'Make sure you have uploaded data containing ' + (currentType === 'bank' ? 'BPV/BRV' : 'CPV/CRV') + ' vouchers.\nThe column names must be exactly: "Voucher ID", "Account Name", "Debit", "Credit".';
+                : 'Confirm that the selected ' + workstream.title + ' account is assigned in Account Control Centre and appears in the uploaded data for this date range.';
             showPopupError('No ' + workstream.entity + 's found for this client.\n' + guidance);
         }
     } catch (error) {

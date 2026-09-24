@@ -6,7 +6,7 @@
 
 from fastapi import APIRouter, HTTPException, Query, Body, Depends
 from fastapi.responses import StreamingResponse
-from database import execute_query_pg, execute_write_pg, execute_batch_pg, execute_batch_insert_with_ids_pg, log_audit, log_data_audit_pg, get_raw_conn_pg, release_raw_conn_pg, get_client_voucher_prefixes_pg, pg_transaction
+from database import execute_query_pg, execute_write_pg, execute_batch_pg, execute_batch_insert_with_ids_pg, log_audit, log_data_audit_pg, get_raw_conn_pg, release_raw_conn_pg, pg_transaction
 from database import start_db_metrics, get_db_metrics, stop_db_metrics
 from psycopg2.extras import Json
 from datetime import datetime, timezone
@@ -130,37 +130,6 @@ def _procedure_roles_for_document(document: dict, checks: list, rules_configured
                 resolved.append(role)
     return resolved
 
-def match_voucher_category(voucher_id: str, client_prefixes: dict) -> Optional[str]:
-    """
-    Case-insensitive "starts with" match of voucher_id against the client's configured
-    per-category prefixes. Returns one of 'Cash Payment'/'Cash Receipt'/'Bank Payment'/
-    'Bank Receipt'/'Journal', or None if nothing matches (including a client with no
-    prefixes configured for any category).
-    """
-    if not voucher_id:
-        return None
-    voucher_id_lower = voucher_id.strip().lower()
-    for category, prefixes in client_prefixes.items():
-        for prefix in prefixes:
-            if voucher_id_lower.startswith(prefix.strip().lower()):
-                return category
-    return None
-
-def voucher_type_label(category: str) -> Optional[str]:
-    """
-    Map a client_voucher_prefixes category directly to its voucher type label
-    (CPV/CRV/BPV/BRV/JV). The 5-way category scheme already encodes Payment vs Receipt
-    (Cash Payment/Cash Receipt/Bank Payment/Bank Receipt/Journal), so no separate
-    debit/credit-side input is needed here anymore.
-    """
-    return {
-        'Cash Payment': 'CPV',
-        'Cash Receipt': 'CRV',
-        'Bank Payment': 'BPV',
-        'Bank Receipt': 'BRV',
-        'Journal': 'JV',
-    }.get(category)
-
 def get_column_value(row_data: dict, aliases: list) -> Optional[str]:
     """
     Try to get a value from row_data using a list of possible column name aliases.
@@ -205,8 +174,7 @@ def get_account_control_routing(client_id: int, workstream: str) -> Optional[dic
             (client_id, workstream),
         )
     except RuntimeError:
-        # Unit tools and an unconfigured local environment may not have Postgres available;
-        # the legacy Account Set/prefix fallback remains the safe compatibility path there.
+        # Unit tools and an unconfigured local environment may not have Postgres available.
         return None
     account_codes = {str(row.get("account_code")).strip() for row in rows if row.get("account_code") is not None}
     if not account_codes:
@@ -234,29 +202,12 @@ def get_published_account_set_routing(client_id: int, set_key: str) -> dict[str,
 
 
 def get_treasury_routing(client_id: int, category_group: Optional[str]) -> dict[str, Any]:
-    """Prefer simplified Cash/Bank assignments, then legacy Account Sets, then prefixes."""
+    """Cash and Bank Verification use Account Control Centre assignments only."""
     if category_group in ('cash', 'bank'):
         assigned = get_account_control_routing(client_id, category_group)
         if assigned:
             return assigned
-        published = get_published_account_set_leaf_accounts(client_id, f'{category_group}_accounts')
-        if published:
-            accounts = published['accounts']
-            return {
-                'mode': 'account_set',
-                'set_key': published['set_key'],
-                'account_codes': {str(account['account_code']).strip() for account in accounts},
-                'account_names': {str(account['account_code']).strip(): account.get('account_name') for account in accounts},
-                'version_number': published['version_number'],
-            }
-    prefixes = get_client_voucher_prefixes_pg(client_id)
-    if category_group == 'cash':
-        prefixes = {key: value for key, value in prefixes.items() if key in ('Cash Payment', 'Cash Receipt')}
-    elif category_group == 'bank':
-        prefixes = {key: value for key, value in prefixes.items() if key in ('Bank Payment', 'Bank Receipt')}
-    return {'mode': 'voucher_prefix', 'prefixes': prefixes}
-
-
+    return {'mode': 'not_configured', 'workstream': category_group, 'account_codes': set()}
 def get_local_vendor_routing(client_id: int) -> dict[str, Any]:
     """Prefer simplified Local Vendor assignments, with legacy Account Set compatibility."""
     return get_account_control_routing(client_id, 'local_vendor') or get_published_account_set_routing(client_id, 'local_vendors')
@@ -359,15 +310,9 @@ LOCAL_VENDOR_VOUCHER_ID_SQL = json_text_expression(VOUCHER_ID_ALIASES)
 
 
 def voucher_contains_treasury_leg(voucher: dict, cash_routing: dict, bank_routing: dict) -> bool:
-    """Cash/Bank takes priority, including legacy prefix fallback where no set exists."""
+    """Cash/Bank takes priority when a configured Account Control Centre code is present."""
     account_codes = set(cash_routing.get('account_codes', set())) | set(bank_routing.get('account_codes', set()))
-    if any(row.get('account_code') in account_codes for row in voucher['rows']):
-        return True
-    prefixes = {}
-    for routing in (cash_routing, bank_routing):
-        if routing.get('mode') == 'voucher_prefix':
-            prefixes.update(routing.get('prefixes', {}))
-    return match_voucher_category(voucher.get('voucher_id'), prefixes) in ('Cash Payment', 'Cash Receipt', 'Bank Payment', 'Bank Receipt')
+    return any(row.get('account_code') in account_codes for row in voucher['rows'])
 
 def is_local_vendor_voucher(voucher: dict, vendor_account_code: str, cash_routing: dict, bank_routing: dict) -> bool:
     """True only when a selected vendor leg is outside Cash/Bank verification."""
@@ -1239,58 +1184,6 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
         result["reason"] = None
     return result
 
-def extract_cashbook_name(row_data: dict, client_prefixes: dict) -> Optional[str]:
-    # Define aliases for required columns
-    voucher_aliases = ['Voucher ID', 'Voucher No', 'Voucher Number', 'Voucher', 'Invoice No', 'Invoice Number']
-    account_aliases = ['Account Name', 'Account', 'Account Detail', 'Account Code', 'Ledger', 'Head']
-    debit_aliases = ['Debit', 'Debit Amount', 'Dr', 'Dr Amount', 'Debit (Dr)', 'Dr. Amount']
-    credit_aliases = ['Credit', 'Credit Amount', 'Cr', 'Cr Amount', 'Credit (Cr)', 'Cr. Amount']
-
-    voucher_id = get_column_value(row_data, voucher_aliases)
-    account_name = get_column_value(row_data, account_aliases)
-    debit_str = get_column_value(row_data, debit_aliases)
-    credit_str = get_column_value(row_data, credit_aliases)
-
-    if not voucher_id or not account_name:
-        return None
-
-    try:
-        debit = float(debit_str) if debit_str else 0.0
-        credit = float(credit_str) if credit_str else 0.0
-    except:
-        return None
-
-    category = match_voucher_category(voucher_id, client_prefixes)
-    # Type-specific side match: the 5-way category already tells us Payment vs Receipt, so
-    # (unlike the old 3-way Cash/Bank/Journal scheme) discovery no longer needs to already
-    # know the cashbook name to determine which side is correct - a Payment-type voucher's
-    # cashbook leg is always the credit side, a Receipt-type voucher's is always the debit
-    # side. This is what fixes expense/vendor accounts (the opposite leg of the same voucher)
-    # from being wrongly returned as cashbook candidates.
-    if category in ('Cash Payment', 'Bank Payment') and credit > 0:
-        return account_name
-    if category in ('Cash Receipt', 'Bank Receipt') and debit > 0:
-        return account_name
-    return None
-
-def is_cashbook_leg_row(row: dict, category: Optional[str]) -> bool:
-    """
-    True only if `row` is structurally the cashbook/bankbook leg of its OWN voucher category
-    (Payment-type -> credit side, Receipt-type -> debit side), mirroring extract_cashbook_name()'s
-    side rule. Regression found during final Bank Verification testing: `cashbook_row` lookups in
-    start_verification_session()/preview_cashbook() previously matched on account_name alone,
-    with no side check - a voucher whose OTHER leg happened to share a name with an unrelated
-    cashbook (e.g. a real Bank Payment transfer voucher debiting "CASH IN HAND" while crediting a
-    bank account) could wrongly be pulled into that unrelated cashbook's transaction list. This
-    can only manifest once a client has both Cash and Bank prefixes configured (impossible before
-    Bank Verification existed), which is why it was dormant until now.
-    """
-    if category in ('Cash Payment', 'Bank Payment'):
-        return row['credit'] > 0
-    if category in ('Cash Receipt', 'Bank Receipt'):
-        return row['debit'] > 0
-    return False
-
 def get_row_data(client_data_id: int) -> dict:
     rows = execute_query_pg("SELECT row_data FROM client_data WHERE id = %s", (client_data_id,))
     if not rows:
@@ -1698,7 +1591,8 @@ def get_cashbooks(
         raise HTTPException(400, "Start date must be before or equal to end date.")
 
     routing = get_treasury_routing(client_id, category_group)
-    client_prefixes = routing.get('prefixes', {})
+    if not _routing_uses_account_codes(routing):
+        return {'cashbooks': [], 'count': 0, 'setup_required': True}
 
     rows = execute_query_pg(
         """
@@ -1719,16 +1613,11 @@ def get_cashbooks(
             if not isinstance(row_data, dict):
                 continue
             voucher_id = row_data.get('Voucher ID')
-            cb_name = (
-                account_set_cashbook_name(row_data, routing)
-                if _routing_uses_account_codes(routing)
-                else extract_cashbook_name(row_data, client_prefixes)
-            )
+            cb_name = account_set_cashbook_name(row_data, routing)
             if debug:
                 debug_info.append({
                     "row_id": row['id'],
                     "voucher_id": voucher_id,
-                    "category": match_voucher_category(voucher_id, client_prefixes),
                     "account_name": row_data.get('Account Name'),
                     "debit": row_data.get('Debit'),
                     "credit": row_data.get('Credit'),
@@ -1751,7 +1640,6 @@ def get_cashbooks(
                     "mode": routing['mode'],
                     "set_key": routing.get('set_key'),
                     "version_number": routing.get('version_number'),
-                    "patterns_used": client_prefixes,
                 },
                 "rows": debug_info
             }
@@ -1764,9 +1652,9 @@ def get_latest_cashbook_date(
     category_group: Optional[str] = Query(None, pattern="^(cash|bank)$", description="'cash' or 'bank' - restricts discovery to that category group")
 ):
     """
-    Returns the extract_date of the most recent client_data row that actually
-    resolves to a cashbook/bankbook leg (via extract_cashbook_name(), the same
-    function get_cashbooks() uses) - lets the Start Verification popup default
+    Returns the extract_date of the most recent client_data row that matches a configured
+    Cash/Bank account (via account_set_cashbook_name(), the same function get_cashbooks()
+    uses) - lets the Start Verification popup default
     its search range to the real latest month with matching data, instead of
     "today's calendar month" (which fails whenever the client's latest upload
     isn't in the current month). Deliberately not a plain MAX(extract_date)
@@ -1778,7 +1666,8 @@ def get_latest_cashbook_date(
         raise HTTPException(404, "Client not found or inactive")
 
     routing = get_treasury_routing(client_id, category_group)
-    client_prefixes = routing.get('prefixes', {})
+    if not _routing_uses_account_codes(routing):
+        return {'latest_date': None, 'setup_required': True}
 
     # Fetch the small date list first, then retrieve JSON only for one date at a time.
     # The previous query transferred every client_data.row_data value to Python before
@@ -1809,11 +1698,7 @@ def get_latest_cashbook_date(
                 row_data = json.loads(row['row_data']) if isinstance(row['row_data'], str) else row['row_data']
                 if not isinstance(row_data, dict):
                     continue
-                matched_cashbook = (
-                    account_set_cashbook_name(row_data, routing)
-                    if _routing_uses_account_codes(routing)
-                    else extract_cashbook_name(row_data, client_prefixes)
-                )
+                matched_cashbook = account_set_cashbook_name(row_data, routing)
                 if matched_cashbook:
                     return {"latest_date": candidate_date}
             except Exception:
@@ -1920,12 +1805,11 @@ def start_verification_session(
     is_non_treasury_session = session_type in NON_TREASURY_WORKSTREAMS
     routing = get_non_treasury_routing(client_id, session_type) if is_non_treasury_session else get_treasury_routing(client_id, session_type)
     workstream_label = NON_TREASURY_WORKSTREAM_LABELS.get(session_type, session_type.title())
-    if is_non_treasury_session and not _routing_uses_account_codes(routing):
+    if not _routing_uses_account_codes(routing):
         raise HTTPException(400, f"Configure {workstream_label} accounts in Account Control Centre before starting verification.")
     selected_account_code = local_vendor_code_from_label(cashbook_name) if is_non_treasury_session else None
     if is_non_treasury_session and not selected_account_code:
         raise HTTPException(400, f"Select a {workstream_label} account from the configured list.")
-    client_prefixes = routing.get('prefixes', {})
     rows = execute_query_pg(
         """
         SELECT id, row_data, extract_date, extract_amount
@@ -1960,9 +1844,6 @@ def start_verification_session(
             voucher_id = get_col_value(rd, voucher_aliases)
             if not voucher_id:
                 continue
-            category = match_voucher_category(voucher_id, client_prefixes)
-            if routing['mode'] == 'voucher_prefix' and category not in ('Cash Payment', 'Cash Receipt', 'Bank Payment', 'Bank Receipt'):
-                continue
             debit_str = get_col_value(rd, debit_aliases)
             credit_str = get_col_value(rd, credit_aliases)
             debit = float(debit_str) if debit_str else 0.0
@@ -1971,10 +1852,7 @@ def start_verification_session(
             if not account_name:
                 continue
             if voucher_id not in vouchers:
-                vouchers[voucher_id] = {
-                    'category': category,
-                    'rows': []
-                }
+                vouchers[voucher_id] = {'rows': []}
             vouchers[voucher_id]['rows'].append({
                 'row_id': row['id'],
                 'row_data': rd,
@@ -2006,29 +1884,15 @@ def start_verification_session(
                         'extract_amount': row['extract_amount']
                     })
             continue
-        # The 5-way category already implies Payment vs Receipt, so vtype comes straight from
-        # it - no need to re-derive it from the cashbook row's debit/credit sign anymore.
-        # cashbook_row is still looked up as a sanity check that the named cashbook actually
-        # appears among this voucher's legs - must also be the structurally correct side for
-        # this voucher's OWN category (see is_cashbook_leg_row()), not just a name match, or a
-        # voucher whose other leg happens to share a name with an unrelated cashbook can leak in.
-        if _routing_uses_account_codes(routing):
-            cashbook_row = next((
-                r for r in data['rows']
-                if r['account_name'] == cashbook_name and r['account_code'] in routing['account_codes']
-            ), None)
-        else:
-            cashbook_row = next((
-                r for r in data['rows']
-                if r['account_name'] == cashbook_name and is_cashbook_leg_row(r, data['category'])
-            ), None)
+        # The configured account code identifies the selected Treasury leg. Its credit/debit
+        # side determines Payment or Receipt, so the matching account name is a sanity check.
+        cashbook_row = next((
+            r for r in data['rows']
+            if r['account_name'] == cashbook_name and r['account_code'] in routing['account_codes']
+        ), None)
         if cashbook_row is None:
             continue
-        vtype = (
-            account_set_voucher_type(session_type, cashbook_row)
-            if _routing_uses_account_codes(routing)
-            else voucher_type_label(data['category'])
-        )
+        vtype = account_set_voucher_type(session_type, cashbook_row)
         if vtype is None:
             continue
         for row in data['rows']:
@@ -3015,12 +2879,11 @@ def preview_cashbook(
     is_non_treasury_session = session_type in NON_TREASURY_WORKSTREAMS
     routing = get_non_treasury_routing(client_id, session_type) if is_non_treasury_session else get_treasury_routing(client_id, session_type)
     workstream_label = NON_TREASURY_WORKSTREAM_LABELS.get(session_type, session_type.title())
-    if is_non_treasury_session and not _routing_uses_account_codes(routing):
+    if not _routing_uses_account_codes(routing):
         raise HTTPException(400, f"Configure {workstream_label} accounts in Account Control Centre before previewing verification.")
     selected_account_code = local_vendor_code_from_label(cashbook_name) if is_non_treasury_session else None
     if is_non_treasury_session and not selected_account_code:
         raise HTTPException(400, f"Select a {workstream_label} account from the configured list.")
-    client_prefixes = routing.get('prefixes', {})
 
     # Fetch rows
     rows = execute_query_pg(
@@ -3065,9 +2928,6 @@ def preview_cashbook(
             voucher_id = get_col_value(rd, voucher_aliases)
             if not voucher_id:
                 continue
-            category = match_voucher_category(voucher_id, client_prefixes)
-            if routing['mode'] == 'voucher_prefix' and category not in ('Cash Payment', 'Cash Receipt', 'Bank Payment', 'Bank Receipt'):
-                continue
             debit_str = get_col_value(rd, debit_aliases)
             credit_str = get_col_value(rd, credit_aliases)
             debit = float(debit_str) if debit_str else 0.0
@@ -3076,10 +2936,7 @@ def preview_cashbook(
             if not account_name:
                 continue
             if voucher_id not in vouchers:
-                vouchers[voucher_id] = {
-                    'category': category,
-                    'rows': []
-                }
+                vouchers[voucher_id] = {'rows': []}
             vouchers[voucher_id]['rows'].append({
                 'row_id': row['id'],
                 'row_data': rd,
@@ -3121,27 +2978,15 @@ def preview_cashbook(
                     'debit_credit_keys': find_debit_credit_keys(row['row_data'], debit_aliases, credit_aliases)
                 })
             continue
-        # Same category-implies-type derivation as start_verification_session - cashbook_row
-        # is looked up only as a sanity check that the named cashbook actually appears among
-        # this voucher's legs (on the structurally correct side, see is_cashbook_leg_row()),
-        # not to derive vtype anymore.
-        if _routing_uses_account_codes(routing):
-            cashbook_row = next((
-                r for r in data['rows']
-                if r['account_name'] == cashbook_name and r['account_code'] in routing['account_codes']
-            ), None)
-        else:
-            cashbook_row = next((
-                r for r in data['rows']
-                if r['account_name'] == cashbook_name and is_cashbook_leg_row(r, data['category'])
-            ), None)
+        # The configured account code identifies the selected Treasury leg; its credit/debit
+        # side determines Payment or Receipt.
+        cashbook_row = next((
+            r for r in data['rows']
+            if r['account_name'] == cashbook_name and r['account_code'] in routing['account_codes']
+        ), None)
         if cashbook_row is None:
             continue
-        vtype = (
-            account_set_voucher_type(session_type, cashbook_row)
-            if _routing_uses_account_codes(routing)
-            else voucher_type_label(data['category'])
-        )
+        vtype = account_set_voucher_type(session_type, cashbook_row)
         if vtype is None:
             continue
         if vtype in ('CPV', 'BPV'):
@@ -4138,8 +3983,9 @@ def reconcile_session_range(
     # rather than shared via a helper, to keep this addition purely additive - see the plan note.
     is_non_treasury_session = session_type in NON_TREASURY_WORKSTREAMS
     routing = get_non_treasury_routing(client_id, session_type) if is_non_treasury_session else get_treasury_routing(client_id, session_type)
+    if not _routing_uses_account_codes(routing):
+        raise HTTPException(400, "Configure Treasury accounts in Account Control Centre before reconciling this session.")
     selected_account_code = local_vendor_code_from_label(cashbook_name) if is_non_treasury_session else None
-    client_prefixes = routing.get('prefixes', {})
     rows = execute_query_pg(
         """
         SELECT id, row_data, extract_date, extract_amount
@@ -4173,9 +4019,6 @@ def reconcile_session_range(
             voucher_id = get_col_value(rd, voucher_aliases)
             if not voucher_id:
                 continue
-            category = match_voucher_category(voucher_id, client_prefixes)
-            if routing['mode'] == 'voucher_prefix' and category not in ('Cash Payment', 'Cash Receipt', 'Bank Payment', 'Bank Receipt'):
-                continue
             debit_str = get_col_value(rd, debit_aliases)
             credit_str = get_col_value(rd, credit_aliases)
             debit = float(debit_str) if debit_str else 0.0
@@ -4184,7 +4027,7 @@ def reconcile_session_range(
             if not account_name:
                 continue
             if voucher_id not in vouchers:
-                vouchers[voucher_id] = {'category': category, 'rows': []}
+                vouchers[voucher_id] = {'rows': []}
             vouchers[voucher_id]['rows'].append({
                 'row_id': row['id'],
                 'account_name': account_name,
@@ -4207,23 +4050,13 @@ def reconcile_session_range(
                     target[row['row_id']] = vid
     else:
         for vid, data in vouchers.items():
-            if _routing_uses_account_codes(routing):
-                cashbook_row = next((
-                    r for r in data['rows']
-                    if r['account_name'] == cashbook_name and r['account_code'] in routing['account_codes']
-                ), None)
-            else:
-                cashbook_row = next((
-                    r for r in data['rows']
-                    if r['account_name'] == cashbook_name and is_cashbook_leg_row(r, data['category'])
-                ), None)
+            cashbook_row = next((
+                r for r in data['rows']
+                if r['account_name'] == cashbook_name and r['account_code'] in routing['account_codes']
+            ), None)
             if cashbook_row is None:
                 continue
-            vtype = (
-                account_set_voucher_type(session_type, cashbook_row)
-                if _routing_uses_account_codes(routing)
-                else voucher_type_label(data['category'])
-            )
+            vtype = account_set_voucher_type(session_type, cashbook_row)
             if vtype is None:
                 continue
             for row in data['rows']:

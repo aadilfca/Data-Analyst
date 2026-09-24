@@ -30,22 +30,10 @@ class ClientUpdate(BaseModel):
     is_active: bool = True
 
 class VoucherPrefixesUpdate(BaseModel):
-    # Field names are Python-identifier-safe versions of the 5 category names in
-    # database.VOUCHER_PREFIX_CATEGORIES (which contain spaces, e.g. "Cash Payment") -
-    # CATEGORY_FIELD_MAP below bridges between the two.
-    cash_payment: List[str] = []
-    cash_receipt: List[str] = []
-    bank_payment: List[str] = []
-    bank_receipt: List[str] = []
+    """Journal is the only voucher-prefix category configured in Client Settings."""
     journal: List[str] = []
 
-# Maps each category name (as stored in client_voucher_prefixes.category / returned by
-# get_client_voucher_prefixes()) to its VoucherPrefixesUpdate field name.
 CATEGORY_FIELD_MAP = {
-    "Cash Payment": "cash_payment",
-    "Cash Receipt": "cash_receipt",
-    "Bank Payment": "bank_payment",
-    "Bank Receipt": "bank_receipt",
     "Journal": "journal",
 }
 
@@ -141,9 +129,7 @@ def create_client(client: ClientCreate, session=Depends(require_admin)):
         (client.client_code, client.client_name, client.industry,
          client.contact_person, client.email, client.phone)
     )
-    # Seed the new client with the default voucher prefixes (CPV/CRV/BPV/BRV/JV) so voucher
-    # detection works out of the box - previously a client had none until manually configured
-    # via the Client Settings page.
+    # Seed only the Journal prefix. Cash and Bank accounts are configured in Account Control Centre.
     save_client_voucher_prefixes_pg(client_id, DEFAULT_VOUCHER_PREFIXES)
 
     log_audit("Admin", "Create", "Clients", f"Created client: {client.client_code} - {client.client_name}")
@@ -199,22 +185,15 @@ def restore_client(client_id: int, session=Depends(require_admin)):
 
 @router.get("/api/clients/{client_id}/voucher-prefixes", response_model=dict)
 def get_voucher_prefixes(client_id: int, session=Depends(require_admin)):
-    """
-    Get a client's voucher prefix configuration (Cash Payment/Cash Receipt/Bank Payment/
-    Bank Receipt/Journal), including seeded defaults.
-    """
+    """Return the client's Journal prefix configuration."""
     existing = execute_query_pg("SELECT id FROM clients WHERE id = %s", (client_id,))
     if not existing:
         raise HTTPException(404, "Client not found")
-    return get_client_voucher_prefixes_pg(client_id)
+    return {"Journal": get_client_voucher_prefixes_pg(client_id).get("Journal", [])}
 
 @router.put("/api/clients/{client_id}/voucher-prefixes", response_model=dict)
 def update_voucher_prefixes(client_id: int, payload: VoucherPrefixesUpdate, session=Depends(require_admin)):
-    """
-    Replace a client's voucher prefix configuration. An empty list for any
-    category is valid. Rejects a prefix that appears under more than one
-    category for the same client.
-    """
+    """Replace the Journal prefix without altering historic Cash/Bank rows."""
     existing = execute_query_pg("SELECT id FROM clients WHERE id = %s", (client_id,))
     if not existing:
         raise HTTPException(404, "Client not found")
@@ -222,6 +201,7 @@ def update_voucher_prefixes(client_id: int, payload: VoucherPrefixesUpdate, sess
     # Trim blanks and de-dupe within each category (case-insensitive, first
     # occurrence wins) before validating - avoids a raw UNIQUE-constraint
     # IntegrityError surfacing as a generic 500 for an accidental duplicate.
+    stored_prefixes = get_client_voucher_prefixes_pg(client_id)
     prefixes = {}
     for category, field in CATEGORY_FIELD_MAP.items():
         seen_in_category = set()
@@ -247,6 +227,7 @@ def update_voucher_prefixes(client_id: int, payload: VoucherPrefixesUpdate, sess
                 )
             prefix_to_category[key] = category
 
-    save_client_voucher_prefixes_pg(client_id, prefixes)
+    stored_prefixes.update(prefixes)
+    save_client_voucher_prefixes_pg(client_id, stored_prefixes)
     log_audit("Admin", "Update", "Clients", f"Updated voucher prefixes for client ID {client_id}")
-    return {"message": "Voucher prefixes updated successfully", "prefixes": prefixes}
+    return {"message": "Journal voucher prefix updated successfully", "prefixes": prefixes}

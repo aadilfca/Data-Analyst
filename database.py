@@ -254,19 +254,13 @@ def diff_row_data(old_data, new_data):
     return changes
 
 
-# 5-way category scheme (Payment/Receipt split explicitly, not derived from debit/credit
-# sign at detection time) - replaced the earlier 3-way Cash/Bank/Journal scheme, which had
-# no way to tell a Payment-type voucher from a Receipt-type voucher without already knowing
-# the cashbook account name. See routers/verification.py's extract_cashbook_name().
+# Historic Cash/Bank categories remain listed solely so existing database rows are preserved
+# when a Journal prefix is updated. They are not seeded, exposed, or used by verification.
 VOUCHER_PREFIX_CATEGORIES = ("Cash Payment", "Cash Receipt", "Bank Payment", "Bank Receipt", "Journal")
 
-# Default single prefix seeded per category for a brand-new client (create_client() in
-# routers/clients.py) and used as the migration target for pre-existing 3-way rows.
+# New clients receive only the Journal prefix. Cash and Bank routing is configured exclusively
+# through Account Control Centre.
 DEFAULT_VOUCHER_PREFIXES = {
-    "Cash Payment": ["CPV"],
-    "Cash Receipt": ["CRV"],
-    "Bank Payment": ["BPV"],
-    "Bank Receipt": ["BRV"],
     "Journal": ["JV"],
 }
 
