@@ -1,5 +1,18 @@
 # Development Plan
 
+## Adjusted priority - Verification workstreams - 2026-09-24
+
+Financial Statements and Notes are intentionally deferred. The active scope is verification of Cash, Bank, Local Vendor, Import Vendor, Export Customer, Payroll, and Contractor vouchers.
+
+| Workstream | Current position | Remaining action |
+|---|---|---|
+| Cash / Bank | Implemented and live; Account Control routing, legacy fallback, Treasury handling, and debit/credit presentation are covered. | Final live-client acceptance only. |
+| Local / Import Vendor | Implemented and live; central account mapping, JV discovery, Treasury exclusion, Preview, and sessions are covered. | Confirm published/account-control mappings and representative periods on the client. |
+| Export Customer / Payroll / Contractor | Implemented and live in Verification with discovery, Preview, sessions, and workstream-specific movement rules. | Change the global quick-navigation entries from Coming soon to Ready, then complete live-client acceptance. |
+| Cross-category Treasury boundary | Intentional: cash/bank payment and receipt legs remain in Cash/Bank; billing/JV legs remain in the relevant workstream. | No change required. |
+
+Next verification phase: correct the three global quick-navigation labels, then run one acceptance pass per workstream using real Account Control mappings and date ranges. Do not begin Financial Statements or Notes until this verification scope is accepted.
+
 ## Current roadmap - Rulebook snapshots and Verification lookup - 2026-09-22
 
 Recommended model: GPT-6 Astra; shared/client separation, concurrent publication, migrations, and historical-result protection require careful cross-file reasoning.

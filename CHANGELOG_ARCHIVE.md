@@ -6487,3 +6487,13 @@ or procedure-modal requests, whose observed latency therefore remains a separate
 **Implementation:** The shared Verification page now recognises `type=import_vendor`, adds the live hub tile and global quick-navigation link, calls only Import Vendor discovery/latest-date endpoints, and keeps its selected account and date range separate from Cash, Bank, and Local Vendor. Preview preserves credit bills and negative debit-note signs.
 
 **Verification:** `node --check` passed for `verification.js` and `client_context.js`; `git diff --check` passed; focused Account Set/Verification suite: 30 passed. Coverage includes the Import Vendor tile, quick navigation, separate date/account state, endpoints, session type, signed debit-note display, and retained Local Vendor contracts. No packages installed.
+
+## Verification-only priority and remaining acceptance - 2026-09-24
+
+**Decision:** Financial Statements and Notes are deferred. Development priority returns to the seven Verification workstreams: Cash, Bank, Local Vendor, Import Vendor, Export Customer, Payroll, and Contractor.
+
+**Current assessment:** Cash/Bank are live with Account Control routing, legacy fallback, Treasury handling, and corrected debit/credit presentation. Local/Import Vendor are live with central account mapping, JV discovery, Treasury exclusion, Preview, and sessions. Export Customer, Payroll, and Contractor are live in the Verification page with discovery, Preview, sessions, and explicit movement rules; focused tests cover their routing and presentation.
+
+**Remaining work:** The global quick-navigation manifest still labels Export Customer, Payroll, and Contractor as Coming soon even though their Verification tiles are Ready. That is a small code/manifest correction for the next phase. Each workstream also needs final live-client acceptance with real Account Control mappings and representative date ranges. Treasury payments intentionally remain in Cash/Bank; billing/JV lines remain in the relevant category workstream.
+
+**Scope boundary:** No Financial Statement or Notes implementation is required for this verification closeout. No application code was changed in this documentation phase.
