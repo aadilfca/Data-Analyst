@@ -6505,3 +6505,11 @@ or procedure-modal requests, whose observed latency therefore remains a separate
 **Implementation:** The Reports preview loads active Financial Statement account assignments, aggregates journal movement by category and month, counts mapped accounts, and flags unmapped account activity. Existing Ledger Summary reports and Verification workstreams remain separate.
 
 **Verification:** Python compilation, JavaScript syntax, git diff --check, and the expanded reconciliation regression suite passed: 31 tests. Operational Financial Statement development remains deferred until the Verification workstreams are accepted.
+
+## Verification global navigation alignment - 2026-09-24
+
+**Scope:** Corrected the shared quick-navigation manifest so Export Customer, Payroll, and Contractor match their already-live Verification tiles.
+
+**Implementation:** Each entry now links to its existing `verification.html?type=` route and is marked Ready. No backend, Account Control routing, Treasury boundary, or Financial Statement behavior changed.
+
+**Verification:** JavaScript syntax and focused Verification routing/UI tests passed. No packages installed.

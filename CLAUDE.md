@@ -204,7 +204,7 @@ One line per file group: what it is now. Full build history for every entry live
 Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; performance findings also reference the investigation documents.
 - 2026-09-24: Verification Phase 6 activated Export Customer, Payroll, and Contractor JV workstreams with Treasury-safe routing and independent discovery/session dates.
 - 2026-09-24: Verification Phase 7 centralized workstream debit/credit rules and signed non-Treasury preview/session presentation.
-- 2026-09-24: Verification workstreams are now the active priority; Financial Statement preview groundwork is committed for future use, while Notes and further statement work remain deferred.
+- 2026-09-24: Verification workstreams are now the active priority; global navigation now exposes all seven live workstreams, while Financial Statement groundwork remains deferred operationally.
 
 - 2026-07-09: main.py NameError fixed; clients module reviewed, no issues found.
 - 2026-07-12: Upload page redesign, 3 phases, plus flush-layout and navbar-gap fixes.

@@ -575,6 +575,10 @@ class ImportVendorUiContractTests(unittest.TestCase):
         self.assertIn("VERIFICATION_SELECTED_CASHBOOK_STORAGE_KEY + ':import_vendor'", source)
         self.assertIn('function getVerificationLineAmount(row)', source)
         self.assertIn("const isPayment = Number(row.amount) < 0 || row.direction === 'Payment';", source)
+        navigation = (root / 'static' / 'client_context.js').read_text(encoding='utf-8')
+        for workstream in ('export_customer', 'payroll', 'contractor'):
+            self.assertIn("/static/verification.html?type=" + workstream, navigation)
+            self.assertIn("state: 'ready'", navigation[navigation.index("type=" + workstream):])
         self.assertIn('id="importVendorTile" data-verification-type="import_vendor"', html)
         self.assertIn('Cash/Bank payments remain in Treasury verification.', html)
         self.assertIn("{ label: 'Import vendor', url: '/static/verification.html?type=import_vendor', state: 'ready' }", navigation)
