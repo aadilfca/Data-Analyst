@@ -6407,3 +6407,11 @@ or procedure-modal requests, whose observed latency therefore remains a separate
 **Implementation:** `import_vendors` is a separate published-set-only routing key, with no prefix fallback. Its voucher eligibility applies the same Cash/Bank Treasury-first rule as Local Vendor, including JVs; account selections for Local and Import Vendors remain isolated.
 
 **Verification:** Python compilation, `git diff --check`, and 24 focused Account Set/Verification tests passed. Coverage proves setup-required behavior, separate account sets, eligible Import Vendor JVs, and Treasury exclusion. No packages installed.
+
+## Import Vendor backend workflow - 2026-09-24
+
+**Scope:** Added Import Vendor backend discovery, latest-date lookup, session creation, and Preview only. The dashboard tile and frontend remain deferred.
+
+**Implementation:** A published `import_vendors` set exposes code-qualified Import Vendor labels for eligible non-Treasury vouchers. Session and Preview accept `import_vendor`, retain only the selected vendor's non-zero account lines, and exclude every voucher containing configured Cash/Bank legs. Credits display as **Import vendor bill / payable**; debits display as negative **Import vendor debit note / adjustment** values.
+
+**Verification:** Python compilation and `git diff --check` passed. Focused Account Set/Verification suite: 28 passed, including Import Vendor discovery, latest-date lookup, JV session capture, Treasury exclusion, and credit/debit Preview presentation. No packages installed.

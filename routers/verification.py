@@ -378,11 +378,20 @@ def _get_or_create_cross_check_shortfall_document_id(cross_check_id: int) -> int
     return new_id
 
 def local_vendor_preview_presentation(vendor_row: dict) -> Optional[dict[str, Any]]:
-    """Present vendor credits as bills and debits as debit notes/adjustments."""
+    """Present Local Vendor credits as bills and debits as debit notes/adjustments."""
     if vendor_row.get('credit', 0) > 0:
         return {'direction': 'Vendor bill / payable', 'amount': vendor_row['credit']}
     if vendor_row.get('debit', 0) > 0:
         return {'direction': 'Debit note / adjustment', 'amount': -vendor_row['debit']}
+    return None
+
+
+def import_vendor_preview_presentation(vendor_row: dict) -> Optional[dict[str, Any]]:
+    """Present Import Vendor credits as bills and debits as debit notes/adjustments."""
+    if vendor_row.get('credit', 0) > 0:
+        return {'direction': 'Import vendor bill / payable', 'amount': vendor_row['credit']}
+    if vendor_row.get('debit', 0) > 0:
+        return {'direction': 'Import vendor debit note / adjustment', 'amount': -vendor_row['debit']}
     return None
 
 
@@ -1439,6 +1448,55 @@ def get_latest_local_vendor_date(client_id: int = Query(..., description="Client
         offset += batch_size
 
 
+@router.get("/api/verification/import_vendors")
+def get_import_vendors(
+    client_id: int = Query(..., description="Client ID"),
+    date_start: str = Query(..., description="Start date (YYYY-MM-DD)"),
+    date_end: str = Query(..., description="End date (YYYY-MM-DD)"),
+):
+    """Discover configured Import Vendor accounts on non-Treasury vouchers."""
+    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
+    if not client:
+        raise HTTPException(404, "Client not found or inactive")
+    try:
+        datetime.fromisoformat(date_start)
+        datetime.fromisoformat(date_end)
+    except ValueError:
+        raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
+    if date_start > date_end:
+        raise HTTPException(400, "Start date must be before or equal to end date.")
+    vendor_routing = get_import_vendor_routing(client_id)
+    if vendor_routing['mode'] != 'account_set':
+        return {'vendors': [], 'count': 0, 'setup_required': True}
+    rows = load_local_vendor_voucher_rows(client_id, vendor_routing['account_codes'], date_start, date_end)
+    vendors = collect_local_vendor_labels(rows, vendor_routing, get_treasury_routing(client_id, 'cash'), get_treasury_routing(client_id, 'bank'))
+    return {'vendors': sorted(vendors), 'count': len(vendors), 'setup_required': False}
+
+
+@router.get("/api/verification/latest_import_vendor_date")
+def get_latest_import_vendor_date(client_id: int = Query(..., description="Client ID")):
+    """Find the latest eligible Import Vendor voucher in bounded vendor-account batches."""
+    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
+    if not client:
+        raise HTTPException(404, "Client not found or inactive")
+    vendor_routing = get_import_vendor_routing(client_id)
+    if vendor_routing['mode'] != 'account_set':
+        return {'latest_date': None, 'setup_required': True}
+    cash_routing = get_treasury_routing(client_id, 'cash')
+    bank_routing = get_treasury_routing(client_id, 'bank')
+    batch_size = 500
+    offset = 0
+    while True:
+        rows = load_local_vendor_voucher_rows(client_id, vendor_routing['account_codes'], limit=batch_size, offset=offset)
+        if not rows:
+            return {'latest_date': None, 'setup_required': False}
+        eligible = collect_local_vendor_vouchers(rows, vendor_routing, cash_routing, bank_routing)
+        dates = [voucher['date'] for voucher in eligible.values() if voucher.get('date')]
+        if dates:
+            return {'latest_date': max(dates), 'setup_required': False}
+        offset += batch_size
+
+
 @router.get("/api/verification/cashbooks")
 def get_cashbooks(
     client_id: int = Query(..., description="Client ID"),
@@ -1668,7 +1726,7 @@ def start_verification_session(
     period_start: str = Query(..., description="Start date (YYYY-MM-DD)"),
     period_end: str = Query(..., description="End date (YYYY-MM-DD)"),
     created_by: str = "Analyst",
-    session_type: str = Query('cash', pattern="^(cash|bank|local_vendor)$", description="'cash', 'bank', or 'local_vendor'")
+    session_type: str = Query('cash', pattern="^(cash|bank|local_vendor|import_vendor)$", description="'cash', 'bank', 'local_vendor', or 'import_vendor'")
 ):
     client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
     if not client:
@@ -1681,12 +1739,18 @@ def start_verification_session(
     if period_start > period_end:
         raise HTTPException(400, "Start date must be before or equal to end date.")
     
-    routing = get_local_vendor_routing(client_id) if session_type == 'local_vendor' else get_treasury_routing(client_id, session_type)
-    if session_type == 'local_vendor' and routing['mode'] != 'account_set':
-        raise HTTPException(400, "Publish the Local Vendors Account Set before starting verification.")
-    selected_vendor_code = local_vendor_code_from_label(cashbook_name) if session_type == 'local_vendor' else None
-    if session_type == 'local_vendor' and not selected_vendor_code:
-        raise HTTPException(400, "Select a Local Vendor account from the configured list.")
+    is_vendor_session = session_type in ('local_vendor', 'import_vendor')
+    routing = (
+        get_local_vendor_routing(client_id) if session_type == 'local_vendor'
+        else get_import_vendor_routing(client_id) if session_type == 'import_vendor'
+        else get_treasury_routing(client_id, session_type)
+    )
+    vendor_workstream = 'Local Vendor' if session_type == 'local_vendor' else 'Import Vendor'
+    if is_vendor_session and routing['mode'] != 'account_set':
+        raise HTTPException(400, f"Publish the {vendor_workstream}s Account Set before starting verification.")
+    selected_vendor_code = local_vendor_code_from_label(cashbook_name) if is_vendor_session else None
+    if is_vendor_session and not selected_vendor_code:
+        raise HTTPException(400, f"Select an {vendor_workstream} account from the configured list.")
     client_prefixes = routing.get('prefixes', {})
     rows = execute_query_pg(
         """
@@ -1751,11 +1815,16 @@ def start_verification_session(
             continue
 
     transactions_to_verify = []
-    cash_routing = get_treasury_routing(client_id, 'cash') if session_type == 'local_vendor' else None
-    bank_routing = get_treasury_routing(client_id, 'bank') if session_type == 'local_vendor' else None
+    cash_routing = get_treasury_routing(client_id, 'cash') if is_vendor_session else None
+    bank_routing = get_treasury_routing(client_id, 'bank') if is_vendor_session else None
     for vid, data in vouchers.items():
-        if session_type == 'local_vendor':
-            if not is_local_vendor_voucher(data, selected_vendor_code, cash_routing, bank_routing):
+        if is_vendor_session:
+            is_eligible = (
+                is_local_vendor_voucher(data, selected_vendor_code, cash_routing, bank_routing)
+                if session_type == 'local_vendor'
+                else is_import_vendor_voucher(data, selected_vendor_code, cash_routing, bank_routing)
+            )
+            if not is_eligible:
                 continue
             for row in data['rows']:
                 if row['account_code'] == selected_vendor_code and (row['debit'] > 0 or row['credit'] > 0):
@@ -1809,7 +1878,7 @@ def start_verification_session(
                 })
     
     if not transactions_to_verify:
-        workstream_name = 'Local Vendor' if session_type == 'local_vendor' else 'cashbook'
+        workstream_name = vendor_workstream if is_vendor_session else 'cashbook'
         raise HTTPException(400, f"No transactions found for {workstream_name} '{cashbook_name}' in the given period.")
     
         # Insert session header
@@ -2751,7 +2820,7 @@ def preview_cashbook(
     date_end: str = Query(..., description="End date (YYYY-MM-DD)"),
     page: int = Query(1, ge=1, description="Page number"),
     limit: int = Query(50, ge=1, le=200, description="Rows per page (max 200)"),
-    session_type: str = Query('cash', pattern="^(cash|bank|local_vendor)$", description="'cash', 'bank', or 'local_vendor'"),
+    session_type: str = Query('cash', pattern="^(cash|bank|local_vendor|import_vendor)$", description="'cash', 'bank', 'local_vendor', or 'import_vendor'"),
 ):
     """
     Get paginated transactions for a specific cashbook without creating a session.
@@ -2771,12 +2840,18 @@ def preview_cashbook(
     if date_start > date_end:
         raise HTTPException(400, "Start date must be before or equal to end date.")
     
-    routing = get_local_vendor_routing(client_id) if session_type == 'local_vendor' else get_treasury_routing(client_id, session_type)
-    if session_type == 'local_vendor' and routing['mode'] != 'account_set':
-        raise HTTPException(400, "Publish the Local Vendors Account Set before previewing verification.")
-    selected_vendor_code = local_vendor_code_from_label(cashbook_name) if session_type == 'local_vendor' else None
-    if session_type == 'local_vendor' and not selected_vendor_code:
-        raise HTTPException(400, "Select a Local Vendor account from the configured list.")
+    is_vendor_session = session_type in ('local_vendor', 'import_vendor')
+    routing = (
+        get_local_vendor_routing(client_id) if session_type == 'local_vendor'
+        else get_import_vendor_routing(client_id) if session_type == 'import_vendor'
+        else get_treasury_routing(client_id, session_type)
+    )
+    vendor_workstream = 'Local Vendor' if session_type == 'local_vendor' else 'Import Vendor'
+    if is_vendor_session and routing['mode'] != 'account_set':
+        raise HTTPException(400, f"Publish the {vendor_workstream}s Account Set before previewing verification.")
+    selected_vendor_code = local_vendor_code_from_label(cashbook_name) if is_vendor_session else None
+    if is_vendor_session and not selected_vendor_code:
+        raise HTTPException(400, f"Select an {vendor_workstream} account from the configured list.")
     client_prefixes = routing.get('prefixes', {})
 
     # Fetch rows
@@ -2852,16 +2927,24 @@ def preview_cashbook(
 
     # Filter to only the selected cashbook/vendor and collect transaction rows
     transactions = []
-    cash_routing = get_treasury_routing(client_id, 'cash') if session_type == 'local_vendor' else None
-    bank_routing = get_treasury_routing(client_id, 'bank') if session_type == 'local_vendor' else None
+    cash_routing = get_treasury_routing(client_id, 'cash') if is_vendor_session else None
+    bank_routing = get_treasury_routing(client_id, 'bank') if is_vendor_session else None
     for vid, data in vouchers.items():
-        if session_type == 'local_vendor':
-            if not is_local_vendor_voucher(data, selected_vendor_code, cash_routing, bank_routing):
+        if is_vendor_session:
+            is_eligible = (
+                is_local_vendor_voucher(data, selected_vendor_code, cash_routing, bank_routing)
+                if session_type == 'local_vendor'
+                else is_import_vendor_voucher(data, selected_vendor_code, cash_routing, bank_routing)
+            )
+            if not is_eligible:
                 continue
             for row in data['rows']:
                 if row['account_code'] != selected_vendor_code:
                     continue
-                presentation = local_vendor_preview_presentation(row)
+                presentation = (
+                    local_vendor_preview_presentation(row) if session_type == 'local_vendor'
+                    else import_vendor_preview_presentation(row)
+                )
                 if not presentation:
                     continue
                 transactions.append({
