@@ -354,6 +354,15 @@ def _get_or_create_cross_check_shortfall_document_id(cross_check_id: int) -> int
     )
     return new_id
 
+def local_vendor_preview_presentation(vendor_row: dict) -> Optional[dict[str, Any]]:
+    """Present vendor credits as bills and debits as debit notes/adjustments."""
+    if vendor_row.get('credit', 0) > 0:
+        return {'direction': 'Vendor bill / payable', 'amount': vendor_row['credit']}
+    if vendor_row.get('debit', 0) > 0:
+        return {'direction': 'Debit note / adjustment', 'amount': -vendor_row['debit']}
+    return None
+
+
 def _has_pending_account_head_note(voucher_line_id: int, sibling_ids: Optional[List[int]] = None) -> bool:
     """
     True if this voucher line (or any sibling session's copy of it - a cashbook reopen creates
@@ -1280,6 +1289,85 @@ def get_verification_stats():
 # PHASE 2 ENDPOINTS
 # ==============================================
 
+def collect_local_vendor_labels(rows: list[dict], vendor_routing: dict, cash_routing: dict, bank_routing: dict) -> set[str]:
+    """Discover configured vendors occurring in non-Treasury vouchers."""
+    vouchers: dict[str, list[dict]] = {}
+    for source_row in rows:
+        try:
+            row_data = source_row['row_data']
+            row_data = json.loads(row_data) if isinstance(row_data, str) else row_data
+            if not isinstance(row_data, dict):
+                continue
+            voucher_id = get_column_value(row_data, ['Voucher ID', 'Voucher No', 'Voucher Number', 'Voucher'])
+            account_code = get_account_code_value(row_data)
+            account_name = get_column_value(row_data, ['Account Name', 'Account', 'Account Detail', 'Ledger', 'Head'])
+            if not voucher_id or not account_code or not account_name:
+                continue
+            vouchers.setdefault(voucher_id, []).append({'account_code': account_code, 'account_name': account_name})
+        except Exception:
+            continue
+    return {
+        local_vendor_label(row['account_code'], row['account_name'])
+        for voucher_id, voucher_rows in vouchers.items()
+        if not voucher_contains_treasury_leg({'voucher_id': voucher_id, 'rows': voucher_rows}, cash_routing, bank_routing)
+        for row in voucher_rows if row['account_code'] in vendor_routing['account_codes']
+    }
+
+
+@router.get("/api/verification/local_vendors")
+def get_local_vendors(
+    client_id: int = Query(..., description="Client ID"),
+    date_start: str = Query(..., description="Start date (YYYY-MM-DD)"),
+    date_end: str = Query(..., description="End date (YYYY-MM-DD)"),
+):
+    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
+    if not client:
+        raise HTTPException(404, "Client not found or inactive")
+    try:
+        datetime.fromisoformat(date_start)
+        datetime.fromisoformat(date_end)
+    except ValueError:
+        raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
+    if date_start > date_end:
+        raise HTTPException(400, "Start date must be before or equal to end date.")
+    vendor_routing = get_local_vendor_routing(client_id)
+    if vendor_routing['mode'] != 'account_set':
+        return {'vendors': [], 'count': 0, 'setup_required': True}
+    rows = execute_query_pg("""SELECT id, row_data FROM client_data
+        WHERE client_id = %s AND is_deleted = FALSE AND change_detection_status != 'deleted'
+          AND extract_date BETWEEN %s AND %s ORDER BY extract_date""", (client_id, date_start, date_end))
+    vendors = collect_local_vendor_labels(rows, vendor_routing, get_treasury_routing(client_id, 'cash'), get_treasury_routing(client_id, 'bank'))
+    return {'vendors': sorted(vendors), 'count': len(vendors), 'setup_required': False}
+
+
+@router.get("/api/verification/latest_local_vendor_date")
+def get_latest_local_vendor_date(client_id: int = Query(..., description="Client ID")):
+    """Return the latest date that contains an eligible Local Vendor JV."""
+    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
+    if not client:
+        raise HTTPException(404, "Client not found or inactive")
+    vendor_routing = get_local_vendor_routing(client_id)
+    if vendor_routing['mode'] != 'account_set':
+        return {'latest_date': None, 'setup_required': True}
+    cash_routing = get_treasury_routing(client_id, 'cash')
+    bank_routing = get_treasury_routing(client_id, 'bank')
+    date_rows = execute_query_pg("""
+        SELECT DISTINCT extract_date FROM client_data
+        WHERE client_id = %s AND is_deleted = FALSE AND change_detection_status != 'deleted'
+        ORDER BY extract_date DESC
+        """, (client_id,))
+    for date_row in date_rows:
+        candidate_date = date_row['extract_date']
+        rows = execute_query_pg("""
+            SELECT id, row_data FROM client_data
+            WHERE client_id = %s AND is_deleted = FALSE AND change_detection_status != 'deleted'
+              AND extract_date = %s
+            """, (client_id, candidate_date))
+        if collect_local_vendor_labels(rows, vendor_routing, cash_routing, bank_routing):
+            return {'latest_date': candidate_date, 'setup_required': False}
+    return {'latest_date': None, 'setup_required': False}
+
+
 @router.get("/api/verification/cashbooks")
 def get_cashbooks(
     client_id: int = Query(..., description="Client ID"),
@@ -1509,9 +1597,7 @@ def start_verification_session(
     period_start: str = Query(..., description="Start date (YYYY-MM-DD)"),
     period_end: str = Query(..., description="End date (YYYY-MM-DD)"),
     created_by: str = "Analyst",
-    # Distinguishes a Cash Verification session from a Bank Verification session (Phases
-    # 7-8 add the dashboard entry points/UI that will pass 'bank' - no caller does yet).
-    session_type: str = Query('cash', pattern="^(cash|bank)$", description="'cash' or 'bank'")
+    session_type: str = Query('cash', pattern="^(cash|bank|local_vendor)$", description="'cash', 'bank', or 'local_vendor'")
 ):
     client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
     if not client:
@@ -1524,7 +1610,12 @@ def start_verification_session(
     if period_start > period_end:
         raise HTTPException(400, "Start date must be before or equal to end date.")
     
-    routing = get_treasury_routing(client_id, session_type)
+    routing = get_local_vendor_routing(client_id) if session_type == 'local_vendor' else get_treasury_routing(client_id, session_type)
+    if session_type == 'local_vendor' and routing['mode'] != 'account_set':
+        raise HTTPException(400, "Publish the Local Vendors Account Set before starting verification.")
+    selected_vendor_code = local_vendor_code_from_label(cashbook_name) if session_type == 'local_vendor' else None
+    if session_type == 'local_vendor' and not selected_vendor_code:
+        raise HTTPException(400, "Select a Local Vendor account from the configured list.")
     client_prefixes = routing.get('prefixes', {})
     rows = execute_query_pg(
         """
@@ -1589,7 +1680,20 @@ def start_verification_session(
             continue
 
     transactions_to_verify = []
+    cash_routing = get_treasury_routing(client_id, 'cash') if session_type == 'local_vendor' else None
+    bank_routing = get_treasury_routing(client_id, 'bank') if session_type == 'local_vendor' else None
     for vid, data in vouchers.items():
+        if session_type == 'local_vendor':
+            if not is_local_vendor_voucher(data, selected_vendor_code, cash_routing, bank_routing):
+                continue
+            for row in data['rows']:
+                if row['account_code'] == selected_vendor_code and (row['debit'] > 0 or row['credit'] > 0):
+                    transactions_to_verify.append({
+                        'client_data_id': row['row_id'], 'row_data': row['row_data'],
+                        'voucher_id': vid, 'extract_date': row['extract_date'],
+                        'extract_amount': row['extract_amount']
+                    })
+            continue
         # The 5-way category already implies Payment vs Receipt, so vtype comes straight from
         # it - no need to re-derive it from the cashbook row's debit/credit sign anymore.
         # cashbook_row is still looked up as a sanity check that the named cashbook actually
@@ -1634,7 +1738,8 @@ def start_verification_session(
                 })
     
     if not transactions_to_verify:
-        raise HTTPException(400, f"No transactions found for cashbook '{cashbook_name}' in the given period.")
+        workstream_name = 'Local Vendor' if session_type == 'local_vendor' else 'cashbook'
+        raise HTTPException(400, f"No transactions found for {workstream_name} '{cashbook_name}' in the given period.")
     
         # Insert session header
     rulebook_version = get_audit_rules_config_version()
@@ -2575,7 +2680,7 @@ def preview_cashbook(
     date_end: str = Query(..., description="End date (YYYY-MM-DD)"),
     page: int = Query(1, ge=1, description="Page number"),
     limit: int = Query(50, ge=1, le=200, description="Rows per page (max 200)"),
-    session_type: str = Query('cash', pattern="^(cash|bank)$", description="'cash' or 'bank'"),
+    session_type: str = Query('cash', pattern="^(cash|bank|local_vendor)$", description="'cash', 'bank', or 'local_vendor'"),
 ):
     """
     Get paginated transactions for a specific cashbook without creating a session.
@@ -2595,7 +2700,12 @@ def preview_cashbook(
     if date_start > date_end:
         raise HTTPException(400, "Start date must be before or equal to end date.")
     
-    routing = get_treasury_routing(client_id, session_type)
+    routing = get_local_vendor_routing(client_id) if session_type == 'local_vendor' else get_treasury_routing(client_id, session_type)
+    if session_type == 'local_vendor' and routing['mode'] != 'account_set':
+        raise HTTPException(400, "Publish the Local Vendors Account Set before previewing verification.")
+    selected_vendor_code = local_vendor_code_from_label(cashbook_name) if session_type == 'local_vendor' else None
+    if session_type == 'local_vendor' and not selected_vendor_code:
+        raise HTTPException(400, "Select a Local Vendor account from the configured list.")
     client_prefixes = routing.get('prefixes', {})
 
     # Fetch rows
@@ -2669,9 +2779,29 @@ def preview_cashbook(
         except:
             continue
 
-    # Filter to only the selected cashbook and collect transaction rows
+    # Filter to only the selected cashbook/vendor and collect transaction rows
     transactions = []
+    cash_routing = get_treasury_routing(client_id, 'cash') if session_type == 'local_vendor' else None
+    bank_routing = get_treasury_routing(client_id, 'bank') if session_type == 'local_vendor' else None
     for vid, data in vouchers.items():
+        if session_type == 'local_vendor':
+            if not is_local_vendor_voucher(data, selected_vendor_code, cash_routing, bank_routing):
+                continue
+            for row in data['rows']:
+                if row['account_code'] != selected_vendor_code:
+                    continue
+                presentation = local_vendor_preview_presentation(row)
+                if not presentation:
+                    continue
+                transactions.append({
+                    'client_data_id': row['row_id'], 'row_data': row['row_data'], 'voucher_id': vid,
+                    'extract_date': row['extract_date'], 'extract_amount': row['extract_amount'],
+                    'amount': presentation['amount'], 'direction': presentation['direction'],
+                    'treasury_amount': None, 'counterpart_total': None, 'imbalance_amount': None,
+                    'is_balanced': True,
+                    'debit_credit_keys': find_debit_credit_keys(row['row_data'], debit_aliases, credit_aliases)
+                })
+            continue
         # Same category-implies-type derivation as start_verification_session - cashbook_row
         # is looked up only as a sanity check that the named cashbook actually appears among
         # this voucher's legs (on the structurally correct side, see is_cashbook_leg_row()),

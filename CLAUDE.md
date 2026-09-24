@@ -279,6 +279,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-22: Existing-Postgres startup wasn't actually running the applied_ruleset_hash migration (line above); added fast-path companion function + regression test.
 - 2026-09-22: Rulebook correction is test-covered; query-batching was rejected after variable remote Save/Verify latency.
 - 2026-09-23: Account Sets now drive Cash/Bank Verification, including JV legs; Preview and the verification table show correct Cash movement and non-zero counterpart amounts.
+- 2026-09-24: Local Vendor backend discovery, session capture, and Preview now route published vendor accounts while Treasury vouchers remain excluded.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

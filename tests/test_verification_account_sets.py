@@ -279,3 +279,74 @@ class LocalVendorRoutingFoundationTests(unittest.TestCase):
     def test_code_label_round_trip_is_not_name_based(self):
         label = verification.local_vendor_label('20-15-50-0001', 'Duplicate Vendor Name')
         self.assertEqual(verification.local_vendor_code_from_label(label), '20-15-50-0001')
+
+class LocalVendorWorkflowTests(unittest.TestCase):
+    vendor_code = '20-15-50-0001'
+    vendor_name = 'Local Leather Supplier'
+
+    def _rows(self):
+        return [
+            {'id': 301, 'row_data': {'Voucher ID': 'JV-1', 'Account Code': self.vendor_code, 'Account Name': self.vendor_name, 'Debit': '0', 'Credit': '150'}, 'extract_date': '2026-01-10', 'extract_amount': 150},
+            {'id': 302, 'row_data': {'Voucher ID': 'JV-1', 'Account Code': '50-10-0001', 'Account Name': 'Raw Material', 'Debit': '150', 'Credit': '0'}, 'extract_date': '2026-01-10', 'extract_amount': 150},
+            {'id': 303, 'row_data': {'Voucher ID': 'JV-2', 'Account Code': self.vendor_code, 'Account Name': self.vendor_name, 'Debit': '25', 'Credit': '0'}, 'extract_date': '2026-01-12', 'extract_amount': 25},
+            {'id': 304, 'row_data': {'Voucher ID': 'JV-2', 'Account Code': '50-10-0001', 'Account Name': 'Raw Material', 'Debit': '0', 'Credit': '25'}, 'extract_date': '2026-01-12', 'extract_amount': 25},
+            {'id': 305, 'row_data': {'Voucher ID': 'BPV-3', 'Account Code': self.vendor_code, 'Account Name': self.vendor_name, 'Debit': '80', 'Credit': '0'}, 'extract_date': '2026-01-15', 'extract_amount': 80},
+            {'id': 306, 'row_data': {'Voucher ID': 'BPV-3', 'Account Code': '10-15-115-15-0001', 'Account Name': 'Main Bank', 'Debit': '0', 'Credit': '80'}, 'extract_date': '2026-01-15', 'extract_amount': 80},
+        ]
+
+    def _treasury_routing(self, _client_id, workstream):
+        return {'mode': 'account_set', 'account_codes': {'10-15-115-15-0001'} if workstream == 'bank' else set()}
+
+    def test_discovery_lists_only_non_treasury_vendor_accounts(self):
+        labels = verification.collect_local_vendor_labels(
+            self._rows(), {'account_codes': {self.vendor_code}},
+            self._treasury_routing(7, 'cash'), self._treasury_routing(7, 'bank'),
+        )
+        self.assertEqual(labels, {f'{self.vendor_code} :: {self.vendor_name}'})
+
+    def test_session_captures_vendor_jvs_but_not_bank_payment(self):
+        details = []
+
+        def query(sql, _params):
+            if 'FROM clients' in sql:
+                return [{'id': 7}]
+            if 'FROM client_data' in sql:
+                return self._rows()
+            raise AssertionError(f'Unexpected query: {sql}')
+
+        def write(sql, _params):
+            return 92 if 'INSERT INTO verification_sessions' in sql else []
+
+        def batch_insert(_conn, _sql, params, template):
+            self.assertIn('Pending', template)
+            details.extend(params)
+            return []
+
+        with patch.object(verification, 'execute_query_pg', side_effect=query), patch.object(verification, 'execute_write_pg', side_effect=write), patch.object(verification, 'execute_batch_insert_with_ids_pg', side_effect=batch_insert), patch.object(verification, 'get_raw_conn_pg', return_value=object()), patch.object(verification, 'release_raw_conn_pg'), patch.object(verification, 'get_audit_rules_config_version', return_value=1), patch.object(verification, 'get_local_vendor_routing', return_value={'mode': 'account_set', 'account_codes': {self.vendor_code}}), patch.object(verification, 'get_treasury_routing', side_effect=self._treasury_routing), patch.object(verification, 'log_audit'):
+            result = verification.start_verification_session(
+                client_id=7, cashbook_name=f'{self.vendor_code} :: {self.vendor_name}',
+                period_start='2026-01-01', period_end='2026-01-31', session_type='local_vendor',
+            )
+
+        self.assertEqual(result['total_transactions'], 2)
+        self.assertEqual(details, [(92, 301, 'JV-1'), (92, 303, 'JV-2')])
+
+    def test_preview_uses_vendor_bill_and_debit_note_signs(self):
+        def query(sql, _params):
+            if 'FROM clients' in sql:
+                return [{'id': 7}]
+            if 'FROM client_data' in sql:
+                return self._rows()
+            if 'FROM verification_details' in sql:
+                return []
+            raise AssertionError(f'Unexpected query: {sql}')
+
+        with patch.object(verification, 'execute_query_pg', side_effect=query), patch.object(verification, 'get_local_vendor_routing', return_value={'mode': 'account_set', 'account_codes': {self.vendor_code}}), patch.object(verification, 'get_treasury_routing', side_effect=self._treasury_routing):
+            result = verification.preview_cashbook(
+                client_id=7, cashbook_name=f'{self.vendor_code} :: {self.vendor_name}',
+                date_start='2026-01-01', date_end='2026-01-31', page=1, limit=50, session_type='local_vendor',
+            )
+
+        self.assertEqual(result['total_rows'], 2)
+        self.assertEqual([row['amount'] for row in result['rows']], [150, -25])
+        self.assertEqual([row['direction'] for row in result['rows']], ['Vendor bill / payable', 'Debit note / adjustment'])

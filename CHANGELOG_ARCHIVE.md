@@ -6367,3 +6367,11 @@ or procedure-modal requests, whose observed latency therefore remains a separate
 **Implementation:** Local Vendors require published `local_vendors` and never use prefixes. Cash/Bank preserve their established fallback and take priority, including JVs. Vendor identity retains the account code with its display name.
 
 **Verification:** Python compilation, `git diff --check`, and 13 focused routing tests passed.
+
+## Local Vendor backend workflow - Phase 1 - 2026-09-24
+
+**Scope:** Added Local Vendor backend discovery, latest-date lookup, session creation, and Preview only. No Verification UI, date-range reconciliation, schema, Audit Workbook, or Cash/Bank behaviour changed.
+
+**Implementation:** A published `local_vendors` set exposes code-qualified vendor labels for eligible non-Treasury vouchers. Session and Preview accept `local_vendor`, retain only the selected vendor's non-zero account lines, and exclude every voucher containing configured Cash/Bank legs (including JVs and prefix fallback). Credits display as **Vendor bill / payable**; debits display as negative **Debit note / adjustment** values.
+
+**Verification:** Python compilation and `git diff --check` passed. Focused Account Set/Verification suite: 16 passed, including discovery, JV session capture, Treasury exclusion, and credit/debit Preview presentation. No packages installed.
