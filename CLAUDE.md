@@ -205,6 +205,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-24: Verification Phase 6 activated Export Customer, Payroll, and Contractor JV workstreams with Treasury-safe routing and independent discovery/session dates.
 - 2026-09-24: Verification Phase 7 centralized workstream debit/credit rules and signed non-Treasury preview/session presentation.
 - 2026-09-24: Verification workstreams are now the active priority; global navigation now exposes all seven live workstreams, while Financial Statement groundwork remains deferred operationally.
+- 2026-09-25: Verification table order standardized across all seven workstreams in static/verification.js; user-confirmed.
 
 - 2026-07-09: main.py NameError fixed; clients module reviewed, no issues found.
 - 2026-07-12: Upload page redesign, 3 phases, plus flush-layout and navbar-gap fixes.
@@ -217,22 +218,16 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-07-21: Client Data Bank unified redesign added shared date ranges, export/grouping fixes, holidays, coverage calendar, and missing-date reporting; Upload reliability evolved into row-level blank-field rejection.
 - 2026-07-22: Trial Balance module, 5 phases, plus column-mapping Section 1 (3 phases) and a delete-upload fix.
 - 2026-07-23: Trial Balance category assignment and Verification deep-link integration completed, including cascading assignments and refresh-safe view persistence.
-- 2026-07-24: Verification gained dynamic Client Data Links/template viewer and full Supporting-Document linking with unassign and follow-up fixes.
-- 2026-07-25: Observation rollup finalized as replace-per-procedure; no-template Documents and Linked Evidence totals were completed.
-- 2026-07-27: Verification behavior was documented; Supporting Documents modal gained its left rail, segmented content, and risk indicator.
-- 2026-07-28: Verification UI fixes and Validation Rules completed, including modal/observation polish and voucher-level approval schema.
+- 2026-07-24/25: Verification gained dynamic Client Data Links, supporting-document linking, unassign flows, and replace-per-procedure observation rollup.
+- 2026-07-27/28: Verification behavior and Supporting Documents UI were documented/refined; Validation Rules and approval schema completed.
 - 2026-07-29: Transaction approval backend, name-only Voucher-Level Checks, and Account Head recommendation search/no-match handling completed; approval UI remains hidden.
 - 2026-07-31: Automated cross-document validation engine, 10 phases (chain-aware evaluation, shortfall observations).
-- 2026-08-01: Rate derivation/backfill, Category detail, Signature Specimen soft-delete, ID-based cross-check fields, and cashbook discovery fixes completed.
-- 2026-08-02: Authority fields added (Signature Specimens/"Approved by" roles/Voucher-level Checks, gate wired) + Category "Approved" checkbox hard-removed, Documents picker merged, Cleared Requirements summary (3 phases).
-- 2026-08-05: Dev/test fixture hard-deletes; inactive items excluded from selection contexts, 5 phases.
-- 2026-08-07: "Verify & Next" now steps through voucher lines before advancing the voucher.
-- 2026-08-08: Audit Rules Categories and Physical Bill evidence completed; repository hygiene, Code Health Review, and initial global search were added.
-- 2026-08-09: Amount extraction/backfill and cleared-status UI fixed; Physical Bill population superseded and removed the former GRN-created Vendor Bill feature.
+- 2026-08-01/02: Verification gained rate/backfill, Category detail, Signature Specimen soft-delete, authority fields, and Cleared Requirements summary.
+- 2026-08-05/07: Dev/test fixtures were hardened; inactive selections were excluded; Verify & Next now traverses voucher lines.
+- 2026-08-08/09: Audit Rules Categories and Physical Bill evidence shipped; amount extraction and cleared-status UI were corrected.
 - 2026-08-10: Verification session/cashbook UX fixes — state persistence, date-range reconciliation (4 phases), header stats (3 phases).
 - 2026-08-12/16: Audit Workbook built and refined with line grouping, compact header, Date/deep links, shared procedure-modal adapter, and stylesheet cache-busting.
-- 2026-08-18: Physical Bill auto-save on modal exit, blank-field relaxation, mandatory-field red-border cue.
-- 2026-08-19: Multi-Bill/Multi-Line Physical Bill, 6 phases (nested header+items schema through styling).
+- 2026-08-18/19: Physical Bills gained auto-save, mandatory-field cues, and multi-bill/multi-line support.
 - 2026-08-20: Global header nav rebuild (6 phases) and First/last page buttons/import progress bar/Subtotal default flag completed.
 - 2026-08-21: Database size, dashboard KPIs, automatic Rate Source, faster imports, and native Excel date handling completed; Overdue Uploads shipped, 4 phases.
 - 2026-08-22: User module (Login → Client Cards → Dashboard, 7 phases) shipped with session-backed client selection and a redesigned header client area.
@@ -241,12 +236,9 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-08-23/25: Shared Loading UI completed across login, Data Bank, Upload, Audit Rules, and Verification, including modal actions and processing feedback.
 - 2026-08-24: Fast Data Handling completed with gzip, indexes, retries, column trimming, debounce, caching, pagination, and retry wiring.
 - 2026-08-24/25: Performance investigation identified region latency, sequential reads, and free-tier limits. See PERFORMANCE_INVESTIGATION.md.
-- 2026-08-24/26: Verification gained save concurrency guards, batched writes/checks, parallel modal reads, sibling memoization, and duplicate-read removal; contaminating test checks were deactivated.
-- 2026-08-25/26: Dashboard/Postgres queries, Render naming, SQLite threadpool handling, and overdue-upload reporting were corrected; start-session findings remain in KNOWN_ISSUES.md.
-- 2026-08-26: Modal data and Category guidance gained batching/caching, request-race protection, and scoped invalidation; voucher Categories freeze on first save.
-- 2026-08-26/27: Trial Balance upload batching, Assign Categories context, Verification navigation/retry/loading recovery, and Data Bank availability progress were completed.
-- 2026-08-27/29: Verification gained opt-in timings, database metrics, dirty tracking, duplicate-save prevention, startup payload reduction, today-only discovery, and busy feedback.
-- 2026-08-28: Voucher support/observation sync/line-navigation optimizations, and grouped atomic Save/Verify with batch ticks and cache invalidation, completed; Render confirmation pending.
+- 2026-08-24/26: Verification gained save concurrency, batched support reads, and Postgres/query corrections; start-session findings remain in KNOWN_ISSUES.md.
+- 2026-08-26/27: Verification modal caching, Category invalidation, Trial Balance batching, navigation recovery, and Data Bank availability progress completed.
+- 2026-08-27/29: Verification gained timings, metrics, dirty tracking, Save/Verify optimizations, startup reduction, and busy feedback.
 - 2026-08-28: Audit Workbook badge refresh adopted cached voucher support and corrected legacy Physical Bill completion; redundant fetch helpers were removed.
 - 2026-08-29: Legacy verification_details.status was confirmed inert; remaining findings live in KNOWN_ISSUES.md. Save/Verify roadmap separated logical verification from persistence.
 - 2026-08-30/31: Versioned client Rulebook completed with Trial Balance-first resolution, session retrieval, local guidance, status evaluation, and standalone line-save loader correction.

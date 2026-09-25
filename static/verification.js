@@ -1422,28 +1422,14 @@ function renderCashbookTable(rows) {
     }
     const firstRow = rows[0].row_data;
     const originalKeys = firstRow ? Object.keys(firstRow) : [];
-    // Debit/Credit columns (Phase 3): collapsed into one "Amount" column, inserted in place of
-    // the first Debit/Credit key so it lands in its natural reading position instead of being
-    // appended at the end. debit_credit_keys comes from the backend (the literal keys it matched
-    // for this row), not a separate frontend alias list, so it can't drift out of sync.
+    // Debit/Credit columns (Phase 3): collapsed into one movement column. Keep the shared
+    // Verification table layout stable across Cash, Bank, and every JV workstream rather than
+    // inheriting the source row's key order.
     const dcKeys = new Set(rows[0].debit_credit_keys || []);
-    const headers = [];
-    let amountInserted = false;
-    originalKeys.forEach(k => {
-        if (dcKeys.has(k)) {
-            if (!amountInserted) {
-                headers.push('__DIRECTION__');
-                headers.push('__AMOUNT__');
-                amountInserted = true;
-            }
-        } else {
-            headers.push(k);
-        }
-    });
-    if (!amountInserted) {
-        headers.push('__DIRECTION__');
-        headers.push('__AMOUNT__');
-    }
+    const preferredKeys = ['Voucher ID', 'Transaction Date', 'Account Detail', 'Account Name', 'Voucher Detail'];
+    const orderedKeys = preferredKeys.filter(key => originalKeys.includes(key));
+    const remainingKeys = originalKeys.filter(key => !dcKeys.has(key) && !preferredKeys.includes(key));
+    const headers = [...orderedKeys, ...remainingKeys, '__DIRECTION__', '__AMOUNT__'];
 
     let html = `<table style="width:100%; border-collapse:collapse; font-size:13px;">
         <thead style="background:#f8fafc; position:sticky; top:0; z-index:1; border-bottom:2px solid #e2e8f0;">

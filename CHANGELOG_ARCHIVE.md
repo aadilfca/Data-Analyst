@@ -1,4 +1,14 @@
 # Changelog Archive
+## Verification table column order — 2026-09-25
+
+**Scope:** Standardize the Verification table column sequence across Cash, Bank, Local Vendor, Import Vendor, Export Customer, Payroll, and Contractor.
+
+**Implementation:** `renderCashbookTable()` now uses Voucher ID, Transaction Date, Account Detail, Account Name, Voucher Detail, Direction, the workstream movement column, and Status while preserving existing values and labels.
+
+**Verification:** User-confirmed local-server test passed. `node --check static/verification.js` and `git diff --check` passed; the automated headless check redirected to login because it had no authenticated session.
+
+Files: static/verification.js.
+
 ## JV configuration retirement and ACC-only workstreams — 2026-09-24
 
 **Scope:** Remove active Journal-prefix configuration and the remaining Local/Import Vendor legacy Account Set fallback. Account Control Centre is now the only Verification routing source for Cash, Bank, vendors, customers, Payroll, and Contractor.
