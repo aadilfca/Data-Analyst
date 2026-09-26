@@ -4313,6 +4313,85 @@ def export_audited_cashbook_excel(session_id: int):
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
 
+VERIFICATION_EXPORT_COLUMNS = [
+    "Sr No.", "Date", "Account Code", "Account Type", "Account Name",
+    "Amount", "Procedures", "Observations", "Status",
+]
+
+
+def _build_verification_export_rows(audit_workbook: dict) -> list[dict]:
+    """Flatten the line-grain Audit Workbook payload into the Verification export shape."""
+    rows = []
+    row_number = 0
+    for voucher in audit_workbook.get("vouchers", []):
+        voucher_date = voucher.get("date") or ""
+        for line in voucher.get("lines", []):
+            row_number += 1
+            procedures = line.get("procedures") or {}
+            observation_entries = (line.get("observations") or {}).get("entries") or []
+            observation_text = "\n".join(
+                f"{entry.get('document_name')}: {entry.get('text') or entry.get('observation_text')}"
+                if entry.get("document_name")
+                else str(entry.get("text") or entry.get("observation_text") or "")
+                for entry in observation_entries
+                if entry.get("text") or entry.get("observation_text")
+            )
+            rows.append({
+                "Sr No.": row_number,
+                "Date": voucher_date,
+                "Account Code": line.get("account_code") or "",
+                "Account Type": line.get("category_name") or "",
+                "Account Name": line.get("account_name") or "",
+                "Amount": line.get("amount") if line.get("amount") is not None else 0,
+                "Procedures": f"{procedures.get('done', 0)}/{procedures.get('total', 0)}",
+                "Observations": observation_text,
+                "Status": line.get("status") or "Pending",
+            })
+    return rows
+
+
+@router.get("/api/verification/export_verification_excel/{session_id}")
+def export_verification_session_excel(session_id: int, user_session=Depends(get_current_user)):
+    """Export the current line-level Verification session values to Excel."""
+    audit_workbook = get_audit_workbook(session_id)
+    rows = _build_verification_export_rows(audit_workbook)
+    if not rows:
+        raise HTTPException(400, "No transactions to export.")
+
+    session = execute_query_pg(
+        "SELECT cashbook_name FROM verification_sessions WHERE id = %s AND status != 'Cancelled'",
+        (session_id,)
+    )
+    if not session:
+        raise HTTPException(404, "Verification session not found or cancelled.")
+
+    df = pd.DataFrame(rows, columns=VERIFICATION_EXPORT_COLUMNS)
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name="Verification", index=False)
+        worksheet = writer.sheets["Verification"]
+        worksheet.freeze_panes = "A2"
+        worksheet.auto_filter.ref = worksheet.dimensions
+        for cell in worksheet[1]:
+            cell.font = Font(bold=True)
+        for row in worksheet.iter_rows(min_row=2, min_col=8, max_col=8):
+            row[0].alignment = Alignment(wrap_text=True, vertical="top")
+        for col in worksheet.columns:
+            max_length = max(len(str(cell.value or "")) for cell in col)
+            worksheet.column_dimensions[col[0].column_letter].width = min(max_length + 2, 50)
+
+    output.seek(0)
+    safe_cashbook_name = re.sub(
+        r"[^A-Za-z0-9._-]+", "_", str(session[0]["cashbook_name"] or "Verification")
+    ).strip("_") or "Verification"
+    filename = f"Verification_{safe_cashbook_name}_{datetime.now().strftime('%Y%m%d')}.xlsx"
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+
 # ==============================================
 # AUDIT GUIDANCE LOOKUP (Phase 9: sourced from Audit Rules Categories)
 # ==============================================

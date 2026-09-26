@@ -51,6 +51,7 @@ function isNonTreasuryVerification() { return ['local_vendor', 'import_vendor', 
 function isVendorVerification() { return isNonTreasuryVerification(); }
 
 let currentSessionId = null;
+let verificationExcelDownloadInFlight = false;
 let currentDetailId = null;
 let sessionRulebook = null;
 let verificationPresenceHeartbeat = null;
@@ -1986,10 +1987,14 @@ function renderVoucherHeader(voucherId, voucherDate, lines) {
                 <span class="cashbook-stat"><span class="cashbook-stat-label">Pending</span><span class="cashbook-stat-value pending" id="voucherStatPending">${statsPending}</span></span>
             </div>
             <div class="cashbook-bar-actions">
+                <button class="btn-cashbook" id="verificationExcelDownloadBtn" title="Download the verified session as Excel"><span class="btn-icon">📥</span> Download Excel</button>
                 <button class="btn-cashbook" id="cashbookReturnBtn"><span class="btn-icon">${bookIcon}</span> Change ${bookLabel}</button>
                 <button class="btn-cashbook" id="auditWorkbookBtn"><span class="btn-icon">📗</span> Audit Workbook</button>
             </div>
         `;
+        document.getElementById('verificationExcelDownloadBtn')?.addEventListener('click', function() {
+            downloadVerificationExcel(this);
+        });
         document.getElementById('cashbookReturnBtn')?.addEventListener('click', function() {
             if (typeof returnToCashbookFromSession === 'function') returnToCashbookFromSession();
         });
@@ -2075,6 +2080,45 @@ function navigateToAuditWorkbook(voucherNo) {
     const params = new URLSearchParams({ session: currentSessionId });
     if (voucherNo) params.set('voucher', voucherNo);
     window.location.href = `/static/audit_workbook.html?${params}`;
+}
+
+async function downloadVerificationExcel(button) {
+    if (!currentSessionId || verificationExcelDownloadInFlight) return;
+    verificationExcelDownloadInFlight = true;
+    let objectUrl = null;
+    if (window.LoadingUI) window.LoadingUI.showSpinner(button, 'Preparing Excel…');
+    try {
+        const response = await window.ApiUtils.apiFetch(
+            `${API_BASE}/api/verification/export_verification_excel/${currentSessionId}`
+        );
+        if (!response.ok) {
+            let message = `Could not download the Verification Excel file (${response.status}).`;
+            try {
+                const errorBody = await response.json();
+                message = errorBody.detail || message;
+            } catch (error) {
+                // Keep the readable fallback when the server returns a non-JSON error page.
+            }
+            throw new Error(message);
+        }
+        const blob = await response.blob();
+        objectUrl = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = objectUrl;
+        link.download = `Verification_${currentSessionId}.xlsx`;
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        showStatus('Verification Excel downloaded.', 'success');
+    } catch (error) {
+        console.error('Verification Excel download failed:', error);
+        showStatus(error.message || 'Could not download the Verification Excel file.', 'error');
+    } finally {
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+        if (window.LoadingUI) window.LoadingUI.hideSpinner(button);
+        verificationExcelDownloadInFlight = false;
+    }
 }
 
 // ---------- VOUCHER LINE ALIAS HELPERS (Phase 3) ----------

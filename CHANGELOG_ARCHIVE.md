@@ -1,4 +1,14 @@
 # Changelog Archive
+## Verification Excel export - 2026-09-26
+
+Scope: Add downloadable Excel export for current Verification sessions.
+
+Implementation: Added a backend export endpoint and line-level workbook columns for date, account details, amount, procedures, observations, and status; added a guarded download button with loading and error feedback.
+
+Verification: 43 focused Verification tests passed, node --check static/verification.js, and git diff --check passed.
+
+Files: routers/verification.py, static/verification.js, tests/test_verification_account_sets.py.
+
 ## Account Control Centre layout polish - 2026-09-26
 
 Scope: Remove redundant introductory copy and the empty dim-blue status banner without changing status feedback behavior.

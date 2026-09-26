@@ -1,5 +1,7 @@
 """Regression coverage for published Account Set treasury routing."""
 
+import asyncio
+import io
 import json
 import re
 import subprocess
@@ -7,8 +9,79 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from openpyxl import load_workbook
+
 from routers import account_control_center as control_center
 from routers import verification
+
+
+class VerificationExportTests(unittest.TestCase):
+    def test_verification_export_rows_preserve_requested_columns_and_values(self):
+        audit_workbook = {
+            "vouchers": [{
+                "date": "2026-08-26",
+                "lines": [{
+                    "account_code": "1100",
+                    "category_name": "Cash",
+                    "account_name": "Cash in Hand",
+                    "amount": 125.5,
+                    "procedures": {"done": 2, "total": 3},
+                    "observations": {
+                        "entries": [{
+                            "document_name": "Payment Approval",
+                            "text": "Missing signature",
+                        }]
+                    },
+                    "status": "Query",
+                }]
+            }]
+        }
+
+        rows = verification._build_verification_export_rows(audit_workbook)
+
+        self.assertEqual(list(rows[0]), verification.VERIFICATION_EXPORT_COLUMNS)
+        self.assertEqual(rows[0], {
+            "Sr No.": 1,
+            "Date": "2026-08-26",
+            "Account Code": "1100",
+            "Account Type": "Cash",
+            "Account Name": "Cash in Hand",
+            "Amount": 125.5,
+            "Procedures": "2/3",
+            "Observations": "Payment Approval: Missing signature",
+            "Status": "Query",
+        })
+
+    def test_verification_export_response_contains_requested_worksheet_columns(self):
+        audit_workbook = {
+            "vouchers": [{
+                "date": "2026-08-26",
+                "lines": [{
+                    "account_code": "1100",
+                    "category_name": "Cash",
+                    "account_name": "Cash in Hand",
+                    "amount": 125.5,
+                    "procedures": {"done": 2, "total": 3},
+                    "observations": {"entries": []},
+                    "status": "Cleared",
+                }]
+            }]
+        }
+
+        with patch.object(verification, "get_audit_workbook", return_value=audit_workbook), patch.object(
+            verification, "execute_query_pg", return_value=[{"cashbook_name": "CASH IN HAND"}]
+        ):
+            response = verification.export_verification_session_excel(1111, user_session={})
+
+        async def read_response():
+            return b"".join([chunk async for chunk in response.body_iterator])
+
+        workbook = load_workbook(io.BytesIO(asyncio.run(read_response())), read_only=True)
+        worksheet = workbook["Verification"]
+        self.assertEqual(
+            [cell.value for cell in worksheet[1]], verification.VERIFICATION_EXPORT_COLUMNS
+        )
+        self.assertEqual(worksheet.cell(row=2, column=6).value, 125.5)
 
 
 class TreasuryRoutingTests(unittest.TestCase):
