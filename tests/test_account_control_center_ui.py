@@ -174,3 +174,102 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     page.locator("#accAccountFilter").fill("Supplier A")
     assert page.locator("#accAccountRows tr").count() == 1
     page.close()
+
+
+def test_cashflow_setup_uses_categories_and_configuration_popups(browser, static_server):
+    accounts = [
+        {"id": 1, "account_code": "10-15", "account_name": "Receipts", "parent_account_code": None, "level": 2, "is_leaf": False, "assignment": {"verification_workstream": None}},
+        {"id": 2, "account_code": "10-15-0001", "account_name": "Cash account", "parent_account_code": "10-15", "level": 3, "is_leaf": True, "category_id": None},
+        {"id": 3, "account_code": "10-15-0002", "account_name": "Bank account", "parent_account_code": "10-15", "level": 3, "is_leaf": True, "category_id": None},
+    ]
+    categories = [{"id": 1, "client_id": 1, "category_key": "customer_receipts", "label": "Customer receipts", "sort_order": 0, "is_active": True}]
+    calls = []
+
+    def handle_api(route, request):
+        url = request.url
+        if "/api/auth/current-client" in url:
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({"client_id": 1, "client_name": "Regression Client", "client_code": "RC"}))
+            return
+        if "/api/users" in url:
+            route.fulfill(status=200, content_type="application/json", body=json.dumps([]))
+            return
+        if url.split("?")[0].endswith("/api/account-control-center/mapping"):
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({
+                "client_id": 1,
+                "upload": {"id": 77, "file_name": "January Trial Balance.xlsx", "as_of_date": "2026-01-31"},
+                "accounts": accounts,
+            }))
+            return
+        base = url.split("?")[0]
+        if base.endswith("/api/account-control-center/cashflow/setup"):
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({
+                "client_id": 1,
+                "upload": {"id": 77, "file_name": "January Trial Balance.xlsx", "as_of_date": "2026-01-31"},
+                "categories": categories,
+                "accounts": accounts,
+                "treasury_accounts": {"cash": [], "bank": []},
+                "settings": {"match_internal_transfers": False, "receipt_presentation": "net"},
+            }))
+            return
+        if base.endswith("/api/account-control-center/cashflow/categories") and request.method == "POST":
+            body = json.loads(request.post_data or "{}")
+            calls.append((request.method, body))
+            categories.append({"id": 2, "client_id": 1, "category_key": body["category_key"], "label": body["label"], "sort_order": 1, "is_active": True})
+            route.fulfill(status=201, content_type="application/json", body=json.dumps({"saved": True, "category": categories[-1]}))
+            return
+        if base.endswith("/api/account-control-center/cashflow/category-assignment"):
+            body = json.loads(request.post_data or "{}")
+            calls.append((request.method, body))
+            for account in accounts:
+                if account["account_code"] == body.get("account_code"):
+                    account["category_id"] = body.get("category_id")
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({"saved": True, **body}))
+            return
+        if base.endswith("/api/account-control-center/cashflow/treasury-accounts") or base.endswith("/api/account-control-center/cashflow/settings"):
+            body = json.loads(request.post_data or "{}")
+            calls.append((request.method, body))
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({"saved": True, **body}))
+            return
+        route.fulfill(status=200, content_type="application/json", body="{}")
+
+    page = browser.new_page()
+    page.route("**/api/**", handle_api)
+    page.goto("{}/static/account_control_center.html".format(static_server), wait_until="load")
+    page.wait_for_selector("#accAccountRows .acc2-workstream")
+    assert page.locator("#accCashflowPanel").is_hidden()
+    page.locator("#accTabCashflow").click()
+    page.wait_for_selector("#accCashflowRows .acc2-cashflow-category")
+    assert page.locator("#accCashflowPanel").is_visible()
+    assert page.locator("#accVerificationPanel").is_hidden()
+    assert page.locator("#accCashflowRows tr").count() == 3
+    assert page.locator("#accCashflowRows .acc2-cashflow-section").count() == 0
+    assert page.locator("#accCashflowRows .acc2-cashflow-role").count() == 0
+    assert page.locator("#accCashflowRows .acc2-cashflow-treatment").count() == 0
+    page.locator("#accCashflowCategoryFab").click()
+    page.locator("#accCashflowCategoryKey").fill("supplier_payments")
+    page.locator("#accCashflowCategoryLabel").fill("Supplier payments")
+    page.locator("#accCashflowCategoryForm button[type='submit']").click()
+    page.wait_for_timeout(150)
+    assert page.locator("#accCashflowCategoryList .acc2-category-item").count() == 2
+    page.locator("#accCashflowCategoryClose").click()
+    page.locator("select.acc2-cashflow-category[data-acc-code='10-15-0001']").select_option("1")
+    page.wait_for_timeout(150)
+    assert any(method == "PUT" and body.get("category_id") == 1 for method, body in calls)
+    page.locator("#accCashflowAccountsButton").click()
+    assert page.locator("#accCashflowCashOptions .acc2-account-parent").count() == 1
+    assert page.locator("#accCashflowCashSelected .acc2-treasury-empty").count() == 1
+    page.locator("#accCashflowCashSearch").fill("Cash account")
+    page.locator("#accCashflowCashOptions input:not(:disabled)").first.check()
+    assert page.locator("#accCashflowCashSelected").get_by_text("10-15-0001").count() == 1
+    page.locator("[data-acc-cashflow-config-tab='bank']").click()
+    page.locator("#accCashflowBankSearch").fill("Bank account")
+    page.locator("#accCashflowBankOptions input:not(:disabled)").first.check()
+    assert page.locator("#accCashflowBankSelected").get_by_text("10-15-0002").count() == 1
+    page.locator("#accCashflowAccountsSave").click()
+    page.wait_for_timeout(150)
+    assert any(method == "PUT" and "cash_account_codes" in body and "bank_account_codes" in body for method, body in calls)
+    page.locator("[data-acc-cashflow-config-tab='transfers']").click()
+    assert page.locator("#accCashflowMatchTransfers").is_visible()
+    page.locator("[data-acc-cashflow-config-tab='customer']").click()
+    assert page.locator(".acc2-payment-format-card").count() == 2
+    page.close()

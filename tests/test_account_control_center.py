@@ -40,6 +40,10 @@ class AccountSetSchemaTests(unittest.TestCase):
                         "account_set_selectors",
                         "account_control_categories",
                         "account_control_assignments",
+                        "account_control_cashflow_categories",
+                        "account_control_cashflow_category_assignments",
+                        "account_control_cashflow_treasury_accounts",
+                        "account_control_cashflow_settings",
                     }.issubset(tables)
                 )
                 self.assertTrue(
@@ -51,6 +55,9 @@ class AccountSetSchemaTests(unittest.TestCase):
                         "idx_account_control_categories_client_type",
                         "idx_account_control_assignments_client",
                         "idx_account_control_assignments_workstream",
+                        "idx_account_control_cashflow_categories_client",
+                        "idx_account_control_cashflow_category_assignments_client",
+                        "idx_account_control_cashflow_treasury_client",
                     }.issubset(indexes)
                 )
             finally:
@@ -91,6 +98,13 @@ class AccountSetPostgresMigrationTests(unittest.TestCase):
         self.assertIn("CREATE TABLE IF NOT EXISTS account_set_versions", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS account_set_selectors", sql)
         self.assertIn("idx_account_set_selectors_version", sql)
+        self.assertIn("CREATE TABLE IF NOT EXISTS account_control_cashflow_categories", sql)
+        self.assertIn("CREATE TABLE IF NOT EXISTS account_control_cashflow_category_assignments", sql)
+        self.assertIn("CREATE TABLE IF NOT EXISTS account_control_cashflow_treasury_accounts", sql)
+        self.assertIn("CREATE TABLE IF NOT EXISTS account_control_cashflow_settings", sql)
+        self.assertIn("idx_account_control_cashflow_categories_client", sql)
+        self.assertIn("idx_account_control_cashflow_category_assignments_client", sql)
+        self.assertIn("idx_account_control_cashflow_treasury_client", sql)
         self.assertTrue(connection.cursor_instance.closed)
         self.assertFalse(connection.rollback_called)
 class AccountSetResolverTests(unittest.TestCase):
@@ -193,6 +207,41 @@ class SimplifiedAccountControlTests(unittest.TestCase):
         self.assertEqual(control_center._clean_control_account_code(payload.parent_account_code), "20-15-50")
         self.assertEqual(payload.verification_workstream, "local_vendor")
 
+
+
+class CashFlowControlTests(unittest.TestCase):
+    def test_category_payload_normalises_key_and_label(self):
+        cleaned = control_center._clean_cashflow_category_payload(
+            control_center.CashFlowCategoryPayload(client_id=1, category_key=" Customer Receipts ", label="  Customer receipts  ")
+        )
+        self.assertEqual(cleaned["category_key"], "customer_receipts")
+        self.assertEqual(cleaned["label"], "Customer receipts")
+
+    def test_category_assignment_payload_cleans_account_code_and_allows_clear(self):
+        cleaned = control_center._clean_cashflow_category_assignment(
+            control_center.CashFlowCategoryAssignmentPayload(client_id=1, account_code=" 10-15-0001 ", category_id=None)
+        )
+        self.assertEqual(cleaned, {"client_id": 1, "account_code": "10-15-0001", "category_id": None})
+
+    def test_settings_accept_only_net_or_gross_at_model_boundary(self):
+        self.assertEqual(control_center.CashFlowSettingsPayload(client_id=1, receipt_presentation="gross").receipt_presentation, "gross")
+
+    def test_category_assignment_upsert_writes_new_assignment_table(self):
+        with patch.object(control_center, "execute_write_pg") as write:
+            control_center._upsert_cashflow_category_assignment(
+                {"client_id": 1, "account_code": "CASH", "category_id": 3}, "Admin"
+            )
+        sql = write.call_args.args[0]
+        self.assertIn("account_control_cashflow_category_assignments", sql)
+        self.assertIn("category_id", sql)
+
+    def test_treasury_payload_rejects_duplicate_cash_and_bank_account(self):
+        payload = control_center.CashFlowTreasuryAccountsPayload(
+            client_id=1, cash_account_codes=["CASH"], bank_account_codes=["CASH"]
+        )
+        with patch.object(control_center, "_latest_control_accounts", return_value=({}, [{"account_code": "CASH", "classification": "leaf"}])), self.assertRaises(HTTPException) as raised:
+            control_center.save_cashflow_treasury_accounts(payload, session={"username": "Admin"})
+        self.assertEqual(raised.exception.status_code, 400)
 
 
 class FinancialStatementControlTests(unittest.TestCase):

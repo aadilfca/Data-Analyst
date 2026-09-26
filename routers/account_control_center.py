@@ -422,6 +422,68 @@ _ACCOUNT_CONTROL_ASSIGNMENT_FIELDS = (
     "verification_workstream", "financial_statement_category_id", "note_category_id",
 )
 _ACCOUNT_CONTROL_CATEGORY_TYPES = frozenset({"financial_statement", "note"})
+_CASHFLOW_SECTIONS = frozenset({"unassigned", "money_in", "money_out", "internal_transfer", "excluded"})
+_CASHFLOW_ROLES = frozenset({"none", "cash", "bank", "both"})
+_CASHFLOW_TREATMENTS = frozenset({
+    "standard", "customer_receipt", "withholding_tax", "bank_charge", "other_deduction", "non_cash",
+})
+
+
+class CashFlowAssignmentPayload(BaseModel):
+    client_id: int = Field(..., ge=1)
+    account_code: str
+    section: str = "unassigned"
+    category_label: Optional[str] = None
+    cash_bank_role: str = "none"
+    treatment_type: str = "standard"
+
+
+class CashFlowBulkAssignmentPayload(BaseModel):
+    client_id: int = Field(..., ge=1)
+    parent_account_code: str
+    section: str = "unassigned"
+    category_label: Optional[str] = None
+    cash_bank_role: str = "none"
+    treatment_type: str = "standard"
+
+
+class CashFlowCategoryPayload(BaseModel):
+    client_id: int = Field(..., ge=1)
+    category_key: str
+    label: str
+    sort_order: int = Field(default=0, ge=0)
+    is_active: bool = True
+
+
+class CashFlowCategoryUpdatePayload(BaseModel):
+    client_id: int = Field(..., ge=1)
+    label: str
+    sort_order: int = Field(default=0, ge=0)
+    is_active: bool = True
+
+
+class CashFlowCategoryAssignmentPayload(BaseModel):
+    client_id: int = Field(..., ge=1)
+    account_code: str
+    category_id: Optional[int] = Field(default=None, ge=1)
+
+
+class CashFlowCategoryBulkAssignmentPayload(BaseModel):
+    client_id: int = Field(..., ge=1)
+    parent_account_code: str
+    category_id: Optional[int] = Field(default=None, ge=1)
+
+
+class CashFlowTreasuryAccountsPayload(BaseModel):
+    client_id: int = Field(..., ge=1)
+    cash_account_codes: list[str] = Field(default_factory=list)
+    bank_account_codes: list[str] = Field(default_factory=list)
+
+
+class CashFlowSettingsPayload(BaseModel):
+    client_id: int = Field(..., ge=1)
+    match_internal_transfers: bool = False
+    receipt_presentation: str = "net"
 
 
 def _clean_control_account_code(value: Any) -> str:
@@ -429,6 +491,131 @@ def _clean_control_account_code(value: Any) -> str:
     if not code or len(code) > 120:
         raise HTTPException(400, "Account code is required and must be 120 characters or fewer")
     return code
+
+
+def _clean_cashflow_assignment(payload: CashFlowAssignmentPayload) -> dict[str, Any]:
+    account_code = _clean_control_account_code(payload.account_code)
+    section = _normalise_key(payload.section) or "unassigned"
+    category_label = _normalise_text(payload.category_label) or None
+    role = _normalise_key(payload.cash_bank_role) or "none"
+    treatment = _normalise_key(payload.treatment_type) or "standard"
+    if section not in _CASHFLOW_SECTIONS:
+        raise HTTPException(400, "Cash Flow section is invalid")
+    if role not in _CASHFLOW_ROLES:
+        raise HTTPException(400, "Cash/Bank role is invalid")
+    if treatment not in _CASHFLOW_TREATMENTS:
+        raise HTTPException(400, "Cash Flow treatment type is invalid")
+    if category_label and len(category_label) > 120:
+        raise HTTPException(400, "Cash Flow category label must be 120 characters or fewer")
+    if section in {"money_in", "money_out", "internal_transfer"} and not category_label:
+        raise HTTPException(400, "A report category is required for an included Cash Flow account")
+    return {
+        "client_id": payload.client_id,
+        "account_code": account_code,
+        "section": section,
+        "category_label": category_label,
+        "cash_bank_role": role,
+        "treatment_type": treatment,
+    }
+
+
+def _public_cashflow_assignment(assignment: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "client_id": assignment["client_id"],
+        "account_code": assignment["account_code"],
+        "section": assignment.get("section") or "unassigned",
+        "category_label": assignment.get("category_label"),
+        "cash_bank_role": assignment.get("cash_bank_role") or "none",
+        "treatment_type": assignment.get("treatment_type") or "standard",
+    }
+
+
+def _upsert_cashflow_assignment(assignment: dict[str, Any], updated_by: str) -> None:
+    execute_write_pg(
+        """
+        INSERT INTO account_control_cashflow_assignments
+            (client_id, account_code, section, category_label, cash_bank_role, treatment_type, updated_by, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+        ON CONFLICT (client_id, account_code) DO UPDATE SET
+            section = EXCLUDED.section,
+            category_label = EXCLUDED.category_label,
+            cash_bank_role = EXCLUDED.cash_bank_role,
+            treatment_type = EXCLUDED.treatment_type,
+            updated_by = EXCLUDED.updated_by,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (
+            assignment["client_id"],
+            assignment["account_code"],
+            assignment["section"],
+            assignment["category_label"],
+            assignment["cash_bank_role"],
+            assignment["treatment_type"],
+            updated_by,
+        ),
+    )
+
+
+def _clean_cashflow_category_payload(payload: CashFlowCategoryPayload) -> dict[str, Any]:
+    category_key = _normalise_key(payload.category_key)
+    label = _normalise_text(payload.label)
+    if not category_key or len(category_key) > 80:
+        raise HTTPException(400, "Cash Flow category key is required and must be 80 characters or fewer")
+    if not label or len(label) > 120:
+        raise HTTPException(400, "Cash Flow category label is required and must be 120 characters or fewer")
+    return {
+        "client_id": payload.client_id,
+        "category_key": category_key,
+        "label": label,
+        "sort_order": payload.sort_order,
+        "is_active": payload.is_active,
+    }
+
+
+def _clean_cashflow_category_update(payload: CashFlowCategoryUpdatePayload) -> dict[str, Any]:
+    label = _normalise_text(payload.label)
+    if not label or len(label) > 120:
+        raise HTTPException(400, "Cash Flow category label is required and must be 120 characters or fewer")
+    return {
+        "client_id": payload.client_id,
+        "label": label,
+        "sort_order": payload.sort_order,
+        "is_active": payload.is_active,
+    }
+
+
+def _clean_cashflow_category_assignment(payload: CashFlowCategoryAssignmentPayload) -> dict[str, Any]:
+    return {
+        "client_id": payload.client_id,
+        "account_code": _clean_control_account_code(payload.account_code),
+        "category_id": payload.category_id,
+    }
+
+
+def _validate_cashflow_category(client_id: int, category_id: Optional[int]) -> None:
+    if category_id is None:
+        return
+    rows = execute_query_pg(
+        "SELECT id FROM account_control_cashflow_categories WHERE id = %s AND client_id = %s AND is_active = TRUE",
+        (category_id, client_id),
+    )
+    if not rows:
+        raise HTTPException(400, "Cash Flow category is invalid or inactive")
+
+
+def _upsert_cashflow_category_assignment(assignment: dict[str, Any], updated_by: str) -> None:
+    execute_write_pg(
+        """
+        INSERT INTO account_control_cashflow_category_assignments
+            (client_id, account_code, category_id, updated_by, updated_at)
+        VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+        ON CONFLICT (client_id, account_code) DO UPDATE SET
+            category_id = EXCLUDED.category_id,
+            updated_by = EXCLUDED.updated_by,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (assignment["client_id"], assignment["account_code"], assignment["category_id"], updated_by),
+    )
 
 
 def _clean_control_assignment(payload: AccountControlAssignmentPayload) -> dict[str, Any]:
@@ -678,6 +865,283 @@ def apply_account_control_mapping_to_children(payload: AccountControlBulkAssignm
             _upsert_control_assignment(child_assignment, actor)
     return {"saved": True, "parent_account_code": parent_code, "leaf_count": len(leaves)}
 
+
+@router.get("/api/account-control-center/cashflow")
+def get_account_control_cashflow(client_id: int = Query(..., ge=1), session=Depends(require_admin)):
+    """Return the latest Trial Balance tree with separate Cash Flow Setup rules."""
+    upload, accounts = _latest_control_accounts(client_id)
+    rows = execute_query_pg(
+        """SELECT account_code, section, category_label, cash_bank_role, treatment_type
+           FROM account_control_cashflow_assignments WHERE client_id = %s""",
+        (client_id,),
+    )
+    assignments = {_normalise_account_code(row["account_code"]): row for row in rows}
+    return {
+        "client_id": client_id,
+        "upload": upload,
+        "sections": sorted(_CASHFLOW_SECTIONS),
+        "cash_bank_roles": sorted(_CASHFLOW_ROLES),
+        "treatment_types": sorted(_CASHFLOW_TREATMENTS),
+        "accounts": [
+            {
+                "id": row["id"],
+                "account_code": row["account_code"],
+                "account_name": row["account_name"],
+                "parent_account_code": row["parent_account_code"],
+                "level": row["level"],
+                "is_leaf": row["classification"] == "leaf",
+                "cashflow": {
+                    "section": assignments.get(_normalise_account_code(row["account_code"]), {}).get("section") or "unassigned",
+                    "category_label": assignments.get(_normalise_account_code(row["account_code"]), {}).get("category_label"),
+                    "cash_bank_role": assignments.get(_normalise_account_code(row["account_code"]), {}).get("cash_bank_role") or "none",
+                    "treatment_type": assignments.get(_normalise_account_code(row["account_code"]), {}).get("treatment_type") or "standard",
+                },
+            }
+            for row in accounts
+        ],
+    }
+
+
+@router.put("/api/account-control-center/cashflow")
+def save_account_control_cashflow(payload: CashFlowAssignmentPayload, session=Depends(require_admin)):
+    """Save one leaf-account Cash Flow Setup rule."""
+    assignment = _clean_cashflow_assignment(payload)
+    _upload, accounts = _latest_control_accounts(assignment["client_id"])
+    account = next(
+        (row for row in accounts if _normalise_account_code(row["account_code"]) == assignment["account_code"]),
+        None,
+    )
+    if not account:
+        raise HTTPException(400, "Account code is not present in the latest Trial Balance")
+    if account["classification"] != "leaf":
+        raise HTTPException(400, "Assign the parent through the bulk child operation; direct assignments require a leaf account")
+    _upsert_cashflow_assignment(assignment, _actor_name(session))
+    return {"saved": True, "account_code": assignment["account_code"], "cashflow": _public_cashflow_assignment(assignment)}
+
+
+@router.post("/api/account-control-center/cashflow/apply-to-children")
+def apply_account_control_cashflow_to_children(payload: CashFlowBulkAssignmentPayload, session=Depends(require_admin)):
+    """Apply one Cash Flow Setup rule to every latest-Trial-Balance leaf below a parent."""
+    parent_code = _clean_control_account_code(payload.parent_account_code)
+    assignment = _clean_cashflow_assignment(
+        CashFlowAssignmentPayload(
+            client_id=payload.client_id,
+            account_code=parent_code,
+            section=payload.section,
+            category_label=payload.category_label,
+            cash_bank_role=payload.cash_bank_role,
+            treatment_type=payload.treatment_type,
+        )
+    )
+    _upload, accounts = _latest_control_accounts(assignment["client_id"])
+    parent = next(
+        (row for row in accounts if _normalise_account_code(row["account_code"]) == parent_code),
+        None,
+    )
+    if not parent:
+        raise HTTPException(400, "Parent account is not present in the latest Trial Balance")
+    leaves = [
+        row for row in accounts
+        if row["classification"] == "leaf"
+        and (
+            _normalise_account_code(row["account_code"]) == parent_code
+            or _normalise_account_code(row["account_code"]).startswith(parent_code + "-")
+        )
+    ]
+    if not leaves:
+        raise HTTPException(400, "No leaf accounts were found below the selected account")
+    actor = _actor_name(session)
+    with pg_transaction():
+        for row in leaves:
+            child_assignment = {**assignment, "account_code": row["account_code"]}
+            _upsert_cashflow_assignment(child_assignment, actor)
+    return {"saved": True, "parent_account_code": parent_code, "leaf_count": len(leaves)}
+
+
+@router.get("/api/account-control-center/cashflow/setup")
+def get_cashflow_setup(client_id: int = Query(..., ge=1), session=Depends(require_admin)):
+    upload, accounts = _latest_control_accounts(client_id)
+    categories = execute_query_pg(
+        """SELECT id, client_id, category_key, label, sort_order, is_active
+           FROM account_control_cashflow_categories
+           WHERE client_id = %s
+           ORDER BY sort_order, LOWER(label), category_key""",
+        (client_id,),
+    )
+    assignments = execute_query_pg(
+        """SELECT account_code, category_id
+           FROM account_control_cashflow_category_assignments
+           WHERE client_id = %s""",
+        (client_id,),
+    )
+    assignment_by_code = {_normalise_account_code(row["account_code"]): row.get("category_id") for row in assignments}
+    treasury_rows = execute_query_pg(
+        """SELECT account_code, treasury_type
+           FROM account_control_cashflow_treasury_accounts
+           WHERE client_id = %s
+           ORDER BY treasury_type, account_code""",
+        (client_id,),
+    )
+    settings_rows = execute_query_pg(
+        """SELECT match_internal_transfers, receipt_presentation
+           FROM account_control_cashflow_settings
+           WHERE client_id = %s""",
+        (client_id,),
+    )
+    settings = settings_rows[0] if settings_rows else {"match_internal_transfers": False, "receipt_presentation": "net"}
+    return {
+        "client_id": client_id,
+        "upload": upload,
+        "categories": [dict(row) for row in categories],
+        "accounts": [
+            {
+                "id": row["id"],
+                "account_code": row["account_code"],
+                "account_name": row["account_name"],
+                "parent_account_code": row["parent_account_code"],
+                "level": row["level"],
+                "is_leaf": row["classification"] == "leaf",
+                "category_id": assignment_by_code.get(_normalise_account_code(row["account_code"])),
+            }
+            for row in accounts
+        ],
+        "treasury_accounts": {
+            "cash": [row["account_code"] for row in treasury_rows if row["treasury_type"] == "cash"],
+            "bank": [row["account_code"] for row in treasury_rows if row["treasury_type"] == "bank"],
+        },
+        "settings": {
+            "match_internal_transfers": bool(settings.get("match_internal_transfers")),
+            "receipt_presentation": settings.get("receipt_presentation") or "net",
+        },
+    }
+
+
+# CASHFLOW_CATEGORY_ROUTES
+@router.post("/api/account-control-center/cashflow/categories", status_code=201)
+def create_cashflow_category(payload: CashFlowCategoryPayload, session=Depends(require_admin)):
+    category = _clean_cashflow_category_payload(payload)
+    _require_active_client(category["client_id"])
+    existing = execute_query_pg(
+        "SELECT id FROM account_control_cashflow_categories WHERE client_id = %s AND category_key = %s",
+        (category["client_id"], category["category_key"]),
+    )
+    if existing:
+        raise HTTPException(409, "A Cash Flow category with this key already exists")
+    execute_write_pg(
+        """INSERT INTO account_control_cashflow_categories
+           (client_id, category_key, label, sort_order, is_active, updated_at)
+           VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)""",
+        (category["client_id"], category["category_key"], category["label"], category["sort_order"], category["is_active"]),
+    )
+    return {"saved": True, "category": category}
+
+
+@router.put("/api/account-control-center/cashflow/categories/{category_id}")
+def update_cashflow_category(category_id: int, payload: CashFlowCategoryUpdatePayload, session=Depends(require_admin)):
+    category = _clean_cashflow_category_update(payload)
+    rows = execute_query_pg(
+        "SELECT id FROM account_control_cashflow_categories WHERE id = %s AND client_id = %s",
+        (category_id, category["client_id"]),
+    )
+    if not rows:
+        raise HTTPException(404, "Cash Flow category not found")
+    execute_write_pg(
+        """UPDATE account_control_cashflow_categories
+           SET label = %s, sort_order = %s, is_active = %s, updated_at = CURRENT_TIMESTAMP
+           WHERE id = %s AND client_id = %s""",
+        (category["label"], category["sort_order"], category["is_active"], category_id, category["client_id"]),
+    )
+    return {"saved": True, "category": {"id": category_id, **category}}
+
+
+@router.put("/api/account-control-center/cashflow/category-assignment")
+def save_cashflow_category_assignment(payload: CashFlowCategoryAssignmentPayload, session=Depends(require_admin)):
+    assignment = _clean_cashflow_category_assignment(payload)
+    _validate_cashflow_category(assignment["client_id"], assignment["category_id"])
+    _upload, accounts = _latest_control_accounts(assignment["client_id"])
+    account = next((row for row in accounts if _normalise_account_code(row["account_code"]) == assignment["account_code"]), None)
+    if not account:
+        raise HTTPException(400, "Account code is not present in the latest Trial Balance")
+    if account["classification"] != "leaf":
+        raise HTTPException(400, "Assign the parent through the bulk child operation; direct assignments require a leaf account")
+    _upsert_cashflow_category_assignment(assignment, _actor_name(session))
+    return {"saved": True, "account_code": assignment["account_code"], "category_id": assignment["category_id"]}
+
+
+@router.post("/api/account-control-center/cashflow/category-assignment/apply-to-children")
+def apply_cashflow_category_to_children(payload: CashFlowCategoryBulkAssignmentPayload, session=Depends(require_admin)):
+    parent_code = _clean_control_account_code(payload.parent_account_code)
+    _validate_cashflow_category(payload.client_id, payload.category_id)
+    _upload, accounts = _latest_control_accounts(payload.client_id)
+    parent = next((row for row in accounts if _normalise_account_code(row["account_code"]) == parent_code), None)
+    if not parent:
+        raise HTTPException(400, "Parent account is not present in the latest Trial Balance")
+    leaves = [
+        row for row in accounts
+        if row["classification"] == "leaf"
+        and (_normalise_account_code(row["account_code"]) == parent_code or _normalise_account_code(row["account_code"]).startswith(parent_code + "-"))
+    ]
+    if not leaves:
+        raise HTTPException(400, "No leaf accounts were found below the selected account")
+    actor = _actor_name(session)
+    with pg_transaction():
+        for row in leaves:
+            _upsert_cashflow_category_assignment(
+                {"client_id": payload.client_id, "account_code": row["account_code"], "category_id": payload.category_id},
+                actor,
+            )
+    return {"saved": True, "parent_account_code": parent_code, "leaf_count": len(leaves)}
+
+
+@router.put("/api/account-control-center/cashflow/treasury-accounts")
+def save_cashflow_treasury_accounts(payload: CashFlowTreasuryAccountsPayload, session=Depends(require_admin)):
+    cash_codes = {_clean_control_account_code(code) for code in payload.cash_account_codes}
+    bank_codes = {_clean_control_account_code(code) for code in payload.bank_account_codes}
+    if cash_codes & bank_codes:
+        raise HTTPException(400, "An account cannot be selected as both Cash and Bank")
+    _upload, accounts = _latest_control_accounts(payload.client_id)
+    leaves = {_normalise_account_code(row["account_code"]) for row in accounts if row["classification"] == "leaf"}
+    invalid = (cash_codes | bank_codes) - leaves
+    if invalid:
+        raise HTTPException(400, "Cash and Bank selections must be leaf accounts from the latest Trial Balance")
+    actor = _actor_name(session)
+    with pg_transaction():
+        execute_write_pg("DELETE FROM account_control_cashflow_treasury_accounts WHERE client_id = %s", (payload.client_id,))
+        for account_code in sorted(cash_codes):
+            execute_write_pg(
+                """INSERT INTO account_control_cashflow_treasury_accounts
+                   (client_id, account_code, treasury_type, updated_by, updated_at)
+                   VALUES (%s, %s, 'cash', %s, CURRENT_TIMESTAMP)""",
+                (payload.client_id, account_code, actor),
+            )
+        for account_code in sorted(bank_codes):
+            execute_write_pg(
+                """INSERT INTO account_control_cashflow_treasury_accounts
+                   (client_id, account_code, treasury_type, updated_by, updated_at)
+                   VALUES (%s, %s, 'bank', %s, CURRENT_TIMESTAMP)""",
+                (payload.client_id, account_code, actor),
+            )
+    return {"saved": True, "cash_account_codes": sorted(cash_codes), "bank_account_codes": sorted(bank_codes)}
+
+
+@router.put("/api/account-control-center/cashflow/settings")
+def save_cashflow_settings(payload: CashFlowSettingsPayload, session=Depends(require_admin)):
+    presentation = _normalise_key(payload.receipt_presentation) or "net"
+    if presentation not in {"net", "gross"}:
+        raise HTTPException(400, "Customer payment presentation must be net or gross")
+    _require_active_client(payload.client_id)
+    execute_write_pg(
+        """INSERT INTO account_control_cashflow_settings
+           (client_id, match_internal_transfers, receipt_presentation, updated_by, updated_at)
+           VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+           ON CONFLICT (client_id) DO UPDATE SET
+             match_internal_transfers = EXCLUDED.match_internal_transfers,
+             receipt_presentation = EXCLUDED.receipt_presentation,
+             updated_by = EXCLUDED.updated_by,
+             updated_at = CURRENT_TIMESTAMP""",
+        (payload.client_id, payload.match_internal_transfers, presentation, _actor_name(session)),
+    )
+    return {"saved": True, "match_internal_transfers": payload.match_internal_transfers, "receipt_presentation": presentation}
 
 @router.get("/api/account-control-center/sets")
 def list_account_sets(client_id: int = Query(..., ge=1), session=Depends(require_admin)):

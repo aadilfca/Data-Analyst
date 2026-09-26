@@ -4,8 +4,12 @@ let accAccounts = [];
 let accLatestUpload = null;
 let accFinancialCategories = [];
 let accNoteCategories = [];
+let accCashflowCategories = [];
+let accCashflowTreasury = { cash: [], bank: [] };
+let accCashflowSettings = { match_internal_transfers: false, receipt_presentation: 'net' };
 let accFinancialLoaded = false;
 let accNotesLoaded = false;
+let accCashflowLoaded = false;
 let accIsAdmin = false;
 
 const ACC_WORKSTREAMS = [
@@ -17,7 +21,6 @@ const ACC_WORKSTREAMS = [
     { value: 'payroll', label: 'Payroll' },
     { value: 'contractor', label: 'Contractor' },
 ];
-
 function accElement(id) { return document.getElementById(id); }
 function accEscape(value) {
     return String(value == null ? '' : value).replace(/[&<>'"]/g, function (character) {
@@ -93,6 +96,7 @@ function accCategoryOptionMarkupFor(categories, selected) {
 }
 function accCategoryOptionMarkup(selected) { return accCategoryOptionMarkupFor(accFinancialCategories, selected); }
 function accNoteCategoryOptionMarkup(selected) { return accCategoryOptionMarkupFor(accNoteCategories, selected); }
+function accCashflowCategoryOptionMarkup(selected) { return accCategoryOptionMarkupFor(accCashflowCategories, selected); }
 function accSetGridState(message, isError) {
     const state = accElement('accGridState');
     state.textContent = message;
@@ -134,6 +138,48 @@ function accRenderRows() {
     }
     accElement('accGridState').hidden = true;
     accElement('accGridWrap').hidden = false;
+}
+function accSetCashflowGridState(message, isError) {
+    const state = accElement('accCashflowGridState');
+    state.textContent = message;
+    state.className = 'acc2-grid-state' + (isError ? ' error' : '');
+    state.hidden = false;
+    accElement('accCashflowGridWrap').hidden = true;
+}
+function accEffectiveCashflowCategory(account) {
+    const direct = account.category_id;
+    if (account.is_leaf || direct != null) return direct == null ? '' : String(direct);
+    const values = Array.from(new Set(accLeavesBelow(account.account_code).map(function (leaf) {
+        return leaf.category_id == null ? '' : String(leaf.category_id);
+    })));
+    return values.length === 1 ? values[0] : (values.length > 1 ? '__mixed' : '');
+}
+function accRenderCashflowRows() {
+    const filter = String(accElement('accCashflowFilter').value || '').trim().toLowerCase();
+    const visible = accAccounts.filter(function (account) {
+        return !filter || (String(account.account_code || '') + ' ' + String(account.account_name || '')).toLowerCase().indexOf(filter) !== -1;
+    });
+    accElement('accCashflowCount').textContent = visible.length + ' of ' + accAccounts.length + ' accounts';
+    const rows = accElement('accCashflowRows');
+    if (!visible.length) {
+        rows.innerHTML = '<tr><td colspan="5" class="acc2-empty">No accounts match this search.</td></tr>';
+    } else {
+        rows.innerHTML = visible.map(function (account) {
+            const isParent = !account.is_leaf;
+            const selected = isParent ? accEffectiveCashflowCategory(account) : (account.category_id == null ? '' : String(account.category_id));
+            const indent = Math.max(0, Number(account.level || 1) - 1) * 16;
+            const result = isParent ? '<span class="acc2-parent-help">Applies to children</span>' : '<span class="acc2-saved" data-acc-cashflow-result="' + accEscape(account.account_code) + '">Saved</span>';
+            return '<tr class="' + (isParent ? 'acc2-parent' : '') + '">' +
+                '<td class="acc2-code" style="padding-left:' + (indent + 10) + 'px">' + accEscape(account.account_code) + '</td>' +
+                '<td>' + accEscape(account.account_name || 'Unknown account') + '</td>' +
+                '<td><span class="acc2-type ' + (isParent ? 'parent' : 'leaf') + '">' + (isParent ? 'Parent' : 'Leaf') + '</span></td>' +
+                '<td><select class="acc2-cashflow-category" data-acc-code="' + accEscape(account.account_code) + '" data-acc-parent="' + (isParent ? 'true' : 'false') + '"' + (!accIsAdmin ? ' disabled' : '') + '>' + accCashflowCategoryOptionMarkup(selected) + '</select></td>' +
+                '<td>' + result + '</td>' +
+                '</tr>';
+        }).join('');
+    }
+    accElement('accCashflowGridState').hidden = true;
+    accElement('accCashflowGridWrap').hidden = false;
 }
 function accRenderFinancialRows() {
     const filter = String(accElement('accFinancialFilter').value || '').trim().toLowerCase();
@@ -228,14 +274,149 @@ function accRenderNoteCategoryList() {
         return '<div class="acc2-category-item"><div><strong>' + accEscape(category.label) + '</strong><span>' + accEscape(category.category_key) + ' - ' + status + '</span></div><div class="acc2-category-actions"><button type="button" class="acc2-mini-action" data-acc-note-id="' + category.id + '" data-acc-note-action="rename">Rename</button><button type="button" class="acc2-mini-action" data-acc-note-id="' + category.id + '" data-acc-note-action="up"' + upDisabled + ' aria-label="Move ' + accEscape(category.label) + ' up">↑</button><button type="button" class="acc2-mini-action" data-acc-note-id="' + category.id + '" data-acc-note-action="down"' + downDisabled + ' aria-label="Move ' + accEscape(category.label) + ' down">↓</button><button type="button" class="acc2-mini-action" data-acc-note-id="' + category.id + '" data-acc-note-action="toggle" data-acc-note-active="' + (category.is_active ? 'true' : 'false') + '">' + action + '</button></div></div>';
     }).join('');
 }
+function accRenderCashflowCategoryList() {
+    const list = accElement('accCashflowCategoryList');
+    if (!accCashflowCategories.length) { list.innerHTML = '<span class="acc2-empty">No Cash Flow categories defined yet.</span>'; return; }
+    list.innerHTML = accCashflowCategories.map(function (category, index) {
+        const action = category.is_active ? 'Deactivate' : 'Reactivate';
+        return '<div class="acc2-category-item"><div><strong>' + accEscape(category.label) + '</strong><span>' + accEscape(category.category_key) + ' - ' + (category.is_active ? 'Active' : 'Inactive') + '</span></div><div class="acc2-category-actions"><button type="button" class="acc2-mini-action" data-acc-cashflow-category-id="' + category.id + '" data-acc-cashflow-category-action="rename">Rename</button><button type="button" class="acc2-mini-action" data-acc-cashflow-category-id="' + category.id + '" data-acc-cashflow-category-action="up"' + (index === 0 ? ' disabled' : '') + '>Up</button><button type="button" class="acc2-mini-action" data-acc-cashflow-category-id="' + category.id + '" data-acc-cashflow-category-action="down"' + (index === accCashflowCategories.length - 1 ? ' disabled' : '') + '>Down</button><button type="button" class="acc2-mini-action" data-acc-cashflow-category-id="' + category.id + '" data-acc-cashflow-category-action="toggle" data-acc-cashflow-category-active="' + (category.is_active ? 'true' : 'false') + '">' + action + '</button></div></div>';
+    }).join('');
+}
+async function accCreateCashflowCategory(event) {
+    event.preventDefault();
+    const key = accElement('accCashflowCategoryKey').value.trim();
+    const label = accElement('accCashflowCategoryLabel').value.trim();
+    try {
+        await accApi('/api/account-control-center/cashflow/categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, category_key: key, label: label, sort_order: accCashflowCategories.length }) });
+        accElement('accCashflowCategoryForm').reset();
+        await accLoadCashflow();
+        accShowStatus('Cash Flow category added.', 'success');
+    } catch (error) { accShowStatus(error.message, 'error'); }
+}
+async function accUpdateCashflowCategory(category, patch, message) {
+    await accApi('/api/account-control-center/cashflow/categories/' + category.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, label: patch.label == null ? category.label : patch.label, sort_order: patch.sort_order == null ? category.sort_order : patch.sort_order, is_active: patch.is_active == null ? category.is_active : patch.is_active }) });
+    await accLoadCashflow();
+    accShowStatus(message, 'success');
+}
+async function accHandleCashflowCategoryAction(event) {
+    const button = event.target.closest('[data-acc-cashflow-category-id]');
+    if (!button || button.disabled) return;
+    const category = accCashflowCategories.find(function (item) { return String(item.id) === button.dataset.accCashflowCategoryId; });
+    if (!category) return;
+    try {
+        const action = button.dataset.accCashflowCategoryAction;
+        if (action === 'toggle') { await accUpdateCashflowCategory(category, { is_active: button.dataset.accCashflowCategoryActive !== 'true' }, 'Cash Flow category status updated.'); return; }
+        if (action === 'rename') { const label = window.prompt('Display label for ' + category.category_key, category.label); if (label && label.trim() && label.trim() !== category.label) await accUpdateCashflowCategory(category, { label: label.trim() }, 'Cash Flow category renamed.'); return; }
+        const index = accCashflowCategories.findIndex(function (item) { return item.id === category.id; });
+        const target = accCashflowCategories[action === 'up' ? index - 1 : index + 1];
+        if (!target) return;
+        await Promise.all([accUpdateCashflowCategory(category, { sort_order: target.sort_order }, 'Cash Flow category order updated.'), accUpdateCashflowCategory(target, { sort_order: category.sort_order }, 'Cash Flow category order updated.')]);
+    } catch (error) { accShowStatus(error.message, 'error'); }
+}
+function accCashflowAccountMatches(account, search) {
+    const haystack = (String(account.account_code || '') + ' ' + String(account.account_name || '')).toLowerCase();
+    return !search || haystack.indexOf(search) !== -1;
+}
+function accCashflowVisibleAccounts(search) {
+    if (!search) return accAccounts;
+    const visibleCodes = new Set();
+    accAccounts.forEach(function (account) {
+        if (!accCashflowAccountMatches(account, search)) return;
+        const accountCode = accNormaliseCode(account.account_code);
+        if (!account.is_leaf) {
+            accAccounts.forEach(function (child) {
+                const childCode = accNormaliseCode(child.account_code);
+                if (childCode === accountCode || childCode.indexOf(accountCode + '-') === 0) visibleCodes.add(childCode);
+            });
+        }
+        let current = account;
+        while (current) {
+            const code = accNormaliseCode(current.account_code);
+            visibleCodes.add(code);
+            current = accAccounts.find(function (candidate) { return accNormaliseCode(candidate.account_code) === accNormaliseCode(current.parent_account_code); });
+        }
+    });
+    return accAccounts.filter(function (account) { return visibleCodes.has(accNormaliseCode(account.account_code)); });
+}
+function accRenderCashflowSelected(type) {
+    const panel = accElement(type === 'cash' ? 'accCashflowCashSelected' : 'accCashflowBankSelected');
+    const selected = new Set((accCashflowTreasury[type] || []).map(accNormaliseCode));
+    const accounts = accAccounts.filter(function (account) { return selected.has(accNormaliseCode(account.account_code)); });
+    panel.innerHTML = '<div class="acc2-treasury-selected-head"><strong>Selected ' + (type === 'cash' ? 'Cash' : 'Bank') + '</strong><span>' + accounts.length + '</span></div>' + (accounts.length ? accounts.map(function (account) {
+        const code = accNormaliseCode(account.account_code);
+        return '<div class="acc2-selected-account"><div><strong>' + accEscape(code) + '</strong><small>' + accEscape(account.account_name || '') + '</small></div><button type="button" data-acc-treasury-remove-type="' + type + '" data-acc-treasury-remove-code="' + accEscape(code) + '" aria-label="Remove ' + accEscape(code) + '">&times;</button></div>';
+    }).join('') : '<p class="acc2-treasury-empty">No accounts selected.</p>');
+}
+function accRenderCashflowAccountOptions() {
+    ['cash', 'bank'].forEach(function (type) {
+        const searchId = type === 'cash' ? 'accCashflowCashSearch' : 'accCashflowBankSearch';
+        const container = accElement(type === 'cash' ? 'accCashflowCashOptions' : 'accCashflowBankOptions');
+        const search = String(accElement(searchId).value || '').trim().toLowerCase();
+        const selected = new Set((accCashflowTreasury[type] || []).map(accNormaliseCode));
+        const visible = accCashflowVisibleAccounts(search);
+        container.innerHTML = visible.length ? visible.map(function (account) {
+            const code = accNormaliseCode(account.account_code);
+            const isParent = !account.is_leaf;
+            return '<label class="acc2-account-option ' + (isParent ? 'acc2-account-parent' : '') + '"><input type="checkbox" data-acc-treasury-type="' + type + '" data-acc-treasury-code="' + accEscape(code) + '"' + (selected.has(code) ? ' checked' : '') + (isParent || !accIsAdmin ? ' disabled' : '') + '><span style="padding-left:' + (Math.max(0, Number(account.level || 1) - 1) * 16) + 'px"><strong>' + accEscape(code) + '</strong><small>' + accEscape(account.account_name || '') + '</small></span><em>' + (isParent ? 'Main class' : 'Select') + '</em></label>';
+        }).join('') : '<span class="acc2-empty">No matching Trial Balance accounts.</span>';
+        accRenderCashflowSelected(type);
+    });
+}
+function accUpdateCashflowTreasurySelection(event) {
+    const checkbox = event.target.closest('[data-acc-treasury-type]');
+    if (!checkbox) return;
+    const type = checkbox.dataset.accTreasuryType;
+    const code = checkbox.dataset.accTreasuryCode;
+    const other = type === 'cash' ? 'bank' : 'cash';
+    if (checkbox.checked) {
+        accCashflowTreasury[type] = Array.from(new Set((accCashflowTreasury[type] || []).concat([code])));
+        accCashflowTreasury[other] = (accCashflowTreasury[other] || []).filter(function (item) { return accNormaliseCode(item) !== code; });
+    } else {
+        accCashflowTreasury[type] = (accCashflowTreasury[type] || []).filter(function (item) { return accNormaliseCode(item) !== code; });
+    }
+    accRenderCashflowAccountOptions();
+}
+function accRemoveCashflowTreasurySelection(event) {
+    const button = event.target.closest('[data-acc-treasury-remove-type]');
+    if (!button) return;
+    const type = button.dataset.accTreasuryRemoveType;
+    const code = button.dataset.accTreasuryRemoveCode;
+    accCashflowTreasury[type] = (accCashflowTreasury[type] || []).filter(function (item) { return accNormaliseCode(item) !== code; });
+    accRenderCashflowAccountOptions();
+}
+async function accSaveCashflowTreasury() {
+    await accApi('/api/account-control-center/cashflow/treasury-accounts', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, cash_account_codes: accCashflowTreasury.cash || [], bank_account_codes: accCashflowTreasury.bank || [] }) });
+    accShowStatus('Cash and Bank account selections saved.', 'success');
+}
+async function accSaveCashflowSettings() {
+    const payload = { client_id: accClientId, match_internal_transfers: accElement('accCashflowMatchTransfers').checked, receipt_presentation: accElement('accCashflowReceiptPresentation').value };
+    await accApi('/api/account-control-center/cashflow/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    accCashflowSettings = { match_internal_transfers: payload.match_internal_transfers, receipt_presentation: payload.receipt_presentation };
+    accShowStatus('Cash Flow transfer and customer receipt settings saved.', 'success');
+}
 async function accLoadMapping() {
     const result = await accApi('/api/account-control-center/mapping?client_id=' + encodeURIComponent(accClientId));
     accAccounts = result.accounts || [];
     accLatestUpload = result.upload || null;
     accRenderSource();
     accRenderRows();
+    if (accCashflowLoaded) accRenderCashflowRows();
     if (accFinancialLoaded) accRenderFinancialRows();
     if (accNotesLoaded) accRenderNotesRows();
+}
+async function accLoadCashflow() {
+    const result = await accApi('/api/account-control-center/cashflow/setup?client_id=' + encodeURIComponent(accClientId));
+    accAccounts = result.accounts || [];
+    accLatestUpload = result.upload || accLatestUpload;
+    accCashflowCategories = result.categories || [];
+    accCashflowTreasury = result.treasury_accounts || { cash: [], bank: [] };
+    accCashflowSettings = result.settings || { match_internal_transfers: false, receipt_presentation: 'net' };
+    accCashflowLoaded = true;
+    accRenderCashflowRows();
+    accRenderCashflowCategoryList();
+    accRenderCashflowAccountOptions();
+    accElement('accCashflowMatchTransfers').checked = !!accCashflowSettings.match_internal_transfers;
+    accElement('accCashflowReceiptPresentation').value = accCashflowSettings.receipt_presentation || 'net';
 }
 async function accLoadFinancialCategories() {
     const result = await accApi('/api/account-control-center/categories?client_id=' + encodeURIComponent(accClientId) + '&category_type=financial_statement&include_inactive=true');
@@ -280,6 +461,36 @@ async function accHandleWorkstreamChange(event) {
     } catch (error) {
         accShowStatus(error.message, 'error');
         await accLoadMapping().catch(function () {});
+    }
+}
+async function accSaveCashflowCategory(account, select) {
+    const categoryId = select.value && select.value !== '__mixed' ? Number(select.value) : null;
+    const result = accElement('accCashflowRows').querySelector('[data-acc-cashflow-result="' + CSS.escape(account.account_code) + '"]');
+    if (result) result.textContent = 'Saving...';
+    await accApi('/api/account-control-center/cashflow/category-assignment', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, account_code: account.account_code, category_id: categoryId }) });
+    account.category_id = categoryId;
+    if (result) result.textContent = 'Saved';
+    accShowStatus('Saved Cash Flow category for ' + account.account_code + '.', 'success');
+}
+async function accApplyCashflowCategoryParent(account, select) {
+    if (!window.confirm('Apply this Cash Flow category to all leaf accounts below ' + account.account_code + '?')) { accRenderCashflowRows(); return; }
+    const categoryId = select.value && select.value !== '__mixed' ? Number(select.value) : null;
+    await accApi('/api/account-control-center/cashflow/category-assignment/apply-to-children', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, parent_account_code: account.account_code, category_id: categoryId }) });
+    await accLoadCashflow();
+    accShowStatus('Applied the Cash Flow category to child accounts below ' + account.account_code + '.', 'success');
+}
+async function accHandleCashflowChange(event) {
+    const select = event.target.closest('.acc2-cashflow-category');
+    if (!select) return;
+    const account = accAccounts.find(function (item) { return accNormaliseCode(item.account_code) === accNormaliseCode(select.dataset.accCode); });
+    if (!account) return;
+    accClearStatus();
+    try {
+        if (select.dataset.accParent === 'true') await accApplyCashflowCategoryParent(account, select);
+        else await accSaveCashflowCategory(account, select);
+    } catch (error) {
+        accShowStatus(error.message, 'error');
+        await accLoadCashflow().catch(function () {});
     }
 }
 async function accSaveFinancialLeaf(account, select) {
@@ -434,6 +645,11 @@ async function accHandleNoteCategoryAction(event) {
         accShowStatus('Note category order updated.', 'success');
     } catch (error) { accShowStatus(error.message, 'error'); }
 }
+function accSetCashflowConfigTab(tabName) {
+    document.querySelectorAll('[data-acc-cashflow-config-tab]').forEach(function (tab) { tab.classList.toggle('active', tab.dataset.accCashflowConfigTab === tabName); });
+    document.querySelectorAll('[data-acc-cashflow-config-panel]').forEach(function (panel) { panel.hidden = panel.dataset.accCashflowConfigPanel !== tabName; });
+}
+function accSetCashflowModal(id, open) { const modal = accElement(id); if (modal) modal.hidden = !open; }
 function accSetTab(tabName) {
     document.querySelectorAll('[data-acc-tab]').forEach(function (tab) {
         const active = tab.dataset.accTab === tabName;
@@ -441,8 +657,11 @@ function accSetTab(tabName) {
         tab.setAttribute('aria-selected', active ? 'true' : 'false');
     });
     accElement('accVerificationPanel').hidden = tabName !== 'verification';
+    accElement('accCashflowPanel').hidden = tabName !== 'cashflow';
     accElement('accFinancialPanel').hidden = tabName !== 'financial';
     accElement('accNotesPanel').hidden = tabName !== 'notes';
+    accElement('accCashflowCategoryFab').hidden = tabName !== 'cashflow';
+    if (tabName === 'cashflow' && !accCashflowLoaded) accLoadCashflow().catch(function (error) { accSetCashflowGridState(error.message, true); });
     if (tabName === 'financial' && !accFinancialLoaded) accLoadFinancialCategories().catch(function (error) { accSetFinancialGridState(error.message, true); });
     if (tabName === 'notes' && !accNotesLoaded) accLoadNoteCategories().catch(function (error) { accSetNotesGridState(error.message, true); });
 }
@@ -467,6 +686,25 @@ function accBindEvents() {
     document.querySelectorAll('[data-acc-tab]').forEach(function (tab) { tab.addEventListener('click', function () { accSetTab(tab.dataset.accTab); }); });
     accElement('accAccountFilter').addEventListener('input', accRenderRows);
     accElement('accAccountRows').addEventListener('change', function (event) { accHandleWorkstreamChange(event); });
+    accElement('accCashflowFilter').addEventListener('input', accRenderCashflowRows);
+    accElement('accCashflowRows').addEventListener('change', function (event) { accHandleCashflowChange(event); });
+    accElement('accCashflowCategoryFab').addEventListener('click', function () { accSetCashflowModal('accCashflowCategoryModal', true); accElement('accCashflowCategoryLabel').focus(); });
+    accElement('accCashflowCategoryButton').addEventListener('click', function () { accSetCashflowModal('accCashflowCategoryModal', true); });
+    accElement('accCashflowCategoryClose').addEventListener('click', function () { accSetCashflowModal('accCashflowCategoryModal', false); });
+    accElement('accCashflowCategoryForm').addEventListener('submit', accCreateCashflowCategory);
+    accElement('accCashflowCategoryList').addEventListener('click', accHandleCashflowCategoryAction);
+    accElement('accCashflowAccountsButton').addEventListener('click', function () { accSetCashflowModal('accCashflowAccountsModal', true); accSetCashflowConfigTab('cash'); accRenderCashflowAccountOptions(); });
+    accElement('accCashflowAccountsClose').addEventListener('click', function () { accSetCashflowModal('accCashflowAccountsModal', false); });
+    document.querySelectorAll('[data-acc-cashflow-config-tab]').forEach(function (tab) { tab.addEventListener('click', function () { accSetCashflowConfigTab(tab.dataset.accCashflowConfigTab); }); });
+    accElement('accCashflowCashSearch').addEventListener('input', accRenderCashflowAccountOptions);
+    accElement('accCashflowBankSearch').addEventListener('input', accRenderCashflowAccountOptions);
+    accElement('accCashflowCashOptions').addEventListener('change', accUpdateCashflowTreasurySelection);
+    accElement('accCashflowBankOptions').addEventListener('change', accUpdateCashflowTreasurySelection);
+    accElement('accCashflowCashSelected').addEventListener('click', accRemoveCashflowTreasurySelection);
+    accElement('accCashflowBankSelected').addEventListener('click', accRemoveCashflowTreasurySelection);
+    accElement('accCashflowAccountsSave').addEventListener('click', function () { accSaveCashflowTreasury().catch(function (error) { accShowStatus(error.message, 'error'); }); });
+    accElement('accCashflowSettingsSave').addEventListener('click', function () { accSaveCashflowSettings().catch(function (error) { accShowStatus(error.message, 'error'); }); });
+    document.addEventListener('keydown', function (event) { if (event.key === 'Escape') { accSetCashflowModal('accCashflowCategoryModal', false); accSetCashflowModal('accCashflowAccountsModal', false); } });
     accElement('accFinancialFilter').addEventListener('input', accRenderFinancialRows);
     accElement('accFinancialRows').addEventListener('change', function (event) { accHandleFinancialChange(event); });
     accElement('accFinancialCategoryForm').addEventListener('submit', accCreateFinancialCategory);

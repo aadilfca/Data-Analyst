@@ -10124,3 +10124,47 @@ body {
 .acc2-financial-category, .acc2-note-category { min-width: 210px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; color: #1e293b; cursor: pointer; padding: 7px 8px; font: inherit; font-size: 12px; }
 .acc2-financial-category:focus, .acc2-note-category:focus { border-color: #2563eb; outline: 2px solid #bfdbfe; }
 .acc2-financial-category:disabled, .acc2-note-category:disabled { cursor: not-allowed; opacity: .65; }
+.acc2-cashflow-fab { position: fixed; right: 28px; bottom: 28px; z-index: 2100; width: 54px; height: 54px; border: 0; border-radius: 50%; background: #1769aa; color: #fff; font-size: 30px; line-height: 1; box-shadow: 0 8px 22px rgba(16, 55, 88, .28); cursor: pointer; }
+.acc2-cashflow-fab:hover { background: #0f548b; transform: translateY(-1px); }
+.acc2-modal-backdrop { position: fixed; inset: 0; z-index: 4000; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(20, 39, 58, .48); }
+.acc2-modal-backdrop[hidden] { display: none; }
+.acc2-modal { width: min(760px, 100%); max-height: 88vh; overflow: auto; padding: 24px; border-radius: 16px; background: #fff; box-shadow: 0 20px 60px rgba(16, 37, 56, .3); }
+.acc2-modal-wide { width: min(940px, 100%); }
+.acc2-modal-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 20px; }
+.acc2-modal-header h2 { margin: 0 0 6px; }
+.acc2-modal-header p { margin: 0; color: #5c6b78; }
+.acc2-modal-close { border: 0; background: transparent; color: #536575; font-size: 28px; line-height: 1; cursor: pointer; }
+.acc2-modal-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 20px; border-bottom: 1px solid #dbe4ea; }
+.acc2-modal-tab { border: 0; border-bottom: 3px solid transparent; padding: 10px 12px; background: transparent; color: #536575; cursor: pointer; }
+.acc2-modal-tab.active { border-bottom-color: #1769aa; color: #124d7d; font-weight: 700; }
+.acc2-modal-search { width: 100%; margin: 8px 0 14px; }
+.acc2-treasury-picker-layout { display: grid; grid-template-columns: minmax(180px, .32fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+.acc2-treasury-selected { position: sticky; top: 0; min-height: 92px; max-height: 300px; overflow: auto; padding: 12px; border: 1px solid #cbdde9; border-radius: 10px; background: #f6fbfe; }
+.acc2-treasury-selected-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 9px; color: #174a6b; font-size: 12px; }
+.acc2-treasury-selected-head span { display: inline-grid; min-width: 23px; height: 23px; place-items: center; border-radius: 50%; background: #1769aa; color: #fff; font-size: 11px; }
+.acc2-selected-account { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; border-top: 1px solid #dceaf1; }
+.acc2-selected-account div { min-width: 0; }
+.acc2-selected-account strong, .acc2-selected-account small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acc2-selected-account strong { color: #183e57; font-size: 11px; }
+.acc2-selected-account small { margin-top: 2px; color: #627484; font-size: 10px; }
+.acc2-selected-account button { flex: 0 0 auto; border: 0; background: transparent; color: #9a4c4c; font-size: 18px; line-height: 1; cursor: pointer; }
+.acc2-treasury-empty { margin: 0; color: #6d7e8b; font-size: 11px; }
+.acc2-account-picker { display: grid; gap: 6px; max-height: 420px; overflow: auto; padding: 4px; }
+.acc2-account-option { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border: 1px solid #dbe4ea; border-radius: 8px; background: #fbfdff; cursor: pointer; }
+.acc2-account-option:hover { border-color: #8bb6d2; background: #f3f9fd; }
+.acc2-account-option span { display: grid; flex: 1 1 auto; gap: 3px; min-width: 0; }
+.acc2-account-option strong, .acc2-account-option small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acc2-account-option em { flex: 0 0 auto; color: #6d7e8b; font-size: 10px; font-style: normal; }
+.acc2-account-option.acc2-account-parent { border-color: transparent; border-radius: 5px; background: #eef2f5; cursor: default; }
+.acc2-account-option.acc2-account-parent strong { color: #536575; }
+.acc2-account-option.acc2-account-parent small, .acc2-account-option.acc2-account-parent em { color: #7d8b95; }
+.acc2-account-option small { color: #627484; }
+.acc2-checkline { display: flex; align-items: flex-start; gap: 10px; margin: 12px 0; font-weight: 600; }
+.acc2-select { min-width: 280px; margin: 8px 0 16px; }
+.acc2-payment-format-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.acc2-payment-format-card { padding: 16px; border: 1px solid #dbe4ea; border-radius: 12px; background: #fbfdff; }
+.acc2-payment-format-card h3 { margin-top: 0; color: #124d7d; }
+.acc2-payment-format-card p { margin: 7px 0; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.acc2-modal-footer { display: flex; justify-content: flex-end; margin-top: 20px; padding-top: 16px; border-top: 1px solid #e5edf2; }
+@media (max-width: 680px) { .acc2-modal-backdrop { padding: 10px; } .acc2-modal { padding: 18px; } .acc2-payment-format-grid { grid-template-columns: 1fr; } .acc2-cashflow-fab { right: 18px; bottom: 18px; } }
+@media (max-width: 680px) { .acc2-treasury-picker-layout { grid-template-columns: 1fr; } .acc2-treasury-selected { position: static; max-height: 150px; } }

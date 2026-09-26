@@ -6581,3 +6581,11 @@ or procedure-modal requests, whose observed latency therefore remains a separate
 **Implementation:** The Reports page now opens directly on the Available reports section. Cashflows card selection still updates the Reports URL and selected-card state without displaying a temporary status banner.
 
 **Verification:** Focused reconciliation tests, JavaScript syntax, and `git diff --check` passed. No packages installed.
+
+## Account Control Centre Cash Flow Setup - Phase 2 - 2026-09-26
+
+**Scope:** Reworked Cash Flow Setup into the approved simplified foundation. Verification, Financial Statement, Notes, transfer-pair engine, foreign-receipt engine, and report generation remain separate.
+
+**Implementation:** The visible grid now has one Categories column, with leaf saves and parent-to-leaf application using client-specific Cash Flow categories. A fixed bottom-right + button opens category create/rename/reorder/deactivate controls. A separate Cash & Bank popup provides searchable Cash and Bank account tabs, Trial Balance hierarchy rows with dimmed main classes, checkbox/row selection, compact selected-account panels with remove controls, a transfer-matching setting, and readonly Gross/Net customer-payment examples; receipt presentation defaults to net. The old multi-field screen is no longer exposed. The additive legacy Cash Flow table remains in schema only for safe rollback compatibility.
+
+**Verification:** SQLite/PostgreSQL schema checks, payload and treasury-validation tests, browser coverage for category creation/assignment and both popups, Python compilation, JavaScript syntax, focused Account Control Centre/Reconciliation suite (36 passed), and `git diff --check` passed. No packages installed.

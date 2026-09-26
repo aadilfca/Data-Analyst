@@ -2601,6 +2601,81 @@ def init_db():
         ''')
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_control_assignments_client ON account_control_assignments (client_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_control_assignments_workstream ON account_control_assignments (client_id, verification_workstream)")
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_cashflow_assignments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                account_code TEXT NOT NULL,
+                section TEXT NOT NULL DEFAULT 'unassigned'
+                    CHECK (section IN ('unassigned', 'money_in', 'money_out', 'internal_transfer', 'excluded')),
+                category_label TEXT,
+                cash_bank_role TEXT NOT NULL DEFAULT 'none'
+                    CHECK (cash_bank_role IN ('none', 'cash', 'bank', 'both')),
+                treatment_type TEXT NOT NULL DEFAULT 'standard'
+                    CHECK (treatment_type IN ('standard', 'customer_receipt', 'withholding_tax', 'bank_charge', 'other_deduction', 'non_cash')),
+                updated_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                UNIQUE(client_id, account_code)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_client ON account_control_cashflow_assignments (client_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_section ON account_control_cashflow_assignments (client_id, section)")
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_cashflow_categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                category_key TEXT NOT NULL,
+                label TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                UNIQUE(client_id, category_key)
+            )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_cashflow_category_assignments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                account_code TEXT NOT NULL,
+                category_id INTEGER,
+                updated_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                FOREIGN KEY (category_id) REFERENCES account_control_cashflow_categories(id) ON DELETE SET NULL,
+                UNIQUE(client_id, account_code)
+            )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_cashflow_treasury_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                account_code TEXT NOT NULL,
+                treasury_type TEXT NOT NULL CHECK (treasury_type IN ('cash', 'bank')),
+                updated_by TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                UNIQUE(client_id, treasury_type, account_code)
+            )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_cashflow_settings (
+                client_id INTEGER PRIMARY KEY,
+                match_internal_transfers INTEGER NOT NULL DEFAULT 0,
+                receipt_presentation TEXT NOT NULL DEFAULT 'net'
+                    CHECK (receipt_presentation IN ('net', 'gross')),
+                updated_by TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_categories_client ON account_control_cashflow_categories (client_id, is_active)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_category_assignments_client ON account_control_cashflow_category_assignments (client_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_treasury_client ON account_control_cashflow_treasury_accounts (client_id, treasury_type)")
         # ---------- ACCOUNT SET CONTROL CENTRE (legacy compatibility) ----------
         # Account Sets remain untouched while the simplified assignment grid is introduced.
         conn.execute('''
@@ -3557,6 +3632,75 @@ def _ensure_postgres_account_set_tables(conn):
         cur.execute("CREATE INDEX IF NOT EXISTS idx_account_control_categories_client_type ON account_control_categories (client_id, category_type, is_active)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_account_control_assignments_client ON account_control_assignments (client_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_account_control_assignments_workstream ON account_control_assignments (client_id, verification_workstream)")
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_cashflow_assignments (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                account_code TEXT NOT NULL,
+                section TEXT NOT NULL DEFAULT 'unassigned'
+                    CHECK (section IN ('unassigned', 'money_in', 'money_out', 'internal_transfer', 'excluded')),
+                category_label TEXT,
+                cash_bank_role TEXT NOT NULL DEFAULT 'none'
+                    CHECK (cash_bank_role IN ('none', 'cash', 'bank', 'both')),
+                treatment_type TEXT NOT NULL DEFAULT 'standard'
+                    CHECK (treatment_type IN ('standard', 'customer_receipt', 'withholding_tax', 'bank_charge', 'other_deduction', 'non_cash')),
+                updated_by TEXT,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                updated_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(client_id, account_code)
+            )
+        ''')
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_client ON account_control_cashflow_assignments (client_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_section ON account_control_cashflow_assignments (client_id, section)")
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_cashflow_categories (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                category_key TEXT NOT NULL,
+                label TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                updated_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(client_id, category_key)
+            )
+        ''')
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_cashflow_category_assignments (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                account_code TEXT NOT NULL,
+                category_id INTEGER REFERENCES account_control_cashflow_categories(id) ON DELETE SET NULL,
+                updated_by TEXT,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                updated_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(client_id, account_code)
+            )
+        ''')
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_cashflow_treasury_accounts (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                account_code TEXT NOT NULL,
+                treasury_type TEXT NOT NULL CHECK (treasury_type IN ('cash', 'bank')),
+                updated_by TEXT,
+                updated_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(client_id, treasury_type, account_code)
+            )
+        ''')
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_cashflow_settings (
+                client_id INTEGER PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE,
+                match_internal_transfers BOOLEAN NOT NULL DEFAULT FALSE,
+                receipt_presentation TEXT NOT NULL DEFAULT 'net'
+                    CHECK (receipt_presentation IN ('net', 'gross')),
+                updated_by TEXT,
+                updated_at TIMESTAMPTZ DEFAULT now()
+            )
+        ''')
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_categories_client ON account_control_cashflow_categories (client_id, is_active)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_category_assignments_client ON account_control_cashflow_category_assignments (client_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_treasury_client ON account_control_cashflow_treasury_accounts (client_id, treasury_type)")
         cur.execute('''
             CREATE TABLE IF NOT EXISTS account_sets (
                 id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

@@ -287,6 +287,8 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-26: Account Control Centre intro and empty status banner removed; focused UI regression coverage added. See CHANGELOG_ARCHIVE.md.
 - 2026-09-26: Verification sessions gained line-level Excel export with focused backend coverage. See CHANGELOG_ARCHIVE.md.
 - 2026-09-26: Reports hub now uses compact report cards without the redundant hero/status header; backend report groundwork remains preserved.
+- 2026-09-26: Account Control Centre Cash Flow Setup now uses one Categories column plus category and Cash/Bank configuration popups; net receipt presentation is the default.
+- 2026-09-26: Cash/Bank configuration now shows Trial Balance hierarchy rows with compact selected-account panels, checkbox selection, search context, and remove controls.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
