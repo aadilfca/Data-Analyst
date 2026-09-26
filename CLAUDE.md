@@ -284,6 +284,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-24: Verification routing now prefers simplified account assignments for Cash, Bank, Local Vendor, and Import Vendor, with legacy fallback preserved.
 - 2026-09-24: Account Control Centre Phase 4 activated Financial Statement categories and field-scoped mapping, preserving Verification assignments; Notes remains a later placeholder.
 - 2026-09-24: Account Control Centre Phase 5 activated Notes to Financial Statements categories and field-scoped account mapping; Verification and Financial Statement assignments remain preserved.
+- 2026-09-26: Account Control Centre intro and empty status banner removed; focused UI regression coverage added. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

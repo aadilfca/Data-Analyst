@@ -119,6 +119,8 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     page = browser.new_page()
     page.route("**/api/**", handle_api)
     page.goto("{}/static/account_control_center.html".format(static_server), wait_until="load")
+    assert page.locator(".acc2-header").count() == 0
+    assert page.locator("#accStatus").is_hidden()
     page.wait_for_selector("#accAccountRows .acc2-workstream")
     assert page.locator("#accSourceInfo").text_content() == "Source: January Trial Balance.xlsx - 2026-01-31"
     assert page.locator("#accTreasuryGuidance").is_hidden()

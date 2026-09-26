@@ -1,4 +1,14 @@
 # Changelog Archive
+## Account Control Centre layout polish - 2026-09-26
+
+Scope: Remove redundant introductory copy and the empty dim-blue status banner without changing status feedback behavior.
+
+Implementation: Removed the intro block, hid only empty #accStatus via :empty, removed unused intro styles, and added UI assertions.
+
+Verification: Focused tests/test_account_control_center_ui.py passed (1 passed); git diff --check passed.
+
+Files: static/account_control_center.html, static/style.css, tests/test_account_control_center_ui.py.
+
 ## Verification table column order — 2026-09-25
 
 **Scope:** Standardize the Verification table column sequence across Cash, Bank, Local Vendor, Import Vendor, Export Customer, Payroll, and Contractor.

@@ -10042,11 +10042,8 @@ body {
 
 /* Simplified Account Control Centre Phase 2 */
 .acc2-page { max-width: 1400px; }
-.acc2-header { margin: 0 0 18px; }
-.acc2-eyebrow { display: block; color: #2563eb; font-size: 11px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
-.acc2-header h1 { margin: 5px 0 7px; color: #172554; font-size: 27px; }
-.acc2-header p { max-width: 850px; margin: 0; color: #475569; line-height: 1.55; }
 .acc2-status { margin-bottom: 16px; padding: 11px 14px; border: 1px solid #bfdbfe; border-radius: 8px; background: #eff6ff; color: #1e40af; }
+.acc2-status:empty { display: none; }
 .acc2-status.success { border-color: #bbf7d0; background: #f0fdf4; color: #166534; }
 .acc2-status.error { border-color: #fecaca; background: #fef2f2; color: #991b1b; }
 .acc2-tabs { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 17px; border-bottom: 1px solid #cbd5e1; }
