@@ -169,3 +169,92 @@ def test_load_report_source_blocks_multiple_datasets_without_selection():
 
     assert not source.ready
     assert any(item["code"] == "ambiguous_journal_source" for item in source.blocking_diagnostics())
+
+
+def test_build_report_source_accepts_account_detail_as_account_code():
+    rows = [{
+        "row_data": {
+            "Voucher ID": "V1",
+            "Transaction Date": "2026-01-05",
+            "Account Detail": "B1",
+            "Account Name": "Bank A",
+            "Debit Amount": 100,
+            "Credit Amount": 0,
+        }
+    }]
+    source = build_report_source(rows, [{"Account Code": "B1", "Cat": "Bank"}])
+
+    assert source.ready
+    assert source.journal.loc[0, "account_code"] == "B1"
+    assert not any(item["code"] == "missing_journal_columns" for item in source.diagnostics)
+    assert not any(item["code"] == "ambiguous_journal_source" for item in source.blocking_diagnostics())
+
+
+def test_build_report_source_prefers_explicit_cashflow_column_mapping():
+    rows = [{
+        "row_data": {
+            "Reference column": "V1",
+            "Date column": "2026-01-05",
+            "Code column": "B1",
+            "Debit column": 100,
+            "Credit column": 0,
+        }
+    }]
+    mapping = {
+        "voucher_id": "Reference column",
+        "date": "Date column",
+        "account_code": "Code column",
+        "debit": "Debit column",
+        "credit": "Credit column",
+    }
+    source = build_report_source(rows, [{"Account Code": "B1", "Cat": "Bank"}], column_mapping=mapping)
+
+    assert source.ready
+    assert source.journal.loc[0, "voucher_id"] == "V1"
+    assert source.journal.loc[0, "account_code"] == "B1"
+    assert source.journal.loc[0, "debit"] == 100
+
+
+def test_load_cashflow_source_applies_saved_template_mapping():
+    rows = [{
+        "template_id": 1,
+        "upload_id": 12,
+        "row_data": {
+            "Reference column": "V1",
+            "Date column": "2026-01-05",
+            "Code column": "B1",
+            "Debit column": 100,
+            "Credit column": 0,
+        },
+    }]
+    mapping_rows = [
+        {"role": "voucher_id", "column_name": "Reference column"},
+        {"role": "date", "column_name": "Date column"},
+        {"role": "account_code", "column_name": "Code column"},
+        {"role": "debit", "column_name": "Debit column"},
+        {"role": "credit", "column_name": "Credit column"},
+    ]
+
+    def query(sql, params=None):
+        if "FROM client_data" in sql:
+            return rows
+        if "FROM account_control_cashflow_source_mappings" in sql:
+            return mapping_rows
+        if "FROM trial_balance_accounts" in sql:
+            return [{"account_code": "B1", "account_name": "Bank A", "source_account_type": "Bank"}]
+        if "FROM account_control_cashflow_category_assignments" in sql:
+            return []
+        raise AssertionError(f"Unexpected query: {sql}")
+
+    source = load_ledger_report_source(
+        7,
+        journal_upload_id=12,
+        period_start="2026-01-01",
+        period_end="2026-01-31",
+        query_fn=query,
+        account_category_source="cashflow",
+    )
+
+    assert source.ready
+    assert source.metadata["cashflow_mapping_ready"] is True
+    assert source.journal.loc[0, "account_code"] == "B1"

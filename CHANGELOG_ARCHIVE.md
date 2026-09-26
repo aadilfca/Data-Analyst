@@ -6589,3 +6589,27 @@ or procedure-modal requests, whose observed latency therefore remains a separate
 **Implementation:** The visible grid now has one Categories column, with leaf saves and parent-to-leaf application using client-specific Cash Flow categories. A fixed bottom-right + button opens category create/rename/reorder/deactivate controls. A separate Cash & Bank popup provides searchable Cash and Bank account tabs, Trial Balance hierarchy rows with dimmed main classes, checkbox/row selection, compact selected-account panels with remove controls, a transfer-matching setting, and readonly Gross/Net customer-payment examples; receipt presentation defaults to net. The old multi-field screen is no longer exposed. The additive legacy Cash Flow table remains in schema only for safe rollback compatibility.
 
 **Verification:** SQLite/PostgreSQL schema checks, payload and treasury-validation tests, browser coverage for category creation/assignment and both popups, Python compilation, JavaScript syntax, focused Account Control Centre/Reconciliation suite (36 passed), and `git diff --check` passed. No packages installed.
+
+## Reports Cashflows summary - Phase 3 - 2026-09-26
+
+**Scope:** Added the first simple read-only Cashflows report. Vendor Reports, Customer Reports, Financial Statements, exports, and report-specific setup remain deferred.
+
+**Implementation:** Account Control Centre Cash Flow category mappings now feed the report source. The pure summary engine identifies configured Cash/Bank treasury legs, groups counter-account lines by category, records unmapped lines for review, lists internal transfers, and retains bank-charge/withholding details while applying the configured net or gross customer-receipt presentation. The Reports Cashflows card now opens a period-filtered summary view with control statuses, categorized totals, transfer details, deduction details, and review items.
+
+**Verification:** Cashflows engine and endpoint tests, existing Account Control Centre and browser tests, Python compilation, JavaScript syntax, and `git diff --check` passed; combined focused suite: 39 tests. No packages installed.
+
+## Cashflows source selection hardening - 2026-09-26
+
+**Scope:** Backend-only Phase 1. Cashflows now recognizes the stored Account Detail account-code field and exposes explicit Client Data Bank upload/template choices. The Load-only UI remains deferred to the next phase.
+
+**Implementation:** Added the Account Detail alias to the report source adapter, added a read-only source-options endpoint grouped by upload/template with period and row-count metadata, and added focused adapter and endpoint regression coverage.
+
+**Verification:** Focused source/reconciliation tests passed: 25 tests. Python compilation and git diff --check passed. No packages installed.
+
+## Cashflows transaction template mapping - Phase 2 - 2026-09-26
+
+**Scope:** Added the backend foundation for selecting a Client Data Bank Transaction template and mapping its fields before Cashflows generation. The Account Control Centre popup UI and manual Load workflow remain deferred.
+
+**Implementation:** Added additive SQLite/PostgreSQL persistence for client/template Cashflows role mappings and the selected source template. Added read/save template-column APIs with required-role and duplicate-column validation. The report-source adapter now applies saved mappings before alias fallback and blocks Cashflows when a selected source lacks a complete required mapping.
+
+**Verification:** Focused source/reconciliation suite passed: 29 tests. SQLite initialization, Python compilation, and git diff --check passed. No packages installed.

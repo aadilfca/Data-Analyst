@@ -16,8 +16,8 @@ from pydantic import BaseModel, Field
 
 from database import execute_query_pg, execute_write_pg, log_audit, pg_transaction
 from routers.auth import require_admin
-from services.ledger_group_summary import LedgerBalanceError, build_cross_group_check, build_financial_statement_summary, build_group_summary
-from services.ledger_report_source import load_ledger_report_source
+from services.ledger_group_summary import LedgerBalanceError, build_cashflow_summary, build_cross_group_check, build_financial_statement_summary, build_group_summary
+from services.ledger_report_source import CASHFLOW_COLUMN_ROLE_LABELS, CASHFLOW_REQUIRED_COLUMN_ROLES, load_ledger_report_source
 from services.reconciliation_balance_source import (
     load_reconciliation_balance_source,
     normalize_balance_month,
@@ -73,6 +73,18 @@ class ReportCategoryAssignmentsUpdate(BaseModel):
 def normalize_group_label(value: Any) -> str:
     """Trim and collapse whitespace while preserving the user's display casing."""
     return re.sub(r"\s+", " ", str(value or "").strip())
+
+
+class CashflowColumnMappingEntry(BaseModel):
+    role: str
+    template_column_id: int
+
+
+class CashflowTemplateMappingUpdate(BaseModel):
+    client_id: int
+    template_id: int
+    mappings: List[CashflowColumnMappingEntry] = Field(default_factory=list)
+    set_as_default: bool = True
 
 
 def normalize_account_code(value: Any) -> str:
@@ -969,6 +981,312 @@ def replace_report_category_assignments(
     }
 
 
+def _cashflow_configuration(client_id: int) -> dict[str, Any]:
+    mappings = execute_query_pg(
+        """
+        SELECT a.account_code, c.category_key, c.label
+        FROM account_control_cashflow_category_assignments a
+        JOIN account_control_cashflow_categories c
+          ON c.id = a.category_id AND c.client_id = a.client_id AND c.is_active = TRUE
+        WHERE a.client_id = %s
+        ORDER BY a.account_code
+        """,
+        (client_id,),
+    )
+    treasury = execute_query_pg(
+        """SELECT account_code, treasury_type
+           FROM account_control_cashflow_treasury_accounts
+           WHERE client_id = %s
+           ORDER BY treasury_type, account_code""",
+        (client_id,),
+    )
+    settings = execute_query_pg(
+        """SELECT match_internal_transfers, receipt_presentation, source_template_id
+           FROM account_control_cashflow_settings WHERE client_id = %s""",
+        (client_id,),
+    )
+    return {
+        "category_mappings": {normalize_account_code(row["account_code"]): row.get("label") or "" for row in mappings},
+        "cash_account_codes": [normalize_account_code(row["account_code"]) for row in treasury if row["treasury_type"] == "cash"],
+        "source_template_id": settings[0].get("source_template_id") if settings else None,
+        "bank_account_codes": [normalize_account_code(row["account_code"]) for row in treasury if row["treasury_type"] == "bank"],
+        "match_internal_transfers": bool(settings[0].get("match_internal_transfers")) if settings else False,
+        "receipt_presentation": (settings[0].get("receipt_presentation") or "net") if settings else "net",
+    }
+
+def _cashflow_template_mapping_view(client_id: int, template_id: int) -> dict[str, Any]:
+    template_rows = execute_query_pg(
+        "SELECT id, template_name, is_system FROM templates WHERE id = %s",
+        (template_id,),
+    )
+    if not template_rows:
+        raise HTTPException(404, "Transaction template not found")
+    columns = execute_query_pg(
+        """
+        SELECT mc.id AS template_column_id, mc.column_name, mc.data_type, tcm.sort_order
+        FROM template_column_mappings tcm
+        JOIN master_columns mc ON mc.id = tcm.column_id
+        WHERE tcm.template_id = %s AND mc.is_active = TRUE
+        ORDER BY tcm.sort_order, mc.id
+        """,
+        (template_id,),
+    )
+    saved_rows = execute_query_pg(
+        """
+        SELECT m.role, m.template_column_id, c.column_name
+        FROM account_control_cashflow_source_mappings m
+        JOIN master_columns c ON c.id = m.template_column_id
+        WHERE m.client_id = %s AND m.template_id = %s
+        ORDER BY m.role
+        """,
+        (client_id, template_id),
+    )
+    saved = {row["role"]: row for row in saved_rows}
+    column_by_id = {row["template_column_id"]: row for row in columns}
+    roles = []
+    for role, label in CASHFLOW_COLUMN_ROLE_LABELS.items():
+        mapped = saved.get(role)
+        column = column_by_id.get(mapped["template_column_id"]) if mapped else None
+        roles.append(
+            {
+                "role": role,
+                "label": label,
+                "required": role in CASHFLOW_REQUIRED_COLUMN_ROLES,
+                "template_column_id": column["template_column_id"] if column else None,
+                "column_name": column["column_name"] if column else None,
+            }
+        )
+    missing_roles = [
+        role for role in CASHFLOW_REQUIRED_COLUMN_ROLES
+        if role not in saved or saved[role]["template_column_id"] not in column_by_id
+    ]
+    return {
+        "client_id": client_id,
+        "template": dict(template_rows[0]),
+        "columns": [dict(row) for row in columns],
+        "roles": roles,
+        "missing_required_roles": missing_roles,
+        "ready": not missing_roles,
+    }
+
+
+@router.get("/api/reconciliation/cashflows/template-columns")
+def get_cashflow_template_columns(
+    client_id: int = Query(..., ge=1),
+    template_id: int = Query(..., ge=1),
+    session=Depends(require_admin),
+):
+    _require_active_client(client_id)
+    return _cashflow_template_mapping_view(client_id, template_id)
+
+
+@router.put("/api/reconciliation/cashflows/template-columns")
+def save_cashflow_template_columns(
+    payload: CashflowTemplateMappingUpdate,
+    session=Depends(require_admin),
+):
+    _require_active_client(payload.client_id)
+    template_rows = execute_query_pg(
+        "SELECT id FROM templates WHERE id = %s",
+        (payload.template_id,),
+    )
+    if not template_rows:
+        raise HTTPException(404, "Transaction template not found")
+    column_rows = execute_query_pg(
+        """
+        SELECT mc.id AS template_column_id
+        FROM template_column_mappings tcm
+        JOIN master_columns mc ON mc.id = tcm.column_id
+        WHERE tcm.template_id = %s AND mc.is_active = TRUE
+        """,
+        (payload.template_id,),
+    )
+    allowed_columns = {row["template_column_id"] for row in column_rows}
+    cleaned: dict[str, int] = {}
+    for item in payload.mappings:
+        role = str(item.role or "").strip().casefold()
+        if role not in CASHFLOW_COLUMN_ROLE_LABELS:
+            raise HTTPException(400, f"Unsupported Cashflows mapping role: {item.role}")
+        if role in cleaned:
+            raise HTTPException(400, f"Cashflows mapping role is repeated: {role}")
+        if item.template_column_id not in allowed_columns:
+            raise HTTPException(400, f"Template column {item.template_column_id} is not part of the selected template")
+        if item.template_column_id in cleaned.values():
+            raise HTTPException(400, "Each template column can be mapped only once")
+        cleaned[role] = item.template_column_id
+    missing_roles = [role for role in CASHFLOW_REQUIRED_COLUMN_ROLES if role not in cleaned]
+    if missing_roles:
+        raise HTTPException(400, {"message": "Required Cashflows roles are missing", "fields": missing_roles})
+    actor = (session or {}).get("username") or "Admin"
+    transaction = pg_transaction() if pg_transaction is not None else nullcontext()
+    with transaction:
+        execute_write_pg(
+            "DELETE FROM account_control_cashflow_source_mappings WHERE client_id = %s AND template_id = %s",
+            (payload.client_id, payload.template_id),
+        )
+        for role, column_id in cleaned.items():
+            execute_write_pg(
+                """INSERT INTO account_control_cashflow_source_mappings
+                   (client_id, template_id, role, template_column_id, updated_by, updated_at)
+                   VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)""",
+                (payload.client_id, payload.template_id, role, column_id, actor),
+            )
+        if payload.set_as_default:
+            execute_write_pg(
+                """INSERT INTO account_control_cashflow_settings
+                   (client_id, source_template_id, updated_by, updated_at)
+                   VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+                   ON CONFLICT (client_id) DO UPDATE SET
+                     source_template_id = EXCLUDED.source_template_id,
+                     updated_by = EXCLUDED.updated_by,
+                     updated_at = CURRENT_TIMESTAMP""",
+                (payload.client_id, payload.template_id, actor),
+            )
+    log_audit("Admin", "Update", "Cashflows", f"Saved template mapping for client {payload.client_id}, template {payload.template_id}")
+    return _cashflow_template_mapping_view(payload.client_id, payload.template_id)
+
+
+
+def _cashflow_source_options(client_id: int) -> list[dict[str, Any]]:
+    rows = execute_query_pg(
+        """
+        SELECT cd.upload_id, cd.template_id, t.template_name, f.file_name,
+               COUNT(*) AS source_row_count,
+               MIN(cd.extract_date) AS period_start,
+               MAX(cd.extract_date) AS period_end
+        FROM client_data cd
+        LEFT JOIN templates t ON t.id = cd.template_id
+        LEFT JOIN uploaded_files f ON f.id = cd.upload_id
+        WHERE cd.client_id = %s AND cd.is_deleted = FALSE
+        GROUP BY cd.upload_id, cd.template_id, t.template_name, f.file_name
+        ORDER BY MAX(cd.extract_date) DESC NULLS LAST,
+                 cd.upload_id DESC NULLS LAST,
+                 cd.template_id DESC NULLS LAST
+        """,
+        (client_id,),
+    )
+    options: list[dict[str, Any]] = []
+    for row in rows:
+        upload_id = row.get("upload_id")
+        template_id = row.get("template_id")
+        selector_type = "upload" if upload_id is not None else "template"
+        selector_id = upload_id if upload_id is not None else template_id
+        options.append(
+            {
+                "selector_type": selector_type,
+                "selector_id": selector_id,
+                "upload_id": upload_id,
+                "template_id": template_id,
+                "template_name": row.get("template_name") or "Unknown template",
+                "file_name": row.get("file_name") or "",
+                "source_row_count": int(row.get("source_row_count") or 0),
+                "period_start": row.get("period_start"),
+                "period_end": row.get("period_end"),
+            }
+        )
+    return options
+
+def _cashflow_preview(summary: dict[str, Any] | None) -> dict[str, Any]:
+    if summary is None:
+        return {
+            "months": [],
+            "category_totals": [],
+            "transfer_details": [],
+            "deduction_details": [],
+            "categories_needing_review": [],
+            "selected_voucher_count": 0,
+            "internal_transfer_count": 0,
+            "category_review_count": 0,
+            "receipt_presentation": "net",
+        }
+    review = summary.get("categories_needing_review")
+    return {
+        "months": [str(month) for month in summary.get("months", [])],
+        "category_totals": _category_total_records(summary.get("category_totals")),
+        "transfer_details": _frame_records(summary.get("transfer_details")),
+        "deduction_details": _frame_records(summary.get("deduction_details")),
+        "categories_needing_review": _frame_records(review),
+        "selected_voucher_count": int(summary.get("selected_voucher_count", 0)),
+        "internal_transfer_count": int(summary.get("internal_transfer_count", 0)),
+        "category_review_count": int(len(review)) if isinstance(review, pd.DataFrame) else 0,
+        "receipt_presentation": summary.get("receipt_presentation") or "net",
+    }
+
+
+def _build_cashflow_result(
+    client_id: int,
+    period_start: Any,
+    period_end: Any,
+    *,
+    journal_upload_id: int | None = None,
+    journal_template_id: int | None = None,
+) -> dict[str, Any]:
+    _require_active_client(client_id)
+    start, end = _parse_report_period(period_start, period_end)
+    configuration = _cashflow_configuration(client_id)
+    diagnostics: list[dict[str, Any]] = []
+    try:
+        source = load_ledger_report_source(
+            client_id,
+            journal_upload_id=journal_upload_id,
+            journal_template_id=journal_template_id,
+            period_start=start,
+            period_end=end,
+            query_fn=execute_query_pg,
+            account_category_source="cashflow",
+        )
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    diagnostics.extend(source.diagnostics)
+    if not configuration["cash_account_codes"] and not configuration["bank_account_codes"]:
+        diagnostics.append(_report_diagnostic("no_treasury_accounts", "error", "Select at least one Cash or Bank account in Account Control Centre before generating Cashflows."))
+
+    summary: dict[str, Any] | None = None
+    if source.ready and not any(item.get("severity") == "error" for item in diagnostics):
+        try:
+            summary = build_cashflow_summary(
+                source.journal,
+                source.coa,
+                configuration["cash_account_codes"],
+                configuration["bank_account_codes"],
+                start,
+                end,
+                match_internal_transfers=configuration["match_internal_transfers"],
+                receipt_presentation=configuration["receipt_presentation"],
+            )
+        except LedgerBalanceError as error:
+            diagnostics.append(_report_diagnostic("unbalanced_cashflow_vouchers", "error", str(error), checks=_frame_records(error.checks, limit=20)))
+        except ValueError as error:
+            diagnostics.append(_report_diagnostic("cashflow_input_error", "error", str(error)))
+
+    review_count = int(summary.get("category_review_count", 0)) if summary else 0
+    transfer_count = int(summary.get("internal_transfer_count", 0)) if summary else 0
+    controls = {
+        "source": {"status": "Ready" if source.ready else "Blocked", "message": "Client Data source is ready." if source.ready else "Resolve the source diagnostics before generating Cashflows."},
+        "treasury": {"status": "Ready" if configuration["cash_account_codes"] or configuration["bank_account_codes"] else "Blocked", "message": f"{len(configuration['cash_account_codes'])} Cash and {len(configuration['bank_account_codes'])} Bank account(s) configured."},
+        "categories": {"status": "Review" if review_count else ("Ready" if summary else "Blocked"), "count": review_count, "message": f"{review_count} counter-account line(s) need category review." if review_count else "Counter-account categories are ready."},
+        "transfers": {"status": "Ready" if summary else "Blocked", "count": transfer_count, "message": f"{transfer_count} internal transfer voucher(s) identified." if summary else "Transfer analysis is unavailable."},
+    }
+    blocking_reasons = [item["message"] for item in diagnostics if item.get("severity") == "error"]
+    if review_count:
+        blocking_reasons.append(controls["categories"]["message"])
+    return {
+        "client_id": client_id,
+        "period_start": start.date().isoformat(),
+        "period_end": end.date().isoformat(),
+        "configuration": {
+            "cash_account_count": len(configuration["cash_account_codes"]),
+            "bank_account_count": len(configuration["bank_account_codes"]),
+            "match_internal_transfers": configuration["match_internal_transfers"],
+            "receipt_presentation": configuration["receipt_presentation"],
+        },
+        "source": {"metadata": dict(source.metadata), "diagnostics": diagnostics, "ready": source.ready and not any(item.get("severity") == "error" for item in diagnostics)},
+        "controls": controls,
+        "blocking_reasons": blocking_reasons,
+        "preview": _cashflow_preview(summary),
+    }
+
+
 def _build_financial_statement_result(
     client_id: int,
     period_start: Any,
@@ -1048,6 +1366,34 @@ def _build_financial_statement_result(
 def _public_report_result(result: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in result.items() if not key.startswith("_")}
 
+
+@router.get("/api/reconciliation/cashflows/preview")
+def preview_cashflows(
+    client_id: int = Query(..., ge=1),
+    period_start: str = Query(...),
+    period_end: str = Query(...),
+    journal_upload_id: Optional[int] = Query(None, ge=1),
+    journal_template_id: Optional[int] = Query(None, ge=1),
+    session=Depends(require_admin),
+):
+    """Return the read-only Cashflows summary from Account Control Centre settings."""
+    return _build_cashflow_result(
+        client_id,
+        period_start,
+        period_end,
+        journal_upload_id=journal_upload_id,
+        journal_template_id=journal_template_id,
+    )
+
+
+@router.get("/api/reconciliation/cashflows/sources")
+def list_cashflow_sources(
+    client_id: int = Query(..., ge=1),
+    session=Depends(require_admin),
+):
+    """Return selectable Client Data Bank upload/template sources for Cashflows."""
+    _require_active_client(client_id)
+    return {"client_id": client_id, "sources": _cashflow_source_options(client_id)}
 
 @router.get("/api/reconciliation/financial-statements/preview")
 def preview_financial_statements(

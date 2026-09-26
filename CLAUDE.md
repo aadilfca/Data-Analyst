@@ -289,7 +289,10 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-26: Reports hub now uses compact report cards without the redundant hero/status header; backend report groundwork remains preserved.
 - 2026-09-26: Account Control Centre Cash Flow Setup now uses one Categories column plus category and Cash/Bank configuration popups; net receipt presentation is the default.
 - 2026-09-26: Cash/Bank configuration now shows Trial Balance hierarchy rows with compact selected-account panels, checkbox selection, search context, and remove controls.
+- 2026-09-26: Reports Cashflows now has a period-filtered read-only summary using Account Control Centre categories, treasury accounts, transfer matching, and net/gross receipt settings.
 
+- 2026-09-26: Cashflows source loading now recognizes Account Detail and exposes explicit Client Data Bank choices; Load-only UI remains next.
+- 2026-09-26: Cashflows now supports client/template transaction-column mappings with required-field validation and persisted source-template selection.
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
 - Findings from a Code Health Review session go to `KNOWN_ISSUES.md`, not the Status log — the Status log records changes made, that file records issues found

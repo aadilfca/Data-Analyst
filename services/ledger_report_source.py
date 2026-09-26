@@ -45,6 +45,7 @@ _JOURNAL_ALIASES: Mapping[str, tuple[str, ...]] = {
         "account #",
         "account no",
         "account number",
+        "account detail",
         "ledger code",
     ),
     "account_name": (
@@ -65,6 +66,16 @@ _JOURNAL_ALIASES: Mapping[str, tuple[str, ...]] = {
     "debit": ("debit", "debit amount", "dr", "amount debit"),
     "credit": ("credit", "credit amount", "cr", "amount credit"),
 }
+CASHFLOW_COLUMN_ROLE_LABELS = {
+    "voucher_id": "Voucher ID",
+    "date": "Transaction Date",
+    "account_code": "Account Detail / Account Code",
+    "account_name": "Account Name",
+    "voucher_detail": "Voucher Detail",
+    "debit": "Debit Amount",
+    "credit": "Credit Amount",
+}
+CASHFLOW_REQUIRED_COLUMN_ROLES = ("voucher_id", "date", "account_code", "debit", "credit")
 _COA_ALIASES: Mapping[str, tuple[str, ...]] = {
     "account_code": ("account_code", "account code", "account #", "account no", "code"),
     "account_title": ("account_title", "account title", "account name", "title", "name"),
@@ -123,13 +134,33 @@ def _resolve_columns(
     columns: Sequence[Any],
     aliases: Mapping[str, Sequence[str]],
     diagnostics: list[dict[str, Any]],
+    preferred: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     by_label: dict[str, list[Any]] = {}
     for column in columns:
         by_label.setdefault(_normalise_label(column), []).append(column)
 
     resolved: dict[str, Any] = {}
+    for canonical, source_name in (preferred or {}).items():
+        if canonical not in aliases:
+            continue
+        matches = by_label.get(_normalise_label(source_name), [])
+        if not matches:
+            diagnostics.append(
+                _diagnostic(
+                    "mapped_source_column_missing",
+                    "error",
+                    f"Configured source column '{source_name}' for '{canonical}' was not found.",
+                    field=canonical,
+                    source_column=str(source_name),
+                )
+            )
+            continue
+        resolved[canonical] = matches[0]
+
     for canonical, candidates in aliases.items():
+        if canonical in resolved:
+            continue
         for candidate in candidates:
             matches = by_label.get(_normalise_label(candidate), [])
             if matches:
@@ -224,6 +255,7 @@ def build_report_source(
     *,
     period_start: Any = None,
     period_end: Any = None,
+    column_mapping: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> LedgerReportSource:
     """Normalize stored client rows and account assignments for Phase 1.
@@ -261,7 +293,7 @@ def build_report_source(
         return LedgerReportSource(_empty_journal(), _normalise_account_rows(account_rows, diagnostics), tuple(diagnostics), metadata or {})
 
     frame = pd.DataFrame(records)
-    resolved = _resolve_columns(frame.columns, _JOURNAL_ALIASES, diagnostics)
+    resolved = _resolve_columns(frame.columns, _JOURNAL_ALIASES, diagnostics, preferred=column_mapping)
     missing = [column for column in ("voucher_id", "date", "account_code", "debit", "credit") if column not in resolved]
     if missing:
         diagnostics.append(
@@ -403,6 +435,25 @@ def _load_account_rows(
                     "No active Financial Statement account mappings are configured; unmapped accounts will require review.",
                 )
             )
+    elif category_source == "cashflow":
+        assignment_rows = query_fn(
+            """
+            SELECT a.account_code, c.label AS category_name
+            FROM account_control_cashflow_category_assignments a
+            JOIN account_control_cashflow_categories c
+              ON c.id = a.category_id AND c.client_id = a.client_id AND c.is_active = TRUE
+            WHERE a.client_id = %s AND a.category_id IS NOT NULL
+            """,
+            (client_id,),
+        )
+        if not assignment_rows:
+            diagnostics.append(
+                _diagnostic(
+                    "no_cashflow_category_mappings",
+                    "warning",
+                    "No active Cash Flow account mappings are configured; counter-account lines will require review.",
+                )
+            )
     else:
         category_set_rows = query_fn(
             """
@@ -456,6 +507,24 @@ def _load_account_rows(
         if not target.get("category") and row.get("category_name"):
             target["category"] = row["category_name"]
     return list(merged.values())
+
+
+def _load_cashflow_column_mapping(
+    client_id: int,
+    template_id: int,
+    query_fn: Callable[..., list[dict[str, Any]]],
+) -> dict[str, str]:
+    rows = query_fn(
+        """
+        SELECT m.role, c.column_name
+        FROM account_control_cashflow_source_mappings m
+        JOIN master_columns c ON c.id = m.template_column_id
+        WHERE m.client_id = %s AND m.template_id = %s
+        ORDER BY m.role
+        """,
+        (client_id, template_id),
+    )
+    return {str(row["role"]): str(row["column_name"]) for row in rows if row.get("role") and row.get("column_name")}
 
 
 def load_ledger_report_source(
@@ -514,6 +583,13 @@ def load_ledger_report_source(
     metadata["source_row_count"] = len(rows)
     metadata["source_template_ids"] = sorted(template_ids)
     metadata["source_upload_ids"] = sorted(upload_ids)
+    column_mapping: dict[str, str] = {}
+    mapping_template_id = next(iter(template_ids)) if len(template_ids) == 1 else None
+    if account_category_source == "cashflow" and mapping_template_id is not None:
+        column_mapping = _load_cashflow_column_mapping(client_id, mapping_template_id, query_fn)
+        metadata["cashflow_mapping_template_id"] = mapping_template_id
+        metadata["cashflow_column_mapping"] = dict(column_mapping)
+        metadata["cashflow_mapping_ready"] = all(role in column_mapping for role in CASHFLOW_REQUIRED_COLUMN_ROLES)
     account_diagnostics: list[dict[str, Any]] = []
     account_rows = _load_account_rows(client_id, query_fn, account_diagnostics, category_source=account_category_source)
     source = build_report_source(
@@ -521,6 +597,7 @@ def load_ledger_report_source(
         account_rows,
         period_start=period_start,
         period_end=period_end,
+        column_mapping=column_mapping or None,
         metadata=metadata,
     )
     if account_diagnostics:
@@ -530,6 +607,24 @@ def load_ledger_report_source(
             tuple([*source.diagnostics, *account_diagnostics]),
             source.metadata,
         )
+    if account_category_source == "cashflow" and not metadata.get("selection_required"):
+        mapping_diagnostics = list(source.diagnostics)
+        missing_roles = [role for role in CASHFLOW_REQUIRED_COLUMN_ROLES if role not in column_mapping]
+        if mapping_template_id is None:
+            mapping_diagnostics.append(
+                _diagnostic("cashflow_column_mapping_required", "error", "Select and map a Transaction template before generating Cashflows.")
+            )
+        elif missing_roles:
+            mapping_diagnostics.append(
+                _diagnostic(
+                    "cashflow_column_mapping_incomplete",
+                    "Required Cashflows template columns are not mapped: " + ", ".join(missing_roles) + ".",
+                    fields=missing_roles,
+                    template_id=mapping_template_id,
+                )
+            )
+        if len(mapping_diagnostics) != len(source.diagnostics):
+            source = LedgerReportSource(source.journal, source.coa, tuple(mapping_diagnostics), source.metadata)
     if metadata.get("selection_required"):
         diagnostics = list(source.diagnostics)
         diagnostics.append(

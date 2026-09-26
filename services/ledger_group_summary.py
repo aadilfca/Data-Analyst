@@ -368,6 +368,173 @@ def build_financial_statement_summary(
     }
 
 
+def build_cashflow_summary(
+    journal_df: pd.DataFrame,
+    coa_df: pd.DataFrame,
+    cash_account_codes: Sequence[str],
+    bank_account_codes: Sequence[str],
+    period_start: Any,
+    period_end: Any,
+    *,
+    match_internal_transfers: bool = False,
+    receipt_presentation: str = "net",
+    tolerance: float = DEFAULT_TOLERANCE,
+) -> dict[str, Any]:
+    """Summarise vouchers containing configured Cash or Bank accounts.
+
+    Cash/Bank lines define the treasury leg. Counter-account lines are grouped
+    by the Cash Flow category assigned in Account Control Centre. Customer
+    receipts default to net presentation: charge and withholding lines remain
+    available in ``deduction_details`` while the main customer category uses
+    the net treasury effect.
+    """
+    start = pd.Timestamp(period_start)
+    end = pd.Timestamp(period_end)
+    if pd.isna(start) or pd.isna(end) or start > end:
+        raise ValueError("period_start and period_end must form a valid inclusive period")
+    presentation = str(receipt_presentation or "net").strip().casefold()
+    if presentation not in {"net", "gross"}:
+        raise ValueError("receipt_presentation must be net or gross")
+
+    months = _period_labels(start, end)
+    journal = _prepare_journal(journal_df, start, end)
+    coa = _prepare_coa(coa_df)
+    category_by_code = (
+        coa.drop_duplicates("account_code", keep="last").set_index("account_code")["category"].to_dict()
+    )
+    cash_codes = {_canonical_code(code) for code in cash_account_codes if _canonical_code(code)}
+    bank_codes = {_canonical_code(code) for code in bank_account_codes if _canonical_code(code)}
+    treasury_codes = cash_codes | bank_codes
+    treasury_type = {code: "Cash" for code in cash_codes}
+    treasury_type.update({code: "Bank" for code in bank_codes})
+    selected_vouchers = journal.loc[journal["account_code"].isin(treasury_codes), "voucher_id"].drop_duplicates().tolist()
+    working = journal.loc[journal["voucher_id"].isin(selected_vouchers)].copy()
+    category_rows: list[dict[str, Any]] = []
+    transfer_rows: list[dict[str, Any]] = []
+    deduction_rows: list[dict[str, Any]] = []
+    review_rows: list[dict[str, Any]] = []
+    balance_rows: list[dict[str, Any]] = []
+
+    def is_customer_category(label: str) -> bool:
+        value = label.casefold()
+        return "customer" in value and ("receipt" in value or "payment" in value)
+
+    def is_deduction_category(label: str) -> bool:
+        value = label.casefold()
+        return "charge" in value or "withholding" in value or "wht" in value or "deduction" in value
+
+    for voucher_id, voucher in working.groupby("voucher_id", sort=False):
+        treasury = voucher.loc[voucher["account_code"].isin(treasury_codes)].copy()
+        contra = voucher.loc[~voucher["account_code"].isin(treasury_codes)].copy()
+        treasury_net = float((treasury["debit"] - treasury["credit"]).sum())
+        contra_net = float((contra["credit"] - contra["debit"]).sum())
+        balance_rows.append(
+            {
+                "voucher_id": voucher_id,
+                "treasury_net": treasury_net,
+                "counter_net": contra_net,
+                "variance": treasury_net - contra_net,
+                "balanced": abs(treasury_net - contra_net) <= tolerance,
+            }
+        )
+        types = {treasury_type.get(code, "Treasury") for code in treasury["account_code"]}
+        is_transfer = treasury["account_code"].nunique() > 1
+        if is_transfer:
+            same_type = len(types) == 1
+            transfer_rows.append(
+                {
+                    "voucher_id": voucher_id,
+                    "date": voucher["date"].min(),
+                    "month": voucher["month"].iloc[0],
+                    "transfer_type": " to ".join(sorted(types)) if len(types) > 1 else f"{next(iter(types))} to {next(iter(types))}",
+                    "amount": float(treasury["debit"].sum()),
+                    "matched": bool(match_internal_transfers and same_type),
+                    "voucher_detail": next((value for value in voucher["voucher_detail"] if value), ""),
+                }
+            )
+            if match_internal_transfers and same_type and contra.empty:
+                continue
+
+        if contra.empty:
+            continue
+        line_rows: list[dict[str, Any]] = []
+        for _, line in contra.iterrows():
+            account_code = line["account_code"]
+            category = _clean_text(category_by_code.get(account_code))
+            if not category:
+                category = line["account_name"] or "Unmapped account"
+                review_rows.append(
+                    {
+                        "voucher_id": voucher_id,
+                        "date": line["date"],
+                        "month": line["month"],
+                        "account_code": account_code,
+                        "account_name": line["account_name"],
+                        "voucher_detail": line["voucher_detail"],
+                        "debit": line["debit"],
+                        "credit": line["credit"],
+                        "fallback_category": category,
+                    }
+                )
+            line_rows.append(
+                {
+                    "category": category,
+                    "month": line["month"],
+                    "amount": float(line["credit"] - line["debit"]),
+                    "account_code": account_code,
+                    "account_name": line["account_name"],
+                    "date": line["date"],
+                }
+            )
+        customer_lines = [row for row in line_rows if is_customer_category(row["category"])]
+        deduction_lines = [row for row in line_rows if is_deduction_category(row["category"])]
+        if presentation == "net" and customer_lines and deduction_lines:
+            customer_total = sum(row["amount"] for row in customer_lines)
+            deduction_total = sum(row["amount"] for row in deduction_lines)
+            first_customer = customer_lines[0]
+            category_rows.append({"category": first_customer["category"], "month": first_customer["month"], "amount": customer_total + deduction_total})
+            for row in deduction_lines:
+                deduction_rows.append({**row, "presentation": "netted_from_customer_receipt"})
+            for row in line_rows:
+                if row not in customer_lines and row not in deduction_lines:
+                    category_rows.append({"category": row["category"], "month": row["month"], "amount": row["amount"]})
+        else:
+            category_rows.extend({"category": row["category"], "month": row["month"], "amount": row["amount"]} for row in line_rows)
+            if deduction_lines:
+                deduction_rows.extend({**row, "presentation": "shown_separately"} for row in deduction_lines)
+
+    balance_checks = pd.DataFrame(balance_rows)
+    unbalanced = balance_checks.loc[~balance_checks["balanced"]] if not balance_checks.empty else balance_checks
+    if not unbalanced.empty:
+        examples = unbalanced[["voucher_id", "variance"]].head(5).to_dict("records")
+        raise LedgerBalanceError(f"Cash/Bank selection contains {len(unbalanced)} unbalanced voucher(s); examples: {examples}", balance_checks)
+
+    category_frame = pd.DataFrame(category_rows, columns=["category", "month", "amount"])
+    if category_frame.empty:
+        category_totals = pd.DataFrame(index=pd.Index([], name="category"), columns=[*months, "Total"], dtype=float)
+    else:
+        pivot = category_frame.pivot_table(index="category", columns="month", values="amount", aggfunc="sum", fill_value=0.0)
+        category_totals = _reindex_months(pivot.sort_index(), months, "category")
+        category_totals["Total"] = category_totals.sum(axis=1)
+    review = pd.DataFrame(review_rows, columns=["voucher_id", "date", "month", "account_code", "account_name", "voucher_detail", "debit", "credit", "fallback_category"])
+    deductions = pd.DataFrame(deduction_rows, columns=["category", "month", "amount", "account_code", "account_name", "date", "presentation"])
+    transfers = pd.DataFrame(transfer_rows, columns=["voucher_id", "date", "month", "transfer_type", "amount", "matched", "voucher_detail"])
+    return {
+        "months": months,
+        "category_totals": category_totals,
+        "transfer_details": transfers,
+        "deduction_details": deductions,
+        "categories_needing_review": review,
+        "balance_checks": balance_checks,
+        "selected_vouchers": selected_vouchers,
+        "selected_voucher_count": len(selected_vouchers),
+        "source_line_count": len(working),
+        "internal_transfer_count": len(transfers),
+        "category_review_count": len(review),
+        "receipt_presentation": presentation,
+    }
+
+
 def build_group_summary(
     journal_df: pd.DataFrame,
     coa_df: pd.DataFrame,

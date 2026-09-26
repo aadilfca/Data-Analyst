@@ -3,9 +3,11 @@ import sqlite3
 import tempfile
 from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+import pandas as pd
 from fastapi import HTTPException
 
 import database
@@ -375,6 +377,9 @@ def test_reports_hub_uses_shared_cards_and_removes_legacy_workspace():
     assert "Financial Statements" in html
     assert "notes section" in html
     assert "data-report-key" in javascript
+    assert "id='cashflowsView'" in html
+    assert "/api/reconciliation/cashflows/preview" in javascript
+    assert "cashflowsSummaryTable" in html
     assert "reportsHubMessage" not in html
     assert "Cashflows is selected" not in javascript
     for legacy_id in (
@@ -388,3 +393,139 @@ def test_reports_hub_uses_shared_cards_and_removes_legacy_workspace():
         assert legacy_id not in html
     assert "onclick=" not in html
     assert "onchange=" not in html
+
+
+def test_cashflow_summary_nets_customer_receipt_deductions_and_keeps_detail():
+    journal = pd.DataFrame([
+        {"voucher_id": "V1", "date": "2026-01-15", "account_code": "B1", "account_name": "Bank", "debit": 100, "credit": 0},
+        {"voucher_id": "V1", "date": "2026-01-15", "account_code": "B1", "account_name": "Bank", "debit": 0, "credit": 3},
+        {"voucher_id": "V1", "date": "2026-01-15", "account_code": "CH", "account_name": "Bank charges", "debit": 1, "credit": 0},
+        {"voucher_id": "V1", "date": "2026-01-15", "account_code": "WT", "account_name": "Withholding tax", "debit": 2, "credit": 0},
+        {"voucher_id": "V1", "date": "2026-01-15", "account_code": "CU", "account_name": "Customer", "debit": 0, "credit": 100},
+    ])
+    coa = pd.DataFrame([
+        {"account_code": "CH", "account_title": "Bank charges", "category": "Bank charges"},
+        {"account_code": "WT", "account_title": "Withholding tax", "category": "Withholding tax"},
+        {"account_code": "CU", "account_title": "Customer", "category": "Customer receipts"},
+    ])
+    summary = reconciliation.build_cashflow_summary(journal, coa, [], ["B1"], "2026-01-01", "2026-01-31")
+    assert summary["category_totals"].loc["Customer receipts", "2026-01"] == 97
+    assert "Bank charges" not in summary["category_totals"].index
+    assert sorted(summary["deduction_details"]["category"].tolist()) == ["Bank charges", "Withholding tax"]
+
+
+def test_cashflow_summary_matches_same_type_internal_transfers():
+    journal = pd.DataFrame([
+        {"voucher_id": "T1", "date": "2026-01-20", "account_code": "B1", "account_name": "Bank A", "debit": 0, "credit": 100},
+        {"voucher_id": "T1", "date": "2026-01-20", "account_code": "B2", "account_name": "Bank B", "debit": 100, "credit": 0},
+    ])
+    summary = reconciliation.build_cashflow_summary(journal, pd.DataFrame(columns=["account_code", "category"]), [], ["B1", "B2"], "2026-01-01", "2026-01-31", match_internal_transfers=True)
+    assert bool(summary["transfer_details"].iloc[0]["matched"]) is True
+    assert summary["category_totals"].empty
+
+
+def test_cashflow_preview_endpoint_returns_configuration_and_preview():
+    source = SimpleNamespace(journal=pd.DataFrame(), coa=pd.DataFrame(), diagnostics=(), metadata={"source_row_count": 0}, ready=True)
+    configuration = {"category_mappings": {}, "cash_account_codes": ["C1"], "bank_account_codes": [], "match_internal_transfers": False, "receipt_presentation": "net"}
+    with patch.object(reconciliation, "_require_active_client"), patch.object(reconciliation, "_cashflow_configuration", return_value=configuration), patch.object(reconciliation, "load_ledger_report_source", return_value=source):
+        response = reconciliation.preview_cashflows(7, "2026-01-01", "2026-01-31", session={"username": "Admin"})
+    assert response["configuration"]["cash_account_count"] == 1
+    assert response["preview"]["category_totals"] == []
+    assert response["controls"]["treasury"]["status"] == "Ready"
+
+
+def test_cashflow_sources_returns_explicit_upload_choices():
+    rows = [{
+        "upload_id": 290,
+        "template_id": 1,
+        "template_name": "Voucher template",
+        "file_name": "June vouchers.xlsx",
+        "source_row_count": 8173,
+        "period_start": "2026-06-01",
+        "period_end": "2026-06-30",
+    }]
+    with patch.object(reconciliation, "_require_active_client"), patch.object(
+        reconciliation, "execute_query_pg", return_value=rows
+    ):
+        response = reconciliation.list_cashflow_sources(7, session={"username": "Admin"})
+
+    assert response == {
+        "client_id": 7,
+        "sources": [{
+            "selector_type": "upload",
+            "selector_id": 290,
+            "upload_id": 290,
+            "template_id": 1,
+            "template_name": "Voucher template",
+            "file_name": "June vouchers.xlsx",
+            "source_row_count": 8173,
+            "period_start": "2026-06-01",
+            "period_end": "2026-06-30",
+        }],
+    }
+
+
+def test_cashflow_template_columns_returns_saved_roles():
+    template_columns = [
+        {"template_column_id": 15, "column_name": "Voucher ID", "data_type": "Text", "sort_order": 0},
+        {"template_column_id": 12, "column_name": "Transaction Date", "data_type": "Date", "sort_order": 1},
+        {"template_column_id": 16, "column_name": "Account Detail", "data_type": "Text", "sort_order": 2},
+        {"template_column_id": 19, "column_name": "Debit Amount", "data_type": "Numeric", "sort_order": 5},
+        {"template_column_id": 20, "column_name": "Credit Amount", "data_type": "Numeric", "sort_order": 6},
+    ]
+    saved = [
+        {"role": "voucher_id", "template_column_id": 15, "column_name": "Voucher ID"},
+        {"role": "date", "template_column_id": 12, "column_name": "Transaction Date"},
+        {"role": "account_code", "template_column_id": 16, "column_name": "Account Detail"},
+        {"role": "debit", "template_column_id": 19, "column_name": "Debit Amount"},
+        {"role": "credit", "template_column_id": 20, "column_name": "Credit Amount"},
+    ]
+
+    def query(sql, params=None):
+        if "FROM templates" in sql:
+            return [{"id": 1, "template_name": "Transaction Report", "is_system": True}]
+        if "FROM template_column_mappings" in sql:
+            return template_columns
+        if "FROM account_control_cashflow_source_mappings" in sql:
+            return saved
+        raise AssertionError(f"Unexpected query: {sql}")
+
+    with patch.object(reconciliation, "_require_active_client"), patch.object(reconciliation, "execute_query_pg", side_effect=query):
+        response = reconciliation.get_cashflow_template_columns(7, 1, session={"username": "Admin"})
+
+    assert response["template"]["template_name"] == "Transaction Report"
+    assert response["ready"] is True
+    assert response["missing_required_roles"] == []
+    assert next(item for item in response["roles"] if item["role"] == "account_code")["column_name"] == "Account Detail"
+
+
+def test_save_cashflow_template_columns_validates_and_persists_mapping():
+    writes = []
+
+    def query(sql, params=None):
+        if "SELECT id FROM templates" in sql:
+            return [{"id": 1}]
+        if "FROM template_column_mappings" in sql:
+            return [{"template_column_id": column_id} for column_id in (15, 12, 16, 19, 20)]
+        raise AssertionError(f"Unexpected query: {sql}")
+
+    def write(sql, params=None):
+        writes.append((sql, params))
+
+    mapping = reconciliation.CashflowTemplateMappingUpdate(
+        client_id=7,
+        template_id=1,
+        mappings=[
+            reconciliation.CashflowColumnMappingEntry(role="voucher_id", template_column_id=15),
+            reconciliation.CashflowColumnMappingEntry(role="date", template_column_id=12),
+            reconciliation.CashflowColumnMappingEntry(role="account_code", template_column_id=16),
+            reconciliation.CashflowColumnMappingEntry(role="debit", template_column_id=19),
+            reconciliation.CashflowColumnMappingEntry(role="credit", template_column_id=20),
+        ],
+    )
+    with patch.object(reconciliation, "_require_active_client"), patch.object(reconciliation, "execute_query_pg", side_effect=query), patch.object(reconciliation, "execute_write_pg", side_effect=write), patch.object(reconciliation, "pg_transaction", return_value=nullcontext()), patch.object(reconciliation, "_cashflow_template_mapping_view", return_value={"ready": True}), patch.object(reconciliation, "log_audit"):
+        response = reconciliation.save_cashflow_template_columns(mapping, session={"username": "Admin"})
+
+    assert response["ready"] is True
+    assert sum("INSERT INTO account_control_cashflow_source_mappings" in sql for sql, _ in writes) == 5
+    assert any("source_template_id" in sql for sql, _ in writes)

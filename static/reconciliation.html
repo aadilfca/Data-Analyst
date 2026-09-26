@@ -51,6 +51,15 @@
                 </div>
             </section>
         </section>
+        <section id='cashflowsView' class='cashflows-report' aria-labelledby='cashflows-heading' hidden>
+            <div class='cashflows-report-header'><div><button type='button' id='cashflowsBackButton' class='cashflows-back'>Back to Reports</button><h2 id='cashflows-heading'>Cashflows</h2><p>Summarise money in, money out, transfers, and customer receipt deductions from configured Cash and Bank accounts.</p></div><div id='cashflowsSourceStatus' class='cashflows-source-status' role='status'></div></div>
+            <form id='cashflowsReportForm' class='cashflows-filter-bar'><label>From <input id='cashflowsPeriodStart' type='date' required></label><label>To <input id='cashflowsPeriodEnd' type='date' required></label><button type='submit' class='cashflows-primary'>Generate summary</button></form>
+            <div id='cashflowsControls' class='cashflows-control-grid'></div>
+            <div id='cashflowsMessage' class='cashflows-message' role='status' hidden></div>
+            <section class='cashflows-report-section'><div class='cashflows-section-heading'><h3>Cash Flow summary</h3><span id='cashflowsReceiptMode'></span></div><div class='cashflows-table-wrap'><table id='cashflowsSummaryTable' class='cashflows-table'></table></div></section>
+            <div class='cashflows-detail-grid'><section class='cashflows-report-section'><div class='cashflows-section-heading'><h3>Internal transfers</h3><span id='cashflowsTransferCount'></span></div><div class='cashflows-table-wrap'><table id='cashflowsTransfersTable' class='cashflows-table'></table></div></section><section class='cashflows-report-section'><div class='cashflows-section-heading'><h3>Customer deductions</h3><span id='cashflowsDeductionCount'></span></div><div class='cashflows-table-wrap'><table id='cashflowsDeductionsTable' class='cashflows-table'></table></div></section></div>
+            <section id='cashflowsReviewSection' class='cashflows-report-section' hidden><div class='cashflows-section-heading'><h3>Review required</h3><span id='cashflowsReviewCount'></span></div><div class='cashflows-table-wrap'><table id='cashflowsReviewTable' class='cashflows-table'></table></div></section>
+        </section>
         <footer class='reconciliation-footer'>
             <span>Reports are kept separate from Audit Verification setup.</span>
             <span>Reports centre - Phase 1</span>

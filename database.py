@@ -2668,11 +2668,37 @@ def init_db():
                 match_internal_transfers INTEGER NOT NULL DEFAULT 0,
                 receipt_presentation TEXT NOT NULL DEFAULT 'net'
                     CHECK (receipt_presentation IN ('net', 'gross')),
+                source_template_id INTEGER,
                 updated_by TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
             )
         ''')
+        try:
+            cur = conn.execute("PRAGMA table_info(account_control_cashflow_settings)")
+            existing_columns = {row[1] for row in cur.fetchall()}
+            if "source_template_id" not in existing_columns:
+                conn.execute("ALTER TABLE account_control_cashflow_settings ADD COLUMN source_template_id INTEGER")
+        except Exception as e:
+            print("[cashflows] Could not add source_template_id to Cashflows settings:", e)
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_cashflow_source_mappings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                template_id INTEGER NOT NULL,
+                role TEXT NOT NULL CHECK (role IN ('voucher_id', 'date', 'account_code', 'account_name', 'voucher_detail', 'debit', 'credit')),
+                template_column_id INTEGER NOT NULL,
+                updated_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                FOREIGN KEY (template_id) REFERENCES templates(id) ON DELETE CASCADE,
+                FOREIGN KEY (template_column_id) REFERENCES master_columns(id) ON DELETE RESTRICT,
+                UNIQUE(client_id, template_id, role),
+                UNIQUE(client_id, template_id, template_column_id)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_source_mappings_client_template ON account_control_cashflow_source_mappings (client_id, template_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_categories_client ON account_control_cashflow_categories (client_id, is_active)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_category_assignments_client ON account_control_cashflow_category_assignments (client_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_treasury_client ON account_control_cashflow_treasury_accounts (client_id, treasury_type)")
@@ -3694,10 +3720,27 @@ def _ensure_postgres_account_set_tables(conn):
                 match_internal_transfers BOOLEAN NOT NULL DEFAULT FALSE,
                 receipt_presentation TEXT NOT NULL DEFAULT 'net'
                     CHECK (receipt_presentation IN ('net', 'gross')),
+                source_template_id INTEGER REFERENCES templates(id) ON DELETE SET NULL,
                 updated_by TEXT,
                 updated_at TIMESTAMPTZ DEFAULT now()
             )
         ''')
+        cur.execute("ALTER TABLE account_control_cashflow_settings ADD COLUMN IF NOT EXISTS source_template_id INTEGER REFERENCES templates(id) ON DELETE SET NULL")
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_cashflow_source_mappings (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+                role TEXT NOT NULL CHECK (role IN ('voucher_id', 'date', 'account_code', 'account_name', 'voucher_detail', 'debit', 'credit')),
+                template_column_id INTEGER NOT NULL REFERENCES master_columns(id) ON DELETE RESTRICT,
+                updated_by TEXT,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                updated_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(client_id, template_id, role),
+                UNIQUE(client_id, template_id, template_column_id)
+            )
+        ''')
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_source_mappings_client_template ON account_control_cashflow_source_mappings (client_id, template_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_categories_client ON account_control_cashflow_categories (client_id, is_active)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_category_assignments_client ON account_control_cashflow_category_assignments (client_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_treasury_client ON account_control_cashflow_treasury_accounts (client_id, treasury_type)")
