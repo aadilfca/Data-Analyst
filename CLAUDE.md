@@ -286,6 +286,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-24: Account Control Centre Phase 5 activated Notes to Financial Statements categories and field-scoped account mapping; Verification and Financial Statement assignments remain preserved.
 - 2026-09-26: Account Control Centre intro and empty status banner removed; focused UI regression coverage added. See CHANGELOG_ARCHIVE.md.
 - 2026-09-26: Verification sessions gained line-level Excel export with focused backend coverage. See CHANGELOG_ARCHIVE.md.
+- 2026-09-26: Reports hub now uses compact report cards without the redundant hero/status header; backend report groundwork remains preserved.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

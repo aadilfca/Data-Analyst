@@ -363,13 +363,28 @@ def test_report_assignments_validate_trial_balance_codes_and_category_keys():
     assert duplicate.value.status_code == 400
 
 
-def test_reconciliation_configuration_screen_uses_delegated_actions_and_exact_code_controls():
+def test_reports_hub_uses_shared_cards_and_removes_legacy_workspace():
     html = Path(__file__).resolve().parents[1].joinpath("static", "reconciliation.html").read_text(encoding="utf-8")
     javascript = Path(__file__).resolve().parents[1].joinpath("static", "reconciliation.js").read_text(encoding="utf-8")
 
-    assert 'id="accountTableBody"' in html
-    assert 'id="saveButton"' in html
-    assert "account-suggestions?client_id=" in javascript
-    assert "account_codes: Array.from(state.selectedCodes)" in javascript
+    assert "id='reportsView'" in html
+    assert "id='cashflowsCard'" in html
+    assert "data-report-key='cashflows'" in html
+    assert "Vendor Reports" in html
+    assert "Customer Reports" in html
+    assert "Financial Statements" in html
+    assert "notes section" in html
+    assert "data-report-key" in javascript
+    assert "reportsHubMessage" not in html
+    assert "Cashflows is selected" not in javascript
+    for legacy_id in (
+        "id='reportForm'",
+        "id='setupView'",
+        "id='reportDiagnosticsPanel'",
+        "id='reportPreviewPanel'",
+        "id='financialStatementPreviewPanel'",
+        "id='balanceForm'",
+    ):
+        assert legacy_id not in html
     assert "onclick=" not in html
     assert "onchange=" not in html

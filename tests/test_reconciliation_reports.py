@@ -131,9 +131,11 @@ def test_reports_view_and_dashboard_entry_are_wired():
     dashboard = root.joinpath("static", "index.html").read_text(encoding="utf-8")
     navigation = root.joinpath("static", "client_context.js").read_text(encoding="utf-8")
 
-    assert 'id="reportsView"' in html
-    assert 'id="downloadReportButton"' in html
-    assert "/api/reconciliation/reports/preview" in javascript
+    assert "id='reportsView'" in html
+    assert "id='cashflowsCard'" in html
+    assert "data-report-key='cashflows'" in html
+    assert "class='module-card coming-soon'" in html
+    assert "/api/reconciliation/reports/preview" not in javascript
     assert 'id="reportsCard"' in dashboard
     assert "reconciliation.html?view=reports" in navigation
     assert 'onclick=' not in html
@@ -185,12 +187,18 @@ def test_financial_statement_preview_uses_account_control_mapping_source():
     assert loader.call_args.kwargs["account_category_source"] == "financial_statement"
 
 
-def test_reports_ui_exposes_financial_statement_preview():
+def test_reports_hub_exposes_requested_report_cards():
     root = Path(__file__).resolve().parents[1]
     html = root.joinpath("static", "reconciliation.html").read_text(encoding="utf-8")
     javascript = root.joinpath("static", "reconciliation.js").read_text(encoding="utf-8")
 
-    assert 'id="previewFinancialStatementsButton"' in html
-    assert 'id="financialStatementPreviewPanel"' in html
-    assert "/api/reconciliation/financial-statements/preview?" in javascript
-    assert "account control mappings" in javascript.lower()
+    assert "Cashflows" in html
+    assert "Vendor Reports" in html
+    assert "Customer Reports" in html
+    assert "Financial Statements" in html
+    assert "notes section" in html
+    assert "<h1>Reports centre</h1>" not in html
+    assert "reportsHubMessage" not in html
+    assert "id='previewFinancialStatementsButton'" not in html
+    assert "id='financialStatementPreviewPanel'" not in html
+    assert "/api/reconciliation/financial-statements/preview?" not in javascript

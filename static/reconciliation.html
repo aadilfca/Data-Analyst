@@ -1,373 +1,62 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset='UTF-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
     <title>Reports | Internal Audit App</title>
-    <link rel="stylesheet" href="/static/style.css?v=27">
+    <link rel='stylesheet' href='/static/style.css?v=27'>
 </head>
-<body class="reconciliation-page" data-nav-module="Reports" data-nav-parent="index.html">
-    <nav class="navbar">
-        <div class="nav-container">
-            <div id="navLeft"></div>
-            <div class="nav-client" id="clientControl"></div>
-            <div class="nav-user"></div>
+<body class='reconciliation-page' data-nav-module='Reports' data-nav-parent='index.html'>
+    <nav class='navbar'>
+        <div class='nav-container'>
+            <div id='navLeft'></div>
+            <div class='nav-client' id='clientControl'></div>
+            <div class='nav-user'></div>
         </div>
     </nav>
-    <main class="reconciliation-shell">
-        <header class="reconciliation-hero">
-            <div>
-                <p class="reconciliation-eyebrow">Ledger Reconciliation</p>
-                <h1>Reports &amp; account setup</h1>
-                <p class="reconciliation-hero-copy">
-                    Generate source-backed monthly summaries from the selected Client Data Bank dataset.
-                    Account membership and report categories remain controlled by exact Trial Balance codes.
-                </p>
-            </div>
-            <div class="reconciliation-hero-mark" aria-hidden="true">↔</div>
-        </header>
-
-        <div class="reconciliation-view-tabs" role="tablist" aria-label="Reconciliation views">
-            <button id="reportsViewButton" class="reconciliation-view-tab is-active" type="button" role="tab" aria-selected="true" data-view="reports">Reports</button>
-            <button id="setupViewButton" class="reconciliation-view-tab" type="button" role="tab" aria-selected="false" data-view="setup">Account setup</button>
-        </div>
-
-        <section id="reportsView" class="reconciliation-report-view" aria-labelledby="reports-heading">
-            <section class="reconciliation-panel reconciliation-source-panel" aria-labelledby="reports-heading">
-                <div class="reconciliation-panel-heading">
-                    <div>
-                        <p class="reconciliation-section-kicker">1 · Report inputs</p>
-                        <h2 id="reports-heading">Prepare a monthly category summary</h2>
-                        <p class="reconciliation-help">The preview checks the ledger, category coverage, transfers, paired Bank/Cash movement, and reconciliation proof before download.</p>
+    <main class='reconciliation-shell'>
+        <section id='reportsView' aria-labelledby='reports-heading'>
+            <section class='hub-group' aria-labelledby='reports-heading'>
+                <h2 id='reports-heading' class='hub-group-title'>Available reports</h2>
+                <div class='module-grid'>
+                    <div id='cashflowsCard' class='module-card' data-report-key='cashflows' role='button' tabindex='0' aria-label='Open Cashflows report'>
+                        <div class='module-icon' aria-hidden='true'>CF</div>
+                        <h3>Cashflows</h3>
+                        <p>Summarise money in, money out, transfers, and closing cash and bank balances.</p>
+                        <span id='cashflowsStatus' class='module-status'>Next build</span>
                     </div>
-                    <span id="reportStatus" class="reconciliation-status-pill is-muted">Not loaded</span>
                 </div>
-                <form id="reportForm" class="reconciliation-report-form">
-                    <label class="reconciliation-field">
-                        <span>Client Data Bank dataset</span>
-                        <select id="reportDataset" class="reconciliation-select" required>
-                            <option value="">Select an imported dataset</option>
-                        </select>
-                        <small>Choose the complete journal that should drive this report.</small>
-                    </label>
-                    <label class="reconciliation-field">
-                        <span>Reporting group</span>
-                        <select id="reportGroup" class="reconciliation-select" required>
-                            <option value="">Select a saved group</option>
-                        </select>
-                        <small>Membership is controlled by exact Trial Balance account codes.</small>
-                    </label>
-                    <label class="reconciliation-field">
-                        <span>Period start</span>
-                        <input id="reportPeriodStart" type="date" required>
-                    </label>
-                    <label class="reconciliation-field">
-                        <span>Period end</span>
-                        <input id="reportPeriodEnd" type="date" required>
-                    </label>
-                    <div class="reconciliation-source-actions">
-                        <button id="previewReportButton" class="reconciliation-btn reconciliation-btn-primary" type="submit">Preview report</button>
-                        <button id="downloadReportButton" class="reconciliation-btn reconciliation-btn-secondary" type="button" disabled>Download Excel</button>
-                        <button id="previewFinancialStatementsButton" class="reconciliation-btn reconciliation-btn-secondary" type="button">Preview Financial Statements</button>
-                    </div>
-                </form>
-                <div id="reportMessage" class="reconciliation-message" role="status" aria-live="polite" hidden></div>
             </section>
-
-            <div id="reportControls" class="reconciliation-report-controls" hidden>
-                <article class="reconciliation-control-card"><span>Ledger balance</span><strong id="reportLedgerStatus">Blocked</strong><small id="reportLedgerMessage"></small></article>
-                <article class="reconciliation-control-card"><span>Category review</span><strong id="reportCategoryStatus">Blocked</strong><small id="reportCategoryMessage"></small></article>
-                <article class="reconciliation-control-card"><span>Transfers</span><strong id="reportTransferStatus">Blocked</strong><small id="reportTransferMessage"></small></article>
-                <article class="reconciliation-control-card"><span>Bank/Cash cross-check</span><strong id="reportCrossStatus">Not configured</strong><small id="reportCrossMessage"></small></article>
-                <article class="reconciliation-control-card"><span>Reconciliation</span><strong id="reportReconStatus">Blocked</strong><small id="reportReconMessage"></small></article>
-            </div>
-
-            <section id="reportDiagnosticsPanel" class="reconciliation-panel reconciliation-report-panel" hidden aria-labelledby="diagnostics-heading">
-                <div class="reconciliation-panel-heading">
-                    <div>
-                        <p class="reconciliation-section-kicker">2 · Controls</p>
-                        <h2 id="diagnostics-heading">Source diagnostics and control notes</h2>
+            <section class='hub-group' aria-labelledby='planned-reports-heading'>
+                <h2 id='planned-reports-heading' class='hub-group-title'>Planned reports</h2>
+                <div class='module-grid'>
+                    <div class='module-card coming-soon' aria-label='Vendor Reports coming soon'>
+                        <div class='module-icon' aria-hidden='true'>VR</div>
+                        <h3>Vendor Reports</h3>
+                        <p>Review vendor payments, balances, and supporting movement summaries.</p>
+                        <span class='module-status coming'>Coming soon</span>
                     </div>
-                </div>
-                <ul id="reportDiagnostics" class="reconciliation-diagnostics"></ul>
-                <div id="reportBlockingReasons" class="reconciliation-blocking-reasons" hidden></div>
-            </section>
-
-            <section id="reportPreviewPanel" class="reconciliation-panel reconciliation-report-panel" hidden aria-labelledby="preview-heading">
-                <div class="reconciliation-panel-heading">
-                    <div>
-                        <p class="reconciliation-section-kicker">3 · Preview</p>
-                        <h2 id="preview-heading">Monthly category preview</h2>
+                    <div class='module-card coming-soon' aria-label='Customer Reports coming soon'>
+                        <div class='module-icon' aria-hidden='true'>CR</div>
+                        <h3>Customer Reports</h3>
+                        <p>Review customer receipts, deductions, balances, and collection movements.</p>
+                        <span class='module-status coming'>Coming soon</span>
                     </div>
-                    <span id="reportPreviewMeta" class="reconciliation-status-pill is-muted"></span>
-                </div>
-                <div id="reportPreviewEmpty" class="reconciliation-empty" hidden></div>
-                <div class="reconciliation-table-wrap">
-                    <table class="reconciliation-account-table reconciliation-report-table">
-                        <thead id="reportPreviewHead"></thead>
-                        <tbody id="reportPreviewBody"></tbody>
-                    </table>
+                    <div class='module-card coming-soon' aria-label='Financial Statements coming soon'>
+                        <div class='module-icon' aria-hidden='true'>FS</div>
+                        <h3>Financial Statements</h3>
+                        <p>Prepare financial statement outputs, including the related notes section.</p>
+                        <span class='module-status coming'>Coming soon</span>
+                    </div>
                 </div>
             </section>
         </section>
-
-        <section id="financialStatementPreviewPanel" class="reconciliation-panel reconciliation-report-panel" hidden aria-labelledby="financial-statement-heading">
-            <div class="reconciliation-panel-heading">
-                <div>
-                    <p class="reconciliation-section-kicker">4 Â· Financial Statements</p>
-                    <h2 id="financial-statement-heading">Financial Statement category preview</h2>
-                    <p class="reconciliation-help">This read-only preview uses the Financial Statement mappings maintained in Account Control Centre. Values are transparent net movement (debit minus credit).</p>
-                </div>
-                <span id="financialStatementStatus" class="reconciliation-status-pill is-muted">Not loaded</span>
-            </div>
-            <div id="financialStatementMessage" class="reconciliation-message" role="status" aria-live="polite" hidden></div>
-            <div id="financialStatementMeta" class="reconciliation-setup-summary"></div>
-            <div id="financialStatementUnmapped" class="reconciliation-blocking-reasons" hidden></div>
-            <div id="financialStatementPreviewEmpty" class="reconciliation-empty" hidden></div>
-            <div class="reconciliation-table-wrap">
-                <table class="reconciliation-account-table reconciliation-report-table">
-                    <thead id="financialStatementPreviewHead"></thead>
-                    <tbody id="financialStatementPreviewBody"></tbody>
-                </table>
-            </div>
-        </section>
-
-        <div id="setupView" hidden>
-            <div class="reconciliation-setup-tabs" role="tablist" aria-label="Account setup sections">
-                <button id="setupGroupsTab" class="reconciliation-setup-tab is-active" type="button" role="tab" aria-selected="true" data-setup-tab="groups">Account groups</button>
-                <button id="setupCategoriesTab" class="reconciliation-setup-tab" type="button" role="tab" aria-selected="false" data-setup-tab="categories">Ledger Summary categories</button>
-                <button id="setupBalancesTab" class="reconciliation-setup-tab" type="button" role="tab" aria-selected="false" data-setup-tab="balances">Reconciliation balances</button>
-            </div>
-
-        <div id="setupGroupsPanel">
-        <section class="reconciliation-panel reconciliation-source-panel" aria-labelledby="source-heading">
-            <div class="reconciliation-panel-heading">
-                <div>
-                    <p class="reconciliation-section-kicker">1 · Reporting group</p>
-                    <h2 id="source-heading">Configure account membership</h2>
-                </div>
-                <span id="sourceStatus" class="reconciliation-status-pill is-muted">Not loaded</span>
-            </div>
-            <form id="sourceForm" class="reconciliation-source-form">
-                <label class="reconciliation-field">
-                    <span>Reporting group</span>
-                    <input id="groupLabel" name="group_label" type="text" maxlength="100" placeholder="e.g. Bank" required>
-                    <small>Bank and Cash suggestions use Trial Balance account type only. Custom groups are supported.</small>
-                </label>
-                <div class="reconciliation-source-actions">
-                    <button id="loadButton" class="reconciliation-btn reconciliation-btn-primary" type="submit">Load accounts</button>
-                    <select id="savedGroupSelect" class="reconciliation-select" aria-label="Saved reporting groups">
-                        <option value="">Saved groups</option>
-                    </select>
-                </div>
-            </form>
-            <div id="globalMessage" class="reconciliation-message" role="status" aria-live="polite" hidden></div>
-        </section>
-
-        <section id="workspace" class="reconciliation-workspace" hidden>
-            <div class="reconciliation-metrics" aria-label="Account selection summary">
-                <article class="reconciliation-metric-card">
-                    <span class="reconciliation-metric-label">Trial Balance accounts</span>
-                    <strong id="totalAccounts">0</strong>
-                    <small>Available for this client</small>
-                </article>
-                <article class="reconciliation-metric-card is-blue">
-                    <span class="reconciliation-metric-label">Selected codes</span>
-                    <strong id="selectedAccounts">0</strong>
-                    <small>Included in this group</small>
-                </article>
-                <article class="reconciliation-metric-card is-green">
-                    <span class="reconciliation-metric-label">Type suggestions</span>
-                    <strong id="suggestedAccounts">0</strong>
-                    <small>Advisory matches only</small>
-                </article>
-                <article class="reconciliation-metric-card is-amber">
-                    <span class="reconciliation-metric-label">Review flags</span>
-                    <strong id="reviewAccounts">0</strong>
-                    <small>Unusual selected types</small>
-                </article>
-            </div>
-
-            <section class="reconciliation-panel" aria-labelledby="accounts-heading">
-                <div class="reconciliation-panel-heading reconciliation-table-heading">
-                    <div>
-                        <p class="reconciliation-section-kicker">2 · Membership</p>
-                        <h2 id="accounts-heading"><span id="activeGroupHeading">Reporting</span> accounts</h2>
-                        <p class="reconciliation-help">Account names help review only. Membership is saved by exact account code.</p>
-                    </div>
-                    <div class="reconciliation-table-actions">
-                        <button id="selectVisibleButton" class="reconciliation-btn reconciliation-btn-secondary" type="button">Select visible</button>
-                        <button id="clearVisibleButton" class="reconciliation-btn reconciliation-btn-quiet" type="button">Clear visible</button>
-                    </div>
-                </div>
-
-                <div class="reconciliation-toolbar">
-                    <label class="reconciliation-search">
-                        <span class="reconciliation-sr-only">Search accounts</span>
-                        <span aria-hidden="true">⌕</span>
-                        <input id="accountSearch" type="search" placeholder="Search code, account name, or type">
-                    </label>
-                    <label class="reconciliation-filter">
-                        <span>Show</span>
-                        <select id="accountFilter" class="reconciliation-select">
-                            <option value="all">All accounts</option>
-                            <option value="selected">Selected only</option>
-                            <option value="suggested">Suggested only</option>
-                            <option value="review">Selected with review flag</option>
-                        </select>
-                    </label>
-                </div>
-
-                <div id="tableMessage" class="reconciliation-empty" hidden></div>
-                <div class="reconciliation-table-wrap">
-                    <table class="reconciliation-account-table">
-                        <thead>
-                            <tr>
-                                <th class="reconciliation-check-column"><span class="reconciliation-sr-only">Include</span></th>
-                                <th>Account code</th>
-                                <th>Account title</th>
-                                <th>Type</th>
-                                <th>Suggestion</th>
-                                <th>Review note</th>
-                            </tr>
-                        </thead>
-                        <tbody id="accountTableBody"></tbody>
-                    </table>
-                </div>
-                <div class="reconciliation-table-footer">
-                    <span id="visibleCount">0 accounts shown</span>
-                    <span id="selectionHint">Select accounts to include them in this group.</span>
-                </div>
-            </section>
-
-            <section class="reconciliation-save-bar" aria-labelledby="save-heading">
-                <div>
-                    <p class="reconciliation-section-kicker">3 · Save</p>
-                    <h2 id="save-heading">Save this exact-code membership</h2>
-                    <p>Only the selected account codes will be active for this group. Accounts without journal activity remain valid selections.</p>
-                </div>
-                <button id="saveButton" class="reconciliation-btn reconciliation-btn-primary reconciliation-btn-large" type="button">Save group</button>
-            </section>
-        </section>
-
-        </div>
-
-        <section id="setupCategoriesPanel" class="reconciliation-setup-panel" hidden aria-labelledby="category-setup-heading">
-            <section class="reconciliation-panel reconciliation-source-panel">
-                <div class="reconciliation-panel-heading">
-                    <div>
-                        <p class="reconciliation-section-kicker">1 · Ledger Summary categories</p>
-                        <h2 id="category-setup-heading">Assign report categories by exact Trial Balance code</h2>
-                        <p class="reconciliation-help">These categories belong only to this client's Ledger Summary reports. They do not alter Audit Verification categories.</p>
-                    </div>
-                    <span id="categoryStatus" class="reconciliation-status-pill is-muted">Not loaded</span>
-                </div>
-                <div id="categorySetCreate" class="reconciliation-empty" hidden>
-                    <strong>Ledger Summary categories have not been created for this client.</strong>
-                    <p>Create the dedicated category set once, then define categories and assign account codes.</p>
-                    <div class="reconciliation-inline-form">
-                        <label class="reconciliation-field">
-                            <span>Category set name</span>
-                            <input id="categorySetNameInput" type="text" maxlength="120" value="Ledger Summary Categories">
-                        </label>
-                        <button id="createCategorySetButton" class="reconciliation-btn reconciliation-btn-primary" type="button">Create category set</button>
-                    </div>
-                </div>
-                <div id="categoryMessage" class="reconciliation-message" role="status" aria-live="polite" hidden></div>
-                <div id="categoryWorkspace" hidden>
-                    <div class="reconciliation-setup-summary">
-                        <span><strong id="categorySetName"></strong></span>
-                        <span id="categoryAssignmentSummary">0 account codes assigned</span>
-                    </div>
-                </div>
-            </section>
-
-            <section id="categoryDefinitionsPanel" class="reconciliation-panel" hidden aria-labelledby="category-definitions-heading">
-                <div class="reconciliation-panel-heading reconciliation-table-heading">
-                    <div>
-                        <p class="reconciliation-section-kicker">2 · Define categories</p>
-                        <h2 id="category-definitions-heading">Monthly summary categories</h2>
-                        <p class="reconciliation-help">Use clear report labels. Parent categories are optional and support future hierarchy.</p>
-                    </div>
-                    <div class="reconciliation-table-actions">
-                        <button id="addCategoryButton" class="reconciliation-btn reconciliation-btn-secondary" type="button">Add category</button>
-                        <button id="saveCategoriesButton" class="reconciliation-btn reconciliation-btn-primary" type="button">Save categories</button>
-                    </div>
-                </div>
-                <div id="categoryDefinitionsEmpty" class="reconciliation-empty" hidden>Add a category before assigning Trial Balance accounts.</div>
-                <div class="reconciliation-table-wrap">
-                    <table class="reconciliation-account-table reconciliation-category-table">
-                        <thead><tr><th>Category label</th><th>Parent category</th><th>Report order</th><th><span class="reconciliation-sr-only">Remove</span></th></tr></thead>
-                        <tbody id="categoryTableBody"></tbody>
-                    </table>
-                </div>
-            </section>
-
-            <section id="categoryAssignmentsPanel" class="reconciliation-panel" hidden aria-labelledby="category-assignments-heading">
-                <div class="reconciliation-panel-heading reconciliation-table-heading">
-                    <div>
-                        <p class="reconciliation-section-kicker">3 · Assign account codes</p>
-                        <h2 id="category-assignments-heading">Trial Balance category mapping</h2>
-                        <p class="reconciliation-help">Account titles and type are review aids. The saved mapping uses exact account codes only.</p>
-                    </div>
-                    <button id="saveCategoryAssignmentsButton" class="reconciliation-btn reconciliation-btn-primary" type="button">Save assignments</button>
-                </div>
-                <div class="reconciliation-toolbar">
-                    <label class="reconciliation-search">
-                        <span class="reconciliation-sr-only">Search Trial Balance accounts</span><span aria-hidden="true">⌕</span>
-                        <input id="categoryAccountSearch" type="search" placeholder="Search code, account name, or type">
-                    </label>
-                    <label class="reconciliation-filter"><span>Show</span><select id="categoryAccountFilter" class="reconciliation-select"><option value="all">All accounts</option><option value="assigned">Assigned only</option><option value="unassigned">Unassigned only</option></select></label>
-                </div>
-                <div id="categoryAssignmentsEmpty" class="reconciliation-empty" hidden></div>
-                <div class="reconciliation-table-wrap">
-                    <table class="reconciliation-account-table reconciliation-category-table">
-                        <thead><tr><th>Account code</th><th>Account title</th><th>Trial Balance type</th><th>Ledger Summary category</th></tr></thead>
-                        <tbody id="categoryAssignmentsBody"></tbody>
-                    </table>
-                </div>
-                <div class="reconciliation-table-footer"><span id="categoryVisibleCount">0 accounts shown</span><span id="categoryAssignmentHint">Assign every relevant account before previewing the report.</span></div>
-            </section>
-        </section>
-
-        <section id="setupBalancesPanel" class="reconciliation-setup-panel" hidden aria-labelledby="balance-setup-heading">
-            <section class="reconciliation-panel reconciliation-source-panel">
-                <div class="reconciliation-panel-heading">
-                    <div>
-                        <p class="reconciliation-section-kicker">1 · Reconciliation balances</p>
-                        <h2 id="balance-setup-heading">Record opening and actual closing balances</h2>
-                        <p class="reconciliation-help">Later monthly openings are carried from the prior actual closing balance to keep the reconciliation proof consistent.</p>
-                    </div>
-                    <span id="balanceStatus" class="reconciliation-status-pill is-muted">Not loaded</span>
-                </div>
-                <form id="balanceForm" class="reconciliation-report-form">
-                    <label class="reconciliation-field"><span>Reporting group</span><select id="balanceGroup" class="reconciliation-select" required><option value="">Select a saved group</option></select></label>
-                    <label class="reconciliation-field"><span>First month</span><input id="balancePeriodStart" type="month" required></label>
-                    <label class="reconciliation-field"><span>Last month</span><input id="balancePeriodEnd" type="month" required></label>
-                    <div class="reconciliation-source-actions"><button id="loadBalancesButton" class="reconciliation-btn reconciliation-btn-primary" type="submit">Load balance grid</button></div>
-                </form>
-                <div id="balanceMessage" class="reconciliation-message" role="status" aria-live="polite" hidden></div>
-            </section>
-            <section id="balanceWorkspace" class="reconciliation-panel" hidden aria-labelledby="balance-grid-heading">
-                <div class="reconciliation-panel-heading reconciliation-table-heading">
-                    <div><p class="reconciliation-section-kicker">2 · Monthly balances</p><h2 id="balance-grid-heading">Balances by account and month</h2><p class="reconciliation-help">Zero is valid. Enter the first opening and every actual closing balance; later openings update automatically.</p></div>
-                    <button id="saveBalancesButton" class="reconciliation-btn reconciliation-btn-primary" type="button">Save balances</button>
-                </div>
-                <div class="reconciliation-table-wrap">
-                    <table class="reconciliation-account-table reconciliation-balance-table"><thead><tr><th>Account code</th><th>Account title</th><th>Month</th><th>Opening balance</th><th>Actual closing balance</th></tr></thead><tbody id="balanceTableBody"></tbody></table>
-                </div>
-                <div class="reconciliation-table-footer"><span id="balanceGridCount">0 balance rows</span><span>Saved months outside this grid are retained.</span></div>
-            </section>
-        </section>
-
-        </div>
-
-        <footer class="reconciliation-footer">
-            <span>Audit Verification categories remain separate from report categories.</span>
-            <span>Ledger Reconciliation · Phase 8</span>
+        <footer class='reconciliation-footer'>
+            <span>Reports are kept separate from Audit Verification setup.</span>
+            <span>Reports centre - Phase 1</span>
         </footer>
     </main>
-    <script src="/static/client_context.js?v=18"></script>
-    <script src="/static/reconciliation.js?v=3"></script>
+    <script src='/static/client_context.js?v=18'></script>
+    <script src='/static/reconciliation.js?v=4'></script>
 </body>
 </html>

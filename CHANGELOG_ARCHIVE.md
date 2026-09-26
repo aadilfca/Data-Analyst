@@ -6573,3 +6573,11 @@ or procedure-modal requests, whose observed latency therefore remains a separate
 **Implementation:** Each entry now links to its existing `verification.html?type=` route and is marked Ready. No backend, Account Control routing, Treasury boundary, or Financial Statement behavior changed.
 
 **Verification:** JavaScript syntax and focused Verification routing/UI tests passed. No packages installed.
+
+## Reports hub spacing cleanup - 2026-09-26
+
+**Scope:** Removed the redundant Reports hero header and Cashflows selection message from the simplified Reports card hub. The four report cards, dashboard route, backend routes, and stored configuration remain unchanged.
+
+**Implementation:** The Reports page now opens directly on the Available reports section. Cashflows card selection still updates the Reports URL and selected-card state without displaying a temporary status banner.
+
+**Verification:** Focused reconciliation tests, JavaScript syntax, and `git diff --check` passed. No packages installed.
