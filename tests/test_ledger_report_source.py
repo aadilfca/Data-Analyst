@@ -96,6 +96,11 @@ def test_load_report_source_uses_selected_upload_and_report_category_assignment(
 
     def query(sql, params=None):
         calls.append((sql, params))
+        if "FROM uploaded_files" in sql:
+            return [
+                {"upload_id": 12, "file_name": "month.xlsx", "upload_date": "2026-01-01"},
+                {"upload_id": 13, "file_name": "month.xlsx", "upload_date": "2026-01-02"},
+            ]
         if "FROM client_data" in sql:
             return _journal_rows()
         if "FROM trial_balance_accounts" in sql:
@@ -126,7 +131,7 @@ def test_load_report_source_uses_selected_upload_and_report_category_assignment(
         "audit_rule_categories" in sql or "FROM account_category_assignments" in sql
         for sql, _ in calls
     )
-    assert calls[0][1] == (7, 12)
+    assert calls[0][1] == (7, 12, "2026-01-01", "2026-01-31")
 
 
 def test_load_report_source_warns_when_ledger_summary_category_set_is_missing():
@@ -170,6 +175,32 @@ def test_load_report_source_blocks_multiple_datasets_without_selection():
     assert not source.ready
     assert any(item["code"] == "ambiguous_journal_source" for item in source.blocking_diagnostics())
 
+
+def test_load_report_source_applies_template_upload_deduplication_query():
+    rows = _journal_rows()
+    rows[1] = dict(rows[1], upload_id=13)
+    calls = []
+
+    def query(sql, params=None):
+        calls.append((sql, params))
+        if "FROM uploaded_files" in sql:
+            return [
+                {"upload_id": 12, "file_name": "month.xlsx", "upload_date": "2026-01-01"},
+                {"upload_id": 13, "file_name": "month.xlsx", "upload_date": "2026-01-02"},
+            ]
+        if "FROM client_data" in sql:
+            return rows
+        if "FROM trial_balance_accounts" in sql or "FROM report_category_sets" in sql:
+            return []
+        raise AssertionError(f"Unexpected query: {sql}")
+
+    source = load_ledger_report_source(7, journal_template_id=9, query_fn=query)
+
+    assert source.ready
+    assert len(source.journal) == 2
+    assert source.metadata["source_row_count"] == 2
+    assert source.metadata["source_upload_ids"] == [12, 13]
+    assert calls[0][1] == (7, 7, 9)
 
 def test_build_report_source_accepts_account_detail_as_account_code():
     rows = [{
@@ -258,3 +289,95 @@ def test_load_cashflow_source_applies_saved_template_mapping():
     assert source.ready
     assert source.metadata["cashflow_mapping_ready"] is True
     assert source.journal.loc[0, "account_code"] == "B1"
+
+
+def test_cashflow_template_query_filters_period_and_treasury_vouchers():
+    rows = _journal_rows()
+    mapping_rows = [
+        {"role": "voucher_id", "column_name": "Voucher ID"},
+        {"role": "date", "column_name": "Date"},
+        {"role": "account_code", "column_name": "Account Code"},
+        {"role": "debit", "column_name": "Debit"},
+        {"role": "credit", "column_name": "Credit"},
+    ]
+    calls = []
+
+    def query(sql, params=None):
+        calls.append((sql, params))
+        if "FROM account_control_cashflow_source_mappings" in sql:
+            return mapping_rows
+        if "FROM uploaded_files" in sql:
+            return [
+                {"upload_id": 12, "file_name": "month.xlsx", "upload_date": "2026-01-01"},
+                {"upload_id": 13, "file_name": "month.xlsx", "upload_date": "2026-01-02"},
+            ]
+        if "FROM client_data" in sql:
+            return rows
+        if "FROM trial_balance_accounts" in sql or "FROM account_control_cashflow_category_assignments" in sql:
+            return []
+        raise AssertionError(f"Unexpected query: {sql}")
+
+    source = load_ledger_report_source(
+        7,
+        journal_template_id=9,
+        period_start="2026-01-01",
+        period_end="2026-01-31",
+        query_fn=query,
+        account_category_source="cashflow",
+        treasury_account_codes=["B1"],
+    )
+
+    source_query, source_params = next((sql, params) for sql, params in calls if "SELECT cd.id AS client_data_id" in sql)
+    assert source.ready
+    assert source.metadata["date_prefilter_applied"] is True
+    assert source.metadata["duplicate_upload_suppression"] is True
+    assert source.metadata["treasury_prefilter_applied"] is False
+    assert source.metadata["treasury_filter_stage"] == "cashflow_summary"
+    assert "cd.extract_date >= %s" in source_query
+    assert "cd.extract_date <= %s" in source_query
+    assert "cd.upload_id = ANY(%s)" in source_query
+    assert any("FROM uploaded_files" in sql for sql, _ in calls)
+    assert "selected_vouchers" not in source_query
+    assert "ANY(%s)" in source_query
+    assert source_params == (7, 9, "2026-01-01", "2026-01-31", [12])
+
+def test_build_report_source_forward_fills_dates_and_parses_excel_dates_and_amounts():
+    excel_serial = int((pd.Timestamp("2026-01-05") - pd.Timestamp("1899-12-30")).days)
+    source = build_report_source([
+        {"row_data": {"Voucher ID": "V1", "Date": excel_serial, "Account Code": "B1", "Debit": "1,000.00", "Credit": ""}},
+        {"row_data": {"Voucher ID": "", "Date": "", "Account Code": "C1", "Debit": "", "Credit": "(100.00)"}},
+    ])
+
+    assert source.ready
+    assert len(source.journal) == 2
+    assert source.journal["date"].tolist() == [pd.Timestamp("2026-01-05"), pd.Timestamp("2026-01-05")]
+    assert source.journal.loc[1, "credit"] == -100.0
+    assert source.metadata["rejected_row_count"] == 0
+
+
+def test_build_report_source_quarantines_layout_and_invalid_rows_as_warnings():
+    source = build_report_source([
+        {"row_data": {"Voucher ID": "V1", "Date": "05-01-2026", "Account Code": "B1", "Debit": 100, "Credit": 0}},
+        {"row_data": {"Voucher ID": "Voucher ID", "Date": "Date", "Account Code": "Account Code", "Debit": "Debit", "Credit": "Credit"}},
+        {"row_data": {"Voucher ID": "", "Date": "", "Account Code": "", "Account Name": "Total", "Debit": "", "Credit": ""}},
+        {"row_data": {"Voucher ID": "V2", "Date": "not-a-date", "Account Code": "E1", "Debit": 25, "Credit": 0}},
+        {"row_data": {"Voucher ID": "V3", "Date": "05/01/2026", "Account Code": "E2", "Debit": "bad", "Credit": 0}},
+    ])
+
+    assert source.ready
+    assert len(source.journal) == 1
+    assert source.journal.loc[0, "date"] == pd.Timestamp("2026-01-05")
+    assert source.metadata["layout_row_count"] == 2
+    assert source.metadata["rejected_row_count"] == 4
+    assert any(item["code"] == "journal_layout_rows_removed" for item in source.diagnostics)
+    assert any(item["code"] == "rejected_journal_rows" and item["severity"] == "warning" for item in source.diagnostics)
+    assert not source.blocking_diagnostics()
+
+
+def test_build_report_source_normalizes_date_valued_account_code():
+    source = build_report_source([
+        {"row_data": {"Voucher ID": "V1", "Date": "2026-01-05", "Account Code": pd.Timestamp("2026-01-05"), "Debit": 100, "Credit": 0}},
+    ])
+
+    assert source.ready
+    assert source.journal.loc[0, "account_code"] == "01-05-2026"

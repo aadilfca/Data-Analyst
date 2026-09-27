@@ -87,6 +87,12 @@ class CashflowTemplateMappingUpdate(BaseModel):
     set_as_default: bool = True
 
 
+class CashflowSourceSelectionUpdate(BaseModel):
+    client_id: int
+    upload_id: Optional[int] = Field(default=None, ge=1)
+    template_id: Optional[int] = Field(default=None, ge=1)
+
+
 def normalize_account_code(value: Any) -> str:
     """Normalize transport whitespace without changing an accounting code's case."""
     return str(value or "").strip()
@@ -996,18 +1002,19 @@ def _cashflow_configuration(client_id: int) -> dict[str, Any]:
     treasury = execute_query_pg(
         """SELECT account_code, treasury_type
            FROM account_control_cashflow_treasury_accounts
-           WHERE client_id = %s
+           WHERE client_id = %s AND is_active = TRUE
            ORDER BY treasury_type, account_code""",
         (client_id,),
     )
     settings = execute_query_pg(
-        """SELECT match_internal_transfers, receipt_presentation, source_template_id
+        """SELECT match_internal_transfers, receipt_presentation, source_upload_id, source_template_id
            FROM account_control_cashflow_settings WHERE client_id = %s""",
         (client_id,),
     )
     return {
         "category_mappings": {normalize_account_code(row["account_code"]): row.get("label") or "" for row in mappings},
         "cash_account_codes": [normalize_account_code(row["account_code"]) for row in treasury if row["treasury_type"] == "cash"],
+        "source_upload_id": settings[0].get("source_upload_id") if settings else None,
         "source_template_id": settings[0].get("source_template_id") if settings else None,
         "bank_account_codes": [normalize_account_code(row["account_code"]) for row in treasury if row["treasury_type"] == "bank"],
         "match_internal_transfers": bool(settings[0].get("match_internal_transfers")) if settings else False,
@@ -1151,6 +1158,8 @@ def _cashflow_source_options(client_id: int) -> list[dict[str, Any]]:
     rows = execute_query_pg(
         """
         SELECT cd.upload_id, cd.template_id, t.template_name, f.file_name,
+               (SELECT s.source_upload_id FROM account_control_cashflow_settings s WHERE s.client_id = cd.client_id) AS selected_upload_id,
+               (SELECT s.source_template_id FROM account_control_cashflow_settings s WHERE s.client_id = cd.client_id) AS selected_template_id,
                COUNT(*) AS source_row_count,
                MIN(cd.extract_date) AS period_start,
                MAX(cd.extract_date) AS period_end
@@ -1158,7 +1167,7 @@ def _cashflow_source_options(client_id: int) -> list[dict[str, Any]]:
         LEFT JOIN templates t ON t.id = cd.template_id
         LEFT JOIN uploaded_files f ON f.id = cd.upload_id
         WHERE cd.client_id = %s AND cd.is_deleted = FALSE
-        GROUP BY cd.upload_id, cd.template_id, t.template_name, f.file_name
+        GROUP BY cd.client_id, cd.upload_id, cd.template_id, t.template_name, f.file_name
         ORDER BY MAX(cd.extract_date) DESC NULLS LAST,
                  cd.upload_id DESC NULLS LAST,
                  cd.template_id DESC NULLS LAST
@@ -1184,7 +1193,23 @@ def _cashflow_source_options(client_id: int) -> list[dict[str, Any]]:
                 "period_end": row.get("period_end"),
             }
         )
+        if row.get("selected_upload_id") is not None:
+            options[-1]["selected_upload_id"] = row.get("selected_upload_id")
+        if row.get("selected_template_id") is not None:
+            options[-1]["selected_template_id"] = row.get("selected_template_id")
     return options
+
+
+def _cashflow_source_selection_response(client_id: int, sources: list[dict[str, Any]]) -> dict[str, Any]:
+    response: dict[str, Any] = {"client_id": client_id, "sources": sources}
+    selected_upload_ids = {item.get("selected_upload_id") for item in sources if item.get("selected_upload_id") is not None}
+    selected_template_ids = {item.get("selected_template_id") for item in sources if item.get("selected_template_id") is not None}
+    if selected_upload_ids:
+        response["selected_upload_id"] = next(iter(selected_upload_ids))
+    if selected_template_ids:
+        response["selected_template_id"] = next(iter(selected_template_ids))
+    return response
+
 
 def _cashflow_preview(summary: dict[str, Any] | None) -> dict[str, Any]:
     if summary is None:
@@ -1217,27 +1242,30 @@ def _build_cashflow_result(
     client_id: int,
     period_start: Any,
     period_end: Any,
-    *,
-    journal_upload_id: int | None = None,
-    journal_template_id: int | None = None,
 ) -> dict[str, Any]:
     _require_active_client(client_id)
     start, end = _parse_report_period(period_start, period_end)
     configuration = _cashflow_configuration(client_id)
+    configured_template_id = configuration.get("source_template_id")
     diagnostics: list[dict[str, Any]] = []
     try:
         source = load_ledger_report_source(
             client_id,
-            journal_upload_id=journal_upload_id,
-            journal_template_id=journal_template_id,
+            journal_template_id=configured_template_id,
             period_start=start,
             period_end=end,
             query_fn=execute_query_pg,
             account_category_source="cashflow",
+            treasury_account_codes=[
+                *configuration["cash_account_codes"],
+                *configuration["bank_account_codes"],
+            ],
         )
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
     diagnostics.extend(source.diagnostics)
+    if configured_template_id is None:
+        diagnostics.append(_report_diagnostic("cashflow_template_not_configured", "error", "Configure and map the Transaction Report template in Account Control Centre before generating Cashflows."))
     if not configuration["cash_account_codes"] and not configuration["bank_account_codes"]:
         diagnostics.append(_report_diagnostic("no_treasury_accounts", "error", "Select at least one Cash or Bank account in Account Control Centre before generating Cashflows."))
 
@@ -1270,6 +1298,15 @@ def _build_cashflow_result(
     blocking_reasons = [item["message"] for item in diagnostics if item.get("severity") == "error"]
     if review_count:
         blocking_reasons.append(controls["categories"]["message"])
+    source_metadata = dict(source.metadata)
+    source_quality = {
+        "source_row_count": int(source_metadata.get("source_row_count") or 0),
+        "valid_row_count": int(source_metadata.get("valid_row_count") or len(source.journal)),
+        "rejected_row_count": int(source_metadata.get("rejected_row_count") or 0),
+        "layout_row_count": int(source_metadata.get("layout_row_count") or 0),
+        "out_of_period_row_count": int(source_metadata.get("out_of_period_row_count") or 0),
+        "rejected_rows_sample": source_metadata.get("rejected_rows_sample") or [],
+    }
     return {
         "client_id": client_id,
         "period_start": start.date().isoformat(),
@@ -1277,10 +1314,11 @@ def _build_cashflow_result(
         "configuration": {
             "cash_account_count": len(configuration["cash_account_codes"]),
             "bank_account_count": len(configuration["bank_account_codes"]),
+            "source_template_id": configured_template_id,
             "match_internal_transfers": configuration["match_internal_transfers"],
             "receipt_presentation": configuration["receipt_presentation"],
         },
-        "source": {"metadata": dict(source.metadata), "diagnostics": diagnostics, "ready": source.ready and not any(item.get("severity") == "error" for item in diagnostics)},
+        "source": {"metadata": source_metadata, "quality": source_quality, "diagnostics": diagnostics, "ready": source.ready and not any(item.get("severity") == "error" for item in diagnostics)},
         "controls": controls,
         "blocking_reasons": blocking_reasons,
         "preview": _cashflow_preview(summary),
@@ -1372,19 +1410,14 @@ def preview_cashflows(
     client_id: int = Query(..., ge=1),
     period_start: str = Query(...),
     period_end: str = Query(...),
-    journal_upload_id: Optional[int] = Query(None, ge=1),
-    journal_template_id: Optional[int] = Query(None, ge=1),
     session=Depends(require_admin),
 ):
-    """Return the read-only Cashflows summary from Account Control Centre settings."""
+    """Return Cashflows using the Transaction Report template configured in Account Control Centre."""
     return _build_cashflow_result(
         client_id,
         period_start,
         period_end,
-        journal_upload_id=journal_upload_id,
-        journal_template_id=journal_template_id,
     )
-
 
 @router.get("/api/reconciliation/cashflows/sources")
 def list_cashflow_sources(
@@ -1393,7 +1426,50 @@ def list_cashflow_sources(
 ):
     """Return selectable Client Data Bank upload/template sources for Cashflows."""
     _require_active_client(client_id)
-    return {"client_id": client_id, "sources": _cashflow_source_options(client_id)}
+    return _cashflow_source_selection_response(client_id, _cashflow_source_options(client_id))
+
+@router.put("/api/reconciliation/cashflows/source")
+def save_cashflow_source(
+    payload: CashflowSourceSelectionUpdate,
+    session=Depends(require_admin),
+):
+    """Persist exactly one Client Data Bank upload or template for Cashflows."""
+    _require_active_client(payload.client_id)
+    if (payload.upload_id is None) == (payload.template_id is None):
+        raise HTTPException(400, "Select exactly one Client Data Bank upload or template")
+    if payload.upload_id is not None:
+        source_rows = execute_query_pg(
+            """SELECT 1 FROM client_data
+               WHERE client_id = %s AND upload_id = %s AND is_deleted = FALSE
+               LIMIT 1""",
+            (payload.client_id, payload.upload_id),
+        )
+    else:
+        source_rows = execute_query_pg(
+            """SELECT 1 FROM client_data
+               WHERE client_id = %s AND template_id = %s AND is_deleted = FALSE
+               LIMIT 1""",
+            (payload.client_id, payload.template_id),
+        )
+    if not source_rows:
+        raise HTTPException(404, "The selected Client Data Bank source was not found for this client")
+    actor = (session or {}).get("username") or "Admin"
+    transaction = pg_transaction() if pg_transaction is not None else nullcontext()
+    with transaction:
+        execute_write_pg(
+            """INSERT INTO account_control_cashflow_settings
+               (client_id, source_upload_id, source_template_id, updated_by, updated_at)
+               VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+               ON CONFLICT (client_id) DO UPDATE SET
+                 source_upload_id = EXCLUDED.source_upload_id,
+                 source_template_id = EXCLUDED.source_template_id,
+                 updated_by = EXCLUDED.updated_by,
+                 updated_at = CURRENT_TIMESTAMP""",
+            (payload.client_id, payload.upload_id, payload.template_id, actor),
+        )
+    log_audit("Admin", "Update", "Cashflows", f"Selected source for client {payload.client_id}")
+    return _cashflow_configuration(payload.client_id)
+
 
 @router.get("/api/reconciliation/financial-statements/preview")
 def preview_financial_statements(

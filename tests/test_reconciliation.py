@@ -379,8 +379,17 @@ def test_reports_hub_uses_shared_cards_and_removes_legacy_workspace():
     assert "data-report-key" in javascript
     assert "id='cashflowsView'" in html
     assert "/api/reconciliation/cashflows/preview" in javascript
+    assert "cashflowsSourceSelect" not in html
+    assert "Uses the configured Transaction Report template" in html
+    assert "Load summary" in html
+    assert "loadCashflowSources" not in javascript
+    assert "journal_upload_id" not in javascript
     assert "cashflowsSummaryTable" in html
     assert "reportsHubMessage" not in html
+    assert "CASHFLOW_REQUEST_TIMEOUT_MS" in javascript
+    assert "AbortController" in javascript
+    assert "signal: controller.signal" in javascript
+    assert "AbortError" in javascript
     assert "Cashflows is selected" not in javascript
     for legacy_id in (
         "id='reportForm'",
@@ -426,7 +435,7 @@ def test_cashflow_summary_matches_same_type_internal_transfers():
 
 def test_cashflow_preview_endpoint_returns_configuration_and_preview():
     source = SimpleNamespace(journal=pd.DataFrame(), coa=pd.DataFrame(), diagnostics=(), metadata={"source_row_count": 0}, ready=True)
-    configuration = {"category_mappings": {}, "cash_account_codes": ["C1"], "bank_account_codes": [], "match_internal_transfers": False, "receipt_presentation": "net"}
+    configuration = {"category_mappings": {}, "cash_account_codes": ["C1"], "bank_account_codes": [], "match_internal_transfers": False, "receipt_presentation": "net", "source_template_id": 1}
     with patch.object(reconciliation, "_require_active_client"), patch.object(reconciliation, "_cashflow_configuration", return_value=configuration), patch.object(reconciliation, "load_ledger_report_source", return_value=source):
         response = reconciliation.preview_cashflows(7, "2026-01-01", "2026-01-31", session={"username": "Admin"})
     assert response["configuration"]["cash_account_count"] == 1
@@ -529,3 +538,47 @@ def test_save_cashflow_template_columns_validates_and_persists_mapping():
     assert response["ready"] is True
     assert sum("INSERT INTO account_control_cashflow_source_mappings" in sql for sql, _ in writes) == 5
     assert any("source_template_id" in sql for sql, _ in writes)
+
+
+def test_cashflow_source_selection_requires_one_source_and_persists_upload():
+    with patch.object(reconciliation, "_require_active_client"), patch.object(reconciliation, "execute_query_pg", return_value=[{"exists": 1}]), patch.object(reconciliation, "execute_write_pg") as write, patch.object(reconciliation, "pg_transaction", return_value=nullcontext()), patch.object(reconciliation, "_cashflow_configuration", return_value={"source_upload_id": 290}), patch.object(reconciliation, "log_audit"):
+        response = reconciliation.save_cashflow_source(
+            reconciliation.CashflowSourceSelectionUpdate(client_id=7, upload_id=290),
+            session={"username": "Admin"},
+        )
+
+    assert response["source_upload_id"] == 290
+    assert write.call_args.args[0].find("source_upload_id") >= 0
+    with patch.object(reconciliation, "_require_active_client"):
+        with pytest.raises(HTTPException) as error:
+            reconciliation.save_cashflow_source(
+                reconciliation.CashflowSourceSelectionUpdate(client_id=7, upload_id=290, template_id=1),
+                session={"username": "Admin"},
+            )
+    assert error.value.status_code == 400
+
+
+def test_cashflow_preview_uses_configured_transaction_template():
+    source = SimpleNamespace(journal=pd.DataFrame(), coa=pd.DataFrame(), diagnostics=(), metadata={"source_row_count": 9859}, ready=True)
+    configuration = {
+        "category_mappings": {},
+        "cash_account_codes": ["C1"],
+        "bank_account_codes": [],
+        "match_internal_transfers": False,
+        "receipt_presentation": "net",
+        "source_upload_id": 290,
+        "source_template_id": 1,
+    }
+    captured = {}
+
+    def load(*args, **kwargs):
+        captured.update(kwargs)
+        return source
+
+    with patch.object(reconciliation, "_require_active_client"), patch.object(reconciliation, "_cashflow_configuration", return_value=configuration), patch.object(reconciliation, "load_ledger_report_source", side_effect=load):
+        response = reconciliation.preview_cashflows(7, "2026-01-01", "2026-08-20", session={"username": "Admin"})
+
+    assert captured.get("journal_upload_id") is None
+    assert captured["journal_template_id"] == 1
+    assert response["configuration"]["source_template_id"] == 1
+    assert "source_upload_id" not in response["configuration"]

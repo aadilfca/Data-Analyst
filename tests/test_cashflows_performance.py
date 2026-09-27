@@ -1,0 +1,69 @@
+"""Phase 6 coverage for SQL-first Cashflows source preparation."""
+
+from services.ledger_report_source import load_cashflow_sql_source
+
+
+def test_cashflow_sql_source_filters_dates_joins_vouchers_and_aggregates_lines():
+    calls = []
+
+    def query(sql, params=None):
+        calls.append((sql, params))
+        if "FROM uploaded_files" in sql:
+            return [
+                {"upload_id": 12, "file_name": "month.xlsx", "upload_date": "2026-01-02"},
+                {"upload_id": 11, "file_name": "month.xlsx", "upload_date": "2026-01-01"},
+            ]
+        return [
+            {
+                "voucher_id": "V1",
+                "date": "2026-01-05",
+                "account_code": "B1",
+                "account_name": "Bank",
+                "voucher_detail": "Receipt",
+                "debit": 100,
+                "credit": 0,
+                "treasury_type": "bank",
+                "category": "",
+                "source_line_count": 2,
+                "classification_status": "cash",
+            },
+            {
+                "voucher_id": "V1",
+                "date": "2026-01-05",
+                "account_code": "EXP",
+                "account_name": "Expense",
+                "voucher_detail": "Receipt",
+                "debit": 0,
+                "credit": 100,
+                "treasury_type": None,
+                "category": "Repairs",
+                "source_line_count": 1,
+                "classification_status": "cash",
+            },
+        ]
+
+    source = load_cashflow_sql_source(
+        7,
+        journal_template_id=9,
+        period_start="2026-01-01",
+        period_end="2026-01-31",
+        query_fn=query,
+    )
+
+    assert source is not None
+    assert source.ready
+    assert source.metadata["sql_aggregated"] is True
+    assert source.metadata["raw_json_parsing"] is False
+    assert source.metadata["duplicate_uploads_suppressed"] == 1
+    assert source.metadata["source_row_count"] == 3
+    assert source.journal.loc[0, "account_code"] == "B1"
+    assert source.coa.set_index("account_code").loc["EXP", "category"] == "Repairs"
+
+    source_sql, source_params = calls[1]
+    assert "c.is_current = TRUE" in source_sql
+    assert "c.transaction_date >= %s" in source_sql
+    assert "c.transaction_date <= %s" in source_sql
+    assert "selected_vouchers" in source_sql
+    assert "GROUP BY l.voucher_id, l.date, l.account_code" in source_sql
+    assert "FROM client_data cd" in source_sql
+    assert source_params == (7, 9, [12], "2026-01-01", "2026-01-31")

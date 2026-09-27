@@ -293,6 +293,16 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 
 - 2026-09-26: Cashflows source loading now recognizes Account Detail and exposes explicit Client Data Bank choices; Load-only UI remains next.
 - 2026-09-26: Cashflows now supports client/template transaction-column mappings with required-field validation and persisted source-template selection.
+- 2026-09-26: Account Control Centre Cashflows gained a Transaction Template popup with template selection, required-field mapping, persistence, and browser coverage.
+- 2026-09-26: Cashflows Phase 1 now selects one Client Data source, repairs/quarantines source rows, and loads the generic report explicitly.
+- 2026-09-27: Cashflows now uses the configured Account Control Centre Transaction Report template across all monthwise Client Data uploads; the Source field is retired.
+
+
+
+- 2026-09-27: Cashflows multi-upload source preparation now caches repeated values and avoids slow scalar writes; Reports UI has a bounded timeout.
+
+- 2026-09-27: Cashflows now filters by date and latest template uploads in SQL; Cash/Bank voucher selection remains in the Python summary stage.
+
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
 - Findings from a Code Health Review session go to `KNOWN_ISSUES.md`, not the Status log — the Status log records changes made, that file records issues found

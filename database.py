@@ -492,6 +492,38 @@ def init_db():
             )
         ''')
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_client_data_client_deleted_extract_date ON client_data (client_id, is_deleted, extract_date)")
+        # Derived, versioned Cash/Bank classifications remain separate from
+        # uploaded row_data so reporting can reclassify without mutating it.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS cash_bank_transaction_classifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_data_id INTEGER NOT NULL,
+                client_id INTEGER NOT NULL,
+                template_id INTEGER NOT NULL,
+                upload_id INTEGER NOT NULL,
+                voucher_id TEXT,
+                account_code TEXT,
+                transaction_date TEXT,
+                debit REAL NOT NULL DEFAULT 0,
+                credit REAL NOT NULL DEFAULT 0,
+                treasury_type TEXT,
+                treasury_account_code TEXT,
+                configuration_version INTEGER NOT NULL,
+                classification_status TEXT NOT NULL DEFAULT 'unmapped',
+                is_current INTEGER NOT NULL DEFAULT 1,
+                classified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_data_id) REFERENCES client_data(id) ON DELETE CASCADE,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                FOREIGN KEY (template_id) REFERENCES templates(id) ON DELETE CASCADE,
+                FOREIGN KEY (upload_id) REFERENCES uploaded_files(id) ON DELETE CASCADE,
+                UNIQUE(client_data_id, configuration_version)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_date ON cash_bank_transaction_classifications (client_id, transaction_date, is_current)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_voucher ON cash_bank_transaction_classifications (client_id, voucher_id, is_current)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_account_date ON cash_bank_transaction_classifications (client_id, account_code, transaction_date, is_current)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_source_version ON cash_bank_transaction_classifications (client_data_id, configuration_version)")
 
         conn.execute('''
             CREATE TABLE IF NOT EXISTS error_codes (
@@ -2658,6 +2690,7 @@ def init_db():
                 treasury_type TEXT NOT NULL CHECK (treasury_type IN ('cash', 'bank')),
                 updated_by TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_active INTEGER NOT NULL DEFAULT 1,
                 FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
                 UNIQUE(client_id, treasury_type, account_code)
             )
@@ -2668,6 +2701,7 @@ def init_db():
                 match_internal_transfers INTEGER NOT NULL DEFAULT 0,
                 receipt_presentation TEXT NOT NULL DEFAULT 'net'
                     CHECK (receipt_presentation IN ('net', 'gross')),
+                source_upload_id INTEGER,
                 source_template_id INTEGER,
                 updated_by TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -2677,6 +2711,8 @@ def init_db():
         try:
             cur = conn.execute("PRAGMA table_info(account_control_cashflow_settings)")
             existing_columns = {row[1] for row in cur.fetchall()}
+            if "source_upload_id" not in existing_columns:
+                conn.execute("ALTER TABLE account_control_cashflow_settings ADD COLUMN source_upload_id INTEGER")
             if "source_template_id" not in existing_columns:
                 conn.execute("ALTER TABLE account_control_cashflow_settings ADD COLUMN source_template_id INTEGER")
         except Exception as e:
@@ -2702,6 +2738,42 @@ def init_db():
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_categories_client ON account_control_cashflow_categories (client_id, is_active)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_category_assignments_client ON account_control_cashflow_category_assignments (client_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_treasury_client ON account_control_cashflow_treasury_accounts (client_id, treasury_type)")
+        try:
+            cur = conn.execute("PRAGMA table_info(account_control_cashflow_treasury_accounts)")
+            treasury_columns = {row[1] for row in cur.fetchall()}
+            if "is_active" not in treasury_columns:
+                conn.execute("ALTER TABLE account_control_cashflow_treasury_accounts ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+        except Exception as e:
+            print("[cashflows] Could not add treasury account active flag:", e)
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_cashflow_config_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                version_number INTEGER NOT NULL,
+                change_action TEXT NOT NULL,
+                changed_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                UNIQUE(client_id, version_number)
+            )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_cashflow_config_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                configuration_version_id INTEGER NOT NULL,
+                client_id INTEGER NOT NULL,
+                account_code TEXT NOT NULL,
+                treasury_type TEXT NOT NULL CHECK (treasury_type IN ('cash', 'bank')),
+                is_active INTEGER NOT NULL DEFAULT 1,
+                changed_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (configuration_version_id) REFERENCES account_control_cashflow_config_versions(id) ON DELETE CASCADE,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                UNIQUE(configuration_version_id, account_code, treasury_type)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_config_versions_client ON account_control_cashflow_config_versions (client_id, version_number)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_config_entries_version ON account_control_cashflow_config_entries (configuration_version_id)")
         # ---------- ACCOUNT SET CONTROL CENTRE (legacy compatibility) ----------
         # Account Sets remain untouched while the simplified assignment grid is introduced.
         conn.execute('''
@@ -3711,6 +3783,7 @@ def _ensure_postgres_account_set_tables(conn):
                 treasury_type TEXT NOT NULL CHECK (treasury_type IN ('cash', 'bank')),
                 updated_by TEXT,
                 updated_at TIMESTAMPTZ DEFAULT now(),
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
                 UNIQUE(client_id, treasury_type, account_code)
             )
         ''')
@@ -3720,11 +3793,13 @@ def _ensure_postgres_account_set_tables(conn):
                 match_internal_transfers BOOLEAN NOT NULL DEFAULT FALSE,
                 receipt_presentation TEXT NOT NULL DEFAULT 'net'
                     CHECK (receipt_presentation IN ('net', 'gross')),
+                source_upload_id INTEGER REFERENCES uploaded_files(id) ON DELETE SET NULL,
                 source_template_id INTEGER REFERENCES templates(id) ON DELETE SET NULL,
                 updated_by TEXT,
                 updated_at TIMESTAMPTZ DEFAULT now()
             )
         ''')
+        cur.execute("ALTER TABLE account_control_cashflow_settings ADD COLUMN IF NOT EXISTS source_upload_id INTEGER REFERENCES uploaded_files(id) ON DELETE SET NULL")
         cur.execute("ALTER TABLE account_control_cashflow_settings ADD COLUMN IF NOT EXISTS source_template_id INTEGER REFERENCES templates(id) ON DELETE SET NULL")
         cur.execute('''
             CREATE TABLE IF NOT EXISTS account_control_cashflow_source_mappings (
@@ -3744,6 +3819,33 @@ def _ensure_postgres_account_set_tables(conn):
         cur.execute("CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_categories_client ON account_control_cashflow_categories (client_id, is_active)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_category_assignments_client ON account_control_cashflow_category_assignments (client_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_treasury_client ON account_control_cashflow_treasury_accounts (client_id, treasury_type)")
+        cur.execute("ALTER TABLE account_control_cashflow_treasury_accounts ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE")
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_cashflow_config_versions (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                version_number INTEGER NOT NULL,
+                change_action TEXT NOT NULL,
+                changed_by TEXT,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(client_id, version_number)
+            )
+        ''')
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_cashflow_config_entries (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                configuration_version_id INTEGER NOT NULL REFERENCES account_control_cashflow_config_versions(id) ON DELETE CASCADE,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                account_code TEXT NOT NULL,
+                treasury_type TEXT NOT NULL CHECK (treasury_type IN ('cash', 'bank')),
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                changed_by TEXT,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(configuration_version_id, account_code, treasury_type)
+            )
+        ''')
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_config_versions_client ON account_control_cashflow_config_versions (client_id, version_number)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_config_entries_version ON account_control_cashflow_config_entries (configuration_version_id)")
         cur.execute('''
             CREATE TABLE IF NOT EXISTS account_sets (
                 id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -3997,6 +4099,42 @@ def _ensure_postgres_voucher_check_assertions(conn):
         cur.close()
 
 
+def _ensure_postgres_cash_bank_transaction_classifications(conn):
+    """Create the additive derived Cash/Bank classification layer."""
+    cur = conn.cursor()
+    try:
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS cash_bank_transaction_classifications (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                client_data_id INTEGER NOT NULL REFERENCES client_data(id) ON DELETE CASCADE,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+                upload_id INTEGER NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
+                voucher_id TEXT,
+                account_code TEXT,
+                transaction_date DATE,
+                debit NUMERIC NOT NULL DEFAULT 0,
+                credit NUMERIC NOT NULL DEFAULT 0,
+                treasury_type TEXT,
+                treasury_account_code TEXT,
+                configuration_version INTEGER NOT NULL,
+                classification_status TEXT NOT NULL DEFAULT 'unmapped',
+                is_current BOOLEAN NOT NULL DEFAULT TRUE,
+                classified_at TIMESTAMPTZ DEFAULT now(),
+                created_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(client_data_id, configuration_version)
+            )
+        ''')
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_date ON cash_bank_transaction_classifications (client_id, transaction_date, is_current)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_voucher ON cash_bank_transaction_classifications (client_id, voucher_id, is_current)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_account_date ON cash_bank_transaction_classifications (client_id, account_code, transaction_date, is_current)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_source_version ON cash_bank_transaction_classifications (client_data_id, configuration_version)")
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
 def _ensure_postgres_local_vendor_discovery_indexes(conn):
     """Create additive indexes for published-account Local Vendor discovery."""
     account_code = "COALESCE(row_data ->> 'Account Detail', row_data ->> 'Account Details', row_data ->> 'Account Code', row_data ->> 'Account No', row_data ->> 'Account Number', row_data ->> 'Code', row_data ->> 'Ledger Code', row_data ->> 'AccountID', row_data ->> 'Account Head', row_data ->> 'Ledger Detail')"
@@ -4030,6 +4168,7 @@ def init_db_postgres(conn):
         migrated_form_tables = _ensure_postgres_form_tables(conn)
         _ensure_postgres_report_category_tables(conn)
         _ensure_postgres_account_set_tables(conn)
+        _ensure_postgres_cash_bank_transaction_classifications(conn)
         migrated_assertions = _ensure_postgres_audit_rule_assertions(conn)
         migrated_compiled_rulebooks = _ensure_postgres_category_compiled_rulebooks(conn)
         migrated_cat_doc_assertions = _ensure_postgres_category_document_assertions(conn)
@@ -4215,7 +4354,32 @@ def init_db_postgres(conn):
     run("CREATE INDEX IF NOT EXISTS idx_client_data_deleted ON client_data (is_deleted)")
     run("CREATE INDEX IF NOT EXISTS idx_client_data_client_date ON client_data (client_id, extract_date)")
     _ensure_postgres_local_vendor_discovery_indexes(conn)
-
+    run('''
+        CREATE TABLE IF NOT EXISTS cash_bank_transaction_classifications (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            client_data_id INTEGER NOT NULL REFERENCES client_data(id) ON DELETE CASCADE,
+            client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+            upload_id INTEGER NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
+            voucher_id TEXT,
+            account_code TEXT,
+            transaction_date DATE,
+            debit NUMERIC NOT NULL DEFAULT 0,
+            credit NUMERIC NOT NULL DEFAULT 0,
+            treasury_type TEXT,
+            treasury_account_code TEXT,
+            configuration_version INTEGER NOT NULL,
+            classification_status TEXT NOT NULL DEFAULT 'unmapped',
+            is_current BOOLEAN NOT NULL DEFAULT TRUE,
+            classified_at TIMESTAMPTZ DEFAULT now(),
+            created_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE(client_data_id, configuration_version)
+        )
+    ''', "cash_bank_transaction_classifications")
+    run("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_date ON cash_bank_transaction_classifications (client_id, transaction_date, is_current)")
+    run("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_voucher ON cash_bank_transaction_classifications (client_id, voucher_id, is_current)")
+    run("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_account_date ON cash_bank_transaction_classifications (client_id, account_code, transaction_date, is_current)")
+    run("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_source_version ON cash_bank_transaction_classifications (client_data_id, configuration_version)")
     # ---------- 10. error_codes ----------
     run('''
         CREATE TABLE IF NOT EXISTS error_codes (
@@ -5976,9 +6140,9 @@ def execute_batch_insert_with_ids_pg(conn, query, params_list, chunk_size=500, t
     since execute_values' auto-generated template can't interleave a literal
     constant with bound values.
 
-    Same chunked-commit contract as execute_batch_pg(): each chunk commits
-    independently, so a failure partway through a huge import still preserves
-    everything already written.
+    Outside an active pg_transaction(), each chunk commits independently, so a
+    failure partway through a huge import preserves everything already written.
+    Inside pg_transaction(), the outer context owns the final commit/rollback.
     """
     cur = conn.cursor()
     ids = []
@@ -5987,9 +6151,11 @@ def execute_batch_insert_with_ids_pg(conn, query, params_list, chunk_size=500, t
         try:
             results = psycopg2.extras.execute_values(cur, query, chunk, template=template, fetch=True)
             ids.extend(row[0] for row in results)
-            conn.commit()
+            if _pg_transaction.get() is None:
+                conn.commit()
         except Exception:
-            conn.rollback()
+            if _pg_transaction.get() is None:
+                conn.rollback()
             raise
     return ids
 

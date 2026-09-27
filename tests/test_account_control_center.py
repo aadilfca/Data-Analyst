@@ -44,6 +44,8 @@ class AccountSetSchemaTests(unittest.TestCase):
                         "account_control_cashflow_category_assignments",
                         "account_control_cashflow_treasury_accounts",
                         "account_control_cashflow_settings",
+                        "account_control_cashflow_config_versions",
+                        "account_control_cashflow_config_entries",
                     }.issubset(tables)
                 )
                 self.assertTrue(
@@ -58,6 +60,8 @@ class AccountSetSchemaTests(unittest.TestCase):
                         "idx_account_control_cashflow_categories_client",
                         "idx_account_control_cashflow_category_assignments_client",
                         "idx_account_control_cashflow_treasury_client",
+                        "idx_account_control_cashflow_config_versions_client",
+                        "idx_account_control_cashflow_config_entries_version",
                     }.issubset(indexes)
                 )
             finally:
@@ -105,6 +109,9 @@ class AccountSetPostgresMigrationTests(unittest.TestCase):
         self.assertIn("idx_account_control_cashflow_categories_client", sql)
         self.assertIn("idx_account_control_cashflow_category_assignments_client", sql)
         self.assertIn("idx_account_control_cashflow_treasury_client", sql)
+        self.assertIn("account_control_cashflow_config_versions", sql)
+        self.assertIn("account_control_cashflow_config_entries", sql)
+        self.assertIn("is_active BOOLEAN NOT NULL DEFAULT TRUE", sql)
         self.assertTrue(connection.cursor_instance.closed)
         self.assertFalse(connection.rollback_called)
 class AccountSetResolverTests(unittest.TestCase):

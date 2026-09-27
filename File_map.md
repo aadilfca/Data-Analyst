@@ -35,6 +35,11 @@ This document lists all source files in the project, grouped by directory, with 
 | `services/reconciliation_balance_source.py` | Normalizes stored opening/month-end balance inputs and reports missing, duplicate, invalid, or out-of-period reconciliation evidence. |
 | `services/reconciliation_xlsx.py` | OpenPyXL exporter for professional Bank/Cash monthly summaries, schedules, review controls, cross-checks, and reconciliation proofs. |
 | `services/storage_cleanup.py` | PostgreSQL storage preview plus one-transaction, protected-data cleanup for approved logs, retired unlinked rows, deleted upload metadata, stale presence, and expired sessions. |
+| `services/cash_bank_classification.py` | Versioned Cash/Bank derived transaction-line builder and controlled SQLite/PostgreSQL backfill service; never mutates raw Client Data. |
+
+## Operations Scripts (`scripts/`)
+
+| `scripts/backfill_cash_bank_transaction_classifications.py` | Explicit operator-run Phase 3 backfill with backend selection, batch size, configuration version, and dry-run reporting. |
 ## Routers (`routers/`)
 | File | Purpose |
 |------|---------|
@@ -126,13 +131,16 @@ This document lists all source files in the project, grouped by directory, with 
 |------|---------|
 | `test_app_smoke.py` | Boots the real app via FastAPI's `TestClient` against a temp SQLite DB and proves routers respond (dashboard page + `/api/clients`). |
 | `test_upload_validation_counts.py` | Verifies `count_new_and_existing_rows` correctly distinguishes new vs. already-imported rows for the same client/template. |
+| `test_cash_bank_transaction_classification.py`, `test_cash_bank_transaction_backfill.py`, `test_cash_bank_transaction_upload_classification.py` | Verifies the versioned Cash/Bank derived layer, controlled backfill, upload-time classification, idempotence, rollback, and raw-data preservation. |
 | `test_verification_indexes.py`, `test_verification_account_sets.py` | Verifies cashbook lookup indexing, simplified and legacy routing, JV Treasury legs, transfers, prefix fallback, Cash movement signs, explicit debit/credit rules for all non-Treasury workstreams, signed preview/session presentation, imbalance detection, and Treasury exclusion. |
-| `test_account_control_center.py` | Tests simplified mapping schema/normalization, partial assignment preservation, Financial Statement and Notes category lifecycle, plus legacy Account Set schema, Postgres upgrade, selector resolution, exclusions, and publication guards. |
+| `test_account_control_center.py` | Tests simplified mapping schema/normalization, partial assignment preservation, Financial Statement and Notes category lifecycle, Cash/Bank configuration schema, plus legacy Account Set schema, Postgres upgrade, selector resolution, exclusions, and publication guards. |
+| `test_cash_bank_configuration_sync.py` | Verifies Account Control Centre Cash/Bank versioning, soft deactivation, derived-layer reclassification, and raw-source preservation. |
 | `test_account_control_center_ui.py` | Hermetic Playwright coverage for Verification, Financial Statement, and Notes grids, leaf/parent saves, category creation, cross-tab preservation, tabs, and account filtering. |
 | `test_verification_nav_skeleton.py` | Playwright regression tests for Verification's voucher navigation. Forces each `moveToAdjacentVoucher()` failure path (HTTP error, aborted request, empty response) plus the boundary case in headless Chromium, asserting the loading skeleton is always cleared and a working retry action is offered; also covers the Prev/Next processing UI — buttons disabled during a navigation, re-enabled per voucher position afterwards (including after a boundary or an error), and a second overlapping navigation dropped rather than duplicated. Fully hermetic: a local static file server plus stubbed `/api/` routes, so it needs no dev server, database or login. |
 | `test_verification_performance_metrics.py`, `test_verification_dirty_saves.py` | Verify database metrics and Verification's revision-based dirty tracking, save failures, in-flight edits, and duplicate prevention. |
 | `test_templates.py` | Playwright regression tests for Edit Template modal closure and draft-column persistence before explicit Save Template submission. |
 | `test_ledger_group_summary.py`, `test_ledger_report_source.py` | Unit tests for canonical voucher/category summaries, transfers, proofs, source normalization, diagnostics, and dataset selection. |
+| `test_cashflows_performance.py` | Verifies SQL-first Cashflows date filtering, voucher joins, derived-layer aggregation, and raw-JSON-free source preparation. |
 | `test_reconciliation.py`, `test_reconciliation_balance_source.py`, `test_reconciliation_reports.py` | Test account-group, balance-input, report-control, Financial Statement preview, preview/download, exact-code validation, transactional replacement, normalization, and completeness behavior. |
 | `test_reconciliation_xlsx.py` | Tests report workbook structure, formatting, typed values, missing-balance handling, and local Bank/Cash golden movement matching. |
 | `test_pg_pool_retry.py` | Unit tests for `database.py`'s stale-pooled-connection recovery — fake pool/connection/cursor (no live Postgres): `_run_pooled_pg` retries once and succeeds, propagates a non-stale error untouched, gives up after one retry; `_is_stale_pg_connection_error` type+message match; `_getconn_pg_checked` skips a closed connection; the recovery log line fires. |

@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from database import execute_query_pg, execute_write_pg, log_audit, pg_transaction
 from routers.auth import require_admin
 from routers.trial_balance import find_latest_parsed_upload
+from services.cash_bank_classification import synchronize_treasury_accounts_postgres
 
 
 router = APIRouter()
@@ -978,17 +979,17 @@ def get_cashflow_setup(client_id: int = Query(..., ge=1), session=Depends(requir
     treasury_rows = execute_query_pg(
         """SELECT account_code, treasury_type
            FROM account_control_cashflow_treasury_accounts
-           WHERE client_id = %s
+           WHERE client_id = %s AND is_active = TRUE
            ORDER BY treasury_type, account_code""",
         (client_id,),
     )
     settings_rows = execute_query_pg(
-        """SELECT match_internal_transfers, receipt_presentation
+        """SELECT match_internal_transfers, receipt_presentation, source_template_id
            FROM account_control_cashflow_settings
            WHERE client_id = %s""",
         (client_id,),
     )
-    settings = settings_rows[0] if settings_rows else {"match_internal_transfers": False, "receipt_presentation": "net"}
+    settings = settings_rows[0] if settings_rows else {"match_internal_transfers": False, "receipt_presentation": "net", "source_template_id": None}
     return {
         "client_id": client_id,
         "upload": upload,
@@ -1012,6 +1013,7 @@ def get_cashflow_setup(client_id: int = Query(..., ge=1), session=Depends(requir
         "settings": {
             "match_internal_transfers": bool(settings.get("match_internal_transfers")),
             "receipt_presentation": settings.get("receipt_presentation") or "net",
+            "source_template_id": settings.get("source_template_id"),
         },
     }
 
@@ -1105,23 +1107,20 @@ def save_cashflow_treasury_accounts(payload: CashFlowTreasuryAccountsPayload, se
     if invalid:
         raise HTTPException(400, "Cash and Bank selections must be leaf accounts from the latest Trial Balance")
     actor = _actor_name(session)
-    with pg_transaction():
-        execute_write_pg("DELETE FROM account_control_cashflow_treasury_accounts WHERE client_id = %s", (payload.client_id,))
-        for account_code in sorted(cash_codes):
-            execute_write_pg(
-                """INSERT INTO account_control_cashflow_treasury_accounts
-                   (client_id, account_code, treasury_type, updated_by, updated_at)
-                   VALUES (%s, %s, 'cash', %s, CURRENT_TIMESTAMP)""",
-                (payload.client_id, account_code, actor),
-            )
-        for account_code in sorted(bank_codes):
-            execute_write_pg(
-                """INSERT INTO account_control_cashflow_treasury_accounts
-                   (client_id, account_code, treasury_type, updated_by, updated_at)
-                   VALUES (%s, %s, 'bank', %s, CURRENT_TIMESTAMP)""",
-                (payload.client_id, account_code, actor),
-            )
-    return {"saved": True, "cash_account_codes": sorted(cash_codes), "bank_account_codes": sorted(bank_codes)}
+    with pg_transaction() as conn:
+        synchronization = synchronize_treasury_accounts_postgres(
+            conn,
+            client_id=payload.client_id,
+            cash_account_codes=sorted(cash_codes),
+            bank_account_codes=sorted(bank_codes),
+            changed_by=actor,
+        )
+    return {
+        "saved": True,
+        "cash_account_codes": sorted(cash_codes),
+        "bank_account_codes": sorted(bank_codes),
+        **synchronization,
+    }
 
 
 @router.put("/api/account-control-center/cashflow/settings")

@@ -6613,3 +6613,41 @@ or procedure-modal requests, whose observed latency therefore remains a separate
 **Implementation:** Added additive SQLite/PostgreSQL persistence for client/template Cashflows role mappings and the selected source template. Added read/save template-column APIs with required-role and duplicate-column validation. The report-source adapter now applies saved mappings before alias fallback and blocks Cashflows when a selected source lacks a complete required mapping.
 
 **Verification:** Focused source/reconciliation suite passed: 29 tests. SQLite initialization, Python compilation, and git diff --check passed. No packages installed.
+
+## Cashflows transaction template popup - Phase 3 - 2026-09-26
+
+**Scope:** Added the approved Transaction Template control beside Cash & Bank Accounts and Manage Categories in Account Control Centre. Cashflows generation and the explicit Load workflow remain the next separate phase.
+
+**Implementation:** The popup loads available Client Data Bank templates, deduplicates them by template, displays required and recommended Cashflows roles, restricts choices to the selected template's columns, validates required mappings in the UI, and saves through the Phase 2 mapping APIs. The setup response now returns the selected source template id, and asset versions were bumped for browser cache refresh.
+
+**Verification:** Account Control Centre backend tests passed: 21 tests. Browser regression tests passed: 2 tests. Combined focused Account Control Centre/Reconciliation/source suite passed: 52 tests. Python compilation, JavaScript syntax, and `git diff --check` passed. No packages installed.
+
+## Cashflows generic report intake repair - Phase 1 - 2026-09-26
+
+**Scope:** Rebuilt the Cashflows intake foundation so one Client Data Bank upload or template is selected explicitly and the generic report can load without treating repairable source noise as a fatal error.
+
+**Implementation:** Added saved upload/template selection, additive SQLite/PostgreSQL schema migration, explicit Load-only Reports workflow, source-quality status, forward-fill for continuation voucher/date rows, Excel-serial and day-first date parsing, amount cleanup, layout-row removal, date-valued account-code normalization, and warning-level quarantine diagnostics with valid-row reporting. The generic summary remains based on configured Cash/Bank accounts, categories, transfers, and receipt settings; workbook-specific judgement is intentionally deferred to the next output phase.
+
+**Verification:** Combined Account Control Centre, Reports UI, source adapter, and reconciliation suite passed: 57 tests. Python compilation, JavaScript syntax, and `git diff --check` passed. No packages installed.
+
+## Cashflows template-only source linkage - 2026-09-27
+
+**Scope:** Removed the active Cashflows Source selector. Cashflows now follows the Transaction Report template configured in Account Control Centre as one logical Client Data source across its monthwise uploads.
+
+**Implementation:** The Cashflows preview route now loads `client_data` by the saved `source_template_id`, ignoring legacy upload selection. The Reports form shows the configured-template note and sends only the client and date range. Existing upload-selection schema/API compatibility remains intact but is no longer used by the active Cashflows UI. Added regression coverage for template priority and Source-field removal.
+
+**Verification:** Combined source, reconciliation, Account Control Centre, and UI suite passed: 57 tests. Python compilation, JavaScript syntax, and `git diff --check` passed. No packages installed.
+## Cashflows loading performance safeguard - 2026-09-27
+
+**Scope:** Safe performance and UI resilience repair for Cashflows using the configured Transaction Report template across monthwise uploads.
+
+**Implementation:** Preserved the existing `client_data` template filter, row decoding, continuation repair, date/amount interpretation, quarantine behavior, category mapping, and report calculations. Cached repeated spreadsheet scalar parsing, moved continuation forward-fill before dataframe construction, computed repeated-header labels once, and added a bounded browser request with a recoverable timeout message.
+
+**Verification:** Full source and reconciliation focused suite passed: 35 tests. Source preparation completed in 67.54 seconds for 54,064 rows; end-to-end Cashflows generation completed in 96.62 seconds. Python compilation, JavaScript syntax, and `git diff --check` passed. No packages installed.
+## Cashflows SQL-first source filtering - 2026-09-27
+
+**Scope:** Narrow Cashflows source retrieval before Python normalization while preserving complete counter-account processing.
+
+**Implementation:** The source query now applies the requested extract_date range and selects only the newest upload per filename through a lightweight uploaded_files metadata query; duplicate re-uploaded files are not deleted. Python retains the final date check and existing Cash/Bank voucher selection, so all counter-account lines in selected vouchers remain available. An expensive JSON voucher join was measured and removed after PostgreSQL timing showed it was slower than date/upload filtering. No new package or database data mutation was used.
+
+**Verification:** Focused source/reconciliation suite passed: 36 tests. Live Leather Crop verification loaded 45,836 rows, suppressed 2 duplicate uploads, generated the Cashflows summary successfully in 53.02 seconds, and retained 2,416 category-review lines. Python compilation and git diff --check passed. No packages installed.

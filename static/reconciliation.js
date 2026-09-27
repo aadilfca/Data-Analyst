@@ -2,6 +2,7 @@
 (function () {
     'use strict';
     let clientId = null;
+    const CASHFLOW_REQUEST_TIMEOUT_MS = 120000;
 
     function element(id) { return document.getElementById(id); }
     function escapeHtml(value) {
@@ -13,8 +14,8 @@
         const amount = Number(value || 0);
         return amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     }
-    async function api(url) {
-        const response = await fetch(url);
+    async function api(url, options) {
+        const response = await fetch(url, options);
         const payload = await response.json().catch(function () { return {}; });
         if (!response.ok) throw new Error(payload.detail || payload.message || 'The Cashflows report could not be loaded.');
         return payload;
@@ -43,6 +44,19 @@
             return '<div class="cashflows-control ' + String(control.status || '').toLowerCase() + '"><strong>' + escapeHtml(key.replace(/_/g, ' ')) + '</strong><span>' + escapeHtml(control.status || '') + '</span><small>' + escapeHtml(control.message || '') + '</small></div>';
         }).join('');
     }
+    function renderSourceQuality(source) {
+        const box = element('cashflowsSourceQuality');
+        const quality = source.quality || {};
+        const warningCount = (source.diagnostics || []).filter(function (item) { return item.severity === 'warning'; }).length;
+        const hasQuality = quality.source_row_count || quality.valid_row_count || quality.rejected_row_count || quality.layout_row_count || warningCount;
+        if (!hasQuality) {
+            box.hidden = true;
+            box.textContent = '';
+            return;
+        }
+        box.hidden = false;
+        box.textContent = 'Source quality: ' + String(quality.valid_row_count || 0) + ' valid row(s), ' + String(quality.rejected_row_count || 0) + ' quarantined, ' + String(quality.layout_row_count || 0) + ' layout row(s) removed' + (warningCount ? ', ' + warningCount + ' warning(s).' : '.');
+    }
     function renderResult(result) {
         const preview = result.preview || {};
         const summaryRows = preview.category_totals || [];
@@ -66,20 +80,27 @@
         element('cashflowsReceiptMode').textContent = 'Receipt presentation: ' + String(preview.receipt_presentation || 'net').toUpperCase();
         renderControls(result.controls || {});
         const source = result.source || {};
-        element('cashflowsSourceStatus').textContent = source.ready ? 'Source ready' : 'Source needs review';
+        element('cashflowsSourceStatus').textContent = source.ready ? ((source.quality || {}).rejected_row_count ? 'Source ready with warnings' : 'Source ready') : 'Source needs review';
+        renderSourceQuality(source);
         setMessage((result.blocking_reasons || []).join(' '), false);
     }
     async function generateCashflows(event) {
         if (event) event.preventDefault();
-        setMessage('Generating Cashflows summary...', false);
+        setMessage('Loading Cashflows summary from the configured Transaction Report template...', false);
         const start = element('cashflowsPeriodStart').value;
         const end = element('cashflowsPeriodEnd').value;
+        const controller = new AbortController();
+        const timeout = window.setTimeout(function () { controller.abort(); }, CASHFLOW_REQUEST_TIMEOUT_MS);
         try {
             const query = new URLSearchParams({ client_id: clientId, period_start: start, period_end: end });
-            const result = await api('/api/reconciliation/cashflows/preview?' + query.toString());
+            const result = await api('/api/reconciliation/cashflows/preview?' + query.toString(), { signal: controller.signal });
             renderResult(result);
         } catch (error) {
-            setMessage(error.message, true);
+            setMessage(error.name === 'AbortError'
+                ? 'Cashflows is taking longer than expected. Please try again or review the configured Transaction Report template.'
+                : error.message, true);
+        } finally {
+            window.clearTimeout(timeout);
         }
     }
     function setReportView(isReport) {
@@ -94,7 +115,7 @@
         params.set('report', 'cashflows');
         window.history.replaceState({}, '', window.location.pathname + '?' + params.toString());
         setReportView(true);
-        generateCashflows();
+        setMessage('Select the date range and press Load summary to use the configured Transaction Report template.', false);
     }
     function showReportsHub() {
         const params = new URLSearchParams(window.location.search);
@@ -115,6 +136,7 @@
         clientId = window.getSelectedClientId ? window.getSelectedClientId() : null;
         defaultPeriods();
         element('cashflowsReportForm').addEventListener('submit', generateCashflows);
+
         element('cashflowsBackButton').addEventListener('click', showReportsHub);
         document.querySelectorAll('[data-report-key]').forEach(function (card) {
             card.addEventListener('click', function () { setSelection(card); });

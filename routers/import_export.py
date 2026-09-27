@@ -3,10 +3,11 @@ from fastapi.responses import StreamingResponse
 import os, json, openpyxl, pandas as pd
 from io import BytesIO
 from database import (
-    execute_query_pg, execute_write_pg, log_audit, get_raw_conn_pg, release_raw_conn_pg,
+    execute_query_pg, execute_write_pg, log_audit, pg_transaction,
     log_data_audit_pg, execute_batch_pg, execute_batch_insert_with_ids_pg,
 )
 from psycopg2.extras import Json
+from services.cash_bank_classification import load_treasury_mapping_postgres, upsert_classification_rows_postgres
 from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime, time
@@ -1589,10 +1590,10 @@ def validate_and_import(request: ImportRequest):
     # a ~4,900-row import under the original SQLite version. Each write category
     # below is batched (database.py's execute_batch_pg()/
     # execute_batch_insert_with_ids_pg(), via psycopg2.extras.execute_batch()/
-    # execute_values()), committing per chunk rather than per row or in one
-    # giant transaction.
-    conn = get_raw_conn_pg()
-    try:
+    # execute_values()). The outer transaction defers the final commit until
+    # both raw client_data and derived classification writes succeed.
+    with pg_transaction() as conn:
+        treasury_mapping = load_treasury_mapping_postgres(conn, request.client_id)
         if change_detection is not None and change_detection.get("unchanged") is not None:
             # --- Re-upload scenario: handle each category ---
             # 1. Unchanged: skip — retain existing validation status (no action needed)
@@ -1600,6 +1601,7 @@ def validate_and_import(request: ImportRequest):
 
             # 2. Changed: update row_data, reset validation_status to 'Pending', log old values
             changed_client_data_params = []
+            changed_classification_sources = []
             changed_verification_params = []
             changed_audit_params = []
             for item in change_detection["changed"]:
@@ -1622,6 +1624,14 @@ def validate_and_import(request: ImportRequest):
                 changed_client_data_params.append(
                     (Json(new_row_data, dumps=lambda d: json.dumps(d, default=str)), new_version, doc_group_id, data_quality_flag, rate_source, amount, date_str, cid)
                 )
+                changed_classification_sources.append({
+                    "id": cid,
+                    "client_id": request.client_id,
+                    "template_id": request.template_id,
+                    "upload_id": request.file_id,
+                    "row_data": new_row_data,
+                    "extract_date": date_str,
+                })
                 changed_audit_params.append(_audit_row_params(cid, "UPDATE", item["old_row_data"], new_row_data))
                 if item.get("verification_detail_id"):
                     changed_verification_params.append((item["verification_detail_id"],))
@@ -1648,9 +1658,17 @@ def validate_and_import(request: ImportRequest):
             if changed_audit_params:
                 execute_batch_pg(conn, DATA_AUDIT_LOG_INSERT_SQL, changed_audit_params)
 
+            if changed_classification_sources:
+                upsert_classification_rows_postgres(
+                    conn,
+                    changed_classification_sources,
+                    treasury_mapping,
+                    configuration_version=1,
+                )
             # 3. New: insert fresh rows
             new_client_data_params = []
             new_row_data_list = []
+            new_extract_dates = []
             for new_row_data in change_detection["new"]:
                 amount, date_str = extract_columns_from_row(new_row_data, template_cols, effective_delimiter, effective_order)
                 doc_group_id = get_document_group_id(template_cols, new_row_data, request.template_id)
@@ -1662,6 +1680,7 @@ def validate_and_import(request: ImportRequest):
                      Json(new_row_data, dumps=lambda d: json.dumps(d, default=str)), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag, rate_source)
                 )
                 new_row_data_list.append(new_row_data)
+                new_extract_dates.append(date_str)
                 inserted_count += 1
                 IMPORT_PROGRESS[request.file_id]["current"] += 1
 
@@ -1674,6 +1693,25 @@ def validate_and_import(request: ImportRequest):
                     """,
                     new_client_data_params,
                     template="(%s, %s, %s, %s, %s, %s, %s, %s, 'added', %s, %s, %s)"
+                )
+                new_classification_sources = [
+                    {
+                        "id": row_id,
+                        "client_id": request.client_id,
+                        "template_id": request.template_id,
+                        "upload_id": request.file_id,
+                        "row_data": new_row_data,
+                        "extract_date": extract_date,
+                    }
+                    for row_id, new_row_data, extract_date in zip(
+                        new_ids, new_row_data_list, new_extract_dates
+                    )
+                ]
+                upsert_classification_rows_postgres(
+                    conn,
+                    new_classification_sources,
+                    treasury_mapping,
+                    configuration_version=1,
                 )
                 new_audit_params = [
                     _audit_row_params(row_id, "INSERT", None, new_row_data)
@@ -1704,6 +1742,7 @@ def validate_and_import(request: ImportRequest):
             # --- First-time upload (no existing data with valid composite key): insert all rows as new ---
             first_upload_client_data_params = []
             first_upload_row_data_list = []
+            first_upload_extract_dates = []
             for row in rows:
                 # Build JSON row_data
                 row_data = {}
@@ -1735,6 +1774,7 @@ def validate_and_import(request: ImportRequest):
                      Json(row_data, dumps=lambda d: json.dumps(d, default=str)), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag, rate_source)
                 )
                 first_upload_row_data_list.append(row_data)
+                first_upload_extract_dates.append(date_str)
                 inserted_count += 1
                 IMPORT_PROGRESS[request.file_id]["current"] += 1
 
@@ -1748,14 +1788,30 @@ def validate_and_import(request: ImportRequest):
                     first_upload_client_data_params,
                     template="(%s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, %s, %s)"
                 )
+                first_classification_sources = [
+                    {
+                        "id": row_id,
+                        "client_id": request.client_id,
+                        "template_id": request.template_id,
+                        "upload_id": request.file_id,
+                        "row_data": row_data,
+                        "extract_date": extract_date,
+                    }
+                    for row_id, row_data, extract_date in zip(
+                        first_upload_ids, first_upload_row_data_list, first_upload_extract_dates
+                    )
+                ]
+                upsert_classification_rows_postgres(
+                    conn,
+                    first_classification_sources,
+                    treasury_mapping,
+                    configuration_version=1,
+                )
                 first_upload_audit_params = [
                     _audit_row_params(row_id, "INSERT", None, row_data)
                     for row_id, row_data in zip(first_upload_ids, first_upload_row_data_list)
                 ]
                 execute_batch_pg(conn, DATA_AUDIT_LOG_INSERT_SQL, first_upload_audit_params)
-    finally:
-        release_raw_conn_pg(conn)
-
     log_audit("Analyst", "Import", "Upload",
               f"Imported {inserted_count} new, {updated_count} updated, {deleted_count} flagged missing for client {request.client_id}, template {template[0]['template_name']}, file ID {request.file_id}")
 

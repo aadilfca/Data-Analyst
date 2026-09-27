@@ -208,8 +208,32 @@ def test_cashflow_setup_uses_categories_and_configuration_popups(browser, static
                 "categories": categories,
                 "accounts": accounts,
                 "treasury_accounts": {"cash": [], "bank": []},
-                "settings": {"match_internal_transfers": False, "receipt_presentation": "net"},
+                "settings": {"match_internal_transfers": False, "receipt_presentation": "net", "source_template_id": None},
             }))
+            return
+        if base.endswith("/api/reconciliation/cashflows/sources"):
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({
+                "client_id": 1,
+                "sources": [{"template_id": 1, "template_name": "Transaction Report", "file_name": "January vouchers.xlsx"}],
+            }))
+            return
+        if base.endswith("/api/reconciliation/cashflows/template-columns") and request.method == "GET":
+            roles = [
+                {"role": "voucher_id", "label": "Voucher ID", "required": True, "template_column_id": 15, "column_name": "Voucher ID"},
+                {"role": "date", "label": "Transaction Date", "required": True, "template_column_id": 12, "column_name": "Transaction Date"},
+                {"role": "account_code", "label": "Account Detail / Account Code", "required": True, "template_column_id": 16, "column_name": "Account Detail"},
+                {"role": "account_name", "label": "Account Name", "required": False, "template_column_id": None, "column_name": None},
+                {"role": "voucher_detail", "label": "Voucher Detail", "required": False, "template_column_id": None, "column_name": None},
+                {"role": "debit", "label": "Debit Amount", "required": True, "template_column_id": 19, "column_name": "Debit Amount"},
+                {"role": "credit", "label": "Credit Amount", "required": True, "template_column_id": 20, "column_name": "Credit Amount"},
+            ]
+            columns = [{"template_column_id": value, "column_name": name} for value, name in [(15, "Voucher ID"), (12, "Transaction Date"), (16, "Account Detail"), (19, "Debit Amount"), (20, "Credit Amount")]]
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({"client_id": 1, "template": {"id": 1, "template_name": "Transaction Report"}, "columns": columns, "roles": roles, "missing_required_roles": [], "ready": True}))
+            return
+        if base.endswith("/api/reconciliation/cashflows/template-columns") and request.method == "PUT":
+            body = json.loads(request.post_data or "{}")
+            calls.append((request.method, body))
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({"client_id": 1, "template": {"id": 1, "template_name": "Transaction Report"}, "columns": [], "roles": [], "missing_required_roles": [], "ready": True}))
             return
         if base.endswith("/api/account-control-center/cashflow/categories") and request.method == "POST":
             body = json.loads(request.post_data or "{}")
@@ -272,4 +296,17 @@ def test_cashflow_setup_uses_categories_and_configuration_popups(browser, static
     assert page.locator("#accCashflowMatchTransfers").is_visible()
     page.locator("[data-acc-cashflow-config-tab='customer']").click()
     assert page.locator(".acc2-payment-format-card").count() == 2
+    page.locator("[data-acc-cashflow-config-tab='transfers']").click()
+    page.locator("#accCashflowAccountsClose").click()
+    page.locator("#accCashflowTemplateButton").click()
+    page.wait_for_selector("#accCashflowTemplateSelect option[value='1']", state="attached")
+    assert page.locator("#accCashflowTemplateModal").is_visible()
+    page.wait_for_selector("#accCashflowTemplateMapping .acc2-template-role")
+    assert page.locator("#accCashflowTemplateMapping .acc2-template-required").count() == 5
+    assert page.locator("#accCashflowTemplateMapping .acc2-template-recommended").count() == 2
+    assert page.locator("#accCashflowTemplateSave").is_enabled()
+    page.locator("#accCashflowTemplateSave").click()
+    page.wait_for_timeout(150)
+    assert any(method == "PUT" and body.get("template_id") == 1 and len(body.get("mappings", [])) == 5 for method, body in calls)
+    page.locator("#accCashflowTemplateClose").click()
     page.close()

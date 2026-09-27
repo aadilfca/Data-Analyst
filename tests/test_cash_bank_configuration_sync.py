@@ -1,0 +1,101 @@
+"""Phase 5 coverage for versioned Account Control Centre synchronization."""
+
+import unittest
+from unittest.mock import patch
+
+from services import cash_bank_classification as classification
+
+
+class _Cursor:
+    def __init__(self):
+        self.statements = []
+        self._rows = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return False
+
+    def execute(self, statement, params=None):
+        sql = " ".join(statement.split())
+        self.statements.append((sql, params))
+        if "SELECT account_code, treasury_type" in sql:
+            self._rows = [{"account_code": "CASH", "treasury_type": "cash"}]
+        elif "MAX(version_number)" in sql:
+            self._rows = [{"current_version": 1}]
+        elif "RETURNING id" in sql:
+            self._rows = [(9,)]
+        elif "SELECT id, client_id, template_id" in sql:
+            self._rows = [{
+                "id": 44,
+                "client_id": 7,
+                "template_id": 2,
+                "upload_id": 3,
+                "row_data": {"Account Code": "BANK", "Voucher ID": "V-1", "Debit": "10"},
+                "extract_date": "2026-01-01",
+            }]
+        else:
+            self._rows = []
+
+    def fetchall(self):
+        return list(self._rows)
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+
+class _Connection:
+    def __init__(self):
+        self.cursor_instance = _Cursor()
+
+    def cursor(self, cursor_factory=None):
+        return self.cursor_instance
+
+
+class CashBankConfigurationSyncTests(unittest.TestCase):
+    def test_action_names_cover_add_edit_and_deactivate(self):
+        current = {("CASH", "cash")}
+        self.assertEqual(classification._configuration_action(set(), current), "created")
+        self.assertEqual(classification._configuration_action(current, set()), "deactivated")
+        self.assertEqual(classification._configuration_action(current, current | {("BANK", "bank")}), "added")
+        self.assertEqual(classification._configuration_action(current, {("BANK", "bank")}), "edited")
+
+    def test_sync_creates_new_version_soft_deactivates_and_preserves_source_payload(self):
+        connection = _Connection()
+        source_before = {
+            "id": 44,
+            "client_id": 7,
+            "template_id": 2,
+            "upload_id": 3,
+            "row_data": {"Account Code": "BANK", "Voucher ID": "V-1", "Debit": "10"},
+            "extract_date": "2026-01-01",
+        }
+        with patch.object(classification, "execute_values"), patch.object(
+            classification, "upsert_classification_rows_postgres", return_value=[]
+        ) as upsert:
+            result = classification.synchronize_treasury_accounts_postgres(
+                connection,
+                client_id=7,
+                cash_account_codes=[],
+                bank_account_codes=["BANK"],
+                changed_by="Admin",
+            )
+
+        self.assertTrue(result["changed"])
+        self.assertEqual(result["configuration_version"], 2)
+        self.assertEqual(result["action"], "edited")
+        upsert.assert_called_once()
+        self.assertEqual(upsert.call_args.kwargs["configuration_version"], 2)
+        self.assertEqual(
+            source_before["row_data"],
+            {"Account Code": "BANK", "Voucher ID": "V-1", "Debit": "10"},
+        )
+        sql = "\n".join(statement for statement, _params in connection.cursor_instance.statements)
+        self.assertIn("SET is_active = FALSE", sql)
+        self.assertIn("SET is_current = FALSE", sql)
+        self.assertNotIn("DELETE FROM account_control_cashflow_treasury_accounts", sql)
+
+
+if __name__ == "__main__":
+    unittest.main()

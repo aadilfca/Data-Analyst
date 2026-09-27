@@ -12,6 +12,7 @@ from routers.auth import get_current_user
 from datetime import datetime
 import traceback
 import sys
+import threading
 
 # ✅ CREATE the app instance FIRST
 app = FastAPI(title="System Analyst Dashboard", version="1.0.0")
@@ -231,37 +232,44 @@ async def global_exception_handler(request: Request, exc: Exception):
         content=response_data
     )
 
+def _initialize_postgres_in_background():
+    """Initialize the optional Postgres schema without delaying web startup."""
+    try:
+        from database import get_pg_pool, get_raw_conn_pg, release_raw_conn_pg, init_db_postgres
+        get_pg_pool()
+        pg_conn = get_raw_conn_pg()
+        try:
+            init_db_postgres(pg_conn)
+        finally:
+            release_raw_conn_pg(pg_conn)
+        startup_state["postgres"] = "ready"
+        print("Postgres (Supabase) schema initialized", flush=True)
+    except Exception as e:
+        startup_state["postgres"] = "degraded"
+        print(f"Postgres init skipped (non-fatal): {e}", flush=True)
+
+
 # Startup event and run block...
 @app.on_event("startup")
 def startup():
-    print("🚀 Starting System Analyst App...")
+    print("Starting System Analyst App...")
     init_db()
 
-    # Supabase (Postgres) migration, Phase 2 of 8: best-effort, non-fatal -
-    # SQLite (above) remains the app's real database until Phase 3 confirms
-    # Postgres works end-to-end, so any failure here (DATABASE_URL unset,
-    # bad credentials, unreachable project) must never block startup.
-    try:
-        from database import get_pg_pool, get_raw_conn_pg, release_raw_conn_pg, init_db_postgres
-        if os.environ.get("DATABASE_URL"):
-            startup_state["postgres"] = "initializing"
-            get_pg_pool()
-            pg_conn = get_raw_conn_pg()
-            try:
-                init_db_postgres(pg_conn)
-            finally:
-                release_raw_conn_pg(pg_conn)
-            startup_state["postgres"] = "ready"
-            print("✅ Postgres (Supabase) schema initialized")
-        else:
-            startup_state["postgres"] = "not_configured"
-            print("ℹ️ DATABASE_URL not set — skipping Postgres init (SQLite-only mode)")
-    except Exception as e:
-        startup_state["postgres"] = "degraded"
-        print(f"⚠️ Postgres init skipped (non-fatal): {e}")
+    # Supabase (Postgres) migration is best-effort and non-fatal. SQLite remains
+    # the app's real database until Postgres works end-to-end, so a remote lock
+    # or network timeout must never block web startup.
+    if os.environ.get("DATABASE_URL"):
+        startup_state["postgres"] = "initializing"
+        threading.Thread(
+            target=_initialize_postgres_in_background,
+            name="postgres-schema-init",
+            daemon=True,
+        ).start()
+    else:
+        startup_state["postgres"] = "not_configured"
+        print("DATABASE_URL not set - skipping Postgres init (SQLite-only mode)")
 
-    print("✅ App ready!")
-
+    print("App ready!", flush=True)
 
 @app.on_event("shutdown")
 def shutdown():

@@ -1,0 +1,677 @@
+"""Cash/Bank transaction-line classification and controlled backfill.
+
+This module reads existing Client Data rows and Account Control Centre treasury
+mappings, then writes only to the derived classification layer. It never
+updates client_data.row_data or the uploaded source files.
+"""
+
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from datetime import date, datetime, timedelta
+import json
+import re
+from typing import Any, Mapping
+
+from psycopg2.extras import RealDictCursor, execute_values
+
+
+_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
+    "voucher_id": (
+        "voucher id", "voucher_id", "voucher no", "voucher number", "voucher",
+        "transaction id", "transaction ref", "reference no",
+    ),
+    "account_code": (
+        "account detail", "account code", "account_code", "account no",
+        "account number", "code", "ledger code", "account head", "ledger detail",
+    ),
+    "transaction_date": (
+        "date", "transaction date", "voucher date", "posting date",
+    ),
+    "debit": ("debit amount", "debit", "dr", "amount debit"),
+    "credit": ("credit amount", "credit", "cr", "amount credit"),
+}
+
+
+def _normalise_label(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().casefold())
+
+
+def _text(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _canonical_code(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return str(value).strip()
+    if isinstance(value, (int, float)):
+        numeric = float(value)
+        if numeric.is_integer():
+            return str(int(numeric))
+    return re.sub(r"s+", " ", _text(value))
+
+
+def _decode_row_data(value: Any) -> dict[str, Any]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except (TypeError, ValueError):
+            return {}
+        return dict(decoded) if isinstance(decoded, Mapping) else {}
+    return {}
+
+
+def _field_value(row_data: Mapping[str, Any], role: str) -> Any:
+    values = {
+        _normalise_label(key): value
+        for key, value in row_data.items()
+    }
+    for alias in _FIELD_ALIASES[role]:
+        normalised = _normalise_label(alias)
+        if normalised in values:
+            return values[normalised]
+    return None
+
+
+def _parse_amount(value: Any) -> float:
+    if value is None or isinstance(value, bool):
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = _text(value)
+    if not text or text.casefold() in {"-", "n/a", "na"}:
+        return 0.0
+    negative = text.startswith("(") and text.endswith(")")
+    if negative:
+        text = text[1:-1]
+    if text.endswith("-"):
+        negative = True
+        text = text[:-1]
+    text = re.sub(r"[^0-9.\-]", "", text.replace(",", ""))
+    if not text or text in {".", "-", "-."}:
+        return 0.0
+    try:
+        amount = float(text)
+    except ValueError:
+        return 0.0
+    return -amount if negative else amount
+
+
+def _parse_date(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        numeric = float(value)
+        if 20000 <= numeric <= 60000:
+            return (datetime(1899, 12, 30) + timedelta(days=numeric)).date().isoformat()
+    text = _text(value)
+    if not text:
+        return None
+    if re.fullmatch(r"\d+(?:\.0+)?", text):
+        numeric = float(text)
+        if 20000 <= numeric <= 60000:
+            return (datetime(1899, 12, 30) + timedelta(days=numeric)).date().isoformat()
+    for fmt in (
+        "%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%Y%m%d",
+        "%d-%m-%Y", "%d/%m/%Y", "%d.%m.%Y",
+        "%d-%m-%y", "%d/%m/%y", "%d.%m.%y",
+        "%d-%b-%Y", "%d/%b/%Y", "%d-%b-%y", "%d/%b/%y",
+    ):
+        try:
+            return datetime.strptime(text, fmt).date().isoformat()
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        return None
+
+
+def build_treasury_mapping(rows: list[Mapping[str, Any]]) -> dict[str, set[str]]:
+    """Return normalized account-code -> one or more treasury types."""
+    mapping: dict[str, set[str]] = {}
+    for row in rows:
+        account_code = _canonical_code(row.get("account_code"))
+        treasury_type = _text(row.get("treasury_type")).casefold()
+        if account_code and treasury_type in {"cash", "bank"}:
+            mapping.setdefault(account_code, set()).add(treasury_type)
+    return mapping
+
+
+def build_classification_row(
+    source_row: Mapping[str, Any],
+    treasury_mapping: Mapping[str, set[str]],
+    configuration_version: int,
+) -> dict[str, Any]:
+    """Build one derived row without modifying the source row."""
+    row_data = _decode_row_data(source_row.get("row_data"))
+    account_code = _canonical_code(_field_value(row_data, "account_code"))
+    voucher_id = _text(_field_value(row_data, "voucher_id"))
+    transaction_date = _parse_date(_field_value(row_data, "transaction_date"))
+    if transaction_date is None:
+        transaction_date = _parse_date(source_row.get("extract_date"))
+
+    treasury_types = treasury_mapping.get(account_code, set())
+    if len(treasury_types) == 1:
+        treasury_type = next(iter(treasury_types))
+        classification_status = treasury_type
+        treasury_account_code = account_code
+    elif not account_code or len(treasury_types) > 1:
+        treasury_type = None
+        classification_status = "unmapped"
+        treasury_account_code = None
+    else:
+        treasury_type = None
+        classification_status = "non_treasury"
+        treasury_account_code = None
+
+    return {
+        "client_data_id": int(source_row["id"]),
+        "client_id": int(source_row["client_id"]),
+        "template_id": int(source_row["template_id"]),
+        "upload_id": int(source_row["upload_id"]),
+        "voucher_id": voucher_id or None,
+        "account_code": account_code or None,
+        "transaction_date": transaction_date,
+        "debit": _parse_amount(_field_value(row_data, "debit")),
+        "credit": _parse_amount(_field_value(row_data, "credit")),
+        "treasury_type": treasury_type,
+        "treasury_account_code": treasury_account_code,
+        "configuration_version": int(configuration_version),
+        "classification_status": classification_status,
+        "is_current": 1,
+    }
+
+
+def load_treasury_mapping_postgres(conn: Any, client_id: int) -> dict[str, set[str]]:
+    """Load the current Account Control Centre treasury mapping on one connection."""
+    with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        cursor.execute(
+            """
+            SELECT account_code, treasury_type
+            FROM account_control_cashflow_treasury_accounts
+            WHERE client_id = %s AND is_active = TRUE
+            """,
+            (client_id,),
+        )
+        return build_treasury_mapping([dict(row) for row in cursor.fetchall()])
+
+
+def _configuration_action(current: set[tuple[str, str]], requested: set[tuple[str, str]]) -> str:
+    """Name the audit event without exposing implementation details to the router."""
+    if not current:
+        return "created"
+    if current - requested and not requested - current:
+        return "deactivated"
+    if requested - current and not current - requested:
+        return "added"
+    return "edited"
+
+
+def synchronize_treasury_accounts_postgres(
+    conn: Any,
+    *,
+    client_id: int,
+    cash_account_codes: list[str],
+    bank_account_codes: list[str],
+    changed_by: str,
+) -> dict[str, Any]:
+    """Save a versioned Cash/Bank snapshot and reclassify existing lines atomically.
+
+    The caller owns the surrounding transaction. The current mapping is soft
+    deactivated, the requested mapping becomes active, and a new derived
+    classification version is written without changing client_data.row_data.
+    """
+    requested_pairs = {
+        (str(code), "cash") for code in cash_account_codes
+    } | {
+        (str(code), "bank") for code in bank_account_codes
+    }
+    with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        cursor.execute(
+            """
+            SELECT account_code, treasury_type
+            FROM account_control_cashflow_treasury_accounts
+            WHERE client_id = %s AND is_active = TRUE
+            """,
+            (client_id,),
+        )
+        current_pairs = {
+            (str(row["account_code"]), str(row["treasury_type"]))
+            for row in cursor.fetchall()
+        }
+        cursor.execute(
+            """
+            SELECT COALESCE(MAX(version_number), 0) AS current_version
+            FROM account_control_cashflow_config_versions
+            WHERE client_id = %s
+            """,
+            (client_id,),
+        )
+        current_version = int(cursor.fetchone()["current_version"] or 0)
+
+    if current_pairs == requested_pairs:
+        return {
+            "configuration_version": current_version or 1,
+            "reclassified_rows": 0,
+            "changed": False,
+            "action": "unchanged",
+        }
+
+    action = _configuration_action(current_pairs, requested_pairs)
+    configuration_version = current_version + 1
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO account_control_cashflow_config_versions
+                (client_id, version_number, change_action, changed_by)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id
+            """,
+            (client_id, configuration_version, action, changed_by),
+        )
+        config_version_id = cursor.fetchone()[0]
+        if requested_pairs:
+            execute_values(
+                cursor,
+                """
+                INSERT INTO account_control_cashflow_config_entries
+                    (configuration_version_id, client_id, account_code, treasury_type, is_active, changed_by)
+                VALUES %s
+                """,
+                [
+                    (config_version_id, client_id, account_code, treasury_type, True, changed_by)
+                    for account_code, treasury_type in sorted(requested_pairs)
+                ],
+                template="(%s, %s, %s, %s, %s, %s)",
+                page_size=500,
+            )
+        cursor.execute(
+            """
+            UPDATE account_control_cashflow_treasury_accounts
+            SET is_active = FALSE, updated_by = %s, updated_at = CURRENT_TIMESTAMP
+            WHERE client_id = %s
+            """,
+            (changed_by, client_id),
+        )
+        if requested_pairs:
+            execute_values(
+                cursor,
+                """
+                INSERT INTO account_control_cashflow_treasury_accounts
+                    (client_id, account_code, treasury_type, is_active, updated_by, updated_at)
+                VALUES %s
+                ON CONFLICT (client_id, treasury_type, account_code) DO UPDATE SET
+                    is_active = TRUE,
+                    updated_by = EXCLUDED.updated_by,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                [
+                    (client_id, account_code, treasury_type, True, changed_by)
+                    for account_code, treasury_type in sorted(requested_pairs)
+                ],
+                template="(%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)",
+                page_size=500,
+            )
+        cursor.execute(
+            """
+            UPDATE cash_bank_transaction_classifications
+            SET is_current = FALSE
+            WHERE client_id = %s AND is_current = TRUE
+            """,
+            (client_id,),
+        )
+        cursor.execute(
+            """
+            SELECT id, client_id, template_id, upload_id, row_data, extract_date
+            FROM client_data
+            WHERE client_id = %s AND is_deleted = FALSE
+            ORDER BY id
+            """,
+            (client_id,),
+        )
+        source_rows = [dict(row) for row in cursor.fetchall()]
+
+    mapping = build_treasury_mapping(
+        [
+            {"account_code": account_code, "treasury_type": treasury_type}
+            for account_code, treasury_type in requested_pairs
+        ]
+    )
+    upsert_classification_rows_postgres(
+        conn, source_rows, mapping, configuration_version=configuration_version
+    )
+    return {
+        "configuration_version": configuration_version,
+        "reclassified_rows": len(source_rows),
+        "changed": True,
+        "action": action,
+    }
+def upsert_classification_rows_postgres(
+    conn: Any,
+    source_rows: list[Mapping[str, Any]],
+    treasury_mapping: Mapping[str, set[str]],
+    configuration_version: int = 1,
+) -> list[dict[str, Any]]:
+    """Upsert derived rows for new or changed upload lines without committing."""
+    derived_rows = [
+        build_classification_row(row, treasury_mapping, configuration_version)
+        for row in source_rows
+    ]
+    if not derived_rows:
+        return []
+
+    values = [
+        (
+            row["client_data_id"],
+            row["client_id"],
+            row["template_id"],
+            row["upload_id"],
+            row["voucher_id"],
+            row["account_code"],
+            row["transaction_date"],
+            row["debit"],
+            row["credit"],
+            row["treasury_type"],
+            row["treasury_account_code"],
+            row["configuration_version"],
+            row["classification_status"],
+            True,
+        )
+        for row in derived_rows
+    ]
+    with conn.cursor() as cursor:
+        execute_values(
+            cursor,
+            """
+            INSERT INTO cash_bank_transaction_classifications (
+                client_data_id, client_id, template_id, upload_id,
+                voucher_id, account_code, transaction_date, debit, credit,
+                treasury_type, treasury_account_code, configuration_version,
+                classification_status, is_current
+            ) VALUES %s
+            ON CONFLICT (client_data_id, configuration_version)
+            DO UPDATE SET
+                client_id = EXCLUDED.client_id,
+                template_id = EXCLUDED.template_id,
+                upload_id = EXCLUDED.upload_id,
+                voucher_id = EXCLUDED.voucher_id,
+                account_code = EXCLUDED.account_code,
+                transaction_date = EXCLUDED.transaction_date,
+                debit = EXCLUDED.debit,
+                credit = EXCLUDED.credit,
+                treasury_type = EXCLUDED.treasury_type,
+                treasury_account_code = EXCLUDED.treasury_account_code,
+                classification_status = EXCLUDED.classification_status,
+                is_current = EXCLUDED.is_current,
+                classified_at = CURRENT_TIMESTAMP
+            """,
+            values,
+            page_size=500,
+        )
+    return derived_rows
+
+@dataclass
+class BackfillSummary:
+    backend: str
+    configuration_version: int
+    dry_run: bool
+    client_ids: list[int]
+    source_rows: int = 0
+    inserted_rows: int = 0
+    skipped_existing_rows: int = 0
+    cash_rows: int = 0
+    bank_rows: int = 0
+    non_treasury_rows: int = 0
+    unmapped_rows: int = 0
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def _record_classification_counts(summary: BackfillSummary, row: Mapping[str, Any]) -> None:
+    status = row["classification_status"]
+    if status == "cash":
+        summary.cash_rows += 1
+    elif status == "bank":
+        summary.bank_rows += 1
+    elif status == "non_treasury":
+        summary.non_treasury_rows += 1
+    else:
+        summary.unmapped_rows += 1
+
+
+def _client_ids_sqlite(conn: Any, client_id: int | None) -> list[int]:
+    if client_id is not None:
+        return [int(client_id)]
+    rows = conn.execute(
+        "SELECT DISTINCT client_id FROM client_data WHERE is_deleted = 0 ORDER BY client_id"
+    ).fetchall()
+    return [int(row[0]) for row in rows]
+
+
+def backfill_sqlite(
+    conn: Any,
+    *,
+    client_id: int | None = None,
+    configuration_version: int = 1,
+    batch_size: int = 500,
+    dry_run: bool = False,
+) -> BackfillSummary:
+    """Backfill SQLite derived classifications in committed batches."""
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    client_ids = _client_ids_sqlite(conn, client_id)
+    summary = BackfillSummary("sqlite", int(configuration_version), dry_run, client_ids)
+
+    insert_sql = """
+        INSERT OR IGNORE INTO cash_bank_transaction_classifications (
+            client_data_id, client_id, template_id, upload_id,
+            voucher_id, account_code, transaction_date, debit, credit,
+            treasury_type, treasury_account_code, configuration_version,
+            classification_status, is_current
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+
+    for current_client_id in client_ids:
+        mapping_rows = conn.execute(
+            """
+            SELECT account_code, treasury_type
+            FROM account_control_cashflow_treasury_accounts
+            WHERE client_id = ?
+            """,
+            (current_client_id,),
+        ).fetchall()
+        mapping = build_treasury_mapping([dict(row) for row in mapping_rows])
+        source_cursor = conn.execute(
+            """
+            SELECT id, client_id, template_id, upload_id, row_data, extract_date
+            FROM client_data
+            WHERE client_id = ? AND is_deleted = 0
+            ORDER BY id
+            """,
+            (current_client_id,),
+        )
+        while True:
+            source_rows = source_cursor.fetchmany(batch_size)
+            if not source_rows:
+                break
+            source_dicts = [dict(row) for row in source_rows]
+            ids = [int(row["id"]) for row in source_dicts]
+            existing_rows = conn.execute(
+                f"""
+                SELECT client_data_id
+                FROM cash_bank_transaction_classifications
+                WHERE configuration_version = ?
+                  AND client_data_id IN ({",".join("?" for _ in ids)})
+                """,
+                (configuration_version, *ids),
+            ).fetchall()
+            existing_ids = {int(row[0]) for row in existing_rows}
+            insert_rows = []
+            for source_row in source_dicts:
+                summary.source_rows += 1
+                derived_row = build_classification_row(
+                    source_row, mapping, configuration_version
+                )
+                _record_classification_counts(summary, derived_row)
+                if derived_row["client_data_id"] in existing_ids:
+                    summary.skipped_existing_rows += 1
+                else:
+                    insert_rows.append(derived_row)
+
+            if not dry_run and insert_rows:
+                try:
+                    conn.executemany(
+                        insert_sql,
+                        [
+                            (
+                                row["client_data_id"],
+                                row["client_id"],
+                                row["template_id"],
+                                row["upload_id"],
+                                row["voucher_id"],
+                                row["account_code"],
+                                row["transaction_date"],
+                                row["debit"],
+                                row["credit"],
+                                row["treasury_type"],
+                                row["treasury_account_code"],
+                                row["configuration_version"],
+                                row["classification_status"],
+                                row["is_current"],
+                            )
+                            for row in insert_rows
+                        ],
+                    )
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+                summary.inserted_rows += len(insert_rows)
+
+    return summary
+
+
+def _client_ids_postgres(conn: Any, client_id: int | None) -> list[int]:
+    with conn.cursor() as cursor:
+        if client_id is None:
+            cursor.execute(
+                "SELECT DISTINCT client_id FROM client_data WHERE is_deleted = FALSE ORDER BY client_id"
+            )
+            return [int(row[0]) for row in cursor.fetchall()]
+    return [int(client_id)]
+
+
+def backfill_postgres(
+    conn: Any,
+    *,
+    client_id: int | None = None,
+    configuration_version: int = 1,
+    batch_size: int = 500,
+    dry_run: bool = False,
+) -> BackfillSummary:
+    """Backfill PostgreSQL derived classifications in committed batches."""
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    client_ids = _client_ids_postgres(conn, client_id)
+    summary = BackfillSummary("postgres", int(configuration_version), dry_run, client_ids)
+    insert_sql = """
+        INSERT INTO cash_bank_transaction_classifications (
+            client_data_id, client_id, template_id, upload_id,
+            voucher_id, account_code, transaction_date, debit, credit,
+            treasury_type, treasury_account_code, configuration_version,
+            classification_status, is_current
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (client_data_id, configuration_version) DO NOTHING
+    """
+
+    try:
+        for current_client_id in client_ids:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    """
+                    SELECT account_code, treasury_type
+                    FROM account_control_cashflow_treasury_accounts
+                    WHERE client_id = %s AND is_active = TRUE
+                    """,
+                    (current_client_id,),
+                )
+                mapping = build_treasury_mapping([dict(row) for row in cursor.fetchall()])
+                cursor.execute(
+                    """
+                    SELECT id, client_id, template_id, upload_id, row_data, extract_date
+                    FROM client_data
+                    WHERE client_id = %s AND is_deleted = FALSE
+                    ORDER BY id
+                    """,
+                    (current_client_id,),
+                )
+                while True:
+                    source_rows = cursor.fetchmany(batch_size)
+                    if not source_rows:
+                        break
+                    source_dicts = [dict(row) for row in source_rows]
+                    ids = [int(row["id"]) for row in source_dicts]
+                    cursor.execute(
+                        """
+                        SELECT client_data_id
+                        FROM cash_bank_transaction_classifications
+                        WHERE configuration_version = %s
+                          AND client_data_id = ANY(%s)
+                        """,
+                        (configuration_version, ids),
+                    )
+                    existing_ids = {int(row["client_data_id"]) for row in cursor.fetchall()}
+                    insert_rows = []
+                    for source_row in source_dicts:
+                        summary.source_rows += 1
+                        derived_row = build_classification_row(
+                            source_row, mapping, configuration_version
+                        )
+                        _record_classification_counts(summary, derived_row)
+                        if derived_row["client_data_id"] in existing_ids:
+                            summary.skipped_existing_rows += 1
+                        else:
+                            insert_rows.append(derived_row)
+
+                    if not dry_run and insert_rows:
+                        cursor.executemany(
+                            insert_sql,
+                            [
+                                (
+                                    row["client_data_id"],
+                                    row["client_id"],
+                                    row["template_id"],
+                                    row["upload_id"],
+                                    row["voucher_id"],
+                                    row["account_code"],
+                                    row["transaction_date"],
+                                    row["debit"],
+                                    row["credit"],
+                                    row["treasury_type"],
+                                    row["treasury_account_code"],
+                                    row["configuration_version"],
+                                    row["classification_status"],
+                                    True,
+                                )
+                                for row in insert_rows
+                            ],
+                        )
+                        conn.commit()
+                        summary.inserted_rows += len(insert_rows)
+    except Exception:
+        conn.rollback()
+        raise
+
+    return summary

@@ -6,7 +6,8 @@ let accFinancialCategories = [];
 let accNoteCategories = [];
 let accCashflowCategories = [];
 let accCashflowTreasury = { cash: [], bank: [] };
-let accCashflowSettings = { match_internal_transfers: false, receipt_presentation: 'net' };
+let accCashflowSettings = { match_internal_transfers: false, receipt_presentation: 'net', source_template_id: null };
+let accCashflowTemplateMapping = null;
 let accFinancialLoaded = false;
 let accNotesLoaded = false;
 let accCashflowLoaded = false;
@@ -404,13 +405,118 @@ async function accLoadMapping() {
     if (accFinancialLoaded) accRenderFinancialRows();
     if (accNotesLoaded) accRenderNotesRows();
 }
+function accSetCashflowTemplateState(message, isError) {
+    const state = accElement('accCashflowTemplateMappingState');
+    state.textContent = message || '';
+    state.className = 'acc2-grid-state' + (isError ? ' error' : '');
+    state.hidden = !message;
+    accElement('accCashflowTemplateMapping').hidden = true;
+    accElement('accCashflowTemplateSave').disabled = true;
+}
+function accCashflowTemplateOptions(sources) {
+    const byTemplate = new Map();
+    (sources || []).forEach(function (source) {
+        const templateId = Number(source.template_id || 0);
+        if (!templateId || byTemplate.has(templateId)) return;
+        byTemplate.set(templateId, source);
+    });
+    return Array.from(byTemplate.values());
+}
+function accRenderCashflowTemplateSources(sources) {
+    const select = accElement('accCashflowTemplateSelect');
+    const options = accCashflowTemplateOptions(sources);
+    if (!options.length) {
+        select.innerHTML = '<option value="">No Client Data Bank templates available</option>';
+        select.disabled = true;
+        accSetCashflowTemplateState('Upload or select a Client Data Bank template before mapping Cashflows columns.');
+        return options;
+    }
+    select.disabled = false;
+    select.innerHTML = '<option value="">Choose a template</option>' + options.map(function (source) {
+        const label = source.template_name || ('Template ' + source.template_id);
+        return '<option value="' + accEscape(source.template_id) + '">' + accEscape(label) + '</option>';
+    }).join('');
+    const selected = String(accCashflowSettings.source_template_id || options[0].template_id);
+    select.value = options.some(function (source) { return String(source.template_id) === selected; }) ? selected : '';
+    accElement('accCashflowTemplateHint').textContent = options.length + ' template' + (options.length === 1 ? '' : 's') + ' available from Client Data Bank.';
+    return options;
+}
+function accRenderCashflowTemplateMapping(mapping) {
+    accCashflowTemplateMapping = mapping;
+    const state = accElement('accCashflowTemplateMappingState');
+    const container = accElement('accCashflowTemplateMapping');
+    const save = accElement('accCashflowTemplateSave');
+    const columns = mapping.columns || [];
+    container.innerHTML = '<div class="acc2-template-mapping-head"><span>Cashflows field</span><span>Template column</span></div>' + (mapping.roles || []).map(function (role) {
+        const selected = role.template_column_id == null ? '' : String(role.template_column_id);
+        const required = role.required ? '<span class="acc2-template-required">Required</span>' : '<span class="acc2-template-recommended">Recommended</span>';
+        const options = '<option value="">Not mapped</option>' + columns.map(function (column) {
+            return '<option value="' + accEscape(column.template_column_id) + '"' + (String(column.template_column_id) === selected ? ' selected' : '') + '>' + accEscape(column.column_name) + '</option>';
+        }).join('');
+        return '<label class="acc2-template-mapping-row"><span><strong>' + accEscape(role.label) + '</strong>' + required + '</span><select class="acc2-template-role" data-acc-template-role="' + accEscape(role.role) + '">' + options + '</select></label>';
+    }).join('');
+    state.hidden = true;
+    container.hidden = false;
+    save.disabled = !(mapping.ready && (mapping.roles || []).some(function (role) { return role.required; }));
+    if (!mapping.ready) {
+        save.disabled = true;
+        state.textContent = 'Map all required fields before saving.';
+        state.className = 'acc2-grid-state error';
+        state.hidden = false;
+    }
+}
+function accCashflowTemplateMappingIsReady() {
+    const requiredRoles = (accCashflowTemplateMapping && accCashflowTemplateMapping.roles || []).filter(function (role) { return role.required; }).map(function (role) { return role.role; });
+    return requiredRoles.every(function (role) {
+        const select = accElement('accCashflowTemplateMapping').querySelector('[data-acc-template-role="' + CSS.escape(role) + '"]');
+        return select && select.value;
+    });
+}
+function accHandleCashflowTemplateMappingChange() {
+    accElement('accCashflowTemplateSave').disabled = !accCashflowTemplateMappingIsReady();
+}
+async function accLoadCashflowTemplateMapping(templateId) {
+    if (!templateId) {
+        accCashflowTemplateMapping = null;
+        accSetCashflowTemplateState('Select a template to view its columns.');
+        return;
+    }
+    accSetCashflowTemplateState('Loading template columns...');
+    const mapping = await accApi('/api/reconciliation/cashflows/template-columns?client_id=' + encodeURIComponent(accClientId) + '&template_id=' + encodeURIComponent(templateId));
+    accRenderCashflowTemplateMapping(mapping);
+}
+async function accOpenCashflowTemplateModal() {
+    accSetCashflowModal('accCashflowTemplateModal', true);
+    accElement('accCashflowTemplateSelect').disabled = true;
+    accElement('accCashflowTemplateSelect').innerHTML = '<option value="">Loading templates...</option>';
+    accSetCashflowTemplateState('Loading Client Data Bank templates...');
+    try {
+        const result = await accApi('/api/reconciliation/cashflows/sources?client_id=' + encodeURIComponent(accClientId));
+        const options = accRenderCashflowTemplateSources(result.sources || []);
+        const selected = accElement('accCashflowTemplateSelect').value;
+        if (selected && options.length) await accLoadCashflowTemplateMapping(selected);
+    } catch (error) {
+        accSetCashflowTemplateState(error.message, true);
+    }
+}
+async function accSaveCashflowTemplate() {
+    const templateId = Number(accElement('accCashflowTemplateSelect').value || 0);
+    if (!templateId || !accCashflowTemplateMappingIsReady()) return;
+    const mappings = Array.from(accElement('accCashflowTemplateMapping').querySelectorAll('[data-acc-template-role]')).filter(function (select) { return select.value; }).map(function (select) {
+        return { role: select.dataset.accTemplateRole, template_column_id: Number(select.value) };
+    });
+    const result = await accApi('/api/reconciliation/cashflows/template-columns', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, template_id: templateId, mappings: mappings, set_as_default: true }) });
+    accCashflowSettings.source_template_id = templateId;
+    accRenderCashflowTemplateMapping(result);
+    accShowStatus('Cashflows transaction template mapping saved.', 'success');
+}
 async function accLoadCashflow() {
     const result = await accApi('/api/account-control-center/cashflow/setup?client_id=' + encodeURIComponent(accClientId));
     accAccounts = result.accounts || [];
     accLatestUpload = result.upload || accLatestUpload;
     accCashflowCategories = result.categories || [];
     accCashflowTreasury = result.treasury_accounts || { cash: [], bank: [] };
-    accCashflowSettings = result.settings || { match_internal_transfers: false, receipt_presentation: 'net' };
+    accCashflowSettings = result.settings || { match_internal_transfers: false, receipt_presentation: 'net', source_template_id: null };
     accCashflowLoaded = true;
     accRenderCashflowRows();
     accRenderCashflowCategoryList();
@@ -704,7 +810,12 @@ function accBindEvents() {
     accElement('accCashflowBankSelected').addEventListener('click', accRemoveCashflowTreasurySelection);
     accElement('accCashflowAccountsSave').addEventListener('click', function () { accSaveCashflowTreasury().catch(function (error) { accShowStatus(error.message, 'error'); }); });
     accElement('accCashflowSettingsSave').addEventListener('click', function () { accSaveCashflowSettings().catch(function (error) { accShowStatus(error.message, 'error'); }); });
-    document.addEventListener('keydown', function (event) { if (event.key === 'Escape') { accSetCashflowModal('accCashflowCategoryModal', false); accSetCashflowModal('accCashflowAccountsModal', false); } });
+    accElement('accCashflowTemplateButton').addEventListener('click', function () { accOpenCashflowTemplateModal(); });
+    accElement('accCashflowTemplateClose').addEventListener('click', function () { accSetCashflowModal('accCashflowTemplateModal', false); });
+    accElement('accCashflowTemplateSelect').addEventListener('change', function (event) { accLoadCashflowTemplateMapping(event.target.value).catch(function (error) { accSetCashflowTemplateState(error.message, true); }); });
+    accElement('accCashflowTemplateMapping').addEventListener('change', accHandleCashflowTemplateMappingChange);
+    accElement('accCashflowTemplateSave').addEventListener('click', function () { accSaveCashflowTemplate().catch(function (error) { accSetCashflowTemplateState(error.message, true); }); });
+    document.addEventListener('keydown', function (event) { if (event.key === 'Escape') { accSetCashflowModal('accCashflowCategoryModal', false); accSetCashflowModal('accCashflowAccountsModal', false); accSetCashflowModal('accCashflowTemplateModal', false); } });
     accElement('accFinancialFilter').addEventListener('input', accRenderFinancialRows);
     accElement('accFinancialRows').addEventListener('change', function (event) { accHandleFinancialChange(event); });
     accElement('accFinancialCategoryForm').addEventListener('submit', accCreateFinancialCategory);
