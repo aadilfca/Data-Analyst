@@ -6651,3 +6651,33 @@ or procedure-modal requests, whose observed latency therefore remains a separate
 **Implementation:** The source query now applies the requested extract_date range and selects only the newest upload per filename through a lightweight uploaded_files metadata query; duplicate re-uploaded files are not deleted. Python retains the final date check and existing Cash/Bank voucher selection, so all counter-account lines in selected vouchers remain available. An expensive JSON voucher join was measured and removed after PostgreSQL timing showed it was slower than date/upload filtering. No new package or database data mutation was used.
 
 **Verification:** Focused source/reconciliation suite passed: 36 tests. Live Leather Crop verification loaded 45,836 rows, suppressed 2 duplicate uploads, generated the Cashflows summary successfully in 53.02 seconds, and retained 2,416 category-review lines. Python compilation and git diff --check passed. No packages installed.
+
+## Cashflows derived classification and SQL aggregation - 2026-09-27
+
+**Scope:** Completed the approved Cashflows synchronization/performance foundation through the
+derived classification, backfill, upload application, Account Control Centre synchronization,
+SQL-first reporting, and read-only verification phases. Raw uploaded transaction data remains
+unchanged.
+
+**Implementation:** Account Control Centre is the single source of truth for Cash/Bank accounts
+and categories. Each transaction line receives a versioned derived classification record. New
+uploads apply the active configuration; add, edit, and deactivate operations reclassify affected
+existing derived lines, with deactivation preserving audit history. Cashflows filters the derived
+layer by client, configured template, current status, non-zero amount, and date in SQL; joins
+counter-account lines by voucher ID; and aggregates category/month totals in SQL. Python formats
+the compact aggregate instead of repeatedly parsing raw JSON rows. A compatibility fallback is
+retained for empty derived fixtures, and no source upload is deleted or rewritten.
+
+**Measured result:** The local Leather Crop WebInspector run returned HTTP 200 for all four
+periods: 1 day **2.45 s** (baseline 4.57 s, 46.5% faster), 15 days **2.93 s** (5.62 s,
+47.8% faster), 1 month **4.16 s** (9.10 s, 54.3% faster), and 6 months **3.60 s** (36.57 s,
+90.2% faster). Nearly all request time was backend wait time; payload transfer was only a few
+milliseconds on localhost. The six-month result is not required to be slower than one month
+because the output is already aggregated and database/cache state affects a single run.
+
+**Startup and verification:** Optional Postgres schema initialization is now non-blocking so the
+tray health check can succeed while the database reports `initializing` or `degraded`. The
+Cashflows/Account Control Centre regression set passed **66 tests**; syntax, staged whitespace,
+and the real server health smoke test passed. The HAR also showed a separate 65.5-second
+`/api/auth/current-client` wait, attributed to the user's temporary internet connectivity issue,
+not the Cashflows preview requests.

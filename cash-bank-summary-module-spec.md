@@ -491,3 +491,25 @@ control totals.
 11. Never drop an unmapped or rejected row silently — show it with its amount.
 12. The report must prove itself to nil against the cash books and bank ledgers before it is
     shown as final.
+
+---
+
+## 11. Runtime performance and synchronization contract
+
+The application implementation keeps raw uploaded `client_data` immutable. Account Control
+Centre is the authority for Cash/Bank account selection and category mapping. Uploads and
+configuration changes write a versioned derived transaction-line classification layer; they do
+not rewrite the uploaded JSON rows. Add, edit, and deactivate operations reclassify affected
+existing derived lines, with deactivation used instead of destructive deletion.
+
+Cashflows must read that derived layer through SQL. The query applies the client, configured
+Transaction Report template, current-row, non-zero, and requested date filters before Python
+processing. It joins counter-account lines by voucher ID, keeps the complete selected voucher,
+and performs the category/month aggregation in SQL. Python formats the already-aggregated rows
+and only applies presentation details such as labels, review lists, transfer display, and
+gross/net receipt wording. It must not repeatedly parse every raw JSON row for each report date
+range.
+
+The query may retain a safe compatibility fallback for fixtures or databases without a populated
+derived layer, but production Cashflows must use the derived SQL path. Any fallback or degraded
+database status must be visible in diagnostics; it must never alter or delete the raw upload.
