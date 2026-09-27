@@ -6681,3 +6681,11 @@ Cashflows/Account Control Centre regression set passed **66 tests**; syntax, sta
 and the real server health smoke test passed. The HAR also showed a separate 65.5-second
 `/api/auth/current-client` wait, attributed to the user's temporary internet connectivity issue,
 not the Cashflows preview requests.
+
+## Cashflows lazy detail loading and inline classification viewer - 2026-09-27
+
+**Scope:** Separate the fast Cash Flow summary from optional Internal transfers, Customer deductions, Review required, and classified-transaction details. Raw uploaded data and derived classification history remain unchanged.
+
+**Implementation:** The Cashflows preview accepts an optional detail-section selection. Reports requests `details=summary` for the initial Load summary action; each child section requests only its own details after the user clicks its button. Existing counts remain available for status labels, and omitted `details` retains the legacy complete response for compatibility. The read-only classified transaction viewer stays inside Reports and calls the derived classification endpoint only when opened.
+
+**Verification:** Aadil confirmed the workflow works in the local app. Focused Cashflows/classification/reconciliation coverage passed **25 tests**; JavaScript syntax, Python compilation, and `git diff --check` passed. No packages were installed and no uploaded source data was modified. This phase reduces initial response rendering and detail payload work; any remaining backend wait should be measured separately before further query changes.

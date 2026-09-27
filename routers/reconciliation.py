@@ -1211,7 +1211,11 @@ def _cashflow_source_selection_response(client_id: int, sources: list[dict[str, 
     return response
 
 
-def _cashflow_preview(summary: dict[str, Any] | None) -> dict[str, Any]:
+def _cashflow_preview(
+    summary: dict[str, Any] | None,
+    detail_sections: set[str] | None = None,
+) -> dict[str, Any]:
+    """Format the summary and only the child detail sections requested by the caller."""
     if summary is None:
         return {
             "months": [],
@@ -1222,19 +1226,24 @@ def _cashflow_preview(summary: dict[str, Any] | None) -> dict[str, Any]:
             "selected_voucher_count": 0,
             "internal_transfer_count": 0,
             "category_review_count": 0,
+            "deduction_count": 0,
             "receipt_presentation": "net",
+            "detail_sections_loaded": [],
         }
+    loaded = {"transfers", "deductions", "review"} if detail_sections is None else set(detail_sections)
     review = summary.get("categories_needing_review")
     return {
         "months": [str(month) for month in summary.get("months", [])],
         "category_totals": _category_total_records(summary.get("category_totals")),
-        "transfer_details": _frame_records(summary.get("transfer_details")),
-        "deduction_details": _frame_records(summary.get("deduction_details")),
-        "categories_needing_review": _frame_records(review),
+        "transfer_details": _frame_records(summary.get("transfer_details")) if "transfers" in loaded else [],
+        "deduction_details": _frame_records(summary.get("deduction_details")) if "deductions" in loaded else [],
+        "categories_needing_review": _frame_records(review) if "review" in loaded else [],
         "selected_voucher_count": int(summary.get("selected_voucher_count", 0)),
         "internal_transfer_count": int(summary.get("internal_transfer_count", 0)),
-        "category_review_count": int(len(review)) if isinstance(review, pd.DataFrame) else 0,
+        "category_review_count": int(summary.get("category_review_count", len(review))) if review is not None else int(summary.get("category_review_count", 0)),
+        "deduction_count": int(len(summary.get("deduction_details"))) if summary.get("deduction_details") is not None else 0,
         "receipt_presentation": summary.get("receipt_presentation") or "net",
+        "detail_sections_loaded": sorted(loaded),
     }
 
 
@@ -1242,6 +1251,7 @@ def _build_cashflow_result(
     client_id: int,
     period_start: Any,
     period_end: Any,
+    detail_sections: set[str] | None = None,
 ) -> dict[str, Any]:
     _require_active_client(client_id)
     start, end = _parse_report_period(period_start, period_end)
@@ -1321,7 +1331,7 @@ def _build_cashflow_result(
         "source": {"metadata": source_metadata, "quality": source_quality, "diagnostics": diagnostics, "ready": source.ready and not any(item.get("severity") == "error" for item in diagnostics)},
         "controls": controls,
         "blocking_reasons": blocking_reasons,
-        "preview": _cashflow_preview(summary),
+        "preview": _cashflow_preview(summary, detail_sections),
     }
 
 
@@ -1405,18 +1415,34 @@ def _public_report_result(result: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in result.items() if not key.startswith("_")}
 
 
+def _parse_cashflow_detail_sections(value: str | None) -> set[str] | None:
+    """Parse optional lazy child-section selection; omitted means legacy full response."""
+    if value is None:
+        return None
+    raw = value.strip().casefold()
+    if raw in {"", "summary"}:
+        return set()
+    allowed = {"transfers", "deductions", "review"}
+    sections = {item.strip() for item in raw.split(",") if item.strip()}
+    if sections - allowed:
+        raise HTTPException(400, "Invalid Cashflows detail section requested.")
+    return sections
+
 @router.get("/api/reconciliation/cashflows/preview")
 def preview_cashflows(
     client_id: int = Query(..., ge=1),
     period_start: str = Query(...),
     period_end: str = Query(...),
+    details: Optional[str] = Query(None, description="summary or comma-separated child sections"),
     session=Depends(require_admin),
 ):
     """Return Cashflows using the Transaction Report template configured in Account Control Centre."""
+    detail_value = details if isinstance(details, str) else None
     return _build_cashflow_result(
         client_id,
         period_start,
         period_end,
+        detail_sections=_parse_cashflow_detail_sections(detail_value),
     )
 
 @router.get("/api/reconciliation/cashflows/sources")

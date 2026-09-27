@@ -141,6 +141,8 @@ This document lists all source files in the project, grouped by directory, with 
 | `test_templates.py` | Playwright regression tests for Edit Template modal closure and draft-column persistence before explicit Save Template submission. |
 | `test_ledger_group_summary.py`, `test_ledger_report_source.py` | Unit tests for canonical voucher/category summaries, transfers, proofs, source normalization, diagnostics, and dataset selection. |
 | `test_cashflows_performance.py` | Verifies SQL-first Cashflows date filtering, voucher joins, derived-layer aggregation, and raw-JSON-free source preparation. |
+| `test_cashflows_classification_preview.py` | Verifies the read-only derived Cashflows classification preview, filtering, paging, and classification fields. |
+| `test_cashflows_direct_window_ui.py` | Static regression checks for the inline classified-transaction window and lazy Cashflows controls. |
 | `test_reconciliation.py`, `test_reconciliation_balance_source.py`, `test_reconciliation_reports.py` | Test account-group, balance-input, report-control, Financial Statement preview, preview/download, exact-code validation, transactional replacement, normalization, and completeness behavior. |
 | `test_reconciliation_xlsx.py` | Tests report workbook structure, formatting, typed values, missing-balance handling, and local Bank/Cash golden movement matching. |
 | `test_pg_pool_retry.py` | Unit tests for `database.py`'s stale-pooled-connection recovery — fake pool/connection/cursor (no live Postgres): `_run_pooled_pg` retries once and succeeds, propagates a non-stale error untouched, gives up after one retry; `_is_stale_pg_connection_error` type+message match; `_getconn_pg_checked` skips a closed connection; the recovery log line fires. |

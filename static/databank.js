@@ -46,6 +46,7 @@ let previewShowSubtotals = true;
 let previewCachedRows = [];
 let previewTemplateId = null;
 let previewTemplateName = '';
+let previewMode = 'raw'; // raw Client Data preview or read-only Cashflows classification preview
 let isPreviewOpen = false;
 let isPreviewLoading = false;
 // Phase 3B: delete is scoped per template, so one confirmed destructive action blocks only its
@@ -121,6 +122,10 @@ const sundayOnlyCheckbox = document.getElementById('sundayOnlyCheckbox');
 const subtotalToggleCheckbox = document.getElementById('subtotalToggleCheckbox');
 const dataQualityFilter = document.getElementById('dataQualityFilter');
 const sundayCountBadge = document.getElementById('sundayCountBadge');
+const cashflowsClassificationFilters = document.getElementById('cashflowsClassificationFilters');
+const classificationTypeFilter = document.getElementById('classificationTypeFilter');
+const classificationAccountFilter = document.getElementById('classificationAccountFilter');
+const classificationCategoryFilter = document.getElementById('classificationCategoryFilter');
 
 // Shared date range modal elements (Phase 2 — Unified date range; restyled
 // from a small anchored popover to a centred overlay modal per the 3-fix).
@@ -358,10 +363,10 @@ async function showRowHistoryPopover(icon, clientDataId) {
 // mode: 'gate' (opened from a row's 👁️ icon, before the preview modal
 // exists — confirming will open it) or 'live' (opened from inside the
 // already-open modal — confirming just refreshes in place).
-function openSharedRangePopover(mode, templateId, templateName) {
+function openSharedRangePopover(mode, templateId, templateName, previewKind = 'raw') {
     // Redesign Phase 6: sharedRangeFrom/sharedRangeTo already hold the
     // persisted range themselves (no more #dateStart/#dateEnd to copy from).
-    pendingPreviewOpen = (mode === 'gate') ? { templateId, templateName } : null;
+    pendingPreviewOpen = (mode === 'gate') ? { templateId, templateName, previewKind } : null;
     sharedRangeConfirmBtn.textContent = (mode === 'gate') ? 'Open Preview' : 'Apply';
     sharedRangePopover.style.display = 'flex';
 }
@@ -400,7 +405,11 @@ async function confirmSharedRangePopover() {
     }
 
     if (gateTarget) {
-        openPreview(gateTarget.templateId, gateTarget.templateName);
+        if (gateTarget.previewKind === 'classification') {
+            openClassificationPreview(gateTarget.templateId, gateTarget.templateName);
+        } else {
+            openPreview(gateTarget.templateId, gateTarget.templateName);
+        }
     }
 }
 
@@ -945,6 +954,22 @@ function buildDatasetActionButtons(item) {
             openSharedRangePopover('gate', item.template_id, item.template_name);
         });
         tdActions.appendChild(previewBtn);
+        // Cashflows classification is deliberately separate from the raw eye
+        // preview: it is read-only and shows current Account Control Centre
+        // assignments alongside the unchanged source columns.
+        if ((item.template_name || '').trim().toLowerCase() === 'transaction report') {
+            const classificationBtn = document.createElement('button');
+            classificationBtn.className = 'action-btn preview';
+            classificationBtn.textContent = '🏷️';
+            classificationBtn.title = 'Cashflows classification preview';
+            classificationBtn.setAttribute('data-tooltip', 'View read-only Cashflows classification');
+            classificationBtn.style.marginLeft = '6px';
+            classificationBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openSharedRangePopover('gate', item.template_id, item.template_name, 'classification');
+            });
+            tdActions.appendChild(classificationBtn);
+        }
 
         // Export button
         const exportBtn = document.createElement('button');
@@ -1130,7 +1155,7 @@ async function deleteTemplateData(templateId, templateName, rowCount, triggerTar
 // ==============================================
 
 // ---------- OPEN PREVIEW ----------
-async function openPreview(templateId, templateName) {
+async function openPreview(templateId, templateName, mode = 'raw') {
     // The shared range (already validated by whichever caller reached this
     // point — confirmSharedRangePopover()) is read fresh here as a defensive
     // fallback, not a copy — see getDateRangeFromFilter().
@@ -1149,19 +1174,30 @@ async function openPreview(templateId, templateName) {
 
     previewTemplateId = templateId;
     previewTemplateName = templateName;
+    previewMode = mode === 'classification' ? 'classification' : 'raw';
     previewLimit = parseInt(pageSizeSelect.value) || 50;
     currentPage = 1;
     isPreviewOpen = true;
 
     // Show modal
     previewModal.style.display = 'flex';
-    previewTitle.textContent = `📋 ${templateName} – Preview (${getSelectedClientName() || 'Unknown Client'})`;
+    previewTitle.textContent = previewMode === 'classification'
+        ? `🏷️ ${templateName} — Cashflows classification (${getSelectedClientName() || 'Unknown Client'})`
+        : `📋 ${templateName} – Preview (${getSelectedClientName() || 'Unknown Client'})`;
     sundayOnlyCheckbox.checked = false;
     searchInput.value = '';
     amountMin.value = '';
     amountMax.value = '';
     dataQualityFilter.value = '';
+    classificationTypeFilter.value = '';
+    classificationAccountFilter.value = '';
+    classificationCategoryFilter.value = '';
     sundayCountBadge.textContent = 'Sunday rows: 0';
+    cashflowsClassificationFilters.style.display = previewMode === 'classification' ? 'flex' : 'none';
+    const rawFilterRow = document.querySelector('.sunday-filter-row');
+    if (rawFilterRow) rawFilterRow.style.display = previewMode === 'classification' ? 'none' : 'flex';
+    if (amountMin.parentElement) amountMin.parentElement.style.display = previewMode === 'classification' ? 'none' : 'flex';
+    if (dataQualityFilter.parentElement) dataQualityFilter.parentElement.style.display = previewMode === 'classification' ? 'none' : 'flex';
 
     // Subtotal toggle: re-initialise from this template's own default flag
     // every time the preview is (re)opened - no cross-open persistence.
@@ -1172,6 +1208,9 @@ async function openPreview(templateId, templateName) {
     fetchPreviewData();
 }
 
+function openClassificationPreview(templateId, templateName) {
+    return openPreview(templateId, templateName, 'classification');
+}
 // Subtotal toggle: per-template has_subtotals_by_default lookup, cached
 // like fetchTemplateColumns() below (same underlying GET /api/templates/{id}
 // endpoint, kept as a separate small cache rather than folding into
@@ -1209,7 +1248,7 @@ async function fetchTemplateSubtotalDefault(templateId) {
 // real shape genuinely isn't known yet.
 function getPreviewSkeletonColumnCount() {
     const cached = templateColumnsCache[previewTemplateId];
-    if (cached && cached.length) return cached.length + 1;
+    if (cached && cached.length) return cached.length + 1 + (previewMode === 'classification' ? 3 : 0);
     const headerCount = previewTableHead.querySelectorAll('th').length;
     if (headerCount) return headerCount;
     return undefined;
@@ -1247,9 +1286,15 @@ async function fetchPreviewData() {
         limit: previewLimit
     });
 
-    // Add filters
+    // Add filters. Cashflows mode sends only derived-layer filters; raw preview
+    // keeps its existing amount, Sunday, and data-quality behavior unchanged.
     if (searchInput.value.trim()) {
         params.append('search', searchInput.value.trim());
+    }
+    if (previewMode === 'classification') {
+        if (classificationTypeFilter.value) params.append('classification_type', classificationTypeFilter.value);
+        if (classificationAccountFilter.value.trim()) params.append('account_code', classificationAccountFilter.value.trim());
+        if (classificationCategoryFilter.value.trim()) params.append('category', classificationCategoryFilter.value.trim());
     }
     if (amountMin.value) {
         params.append('amount_min', amountMin.value);
@@ -1268,7 +1313,10 @@ async function fetchPreviewData() {
         const perfStarted = dataBankPerfEnabled ? performance.now() : null;
         const requestParams = dataBankPerfEnabled ? new URLSearchParams(params) : params;
         if (dataBankPerfEnabled) requestParams.set('perf', 'true');
-        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/data/preview?${requestParams.toString()}`);
+        const endpoint = previewMode === 'classification'
+            ? '/api/data/cashflows-classification-preview'
+            : '/api/data/preview';
+        const res = await window.ApiUtils.apiFetch(`${API_BASE}${endpoint}?${requestParams.toString()}`);
         if (!res.ok) {
             const err = await res.json();
             throw new Error(err.detail || 'Failed to fetch preview');
@@ -1276,7 +1324,7 @@ async function fetchPreviewData() {
         const data = await res.json();
         
         previewTotalRows = data.total_rows;
-        previewSundayCount = data.sunday_count;
+        previewSundayCount = data.sunday_count || 0;
         previewDocumentKeyColumn = data.document_key_column || null;
         previewDateColumn = data.date_column || null;
         previewAmountColumns = data.amount_columns || [];
@@ -1363,6 +1411,7 @@ async function renderPreviewRows(rows) {
     const firstRow = rows[0].row_data;
     const templateHeaders = await fetchTemplateColumns(previewTemplateId);
     const headers = templateHeaders.length ? templateHeaders : (firstRow ? Object.keys(firstRow) : []);
+    const classificationHeaders = previewMode === 'classification' ? ['Type', 'Account', 'Assigned Category'] : [];
     previewTableHead.innerHTML = '';
     if (headers.length) {
         const tr = document.createElement('tr');
@@ -1392,6 +1441,20 @@ async function renderPreviewRows(rows) {
             th.style.background = '#f8fafc';
             tr.appendChild(th);
         });
+        if (classificationHeaders.length) {
+            classificationHeaders.forEach((h) => {
+                const th = document.createElement('th');
+                th.textContent = h;
+                th.style.padding = '8px 12px';
+                th.style.textAlign = 'left';
+                th.style.borderBottom = '2px solid #e2e8f0';
+                th.style.whiteSpace = 'nowrap';
+                th.style.position = 'sticky';
+                th.style.top = '0';
+                th.style.background = '#f8fafc';
+                tr.appendChild(th);
+            });
+        }
         previewTableHead.appendChild(tr);
     }
     
@@ -1418,8 +1481,8 @@ async function renderPreviewRows(rows) {
 
         const prevGroupId = index > 0 ? rows[index - 1].document_group_id : undefined;
         const nextGroupId = index < rows.length - 1 ? rows[index + 1].document_group_id : undefined;
-        const isFirstInGroup = row.document_group_id !== prevGroupId;
-        const isLastInGroup = row.document_group_id !== nextGroupId;
+        const isFirstInGroup = previewMode === 'classification' || row.document_group_id !== prevGroupId;
+        const isLastInGroup = previewMode === 'classification' || row.document_group_id !== nextGroupId;
 
         if (isFirstInGroup) {
             groupSums = {};
@@ -1505,6 +1568,21 @@ async function renderPreviewRows(rows) {
             }
             tr.appendChild(td);
         });
+        if (previewMode === 'classification') {
+            const classification = row.classification || {};
+            const values = [
+                classification.type || 'Needs review',
+                [classification.account_code, classification.account_name].filter(Boolean).join(' — ') || '—',
+                classification.assigned_category || (classification.classification_status === 'unmapped' ? 'Needs review' : '—')
+            ];
+            values.forEach((value) => {
+                const td = document.createElement('td');
+                td.style.padding = '6px 12px';
+                td.style.borderBottom = '1px solid #f0f2f5';
+                td.textContent = value;
+                tr.appendChild(td);
+            });
+        }
         previewTableBody.appendChild(tr);
 
         // Subtotal row: inserted after the last line of each document,
@@ -1513,7 +1591,7 @@ async function renderPreviewRows(rows) {
         // each document's block reads as visually closed off. Skipped
         // entirely when the template has no Amount (Numeric) column, since
         // there's nothing meaningful to subtotal.
-        if (isLastInGroup && previewAmountColumns.length > 0 && previewShowSubtotals) {
+        if (previewMode === 'raw' && isLastInGroup && previewAmountColumns.length > 0 && previewShowSubtotals) {
             const subtotalTr = document.createElement('tr');
             subtotalTr.className = 'preview-subtotal-row';
 
@@ -1562,6 +1640,9 @@ function clearPreviewFilters() {
     amountMax.value = '';
     sundayOnlyCheckbox.checked = false;
     dataQualityFilter.value = '';
+    classificationTypeFilter.value = '';
+    classificationAccountFilter.value = '';
+    classificationCategoryFilter.value = '';
     currentPage = 1;
     fetchPreviewData();
 }
@@ -1810,6 +1891,15 @@ searchInput.addEventListener('input', function() {
 amountMin.addEventListener('keydown', (e) => { if (e.key === 'Enter' && isPreviewOpen) applyPreviewFilters(); });
 amountMax.addEventListener('keydown', (e) => { if (e.key === 'Enter' && isPreviewOpen) applyPreviewFilters(); });
 
+// Cashflows classification filters refresh only the derived-layer query.
+classificationTypeFilter.addEventListener('change', () => {
+    if (isPreviewOpen && previewMode === 'classification') applyPreviewFilters();
+});
+[classificationAccountFilter, classificationCategoryFilter].forEach((input) => {
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && isPreviewOpen && previewMode === 'classification') applyPreviewFilters();
+    });
+});
 // Shared date range modal (Phase 2 — Unified date range): the preview
 // modal's own trigger opens it in "live" mode (no pending template —
 // confirming just re-fetches the currently open preview).
@@ -1902,6 +1992,17 @@ window.onClientChange = function(clientId) {
     }, 300);
 };
 
+async function openClassificationFromQuery() {
+    const query = new URLSearchParams(window.location.search);
+    if (query.get('cashflows_classification') !== '1') return;
+    const templateId = Number(query.get('template_id'));
+    if (!templateId) return;
+    const start = query.get('date_start');
+    const end = query.get('date_end');
+    if (start) sharedRangeFromInput.value = start;
+    if (end) sharedRangeToInput.value = end;
+    await openClassificationPreview(templateId, query.get('template_name') || 'Transaction Report');
+}
 // ---------- INIT ----------
 window.onload = async function() {
     // Show feedback before session/settings initialization so the user never
@@ -1932,5 +2033,6 @@ window.onload = async function() {
         return;
     }
 
-    fetchAvailability();
+    await fetchAvailability();
+    await openClassificationFromQuery();
 };

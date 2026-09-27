@@ -10204,3 +10204,25 @@ body {
 .cashflows-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
 .cashflows-table-wrap { overflow: auto; }.cashflows-table { width: 100%; border-collapse: collapse; font-size: 12px; }.cashflows-table th, .cashflows-table td { padding: 9px 10px; border-bottom: 1px solid #e6edf2; text-align: left; white-space: nowrap; }.cashflows-table th { background: #f4f8fa; color: #526675; font-size: 11px; text-transform: uppercase; }.cashflows-table td:not(:first-child) { text-align: right; }.cashflows-table th:not(:first-child) { text-align: right; }.cashflows-table tbody tr:hover { background: #f8fbfd; }.cashflows-empty { color: #71808c; text-align: center !important; }
 @media (max-width: 760px) { .cashflows-report-header, .cashflows-detail-grid { grid-template-columns: 1fr; display: grid; }.cashflows-source-status { justify-self: start; } }
+
+.cashflows-lazy-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.cashflows-lazy-actions[hidden], .cashflows-report-section[hidden] { display: none; }
+.cashflows-lazy-actions .cashflows-secondary { min-width: 190px; }
+/* Direct Cashflows classified-transactions window. */
+.cashflows-transactions-section { display: grid; gap: 12px; }
+.cashflows-transactions-section[hidden] { display: none; }
+.cashflows-transactions-note { margin: 5px 0 0; color: #64748b; font-size: 12px; font-weight: 400; }
+.cashflows-transactions-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; padding: 10px 12px; border: 1px solid #dbe4ea; border-radius: 10px; background: #f8fbfd; }
+.cashflows-transactions-toolbar input, .cashflows-transactions-toolbar select { min-width: 145px; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 7px; background: #fff; font: inherit; font-size: 12px; }
+.cashflows-transactions-toolbar input:first-child { flex: 1 1 260px; }
+.cashflows-secondary { border: 1px solid #b8c9d6; border-radius: 7px; padding: 8px 12px; background: #fff; color: #334e60; font-weight: 700; cursor: pointer; }
+.cashflows-secondary:hover:not(:disabled) { background: #eef5f8; }
+.cashflows-secondary:disabled { cursor: not-allowed; opacity: .55; }
+.cashflows-transactions-table-wrap { max-height: 58vh; }
+.cashflows-transactions-table-wrap .cashflows-table th { position: sticky; top: 0; z-index: 1; }
+.cashflows-transactions-section .cashflows-classification-cell { color: #334e60; font-weight: 600; }
+.cashflows-transactions-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 10px; color: #64748b; font-size: 12px; }
+@media (max-width: 760px) {
+    .cashflows-transactions-toolbar input, .cashflows-transactions-toolbar select { flex: 1 1 100%; min-width: 0; }
+    .cashflows-transactions-pagination { justify-content: space-between; }
+}

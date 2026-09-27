@@ -582,3 +582,31 @@ def test_cashflow_preview_uses_configured_transaction_template():
     assert captured["journal_template_id"] == 1
     assert response["configuration"]["source_template_id"] == 1
     assert "source_upload_id" not in response["configuration"]
+
+def test_cashflow_detail_sections_parser_and_summary_filter():
+    assert reconciliation._parse_cashflow_detail_sections(None) is None
+    assert reconciliation._parse_cashflow_detail_sections("summary") == set()
+    assert reconciliation._parse_cashflow_detail_sections("transfers, review") == {"transfers", "review"}
+    with pytest.raises(HTTPException) as error:
+        reconciliation._parse_cashflow_detail_sections("unknown")
+    assert error.value.status_code == 400
+
+    summary = {
+        "months": ["2026-01"],
+        "category_totals": pd.DataFrame(),
+        "transfer_details": pd.DataFrame([{"voucher_id": "V1"}]),
+        "deduction_details": pd.DataFrame([{"category": "Charge"}]),
+        "categories_needing_review": pd.DataFrame([{"voucher_id": "V1"}]),
+        "selected_voucher_count": 1,
+        "internal_transfer_count": 1,
+        "category_review_count": 1,
+        "receipt_presentation": "net",
+    }
+    preview = reconciliation._cashflow_preview(summary, set())
+    assert preview["transfer_details"] == []
+    assert preview["deduction_details"] == []
+    assert preview["categories_needing_review"] == []
+    assert preview["internal_transfer_count"] == 1
+    assert preview["category_review_count"] == 1
+    assert preview["deduction_count"] == 1
+    assert preview["detail_sections_loaded"] == []

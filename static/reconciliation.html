@@ -4,7 +4,7 @@
     <meta charset='UTF-8'>
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
     <title>Reports | Internal Audit App</title>
-    <link rel='stylesheet' href='/static/style.css?v=28'>
+    <link rel='stylesheet' href='/static/style.css?v=30'>
 </head>
 <body class='reconciliation-page' data-nav-module='Reports' data-nav-parent='index.html'>
     <nav class='navbar'>
@@ -53,12 +53,51 @@
         </section>
         <section id='cashflowsView' class='cashflows-report' aria-labelledby='cashflows-heading' hidden>
             <div class='cashflows-report-header'><div><button type='button' id='cashflowsBackButton' class='cashflows-back'>Back to Reports</button><h2 id='cashflows-heading'>Cashflows</h2><p>Summarise money in, money out, transfers, and customer receipt deductions from configured Cash and Bank accounts.</p></div><div id='cashflowsSourceStatus' class='cashflows-source-status' role='status'></div></div>
-            <form id='cashflowsReportForm' class='cashflows-filter-bar'><span class='cashflows-source-status'>Uses the configured Transaction Report template</span><label>From <input id='cashflowsPeriodStart' type='date' required></label><label>To <input id='cashflowsPeriodEnd' type='date' required></label><button type='submit' class='cashflows-primary'>Load summary</button></form>
+            <form id='cashflowsReportForm' class='cashflows-filter-bar'><span class='cashflows-source-status'>Uses the configured Transaction Report template</span><label>From <input id='cashflowsPeriodStart' type='date' required></label><label>To <input id='cashflowsPeriodEnd' type='date' required></label><button type='submit' class='cashflows-primary'>Load summary</button><button type='button' id='cashflowsViewTransactionsButton' class='cashflows-secondary' hidden>View classified transactions</button></form>
             <div id='cashflowsControls' class='cashflows-control-grid'></div>
             <div id='cashflowsMessage' class='cashflows-message' role='status' hidden></div><div id='cashflowsSourceQuality' class='cashflows-source-quality' role='status' hidden></div>
             <section class='cashflows-report-section'><div class='cashflows-section-heading'><h3>Cash Flow summary</h3><span id='cashflowsReceiptMode'></span></div><div class='cashflows-table-wrap'><table id='cashflowsSummaryTable' class='cashflows-table'></table></div></section>
-            <div class='cashflows-detail-grid'><section class='cashflows-report-section'><div class='cashflows-section-heading'><h3>Internal transfers</h3><span id='cashflowsTransferCount'></span></div><div class='cashflows-table-wrap'><table id='cashflowsTransfersTable' class='cashflows-table'></table></div></section><section class='cashflows-report-section'><div class='cashflows-section-heading'><h3>Customer deductions</h3><span id='cashflowsDeductionCount'></span></div><div class='cashflows-table-wrap'><table id='cashflowsDeductionsTable' class='cashflows-table'></table></div></section></div>
+            <div id='cashflowsLazyActions' class='cashflows-lazy-actions'>
+                <button type='button' id='cashflowsLoadTransfersButton' class='cashflows-secondary'>Load internal transfers</button>
+                <button type='button' id='cashflowsLoadDeductionsButton' class='cashflows-secondary'>Load customer deductions</button>
+                <button type='button' id='cashflowsLoadReviewButton' class='cashflows-secondary'>Load review required</button>
+            </div>
+            <div class='cashflows-detail-grid'>
+                <section id='cashflowsTransfersSection' class='cashflows-report-section' hidden><div class='cashflows-section-heading'><h3>Internal transfers</h3><span id='cashflowsTransferCount'></span></div><div class='cashflows-table-wrap'><table id='cashflowsTransfersTable' class='cashflows-table'></table></div></section>
+                <section id='cashflowsDeductionsSection' class='cashflows-report-section' hidden><div class='cashflows-section-heading'><h3>Customer deductions</h3><span id='cashflowsDeductionCount'></span></div><div class='cashflows-table-wrap'><table id='cashflowsDeductionsTable' class='cashflows-table'></table></div></section>
+            </div>
             <section id='cashflowsReviewSection' class='cashflows-report-section' hidden><div class='cashflows-section-heading'><h3>Review required</h3><span id='cashflowsReviewCount'></span></div><div class='cashflows-table-wrap'><table id='cashflowsReviewTable' class='cashflows-table'></table></div></section>
+            <section id='cashflowsTransactionsSection' class='cashflows-report-section cashflows-transactions-section' hidden>
+                <div class='cashflows-section-heading'>
+                    <div>
+                        <h3>Classified transactions</h3>
+                        <p class='cashflows-transactions-note'>Read-only view using the selected Cashflows date range and current Account Control Centre classifications.</p>
+                    </div>
+                    <span id='cashflowsTransactionsCount'></span>
+                </div>
+                <div class='cashflows-transactions-toolbar'>
+                    <input id='cashflowsTransactionsSearch' type='search' placeholder='Search voucher, account, category, or source values' aria-label='Search classified transactions'>
+                    <select id='cashflowsTransactionsType' aria-label='Filter classified transaction type'>
+                        <option value=''>All types</option>
+                        <option value='cash'>Cash</option>
+                        <option value='bank'>Bank</option>
+                        <option value='counter'>Counter-account</option>
+                        <option value='review'>Needs review</option>
+                    </select>
+                    <input id='cashflowsTransactionsAccount' type='search' placeholder='Account code' aria-label='Filter account code'>
+                    <input id='cashflowsTransactionsCategory' type='search' placeholder='Assigned category' aria-label='Filter assigned category'>
+                    <button type='button' id='cashflowsTransactionsApply' class='cashflows-primary'>Apply</button>
+                    <button type='button' id='cashflowsTransactionsClear' class='cashflows-secondary'>Clear</button>
+                </div>
+                <div class='cashflows-table-wrap cashflows-transactions-table-wrap'>
+                    <table id='cashflowsTransactionsTable' class='cashflows-table'></table>
+                </div>
+                <div class='cashflows-transactions-pagination'>
+                    <button type='button' id='cashflowsTransactionsPrevious' class='cashflows-secondary' disabled>Previous</button>
+                    <span id='cashflowsTransactionsPageInfo'>Page 1 of 1</span>
+                    <button type='button' id='cashflowsTransactionsNext' class='cashflows-secondary' disabled>Next</button>
+                </div>
+            </section>
         </section>
         <footer class='reconciliation-footer'>
             <span>Reports are kept separate from Audit Verification setup.</span>
@@ -66,6 +105,6 @@
         </footer>
     </main>
     <script src='/static/client_context.js?v=18'></script>
-    <script src='/static/reconciliation.js?v=5'></script>
+    <script src='/static/reconciliation.js?v=7'></script>
 </body>
 </html>

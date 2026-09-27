@@ -18,6 +18,7 @@ import database
 # since routers/verification.py never imports from this module.
 from routers.verification import get_assignment_status_map
 from routers.audit_rules import build_verification_field_policy
+from services.cash_bank_classification import load_cashflow_classification_preview
 
 router = APIRouter()
 
@@ -491,6 +492,71 @@ def get_client_overdue_uploads(client_id: int = Query(..., description="Client I
 # 📊 PREVIEW ROWS (Aggregated across multiple uploads)
 # ==============================================
 
+
+@router.get("/api/data/cashflows-classification-preview")
+@_preview_perf_diagnostics
+def get_cashflows_classification_preview(
+    client_id: int = Query(..., description="Client ID"),
+    template_id: int = Query(..., description="Configured Transaction Report template ID"),
+    date_start: str = Query(..., description="Start date (YYYY-MM-DD)"),
+    date_end: str = Query(..., description="End date (YYYY-MM-DD)"),
+    page: int = Query(1, ge=1, description="Page number"),
+    limit: int = Query(50, ge=1, le=200, description="Rows per page (max 200)"),
+    search: Optional[str] = Query(None, description="Search voucher, account, category, or source values"),
+    classification_type: Optional[str] = Query(None, description="cash, bank, counter, or review"),
+    account_code: Optional[str] = Query(None, description="Exact account-code filter"),
+    category: Optional[str] = Query(None, description="Assigned-category filter"),
+    perf: bool = Query(False, include_in_schema=False),
+):
+    """Return a paginated, read-only view of raw Client Data plus Cashflows classification."""
+    client = execute_query_pg(
+        "SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,)
+    )
+    if not client:
+        raise HTTPException(404, "Client not found or inactive")
+
+    template = execute_query_pg(
+        "SELECT id, template_name FROM templates WHERE id = %s AND is_active = TRUE",
+        (template_id,),
+    )
+    if not template:
+        raise HTTPException(404, "Template not found")
+
+    try:
+        start_date = datetime.fromisoformat(date_start).date()
+        end_date = datetime.fromisoformat(date_end).date()
+    except ValueError:
+        raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
+    if start_date > end_date:
+        raise HTTPException(400, "Start date must be before or equal to end date.")
+
+    settings = execute_query_pg(
+        "SELECT source_template_id FROM account_control_cashflow_settings WHERE client_id = %s",
+        (client_id,),
+    )
+    configured_template_id = settings[0].get("source_template_id") if settings else None
+    if configured_template_id is not None and int(configured_template_id) != template_id:
+        raise HTTPException(409, "This template is not the Cashflows source template configured in Account Control Centre.")
+
+    result = load_cashflow_classification_preview(
+        client_id,
+        template_id,
+        start_date,
+        end_date,
+        page=page,
+        limit=limit,
+        search=search,
+        classification_type=classification_type,
+        account_code=account_code,
+        category=category,
+    )
+    result.update({
+        "template_id": template_id,
+        "template_name": template[0].get("template_name") or "Transaction Report",
+        "template_columns": get_template_columns_ordered(template_id),
+        "classification_columns": ["Type", "Account", "Assigned Category"],
+    })
+    return result
 @router.get("/api/data/preview")
 @_preview_perf_diagnostics
 def get_preview_rows(

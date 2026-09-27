@@ -11,9 +11,10 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
 import json
 import re
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from psycopg2.extras import RealDictCursor, execute_values
+from database import execute_query_pg
 
 
 _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
@@ -438,6 +439,153 @@ class BackfillSummary:
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
 
+
+def load_cashflow_classification_preview(
+    client_id: int,
+    template_id: int,
+    period_start: Any,
+    period_end: Any,
+    *,
+    page: int = 1,
+    limit: int = 50,
+    search: str | None = None,
+    classification_type: str | None = None,
+    account_code: str | None = None,
+    category: str | None = None,
+    query_fn: Callable[..., list[dict[str, Any]]] = execute_query_pg,
+) -> dict[str, Any]:
+    """Return one read-only, paginated Client Data/classification view.
+
+    Raw ``client_data.row_data`` is selected but never updated. The three
+    Cashflows fields are resolved in SQL from the current derived row and the
+    active Account Control Centre category assignment.
+    """
+    if page < 1 or limit < 1 or limit > 200:
+        raise ValueError("Invalid classification preview pagination")
+
+    where = [
+        "cd.client_id = %s",
+        "cd.template_id = %s",
+        "cd.is_deleted = FALSE",
+        "c.is_current = TRUE",
+        "c.transaction_date >= %s",
+        "c.transaction_date <= %s",
+    ]
+    params: list[Any] = [client_id, template_id, period_start, period_end]
+
+    if search:
+        like = f"%{search.strip()}%"
+        where.append(
+            "("
+            "LOWER(COALESCE(c.voucher_id, '')) LIKE LOWER(%s) "
+            "OR LOWER(COALESCE(c.account_code, '')) LIKE LOWER(%s) "
+            "OR LOWER(COALESCE(category.label, '')) LIKE LOWER(%s) "
+            "OR EXISTS (SELECT 1 FROM jsonb_each_text(cd.row_data) pair "
+            "WHERE LOWER(pair.value) LIKE LOWER(%s))"
+            ")"
+        )
+        params.extend([like, like, like, like])
+
+    if classification_type == "cash":
+        where.append("c.treasury_type = 'cash'")
+    elif classification_type == "bank":
+        where.append("c.treasury_type = 'bank'")
+    elif classification_type == "counter":
+        where.append("c.classification_status = 'non_treasury'")
+    elif classification_type == "review":
+        where.append("c.classification_status = 'unmapped'")
+    elif classification_type not in (None, ""):
+        raise ValueError("Invalid classification type")
+
+    if account_code:
+        where.append("LOWER(c.account_code) = LOWER(%s)")
+        params.append(account_code.strip())
+    if category:
+        where.append("LOWER(COALESCE(category.label, '')) LIKE LOWER(%s)")
+        params.append(f"%{category.strip()}%")
+
+    where_sql = " AND ".join(where)
+    from_sql = """
+        FROM client_data cd
+        JOIN cash_bank_transaction_classifications c
+          ON c.client_data_id = cd.id
+        LEFT JOIN account_control_cashflow_category_assignments category_assignment
+          ON category_assignment.client_id = c.client_id
+         AND category_assignment.account_code = c.account_code
+        LEFT JOIN account_control_cashflow_categories category
+          ON category.id = category_assignment.category_id
+         AND category.client_id = c.client_id
+         AND category.is_active = TRUE
+    """
+    count_rows = query_fn(
+        f"SELECT COUNT(*) AS total {from_sql} WHERE {where_sql}",
+        tuple(params),
+    )
+    total = int(count_rows[0].get("total") or 0) if count_rows else 0
+
+    offset = (page - 1) * limit
+    data_sql = f"""
+        SELECT
+            cd.id,
+            cd.row_data,
+            cd.extract_amount,
+            cd.extract_date,
+            cd.data_quality_flag,
+            cd.rate_source,
+            c.voucher_id,
+            c.account_code,
+            c.transaction_date,
+            c.debit,
+            c.credit,
+            c.treasury_type,
+            c.treasury_account_code,
+            c.configuration_version,
+            c.classification_status,
+            COALESCE(category.label, '') AS assigned_category,
+            COALESCE(
+                cd.row_data ->> 'Account Name',
+                cd.row_data ->> 'Account Title',
+                cd.row_data ->> 'Ledger Name',
+                cd.row_data ->> 'Particulars',
+                ''
+            ) AS source_account_name
+        {from_sql}
+        WHERE {where_sql}
+        ORDER BY c.transaction_date DESC NULLS LAST, c.voucher_id, c.account_code, cd.id
+        LIMIT %s OFFSET %s
+    """
+    rows = query_fn(data_sql, tuple([*params, limit, offset]))
+    formatted: list[dict[str, Any]] = []
+    for row in rows:
+        status = row.get("classification_status") or "unmapped"
+        treasury_type = row.get("treasury_type")
+        if treasury_type in ("cash", "bank"):
+            display_type = treasury_type.title()
+        elif status == "non_treasury":
+            display_type = "Counter-account"
+        else:
+            display_type = "Needs review"
+        formatted.append({
+            "id": row.get("id"),
+            "row_data": row.get("row_data") or {},
+            "extract_amount": row.get("extract_amount"),
+            "extract_date": row.get("extract_date"),
+            "data_quality_flag": row.get("data_quality_flag"),
+            "rate_source": row.get("rate_source"),
+            "classification": {
+                "type": display_type,
+                "account_code": row.get("treasury_account_code") or row.get("account_code"),
+                "account_name": row.get("source_account_name") or "",
+                "assigned_category": row.get("assigned_category") or "",
+                "classification_status": status,
+                "voucher_id": row.get("voucher_id"),
+                "transaction_date": row.get("transaction_date"),
+                "debit": row.get("debit") or 0,
+                "credit": row.get("credit") or 0,
+                "configuration_version": row.get("configuration_version"),
+            },
+        })
+    return {"total_rows": total, "page": page, "limit": limit, "rows": formatted}
 
 def _record_classification_counts(summary: BackfillSummary, row: Mapping[str, Any]) -> None:
     status = row["classification_status"]

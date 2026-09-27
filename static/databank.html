@@ -1055,6 +1055,19 @@
                 <button id="clearPreviewFiltersBtn" class="btn-secondary">Clear</button>
             </div>
 
+            <!-- Cashflows classification filters: read-only, derived from Account Control Centre. -->
+            <div id="cashflowsClassificationFilters" style="display:none; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:12px; padding:8px 0; border-bottom:1px solid #e2e8f0;">
+                <span style="font-size:12px; color:#475569; font-weight:600;">Classification filters:</span>
+                <select id="classificationTypeFilter" aria-label="Classification type" style="padding:4px 8px; border:1px solid #d0d5dd; border-radius:4px; font-size:12px;">
+                    <option value="">All types</option>
+                    <option value="cash">Cash</option>
+                    <option value="bank">Bank</option>
+                    <option value="counter">Counter-account</option>
+                    <option value="review">Needs review</option>
+                </select>
+                <input type="text" id="classificationAccountFilter" placeholder="Account code" aria-label="Account code" style="width:120px; padding:4px 8px; border:1px solid #d0d5dd; border-radius:4px; font-size:12px;">
+                <input type="text" id="classificationCategoryFilter" placeholder="Assigned category" aria-label="Assigned category" style="width:160px; padding:4px 8px; border:1px solid #d0d5dd; border-radius:4px; font-size:12px;">
+            </div>
             <!-- Table Area -->
             <div style="overflow-x:auto; max-height:55vh;">
                 <table style="width:100%; border-collapse:collapse; font-size:13px;">

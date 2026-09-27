@@ -48,6 +48,7 @@ One line per file group: what it is now. Full build history for every entry live
 - services/cash_bank_classification.py + scripts/backfill_cash_bank_transaction_classifications.py -> versioned derived Cash/Bank transaction-line classification, upload/backfill application, and audited reclassification without raw-row mutation. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_xlsx.py → static Bank/Cash workbook exporter for summaries, schedules, reviews, cross-checks, and reconciliation proofs. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_balance_source.py → validates stored opening/month-end balances and converts them to reconciliation-engine inputs. See CHANGELOG_ARCHIVE.md.
+- tests/test_cashflows_classification_preview.py + tests/test_cashflows_direct_window_ui.py → regression coverage for the derived Cashflows preview and inline/lazy Reports UI.
 
 
 - static/reconciliation.html, static/reconciliation.js -> client-context Reports plus group, Ledger Summary category, and balance setup. See CHANGELOG_ARCHIVE.md.
@@ -304,6 +305,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 
 - 2026-09-27: Cashflows now filters by date and latest template uploads in SQL; Cash/Bank voucher selection remains in the Python summary stage.
 - 2026-09-27: Cashflows now uses versioned derived lines, SQL date/voucher aggregation, and Python formatting; optional Postgres startup migration is non-blocking.
+- 2026-09-27: Cashflows now loads child detail sections and classified transactions on demand; the read-only viewer remains inside Reports.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
