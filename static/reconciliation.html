@@ -4,7 +4,7 @@
     <meta charset='UTF-8'>
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
     <title>Reports | Internal Audit App</title>
-    <link rel='stylesheet' href='/static/style.css?v=32'>
+    <link rel='stylesheet' href='/static/style.css?v=34'>
 </head>
 <body class='reconciliation-page' data-nav-module='Reports' data-nav-parent='index.html'>
     <nav class='navbar'>
@@ -51,10 +51,9 @@
                 </div>
             </section>
         </section>
-        <section id='cashflowsView' class='cashflows-report' aria-labelledby='cashflows-heading' hidden>
-            <div class='cashflows-report-header'><div><button type='button' id='cashflowsBackButton' class='cashflows-back'>Back to Reports</button><h2 id='cashflows-heading'>Cashflows</h2><p>Summarise money in, money out, transfers, and customer receipt deductions from configured Cash and Bank accounts.</p></div><div id='cashflowsSourceStatus' class='cashflows-source-status' role='status'></div></div>
+        <section id='cashflowsView' class='cashflows-report' aria-label='Cashflows report' hidden>
             <form id='cashflowsReportForm' class='cashflows-filter-bar'>
-                <span class='cashflows-source-status'>Uses the configured Transaction Report template</span>
+                <label class='cashflows-grouping-control' for='cashflowsGroupingSelect'>Group by<select id='cashflowsGroupingSelect' aria-label='Cashflows report grouping'><option value='suggested'>Suggested</option><option value='day'>Daily</option><option value='fortnight'>Fortnightly</option><option value='month'>Monthly</option><option value='quarter'>Quarterly</option><option value='half_year'>Half-yearly</option><option value='year'>Annually</option></select></label>
                 <div class='cashflows-period-control'>
                     <button type='button' id='cashflowsPeriodButton' class='cashflows-period-button' aria-haspopup='dialog' aria-expanded='false'>Select period</button>
                     <div id='cashflowsPeriodPopover' class='cashflows-period-popover' role='dialog' aria-label='Cashflows reporting period' hidden>
@@ -76,7 +75,6 @@
                             <button type='button' class='cashflows-period-chip' data-period-type='custom'>Custom range</button>
                         </div></div>
                         <div id='cashflowsPeriodPicker' class='cashflows-period-picker' hidden></div>
-                        <div id='cashflowsCustomGrouping' class='cashflows-custom-grouping' hidden><label for='cashflowsCustomGroupingSelect'>Suggested grouping</label><select id='cashflowsCustomGroupingSelect'><option value='day'>Day</option><option value='fortnight'>Fortnight</option><option value='month'>Month</option><option value='quarter'>Quarter</option><option value='half_year'>Half-year</option><option value='year'>Year</option></select></div>
                         <div id='cashflowsPeriodFooter' class='cashflows-period-footer' hidden><button type='button' id='cashflowsPeriodCancel' class='cashflows-secondary'>Cancel</button><button type='button' id='cashflowsPeriodApply' class='cashflows-primary'>Apply</button></div>
                     </div>
                 </div>
@@ -85,8 +83,7 @@
                 <button type='submit' class='cashflows-primary'>Load summary</button>
                 <button type='button' id='cashflowsViewTransactionsButton' class='cashflows-secondary' hidden>View classified transactions</button>
             </form>
-            <div id='cashflowsControls' class='cashflows-control-grid'></div>
-            <div id='cashflowsMessage' class='cashflows-message' role='status' hidden></div><div id='cashflowsSourceQuality' class='cashflows-source-quality' role='status' hidden></div>
+            <div id='cashflowsMessage' class='cashflows-message' role='status' hidden></div>
             <section class='cashflows-report-section'><div class='cashflows-section-heading'><h3>Cash Flow summary</h3><span id='cashflowsReceiptMode'></span></div><div class='cashflows-table-wrap'><table id='cashflowsSummaryTable' class='cashflows-table'></table></div></section>
             <div id='cashflowsLazyActions' class='cashflows-lazy-actions'>
                 <button type='button' id='cashflowsLoadTransfersButton' class='cashflows-secondary'>Load internal transfers</button>

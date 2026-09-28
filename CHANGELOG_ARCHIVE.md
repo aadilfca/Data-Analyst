@@ -6708,6 +6708,14 @@ not the Cashflows preview requests.
 
 **Verification:** Focused Cashflows/reconciliation/source/UI coverage passed **58 tests**; Python compilation, JavaScript syntax, and `git diff --check` passed. The complete suite run reported **407 passed**, with unrelated pre-existing failures and one temporary-directory permission error; the two existing Cashflows direct-call failures were corrected and the relevant reconciliation suite passed. The headless browser smoke test reached the login redirect, so authenticated manual selector testing remains pending. No packages were installed and no uploaded source data was modified.
 
+## Cashflows report view cleanup - Phase 1 - 2026-09-28
+
+**Scope:** Simplified the confirmed Cashflows report view without changing backend behavior or the period-selection workflow.
+
+**Implementation:** Removed the redundant template note, report header, Back to Reports button, source-status cards, and source-quality block. Grouping, period, Load summary, and classified-transaction controls now sit together. The existing global Up arrow returns from Cashflows to the Reports hub.
+
+**Verification:** Aadil confirmed the local browser layout works. Focused UI/reconciliation coverage passed 9 tests; JavaScript syntax and git diff --check passed. Stylesheet cache links were synchronized to v=34. No packages were installed or source data changed.
+
 ## Cashflows period selector multi-select follow-up - 2026-09-28
 
 **Scope:** Completed the accepted Phase 1 selector refinements after local testing. The existing compact Cashflows report period control remains the only affected UI.

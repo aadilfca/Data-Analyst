@@ -33,8 +33,15 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert "cashflowsPeriodButton" in html
     assert "cashflowsPeriodPopover" in html
     assert "cashflowsPeriodPicker" in html
+    assert "cashflowsGroupingSelect" in html
+    assert "Group by" in html
+    assert "cashflowsCustomGrouping" not in html
+    assert "cashflowsBackButton" not in html
+    assert "cashflowsSourceStatus" not in html
+    assert "cashflowsControls" not in html
+    assert "cashflowsSourceQuality" not in html
+    assert "cashflows-report-header" not in html
     assert "data-period-type='fortnight'" in html
-    assert "cashflowsCustomGroupingSelect" in html
     assert 'data-picker-nav=' + chr(34) + 'prev' + chr(34) in script
     assert 'data-picker-nav=' + chr(34) + 'next' + chr(34) in script
     assert "cashflowSelectedPeriods" in script
@@ -44,4 +51,18 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert "event.composedPath" in script
     assert "periodControl" in script
     assert "insidePeriodControl" in script
+    assert "cashflowGroupingPreference" in script
+    assert "preferredCashflowGrouping" in script
+    assert "cashflowsGroupingSelect" in script
+    assert "cashflowsCustomGroupingSelect" not in script
+    assert "cashflowsBackButton" not in script
+    assert "cashflowsSourceStatus" not in script
+    assert "renderControls" not in script
+    assert "renderSourceQuality" not in script
+    assert "setUpOverride" in script
     assert "group_by: cashflowSelection.groupBy" in script
+    assert ".cashflows-grouping-control" in styles
+    assert ".cashflows-template-note" not in styles
+    assert ".cashflows-report-header" not in styles
+    assert ".cashflows-control-grid" not in styles
+    assert ".cashflows-source-quality" not in styles

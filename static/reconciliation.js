@@ -8,8 +8,8 @@
     const classifiedTransactionsLimit = 50;
     let classifiedTransactionsRequest = null;
     const CASHFLOW_REQUEST_TIMEOUT_MS = 120000;
-    const CASHFLOW_GROUPING_LABELS = { day: 'Daily', fortnight: 'Fortnightly', month: 'Monthly', quarter: 'Quarterly', half_year: 'Half-yearly', year: 'Annually' };
     let cashflowSelection = { start: '', end: '', groupBy: 'month' };
+    let cashflowGroupingPreference = 'suggested';
     let stagedCashflowSelection = null;
     let activeCashflowPicker = null;
     let cashflowSelectedPeriods = [];
@@ -37,11 +37,12 @@
         if (start.getFullYear() === end.getFullYear()) return formatMonth(start) + '–' + formatMonth(end) + ' ' + start.getFullYear();
         return formatMonth(start) + ' ' + start.getFullYear() + '–' + formatMonth(end) + ' ' + end.getFullYear();
     }
-    function periodButtonLabel(selection) { return formatRange(selection.start, selection.end) + ' · ' + (CASHFLOW_GROUPING_LABELS[selection.groupBy] || 'Monthly'); }
+    function periodButtonLabel(selection) { return formatRange(selection.start, selection.end); }
     function syncCashflowSelection() {
         element('cashflowsPeriodStart').value = cashflowSelection.start;
         element('cashflowsPeriodEnd').value = cashflowSelection.end;
         element('cashflowsPeriodButton').textContent = periodButtonLabel(cashflowSelection);
+        element('cashflowsGroupingSelect').value = cashflowGroupingPreference;
     }
     function monthsInclusive(startValue, endValue) {
         const start = fromIso(startValue); const end = fromIso(endValue);
@@ -56,6 +57,9 @@
         if (months <= 12) return 'month';
         if (months <= 36) return 'quarter';
         return 'year';
+    }
+    function preferredCashflowGrouping(suggestedGrouping) {
+        return cashflowGroupingPreference === 'suggested' ? suggestedGrouping : cashflowGroupingPreference;
     }
     function groupingForPicked(type, startValue, endValue) {
         if (type === 'month' && monthsInclusive(startValue, endValue) === 1) return 'day';
@@ -87,7 +91,7 @@
         if (name === 'this_year') { start = yearStart(today); end = yearEnd(today); groupBy = 'month'; }
         if (name === 'last_year') { start = localDate(startYear - 1, 0, 1); end = localDate(startYear - 1, 11, 31); groupBy = 'month'; }
         if (name === 'monthly') { start = yearStart(today); groupBy = 'month'; }
-        stagedCashflowSelection = { start: toIso(start), end: toIso(end), groupBy: groupBy };
+        stagedCashflowSelection = { start: toIso(start), end: toIso(end), groupBy: preferredCashflowGrouping(groupBy) };
         applyCashflowSelection(true);
     }
     function pickerPeriods(type, anchor) {
@@ -126,7 +130,7 @@
         const first = new Date(Math.min.apply(null, starts));
         const last = new Date(Math.max.apply(null, ends));
         const startValue = toIso(first); const endValue = toIso(last);
-        stagedCashflowSelection = { start: startValue, end: endValue, groupBy: groupingForPicked(type, startValue, endValue) };
+        stagedCashflowSelection = { start: startValue, end: endValue, groupBy: preferredCashflowGrouping(groupingForPicked(type, startValue, endValue)) };
     }
     function chooseCashflowPeriod(start, end, type) {
         const startValue = toIso(start); const endValue = toIso(end);
@@ -143,14 +147,11 @@
     }
     function renderCashflowPeriodPicker(type) {
         const picker = element('cashflowsPeriodPicker');
-        const customGrouping = element('cashflowsCustomGrouping');
         const footer = element('cashflowsPeriodFooter');
         picker.hidden = false;
         footer.hidden = false;
-        customGrouping.hidden = type !== 'custom';
         if (type === 'custom') {
             picker.innerHTML = '<div class="cashflows-custom-range"><label>From <input type="date" data-picker-input="start" value="' + escapeHtml(stagedCashflowSelection.start) + '"></label><label>To <input type="date" data-picker-input="end" value="' + escapeHtml(stagedCashflowSelection.end) + '"></label></div>';
-            element('cashflowsCustomGroupingSelect').value = stagedCashflowSelection.groupBy || autoCashflowGrouping(stagedCashflowSelection.start, stagedCashflowSelection.end);
             return;
         }
         if (type === 'day') {
@@ -178,7 +179,6 @@
         cashflowSelectedPeriods = [];
         cashflowPickerView = cashflowSelection.start;
         element('cashflowsPeriodPicker').hidden = true;
-        element('cashflowsCustomGrouping').hidden = true;
         element('cashflowsPeriodFooter').hidden = true;
         const popover = element('cashflowsPeriodPopover');
         popover.hidden = false;
@@ -193,7 +193,7 @@
         if (target.matches('[data-picker-input="start"]') || target.matches('[data-picker-input="end"]')) {
             stagedCashflowSelection.start = element('cashflowsPeriodPicker').querySelector('[data-picker-input="start"]').value;
             stagedCashflowSelection.end = element('cashflowsPeriodPicker').querySelector('[data-picker-input="end"]').value;
-            stagedCashflowSelection.groupBy = element('cashflowsCustomGroupingSelect').value || autoCashflowGrouping(stagedCashflowSelection.start, stagedCashflowSelection.end);
+            stagedCashflowSelection.groupBy = preferredCashflowGrouping(autoCashflowGrouping(stagedCashflowSelection.start, stagedCashflowSelection.end));
         }
         if (target.matches('[data-picker-start]')) chooseCashflowPeriod(fromIso(target.dataset.pickerStart), fromIso(target.dataset.pickerEnd), activeCashflowPicker);
     }
@@ -232,12 +232,6 @@
             }).join('') + '</tr>';
         }).join('') + '</tbody>';
     }
-    function renderControls(controls) {
-        element('cashflowsControls').innerHTML = Object.keys(controls || {}).map(function (key) {
-            const control = controls[key] || {};
-            return '<div class="cashflows-control ' + String(control.status || '').toLowerCase() + '"><strong>' + escapeHtml(key.replace(/_/g, ' ')) + '</strong><span>' + escapeHtml(control.status || '') + '</span><small>' + escapeHtml(control.message || '') + '</small></div>';
-        }).join('');
-    }
     function renderCategoryOptions(values, replaceExisting) {
         const datalist = element('cashflowsTransactionsCategoryOptions');
         const input = element('cashflowsTransactionsCategory');
@@ -251,19 +245,6 @@
         datalist.innerHTML = Array.from(categories).sort(function (left, right) { return left.localeCompare(right); }).map(function (category) {
             return '<option value="' + escapeHtml(category) + '"></option>';
         }).join('');
-    }
-    function renderSourceQuality(source) {
-        const box = element('cashflowsSourceQuality');
-        const quality = source.quality || {};
-        const warningCount = (source.diagnostics || []).filter(function (item) { return item.severity === 'warning'; }).length;
-        const hasQuality = quality.source_row_count || quality.valid_row_count || quality.rejected_row_count || quality.layout_row_count || warningCount;
-        if (!hasQuality) {
-            box.hidden = true;
-            box.textContent = '';
-            return;
-        }
-        box.hidden = false;
-        box.textContent = 'Source quality: ' + String(quality.valid_row_count || 0) + ' valid row(s), ' + String(quality.rejected_row_count || 0) + ' quarantined, ' + String(quality.layout_row_count || 0) + ' layout row(s) removed' + (warningCount ? ', ' + warningCount + ' warning(s).' : '.');
     }
     function resetLazyCashflowSections() {
         ['cashflowsTransfersSection', 'cashflowsDeductionsSection', 'cashflowsReviewSection'].forEach(function (id) {
@@ -327,10 +308,7 @@
         renderTable(element('cashflowsSummaryTable'), columns, tableRows, 'No Cash Flow activity was found for this period.');
         renderCategoryOptions(summaryRows, true);
         element('cashflowsReceiptMode').textContent = 'Receipt presentation: ' + String(preview.receipt_presentation || 'net').toUpperCase();
-        renderControls(result.controls || {});
         const source = result.source || {};
-        element('cashflowsSourceStatus').textContent = source.ready ? ((source.quality || {}).rejected_row_count ? 'Source ready with warnings' : 'Source ready') : 'Source needs review';
-        renderSourceQuality(source);
         setMessage((result.blocking_reasons || []).join(' '), false);
 
         resetLazyCashflowSections();
@@ -504,6 +482,7 @@
     function setReportView(isReport) {
         element('reportsView').hidden = isReport;
         element('cashflowsView').hidden = !isReport;
+        if (typeof window.setUpOverride === 'function') window.setUpOverride(isReport ? showReportsHub : null);
     }
     function setSelection(card) {
         if (card.dataset.reportKey !== 'cashflows') return;
@@ -513,7 +492,7 @@
         params.set('report', 'cashflows');
         window.history.replaceState({}, '', window.location.pathname + '?' + params.toString());
         setReportView(true);
-        setMessage('Select a reporting period and press Load summary to use the configured Transaction Report template.', false);
+        setMessage('', false);
     }
     function showReportsHub() {
         const params = new URLSearchParams(window.location.search);
@@ -524,7 +503,9 @@
     }
     function defaultPeriods() {
         const today = new Date();
-        cashflowSelection = { start: toIso(yearStart(today)), end: toIso(today), groupBy: 'month' };
+        cashflowGroupingPreference = 'suggested';
+        const start = toIso(yearStart(today)); const end = toIso(today);
+        cashflowSelection = { start: start, end: end, groupBy: autoCashflowGrouping(start, end) };
         syncCashflowSelection();
     }
     async function initialise() {
@@ -556,8 +537,14 @@
         });
         element('cashflowsPeriodPicker').addEventListener('click', handleCashflowPickerChange);
         element('cashflowsPeriodPicker').addEventListener('change', handleCashflowPickerChange);
-        element('cashflowsCustomGroupingSelect').addEventListener('change', function (event) {
-            if (stagedCashflowSelection) stagedCashflowSelection.groupBy = event.target.value;
+        element('cashflowsGroupingSelect').addEventListener('change', function (event) {
+            cashflowGroupingPreference = event.target.value || 'suggested';
+            const start = stagedCashflowSelection && stagedCashflowSelection.start ? stagedCashflowSelection.start : cashflowSelection.start;
+            const end = stagedCashflowSelection && stagedCashflowSelection.end ? stagedCashflowSelection.end : cashflowSelection.end;
+            const groupBy = preferredCashflowGrouping(autoCashflowGrouping(start, end));
+            if (stagedCashflowSelection) stagedCashflowSelection.groupBy = groupBy;
+            else cashflowSelection.groupBy = groupBy;
+            syncCashflowSelection();
         });
         document.addEventListener('click', function (event) {
             const popover = element('cashflowsPeriodPopover');
@@ -600,7 +587,6 @@
             });
         });
 
-        element('cashflowsBackButton').addEventListener('click', showReportsHub);
         document.querySelectorAll('[data-report-key]').forEach(function (card) {
             card.addEventListener('click', function () { setSelection(card); });
             card.addEventListener('keydown', function (event) { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelection(card); } });
