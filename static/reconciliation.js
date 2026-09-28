@@ -14,6 +14,8 @@
     let activeCashflowPicker = null;
     let cashflowSelectedPeriods = [];
     let cashflowPickerView = null;
+    let cashflowToastTimer = null;
+    let cashflowProcessingControls = [];
 
     function localDate(year, month, day) { return new Date(year, month, day, 12, 0, 0, 0); }
     function toIso(date) {
@@ -214,11 +216,48 @@
         if (!response.ok) throw new Error(payload.detail || payload.message || 'The Cashflows report could not be loaded.');
         return payload;
     }
-    function setMessage(message, isError) {
-        const box = element('cashflowsMessage');
-        box.textContent = message || '';
-        box.className = 'cashflows-message' + (isError ? ' error' : '');
-        box.hidden = !message;
+    function showCashflowToast(message, isError) {
+        const toast = element('cashflowsToast');
+        if (!toast) return;
+        if (cashflowToastTimer) window.clearTimeout(cashflowToastTimer);
+        toast.textContent = message || '';
+        toast.className = 'cashflows-toast' + (isError ? ' is-error' : '');
+        toast.hidden = !message;
+        if (message) {
+            cashflowToastTimer = window.setTimeout(function () {
+                toast.hidden = true;
+                toast.textContent = '';
+            }, 4200);
+        }
+    }
+    function setCashflowProcessingStep(step, message) {
+        const order = { prepare: 0, load: 1, render: 2 };
+        const currentIndex = order[step] == null ? 0 : order[step];
+        document.querySelectorAll('[data-processing-step]').forEach(function (item) {
+            const itemIndex = order[item.dataset.processingStep];
+            item.classList.toggle('is-complete', itemIndex < currentIndex);
+            item.classList.toggle('is-current', item.dataset.processingStep === step);
+            if (item.dataset.processingStep === step) item.setAttribute('aria-current', 'step');
+            else item.removeAttribute('aria-current');
+        });
+        element('cashflowsProcessingMessage').textContent = message || '';
+    }
+    function showCashflowProcessing() {
+        cashflowProcessingControls = Array.from(document.querySelectorAll('button, select, input, textarea')).map(function (control) {
+            return { element: control, disabled: control.disabled };
+        });
+        cashflowProcessingControls.forEach(function (item) { item.element.disabled = true; });
+        element('cashflowsView').setAttribute('aria-busy', 'true');
+        document.body.classList.add('cashflows-processing-open');
+        element('cashflowsProcessing').hidden = false;
+        setCashflowProcessingStep('prepare', 'Preparing the selected period.');
+    }
+    function hideCashflowProcessing() {
+        cashflowProcessingControls.forEach(function (item) { item.element.disabled = item.disabled; });
+        cashflowProcessingControls = [];
+        element('cashflowsView').removeAttribute('aria-busy');
+        document.body.classList.remove('cashflows-processing-open');
+        element('cashflowsProcessing').hidden = true;
     }
     function renderTable(table, columns, rows, emptyMessage) {
         if (!rows.length) {
@@ -309,7 +348,6 @@
         renderCategoryOptions(summaryRows, true);
         element('cashflowsReceiptMode').textContent = 'Receipt presentation: ' + String(preview.receipt_presentation || 'net').toUpperCase();
         const source = result.source || {};
-        setMessage((result.blocking_reasons || []).join(' '), false);
 
         resetLazyCashflowSections();
         const lazyActions = element('cashflowsLazyActions');
@@ -327,24 +365,35 @@
             viewTransactionsButton.textContent = 'View classified transactions';
         }
     }
+    function showCashflowResultNotice(result) {
+        const preview = result.preview || {};
+        const blockingReasons = result.blocking_reasons || [];
+        const reviewCount = Number(preview.category_review_count || 0);
+        if (blockingReasons.length) showCashflowToast(blockingReasons.join(' '), true);
+        else if (reviewCount) showCashflowToast(String(reviewCount) + ' counter-account line(s) need category review.', false);
+    }
     async function generateCashflows(event) {
         if (event) event.preventDefault();
-        setMessage('Loading Cashflows summary from the configured Transaction Report template...', false);
+        showCashflowProcessing();
         const start = element('cashflowsPeriodStart').value;
         const end = element('cashflowsPeriodEnd').value;
         const controller = new AbortController();
         const timeout = window.setTimeout(function () { controller.abort(); }, CASHFLOW_REQUEST_TIMEOUT_MS);
         try {
+            setCashflowProcessingStep('load', 'Loading Cashflows data for the selected period.');
             const query = new URLSearchParams({ client_id: clientId, period_start: start, period_end: end, group_by: cashflowSelection.groupBy, details: 'summary' });
             const result = await api('/api/reconciliation/cashflows/preview?' + query.toString(), { signal: controller.signal });
+            setCashflowProcessingStep('render', 'Rendering the grouped Cashflows summary.');
             renderResult(result);
             if (!element('cashflowsTransactionsSection').hidden) await loadClassifiedTransactions(true);
+            showCashflowResultNotice(result);
         } catch (error) {
-            setMessage(error.name === 'AbortError'
+            showCashflowToast(error.name === 'AbortError'
                 ? 'Cashflows is taking longer than expected. Please try again or review the configured Transaction Report template.'
                 : error.message, true);
         } finally {
             window.clearTimeout(timeout);
+            hideCashflowProcessing();
         }
     }
     function classifiedTransactionLayout(result) {
@@ -441,7 +490,7 @@
         } catch (error) {
             if (error.name === 'AbortError') return;
             table.innerHTML = '<tbody><tr><td class="cashflows-empty">Unable to load classified transactions.</td></tr></tbody>';
-            setMessage(error.message, true);
+            showCashflowToast(error.message, true);
         }
     }
     async function toggleClassifiedTransactions() {
@@ -474,7 +523,7 @@
             button.textContent = labels[section] + ' (loaded)';
         } catch (error) {
             button.textContent = labels[section];
-            setMessage(error.message, true);
+            showCashflowToast(error.message, true);
         } finally {
             button.disabled = false;
         }
@@ -492,7 +541,6 @@
         params.set('report', 'cashflows');
         window.history.replaceState({}, '', window.location.pathname + '?' + params.toString());
         setReportView(true);
-        setMessage('', false);
     }
     function showReportsHub() {
         const params = new URLSearchParams(window.location.search);

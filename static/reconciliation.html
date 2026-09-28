@@ -4,7 +4,7 @@
     <meta charset='UTF-8'>
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
     <title>Reports | Internal Audit App</title>
-    <link rel='stylesheet' href='/static/style.css?v=34'>
+    <link rel='stylesheet' href='/static/style.css?v=35'>
 </head>
 <body class='reconciliation-page' data-nav-module='Reports' data-nav-parent='index.html'>
     <nav class='navbar'>
@@ -83,7 +83,6 @@
                 <button type='submit' class='cashflows-primary'>Load summary</button>
                 <button type='button' id='cashflowsViewTransactionsButton' class='cashflows-secondary' hidden>View classified transactions</button>
             </form>
-            <div id='cashflowsMessage' class='cashflows-message' role='status' hidden></div>
             <section class='cashflows-report-section'><div class='cashflows-section-heading'><h3>Cash Flow summary</h3><span id='cashflowsReceiptMode'></span></div><div class='cashflows-table-wrap'><table id='cashflowsSummaryTable' class='cashflows-table'></table></div></section>
             <div id='cashflowsLazyActions' class='cashflows-lazy-actions'>
                 <button type='button' id='cashflowsLoadTransfersButton' class='cashflows-secondary'>Load internal transfers</button>
@@ -128,6 +127,19 @@
                 </div>
             </section>
         </section>
+        <div id='cashflowsToast' class='cashflows-toast' role='status' aria-live='polite' hidden></div>
+        <div id='cashflowsProcessing' class='cashflows-processing' role='dialog' aria-modal='true' aria-labelledby='cashflowsProcessingTitle' hidden>
+            <div class='cashflows-processing-panel'>
+                <div class='cashflows-processing-spinner' aria-hidden='true'></div>
+                <h2 id='cashflowsProcessingTitle'>Loading Cashflows summary</h2>
+                <p id='cashflowsProcessingMessage'>Preparing the selected period.</p>
+                <ol class='cashflows-processing-steps'>
+                    <li data-processing-step='prepare'>Prepare selected period</li>
+                    <li data-processing-step='load'>Load Cashflows data</li>
+                    <li data-processing-step='render'>Render report summary</li>
+                </ol>
+            </div>
+        </div>
         <footer class='reconciliation-footer'>
             <span>Reports are kept separate from Audit Verification setup.</span>
             <span>Reports centre - Phase 1</span>

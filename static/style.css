@@ -10191,6 +10191,24 @@ body {
 @media (max-width: 680px) { .acc2-template-mapping-head { display: none; } .acc2-template-mapping-row { grid-template-columns: 1fr; gap: 8px; } }
 .cashflows-report { display: grid; gap: 18px; }
 .cashflows-report[hidden] { display: none; }
+.cashflows-toast { position: fixed; top: 76px; right: 24px; z-index: 120; width: min(360px, calc(100vw - 32px)); box-sizing: border-box; padding: 12px 15px; border: 1px solid #b8d7c1; border-radius: 9px; background: #f0fbf3; color: #245b31; box-shadow: 0 10px 28px rgba(15, 23, 42, .18); font-size: 12px; font-weight: 700; }
+.cashflows-toast[hidden] { display: none; }
+.cashflows-toast.is-error { border-color: #e7a0a0; background: #fff1f1; color: #9b2c2c; }
+.cashflows-processing { position: fixed; inset: 0; z-index: 110; display: grid; place-items: center; padding: 24px; background: rgba(15, 23, 42, .36); backdrop-filter: blur(5px); }
+.cashflows-processing[hidden] { display: none; }
+.cashflows-processing-panel { width: min(420px, calc(100vw - 48px)); box-sizing: border-box; padding: 26px; border: 1px solid #dbe4ea; border-radius: 14px; background: #fff; box-shadow: 0 18px 48px rgba(15, 23, 42, .28); text-align: center; }
+.cashflows-processing-panel h2 { margin: 12px 0 6px; color: #1a1a2e; font-size: 19px; }
+.cashflows-processing-panel p { margin: 0; color: #64748b; font-size: 13px; }
+.cashflows-processing-spinner { width: 34px; height: 34px; margin: 0 auto; border: 3px solid #dbeafe; border-top-color: #1769aa; border-radius: 50%; animation: cashflows-spin .85s linear infinite; }
+@keyframes cashflows-spin { to { transform: rotate(360deg); } }
+.cashflows-processing-steps { display: grid; gap: 7px; margin: 20px 0 0; padding: 0; list-style: none; color: #94a3b8; font-size: 12px; text-align: left; }
+.cashflows-processing-steps li { padding: 7px 10px 7px 29px; border-radius: 7px; position: relative; }
+.cashflows-processing-steps li::before { content: '•'; position: absolute; left: 11px; color: #cbd5e1; font-size: 18px; line-height: 13px; }
+.cashflows-processing-steps li.is-current { background: #eff6ff; color: #1769aa; font-weight: 700; }
+.cashflows-processing-steps li.is-current::before { content: '…'; color: #1769aa; }
+.cashflows-processing-steps li.is-complete { color: #2e7d32; }
+.cashflows-processing-steps li.is-complete::before { content: '✓'; color: #2e7d32; font-weight: 800; }
+body.cashflows-processing-open { overflow: hidden; }
 .cashflows-filter-bar { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 14px 16px; border: 1px solid #dbe4ea; border-radius: 12px; background: #f8fbfd; }
 .cashflows-filter-bar label { display: grid; gap: 5px; color: #526675; font-size: 12px; font-weight: 700; }
 .cashflows-filter-bar input { min-width: 145px; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 7px; font: inherit; }.cashflows-filter-bar select { min-width: 260px; max-width: 420px; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 7px; background: #fff; font: inherit; }
@@ -10218,7 +10236,6 @@ body {
 .cashflows-custom-range input { min-width: 0; width: 100%; box-sizing: border-box; padding: 8px 9px; border: 1px solid #cbd5e1; border-radius: 7px; background: #fff; font: inherit; }
 .cashflows-period-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid #e6edf2; }
 .cashflows-primary { border: 0; border-radius: 7px; padding: 9px 14px; background: #1769aa; color: #fff; font-weight: 700; cursor: pointer; }
-.cashflows-message { padding: 11px 13px; border: 1px solid #f0c36d; border-radius: 8px; background: #fff8e8; color: #805b12; font-size: 12px; }.cashflows-message.error { border-color: #e7a0a0; background: #fff1f1; color: #9b2c2c; }
 .cashflows-report-section { min-width: 0; padding: 16px; border-radius: 12px; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
 .cashflows-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }.cashflows-section-heading h3 { margin: 0; color: #334e60; }.cashflows-section-heading span { color: #64748b; font-size: 11px; font-weight: 700; }
 .cashflows-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }

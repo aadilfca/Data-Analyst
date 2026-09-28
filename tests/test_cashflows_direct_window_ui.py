@@ -41,6 +41,11 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert "cashflowsControls" not in html
     assert "cashflowsSourceQuality" not in html
     assert "cashflows-report-header" not in html
+    assert "cashflowsMessage" not in html
+    assert "cashflowsToast" in html
+    assert "cashflowsProcessing" in html
+    assert "cashflowsProcessingMessage" in html
+    assert "data-processing-step='load'" in html
     assert "data-period-type='fortnight'" in html
     assert 'data-picker-nav=' + chr(34) + 'prev' + chr(34) in script
     assert 'data-picker-nav=' + chr(34) + 'next' + chr(34) in script
@@ -60,9 +65,19 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert "renderControls" not in script
     assert "renderSourceQuality" not in script
     assert "setUpOverride" in script
+    assert "setMessage" not in script
+    assert "showCashflowToast" in script
+    assert "showCashflowProcessing" in script
+    assert "hideCashflowProcessing" in script
+    assert "setCashflowProcessingStep" in script
+    assert "cashflowProcessingControls" in script
     assert "group_by: cashflowSelection.groupBy" in script
     assert ".cashflows-grouping-control" in styles
     assert ".cashflows-template-note" not in styles
     assert ".cashflows-report-header" not in styles
     assert ".cashflows-control-grid" not in styles
     assert ".cashflows-source-quality" not in styles
+    assert ".cashflows-message" not in styles
+    assert ".cashflows-toast" in styles
+    assert ".cashflows-processing" in styles
+    assert ".cashflows-processing-panel" in styles

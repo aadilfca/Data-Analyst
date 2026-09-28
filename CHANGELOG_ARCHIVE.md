@@ -6716,6 +6716,14 @@ not the Cashflows preview requests.
 
 **Verification:** Aadil confirmed the local browser layout works. Focused UI/reconciliation coverage passed 9 tests; JavaScript syntax and git diff --check passed. Stylesheet cache links were synchronized to v=34. No packages were installed or source data changed.
 
+## Cashflows processing feedback - Phase 2 - 2026-09-28
+
+**Scope:** Replaced the remaining Cashflows alert-bar feedback with compact transient status messaging and blocking Load summary feedback.
+
+**Implementation:** Review warnings and request errors now appear as short-lived right-side toasts. Load summary shows a blurred modal overlay with spinner and staged progress labels, disables page controls, prevents background interaction, and remains active through dependent classified-transaction loading.
+
+**Verification:** Aadil confirmed the local browser behavior works. Focused UI/reconciliation coverage passed 9 tests; JavaScript syntax and git diff --check passed. Stylesheet cache links were synchronized to v=35. No packages were installed or source data changed.
+
 ## Cashflows period selector multi-select follow-up - 2026-09-28
 
 **Scope:** Completed the accepted Phase 1 selector refinements after local testing. The existing compact Cashflows report period control remains the only affected UI.
