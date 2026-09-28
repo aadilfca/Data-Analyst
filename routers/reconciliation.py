@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 from database import execute_query_pg, execute_write_pg, log_audit, pg_transaction
 from routers.auth import require_admin
-from services.ledger_group_summary import LedgerBalanceError, build_cashflow_summary, build_cross_group_check, build_financial_statement_summary, build_group_summary
+from services.ledger_group_summary import LedgerBalanceError, build_cashflow_summary, build_cross_group_check, build_financial_statement_summary, build_group_summary, normalize_cashflow_grouping
 from services.ledger_report_source import CASHFLOW_COLUMN_ROLE_LABELS, CASHFLOW_REQUIRED_COLUMN_ROLES, load_ledger_report_source
 from services.reconciliation_balance_source import (
     load_reconciliation_balance_source,
@@ -1219,6 +1219,8 @@ def _cashflow_preview(
     if summary is None:
         return {
             "months": [],
+            "periods": [],
+            "group_by": "month",
             "category_totals": [],
             "transfer_details": [],
             "deduction_details": [],
@@ -1234,6 +1236,8 @@ def _cashflow_preview(
     review = summary.get("categories_needing_review")
     return {
         "months": [str(month) for month in summary.get("months", [])],
+        "periods": summary.get("periods", []),
+        "group_by": summary.get("group_by", "month"),
         "category_totals": _category_total_records(summary.get("category_totals")),
         "transfer_details": _frame_records(summary.get("transfer_details")) if "transfers" in loaded else [],
         "deduction_details": _frame_records(summary.get("deduction_details")) if "deductions" in loaded else [],
@@ -1252,9 +1256,14 @@ def _build_cashflow_result(
     period_start: Any,
     period_end: Any,
     detail_sections: set[str] | None = None,
+    group_by: str = "month",
 ) -> dict[str, Any]:
     _require_active_client(client_id)
     start, end = _parse_report_period(period_start, period_end)
+    try:
+        grouping = normalize_cashflow_grouping(group_by)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
     configuration = _cashflow_configuration(client_id)
     configured_template_id = configuration.get("source_template_id")
     diagnostics: list[dict[str, Any]] = []
@@ -1291,6 +1300,7 @@ def _build_cashflow_result(
                 end,
                 match_internal_transfers=configuration["match_internal_transfers"],
                 receipt_presentation=configuration["receipt_presentation"],
+                group_by=grouping,
             )
         except LedgerBalanceError as error:
             diagnostics.append(_report_diagnostic("unbalanced_cashflow_vouchers", "error", str(error), checks=_frame_records(error.checks, limit=20)))
@@ -1321,6 +1331,7 @@ def _build_cashflow_result(
         "client_id": client_id,
         "period_start": start.date().isoformat(),
         "period_end": end.date().isoformat(),
+        "group_by": grouping,
         "configuration": {
             "cash_account_count": len(configuration["cash_account_codes"]),
             "bank_account_count": len(configuration["bank_account_codes"]),
@@ -1433,16 +1444,20 @@ def preview_cashflows(
     client_id: int = Query(..., ge=1),
     period_start: str = Query(...),
     period_end: str = Query(...),
+    group_by: str = Query("month"),
     details: Optional[str] = Query(None, description="summary or comma-separated child sections"),
     session=Depends(require_admin),
 ):
     """Return Cashflows using the Transaction Report template configured in Account Control Centre."""
+    if not isinstance(group_by, str):
+        group_by = getattr(group_by, "default", "month")
     detail_value = details if isinstance(details, str) else None
     return _build_cashflow_result(
         client_id,
         period_start,
         period_end,
         detail_sections=_parse_cashflow_detail_sections(detail_value),
+        group_by=group_by,
     )
 
 @router.get("/api/reconciliation/cashflows/sources")

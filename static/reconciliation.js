@@ -8,6 +8,195 @@
     const classifiedTransactionsLimit = 50;
     let classifiedTransactionsRequest = null;
     const CASHFLOW_REQUEST_TIMEOUT_MS = 120000;
+    const CASHFLOW_GROUPING_LABELS = { day: 'Daily', fortnight: 'Fortnightly', month: 'Monthly', quarter: 'Quarterly', half_year: 'Half-yearly', year: 'Annually' };
+    let cashflowSelection = { start: '', end: '', groupBy: 'month' };
+    let stagedCashflowSelection = null;
+    let activeCashflowPicker = null;
+    let cashflowSelectedPeriods = [];
+    let cashflowPickerView = null;
+
+    function localDate(year, month, day) { return new Date(year, month, day, 12, 0, 0, 0); }
+    function toIso(date) {
+        return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
+    }
+    function fromIso(value) {
+        const parts = String(value || '').split('-').map(Number);
+        return parts.length === 3 && parts.every(function (part) { return Number.isFinite(part); }) ? localDate(parts[0], parts[1] - 1, parts[2]) : null;
+    }
+    function monthStart(date) { return localDate(date.getFullYear(), date.getMonth(), 1); }
+    function monthEnd(date) { return localDate(date.getFullYear(), date.getMonth() + 1, 0); }
+    function yearStart(date) { return localDate(date.getFullYear(), 0, 1); }
+    function yearEnd(date) { return localDate(date.getFullYear(), 11, 31); }
+    function formatMonth(date) { return date.toLocaleDateString(undefined, { month: 'short' }); }
+    function formatRange(startValue, endValue) {
+        const start = fromIso(startValue); const end = fromIso(endValue);
+        if (!start || !end) return 'Select period';
+        if (startValue === endValue) return start.getDate() + ' ' + formatMonth(start) + ' ' + start.getFullYear();
+        if (start.getFullYear() === end.getFullYear() && start.getMonth() === 0 && start.getDate() === 1 && end.getMonth() === 11 && end.getDate() === 31) return String(start.getFullYear());
+        if (start.getFullYear() === end.getFullYear() && start.getMonth() === end.getMonth()) return start.getDate() + '–' + end.getDate() + ' ' + formatMonth(start) + ' ' + start.getFullYear();
+        if (start.getFullYear() === end.getFullYear()) return formatMonth(start) + '–' + formatMonth(end) + ' ' + start.getFullYear();
+        return formatMonth(start) + ' ' + start.getFullYear() + '–' + formatMonth(end) + ' ' + end.getFullYear();
+    }
+    function periodButtonLabel(selection) { return formatRange(selection.start, selection.end) + ' · ' + (CASHFLOW_GROUPING_LABELS[selection.groupBy] || 'Monthly'); }
+    function syncCashflowSelection() {
+        element('cashflowsPeriodStart').value = cashflowSelection.start;
+        element('cashflowsPeriodEnd').value = cashflowSelection.end;
+        element('cashflowsPeriodButton').textContent = periodButtonLabel(cashflowSelection);
+    }
+    function monthsInclusive(startValue, endValue) {
+        const start = fromIso(startValue); const end = fromIso(endValue);
+        return start && end ? ((end.getFullYear() - start.getFullYear()) * 12) + end.getMonth() - start.getMonth() + 1 : 0;
+    }
+    function autoCashflowGrouping(startValue, endValue) {
+        const start = fromIso(startValue); const end = fromIso(endValue);
+        if (!start || !end) return 'month';
+        const days = Math.round((end - start) / 86400000) + 1;
+        const months = monthsInclusive(startValue, endValue);
+        if (days <= 31) return 'day';
+        if (months <= 12) return 'month';
+        if (months <= 36) return 'quarter';
+        return 'year';
+    }
+    function groupingForPicked(type, startValue, endValue) {
+        if (type === 'month' && monthsInclusive(startValue, endValue) === 1) return 'day';
+        if (type === 'fortnight' && Math.round((fromIso(endValue) - fromIso(startValue)) / 86400000) + 1 <= 14) return 'day';
+        if ((type === 'quarter' || type === 'half_year' || type === 'year') && monthsInclusive(startValue, endValue) <= (type === 'quarter' ? 3 : type === 'half_year' ? 6 : 12)) return 'month';
+        return type;
+    }
+    function closeCashflowPopover() {
+        const popover = element('cashflowsPeriodPopover');
+        popover.hidden = true;
+        element('cashflowsPeriodButton').setAttribute('aria-expanded', 'false');
+        stagedCashflowSelection = null;
+        activeCashflowPicker = null;
+        cashflowSelectedPeriods = [];
+    }
+    function applyCashflowSelection(loadImmediately) {
+        if (!stagedCashflowSelection || !stagedCashflowSelection.start || !stagedCashflowSelection.end) return;
+        cashflowSelection = { start: stagedCashflowSelection.start, end: stagedCashflowSelection.end, groupBy: stagedCashflowSelection.groupBy };
+        syncCashflowSelection();
+        closeCashflowPopover();
+        if (loadImmediately) generateCashflows();
+    }
+    function quickCashflowSelection(name) {
+        const today = new Date(); const startYear = today.getFullYear();
+        let start = yearStart(today); let end = today; let groupBy = 'month';
+        if (name === 'this_month') { start = monthStart(today); groupBy = 'day'; }
+        if (name === 'this_quarter') { start = localDate(startYear, Math.floor(today.getMonth() / 3) * 3, 1); groupBy = 'month'; }
+        if (name === 'ytd') { start = yearStart(today); groupBy = 'month'; }
+        if (name === 'this_year') { start = yearStart(today); end = yearEnd(today); groupBy = 'month'; }
+        if (name === 'last_year') { start = localDate(startYear - 1, 0, 1); end = localDate(startYear - 1, 11, 31); groupBy = 'month'; }
+        if (name === 'monthly') { start = yearStart(today); groupBy = 'month'; }
+        stagedCashflowSelection = { start: toIso(start), end: toIso(end), groupBy: groupBy };
+        applyCashflowSelection(true);
+    }
+    function pickerPeriods(type, anchor) {
+        const year = anchor.getFullYear(); const periods = [];
+        if (type === 'month') for (let month = 0; month < 12; month += 1) periods.push({ start: localDate(year, month, 1), end: localDate(year, month + 1, 0), label: formatMonth(localDate(year, month, 1)) });
+        if (type === 'quarter') for (let quarter = 0; quarter < 4; quarter += 1) periods.push({ start: localDate(year, quarter * 3, 1), end: localDate(year, quarter * 3 + 3, 0), label: 'Q' + (quarter + 1) });
+        if (type === 'half_year') for (let half = 0; half < 2; half += 1) periods.push({ start: localDate(year, half * 6, 1), end: localDate(year, half * 6 + 6, 0), label: 'H' + (half + 1) });
+        if (type === 'fortnight') for (let month = 0; month < 12; month += 1) { periods.push({ start: localDate(year, month, 1), end: localDate(year, month, 14), label: 'F1 ' + formatMonth(localDate(year, month, 1)) }); periods.push({ start: localDate(year, month, 15), end: localDate(year, month + 1, 0), label: 'F2 ' + formatMonth(localDate(year, month, 1)) }); }
+        if (type === 'year') for (let offset = -5; offset < 7; offset += 1) periods.push({ start: localDate(year + offset, 0, 1), end: localDate(year + offset, 11, 31), label: String(year + offset) });
+        return periods;
+    }
+    function pickerHeading(label) {
+        return '<div class="cashflows-picker-heading"><button type="button" class="cashflows-picker-nav" data-picker-nav="prev" aria-label="Previous period">&lsaquo;</button><strong>' + escapeHtml(label) + '</strong><button type="button" class="cashflows-picker-nav" data-picker-nav="next" aria-label="Next period">&rsaquo;</button></div>';
+    }
+    function moveCashflowPicker(direction) {
+        const current = fromIso(cashflowPickerView) || fromIso(stagedCashflowSelection.start) || new Date();
+        if (activeCashflowPicker === 'day') {
+            cashflowPickerView = toIso(localDate(current.getFullYear(), current.getMonth() + direction, 1));
+        } else {
+            cashflowPickerView = toIso(localDate(current.getFullYear() + direction, current.getMonth(), 1));
+        }
+        renderCashflowPeriodPicker(activeCashflowPicker);
+    }
+    function cashflowPeriodKey(startValue, endValue) { return startValue + '|' + endValue; }
+    function isCashflowPeriodSelected(startValue, endValue) {
+        const key = cashflowPeriodKey(startValue, endValue);
+        return cashflowSelectedPeriods.some(function (period) { return period.key === key; });
+    }
+    function updateStagedCashflowSelection(type) {
+        if (!cashflowSelectedPeriods.length) {
+            stagedCashflowSelection = { start: '', end: '', groupBy: type };
+            return;
+        }
+        const starts = cashflowSelectedPeriods.map(function (period) { return fromIso(period.start); });
+        const ends = cashflowSelectedPeriods.map(function (period) { return fromIso(period.end); });
+        const first = new Date(Math.min.apply(null, starts));
+        const last = new Date(Math.max.apply(null, ends));
+        const startValue = toIso(first); const endValue = toIso(last);
+        stagedCashflowSelection = { start: startValue, end: endValue, groupBy: groupingForPicked(type, startValue, endValue) };
+    }
+    function chooseCashflowPeriod(start, end, type) {
+        const startValue = toIso(start); const endValue = toIso(end);
+        const key = cashflowPeriodKey(startValue, endValue);
+        const selectedIndex = cashflowSelectedPeriods.findIndex(function (period) { return period.key === key; });
+        if (selectedIndex >= 0) {
+            cashflowSelectedPeriods.splice(selectedIndex, 1);
+        } else {
+            cashflowSelectedPeriods.push({ key: key, start: startValue, end: endValue });
+        }
+        updateStagedCashflowSelection(type);
+        cashflowPickerView = startValue;
+        renderCashflowPeriodPicker(type);
+    }
+    function renderCashflowPeriodPicker(type) {
+        const picker = element('cashflowsPeriodPicker');
+        const customGrouping = element('cashflowsCustomGrouping');
+        const footer = element('cashflowsPeriodFooter');
+        picker.hidden = false;
+        footer.hidden = false;
+        customGrouping.hidden = type !== 'custom';
+        if (type === 'custom') {
+            picker.innerHTML = '<div class="cashflows-custom-range"><label>From <input type="date" data-picker-input="start" value="' + escapeHtml(stagedCashflowSelection.start) + '"></label><label>To <input type="date" data-picker-input="end" value="' + escapeHtml(stagedCashflowSelection.end) + '"></label></div>';
+            element('cashflowsCustomGroupingSelect').value = stagedCashflowSelection.groupBy || autoCashflowGrouping(stagedCashflowSelection.start, stagedCashflowSelection.end);
+            return;
+        }
+        if (type === 'day') {
+            const cursor = fromIso(cashflowPickerView) || fromIso(stagedCashflowSelection.start) || new Date();
+            const first = monthStart(cursor); const last = monthEnd(cursor); const days = [];
+            for (let day = 1; day <= last.getDate(); day += 1) {
+                const date = localDate(cursor.getFullYear(), cursor.getMonth(), day);
+                const dateValue = toIso(date); const selected = isCashflowPeriodSelected(dateValue, dateValue);
+                days.push('<button type="button" class="cashflows-picker-cell' + (selected ? ' is-selected' : '') + '" aria-pressed="' + String(selected) + '" data-picker-start="' + dateValue + '" data-picker-end="' + dateValue + '">' + day + '</button>');
+            }
+            picker.innerHTML = pickerHeading(cursor.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })) + '<div class="cashflows-day-grid">' + days.join('') + '</div>';
+            return;
+        }
+        const anchor = fromIso(cashflowPickerView) || fromIso(stagedCashflowSelection.start) || new Date();
+        const cells = pickerPeriods(type, anchor).map(function (period) {
+            const startValue = toIso(period.start); const endValue = toIso(period.end);
+            const selected = isCashflowPeriodSelected(startValue, endValue);
+            return '<button type="button" class="cashflows-picker-cell' + (selected ? ' is-selected' : '') + '" aria-pressed="' + String(selected) + '" data-picker-start="' + startValue + '" data-picker-end="' + endValue + '">' + escapeHtml(period.label) + '</button>';
+        }).join('');
+        picker.innerHTML = pickerHeading(anchor.getFullYear()) + '<div class="cashflows-period-grid">' + cells + '</div>';
+    }
+    function openCashflowPopover() {
+        stagedCashflowSelection = { start: cashflowSelection.start, end: cashflowSelection.end, groupBy: cashflowSelection.groupBy };
+        activeCashflowPicker = null;
+        cashflowSelectedPeriods = [];
+        cashflowPickerView = cashflowSelection.start;
+        element('cashflowsPeriodPicker').hidden = true;
+        element('cashflowsCustomGrouping').hidden = true;
+        element('cashflowsPeriodFooter').hidden = true;
+        const popover = element('cashflowsPeriodPopover');
+        popover.hidden = false;
+        element('cashflowsPeriodButton').setAttribute('aria-expanded', 'true');
+    }
+    function handleCashflowPickerChange(event) {
+        const target = event.target;
+        if (target.matches('[data-picker-nav]')) {
+            moveCashflowPicker(target.dataset.pickerNav === 'next' ? 1 : -1);
+            return;
+        }
+        if (target.matches('[data-picker-input="start"]') || target.matches('[data-picker-input="end"]')) {
+            stagedCashflowSelection.start = element('cashflowsPeriodPicker').querySelector('[data-picker-input="start"]').value;
+            stagedCashflowSelection.end = element('cashflowsPeriodPicker').querySelector('[data-picker-input="end"]').value;
+            stagedCashflowSelection.groupBy = element('cashflowsCustomGroupingSelect').value || autoCashflowGrouping(stagedCashflowSelection.start, stagedCashflowSelection.end);
+        }
+        if (target.matches('[data-picker-start]')) chooseCashflowPeriod(fromIso(target.dataset.pickerStart), fromIso(target.dataset.pickerEnd), activeCashflowPicker);
+    }
 
     function element(id) { return document.getElementById(id); }
     function escapeHtml(value) {
@@ -114,9 +303,28 @@
         lastCashflowsResult = result;
         const preview = result.preview || {};
         const summaryRows = preview.category_totals || [];
-        const months = preview.months || [];
-        const columns = [{ key: 'category', label: 'Category' }].concat(months.map(function (month) { return { key: month, label: month, amount: true }; })).concat([{ key: 'Total', label: 'Total', amount: true }]);
-        renderTable(element('cashflowsSummaryTable'), columns, summaryRows, 'No Cash Flow activity was found for this period.');
+        const groupBy = preview.group_by || result.group_by || 'month';
+        const periods = preview.periods || (preview.months || []).map(function (month) { return { key: month, label: month }; });
+        let columns; let tableRows;
+        if (groupBy === 'day' || groupBy === 'fortnight') {
+            const categoryKeys = summaryRows.map(function (row) { return row.category; });
+            columns = [{ key: 'period', label: groupBy === 'day' ? 'Day' : 'Fortnight' }].concat(categoryKeys.map(function (category) { return { key: category, label: category, amount: true }; })).concat([{ key: 'Total', label: 'Total', amount: true }]);
+            tableRows = periods.map(function (period) {
+                const row = { period: period.label };
+                let total = 0;
+                categoryKeys.forEach(function (category) {
+                    const source = summaryRows.find(function (item) { return item.category === category; });
+                    const amount = Number((source && source[period.key]) || 0);
+                    row[category] = amount; total += amount;
+                });
+                row.Total = total;
+                return row;
+            });
+        } else {
+            columns = [{ key: 'category', label: 'Category' }].concat(periods.map(function (period) { return { key: period.key, label: period.label, amount: true }; })).concat([{ key: 'Total', label: 'Total', amount: true }]);
+            tableRows = summaryRows;
+        }
+        renderTable(element('cashflowsSummaryTable'), columns, tableRows, 'No Cash Flow activity was found for this period.');
         renderCategoryOptions(summaryRows, true);
         element('cashflowsReceiptMode').textContent = 'Receipt presentation: ' + String(preview.receipt_presentation || 'net').toUpperCase();
         renderControls(result.controls || {});
@@ -149,7 +357,7 @@
         const controller = new AbortController();
         const timeout = window.setTimeout(function () { controller.abort(); }, CASHFLOW_REQUEST_TIMEOUT_MS);
         try {
-            const query = new URLSearchParams({ client_id: clientId, period_start: start, period_end: end, details: 'summary' });
+            const query = new URLSearchParams({ client_id: clientId, period_start: start, period_end: end, group_by: cashflowSelection.groupBy, details: 'summary' });
             const result = await api('/api/reconciliation/cashflows/preview?' + query.toString(), { signal: controller.signal });
             renderResult(result);
             if (!element('cashflowsTransactionsSection').hidden) await loadClassifiedTransactions(true);
@@ -281,7 +489,7 @@
         if (!button) return;
         button.disabled = true;
         button.textContent = 'Loading…';
-        const params = new URLSearchParams({ client_id: String(clientId), period_start: start, period_end: end, details: section });
+        const params = new URLSearchParams({ client_id: String(clientId), period_start: start, period_end: end, group_by: cashflowSelection.groupBy, details: section });
         try {
             const result = await api('/api/reconciliation/cashflows/preview?' + params.toString());
             renderCashflowChild(section, result.preview || {});
@@ -305,7 +513,7 @@
         params.set('report', 'cashflows');
         window.history.replaceState({}, '', window.location.pathname + '?' + params.toString());
         setReportView(true);
-        setMessage('Select the date range and press Load summary to use the configured Transaction Report template.', false);
+        setMessage('Select a reporting period and press Load summary to use the configured Transaction Report template.', false);
     }
     function showReportsHub() {
         const params = new URLSearchParams(window.location.search);
@@ -316,15 +524,50 @@
     }
     function defaultPeriods() {
         const today = new Date();
-        const end = today.toISOString().slice(0, 10);
-        const start = today.getFullYear() + '-01-01';
-        element('cashflowsPeriodStart').value = start;
-        element('cashflowsPeriodEnd').value = end;
+        cashflowSelection = { start: toIso(yearStart(today)), end: toIso(today), groupBy: 'month' };
+        syncCashflowSelection();
     }
     async function initialise() {
         if (window.clientContextReady) await window.clientContextReady;
         clientId = window.getSelectedClientId ? window.getSelectedClientId() : null;
         defaultPeriods();
+        element('cashflowsPeriodButton').addEventListener('click', function () {
+            const popover = element('cashflowsPeriodPopover');
+            if (popover.hidden) openCashflowPopover(); else closeCashflowPopover();
+        });
+        element('cashflowsPeriodPopover').addEventListener('click', function (event) {
+            const quick = event.target.closest('[data-quick-period]');
+            if (quick) { quickCashflowSelection(quick.dataset.quickPeriod); return; }
+            const periodType = event.target.closest('[data-period-type]');
+            if (periodType) {
+                activeCashflowPicker = periodType.dataset.periodType;
+                cashflowSelectedPeriods = [];
+                cashflowPickerView = stagedCashflowSelection.start;
+                if (activeCashflowPicker === 'custom') {
+                    stagedCashflowSelection.groupBy = autoCashflowGrouping(stagedCashflowSelection.start, stagedCashflowSelection.end);
+                } else {
+                    stagedCashflowSelection = { start: '', end: '', groupBy: activeCashflowPicker };
+                }
+                renderCashflowPeriodPicker(activeCashflowPicker);
+                return;
+            }
+            if (event.target.closest('#cashflowsPeriodCancel')) { closeCashflowPopover(); return; }
+            if (event.target.closest('#cashflowsPeriodApply')) { applyCashflowSelection(true); return; }
+        });
+        element('cashflowsPeriodPicker').addEventListener('click', handleCashflowPickerChange);
+        element('cashflowsPeriodPicker').addEventListener('change', handleCashflowPickerChange);
+        element('cashflowsCustomGroupingSelect').addEventListener('change', function (event) {
+            if (stagedCashflowSelection) stagedCashflowSelection.groupBy = event.target.value;
+        });
+        document.addEventListener('click', function (event) {
+            const popover = element('cashflowsPeriodPopover');
+            const periodControl = popover.closest('.cashflows-period-control');
+            const eventPath = typeof event.composedPath === 'function' ? event.composedPath() : [];
+            const insidePeriodControl = eventPath.length
+                ? eventPath.indexOf(periodControl) >= 0
+                : !!event.target.closest('.cashflows-period-control');
+            if (!insidePeriodControl && !popover.hidden) closeCashflowPopover();
+        });
         element('cashflowsReportForm').addEventListener('submit', generateCashflows);
         element('cashflowsViewTransactionsButton').addEventListener('click', toggleClassifiedTransactions);
         element('cashflowsLoadTransfersButton').addEventListener('click', function () { loadCashflowChild('transfers'); });

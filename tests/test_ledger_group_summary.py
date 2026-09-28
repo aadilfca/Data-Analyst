@@ -3,6 +3,7 @@ import pytest
 
 from services.ledger_group_summary import (
     LedgerBalanceError,
+    build_cashflow_summary,
     build_cross_group_check,
     build_group_summary,
 )
@@ -83,6 +84,56 @@ def test_build_group_summary_uses_full_vouchers_and_balances_monthly():
     review = result["categories_needing_review"]
     assert review["account_code"].tolist() == ["UNKNOWN"]
     assert review["fallback_category"].tolist() == ["Unmapped customer"]
+
+
+def test_cashflow_summary_buckets_transactions_by_own_date_and_zero_fills_periods():
+    journal, coa = _fixture_data()
+
+    result = build_cashflow_summary(
+        journal,
+        coa,
+        ["C1"],
+        ["B1", "B2"],
+        "2026-01-01",
+        "2026-03-31",
+        group_by="month",
+    )
+
+    assert [period["key"] for period in result["periods"]] == ["2026-01", "2026-02", "2026-03"]
+    categories = result["category_totals"]
+    assert categories.loc["Customers", "2026-01"] == 100
+    assert categories.loc["Unmapped customer", "2026-02"] == 30
+    assert categories.loc["Customers", "2026-03"] == 0
+    assert result["group_by"] == "month"
+
+
+@pytest.mark.parametrize(
+    ("grouping", "period_start", "period_end", "expected_keys"),
+    [
+        ("day", "2026-01-05", "2026-01-06", ["2026-01-05", "2026-01-06"]),
+        ("fortnight", "2026-01-01", "2026-02-28", ["2026-01-1", "2026-01-2", "2026-02-1", "2026-02-2"]),
+        ("quarter", "2026-02-10", "2026-04-18", ["2026-Q1", "2026-Q2"]),
+        ("half_year", "2026-02-10", "2026-08-18", ["2026-H1", "2026-H2"]),
+        ("year", "2026-02-10", "2027-01-05", ["2026", "2027"]),
+    ],
+)
+def test_cashflow_summary_supports_all_phase_one_groupings(grouping, period_start, period_end, expected_keys):
+    journal, coa = _fixture_data()
+
+    result = build_cashflow_summary(
+        journal,
+        coa,
+        ["C1"],
+        ["B1", "B2"],
+        period_start,
+        period_end,
+        group_by=grouping,
+    )
+
+    assert result["group_by"] == grouping
+    assert [period["key"] for period in result["periods"]] == expected_keys
+    assert result["periods"][0]["start"] == period_start
+    assert result["periods"][-1]["end"] == period_end
 
 
 def test_unbalanced_voucher_stops_report_generation():

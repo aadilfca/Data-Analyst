@@ -16,6 +16,7 @@ import pandas as pd
 
 
 DEFAULT_TOLERANCE = 0.005
+CASHFLOW_GROUPINGS = ("day", "fortnight", "month", "quarter", "half_year", "year")
 
 
 class LedgerBalanceError(ValueError):
@@ -137,6 +138,72 @@ def _period_labels(period_start: pd.Timestamp, period_end: pd.Timestamp) -> list
     first = period_start.to_period("M")
     last = period_end.to_period("M")
     return [str(period) for period in pd.period_range(first, last, freq="M")]
+
+
+def normalize_cashflow_grouping(value: Any) -> str:
+    grouping = str(value or 'month').strip().casefold().replace('-', '_')
+    aliases = {'halfyear': 'half_year', 'half_yearly': 'half_yearly', 'annual': 'year'}
+    grouping = aliases.get(grouping, grouping)
+    if grouping == 'half_yearly':
+        grouping = 'half_year'
+    if grouping not in CASHFLOW_GROUPINGS:
+        allowed = ', '.join(CASHFLOW_GROUPINGS)
+        raise ValueError('Unsupported Cashflows grouping {}. Choose one of: {}.'.format(value, allowed))
+    return grouping
+
+
+def _period_descriptor(key: str, start: pd.Timestamp, end: pd.Timestamp, label: str) -> dict[str, str]:
+    return {'key': key, 'start': start.date().isoformat(), 'end': end.date().isoformat(), 'label': label}
+
+
+def _cashflow_periods(period_start: Any, period_end: Any, grouping: Any = 'month') -> list[dict[str, str]]:
+    start = pd.Timestamp(period_start).normalize()
+    end = pd.Timestamp(period_end).normalize()
+    if pd.isna(start) or pd.isna(end) or start > end:
+        raise ValueError('period_start and period_end must form a valid inclusive period')
+    grouping = normalize_cashflow_grouping(grouping)
+    periods: list[dict[str, str]] = []
+    if grouping == 'day':
+        candidates = [(day, day, day.strftime('%d-%b-%y'), day.strftime('%Y-%m-%d')) for day in pd.date_range(start, end, freq='D')]
+    elif grouping == 'fortnight':
+        candidates = []
+        cursor = start.to_period('M')
+        last_month = end.to_period('M')
+        while cursor <= last_month:
+            month_start = cursor.start_time.normalize()
+            month_end = cursor.end_time.normalize()
+            for sequence, bucket_start in enumerate((month_start, month_start + pd.Timedelta(days=14)), 1):
+                bucket_end = min(bucket_start + pd.Timedelta(days=13), month_end)
+                candidates.append((bucket_start, bucket_end, 'F{} {}'.format(sequence, bucket_start.strftime('%b-%y')), '{}-{}'.format(cursor, sequence)))
+            cursor += 1
+    elif grouping == 'month':
+        candidates = [(period.start_time.normalize(), period.end_time.normalize(), period.start_time.strftime('%b-%y'), str(period)) for period in pd.period_range(start.to_period('M'), end.to_period('M'), freq='M')]
+    elif grouping == 'quarter':
+        candidates = [(period.start_time.normalize(), period.end_time.normalize(), 'Q{} {}'.format(period.quarter, period.year), '{}-Q{}'.format(period.year, period.quarter)) for period in pd.period_range(start.to_period('Q'), end.to_period('Q'), freq='Q')]
+    elif grouping == 'half_year':
+        candidates = []
+        for year in range(start.year, end.year + 1):
+            for half, month in ((1, 1), (2, 7)):
+                bucket_start = pd.Timestamp(year=year, month=month, day=1)
+                bucket_end = bucket_start + pd.offsets.DateOffset(months=6) - pd.Timedelta(days=1)
+                candidates.append((bucket_start, bucket_end, 'H{} {}'.format(half, year), '{}-H{}'.format(year, half)))
+    else:
+        candidates = [(period.start_time.normalize(), period.end_time.normalize(), str(period.year), str(period.year)) for period in pd.period_range(start.to_period('Y'), end.to_period('Y'), freq='Y')]
+    for candidate_start, candidate_end, label, key in candidates:
+        clipped_start = max(start, candidate_start)
+        clipped_end = min(end, candidate_end)
+        if clipped_start <= clipped_end:
+            periods.append(_period_descriptor(key, clipped_start, clipped_end, label))
+    return periods
+
+
+def _reindex_periods(frame: pd.DataFrame, period_keys: Sequence[str], index_name: str) -> pd.DataFrame:
+    if frame.empty:
+        empty = pd.DataFrame(index=pd.Index([], name=index_name), columns=list(period_keys), dtype=float)
+        return empty.fillna(0.0)
+    result = frame.reindex(columns=list(period_keys), fill_value=0.0).fillna(0.0)
+    result.index.name = index_name
+    return result.astype(float)
 
 
 def _reindex_months(frame: pd.DataFrame, month_labels: Sequence[str], index_name: str) -> pd.DataFrame:
@@ -376,6 +443,7 @@ def build_cashflow_summary(
     period_start: Any,
     period_end: Any,
     *,
+    group_by: str = 'month',
     match_internal_transfers: bool = False,
     receipt_presentation: str = "net",
     tolerance: float = DEFAULT_TOLERANCE,
@@ -396,8 +464,22 @@ def build_cashflow_summary(
     if presentation not in {"net", "gross"}:
         raise ValueError("receipt_presentation must be net or gross")
 
+    grouping = normalize_cashflow_grouping(group_by)
+    periods = _cashflow_periods(start, end, grouping)
+    period_keys = [period["key"] for period in periods]
+    period_ranges = [(period["key"], pd.Timestamp(period["start"]), pd.Timestamp(period["end"]), period["label"]) for period in periods]
+
+    def period_for_date(value: Any) -> tuple[str, str]:
+        timestamp = pd.Timestamp(value).normalize()
+        for key, bucket_start, bucket_end, label in period_ranges:
+            if bucket_start <= timestamp <= bucket_end:
+                return key, label
+        raise ValueError("A transaction date did not fall inside the requested reporting periods")
+
     months = _period_labels(start, end)
     journal = _prepare_journal(journal_df, start, end)
+    if not journal.empty:
+        journal[["period_key", "period_label"]] = journal["date"].map(period_for_date).apply(pd.Series)
     coa = _prepare_coa(coa_df)
     category_by_code = (
         coa.drop_duplicates("account_code", keep="last").set_index("account_code")["category"].to_dict()
@@ -446,6 +528,8 @@ def build_cashflow_summary(
                     "voucher_id": voucher_id,
                     "date": voucher["date"].min(),
                     "month": voucher["month"].iloc[0],
+                    "period_key": voucher["period_key"].iloc[0],
+                    "period_label": voucher["period_label"].iloc[0],
                     "transfer_type": " to ".join(sorted(types)) if len(types) > 1 else f"{next(iter(types))} to {next(iter(types))}",
                     "amount": float(treasury["debit"].sum()),
                     "matched": bool(match_internal_transfers and same_type),
@@ -468,6 +552,8 @@ def build_cashflow_summary(
                         "voucher_id": voucher_id,
                         "date": line["date"],
                         "month": line["month"],
+                        "period_key": line["period_key"],
+                        "period_label": line["period_label"],
                         "account_code": account_code,
                         "account_name": line["account_name"],
                         "voucher_detail": line["voucher_detail"],
@@ -480,6 +566,8 @@ def build_cashflow_summary(
                 {
                     "category": category,
                     "month": line["month"],
+                    "period_key": line["period_key"],
+                    "period_label": line["period_label"],
                     "amount": float(line["credit"] - line["debit"]),
                     "account_code": account_code,
                     "account_name": line["account_name"],
@@ -492,14 +580,14 @@ def build_cashflow_summary(
             customer_total = sum(row["amount"] for row in customer_lines)
             deduction_total = sum(row["amount"] for row in deduction_lines)
             first_customer = customer_lines[0]
-            category_rows.append({"category": first_customer["category"], "month": first_customer["month"], "amount": customer_total + deduction_total})
+            category_rows.append({"category": first_customer["category"], "month": first_customer["month"], "period_key": first_customer["period_key"], "amount": customer_total + deduction_total})
             for row in deduction_lines:
                 deduction_rows.append({**row, "presentation": "netted_from_customer_receipt"})
             for row in line_rows:
                 if row not in customer_lines and row not in deduction_lines:
-                    category_rows.append({"category": row["category"], "month": row["month"], "amount": row["amount"]})
+                    category_rows.append({"category": row["category"], "month": row["month"], "period_key": row["period_key"], "amount": row["amount"]})
         else:
-            category_rows.extend({"category": row["category"], "month": row["month"], "amount": row["amount"]} for row in line_rows)
+            category_rows.extend({"category": row["category"], "month": row["month"], "period_key": row["period_key"], "amount": row["amount"]} for row in line_rows)
             if deduction_lines:
                 deduction_rows.extend({**row, "presentation": "shown_separately"} for row in deduction_lines)
 
@@ -509,18 +597,20 @@ def build_cashflow_summary(
         examples = unbalanced[["voucher_id", "variance"]].head(5).to_dict("records")
         raise LedgerBalanceError(f"Cash/Bank selection contains {len(unbalanced)} unbalanced voucher(s); examples: {examples}", balance_checks)
 
-    category_frame = pd.DataFrame(category_rows, columns=["category", "month", "amount"])
+    category_frame = pd.DataFrame(category_rows, columns=["category", "month", "period_key", "amount"])
     if category_frame.empty:
-        category_totals = pd.DataFrame(index=pd.Index([], name="category"), columns=[*months, "Total"], dtype=float)
+        category_totals = pd.DataFrame(index=pd.Index([], name="category"), columns=[*period_keys, "Total"], dtype=float)
     else:
-        pivot = category_frame.pivot_table(index="category", columns="month", values="amount", aggfunc="sum", fill_value=0.0)
-        category_totals = _reindex_months(pivot.sort_index(), months, "category")
+        pivot = category_frame.pivot_table(index="category", columns="period_key", values="amount", aggfunc="sum", fill_value=0.0)
+        category_totals = _reindex_periods(pivot.sort_index(), period_keys, "category")
         category_totals["Total"] = category_totals.sum(axis=1)
-    review = pd.DataFrame(review_rows, columns=["voucher_id", "date", "month", "account_code", "account_name", "voucher_detail", "debit", "credit", "fallback_category"])
-    deductions = pd.DataFrame(deduction_rows, columns=["category", "month", "amount", "account_code", "account_name", "date", "presentation"])
-    transfers = pd.DataFrame(transfer_rows, columns=["voucher_id", "date", "month", "transfer_type", "amount", "matched", "voucher_detail"])
+    review = pd.DataFrame(review_rows, columns=["voucher_id", "date", "month", "period_key", "period_label", "account_code", "account_name", "voucher_detail", "debit", "credit", "fallback_category"])
+    deductions = pd.DataFrame(deduction_rows, columns=["category", "month", "period_key", "period_label", "amount", "account_code", "account_name", "date", "presentation"])
+    transfers = pd.DataFrame(transfer_rows, columns=["voucher_id", "date", "month", "period_key", "period_label", "transfer_type", "amount", "matched", "voucher_detail"])
     return {
         "months": months,
+        "periods": periods,
+        "group_by": grouping,
         "category_totals": category_totals,
         "transfer_details": transfers,
         "deduction_details": deductions,

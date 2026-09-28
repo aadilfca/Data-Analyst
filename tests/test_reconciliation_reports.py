@@ -47,6 +47,25 @@ def _summary():
     }
 
 
+def _cashflow_summary():
+    return {
+        "months": ["2026-02", "2026-03", "2026-04"],
+        "periods": [
+            {"key": "2026-Q1", "start": "2026-02-10", "end": "2026-03-31", "label": "Q1 2026"},
+            {"key": "2026-Q2", "start": "2026-04-01", "end": "2026-04-18", "label": "Q2 2026"},
+        ],
+        "group_by": "quarter",
+        "category_totals": pd.DataFrame({"2026-Q1": [125.0], "2026-Q2": [50.0], "Total": [175.0]}, index=["Customers"]),
+        "transfer_details": pd.DataFrame(),
+        "deduction_details": pd.DataFrame(),
+        "categories_needing_review": pd.DataFrame(),
+        "selected_voucher_count": 2,
+        "internal_transfer_count": 0,
+        "category_review_count": 0,
+        "receipt_presentation": "net",
+    }
+
+
 def _saved_codes(_client_id, group_label=None):
     return {"B1"} if not group_label or group_label.casefold() == "bank" else set()
 
@@ -95,6 +114,36 @@ def test_preview_report_blocks_download_when_balance_evidence_is_missing():
     assert response["can_download"] is False
     assert response["controls"]["reconciliation"]["status"] == "Blocked"
     assert any("Closing balances are missing" in reason for reason in response["blocking_reasons"])
+
+
+def test_cashflows_preview_passes_grouping_and_returns_period_descriptors():
+    configuration = {
+        "source_template_id": 9,
+        "cash_account_codes": [],
+        "bank_account_codes": ["B1"],
+        "match_internal_transfers": False,
+        "receipt_presentation": "net",
+    }
+    with (
+        patch.object(reconciliation, "_require_active_client"),
+        patch.object(reconciliation, "_cashflow_configuration", return_value=configuration),
+        patch.object(reconciliation, "load_ledger_report_source", return_value=_source()),
+        patch.object(reconciliation, "build_cashflow_summary", return_value=_cashflow_summary()) as builder,
+    ):
+        response = reconciliation.preview_cashflows(
+            7,
+            "2026-02-10",
+            "2026-04-18",
+            group_by="quarter",
+            details="summary",
+            session=None,
+        )
+
+    assert response["group_by"] == "quarter"
+    assert response["preview"]["group_by"] == "quarter"
+    assert response["preview"]["periods"][1]["label"] == "Q2 2026"
+    assert response["preview"]["category_totals"][0]["2026-Q1"] == 125.0
+    assert builder.call_args.kwargs["group_by"] == "quarter"
 
 
 def test_download_report_returns_professional_xlsx_when_controls_pass():

@@ -30,3 +30,18 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert "renderCategoryOptions" in script
     assert "Unassigned" in script
     assert "__unassigned__" in script
+    assert "cashflowsPeriodButton" in html
+    assert "cashflowsPeriodPopover" in html
+    assert "cashflowsPeriodPicker" in html
+    assert "data-period-type='fortnight'" in html
+    assert "cashflowsCustomGroupingSelect" in html
+    assert 'data-picker-nav=' + chr(34) + 'prev' + chr(34) in script
+    assert 'data-picker-nav=' + chr(34) + 'next' + chr(34) in script
+    assert "cashflowSelectedPeriods" in script
+    assert "isCashflowPeriodSelected" in script
+    assert "findIndex" in script
+    assert ".cashflows-picker-cell.is-selected" in styles
+    assert "event.composedPath" in script
+    assert "periodControl" in script
+    assert "insidePeriodControl" in script
+    assert "group_by: cashflowSelection.groupBy" in script

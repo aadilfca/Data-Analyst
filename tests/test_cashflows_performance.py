@@ -65,5 +65,50 @@ def test_cashflow_sql_source_filters_dates_joins_vouchers_and_aggregates_lines()
     assert "c.transaction_date <= %s" in source_sql
     assert "selected_vouchers" in source_sql
     assert "GROUP BY l.voucher_id, l.date, l.account_code" in source_sql
+    assert "c.transaction_date AS date" in source_sql
     assert "FROM client_data cd" in source_sql
     assert source_params == (7, 9, [12], "2026-01-01", "2026-01-31")
+
+
+def test_cashflow_sql_source_preserves_each_transaction_date_for_bucketing():
+    def query(sql, params=None):
+        if "FROM uploaded_files" in sql:
+            return [{"upload_id": 12, "file_name": "period.xlsx", "upload_date": "2026-02-01"}]
+        return [
+            {
+                "voucher_id": "V1",
+                "date": "2026-01-05",
+                "account_code": "B1",
+                "account_name": "Bank",
+                "voucher_detail": "January receipt",
+                "debit": 100,
+                "credit": 0,
+                "treasury_type": "bank",
+                "category": "",
+                "source_line_count": 2,
+                "classification_status": "cash",
+            },
+            {
+                "voucher_id": "V2",
+                "date": "2026-02-05",
+                "account_code": "B1",
+                "account_name": "Bank",
+                "voucher_detail": "February receipt",
+                "debit": 75,
+                "credit": 0,
+                "treasury_type": "bank",
+                "category": "",
+                "source_line_count": 2,
+                "classification_status": "cash",
+            },
+        ]
+
+    source = load_cashflow_sql_source(
+        7,
+        journal_template_id=9,
+        period_start="2026-01-01",
+        period_end="2026-02-28",
+        query_fn=query,
+    )
+
+    assert source.journal["date"].dt.strftime("%Y-%m-%d").tolist() == ["2026-01-05", "2026-02-05"]

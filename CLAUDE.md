@@ -204,110 +204,18 @@ One line per file group: what it is now. Full build history for every entry live
 ## Status log
 
 Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; performance findings also reference the investigation documents.
-- 2026-09-24: Verification Phase 6 activated Export Customer, Payroll, and Contractor JV workstreams with Treasury-safe routing and independent discovery/session dates.
-- 2026-09-24: Verification Phase 7 centralized workstream debit/credit rules and signed non-Treasury preview/session presentation.
-- 2026-09-24: Verification workstreams are now the active priority; global navigation now exposes all seven live workstreams, while Financial Statement groundwork remains deferred operationally.
-- 2026-09-25: Verification table order standardized across all seven workstreams in static/verification.js; user-confirmed.
-- 2026-09-28: Cashflows now support historical orphan discovery and exact Account Control Centre category assignment; source data remains unchanged.
-
-- 2026-07-09: main.py NameError fixed; clients module reviewed, no issues found.
-- 2026-07-12: Upload page redesign, 3 phases, plus flush-layout and navbar-gap fixes.
-- 2026-07-13/15: Verification cards, voucher grouping/table/header, transaction popover, validation indicators, and Prev/Next navigation redesigned across successive phases.
-- 2026-07-16: Template quick-add, five-way client voucher prefixes, and shared flexible date-import parsing completed.
-- 2026-07-17: Upload row exclusion/header/file flow and session restore completed; Mini Preview removed; global navbar standardized.
-- 2026-07-18: Bank Verification, hub, cashbook preview selector, navigation fix, and five-way voucher-prefix discovery completed and regression-tested.
-- 2026-07-19: Global quick-navigation menu, 3 phases, plus the navbar search field.
-- 2026-07-20: Audit Rules module and saved upload-column mappings completed across backend, frontend, and Verification integration.
-- 2026-07-21: Client Data Bank unified redesign added shared date ranges, export/grouping fixes, holidays, coverage calendar, and missing-date reporting; Upload reliability evolved into row-level blank-field rejection.
-- 2026-07-22: Trial Balance module, 5 phases, plus column-mapping Section 1 (3 phases) and a delete-upload fix.
-- 2026-07-23: Trial Balance category assignment and Verification deep-link integration completed, including cascading assignments and refresh-safe view persistence.
-- 2026-07-24/25: Verification gained dynamic Client Data Links, supporting-document linking, unassign flows, and replace-per-procedure observation rollup.
-- 2026-07-27/28: Verification behavior and Supporting Documents UI were documented/refined; Validation Rules and approval schema completed.
-- 2026-07-29: Transaction approval backend, name-only Voucher-Level Checks, and Account Head recommendation search/no-match handling completed; approval UI remains hidden.
-- 2026-07-31: Automated cross-document validation engine, 10 phases (chain-aware evaluation, shortfall observations).
-- 2026-08-01/02: Verification gained rate/backfill, Category detail, Signature Specimen soft-delete, authority fields, and Cleared Requirements summary.
-- 2026-08-05/07: Dev/test fixtures were hardened; inactive selections were excluded; Verify & Next now traverses voucher lines.
-- 2026-08-08/09: Audit Rules Categories and Physical Bill evidence shipped; amount extraction and cleared-status UI were corrected.
-- 2026-08-10: Verification session/cashbook UX fixes — state persistence, date-range reconciliation (4 phases), header stats (3 phases).
-- 2026-08-12/16: Audit Workbook built and refined with line grouping, compact header, Date/deep links, shared procedure-modal adapter, and stylesheet cache-busting.
-- 2026-08-18/19: Physical Bills gained auto-save, mandatory-field cues, and multi-bill/multi-line support.
-- 2026-08-20: Global header nav rebuild (6 phases) and First/last page buttons/import progress bar/Subtotal default flag completed.
-- 2026-08-21: Database size, dashboard KPIs, automatic Rate Source, faster imports, and native Excel date handling completed; Overdue Uploads shipped, 4 phases.
-- 2026-08-22: User module (Login → Client Cards → Dashboard, 7 phases) shipped with session-backed client selection and a redesigned header client area.
-- 2026-08-22: Admin role/guard, Manage Users, gated Client Settings, and firm-level header/tabs completed; client-context races were fixed.
-- 2026-08-23: Supabase/Render migration completed with pooled Postgres, router cutover, verified data migration, and Client Settings corrections.
-- 2026-08-23/25: Shared Loading UI completed across login, Data Bank, Upload, Audit Rules, and Verification, including modal actions and processing feedback.
-- 2026-08-24: Fast Data Handling completed with gzip, indexes, retries, column trimming, debounce, caching, pagination, and retry wiring.
-- 2026-08-24/25: Performance investigation identified region latency, sequential reads, and free-tier limits. See PERFORMANCE_INVESTIGATION.md.
-- 2026-08-24/26: Verification gained save concurrency, batched support reads, and Postgres/query corrections; start-session findings remain in KNOWN_ISSUES.md.
-- 2026-08-26/27: Verification modal caching, Category invalidation, Trial Balance batching, navigation recovery, and Data Bank availability progress completed.
-- 2026-08-27/29: Verification gained timings, metrics, dirty tracking, Save/Verify optimizations, startup reduction, and busy feedback.
-- 2026-08-28: Audit Workbook badge refresh adopted cached voucher support and corrected legacy Physical Bill completion; redundant fetch helpers were removed.
-- 2026-08-29: Legacy verification_details.status was confirmed inert; remaining findings live in KNOWN_ISSUES.md. Save/Verify roadmap separated logical verification from persistence.
-- 2026-08-30/31: Versioned client Rulebook completed with Trial Balance-first resolution, session retrieval, local guidance, status evaluation, and standalone line-save loader correction.
-- 2026-08-23/09-01: Workflow gained post-test Git gates, approval checkpoints, concise pendencies, documentation budgets, and cross-agent ownership; Architecture and Status were compressed.
-- 2026-09-01: Cross-check matrix redesign superseded per-document flat fields; schema, CRUD, authoring, and live persistence completed; legacy engine/drop work was deferred.
-- 2026-09-02: Procedure modal gained Cross-check empty-state chips and safe shortfall-note Documents; cold-pool latency was investigated. See CHANGELOG_ARCHIVE.md.
-- 2026-09-02/04: Tray/VBS lifecycle, duplicate-controller prevention, bounded Postgres startup, and health reporting completed; Postgres pool gained stale-connection retry and warm-start tuning.
-- 2026-09-03/04: Configurable Verification fields, Category roles/signatories, reusable Applied Cross-checks, and Rulebook runtime linkage completed; Category procedure-only saves were corrected.
-- 2026-09-05: Unconfigured Document previews now include active Template columns; Forms gained typed fields, linked columns, authoring, persistence, and legacy-safe Document creation.
-- 2026-09-06/08: Forms gained typed Header/Item rendering, atomic persistence, Rulebook metadata, optional templates, and blank-only Copy from lines; acceptance completed.
-- 2026-09-06: D2-D5 established canonical Category Documents, authoritative Procedure/Evidence requirements, Cross-check dependencies, and frozen-Category tab governance; manually confirmed.
-- 2026-09-07: D6 Form Quantity comparisons and modal schema/cache/exit safeguards were manually confirmed; D7 retired Evidence Type authoring while preserving legacy values.
-- 2026-09-07/08: D8 migration and legacy retirement completed with source records retained; D9 configuration hardening manually confirmed. See CHANGELOG_ARCHIVE.md.
-- 2026-09-07: P7 amount mismatches now require configured Amount fields; P1 removed the non-required Approved-by authority gate; both corrections manually confirmed.
-- 2026-09-08: Category Control Center, Verification smoke checks, and Workbook Form counts passed manual acceptance; Workbook fix pushed. See CHANGELOG_ARCHIVE.md.
-- 2026-09-09: Dashboard PostgreSQL sizing/regression completed; Database Size stat now reads real Postgres/SQLite size in MB, not a client_data estimate.
-- 2026-09-09/13: Audit Rules gained staged non-blocking processing feedback, priority rail-click handling, and shared progress-cursor ownership across CRUD/matrix actions.
-- 2026-09-10/12: Ledger Reconciliation Phases 1–8 added summary, diagnostics, categories, export, balances, and Reports/setup; manual acceptance remains pending.
-- 2026-09-12: Physical Bill Split and Form bill-group foundations, multi-bill cards, Quick-add flows, persistence, and live status refresh completed; acceptance pending where noted.
-- 2026-09-13: Loading feedback and hardening Mini-phases 1–5 completed; Audit Rules cursor/cache integration verified. See CHANGELOG_ARCHIVE.md.
-- 2026-09-13: Form draft discard safeguards completed; Procedure Data Table gained aligned multi-select rows and click-to-select/link behavior.
-- 2026-09-14: Forms gained Multiply definitions and server-owned calculations, read-only totals, numeric completion/cross-check handling, and tamper-safe persistence.
-- 2026-09-14: Storage Cleanup Phase B added a fresh-preview-hash, typed-confirmation cleanup transaction and existing-schema ledger migration protecting client, Verification, Trial Balance, and linked evidence. See CHANGELOG_ARCHIVE.md.
-- 2026-09-15/17: Verification/Procedure search popover focus refinements completed; start popup gained a direct session shortcut with shared request/progress handling.
-- 2026-09-19: Voucher Line gained Procedure-badge routing, Correct/Account Head status gates, Browse All Rows multi-select, and Save/Verify system-Document markers. See CHANGELOG_ARCHIVE.md.
-- 2026-09-19: Physical Bill item entry and styling (table and Form-style renderers alike) were unified into a compact, flush spreadsheet layout. See CHANGELOG_ARCHIVE.md.
-- 2026-09-20: Account Head clear control, Form Total-to-voucher reconciliation, Procedure modal Check/status, and Observation badge/query scoping fixes completed. See CHANGELOG_ARCHIVE.md.
-- 2026-09-20: Read-only traceability investigation mapped Category rules to Verification Cleared/Query gates; 15 findings logged. See AUDIT_RULES_TRACEABILITY_INVESTIGATION.md.
-- 2026-09-20/21: Assertions feature completed, 5 phases — master list, Document/Cross-check/Voucher-check tagging, picker UI, and coverage-gap warning. See CHANGELOG_ARCHIVE.md.
-- 2026-09-21: Audit Rules navigation and Category detail were streamlined into a two-pane editor with live status requirements and rule configuration.
-
-- 2026-09-21/22: Verification uses Category/global snapshots and applied hashes; existing PostgreSQL startup now migrates the hash column. See CHANGELOG_ARCHIVE.md, Rulebook snapshot status integration.
-- 2026-09-22: Existing-Postgres startup wasn't actually running the applied_ruleset_hash migration (line above); added fast-path companion function + regression test.
-- 2026-09-22: Rulebook correction is test-covered; query-batching was rejected after variable remote Save/Verify latency.
-- 2026-09-23: Account Sets now drive Cash/Bank Verification, including JV legs; Preview and the verification table show correct Cash movement and non-zero counterpart amounts.
-- 2026-09-24: Local Vendor backend discovery, session capture, and Preview now route published vendor accounts while Treasury vouchers remain excluded.
-- 2026-09-24: Local Vendor verification UI, quick navigation, and Treasury-safe session entry are now available; Cash/Bank workflow remains unchanged.
-- 2026-09-24: Local Vendor discovery now uses indexed vendor candidates, avoiding historical date-by-date scans while preserving Treasury exclusion.
-- 2026-09-24: Local Vendor date selection is now isolated from Cash/Bank, defaulting to its own latest eligible JV period.
-- 2026-09-24: Import Vendor Verification UI, quick navigation, separate date state, and Treasury-safe session entry are now available.
-- 2026-09-24: Simplified Account Control Centre Phase 1 added one client/account assignment foundation for Verification, Financial Statements, and Notes; legacy Account Sets remain compatible.
-- 2026-09-24: Account Control Centre Phase 2 added the Verification Accounts grid with leaf saves, parent-to-leaf application, account search, and Financial Statement/Notes placeholders.
-- 2026-09-24: Verification routing now prefers simplified account assignments for Cash, Bank, Local Vendor, and Import Vendor, with legacy fallback preserved.
-- 2026-09-24: Account Control Centre Phase 4 activated Financial Statement categories and field-scoped mapping, preserving Verification assignments; Notes remains a later placeholder.
-- 2026-09-24: Account Control Centre Phase 5 activated Notes to Financial Statements categories and field-scoped account mapping; Verification and Financial Statement assignments remain preserved.
-- 2026-09-26: Account Control Centre intro and empty status banner removed; focused UI regression coverage added. See CHANGELOG_ARCHIVE.md.
-- 2026-09-26: Verification sessions gained line-level Excel export with focused backend coverage. See CHANGELOG_ARCHIVE.md.
-- 2026-09-26: Reports hub now uses compact report cards without the redundant hero/status header; backend report groundwork remains preserved.
-- 2026-09-26: Account Control Centre Cash Flow Setup now uses one Categories column plus category and Cash/Bank configuration popups; net receipt presentation is the default.
-- 2026-09-26: Cash/Bank configuration now shows Trial Balance hierarchy rows with compact selected-account panels, checkbox selection, search context, and remove controls.
-- 2026-09-26: Reports Cashflows now has a period-filtered read-only summary using Account Control Centre categories, treasury accounts, transfer matching, and net/gross receipt settings.
-
-- 2026-09-26: Cashflows source loading now recognizes Account Detail and exposes explicit Client Data Bank choices; Load-only UI remains next.
-- 2026-09-26: Cashflows now supports client/template transaction-column mappings with required-field validation and persisted source-template selection.
-- 2026-09-26: Account Control Centre Cashflows gained a Transaction Template popup with template selection, required-field mapping, persistence, and browser coverage.
-- 2026-09-26: Cashflows Phase 1 now selects one Client Data source, repairs/quarantines source rows, and loads the generic report explicitly.
-- 2026-09-27: Cashflows now uses the configured Account Control Centre Transaction Report template across all monthwise Client Data uploads; the Source field is retired.
-
-
-
-- 2026-09-27: Cashflows multi-upload source preparation now caches repeated values and avoids slow scalar writes; Reports UI has a bounded timeout.
-
-- 2026-09-27: Cashflows now filters by date and latest template uploads in SQL; Cash/Bank voucher selection remains in the Python summary stage.
-- 2026-09-27: Cashflows now uses versioned derived lines, SQL date/voucher aggregation, and Python formatting; optional Postgres startup migration is non-blocking.
-- 2026-09-27: Cashflows now loads child detail sections and classified transactions on demand; the read-only viewer remains inside Reports.
-
+- 2026-07-09/20: Upload, Verification, Audit Rules, quick navigation, and shared date-import groundwork shipped.
+- 2026-07-21/25: Client Data Bank, Trial Balance, dynamic links, supporting documents, and observation rollup foundations shipped.
+- 2026-07-27/08-02: Validation Rules, cross-document checks, rate/backfill, Categories, Signature Specimen, and Cleared Requirements shipped.
+- 2026-08-05/12: Verification fixtures, session/cashbook UX, Audit Workbook, and stylesheet cache-busting were completed.
+- 2026-08-18/31: Physical Bills, global navigation, database/performance work, admin/client sessions, Postgres migration, and shared Loading UI shipped.
+- 2026-09-01/08: Cross-check matrix, tray lifecycle, configurable fields, Forms, assertions, and Category Control Centre acceptance completed.
+- 2026-09-09/14: Database sizing, Audit Rules feedback, Ledger Reconciliation Phases 1-8, Physical Bill split, Forms calculations, and Storage Cleanup Phase B progressed.
+- 2026-09-15/21: Verification search, Procedure routing, Physical Bill layout, status gates, assertions, and rulebook traceability were refined.
+- 2026-09-22/25: Rulebook migration, Account Sets, vendor/import workstreams, and simplified Account Control Centre routing progressed.
+- 2026-09-26: Reports hub, Cash Flow Setup, treasury panels, Cashflows source/template intake, repair/quarantine, and explicit load workflow shipped.
+- 2026-09-27: Cashflows gained configured-template multi-upload loading, derived classification, SQL filtering/aggregation, performance safeguards, and lazy detail loading.
+- 2026-09-28: Cashflows gained historical-orphan compatibility, date-preserving buckets, and compact Day/Fortnight/Month/Quarter/Half-year/Year/Custom multi-select.
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
 - Findings from a Code Health Review session go to `KNOWN_ISSUES.md`, not the Status log — the Status log records changes made, that file records issues found

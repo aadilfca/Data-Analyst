@@ -4,7 +4,7 @@
     <meta charset='UTF-8'>
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
     <title>Reports | Internal Audit App</title>
-    <link rel='stylesheet' href='/static/style.css?v=30'>
+    <link rel='stylesheet' href='/static/style.css?v=32'>
 </head>
 <body class='reconciliation-page' data-nav-module='Reports' data-nav-parent='index.html'>
     <nav class='navbar'>
@@ -53,7 +53,38 @@
         </section>
         <section id='cashflowsView' class='cashflows-report' aria-labelledby='cashflows-heading' hidden>
             <div class='cashflows-report-header'><div><button type='button' id='cashflowsBackButton' class='cashflows-back'>Back to Reports</button><h2 id='cashflows-heading'>Cashflows</h2><p>Summarise money in, money out, transfers, and customer receipt deductions from configured Cash and Bank accounts.</p></div><div id='cashflowsSourceStatus' class='cashflows-source-status' role='status'></div></div>
-            <form id='cashflowsReportForm' class='cashflows-filter-bar'><span class='cashflows-source-status'>Uses the configured Transaction Report template</span><label>From <input id='cashflowsPeriodStart' type='date' required></label><label>To <input id='cashflowsPeriodEnd' type='date' required></label><button type='submit' class='cashflows-primary'>Load summary</button><button type='button' id='cashflowsViewTransactionsButton' class='cashflows-secondary' hidden>View classified transactions</button></form>
+            <form id='cashflowsReportForm' class='cashflows-filter-bar'>
+                <span class='cashflows-source-status'>Uses the configured Transaction Report template</span>
+                <div class='cashflows-period-control'>
+                    <button type='button' id='cashflowsPeriodButton' class='cashflows-period-button' aria-haspopup='dialog' aria-expanded='false'>Select period</button>
+                    <div id='cashflowsPeriodPopover' class='cashflows-period-popover' role='dialog' aria-label='Cashflows reporting period' hidden>
+                        <div class='cashflows-period-group'><span class='cashflows-period-label'>Quick period</span><div class='cashflows-period-chips'>
+                            <button type='button' class='cashflows-period-chip' data-quick-period='this_month'>This month</button>
+                            <button type='button' class='cashflows-period-chip' data-quick-period='this_quarter'>This quarter</button>
+                            <button type='button' class='cashflows-period-chip' data-quick-period='ytd'>YTD</button>
+                            <button type='button' class='cashflows-period-chip' data-quick-period='this_year'>This year</button>
+                            <button type='button' class='cashflows-period-chip' data-quick-period='last_year'>Last year</button>
+                            <button type='button' class='cashflows-period-chip' data-quick-period='monthly'>Monthly</button>
+                        </div></div>
+                        <div class='cashflows-period-group'><span class='cashflows-period-label'>Pick by</span><div class='cashflows-period-chips'>
+                            <button type='button' class='cashflows-period-chip' data-period-type='day'>Day</button>
+                            <button type='button' class='cashflows-period-chip' data-period-type='fortnight'>Fortnight</button>
+                            <button type='button' class='cashflows-period-chip' data-period-type='month'>Month</button>
+                            <button type='button' class='cashflows-period-chip' data-period-type='quarter'>Quarter</button>
+                            <button type='button' class='cashflows-period-chip' data-period-type='half_year'>Half-year</button>
+                            <button type='button' class='cashflows-period-chip' data-period-type='year'>Year</button>
+                            <button type='button' class='cashflows-period-chip' data-period-type='custom'>Custom range</button>
+                        </div></div>
+                        <div id='cashflowsPeriodPicker' class='cashflows-period-picker' hidden></div>
+                        <div id='cashflowsCustomGrouping' class='cashflows-custom-grouping' hidden><label for='cashflowsCustomGroupingSelect'>Suggested grouping</label><select id='cashflowsCustomGroupingSelect'><option value='day'>Day</option><option value='fortnight'>Fortnight</option><option value='month'>Month</option><option value='quarter'>Quarter</option><option value='half_year'>Half-year</option><option value='year'>Year</option></select></div>
+                        <div id='cashflowsPeriodFooter' class='cashflows-period-footer' hidden><button type='button' id='cashflowsPeriodCancel' class='cashflows-secondary'>Cancel</button><button type='button' id='cashflowsPeriodApply' class='cashflows-primary'>Apply</button></div>
+                    </div>
+                </div>
+                <input id='cashflowsPeriodStart' type='date' required hidden>
+                <input id='cashflowsPeriodEnd' type='date' required hidden>
+                <button type='submit' class='cashflows-primary'>Load summary</button>
+                <button type='button' id='cashflowsViewTransactionsButton' class='cashflows-secondary' hidden>View classified transactions</button>
+            </form>
             <div id='cashflowsControls' class='cashflows-control-grid'></div>
             <div id='cashflowsMessage' class='cashflows-message' role='status' hidden></div><div id='cashflowsSourceQuality' class='cashflows-source-quality' role='status' hidden></div>
             <section class='cashflows-report-section'><div class='cashflows-section-heading'><h3>Cash Flow summary</h3><span id='cashflowsReceiptMode'></span></div><div class='cashflows-table-wrap'><table id='cashflowsSummaryTable' class='cashflows-table'></table></div></section>
@@ -106,6 +137,6 @@
         </footer>
     </main>
     <script src='/static/client_context.js?v=18'></script>
-    <script src='/static/reconciliation.js?v=7'></script>
+    <script src='/static/reconciliation.js?v=8'></script>
 </body>
 </html>

@@ -6699,3 +6699,19 @@ not the Cashflows preview requests.
 **Implementation:** The Cashflows preview accepts an optional detail-section selection. Reports requests `details=summary` for the initial Load summary action; each child section requests only its own details after the user clicks its button. Existing counts remain available for status labels, and omitted `details` retains the legacy complete response for compatibility. The read-only classified transaction viewer stays inside Reports and calls the derived classification endpoint only when opened.
 
 **Verification:** Aadil confirmed the workflow works in the local app. Focused Cashflows/classification/reconciliation coverage passed **25 tests**; JavaScript syntax, Python compilation, and `git diff --check` passed. No packages were installed and no uploaded source data was modified. This phase reduces initial response rendering and detail payload work; any remaining backend wait should be measured separately before further query changes.
+
+## Cashflows period control and date bucketing - Phase 1 - 2026-09-28
+
+**Scope:** Correct multi-month Cashflows bucketing and add one compact selector for Day, Fortnight, Month, Quarter, Half-year, Year, and Custom range analysis.
+
+**Implementation:** The server now assigns each transaction to its own inclusive period and returns period keys, clipped boundaries, labels, and zero-filled buckets. Reports uses a compact header popover with quick periods, adaptive single-period grouping, custom-range grouping, range extension, and month/year navigation. The API and lazy detail requests carry the selected grouping. Opening/Closing balances, saved defaults, export parity, and drill-down remain later phases because the current Cashflows source does not provide a reliable daily balance series.
+
+**Verification:** Focused Cashflows/reconciliation/source/UI coverage passed **58 tests**; Python compilation, JavaScript syntax, and `git diff --check` passed. The complete suite run reported **407 passed**, with unrelated pre-existing failures and one temporary-directory permission error; the two existing Cashflows direct-call failures were corrected and the relevant reconciliation suite passed. The headless browser smoke test reached the login redirect, so authenticated manual selector testing remains pending. No packages were installed and no uploaded source data was modified.
+
+## Cashflows period selector multi-select follow-up - 2026-09-28
+
+**Scope:** Completed the accepted Phase 1 selector refinements after local testing. The existing compact Cashflows report period control remains the only affected UI.
+
+**Implementation:** Pick-by cells now toggle independently, support multiple staged selections, retain choices during picker navigation, and show selected state for day and larger periods. Apply converts selected cells into one inclusive earliest-to-latest report range; Cancel discards staged changes. Outside-click handling keeps the popover open while interacting with picker controls. Stylesheet cache versions were bumped together on all HTML pages.
+
+**Verification:** `node --check static/reconciliation.js`, focused UI/reconciliation tests (9 passed), and `git diff --check` passed. Aadil confirmed the browser behavior works. No packages were installed or source data changed.
