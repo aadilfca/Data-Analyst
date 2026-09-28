@@ -216,6 +216,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-26: Reports hub, Cash Flow Setup, treasury panels, Cashflows source/template intake, repair/quarantine, and explicit load workflow shipped.
 - 2026-09-27: Cashflows gained configured-template multi-upload loading, derived classification, SQL filtering/aggregation, performance safeguards, and lazy detail loading.
 - 2026-09-28: Cashflows gained date-preserving multi-select periods, external grouping, streamlined controls, global Up navigation, transient toasts, and blocking summary processing UI.
+- 2026-09-28: Cashflows backfill now processes all PostgreSQL batches, and daily/fortnightly summaries keep categories as rows with periods as columns.
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
 - Findings from a Code Health Review session go to `KNOWN_ISSUES.md`, not the Status log — the Status log records changes made, that file records issues found

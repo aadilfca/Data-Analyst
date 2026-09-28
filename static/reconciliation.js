@@ -323,27 +323,11 @@
         lastCashflowsResult = result;
         const preview = result.preview || {};
         const summaryRows = preview.category_totals || [];
-        const groupBy = preview.group_by || result.group_by || 'month';
         const periods = preview.periods || (preview.months || []).map(function (month) { return { key: month, label: month }; });
-        let columns; let tableRows;
-        if (groupBy === 'day' || groupBy === 'fortnight') {
-            const categoryKeys = summaryRows.map(function (row) { return row.category; });
-            columns = [{ key: 'period', label: groupBy === 'day' ? 'Day' : 'Fortnight' }].concat(categoryKeys.map(function (category) { return { key: category, label: category, amount: true }; })).concat([{ key: 'Total', label: 'Total', amount: true }]);
-            tableRows = periods.map(function (period) {
-                const row = { period: period.label };
-                let total = 0;
-                categoryKeys.forEach(function (category) {
-                    const source = summaryRows.find(function (item) { return item.category === category; });
-                    const amount = Number((source && source[period.key]) || 0);
-                    row[category] = amount; total += amount;
-                });
-                row.Total = total;
-                return row;
-            });
-        } else {
-            columns = [{ key: 'category', label: 'Category' }].concat(periods.map(function (period) { return { key: period.key, label: period.label, amount: true }; })).concat([{ key: 'Total', label: 'Total', amount: true }]);
-            tableRows = summaryRows;
-        }
+        const columns = [{ key: 'category', label: 'Category' }]
+            .concat(periods.map(function (period) { return { key: period.key, label: period.label, amount: true }; }))
+            .concat([{ key: 'Total', label: 'Total', amount: true }]);
+        const tableRows = summaryRows;
         renderTable(element('cashflowsSummaryTable'), columns, tableRows, 'No Cash Flow activity was found for this period.');
         renderCategoryOptions(summaryRows, true);
         element('cashflowsReceiptMode').textContent = 'Receipt presentation: ' + String(preview.receipt_presentation || 'net').toUpperCase();

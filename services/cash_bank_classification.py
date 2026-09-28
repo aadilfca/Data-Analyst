@@ -744,14 +744,20 @@ def backfill_postgres(
             voucher_id, account_code, transaction_date, debit, credit,
             treasury_type, treasury_account_code, configuration_version,
             classification_status, is_current
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ) VALUES %s
         ON CONFLICT (client_data_id, configuration_version) DO NOTHING
     """
 
     try:
         for current_client_id in client_ids:
-            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                cursor.execute(
+            # Keep the source cursor alive while checking each batch against
+            # the derived table. Reusing one cursor for both queries resets
+            # the source result set after the first batch.
+            with (
+                conn.cursor(cursor_factory=RealDictCursor) as source_cursor,
+                conn.cursor(cursor_factory=RealDictCursor) as lookup_cursor,
+            ):
+                lookup_cursor.execute(
                     """
                     SELECT account_code, treasury_type
                     FROM account_control_cashflow_treasury_accounts
@@ -759,8 +765,8 @@ def backfill_postgres(
                     """,
                     (current_client_id,),
                 )
-                mapping = build_treasury_mapping([dict(row) for row in cursor.fetchall()])
-                cursor.execute(
+                mapping = build_treasury_mapping([dict(row) for row in lookup_cursor.fetchall()])
+                source_cursor.execute(
                     """
                     SELECT id, client_id, template_id, upload_id, row_data, extract_date
                     FROM client_data
@@ -770,12 +776,12 @@ def backfill_postgres(
                     (current_client_id,),
                 )
                 while True:
-                    source_rows = cursor.fetchmany(batch_size)
+                    source_rows = source_cursor.fetchmany(batch_size)
                     if not source_rows:
                         break
                     source_dicts = [dict(row) for row in source_rows]
                     ids = [int(row["id"]) for row in source_dicts]
-                    cursor.execute(
+                    lookup_cursor.execute(
                         """
                         SELECT client_data_id
                         FROM cash_bank_transaction_classifications
@@ -784,7 +790,7 @@ def backfill_postgres(
                         """,
                         (configuration_version, ids),
                     )
-                    existing_ids = {int(row["client_data_id"]) for row in cursor.fetchall()}
+                    existing_ids = {int(row["client_data_id"]) for row in lookup_cursor.fetchall()}
                     insert_rows = []
                     for source_row in source_dicts:
                         summary.source_rows += 1
@@ -798,7 +804,8 @@ def backfill_postgres(
                             insert_rows.append(derived_row)
 
                     if not dry_run and insert_rows:
-                        cursor.executemany(
+                        execute_values(
+                            lookup_cursor,
                             insert_sql,
                             [
                                 (
@@ -819,6 +826,7 @@ def backfill_postgres(
                                 )
                                 for row in insert_rows
                             ],
+                            page_size=batch_size,
                         )
                         conn.commit()
                         summary.inserted_rows += len(insert_rows)

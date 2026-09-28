@@ -5,7 +5,63 @@ import tempfile
 import unittest
 
 import database
-from services.cash_bank_classification import backfill_sqlite
+from services.cash_bank_classification import backfill_postgres, backfill_sqlite
+
+
+class _PostgresBackfillCursor:
+    def __init__(self, source_rows):
+        self.source_rows = source_rows
+        self.rows = []
+        self.source_index = 0
+        self.mode = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return False
+
+    def execute(self, statement, params=None):
+        if "FROM account_control_cashflow_treasury_accounts" in statement:
+            self.mode = "mapping"
+            self.rows = [{"account_code": "1000", "treasury_type": "cash"}]
+        elif "SELECT id, client_id, template_id, upload_id" in statement:
+            self.mode = "source"
+            self.source_index = 0
+        elif "SELECT client_data_id" in statement:
+            self.mode = "existing"
+            self.rows = []
+        else:
+            raise AssertionError(f"Unexpected PostgreSQL statement: {statement}")
+
+    def fetchall(self):
+        return self.rows
+
+    def fetchmany(self, size):
+        if self.mode != "source":
+            return []
+        batch = self.source_rows[self.source_index:self.source_index + size]
+        self.source_index += len(batch)
+        return batch
+
+    def executemany(self, statement, values):
+        raise AssertionError("dry-run should not write derived classifications")
+
+
+class _PostgresBackfillConnection:
+    def __init__(self, source_rows):
+        self.source_rows = source_rows
+        self.commit_count = 0
+        self.rollback_count = 0
+
+    def cursor(self, *args, **kwargs):
+        return _PostgresBackfillCursor(self.source_rows)
+
+    def commit(self):
+        self.commit_count += 1
+
+    def rollback(self):
+        self.rollback_count += 1
 
 
 class CashBankTransactionBackfillTests(unittest.TestCase):
@@ -190,6 +246,38 @@ class CashBankTransactionBackfillTests(unittest.TestCase):
             0,
         )
 
+    def test_postgres_backfill_keeps_source_cursor_across_batches(self):
+        source_rows = [
+            {
+                "id": index,
+                "client_id": 7,
+                "template_id": 9,
+                "upload_id": 11,
+                "row_data": {
+                    "Voucher ID": f"V-{index}",
+                    "Account Detail": "1000",
+                    "Date": f"2026-0{index}-01",
+                    "Debit Amount": "10",
+                    "Credit Amount": "0",
+                },
+                "extract_date": f"2026-0{index}-01",
+            }
+            for index in (1, 2, 3, 4)
+        ]
+        connection = _PostgresBackfillConnection(source_rows)
 
+        summary = backfill_postgres(
+            connection,
+            client_id=7,
+            configuration_version=1,
+            batch_size=2,
+            dry_run=True,
+        )
+
+        self.assertEqual(summary.source_rows, 4)
+        self.assertEqual(summary.skipped_existing_rows, 0)
+        self.assertEqual(summary.cash_rows, 4)
+        self.assertEqual(connection.commit_count, 0)
+        self.assertEqual(connection.rollback_count, 0)
 if __name__ == "__main__":
     unittest.main()

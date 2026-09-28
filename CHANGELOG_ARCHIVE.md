@@ -1,4 +1,14 @@
 # Changelog Archive
+## Cashflows backfill completeness and period matrix orientation - 2026-09-28
+
+**Scope:** Ensure PostgreSQL Cash/Bank classification backfills process every source batch and keep Cashflows daily and fortnightly summaries readable.
+
+**Implementation:** Backfill now uses separate source and lookup cursors with bulk inserts, preventing later batches from being skipped. Cashflows renders one consistent matrix with Category as the first column and selected periods across columns for every grouping.
+
+**Verification:** User-confirmed local UI test passed. Focused Ledger Summary, reconciliation API, and Cashflows UI tests passed (19); JavaScript syntax and `git diff --check` passed. The controlled repair scanned 115,652 source rows and inserted 77,616 derived classifications.
+
+Files: services/cash_bank_classification.py, static/reconciliation.js, tests/test_cash_bank_transaction_backfill.py.
+
 ## Cashflows historical orphan account handling - 2026-09-28
 
 **Scope:** Complete the approved read-only discovery and controlled category-assignment phases for historical transaction account codes missing from the latest Trial Balance.
