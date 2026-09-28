@@ -501,8 +501,12 @@ def load_cashflow_classification_preview(
         where.append("LOWER(c.account_code) = LOWER(%s)")
         params.append(account_code.strip())
     if category:
-        where.append("LOWER(COALESCE(category.label, '')) LIKE LOWER(%s)")
-        params.append(f"%{category.strip()}%")
+        category_filter = category.strip().casefold()
+        if category_filter == "__unassigned__":
+            where.append("NULLIF(BTRIM(COALESCE(category.label, '')), '') IS NULL")
+        else:
+            where.append("LOWER(COALESCE(category.label, '')) LIKE LOWER(%s)")
+            params.append(f"%{category.strip()}%")
 
     where_sql = " AND ".join(where)
     from_sql = """
@@ -823,3 +827,74 @@ def backfill_postgres(
         raise
 
     return summary
+
+
+def discover_historical_orphan_accounts_postgres(
+    client_id: int,
+    current_accounts: list[Mapping[str, Any]],
+    query_fn: Callable[..., list[Mapping[str, Any]]] | None = None,
+) -> list[dict[str, Any]]:
+    """Return historical transaction account codes absent from the latest TB."""
+    query = query_fn or execute_query_pg
+    rows = query(
+        """
+        SELECT
+            c.account_code,
+            COUNT(*) AS transaction_count,
+            COUNT(DISTINCT c.voucher_id) AS voucher_count,
+            MIN(c.transaction_date) AS first_transaction_date,
+            MAX(c.transaction_date) AS last_transaction_date,
+            COALESCE(
+                MAX(NULLIF(BTRIM(cd.row_data ->> 'Account Name'), '')),
+                MAX(NULLIF(BTRIM(cd.row_data ->> 'Account Title'), '')),
+                MAX(NULLIF(BTRIM(cd.row_data ->> 'Ledger Name'), '')),
+                MAX(NULLIF(BTRIM(cd.row_data ->> 'Particulars'), '')),
+                ''
+            ) AS source_account_name,
+            MAX(orphan_category_assignment.category_id) AS category_id
+        FROM cash_bank_transaction_classifications c
+        JOIN client_data cd ON cd.id = c.client_data_id
+        LEFT JOIN account_control_cashflow_category_assignments orphan_category_assignment
+          ON orphan_category_assignment.client_id = c.client_id
+         AND orphan_category_assignment.account_code = c.account_code
+        WHERE c.client_id = %s
+          AND NULLIF(BTRIM(c.account_code), '') IS NOT NULL
+        GROUP BY c.account_code
+        ORDER BY c.account_code
+        """,
+        (client_id,),
+    )
+    current_by_code = {
+        str(account.get("account_code") or "").strip().casefold(): account
+        for account in current_accounts
+        if str(account.get("account_code") or "").strip()
+    }
+
+    def nearest_parent(code: str) -> dict[str, Any] | None:
+        parts = code.split("-")
+        for index in range(len(parts) - 1, 0, -1):
+            parent = current_by_code.get("-".join(parts[:index]).casefold())
+            if parent:
+                return parent
+        return None
+
+    discovered: list[dict[str, Any]] = []
+    for row in rows:
+        code = str(row.get("account_code") or "").strip()
+        if not code or code.casefold() in current_by_code:
+            continue
+        parent = nearest_parent(code)
+        discovered.append({
+            "account_code": code,
+            "account_name": str(row.get("source_account_name") or "").strip(),
+            "category_id": row.get("category_id"),
+            "parent_account_code": parent.get("account_code") if parent else None,
+            "parent_account_name": parent.get("account_name") if parent else None,
+            "transaction_count": int(row.get("transaction_count") or 0),
+            "voucher_count": int(row.get("voucher_count") or 0),
+            "first_transaction_date": row.get("first_transaction_date"),
+            "last_transaction_date": row.get("last_transaction_date"),
+            "is_historical_orphan": True,
+            "is_read_only": True,
+        })
+    return discovered

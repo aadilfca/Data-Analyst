@@ -85,7 +85,8 @@
                         <option value='review'>Needs review</option>
                     </select>
                     <input id='cashflowsTransactionsAccount' type='search' placeholder='Account code' aria-label='Filter account code'>
-                    <input id='cashflowsTransactionsCategory' type='search' placeholder='Assigned category' aria-label='Filter assigned category'>
+                    <input id='cashflowsTransactionsCategory' list='cashflowsTransactionsCategoryOptions' type='search' placeholder='Assigned category' aria-label='Filter assigned category' autocomplete='off'>
+                    <datalist id='cashflowsTransactionsCategoryOptions'></datalist>
                     <button type='button' id='cashflowsTransactionsApply' class='cashflows-primary'>Apply</button>
                     <button type='button' id='cashflowsTransactionsClear' class='cashflows-secondary'>Clear</button>
                 </div>

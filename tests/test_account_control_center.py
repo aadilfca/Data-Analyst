@@ -217,6 +217,23 @@ class SimplifiedAccountControlTests(unittest.TestCase):
 
 
 class CashFlowControlTests(unittest.TestCase):
+    def test_cashflow_setup_includes_read_only_historical_orphans(self):
+        accounts = [{
+            "id": 1,
+            "account_code": "60-10-70",
+            "account_name": "Vehicles Running And Maintenance - Admin",
+            "parent_account_code": None,
+            "level": 3,
+            "classification": "parent",
+        }]
+        with patch.object(control_center, "_latest_control_accounts", return_value=({"id": 9}, accounts)), patch.object(
+            control_center,
+            "discover_historical_orphan_accounts_postgres",
+            return_value=[{"account_code": "60-10-70-0007", "is_read_only": True}],
+        ), patch.object(control_center, "execute_query_pg", side_effect=[[], [], [], []]):
+            result = control_center.get_cashflow_setup(1, session={"username": "Admin"})
+
+        self.assertEqual(result["historical_orphans"][0]["account_code"], "60-10-70-0007")
     def test_category_payload_normalises_key_and_label(self):
         cleaned = control_center._clean_cashflow_category_payload(
             control_center.CashFlowCategoryPayload(client_id=1, category_key=" Customer Receipts ", label="  Customer receipts  ")
@@ -224,6 +241,22 @@ class CashFlowControlTests(unittest.TestCase):
         self.assertEqual(cleaned["category_key"], "customer_receipts")
         self.assertEqual(cleaned["label"], "Customer receipts")
 
+    def test_historical_orphan_category_assignment_is_allowed_for_exact_code(self):
+        payload = control_center.CashFlowCategoryAssignmentPayload(
+            client_id=1, account_code="60-10-70-0007", category_id=4
+        )
+        accounts = [{"account_code": "60-10-70", "classification": "parent"}]
+        with patch.object(control_center, "_latest_control_accounts", return_value=({}, accounts)), patch.object(
+            control_center,
+            "discover_historical_orphan_accounts_postgres",
+            return_value=[{"account_code": "60-10-70-0007", "is_historical_orphan": True}],
+        ), patch.object(control_center, "_validate_cashflow_category"), patch.object(
+            control_center, "_upsert_cashflow_category_assignment"
+        ) as upsert:
+            result = control_center.save_cashflow_category_assignment(payload, session={"username": "Admin"})
+
+        self.assertEqual(result["classification_scope"], "historical_orphan")
+        upsert.assert_called_once()
     def test_category_assignment_payload_cleans_account_code_and_allows_clear(self):
         cleaned = control_center._clean_cashflow_category_assignment(
             control_center.CashFlowCategoryAssignmentPayload(client_id=1, account_code=" 10-15-0001 ", category_id=None)
@@ -233,6 +266,19 @@ class CashFlowControlTests(unittest.TestCase):
     def test_settings_accept_only_net_or_gross_at_model_boundary(self):
         self.assertEqual(control_center.CashFlowSettingsPayload(client_id=1, receipt_presentation="gross").receipt_presentation, "gross")
 
+    def test_unknown_category_assignment_code_is_rejected(self):
+        payload = control_center.CashFlowCategoryAssignmentPayload(
+            client_id=1, account_code="99-99-9999", category_id=4
+        )
+        with patch.object(control_center, "_latest_control_accounts", return_value=({}, [])), patch.object(
+            control_center,
+            "discover_historical_orphan_accounts_postgres",
+            return_value=[],
+        ), patch.object(control_center, "_validate_cashflow_category"):
+            with self.assertRaises(HTTPException) as raised:
+                control_center.save_cashflow_category_assignment(payload, session={"username": "Admin"})
+
+        self.assertEqual(raised.exception.status_code, 400)
     def test_category_assignment_upsert_writes_new_assignment_table(self):
         with patch.object(control_center, "execute_write_pg") as write:
             control_center._upsert_cashflow_category_assignment(

@@ -21,3 +21,12 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert "details: 'summary'" in script
     assert "loadCashflowChild" in script
     assert ".cashflows-lazy-actions" in styles
+    assert ".cashflows-transactions-section .cashflows-table th" in styles
+    assert "assignedCategoryIndex" in script
+    assert "cashflows-classified-cash" in script
+    assert "cashflows-classified-bank" in script
+    assert "#0070C0" in styles
+    assert "cashflowsTransactionsCategoryOptions" in html
+    assert "renderCategoryOptions" in script
+    assert "Unassigned" in script
+    assert "__unassigned__" in script

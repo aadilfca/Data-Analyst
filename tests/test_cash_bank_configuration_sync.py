@@ -54,6 +54,36 @@ class _Connection:
 
 
 class CashBankConfigurationSyncTests(unittest.TestCase):
+    def test_historical_orphans_are_read_only_and_grouped_under_nearest_current_parent(self):
+        queried = []
+
+        def query(sql, params):
+            queried.append((sql, params))
+            return [{
+                "account_code": "60-10-70-0007",
+                "source_account_name": "Pool Bikes",
+                "transaction_count": 6,
+                "voucher_count": 2,
+                "first_transaction_date": "2026-01-01",
+                "last_transaction_date": "2026-01-30",
+                "category_id": 4,
+            }]
+
+        result = classification.discover_historical_orphan_accounts_postgres(
+            7,
+            [{"account_code": "60-10-70", "account_name": "Vehicles Running And Maintenance - Admin"}],
+            query_fn=query,
+        )
+
+        self.assertEqual(len(queried), 1)
+        self.assertEqual(queried[0][1], (7,))
+        self.assertIn("account_control_cashflow_category_assignments", queried[0][0])
+        self.assertEqual(result[0]["category_id"], 4)
+        self.assertNotIn("INSERT", queried[0][0].upper())
+        self.assertEqual(result[0]["parent_account_code"], "60-10-70")
+        self.assertEqual(result[0]["parent_account_name"], "Vehicles Running And Maintenance - Admin")
+        self.assertTrue(result[0]["is_historical_orphan"])
+        self.assertTrue(result[0]["is_read_only"])
     def test_action_names_cover_add_edit_and_deactivate(self):
         current = {("CASH", "cash")}
         self.assertEqual(classification._configuration_action(set(), current), "created")

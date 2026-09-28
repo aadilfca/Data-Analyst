@@ -1,4 +1,14 @@
 # Changelog Archive
+## Cashflows historical orphan account handling - 2026-09-28
+
+**Scope:** Complete the approved read-only discovery and controlled category-assignment phases for historical transaction account codes missing from the latest Trial Balance.
+
+**Implementation:** Cash Flow Setup now discovers distinct orphan codes from derived transaction classifications, shows their historical account name, surviving parent, transaction/voucher counts, and navy historical styling. Exact orphan codes can receive or clear an active Cash Flow category through the existing assignment table; parent bulk assignment and unknown codes remain blocked. Cashflows resolves the saved category through the derived-layer join without rewriting raw uploads or duplicating derived rows.
+
+**Verification:** User-confirmed orphan discovery and category assignment in the local app. The focused Cashflows/Account Control Centre suite passed 33 tests; Python compilation, JavaScript syntax, and git diff --check passed. No uploaded source data was modified.
+
+Files: routers/account_control_center.py, services/cash_bank_classification.py, static/account_control_center.html, static/account_control_center.js, static/style.css, tests/test_account_control_center.py, tests/test_account_control_center_ui.py, tests/test_cash_bank_configuration_sync.py.
+
 ## Verification Excel export - 2026-09-26
 
 Scope: Add downloadable Excel export for current Verification sessions.

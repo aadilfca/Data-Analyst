@@ -49,6 +49,20 @@
             return '<div class="cashflows-control ' + String(control.status || '').toLowerCase() + '"><strong>' + escapeHtml(key.replace(/_/g, ' ')) + '</strong><span>' + escapeHtml(control.status || '') + '</span><small>' + escapeHtml(control.message || '') + '</small></div>';
         }).join('');
     }
+    function renderCategoryOptions(values, replaceExisting) {
+        const datalist = element('cashflowsTransactionsCategoryOptions');
+        const input = element('cashflowsTransactionsCategory');
+        if (!datalist || !input) return;
+        const categories = new Set(replaceExisting ? ['Unassigned'] : Array.from(datalist.options || []).map(function (option) { return option.value; }));
+        (values || []).forEach(function (value) {
+            const category = typeof value === 'string' ? value : (value && value.category);
+            if (category) categories.add(String(category));
+        });
+        if (input.value.trim()) categories.add(input.value.trim());
+        datalist.innerHTML = Array.from(categories).sort(function (left, right) { return left.localeCompare(right); }).map(function (category) {
+            return '<option value="' + escapeHtml(category) + '"></option>';
+        }).join('');
+    }
     function renderSourceQuality(source) {
         const box = element('cashflowsSourceQuality');
         const quality = source.quality || {};
@@ -103,6 +117,7 @@
         const months = preview.months || [];
         const columns = [{ key: 'category', label: 'Category' }].concat(months.map(function (month) { return { key: month, label: month, amount: true }; })).concat([{ key: 'Total', label: 'Total', amount: true }]);
         renderTable(element('cashflowsSummaryTable'), columns, summaryRows, 'No Cash Flow activity was found for this period.');
+        renderCategoryOptions(summaryRows, true);
         element('cashflowsReceiptMode').textContent = 'Receipt presentation: ' + String(preview.receipt_presentation || 'net').toUpperCase();
         renderControls(result.controls || {});
         const source = result.source || {};
@@ -146,19 +161,29 @@
             window.clearTimeout(timeout);
         }
     }
-    function classifiedTransactionColumns(result) {
+    function classifiedTransactionLayout(result) {
         const rawColumns = (result.template_columns || []).map(function (column) {
             return typeof column === 'string' ? column : column.column_name;
         }).filter(Boolean);
-        return rawColumns.concat(['Type', 'Account', 'Assigned Category']);
+        const normalised = function (value) { return String(value).trim().toLowerCase(); };
+        const voucherDetailIndex = rawColumns.findIndex(function (column) { return normalised(column) === 'voucher detail'; });
+        const accountNameIndex = rawColumns.findIndex(function (column) { return normalised(column) === 'account name'; });
+        const assignedCategoryIndex = voucherDetailIndex >= 0
+            ? voucherDetailIndex
+            : (accountNameIndex >= 0 ? accountNameIndex + 1 : rawColumns.length);
+        const columns = rawColumns.slice();
+        columns.splice(assignedCategoryIndex, 0, 'Assigned Category');
+        columns.push('Type', 'Account');
+        return { rawColumns: rawColumns, columns: columns, assignedCategoryIndex: assignedCategoryIndex };
     }
+
     function renderClassifiedTransactions(result) {
         const table = element('cashflowsTransactionsTable');
         const rows = result.rows || [];
-        const rawColumns = (result.template_columns || []).map(function (column) {
-            return typeof column === 'string' ? column : column.column_name;
-        }).filter(Boolean);
-        const columns = classifiedTransactionColumns(result);
+        const layout = classifiedTransactionLayout(result);
+        renderCategoryOptions(rows.map(function (row) { return row.classification && row.classification.assigned_category; }));
+        const rawColumns = layout.rawColumns;
+        const columns = layout.columns;
         const totalPages = Math.max(1, Math.ceil(classifiedTransactionsTotal / classifiedTransactionsLimit));
         element('cashflowsTransactionsCount').textContent = String(classifiedTransactionsTotal) + ' line(s)';
         element('cashflowsTransactionsPageInfo').textContent = 'Page ' + String(classifiedTransactionsPage) + ' of ' + String(totalPages);
@@ -174,14 +199,22 @@
             const classification = row.classification || {};
             const account = [classification.account_code, classification.account_name].filter(Boolean).join(' — ') || '—';
             const assignedCategory = classification.assigned_category || (classification.classification_status === 'unmapped' ? 'Needs review' : '—');
-            const values = rawColumns.map(function (column) { return raw[column] == null ? '' : raw[column]; }).concat([
-                classification.type || 'Needs review', account, assignedCategory
+            const rawValues = rawColumns.map(function (column) { return raw[column] == null ? '' : raw[column]; });
+            const values = rawValues.slice(0, layout.assignedCategoryIndex).concat([
+                assignedCategory
+            ], rawValues.slice(layout.assignedCategoryIndex), [
+                classification.type || 'Needs review', account
             ]);
             const cells = values.map(function (value, valueIndex) {
-                const className = valueIndex >= rawColumns.length ? ' class="cashflows-classification-cell"' : '';
+                const label = columns[valueIndex];
+                const className = ['Type', 'Account', 'Assigned Category'].indexOf(label) >= 0 ? ' class="cashflows-classification-cell"' : '';
                 return '<td' + className + '>' + escapeHtml(value) + '</td>';
             }).join('');
-            return '<tr><td>' + String((classifiedTransactionsPage - 1) * classifiedTransactionsLimit + index + 1) + '</td>' + cells + '</tr>';
+            const classificationType = String(classification.type || '').trim().toLowerCase();
+            const rowClass = classificationType === 'cash'
+                ? ' class="cashflows-classified-cash"'
+                : (classificationType === 'bank' ? ' class="cashflows-classified-bank"' : '');
+            return '<tr' + rowClass + '><td>' + String((classifiedTransactionsPage - 1) * classifiedTransactionsLimit + index + 1) + '</td>' + cells + '</tr>';
         }).join('');
         table.innerHTML = '<thead><tr>' + headerCells + '</tr></thead><tbody>' + bodyRows + '</tbody>';
     }
@@ -208,10 +241,11 @@
         const type = element('cashflowsTransactionsType').value;
         const account = element('cashflowsTransactionsAccount').value.trim();
         const category = element('cashflowsTransactionsCategory').value.trim();
+        const categoryFilter = category.toLowerCase() === 'unassigned' ? '__unassigned__' : category;
         if (search) params.set('search', search);
         if (type) params.set('classification_type', type);
         if (account) params.set('account_code', account);
-        if (category) params.set('category', category);
+        if (categoryFilter) params.set('category', categoryFilter);
         try {
             const result = await api('/api/data/cashflows-classification-preview?' + params.toString(), {
                 signal: classifiedTransactionsRequest.signal

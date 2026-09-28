@@ -11,7 +11,10 @@ from pydantic import BaseModel, Field
 from database import execute_query_pg, execute_write_pg, log_audit, pg_transaction
 from routers.auth import require_admin
 from routers.trial_balance import find_latest_parsed_upload
-from services.cash_bank_classification import synchronize_treasury_accounts_postgres
+from services.cash_bank_classification import (
+    discover_historical_orphan_accounts_postgres,
+    synchronize_treasury_accounts_postgres,
+)
 
 
 router = APIRouter()
@@ -962,6 +965,7 @@ def apply_account_control_cashflow_to_children(payload: CashFlowBulkAssignmentPa
 @router.get("/api/account-control-center/cashflow/setup")
 def get_cashflow_setup(client_id: int = Query(..., ge=1), session=Depends(require_admin)):
     upload, accounts = _latest_control_accounts(client_id)
+    historical_orphans = discover_historical_orphan_accounts_postgres(client_id, accounts)
     categories = execute_query_pg(
         """SELECT id, client_id, category_key, label, sort_order, is_active
            FROM account_control_cashflow_categories
@@ -1006,6 +1010,7 @@ def get_cashflow_setup(client_id: int = Query(..., ge=1), session=Depends(requir
             }
             for row in accounts
         ],
+        "historical_orphans": historical_orphans,
         "treasury_accounts": {
             "cash": [row["account_code"] for row in treasury_rows if row["treasury_type"] == "cash"],
             "bank": [row["account_code"] for row in treasury_rows if row["treasury_type"] == "bank"],
@@ -1061,13 +1066,20 @@ def save_cashflow_category_assignment(payload: CashFlowCategoryAssignmentPayload
     assignment = _clean_cashflow_category_assignment(payload)
     _validate_cashflow_category(assignment["client_id"], assignment["category_id"])
     _upload, accounts = _latest_control_accounts(assignment["client_id"])
+    historical_orphans = discover_historical_orphan_accounts_postgres(assignment["client_id"], accounts)
     account = next((row for row in accounts if _normalise_account_code(row["account_code"]) == assignment["account_code"]), None)
-    if not account:
-        raise HTTPException(400, "Account code is not present in the latest Trial Balance")
-    if account["classification"] != "leaf":
+    orphan = next((row for row in historical_orphans if _normalise_account_code(row["account_code"]) == assignment["account_code"]), None)
+    if not account and not orphan:
+        raise HTTPException(400, "Account code is not present in the latest Trial Balance or historical transaction history")
+    if account and account["classification"] != "leaf":
         raise HTTPException(400, "Assign the parent through the bulk child operation; direct assignments require a leaf account")
     _upsert_cashflow_category_assignment(assignment, _actor_name(session))
-    return {"saved": True, "account_code": assignment["account_code"], "category_id": assignment["category_id"]}
+    return {
+        "saved": True,
+        "account_code": assignment["account_code"],
+        "category_id": assignment["category_id"],
+        "classification_scope": "historical_orphan" if orphan and not account else "current_trial_balance",
+    }
 
 
 @router.post("/api/account-control-center/cashflow/category-assignment/apply-to-children")

@@ -33,9 +33,9 @@ One line per file group: what it is now. Full build history for every entry live
 - static/procedure_modal.js → shared Verification/Audit Workbook Procedure modal for grouped Data Table search, evidence/Forms, procedures, and observations. See CHANGELOG_ARCHIVE.md.
 - static/audit_workbook.js, static/audit_workbook.html → Audit Workbook: session rows, filtering, totals, shared Procedure Modal, and cached evidence/Form completion badges. See CHANGELOG_ARCHIVE.md.
 - routers/trial_balance.py → Trial Balance upload, hierarchy, categories, deletion, and shared latest parsed-upload lookup. See CHANGELOG_ARCHIVE.md.
-- routers/account_control_center.py → simplified client/account mapping, Financial Statement/Notes category CRUD, field-scoped assignments, and legacy Account Set APIs. See CHANGELOG_ARCHIVE.md.
+- routers/account_control_center.py → client/account mappings, Cash Flow categories, treasury setup, and historical-orphan category assignments. See CHANGELOG_ARCHIVE.md.
 - static/trial_balance.html, static/trial_balance.js → Trial Balance upload/review UI with scoped loading feedback; Period End supplies backend `as_of_date` (no separate input). See CHANGELOG_ARCHIVE.md and the period-input Convention below.
-- static/account_control_center.html, static/account_control_center.js → central Verification/Financial Statement/Notes mappings with Cash/Bank voucher-selection guidance. See CHANGELOG_ARCHIVE.md.
+- static/account_control_center.html, static/account_control_center.js → central mappings, Cash/Bank setup, and historical-orphan Cash Flow category assignment. See CHANGELOG_ARCHIVE.md.
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Two-pane Audit Rules editor for Documents, Cross-checks, Categories, Voucher Checks and Assertions, plus Assign Categories. See CHANGELOG_ARCHIVE.md.
 - category_control_center_prototype.html → standalone review-only prototype for the Category Control Center redesign; sample data only, no backend connection.
@@ -45,13 +45,13 @@ One line per file group: what it is now. Full build history for every entry live
 - static/loading_ui.js → shared `window.LoadingUI` primitives, including token-based target-aware global progress-cursor ownership. See CHANGELOG_ARCHIVE.md.
 - static/api_utils.js → shared `apiFetch()` (GET debounce/retry) and `apiFetchMutate()` (non-retried writes, optional Loading UI); warning-only direct-`/api/` fetch guard; partial rollout. See CHANGELOG_ARCHIVE.md.
 - services/ledger_group_summary.py + ledger_report_source.py → pure summary engine and stored Client Data/report-category adapter. See CHANGELOG_ARCHIVE.md.
-- services/cash_bank_classification.py + scripts/backfill_cash_bank_transaction_classifications.py -> versioned derived Cash/Bank transaction-line classification, upload/backfill application, and audited reclassification without raw-row mutation. See CHANGELOG_ARCHIVE.md.
+- services/cash_bank_classification.py + scripts/backfill_cash_bank_transaction_classifications.py -> versioned derived Cash/Bank lines, Cash Flow category resolution, upload/backfill application, and audited reclassification without raw-row mutation. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_xlsx.py → static Bank/Cash workbook exporter for summaries, schedules, reviews, cross-checks, and reconciliation proofs. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_balance_source.py → validates stored opening/month-end balances and converts them to reconciliation-engine inputs. See CHANGELOG_ARCHIVE.md.
-- tests/test_cashflows_classification_preview.py + tests/test_cashflows_direct_window_ui.py → regression coverage for the derived Cashflows preview and inline/lazy Reports UI.
+- tests/test_account_control_center*.py + tests/test_cash_bank_configuration_sync.py + tests/test_cashflows*.py → regression coverage for setup, orphan assignment, derived classification, and Cashflows Reports UI.
 
 
-- static/reconciliation.html, static/reconciliation.js -> client-context Reports plus group, Ledger Summary category, and balance setup. See CHANGELOG_ARCHIVE.md.
+- static/reconciliation.html, static/reconciliation.js -> client-context Reports, Cashflows summary, classified transactions, Ledger Summary categories, and balance setup. See CHANGELOG_ARCHIVE.md.
 
 ## Commands
 - Run app: [your actual run command]
@@ -208,6 +208,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-24: Verification Phase 7 centralized workstream debit/credit rules and signed non-Treasury preview/session presentation.
 - 2026-09-24: Verification workstreams are now the active priority; global navigation now exposes all seven live workstreams, while Financial Statement groundwork remains deferred operationally.
 - 2026-09-25: Verification table order standardized across all seven workstreams in static/verification.js; user-confirmed.
+- 2026-09-28: Cashflows now support historical orphan discovery and exact Account Control Centre category assignment; source data remains unchanged.
 
 - 2026-07-09: main.py NameError fixed; clients module reviewed, no issues found.
 - 2026-07-12: Upload page redesign, 3 phases, plus flush-layout and navbar-gap fixes.

@@ -80,3 +80,24 @@ def test_cashflows_classification_preview_rejects_unknown_type():
         assert "Invalid classification type" in str(exc)
     else:
         raise AssertionError("invalid classification type was accepted")
+
+def test_cashflows_classification_preview_filters_unassigned_categories():
+    calls = []
+
+    def query_fn(sql, params):
+        calls.append((sql, params))
+        return [{"total": 0}] if "SELECT COUNT(*)" in sql else []
+
+    result = load_cashflow_classification_preview(
+        5,
+        9,
+        date(2026, 1, 1),
+        date(2026, 1, 31),
+        category="__unassigned__",
+        query_fn=query_fn,
+    )
+
+    assert result["total_rows"] == 0
+    assert len(calls) == 2
+    assert all("NULLIF(BTRIM(COALESCE(category.label, '')), '') IS NULL" in sql for sql, _ in calls)
+    assert all("__unassigned__" not in params for _, params in calls)
