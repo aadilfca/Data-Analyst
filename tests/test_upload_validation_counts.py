@@ -57,5 +57,25 @@ class UploadValidationCountTests(unittest.TestCase):
         self.assertEqual(existing_count, 1)
 
 
+    def test_uses_set_based_counts_when_postgres_returns_counts(self):
+        template_cols = [
+            {"id": 1, "column_name": "Voucher", "data_type": "Text"},
+            {"id": 2, "column_name": "Amount", "data_type": "Numeric"},
+        ]
+
+        class MappingStub:
+            def __init__(self, excel_column_name):
+                self.excel_column_name = excel_column_name
+
+        rows = [{"Voucher": "ABC", "Amount": 100}, {"Voucher": "XYZ", "Amount": 200}]
+        mapping_dict = {1: MappingStub("Voucher"), 2: MappingStub("Amount")}
+        with patch(
+            "routers.import_export.execute_query_pg",
+            return_value=[{"new_count": 1, "existing_count": 1}],
+        ) as query:
+            counts = count_new_and_existing_rows(1, 1, rows, template_cols, mapping_dict)
+
+        self.assertEqual(counts, (1, 1))
+        query.assert_called_once()
 if __name__ == "__main__":
     unittest.main()

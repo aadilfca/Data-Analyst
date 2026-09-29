@@ -225,6 +225,105 @@ def test_cashflow_summary_read_model_round_trip_preserves_period_totals():
     assert cached["summary"]["category_totals"].loc["Customers", "2026-Q1"] == 125.0
     assert cached["metadata"]["summary_read_model"] == "hit"
 
+def test_prepared_daily_snapshot_rolls_up_to_requested_months():
+    from services.ledger_report_source import _cashflow_daily_rollup
+
+    payload = {
+        "periods": [
+            {"key": "2026-01-01", "start": "2026-01-01", "end": "2026-01-01", "label": "01-Jan-26"},
+            {"key": "2026-01-02", "start": "2026-01-02", "end": "2026-01-02", "label": "02-Jan-26"},
+            {"key": "2026-02-01", "start": "2026-02-01", "end": "2026-02-01", "label": "01-Feb-26"},
+        ],
+        "categories": [{"category": "Customers", "values": {"2026-01-01": 10, "2026-01-02": 15, "2026-02-01": 20}}],
+        "period_metrics": {
+            "2026-01-01": {"source_line_count": 2, "selected_voucher_count": 1, "internal_transfer_count": 0, "category_review_count": 0},
+            "2026-01-02": {"source_line_count": 2, "selected_voucher_count": 1, "internal_transfer_count": 1, "category_review_count": 0},
+            "2026-02-01": {"source_line_count": 2, "selected_voucher_count": 1, "internal_transfer_count": 0, "category_review_count": 1},
+        },
+        "receipt_presentation": "net",
+    }
+
+    summary = _cashflow_daily_rollup(payload, "2026-01-01", "2026-02-28", "month")
+
+    assert summary["category_totals"].loc["Customers", "2026-01"] == 25
+    assert summary["category_totals"].loc["Customers", "2026-02"] == 20
+    assert summary["selected_voucher_count"] == 3
+    assert summary["internal_transfer_count"] == 1
+    assert summary["category_review_count"] == 1
+
+
+def test_cashflows_preview_uses_prepared_snapshot_when_exact_cache_misses():
+    configuration = {
+        "source_template_id": 9,
+        "cash_account_codes": [],
+        "bank_account_codes": ["B1"],
+        "match_internal_transfers": False,
+        "receipt_presentation": "net",
+    }
+    cached = {
+        "metadata": {
+            "source_upload_ids": [21],
+            "selected_template_upload_ids": [21],
+            "source_row_count": 4,
+            "valid_row_count": 4,
+            "summary_read_model": "prepared_snapshot",
+        },
+        "summary": _cashflow_summary(),
+    }
+    with (
+        patch.object(reconciliation, "_require_active_client"),
+        patch.object(reconciliation, "_cashflow_configuration", return_value=configuration),
+        patch.object(reconciliation, "load_cashflow_summary_read_model", return_value=None),
+        patch.object(reconciliation, "load_cashflow_prepared_summary", return_value=cached),
+        patch.object(reconciliation, "load_ledger_report_source") as loader,
+    ):
+        response = reconciliation.preview_cashflows(
+            7,
+            "2026-02-10",
+            "2026-04-18",
+            group_by="quarter",
+            details="summary",
+            session=None,
+        )
+
+    loader.assert_not_called()
+    assert response["preview"]["category_totals"][0]["2026-Q1"] == 125.0
+
+def test_preparation_builds_one_daily_snapshot_after_committed_source_changes():
+    from services import ledger_report_source
+
+    source = SimpleNamespace(
+        ready=True,
+        journal=pd.DataFrame(),
+        coa=pd.DataFrame(),
+        metadata={"selected_template_upload_ids": [21]},
+    )
+    summary = _cashflow_summary()
+
+    def query(sql, params=None):
+        if "account_control_cashflow_treasury_accounts" in sql:
+            return [{
+                "treasury": [{"account_code": "B1", "treasury_type": "bank"}],
+                "settings": {"source_template_id": 9, "match_internal_transfers": False, "receipt_presentation": "net"},
+            }]
+        if "FROM uploaded_files" in sql:
+            return [{"upload_id": 21, "file_name": "period.xlsx", "upload_date": "2026-04-01"}]
+        if "MIN(c.transaction_date)" in sql:
+            return [{"period_start": "2026-01-01", "period_end": "2026-06-30"}]
+        raise AssertionError(f"Unexpected preparation read: {sql}")
+
+    with (
+        patch.object(ledger_report_source, "load_cashflow_sql_source", return_value=source),
+        patch("services.ledger_group_summary.build_cashflow_summary", return_value=summary) as builder,
+        patch.object(ledger_report_source, "store_cashflow_summary_read_model") as store,
+    ):
+        result = ledger_report_source.prepare_cashflow_summary_snapshot(5, query_fn=query)
+
+    assert result["status"] == "prepared"
+    builder.assert_called_once()
+    assert store.call_args.kwargs["group_by"] == "day"
+    assert store.call_args.kwargs["source_upload_ids"] == [21]
+
 def test_cashflow_configuration_uses_one_query_and_preserves_sections():
     calls = []
 

@@ -24,6 +24,7 @@ from services.ledger_report_source import (
     CASHFLOW_REQUIRED_COLUMN_ROLES,
     LedgerReportSource,
     load_cashflow_summary_read_model,
+    load_cashflow_prepared_summary,
     load_ledger_report_source,
     store_cashflow_summary_read_model,
 )
@@ -1316,6 +1317,19 @@ def _build_cashflow_result(
             )
         except Exception as error:
             logger.warning("cashflows_summary_read_model_lookup_failed client_id=%s error=%s", client_id, error)
+    if cached_summary is None and detail_sections == set() and configured_template_id is not None:
+        try:
+            cached_summary = load_cashflow_prepared_summary(
+                client_id,
+                journal_template_id=configured_template_id,
+                period_start=start,
+                period_end=end,
+                group_by=grouping,
+                receipt_presentation=configuration["receipt_presentation"],
+                query_fn=execute_query_pg,
+            )
+        except Exception as error:
+            logger.warning("cashflows_prepared_snapshot_lookup_failed client_id=%s error=%s", client_id, error)
     if cached_summary is not None:
         source = LedgerReportSource(
             pd.DataFrame(),
@@ -1350,7 +1364,7 @@ def _build_cashflow_result(
 
     summary: dict[str, Any] | None = cached_summary["summary"] if cached_summary is not None else None
     summary_seconds = 0.0
-    summary_status = "read_model_hit" if cached_summary is not None else "skipped_source_not_ready"
+    summary_status = (cached_summary["metadata"].get("summary_read_model") if cached_summary else None) or "skipped_source_not_ready"
     if summary is None and source.ready and not any(item.get("severity") == "error" for item in diagnostics):
         summary_started = perf_counter()
         summary_status = "completed"
@@ -1374,7 +1388,7 @@ def _build_cashflow_result(
             diagnostics.append(_report_diagnostic("cashflow_input_error", "error", str(error)))
         finally:
             summary_seconds = perf_counter() - summary_started
-    if summary is not None and cached_summary is None and detail_sections == set() and configured_template_id is not None:
+    if summary is not None and detail_sections == set() and configured_template_id is not None and (cached_summary is None or cached_summary["metadata"].get("summary_read_model") == "prepared_snapshot"):
         try:
             source_metadata_for_cache = source.metadata
             store_cashflow_summary_read_model(

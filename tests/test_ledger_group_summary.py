@@ -195,6 +195,22 @@ def test_cashflow_summary_nets_customer_receipt_and_keeps_deduction_detail():
     assert result["deduction_details"]["amount"].tolist() == [10.0]
 
 
+def test_cashflow_summary_exposes_period_metrics_for_prepared_snapshot():
+    journal, coa = _fixture_data()
+    result = build_cashflow_summary(
+        journal,
+        coa,
+        [],
+        ["B1", "B2"],
+        "2026-01-01",
+        "2026-02-28",
+        group_by="day",
+    )
+
+    assert result["period_metrics"]["2026-01-05"]["source_line_count"] == 2
+    assert result["period_metrics"]["2026-01-05"]["selected_voucher_count"] == 1
+    assert result["period_metrics"]["2026-02-10"]["category_review_count"] == 1
+
 def test_unbalanced_voucher_stops_report_generation():
     journal, coa = _fixture_data()
     journal.loc[len(journal)] = ["BAD", "2026-02-25", "B1", "Bank A", "Broken", 10, 0]

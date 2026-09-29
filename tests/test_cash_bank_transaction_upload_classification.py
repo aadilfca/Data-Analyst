@@ -34,6 +34,76 @@ class _Connection:
 
 
 class UploadClassificationTests(unittest.TestCase):
+    def test_compare_treats_reordered_rows_within_document_as_unchanged(self):
+        template_cols = [
+            {"id": 15, "column_name": "Voucher ID", "data_type": "Text"},
+            {"id": 12, "column_name": "Transaction Date", "data_type": "Date"},
+            {"id": 16, "column_name": "Account Detail", "data_type": "Text"},
+            {"id": 19, "column_name": "Debit Amount", "data_type": "Numeric"},
+        ]
+        existing_rows = [
+            {
+                "id": 101,
+                "row_data": {
+                    "Voucher ID": "V-1",
+                    "Transaction Date": "01/01/2026",
+                    "Account Detail": "1000",
+                    "Debit Amount": 25,
+                },
+                "version": 1,
+                "document_group_id": "1-V-1",
+                "validation_status": "Pending",
+                "verification_detail_id": None,
+            },
+            {
+                "id": 102,
+                "row_data": {
+                    "Voucher ID": "V-1",
+                    "Transaction Date": "01/01/2026",
+                    "Account Detail": "2000",
+                    "Debit Amount": 10,
+                },
+                "version": 1,
+                "document_group_id": "1-V-1",
+                "validation_status": "Pending",
+                "verification_detail_id": None,
+            },
+        ]
+        incoming_rows = [
+            {
+                "Voucher ID": "V-1",
+                "Date": "01/01/2026",
+                "Account Code": "2000",
+                "Debit": 10,
+            },
+            {
+                "Voucher ID": "V-1",
+                "Date": "01/01/2026",
+                "Account Code": "1000",
+                "Debit": 25,
+            },
+        ]
+
+        with patch.object(import_export, "execute_query_pg", return_value=existing_rows):
+            result = import_export.compare_transactions(
+                client_id=3,
+                template_id=1,
+                template_cols=template_cols,
+                incoming_rows=incoming_rows,
+                col_mapping={
+                    "Voucher ID": "Voucher ID",
+                    "Transaction Date": "Date",
+                    "Account Detail": "Account Code",
+                    "Debit Amount": "Debit",
+                },
+                mapping_dict={},
+            )
+
+        self.assertEqual(result["unchanged_count"], 2)
+        self.assertEqual(result["changed_count"], 0)
+        self.assertEqual(result["new_count"], 0)
+        self.assertEqual(result["missing_count"], 0)
+
     def test_derived_upsert_refreshes_same_source_line_without_mutating_payload(self):
         connection = _Connection()
         source_row = {
@@ -187,11 +257,12 @@ class UploadClassificationTests(unittest.TestCase):
             patch.object(import_export, "get_rate_precision", return_value=0),
             patch.object(import_export, "load_treasury_mapping_postgres", return_value={"1000": {"cash"}, "2000": {"bank"}}),
             patch.object(import_export, "upsert_classification_rows_postgres", side_effect=capture_upsert),
+            patch.object(import_export, "prepare_cashflow_summary_snapshot", return_value={"status": "skipped"}),
             patch.object(import_export, "log_audit"),
             patch.object(import_export.pd, "read_excel", return_value=dataframe),
             patch.object(import_export, "pg_transaction", side_effect=lambda: transaction()),
         ]
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9], patches[10], patches[11]:
             result = import_export.validate_and_import(request)
 
         return result, connection, captured_sources

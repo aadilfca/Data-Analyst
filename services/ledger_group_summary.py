@@ -575,7 +575,7 @@ def build_cashflow_summary(
             contra["account_name"].where(contra["account_name"].ne(""), "Unmapped account"),
         )
         contra["amount"] = contra["credit"] - contra["debit"]
-        category_text = contra["category"].str.casefold()
+        category_text = contra["category"].fillna("").astype(str).str.casefold()
         contra["is_customer"] = category_text.str.contains("customer", regex=False) & (
             category_text.str.contains("receipt", regex=False) | category_text.str.contains("payment", regex=False)
         )
@@ -623,6 +623,15 @@ def build_cashflow_summary(
         category_totals["Total"] = category_totals.sum(axis=1)
     review = review.reset_index(drop=True)
     deductions = deductions[["category", "month", "period_key", "period_label", "amount", "account_code", "account_name", "date", "presentation"]].reset_index(drop=True)
+    period_metrics = {
+        period["key"]: {
+            "source_line_count": int((working["period_key"] == period["key"]).sum()) if not working.empty else 0,
+            "selected_voucher_count": int(working.loc[working["period_key"] == period["key"], "voucher_id"].nunique()) if not working.empty else 0,
+            "internal_transfer_count": int((transfer_details["period_key"] == period["key"]).sum()) if not transfer_details.empty else 0,
+            "category_review_count": int((review["period_key"] == period["key"]).sum()) if not review.empty else 0,
+        }
+        for period in periods
+    }
     return {
         "months": months,
         "periods": periods,
@@ -637,6 +646,7 @@ def build_cashflow_summary(
         "source_line_count": len(working),
         "internal_transfer_count": len(transfer_details),
         "category_review_count": len(review),
+        "period_metrics": period_metrics,
         "receipt_presentation": presentation,
     }
 

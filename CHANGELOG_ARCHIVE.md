@@ -1,4 +1,21 @@
 # Changelog Archive
+## Cashflows performance-balancing plan — 2026-09-29
+
+**Desi operating model:** upload transactions once, derive Month/Fortnight and other period keys at upload time, store the prepared rows, and let Cashflows read them like an Excel PivotTable. Raw transaction rows remain read-only; a re-upload replaces the active source, while a category or treasury change invalidates and rebuilds affected preparation.
+
+**Integrity rule:** prepared results are valid only for the same client, template/upload set, configuration, receipt presentation, and source date bounds. If preparation is unavailable, Cashflows falls back to the canonical transaction calculation; no optimization may silently omit rows or alter totals.
+
+**Performance levers:** use vectorized pandas derivation for deterministic period fields, bulk database writes inside one transaction, fewer repeated database round-trips during mapping and validation, bounded stale-connection retries, and prepared daily rollups for selected report groupings. JavaScript caching/compression is secondary because report responses are already small; the measured delay is server/database waiting.
+
+**Measured starting point:** the 3536-row workbook uploaded in 1.36 seconds and auto-mapped in 1.68 seconds; mapping persistence took 14.63 seconds; validation waited 70.4 seconds before an SSL/database EOF failure. These timings make database round-trips and connection recovery the first balancing target.
+
+**Acceptance checks:** compare upload, mapping, validation, import, first Cashflows load, and repeat load timings; reconcile daily, fortnightly, monthly, quarterly, half-yearly, and annual totals against the canonical source; verify that category/configuration changes rebuild or safely fall back without stale results.
+
+**Phase implementation:** saved mapping replacement now uses one atomic transaction and bulk insert; Cashflows snapshot preparation is scheduled after the import response, while canonical data remains the safe fallback until preparation completes.
+
+**Technique check:** local parsing of the 3536-row workbook took 1.376 seconds, while vectorized Month/Fortnight derivation took 0.014 seconds. Vectorization is worthwhile for derived fields, but database round-trips and Supabase connection stability remain the dominant constraint; JavaScript optimization is secondary for these small response payloads.
+
+**Balancing implementation:** validation now counts exact JSONB row matches inside PostgreSQL instead of downloading historical rows; the controlled 3536-row validation fell from 12.8–19.1 seconds to 4.0 seconds with counts unchanged. Import change detection now compares each document as an exact normalized row multiset, so harmless line reordering does not trigger writes; the repeat controlled import reported 3536 unchanged rows and 0 updates in 7.1 seconds. The remaining import cost is primarily the historical `row_data` read (about 4.5 seconds in the final run), so the 2–3 second target is not yet claimed.
 ## Cashflows summary read model - 2026-09-29
 
 **Scope:** Reduce repeat Cashflows summary fetch time while preserving report integrity.

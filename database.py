@@ -5923,14 +5923,21 @@ _db_stats_var = contextvars.ContextVar("_db_stats_var", default=None)
 
 def start_db_metrics():
     """Start request-local DB metrics and return the token needed to restore context."""
-    return _db_stats_var.set({"calls": 0, "reads": 0, "writes": 0, "db_time": 0.0})
+    return _db_stats_var.set({"calls": 0, "reads": 0, "writes": 0, "db_time": 0.0, "_details": []})
 
 
 def get_db_metrics():
-    """Return a copy so callers cannot mutate the request-local counters."""
+    """Return public request-local DB metrics without exposing diagnostic internals."""
     stats = _db_stats_var.get()
-    return dict(stats) if stats is not None else {"calls": 0, "reads": 0, "writes": 0, "db_time": 0.0}
+    if stats is None:
+        return {"calls": 0, "reads": 0, "writes": 0, "db_time": 0.0}
+    return {key: stats[key] for key in ("calls", "reads", "writes", "db_time")}
 
+
+def get_db_query_details():
+    """Return opt-in per-query timings without changing the public metric shape."""
+    stats = _db_stats_var.get()
+    return list(stats.get("_details", [])) if stats is not None else []
 
 def stop_db_metrics(token):
     """Restore the previous context, including after an exception."""
@@ -5947,9 +5954,15 @@ def _instrument_db_call(kind):
             try:
                 return fn(*args, **kwargs)
             finally:
+                elapsed = time.perf_counter() - started
                 stats["calls"] += 1
                 stats[kind] += 1
-                stats["db_time"] += time.perf_counter() - started
+                stats["db_time"] += elapsed
+                stats.setdefault("_details", []).append({
+                    "kind": kind,
+                    "ms": round(elapsed * 1000, 1),
+                    "query": " ".join(str(args[0]).split())[:180] if args else "unknown",
+                })
         return wrapper
     return decorator
 # === END OPT-IN PERFORMANCE DIAGNOSTICS ====================================

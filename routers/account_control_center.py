@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Optional
 
@@ -15,9 +16,19 @@ from services.cash_bank_classification import (
     discover_historical_orphan_accounts_postgres,
     synchronize_treasury_accounts_postgres,
 )
+from services.ledger_report_source import invalidate_cashflow_summary_read_models, prepare_cashflow_summary_snapshot
+
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+def _refresh_cashflow_snapshot(client_id: int, reason: str) -> None:
+    try:
+        invalidate_cashflow_summary_read_models(client_id)
+        prepare_cashflow_summary_snapshot(client_id)
+    except Exception as error:
+        logger.warning("cashflows_snapshot_preparation_failed client_id=%s reason=%s error=%s", client_id, reason, error)
 
 _SELECTOR_TYPES = {
     "include_subtree",
@@ -765,7 +776,6 @@ def create_account_control_category(payload: AccountControlCategoryPayload, sess
     )
     return {"saved": True, "category": category}
 
-
 @router.put("/api/account-control-center/categories/{category_id}")
 def update_account_control_category(category_id: int, payload: AccountControlCategoryUpdatePayload, session=Depends(require_admin)):
     category = _clean_category_update(payload)
@@ -782,7 +792,6 @@ def update_account_control_category(category_id: int, payload: AccountControlCat
         (category["label"], category["sort_order"], category["is_active"], category_id, category["client_id"], category["category_type"]),
     )
     return {"saved": True, "category": {"id": category_id, **category}}
-
 
 @router.get("/api/account-control-center/mapping")
 def get_account_control_mapping(client_id: int = Query(..., ge=1), session=Depends(require_admin)):
@@ -868,7 +877,6 @@ def apply_account_control_mapping_to_children(payload: AccountControlBulkAssignm
             child_assignment = {**assignment, "account_code": row["account_code"]}
             _upsert_control_assignment(child_assignment, actor)
     return {"saved": True, "parent_account_code": parent_code, "leaf_count": len(leaves)}
-
 
 @router.get("/api/account-control-center/cashflow")
 def get_account_control_cashflow(client_id: int = Query(..., ge=1), session=Depends(require_admin)):
@@ -959,8 +967,10 @@ def apply_account_control_cashflow_to_children(payload: CashFlowBulkAssignmentPa
         for row in leaves:
             child_assignment = {**assignment, "account_code": row["account_code"]}
             _upsert_cashflow_assignment(child_assignment, actor)
-    return {"saved": True, "parent_account_code": parent_code, "leaf_count": len(leaves)}
+    _refresh_cashflow_snapshot(payload.client_id, "category_bulk_assignment")
 
+
+    return {"saved": True, "parent_account_code": parent_code, "leaf_count": len(leaves)}
 
 @router.get("/api/account-control-center/cashflow/setup")
 def get_cashflow_setup(client_id: int = Query(..., ge=1), session=Depends(require_admin)):
@@ -1040,8 +1050,10 @@ def create_cashflow_category(payload: CashFlowCategoryPayload, session=Depends(r
            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)""",
         (category["client_id"], category["category_key"], category["label"], category["sort_order"], category["is_active"]),
     )
-    return {"saved": True, "category": category}
+    _refresh_cashflow_snapshot(category["client_id"], "category_created")
 
+
+    return {"saved": True, "category": category}
 
 @router.put("/api/account-control-center/cashflow/categories/{category_id}")
 def update_cashflow_category(category_id: int, payload: CashFlowCategoryUpdatePayload, session=Depends(require_admin)):
@@ -1058,8 +1070,10 @@ def update_cashflow_category(category_id: int, payload: CashFlowCategoryUpdatePa
            WHERE id = %s AND client_id = %s""",
         (category["label"], category["sort_order"], category["is_active"], category_id, category["client_id"]),
     )
-    return {"saved": True, "category": {"id": category_id, **category}}
+    _refresh_cashflow_snapshot(category["client_id"], "category_updated")
 
+
+    return {"saved": True, "category": {"id": category_id, **category}}
 
 @router.put("/api/account-control-center/cashflow/category-assignment")
 def save_cashflow_category_assignment(payload: CashFlowCategoryAssignmentPayload, session=Depends(require_admin)):
@@ -1074,6 +1088,7 @@ def save_cashflow_category_assignment(payload: CashFlowCategoryAssignmentPayload
     if account and account["classification"] != "leaf":
         raise HTTPException(400, "Assign the parent through the bulk child operation; direct assignments require a leaf account")
     _upsert_cashflow_category_assignment(assignment, _actor_name(session))
+    _refresh_cashflow_snapshot(assignment["client_id"], "category_assignment")
     return {
         "saved": True,
         "account_code": assignment["account_code"],
@@ -1104,8 +1119,10 @@ def apply_cashflow_category_to_children(payload: CashFlowCategoryBulkAssignmentP
                 {"client_id": payload.client_id, "account_code": row["account_code"], "category_id": payload.category_id},
                 actor,
             )
-    return {"saved": True, "parent_account_code": parent_code, "leaf_count": len(leaves)}
+    _refresh_cashflow_snapshot(payload.client_id, "category_bulk_assignment")
 
+
+    return {"saved": True, "parent_account_code": parent_code, "leaf_count": len(leaves)}
 
 @router.put("/api/account-control-center/cashflow/treasury-accounts")
 def save_cashflow_treasury_accounts(payload: CashFlowTreasuryAccountsPayload, session=Depends(require_admin)):
@@ -1127,6 +1144,7 @@ def save_cashflow_treasury_accounts(payload: CashFlowTreasuryAccountsPayload, se
             bank_account_codes=sorted(bank_codes),
             changed_by=actor,
         )
+    _refresh_cashflow_snapshot(payload.client_id, "treasury_accounts")
     return {
         "saved": True,
         "cash_account_codes": sorted(cash_codes),
@@ -1152,6 +1170,7 @@ def save_cashflow_settings(payload: CashFlowSettingsPayload, session=Depends(req
              updated_at = CURRENT_TIMESTAMP""",
         (payload.client_id, payload.match_internal_transfers, presentation, _actor_name(session)),
     )
+    _refresh_cashflow_snapshot(payload.client_id, "cashflow_settings")
     return {"saved": True, "match_internal_transfers": payload.match_internal_transfers, "receipt_presentation": presentation}
 
 @router.get("/api/account-control-center/sets")

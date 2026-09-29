@@ -1,25 +1,73 @@
-from fastapi import APIRouter, File, UploadFile, HTTPException, Body
+from fastapi import APIRouter, BackgroundTasks, File, UploadFile, HTTPException, Body
 from fastapi.responses import StreamingResponse
-import os, json, openpyxl, pandas as pd
+import os, json, logging, openpyxl, pandas as pd
 from io import BytesIO
+from functools import wraps
+from time import perf_counter
 from database import (
     execute_query_pg, execute_write_pg, log_audit, pg_transaction,
     log_data_audit_pg, execute_batch_pg, execute_batch_insert_with_ids_pg,
+    start_db_metrics, get_db_metrics, get_db_query_details, stop_db_metrics,
 )
 from psycopg2.extras import Json
 from services.cash_bank_classification import load_treasury_mapping_postgres, upsert_classification_rows_postgres
+from services.ledger_report_source import prepare_cashflow_summary_snapshot
 from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime, time
 
 # ⭐ MUST HAVE THIS LINE
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
-# In-memory row-write progress for an in-flight import, keyed by file_id (known to
-# the frontend before it fires POST /api/upload/import, so it can poll
-# GET /api/upload/import-status/{file_id} while that request is still in flight).
-# Synchronous single-request import, no queue/background job -- state only lives
-# for the duration of one import call.
+def _log_upload_timing(stage):
+    """Opt-in timing for upload diagnostics; normal requests pay no timing-log cost."""
+    def decorate(function):
+        @wraps(function)
+        def timed(*args, **kwargs):
+            perf_enabled = kwargs.pop("perf", False)
+            if not perf_enabled:
+                return function(*args, **kwargs)
+            token = start_db_metrics()
+            started = perf_counter()
+            try:
+                return function(*args, **kwargs)
+            finally:
+                metrics = get_db_metrics()
+                query_details = get_db_query_details()
+                stop_db_metrics(token)
+                logger.warning(
+                    "upload_perf stage=%s total_ms=%.1f db_calls=%s db_reads=%s db_writes=%s db_ms=%.1f db_details=%s",
+                    stage,
+                    (perf_counter() - started) * 1000,
+                    metrics["calls"],
+                    metrics["reads"],
+                    metrics["writes"],
+                    metrics["db_time"] * 1000,
+                    json.dumps(query_details, ensure_ascii=True),
+                )
+        return timed
+    return decorate
+
+
+def _prepare_cashflow_snapshot_background(client_id: int, file_id: int, template_id: int):
+    """Prepare the Cashflows read model after import without delaying the upload response."""
+    try:
+        prepare_cashflow_summary_snapshot(client_id)
+    except Exception as error:
+        logger.warning(
+            "cashflows_snapshot_preparation_failed client_id=%s template_id=%s error=%s",
+            client_id,
+            template_id,
+            error,
+        )
+    finally:
+        progress = IMPORT_PROGRESS.get(file_id)
+        if progress is not None:
+            progress["status"] = "complete"
+
+# In-memory progress for an import, keyed by file_id. Row writes finish inside the
+# request; Cashflows snapshot preparation continues as a bounded background task.
 IMPORT_PROGRESS: dict = {}
 
 # ---------- FLEXIBLE DATE PARSING (Phase 1 of the date-format requirement) ----------
@@ -194,8 +242,8 @@ def filter_excluded_rows(rows: list, excluded_rows: Optional[List[int]]) -> list
     return [row for idx, row in enumerate(rows, start=2) if idx not in excluded_set]
 
 
-def count_new_and_existing_rows(client_id: int, template_id: int, rows: list, template_cols: list, mapping_dict: dict):
-    """Count rows that are new versus already present for the same client/template."""
+def _count_new_and_existing_rows_legacy(client_id: int, template_id: int, rows: list, template_cols: list, mapping_dict: dict):
+    """Legacy exact comparison used only if the set-based PostgreSQL query fails."""
     existing_rows = execute_query_pg(
         """
         SELECT row_data
@@ -204,10 +252,6 @@ def count_new_and_existing_rows(client_id: int, template_id: int, rows: list, te
         """,
         (client_id, template_id),
     )
-
-    # row_data is JSONB - execute_query_pg already returns a native dict, not a
-    # JSON string, so no json.loads() step is needed before re-serializing for
-    # the comparison set.
     seen_existing = set()
     for row in existing_rows:
         raw = row.get("row_data")
@@ -219,7 +263,6 @@ def count_new_and_existing_rows(client_id: int, template_id: int, rows: list, te
 
     new_count = 0
     existing_count = 0
-
     for row in rows:
         try:
             row_data = {}
@@ -227,7 +270,6 @@ def count_new_and_existing_rows(client_id: int, template_id: int, rows: list, te
                 mapping = mapping_dict.get(t_col["id"])
                 if mapping and mapping.excel_column_name and mapping.excel_column_name in row:
                     row_data[t_col["column_name"]] = json_safe_cell_value(row[mapping.excel_column_name])
-
             row_json = json.dumps(row_data, sort_keys=True, ensure_ascii=False)
             if row_json in seen_existing:
                 existing_count += 1
@@ -235,15 +277,88 @@ def count_new_and_existing_rows(client_id: int, template_id: int, rows: list, te
                 new_count += 1
                 seen_existing.add(row_json)
         except Exception:
-            # A row that can't be parsed/serialized is already going to be
-            # flagged by the main validation loop -- don't let it crash the
-            # whole /validate request just to compute this count.
             continue
-
     return new_count, existing_count
 
 
+def count_new_and_existing_rows(client_id: int, template_id: int, rows: list, template_cols: list, mapping_dict: dict):
+    """Count rows with exact JSONB equality without transferring historical row payloads."""
+    incoming_row_data = []
+    for row in rows:
+        try:
+            row_data = {}
+            for t_col in template_cols:
+                mapping = mapping_dict.get(t_col["id"])
+                if mapping and mapping.excel_column_name and mapping.excel_column_name in row:
+                    row_data[t_col["column_name"]] = json_safe_cell_value(row[mapping.excel_column_name])
+            incoming_row_data.append(row_data)
+        except Exception:
+            # Preserve the old helper's behavior: rows that cannot be serialized
+            # are left for the main validation loop to report.
+            continue
+
+    if not incoming_row_data:
+        return 0, 0
+
+    try:
+        incoming_json = Json(
+            incoming_row_data,
+            dumps=lambda value: json.dumps(value, default=str, ensure_ascii=False),
+        )
+        result = execute_query_pg(
+            """
+            WITH incoming AS (
+                SELECT value AS row_data
+                FROM jsonb_array_elements(%s::jsonb)
+            ),
+            existing AS (
+                SELECT DISTINCT row_data
+                FROM client_data
+                WHERE client_id = %s AND template_id = %s AND is_deleted = FALSE
+            ),
+            new_distinct AS (
+                SELECT DISTINCT i.row_data
+                FROM incoming i
+                LEFT JOIN existing e ON e.row_data = i.row_data
+                WHERE e.row_data IS NULL
+            )
+            SELECT
+                (SELECT COUNT(*) FROM new_distinct)::int AS new_count,
+                ((SELECT COUNT(*) FROM incoming) -
+                 (SELECT COUNT(*) FROM new_distinct))::int AS existing_count
+            """,
+            (incoming_json, client_id, template_id),
+        )
+        if result and "new_count" in result[0] and "existing_count" in result[0]:
+            return int(result[0]["new_count"]), int(result[0]["existing_count"])
+        raise ValueError("set-based count returned an unexpected shape")
+    except Exception as error:
+        logger.warning(
+            "upload_validation_set_count_fallback client_id=%s template_id=%s error=%s",
+            client_id,
+            template_id,
+            error,
+        )
+        return _count_new_and_existing_rows_legacy(
+            client_id, template_id, rows, template_cols, mapping_dict
+        )
+
 # ---------- CHANGE DETECTION (Phase 3: document-level grouping using document_group_id) ----------
+def _row_comparison_fingerprint(row_data: dict) -> tuple:
+    """Return the exact normalized values used by the legacy row comparison.
+
+    Blank/missing values are omitted because the existing comparison treats both
+    as an empty string. Sorting the pairs makes row-order changes within one
+    document irrelevant while retaining exact value comparison.
+    """
+    normalized = []
+    for field, value in row_data.items():
+        value_text = str(value or '').strip()
+        if value_text:
+            normalized.append((field, value_text))
+    return tuple(sorted(normalized))
+
+
 def compare_transactions(client_id: int, template_id: int, template_cols: list,
                          incoming_rows: list, col_mapping: dict, mapping_dict: dict,
                          rate_source: Optional[str] = None, rate_precision: int = 0) -> dict:
@@ -340,16 +455,13 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
             # If incoming has different number of rows OR any field differs → changed
             is_same = len(incoming_rows_data) == len(existing_row_datas)
             if is_same:
-                for new_row_data, old_row_data in zip(incoming_rows_data, existing_row_datas):
-                    all_fields = set(list(new_row_data.keys()) + list(old_row_data.keys()))
-                    for field in all_fields:
-                        new_val = new_row_data.get(field)
-                        old_val = old_row_data.get(field)
-                        if str(new_val or '').strip() != str(old_val or '').strip():
-                            is_same = False
-                            break
-                    if not is_same:
-                        break
+                incoming_fingerprints = sorted(
+                    _row_comparison_fingerprint(row) for row in incoming_rows_data
+                )
+                existing_fingerprints = sorted(
+                    _row_comparison_fingerprint(row) for row in existing_row_datas
+                )
+                is_same = incoming_fingerprints == existing_fingerprints
 
             if is_same:
                 # Unchanged: preserve validation status – skip all rows in this document
@@ -873,9 +985,7 @@ def auto_map_headers(request: AutoMapRequest):
 def save_column_mapping(request: SaveMappingRequest):
     """
     Saves (or overwrites) the confirmed Excel-column -> template-column mapping for a
-    client+template, so it can be auto-applied on a later upload (Phase A2). Upsert via
-    delete-then-reinsert, same pattern used elsewhere in this app for replacing an
-    ordered/child row set (e.g. update_template() in routers/templates.py).
+    client+template. The replacement is atomic and uses one bulk database write.
     """
     client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (request.client_id,))
     if not client:
@@ -884,29 +994,34 @@ def save_column_mapping(request: SaveMappingRequest):
     if not template:
         raise HTTPException(404, "Template not found")
 
-    execute_write_pg(
-        "DELETE FROM saved_column_mappings WHERE client_id = %s AND template_id = %s",
-        (request.client_id, request.template_id)
-    )
-
-    saved_count = 0
-    for entry in request.mappings:
-        # Nothing meaningful to save for a column that wasn't matched to an Excel header.
-        if not entry.excel_column or not entry.excel_column.strip():
-            continue
+    entries = [
+        (request.client_id, request.template_id, entry.template_column_id, entry.excel_column)
+        for entry in request.mappings
+        if entry.excel_column and entry.excel_column.strip()
+    ]
+    with pg_transaction() as conn:
         execute_write_pg(
-            """
-            INSERT INTO saved_column_mappings (client_id, template_id, template_column_id, excel_column)
-            VALUES (%s, %s, %s, %s)
-            """,
-            (request.client_id, request.template_id, entry.template_column_id, entry.excel_column)
+            "DELETE FROM saved_column_mappings WHERE client_id = %s AND template_id = %s",
+            (request.client_id, request.template_id)
         )
-        saved_count += 1
+        if entries:
+            execute_batch_pg(
+                conn,
+                """
+                INSERT INTO saved_column_mappings (client_id, template_id, template_column_id, excel_column)
+                VALUES (%s, %s, %s, %s)
+                """,
+                entries,
+            )
 
-    log_audit("Analyst", "Save", "Upload",
-              f"Saved column mapping for client {request.client_id}, template {request.template_id} ({saved_count} columns)")
+    saved_count = len(entries)
+    log_audit(
+        "Analyst",
+        "Save",
+        "Upload",
+        f"Saved column mapping for client {request.client_id}, template {request.template_id} ({saved_count} columns)"
+    )
     return {"message": "Column mapping saved successfully", "saved_count": saved_count}
-
 
 @router.get("/api/upload/saved-mapping")
 def get_saved_column_mapping(client_id: int, template_id: int):
@@ -1144,7 +1259,8 @@ def preview_date_format(request: DatePreviewRequest):
 
 # ---------- VALIDATE ONLY (NO IMPORT) ----------
 @router.post("/api/upload/validate")
-def validate_only(request: ImportRequest):
+@_log_upload_timing("validate")
+def validate_only(request: ImportRequest, perf: bool = False):
     """
     Validate the Excel file without importing any data.
     Returns row-by-row validation errors.
@@ -1377,7 +1493,8 @@ def _audit_row_params(client_data_id, action, old_data=None, new_data=None, user
 
 # ---------- VALIDATE & IMPORT ----------
 @router.post("/api/upload/import")
-def validate_and_import(request: ImportRequest):
+@_log_upload_timing("import")
+def validate_and_import(request: ImportRequest, background_tasks: BackgroundTasks = None, perf: bool = False):
     # Validate template and file
     template = execute_query_pg("SELECT id, template_name, rate_source FROM templates WHERE id = %s AND is_active = TRUE", (request.template_id,))
     if not template:
@@ -1812,10 +1929,26 @@ def validate_and_import(request: ImportRequest):
                     for row_id, row_data in zip(first_upload_ids, first_upload_row_data_list)
                 ]
                 execute_batch_pg(conn, DATA_AUDIT_LOG_INSERT_SQL, first_upload_audit_params)
-    log_audit("Analyst", "Import", "Upload",
-              f"Imported {inserted_count} new, {updated_count} updated, {deleted_count} flagged missing for client {request.client_id}, template {template[0]['template_name']}, file ID {request.file_id}")
+    IMPORT_PROGRESS[request.file_id]["status"] = "preparing"
+    if background_tasks is None:
+        # Direct callers and isolated tests retain the old synchronous contract.
+        _prepare_cashflow_snapshot_background(request.client_id, request.file_id, request.template_id)
+    else:
+        background_tasks.add_task(
+            _prepare_cashflow_snapshot_background,
+            request.client_id,
+            request.file_id,
+            request.template_id,
+        )
+    log_audit(
+        "Analyst",
+        "Import",
+        "Upload",
+        f"Imported {inserted_count} new, {updated_count} updated, {deleted_count} flagged missing for client {request.client_id}, template {template[0]['template_name']}, file ID {request.file_id}"
+    )
 
-    IMPORT_PROGRESS[request.file_id]["status"] = "complete"
+    if background_tasks is None:
+        IMPORT_PROGRESS[request.file_id]["status"] = "complete"
 
     return {
         "status": "success",

@@ -807,6 +807,7 @@ def _cashflow_summary_payload(summary: Mapping[str, Any]) -> dict[str, Any]:
         "selected_voucher_count": int(summary.get("selected_voucher_count", 0) or 0),
         "internal_transfer_count": int(summary.get("internal_transfer_count", 0) or 0),
         "category_review_count": int(summary.get("category_review_count", 0) or 0),
+        "period_metrics": summary.get("period_metrics") or {},
         "receipt_presentation": summary.get("receipt_presentation") or "net",
     }
 
@@ -840,9 +841,297 @@ def _cashflow_summary_from_payload(payload: Mapping[str, Any], group_by: str) ->
         "selected_voucher_count": int(payload.get("selected_voucher_count", 0) or 0),
         "internal_transfer_count": int(payload.get("internal_transfer_count", 0) or 0),
         "category_review_count": int(payload.get("category_review_count", 0) or 0),
+        "source_line_count": int(payload.get("source_line_count", 0) or 0),
+        "period_metrics": payload.get("period_metrics") or {},
         "receipt_presentation": payload.get("receipt_presentation") or "net",
     }
 
+
+def _cashflow_json_value(value: Any) -> Any:
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (TypeError, ValueError):
+            return {}
+    return value or {}
+
+
+def _cashflow_preparation_configuration(
+    client_id: int,
+    query_fn: Callable[..., list[dict[str, Any]]],
+) -> dict[str, Any]:
+    rows = query_fn(
+        """
+        SELECT
+            COALESCE((
+                SELECT json_agg(json_build_object(
+                    'account_code', t.account_code,
+                    'treasury_type', t.treasury_type
+                ) ORDER BY t.treasury_type, t.account_code)
+                FROM account_control_cashflow_treasury_accounts t
+                WHERE t.client_id = %s AND t.is_active = TRUE
+            ), '[]'::json) AS treasury,
+            COALESCE((
+                SELECT json_build_object(
+                    'match_internal_transfers', s.match_internal_transfers,
+                    'receipt_presentation', s.receipt_presentation,
+                    'source_template_id', s.source_template_id
+                )
+                FROM account_control_cashflow_settings s
+                WHERE s.client_id = %s
+                LIMIT 1
+            ), '{}'::json) AS settings
+        """,
+        (client_id, client_id),
+    )
+    row = rows[0] if rows else {}
+    treasury = _cashflow_json_value(row.get("treasury"))
+    settings = _cashflow_json_value(row.get("settings"))
+    treasury = treasury if isinstance(treasury, list) else []
+    settings = settings if isinstance(settings, Mapping) else {}
+    return {
+        "source_template_id": settings.get("source_template_id"),
+        "cash_account_codes": [
+            _canonical_code(item.get("account_code"))
+            for item in treasury
+            if str(item.get("treasury_type") or "").casefold() == "cash"
+        ],
+        "bank_account_codes": [
+            _canonical_code(item.get("account_code"))
+            for item in treasury
+            if str(item.get("treasury_type") or "").casefold() == "bank"
+        ],
+        "match_internal_transfers": bool(settings.get("match_internal_transfers")),
+        "receipt_presentation": str(settings.get("receipt_presentation") or "net").casefold(),
+    }
+
+
+def _cashflow_snapshot_bounds(
+    client_id: int,
+    template_id: int,
+    upload_ids: Sequence[int],
+    query_fn: Callable[..., list[dict[str, Any]]],
+) -> tuple[Any, Any] | None:
+    rows = query_fn(
+        """
+        SELECT MIN(c.transaction_date) AS period_start, MAX(c.transaction_date) AS period_end
+        FROM cash_bank_transaction_classifications c
+        JOIN client_data cd ON cd.id = c.client_data_id AND cd.is_deleted = FALSE
+        WHERE c.client_id = %s
+          AND c.template_id = %s
+          AND c.upload_id = ANY(%s)
+          AND c.is_current = TRUE
+          AND c.transaction_date IS NOT NULL
+        """,
+        (client_id, template_id, list(upload_ids)),
+    )
+    if not rows or rows[0].get("period_start") is None or rows[0].get("period_end") is None:
+        return None
+    return rows[0]["period_start"], rows[0]["period_end"]
+
+
+def _cashflow_daily_rollup(
+    payload: Mapping[str, Any],
+    period_start: Any,
+    period_end: Any,
+    group_by: str,
+) -> dict[str, Any]:
+    from services.ledger_group_summary import _cashflow_periods, normalize_cashflow_grouping
+
+    grouping = normalize_cashflow_grouping(group_by)
+    periods = _cashflow_periods(period_start, period_end, grouping)
+    daily_periods = [
+        (str(period.get("key")), pd.Timestamp(period["start"]).normalize())
+        for period in payload.get("periods", [])
+        if period.get("key") is not None and period.get("start") is not None
+    ]
+    target_days = {
+        period["key"]: [
+            key for key, day in daily_periods
+            if pd.Timestamp(period["start"]).normalize() <= day <= pd.Timestamp(period["end"]).normalize()
+        ]
+        for period in periods
+    }
+    rows: list[dict[str, Any]] = []
+    for category in payload.get("categories", []):
+        values = category.get("values") or {}
+        row = {"category": str(category.get("category") or "")}
+        for period in periods:
+            row[period["key"]] = sum(float(values.get(day_key, 0.0) or 0.0) for day_key in target_days[period["key"]])
+        row["Total"] = sum(float(row[period["key"]]) for period in periods)
+        rows.append(row)
+    period_metrics: dict[str, dict[str, int]] = {}
+    source_metrics = payload.get("period_metrics") or {}
+    for period in periods:
+        totals = {"source_line_count": 0, "selected_voucher_count": 0, "internal_transfer_count": 0, "category_review_count": 0}
+        for day_key in target_days[period["key"]]:
+            values = source_metrics.get(day_key) or {}
+            for metric in totals:
+                totals[metric] += int(values.get(metric, 0) or 0)
+        period_metrics[period["key"]] = totals
+    if rows:
+        category_totals = pd.DataFrame(rows).set_index("category")
+        category_totals.index.name = "category"
+    else:
+        category_totals = pd.DataFrame(columns=[period["key"] for period in periods] + ["Total"], dtype=float)
+        category_totals.index.name = "category"
+    totals = {
+        metric: sum(values[metric] for values in period_metrics.values())
+        for metric in ("source_line_count", "selected_voucher_count", "internal_transfer_count", "category_review_count")
+    }
+    months = [
+        str(period)
+        for period in pd.period_range(pd.Timestamp(period_start).to_period("M"), pd.Timestamp(period_end).to_period("M"), freq="M")
+    ]
+    return {
+        "months": months,
+        "periods": periods,
+        "group_by": grouping,
+        "category_totals": category_totals,
+        "transfer_details": pd.DataFrame(),
+        "deduction_details": pd.DataFrame(),
+        "categories_needing_review": pd.DataFrame(),
+        "selected_vouchers": [],
+        "source_line_count": totals["source_line_count"],
+        "selected_voucher_count": totals["selected_voucher_count"],
+        "internal_transfer_count": totals["internal_transfer_count"],
+        "category_review_count": totals["category_review_count"],
+        "period_metrics": period_metrics,
+        "receipt_presentation": payload.get("receipt_presentation") or "net",
+    }
+
+
+def load_cashflow_prepared_summary(
+    client_id: int,
+    *,
+    journal_template_id: int | None,
+    period_start: Any,
+    period_end: Any,
+    group_by: str,
+    receipt_presentation: str,
+    query_fn: Callable[..., list[dict[str, Any]]] = execute_query_pg,
+) -> dict[str, Any] | None:
+    """Roll a full-range daily snapshot into the requested report periods."""
+    if journal_template_id is None:
+        return None
+    upload_ids, suppressed_count = _latest_template_upload_ids(client_id, journal_template_id, query_fn)
+    if not upload_ids:
+        return None
+    bounds = _cashflow_snapshot_bounds(client_id, journal_template_id, upload_ids, query_fn)
+    if bounds is None:
+        return None
+    source_start, source_end = bounds
+    rows = query_fn(
+        """
+        SELECT summary_payload, configuration_version, created_at
+        FROM cash_bank_summary_read_models
+        WHERE client_id = %s
+          AND template_id = %s
+          AND source_upload_ids_key = %s
+          AND period_start = %s
+          AND period_end = %s
+          AND group_by = 'day'
+          AND receipt_presentation = %s
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (client_id, journal_template_id, _cashflow_upload_ids_key(upload_ids), source_start, source_end, receipt_presentation),
+    )
+    if not rows:
+        return None
+    payload = _cashflow_json_value(rows[0].get("summary_payload"))
+    if not isinstance(payload, Mapping):
+        return None
+    summary = _cashflow_daily_rollup(payload, period_start, period_end, group_by)
+    metadata = {
+        "client_id": client_id,
+        "journal_template_id": journal_template_id,
+        "source_template_ids": [journal_template_id],
+        "source_upload_ids": upload_ids,
+        "selected_template_upload_ids": upload_ids,
+        "duplicate_upload_suppression": True,
+        "duplicate_uploads_suppressed": suppressed_count,
+        "source_row_count": int(summary.get("source_line_count", 0) or 0),
+        "valid_row_count": int(summary.get("source_line_count", 0) or 0),
+        "rejected_row_count": 0,
+        "layout_row_count": 0,
+        "date_prefilter_applied": True,
+        "source_period_start": str(period_start),
+        "source_period_end": str(period_end),
+        "treasury_filter_stage": "summary_prepared_snapshot",
+        "sql_aggregated": True,
+        "raw_json_parsing": False,
+        "summary_read_model": "prepared_snapshot",
+        "classification_configuration_version": rows[0].get("configuration_version"),
+        "summary_read_model_created_at": rows[0].get("created_at"),
+    }
+    return {"summary": summary, "metadata": metadata}
+
+
+def invalidate_cashflow_summary_read_models(
+    client_id: int,
+    *,
+    write_fn: Callable[..., Any] = execute_write_pg,
+) -> None:
+    """Invalidate all prepared and exact Cashflows summaries for one client."""
+    write_fn(
+        "DELETE FROM cash_bank_summary_read_models WHERE client_id = %s",
+        (client_id,),
+    )
+
+def prepare_cashflow_summary_snapshot(
+    client_id: int,
+    *,
+    query_fn: Callable[..., list[dict[str, Any]]] = execute_query_pg,
+    write_fn: Callable[..., Any] = execute_write_pg,
+) -> dict[str, Any]:
+    """Build one reusable daily snapshot after committed source/configuration changes."""
+    from services.ledger_group_summary import build_cashflow_summary
+
+    configuration = _cashflow_preparation_configuration(client_id, query_fn)
+    template_id = configuration.get("source_template_id")
+    if template_id is None:
+        return {"status": "skipped", "reason": "template_not_configured"}
+    upload_ids, _suppressed_count = _latest_template_upload_ids(client_id, int(template_id), query_fn)
+    if not upload_ids:
+        return {"status": "skipped", "reason": "no_source_uploads"}
+    bounds = _cashflow_snapshot_bounds(client_id, int(template_id), upload_ids, query_fn)
+    if bounds is None:
+        return {"status": "skipped", "reason": "no_classified_dates"}
+    source_start, source_end = bounds
+    source = load_cashflow_sql_source(
+        client_id,
+        journal_template_id=int(template_id),
+        period_start=source_start,
+        period_end=source_end,
+        cashflow_group_by="day",
+        query_fn=query_fn,
+    )
+    if source is None or not source.ready:
+        return {"status": "skipped", "reason": "source_not_ready"}
+    summary = build_cashflow_summary(
+        source.journal,
+        source.coa,
+        configuration["cash_account_codes"],
+        configuration["bank_account_codes"],
+        source_start,
+        source_end,
+        match_internal_transfers=configuration["match_internal_transfers"],
+        receipt_presentation=configuration["receipt_presentation"],
+        group_by="day",
+    )
+    store_cashflow_summary_read_model(
+        client_id,
+        journal_template_id=int(template_id),
+        source_upload_ids=source.metadata.get("selected_template_upload_ids") or upload_ids,
+        configuration_version=source.metadata.get("classification_configuration_version") or 1,
+        period_start=source_start,
+        period_end=source_end,
+        group_by="day",
+        summary=summary,
+        write_fn=write_fn,
+    )
+    return {"status": "prepared", "period_start": str(source_start), "period_end": str(source_end), "upload_count": len(upload_ids)}
 
 def load_cashflow_summary_read_model(
     client_id: int,
