@@ -227,3 +227,4 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - If new files were created, add them to the Architecture/file map (this file's own Architecture section) AND to `File_Map.md` (same folder as this file, git-tracked alongside it — a separate, more detailed one-line-per-file reference) if a file was added, removed, or repurposed. This is the only File_Map.md in the project — do not create or update a second copy elsewhere.
 - If a new convention or rule emerges from a mistake, add it under Conventions
 Do this automatically at the end of the session without being asked.
+- 2026-09-29: Cashflows speed work is paused after commit 2b90255; deferred work and the next feature backlog are recorded in CHANGELOG_ARCHIVE.md.

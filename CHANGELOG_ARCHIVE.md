@@ -6792,3 +6792,42 @@ not the Cashflows preview requests.
 **Implementation:** Pick-by cells now toggle independently, support multiple staged selections, retain choices during picker navigation, and show selected state for day and larger periods. Apply converts selected cells into one inclusive earliest-to-latest report range; Cancel discards staged changes. Outside-click handling keeps the popover open while interacting with picker controls. Stylesheet cache versions were bumped together on all HTML pages.
 
 **Verification:** `node --check static/reconciliation.js`, focused UI/reconciliation tests (9 passed), and `git diff --check` passed. Aadil confirmed the browser behavior works. No packages were installed or source data changed.
+## Cashflows performance freeze and fresh-chat handover - 2026-09-29
+
+### Decision
+
+Pause further Cashflows speed development under the current free, geographically distant Supabase database and weak local internet connection. The current implementation is sufficiently optimized for feature development; do not reopen performance work merely because an individual cold request is variable.
+
+### Completed baseline
+
+- Reports use prepared monthly/fortnightly fields where safe, with date-based fallback for all grouping modes.
+- Daily snapshots, exact summary reads, invalidation after upload/category/configuration changes, and canonical fallback protect report integrity.
+- Upload validation uses exact set-based PostgreSQL counting with a safe legacy fallback.
+- Import comparison is row-order-safe; harmless transaction reordering does not create false updates.
+- Bulk writes, post-response snapshot preparation, and optional performance timing logs are in place.
+- Warm Cashflows requests reached approximately 1.4-2.1 seconds in user tests; occasional cold requests remain slower because of remote database/network latency.
+- Commit `2b90255` contains the balancing work and has been pushed to `origin/main`.
+
+### Deferred speed backlog
+
+Revisit only when the deployment or business case justifies it:
+
+1. Reduce cold-cache report latency and consider controlled prewarming for common periods.
+2. Optimize the remaining historical `row_data` comparison/read path.
+3. Improve large changed-data import time; do not treat browser polling or response size as the main culprit without new measurements.
+4. Review PostgreSQL indexes, connection pooling, retries, and server region after moving to a commercial database/server.
+5. Rebenchmark upload, validation, import, first report, and repeat report on the commercial environment.
+
+The 2-3 second target is not a guaranteed requirement for the current free remote infrastructure. Any future speed work must preserve exact counts, row-level integrity, category refresh behavior, and safe fallback paths.
+
+### Product work still to do
+
+1. Add administrator-controlled default reporting periods: fiscal-year start, this financial year, YTD, last 12 months, and custom period.
+2. Verify that every export matches the visible report for daily, fortnightly, monthly, quarterly, half-yearly, annual, and custom selections.
+3. Complete a formal reconciliation matrix against canonical transactions, covering opening/closing balances, empty periods, partial periods, boundaries, and category totals.
+4. Add Cashflows amount-to-transaction drill-down.
+5. Keep Quarter, Half-year, and Year as derived report groupings for now; add upload-time columns only if later evidence shows a material benefit.
+
+### Fresh-chat starting point
+
+Begin the next feature chat with: "Cashflows performance balancing is complete and frozen under current infrastructure. Do not optimize speed unless new evidence or a commercial deployment is available. Continue with the product backlog in this note, starting with default reporting-period settings."
