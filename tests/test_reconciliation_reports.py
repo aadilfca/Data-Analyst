@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import logging
 from types import SimpleNamespace
@@ -147,6 +148,82 @@ def test_cashflows_preview_passes_grouping_and_returns_period_descriptors():
     assert builder.call_args.kwargs["group_by"] == "quarter"
     assert builder.call_args.kwargs["group_by"] == response["group_by"]
 
+
+def test_cashflows_preview_uses_summary_read_model_without_loading_detail_source():
+    configuration = {
+        "source_template_id": 9,
+        "cash_account_codes": [],
+        "bank_account_codes": ["B1"],
+        "match_internal_transfers": False,
+        "receipt_presentation": "net",
+    }
+    cached = {
+        "metadata": {
+            "source_upload_ids": [21],
+            "selected_template_upload_ids": [21],
+            "source_row_count": 4,
+            "valid_row_count": 4,
+        },
+        "summary": _cashflow_summary(),
+    }
+    with (
+        patch.object(reconciliation, "_require_active_client"),
+        patch.object(reconciliation, "_cashflow_configuration", return_value=configuration),
+        patch.object(reconciliation, "load_cashflow_summary_read_model", return_value=cached),
+        patch.object(reconciliation, "load_ledger_report_source") as loader,
+    ):
+        response = reconciliation.preview_cashflows(
+            7,
+            "2026-02-10",
+            "2026-04-18",
+            group_by="quarter",
+            details="summary",
+            session=None,
+        )
+
+    loader.assert_not_called()
+    assert response["preview"]["group_by"] == "quarter"
+    assert response["preview"]["category_totals"][0]["2026-Q1"] == 125.0
+
+def test_cashflow_summary_read_model_round_trip_preserves_period_totals():
+    from services import ledger_report_source
+
+    writes = []
+    ledger_report_source.store_cashflow_summary_read_model(
+        7,
+        journal_template_id=9,
+        source_upload_ids=[21],
+        configuration_version=4,
+        period_start="2026-02-10",
+        period_end="2026-04-18",
+        group_by="quarter",
+        summary=_cashflow_summary(),
+        write_fn=lambda query, params: writes.append((query, params)),
+    )
+
+    payload = json.loads(writes[0][1][-1])
+
+    def query(sql, params):
+        if "FROM uploaded_files" in sql:
+            return [{"upload_id": 21, "file_name": "period.xlsx", "upload_date": "2026-04-01"}]
+        return [{
+            "summary_payload": payload,
+            "configuration_version": 4,
+            "created_at": "2026-09-29T00:00:00+00:00",
+        }]
+
+    cached = ledger_report_source.load_cashflow_summary_read_model(
+        7,
+        journal_template_id=9,
+        period_start="2026-02-10",
+        period_end="2026-04-18",
+        group_by="quarter",
+        receipt_presentation="net",
+        query_fn=query,
+    )
+
+    assert cached["summary"]["category_totals"].loc["Customers", "2026-Q1"] == 125.0
+    assert cached["metadata"]["summary_read_model"] == "hit"
 
 def test_cashflow_configuration_uses_one_query_and_preserves_sections():
     calls = []

@@ -535,6 +535,23 @@ def init_db():
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_account_date ON cash_bank_transaction_classifications (client_id, account_code, transaction_date, is_current)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_source_version ON cash_bank_transaction_classifications (client_data_id, configuration_version)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_period ON cash_bank_transaction_classifications (client_id, transaction_month, transaction_fortnight, is_current)")
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS cash_bank_summary_read_models (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                template_id INTEGER NOT NULL,
+                source_upload_ids_key TEXT NOT NULL,
+                configuration_version INTEGER NOT NULL DEFAULT 1,
+                period_start TEXT NOT NULL,
+                period_end TEXT NOT NULL,
+                group_by TEXT NOT NULL,
+                receipt_presentation TEXT NOT NULL,
+                summary_payload TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(client_id, template_id, source_upload_ids_key, period_start, period_end, group_by, receipt_presentation)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cash_bank_summary_read_models_client ON cash_bank_summary_read_models (client_id, template_id, group_by)")
 
         conn.execute('''
             CREATE TABLE IF NOT EXISTS error_codes (
@@ -4145,6 +4162,23 @@ def _ensure_postgres_cash_bank_transaction_classifications(conn):
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_account_date ON cash_bank_transaction_classifications (client_id, account_code, transaction_date, is_current)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_source_version ON cash_bank_transaction_classifications (client_data_id, configuration_version)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_period ON cash_bank_transaction_classifications (client_id, transaction_month, transaction_fortnight, is_current)")
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS cash_bank_summary_read_models (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+                source_upload_ids_key TEXT NOT NULL,
+                configuration_version INTEGER NOT NULL DEFAULT 1,
+                period_start DATE NOT NULL,
+                period_end DATE NOT NULL,
+                group_by TEXT NOT NULL,
+                receipt_presentation TEXT NOT NULL,
+                summary_payload JSONB NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(client_id, template_id, source_upload_ids_key, period_start, period_end, group_by, receipt_presentation)
+            )
+        ''')
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cash_bank_summary_read_models_client ON cash_bank_summary_read_models (client_id, template_id, group_by)")
     except Exception:
         conn.rollback()
         raise
@@ -4399,6 +4433,23 @@ def init_db_postgres(conn):
     run("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_account_date ON cash_bank_transaction_classifications (client_id, account_code, transaction_date, is_current)")
     run("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_source_version ON cash_bank_transaction_classifications (client_data_id, configuration_version)")
     run("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_period ON cash_bank_transaction_classifications (client_id, transaction_month, transaction_fortnight, is_current)")
+    run('''
+        CREATE TABLE IF NOT EXISTS cash_bank_summary_read_models (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+            source_upload_ids_key TEXT NOT NULL,
+            configuration_version INTEGER NOT NULL DEFAULT 1,
+            period_start DATE NOT NULL,
+            period_end DATE NOT NULL,
+            group_by TEXT NOT NULL,
+            receipt_presentation TEXT NOT NULL,
+            summary_payload JSONB NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE(client_id, template_id, source_upload_ids_key, period_start, period_end, group_by, receipt_presentation)
+        )
+    ''', "cash_bank_summary_read_models")
+    run("CREATE INDEX IF NOT EXISTS idx_cash_bank_summary_read_models_client ON cash_bank_summary_read_models (client_id, template_id, group_by)")
     # ---------- 10. error_codes ----------
     run('''
         CREATE TABLE IF NOT EXISTS error_codes (

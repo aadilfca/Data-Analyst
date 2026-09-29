@@ -1,4 +1,12 @@
 # Changelog Archive
+## Cashflows summary read model - 2026-09-29
+
+**Scope:** Reduce repeat Cashflows summary fetch time while preserving report integrity.
+
+**Implementation:** Added a versioned PostgreSQL summary read model keyed by client, template uploads, date range, grouping, and receipt presentation. New or reclassified uploads invalidate affected client summaries; cache misses use the existing detailed calculation path.
+
+**Verification:** Focused Cashflows, reconciliation, grouping, source, classification, and performance coverage passed 49 tests. User measurements showed repeat three-month and six-month loads near 1.5 seconds.
+
 ## Cashflows prepared Month/Fortnight aggregation - 2026-09-29
 
 **Scope:** Use upload-time Month and Fortnight classification keys for Cashflows grouping while preserving exact transaction-date filtering and existing report totals.

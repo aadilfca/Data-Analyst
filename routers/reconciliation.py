@@ -19,7 +19,14 @@ from pydantic import BaseModel, Field
 from database import execute_query_pg, execute_write_pg, log_audit, pg_transaction
 from routers.auth import require_admin
 from services.ledger_group_summary import LedgerBalanceError, build_cashflow_summary, build_cross_group_check, build_financial_statement_summary, build_group_summary, normalize_cashflow_grouping
-from services.ledger_report_source import CASHFLOW_COLUMN_ROLE_LABELS, CASHFLOW_REQUIRED_COLUMN_ROLES, load_ledger_report_source
+from services.ledger_report_source import (
+    CASHFLOW_COLUMN_ROLE_LABELS,
+    CASHFLOW_REQUIRED_COLUMN_ROLES,
+    LedgerReportSource,
+    load_cashflow_summary_read_model,
+    load_ledger_report_source,
+    store_cashflow_summary_read_model,
+)
 from services.reconciliation_balance_source import (
     load_reconciliation_balance_source,
     normalize_balance_month,
@@ -1295,22 +1302,45 @@ def _build_cashflow_result(
     configured_template_id = configuration.get("source_template_id")
     diagnostics: list[dict[str, Any]] = []
     source_started = perf_counter()
-    try:
-        source = load_ledger_report_source(
-            client_id,
-            journal_template_id=configured_template_id,
-            period_start=start,
-            period_end=end,
-            cashflow_group_by=grouping,
-            query_fn=execute_query_pg,
-            account_category_source="cashflow",
-            treasury_account_codes=[
-                *configuration["cash_account_codes"],
-                *configuration["bank_account_codes"],
-            ],
+    cached_summary = None
+    if detail_sections == set() and configured_template_id is not None:
+        try:
+            cached_summary = load_cashflow_summary_read_model(
+                client_id,
+                journal_template_id=configured_template_id,
+                period_start=start,
+                period_end=end,
+                group_by=grouping,
+                receipt_presentation=configuration["receipt_presentation"],
+                query_fn=execute_query_pg,
+            )
+        except Exception as error:
+            logger.warning("cashflows_summary_read_model_lookup_failed client_id=%s error=%s", client_id, error)
+    if cached_summary is not None:
+        source = LedgerReportSource(
+            pd.DataFrame(),
+            pd.DataFrame(),
+            (),
+            cached_summary["metadata"],
+            (),
         )
-    except ValueError as error:
-        raise HTTPException(400, str(error)) from error
+    else:
+        try:
+            source = load_ledger_report_source(
+                client_id,
+                journal_template_id=configured_template_id,
+                period_start=start,
+                period_end=end,
+                cashflow_group_by=grouping,
+                query_fn=execute_query_pg,
+                account_category_source="cashflow",
+                treasury_account_codes=[
+                    *configuration["cash_account_codes"],
+                    *configuration["bank_account_codes"],
+                ],
+            )
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
     source_seconds = perf_counter() - source_started
     diagnostics.extend(source.diagnostics)
     if configured_template_id is None:
@@ -1318,10 +1348,10 @@ def _build_cashflow_result(
     if not configuration["cash_account_codes"] and not configuration["bank_account_codes"]:
         diagnostics.append(_report_diagnostic("no_treasury_accounts", "error", "Select at least one Cash or Bank account in Account Control Centre before generating Cashflows."))
 
-    summary: dict[str, Any] | None = None
+    summary: dict[str, Any] | None = cached_summary["summary"] if cached_summary is not None else None
     summary_seconds = 0.0
-    summary_status = "skipped_source_not_ready"
-    if source.ready and not any(item.get("severity") == "error" for item in diagnostics):
+    summary_status = "read_model_hit" if cached_summary is not None else "skipped_source_not_ready"
+    if summary is None and source.ready and not any(item.get("severity") == "error" for item in diagnostics):
         summary_started = perf_counter()
         summary_status = "completed"
         try:
@@ -1344,6 +1374,21 @@ def _build_cashflow_result(
             diagnostics.append(_report_diagnostic("cashflow_input_error", "error", str(error)))
         finally:
             summary_seconds = perf_counter() - summary_started
+    if summary is not None and cached_summary is None and detail_sections == set() and configured_template_id is not None:
+        try:
+            source_metadata_for_cache = source.metadata
+            store_cashflow_summary_read_model(
+                client_id,
+                journal_template_id=configured_template_id,
+                source_upload_ids=source_metadata_for_cache.get("selected_template_upload_ids") or source_metadata_for_cache.get("source_upload_ids") or [],
+                configuration_version=source_metadata_for_cache.get("classification_configuration_version"),
+                period_start=start,
+                period_end=end,
+                group_by=grouping,
+                summary=summary,
+            )
+        except Exception as error:
+            logger.warning("cashflows_summary_read_model_store_failed client_id=%s error=%s", client_id, error)
 
     review_count = int(summary.get("category_review_count", 0)) if summary else 0
     transfer_count = int(summary.get("internal_transfer_count", 0)) if summary else 0

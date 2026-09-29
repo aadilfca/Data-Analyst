@@ -219,6 +219,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-28: Cashflows backfill now processes all PostgreSQL batches, and daily/fortnightly summaries keep categories as rows with periods as columns.
 - 2026-09-29: Cashflows repeated summary loads now stay in-page after restoring the report form submit handler.
 - 2026-09-29: Cashflows now uses upload-time Month/Fortnight keys for grouping, preserving date-boundary integrity with safe legacy fallback.
+- 2026-09-29: Cashflows gained an invalidated summary read model for repeat summary requests, with detailed-path fallback on cache misses.
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
 - Findings from a Code Health Review session go to `KNOWN_ISSUES.md`, not the Status log — the Status log records changes made, that file records issues found

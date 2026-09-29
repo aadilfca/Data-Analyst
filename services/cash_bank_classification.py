@@ -442,6 +442,11 @@ def upsert_classification_rows_postgres(
             values,
             page_size=500,
         )
+        if hasattr(cursor, "execute"):
+            cursor.execute(
+                "DELETE FROM cash_bank_summary_read_models WHERE client_id = ANY(%s)",
+                ([int(row["client_id"]) for row in derived_rows],),
+            )
     return derived_rows
 
 @dataclass

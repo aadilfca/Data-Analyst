@@ -16,7 +16,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 import pandas as pd
 
-from database import execute_query_pg
+from database import execute_query_pg, execute_write_pg
 
 
 JOURNAL_COLUMNS = (
@@ -780,6 +780,179 @@ def _latest_template_upload_ids(
         latest_by_name.setdefault(file_name, int(upload_id))
     selected = sorted(latest_by_name.values())
     return selected, max(0, len(rows) - len(selected))
+
+def _cashflow_upload_ids_key(upload_ids: Sequence[int]) -> str:
+    return ",".join(str(int(upload_id)) for upload_id in sorted(set(upload_ids)))
+
+
+def _cashflow_summary_payload(summary: Mapping[str, Any]) -> dict[str, Any]:
+    periods = [dict(period) for period in summary.get("periods", [])]
+    period_keys = [str(period["key"]) for period in periods]
+    category_totals = summary.get("category_totals")
+    categories: list[dict[str, Any]] = []
+    if isinstance(category_totals, pd.DataFrame):
+        for category, values in category_totals.iterrows():
+            categories.append({
+                "category": str(category),
+                "values": {
+                    key: float(values.get(key, 0.0) or 0.0)
+                    for key in period_keys
+                },
+            })
+    return {
+        "months": [str(month) for month in summary.get("months", [])],
+        "periods": periods,
+        "categories": categories,
+        "source_line_count": int(summary.get("source_line_count", 0) or 0),
+        "selected_voucher_count": int(summary.get("selected_voucher_count", 0) or 0),
+        "internal_transfer_count": int(summary.get("internal_transfer_count", 0) or 0),
+        "category_review_count": int(summary.get("category_review_count", 0) or 0),
+        "receipt_presentation": summary.get("receipt_presentation") or "net",
+    }
+
+
+def _cashflow_summary_from_payload(payload: Mapping[str, Any], group_by: str) -> dict[str, Any]:
+    periods = [dict(period) for period in payload.get("periods", [])]
+    period_keys = [str(period["key"]) for period in periods]
+    rows: list[dict[str, Any]] = []
+    for category in payload.get("categories", []):
+        values = category.get("values") or {}
+        row = {"category": str(category.get("category") or "")}
+        for key in period_keys:
+            row[key] = float(values.get(key, 0.0) or 0.0)
+        row["Total"] = sum(float(row[key]) for key in period_keys)
+        rows.append(row)
+    if rows:
+        category_totals = pd.DataFrame(rows).set_index("category")
+        category_totals.index.name = "category"
+    else:
+        category_totals = pd.DataFrame(columns=[*period_keys, "Total"], dtype=float)
+        category_totals.index.name = "category"
+    return {
+        "months": [str(month) for month in payload.get("months", [])],
+        "periods": periods,
+        "group_by": group_by,
+        "category_totals": category_totals,
+        "transfer_details": pd.DataFrame(),
+        "deduction_details": pd.DataFrame(),
+        "categories_needing_review": pd.DataFrame(),
+        "selected_vouchers": [],
+        "selected_voucher_count": int(payload.get("selected_voucher_count", 0) or 0),
+        "internal_transfer_count": int(payload.get("internal_transfer_count", 0) or 0),
+        "category_review_count": int(payload.get("category_review_count", 0) or 0),
+        "receipt_presentation": payload.get("receipt_presentation") or "net",
+    }
+
+
+def load_cashflow_summary_read_model(
+    client_id: int,
+    *,
+    journal_template_id: int | None,
+    period_start: Any,
+    period_end: Any,
+    group_by: str,
+    receipt_presentation: str,
+    query_fn: Callable[..., list[dict[str, Any]]] = execute_query_pg,
+) -> dict[str, Any] | None:
+    """Load an exact summary-only snapshot when the source/configuration is unchanged."""
+    if journal_template_id is None:
+        return None
+    upload_ids, suppressed_count = _latest_template_upload_ids(client_id, journal_template_id, query_fn)
+    if not upload_ids:
+        return None
+    upload_key = _cashflow_upload_ids_key(upload_ids)
+    rows = query_fn(
+        """
+        SELECT summary_payload, configuration_version, created_at
+        FROM cash_bank_summary_read_models
+        WHERE client_id = %s
+          AND template_id = %s
+          AND source_upload_ids_key = %s
+          AND period_start = %s
+          AND period_end = %s
+          AND group_by = %s
+          AND receipt_presentation = %s
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (client_id, journal_template_id, upload_key, period_start, period_end, group_by, receipt_presentation),
+    )
+    if not rows:
+        return None
+    payload = rows[0].get("summary_payload") or {}
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(payload, Mapping):
+        return None
+    summary = _cashflow_summary_from_payload(payload, group_by)
+    metadata = {
+        "client_id": client_id,
+        "journal_template_id": journal_template_id,
+        "source_template_ids": [journal_template_id],
+        "source_upload_ids": upload_ids,
+        "selected_template_upload_ids": upload_ids,
+        "duplicate_upload_suppression": True,
+        "duplicate_uploads_suppressed": suppressed_count,
+        "source_row_count": int(payload.get("source_line_count", 0) or 0),
+        "valid_row_count": int(payload.get("source_line_count", 0) or 0),
+        "rejected_row_count": 0,
+        "layout_row_count": 0,
+        "date_prefilter_applied": True,
+        "source_period_start": str(period_start),
+        "source_period_end": str(period_end),
+        "treasury_filter_stage": "summary_read_model",
+        "sql_aggregated": True,
+        "raw_json_parsing": False,
+        "summary_read_model": "hit",
+        "classification_configuration_version": rows[0].get("configuration_version"),
+        "summary_read_model_created_at": rows[0].get("created_at"),
+    }
+    return {"summary": summary, "metadata": metadata}
+
+
+def store_cashflow_summary_read_model(
+    client_id: int,
+    *,
+    journal_template_id: int | None,
+    source_upload_ids: Sequence[int],
+    configuration_version: int | None,
+    period_start: Any,
+    period_end: Any,
+    group_by: str,
+    summary: Mapping[str, Any],
+    write_fn: Callable[..., Any] = execute_write_pg,
+) -> None:
+    """Persist one completed summary-only snapshot for safe repeat loads."""
+    if journal_template_id is None or not source_upload_ids:
+        return
+    payload = _cashflow_summary_payload(summary)
+    write_fn(
+        """
+        INSERT INTO cash_bank_summary_read_models (
+            client_id, template_id, source_upload_ids_key, configuration_version,
+            period_start, period_end, group_by, receipt_presentation, summary_payload
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+        ON CONFLICT (client_id, template_id, source_upload_ids_key, period_start, period_end, group_by, receipt_presentation)
+        DO UPDATE SET
+            configuration_version = EXCLUDED.configuration_version,
+            summary_payload = EXCLUDED.summary_payload,
+            created_at = CURRENT_TIMESTAMP
+        """,
+        (
+            client_id,
+            journal_template_id,
+            _cashflow_upload_ids_key(source_upload_ids),
+            int(configuration_version or 1),
+            period_start,
+            period_end,
+            group_by,
+            payload["receipt_presentation"],
+            json.dumps(payload),
+        ),
+    )
 
 def load_cashflow_sql_source(
     client_id: int,
