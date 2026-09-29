@@ -205,6 +205,32 @@ def _reindex_periods(frame: pd.DataFrame, period_keys: Sequence[str], index_name
     result.index.name = index_name
     return result.astype(float)
 
+def _prepared_period_values(
+    journal: pd.DataFrame,
+    periods: Sequence[Mapping[str, str]],
+    grouping: str,
+) -> pd.Series | None:
+    """Return prepared period assignments when every row has a valid key."""
+    if grouping == "month":
+        column = "transaction_month"
+        key_map = {period["key"]: (period["key"], period["label"]) for period in periods}
+    elif grouping == "fortnight":
+        column = "transaction_fortnight"
+        key_map = {
+            f"{period['key'][:7]}-F{period['key'][-1]}": (period["key"], period["label"])
+            for period in periods
+        }
+    else:
+        return None
+    if column not in journal.columns:
+        return None
+    prepared = journal[column].map(_clean_text)
+    if prepared.empty or prepared.eq("").any():
+        return None
+    values = prepared.map(key_map)
+    if values.isna().any():
+        return None
+    return values
 
 def _reindex_months(frame: pd.DataFrame, month_labels: Sequence[str], index_name: str) -> pd.DataFrame:
     if frame.empty:
@@ -475,7 +501,9 @@ def build_cashflow_summary(
     months = _period_labels(start, end)
     journal = _prepare_journal(journal_df, start, end)
     if not journal.empty:
-        period_values = journal["date"].dt.normalize().map(period_lookup)
+        period_values = _prepared_period_values(journal, periods, grouping)
+        if period_values is None:
+            period_values = journal["date"].dt.normalize().map(period_lookup)
         if period_values.isna().any():
             raise ValueError("A transaction date did not fall inside the requested reporting periods")
         period_frame = pd.DataFrame(

@@ -5,7 +5,11 @@ import tempfile
 import unittest
 
 import database
-from services.cash_bank_classification import backfill_postgres, backfill_sqlite
+from services.cash_bank_classification import (
+    backfill_postgres,
+    backfill_sqlite,
+    build_classification_row,
+)
 
 
 class _PostgresBackfillCursor:
@@ -186,8 +190,8 @@ class CashBankTransactionBackfillTests(unittest.TestCase):
 
         rows = self.connection.execute(
             """
-            SELECT voucher_id, account_code, treasury_type, classification_status,
-                   debit, credit, configuration_version
+            SELECT voucher_id, account_code, transaction_month, transaction_fortnight,
+                   treasury_type, classification_status, debit, credit, configuration_version
             FROM cash_bank_transaction_classifications
             ORDER BY client_data_id
             """
@@ -196,6 +200,8 @@ class CashBankTransactionBackfillTests(unittest.TestCase):
         self.assertEqual(dict(rows[0]), {
             "voucher_id": "V-001",
             "account_code": "1000",
+            "transaction_month": "2024-01",
+            "transaction_fortnight": "2024-01-F1",
             "treasury_type": "cash",
             "classification_status": "cash",
             "debit": 100.5,
@@ -211,6 +217,31 @@ class CashBankTransactionBackfillTests(unittest.TestCase):
         ).fetchall()
         self.assertEqual([tuple(row) for row in before], [tuple(row) for row in after])
 
+    def test_period_keys_use_inclusive_fortnight_boundaries(self):
+        expected = [
+            ("2024-01-14", "2024-01", "2024-01-F1"),
+            ("2024-01-15", "2024-01", "2024-01-F2"),
+            ("2024-02-29", "2024-02", "2024-02-F2"),
+            ("2024-03-01", "2024-03", "2024-03-F1"),
+        ]
+        for offset, (date_value, month_key, fortnight_key) in enumerate(expected, start=1):
+            derived = build_classification_row(
+                {
+                    "id": 100 + offset,
+                    "client_id": self.client_id,
+                    "template_id": 1,
+                    "upload_id": 1,
+                    "row_data": json.dumps({
+                        "Account Detail": "1000",
+                        "Date": date_value,
+                    }),
+                    "extract_date": date_value,
+                },
+                {"1000": {"cash"}},
+                configuration_version=1,
+            )
+            self.assertEqual(derived["transaction_month"], month_key)
+            self.assertEqual(derived["transaction_fortnight"], fortnight_key)
     def test_backfill_is_idempotent_and_dry_run_does_not_write(self):
         first = backfill_sqlite(
             self.connection,

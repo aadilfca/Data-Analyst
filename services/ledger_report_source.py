@@ -28,6 +28,7 @@ JOURNAL_COLUMNS = (
     "debit",
     "credit",
 )
+CASHFLOW_PREPARED_PERIOD_COLUMNS = ("transaction_month", "transaction_fortnight")
 COA_COLUMNS = ("account_code", "account_title", "account_type", "category")
 
 _JOURNAL_ALIASES: Mapping[str, tuple[str, ...]] = {
@@ -787,6 +788,7 @@ def load_cashflow_sql_source(
     journal_template_id: int | None = None,
     period_start: Any = None,
     period_end: Any = None,
+    cashflow_group_by: str | None = None,
     query_fn: Callable[..., list[dict[str, Any]]] = execute_query_pg,
 ) -> LedgerReportSource | None:
     """Load Cashflows from the SQL-aggregated derived classification layer.
@@ -821,6 +823,8 @@ def load_cashflow_sql_source(
                 c.voucher_id,
                 c.transaction_date AS date,
                 c.account_code,
+                c.transaction_month,
+                c.transaction_fortnight,
                 COALESCE(
                     cd.row_data ->> 'Account Name',
                     cd.row_data ->> 'Account Title',
@@ -876,6 +880,8 @@ def load_cashflow_sql_source(
             SUM(l.credit) AS credit,
             MAX(l.treasury_type) AS treasury_type,
             MAX(l.category) AS category,
+            MAX(l.transaction_month) AS transaction_month,
+            MAX(l.transaction_fortnight) AS transaction_fortnight,
             COUNT(*) AS source_line_count,
             MAX(l.classification_status) AS classification_status
         FROM classified_lines l
@@ -891,7 +897,7 @@ def load_cashflow_sql_source(
         return None
 
     records = [dict(row) for row in rows]
-    journal = pd.DataFrame(records).reindex(columns=list(JOURNAL_COLUMNS))
+    journal = pd.DataFrame(records).reindex(columns=[*JOURNAL_COLUMNS, *CASHFLOW_PREPARED_PERIOD_COLUMNS])
     if journal.empty:
         return None
     journal["date"] = pd.to_datetime(journal["date"], errors="coerce")
@@ -938,6 +944,7 @@ def load_cashflow_sql_source(
         "treasury_filter_stage": "sql_derived_classification",
         "sql_aggregated": True,
         "raw_json_parsing": False,
+        "prepared_periods_requested": str(cashflow_group_by or "").casefold() in {"month", "fortnight"},
     }
     return LedgerReportSource(journal, coa, (), metadata, ())
 def load_ledger_report_source(
@@ -950,6 +957,7 @@ def load_ledger_report_source(
     query_fn: Callable[..., list[dict[str, Any]]] = execute_query_pg,
     account_category_source: str = "ledger_summary",
     treasury_account_codes: Sequence[str] | None = None,
+    cashflow_group_by: str | None = None,
 ) -> LedgerReportSource:
     """Load one explicit Client Data Bank dataset and its client categories."""
 
@@ -960,6 +968,7 @@ def load_ledger_report_source(
             journal_template_id=journal_template_id,
             period_start=period_start,
             period_end=period_end,
+            cashflow_group_by=cashflow_group_by,
             query_fn=query_fn,
         )
         if optimized is not None:

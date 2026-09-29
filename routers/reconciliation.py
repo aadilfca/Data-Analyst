@@ -991,37 +991,56 @@ def replace_report_category_assignments(
 
 
 def _cashflow_configuration(client_id: int) -> dict[str, Any]:
-    mappings = execute_query_pg(
+    rows = execute_query_pg(
         """
-        SELECT a.account_code, c.category_key, c.label
-        FROM account_control_cashflow_category_assignments a
-        JOIN account_control_cashflow_categories c
-          ON c.id = a.category_id AND c.client_id = a.client_id AND c.is_active = TRUE
-        WHERE a.client_id = %s
-        ORDER BY a.account_code
+        SELECT
+            COALESCE((
+                SELECT json_agg(json_build_object(
+                    'account_code', a.account_code,
+                    'category_key', c.category_key,
+                    'label', c.label
+                ) ORDER BY a.account_code)
+                FROM account_control_cashflow_category_assignments a
+                JOIN account_control_cashflow_categories c
+                  ON c.id = a.category_id
+                 AND c.client_id = a.client_id
+                 AND c.is_active = TRUE
+                WHERE a.client_id = %s
+            ), '[]'::json) AS mappings,
+            COALESCE((
+                SELECT json_agg(json_build_object(
+                    'account_code', t.account_code,
+                    'treasury_type', t.treasury_type
+                ) ORDER BY t.treasury_type, t.account_code)
+                FROM account_control_cashflow_treasury_accounts t
+                WHERE t.client_id = %s AND t.is_active = TRUE
+            ), '[]'::json) AS treasury,
+            COALESCE((
+                SELECT json_build_object(
+                    'match_internal_transfers', s.match_internal_transfers,
+                    'receipt_presentation', s.receipt_presentation,
+                    'source_upload_id', s.source_upload_id,
+                    'source_template_id', s.source_template_id
+                )
+                FROM account_control_cashflow_settings s
+                WHERE s.client_id = %s
+                LIMIT 1
+            ), '{}'::json) AS settings
         """,
-        (client_id,),
+        (client_id, client_id, client_id),
     )
-    treasury = execute_query_pg(
-        """SELECT account_code, treasury_type
-           FROM account_control_cashflow_treasury_accounts
-           WHERE client_id = %s AND is_active = TRUE
-           ORDER BY treasury_type, account_code""",
-        (client_id,),
-    )
-    settings = execute_query_pg(
-        """SELECT match_internal_transfers, receipt_presentation, source_upload_id, source_template_id
-           FROM account_control_cashflow_settings WHERE client_id = %s""",
-        (client_id,),
-    )
+    row = rows[0] if rows else {}
+    mappings = row.get("mappings") or []
+    treasury = row.get("treasury") or []
+    settings = row.get("settings") or {}
     return {
         "category_mappings": {normalize_account_code(row["account_code"]): row.get("label") or "" for row in mappings},
         "cash_account_codes": [normalize_account_code(row["account_code"]) for row in treasury if row["treasury_type"] == "cash"],
-        "source_upload_id": settings[0].get("source_upload_id") if settings else None,
-        "source_template_id": settings[0].get("source_template_id") if settings else None,
+        "source_upload_id": settings.get("source_upload_id"),
+        "source_template_id": settings.get("source_template_id"),
         "bank_account_codes": [normalize_account_code(row["account_code"]) for row in treasury if row["treasury_type"] == "bank"],
-        "match_internal_transfers": bool(settings[0].get("match_internal_transfers")) if settings else False,
-        "receipt_presentation": (settings[0].get("receipt_presentation") or "net") if settings else "net",
+        "match_internal_transfers": bool(settings.get("match_internal_transfers")),
+        "receipt_presentation": settings.get("receipt_presentation") or "net",
     }
 
 def _cashflow_template_mapping_view(client_id: int, template_id: int) -> dict[str, Any]:
@@ -1262,13 +1281,17 @@ def _build_cashflow_result(
     group_by: str = "month",
 ) -> dict[str, Any]:
     request_started = perf_counter()
+    validation_started = perf_counter()
     _require_active_client(client_id)
+    validation_seconds = perf_counter() - validation_started
     start, end = _parse_report_period(period_start, period_end)
     try:
         grouping = normalize_cashflow_grouping(group_by)
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
+    configuration_started = perf_counter()
     configuration = _cashflow_configuration(client_id)
+    configuration_seconds = perf_counter() - configuration_started
     configured_template_id = configuration.get("source_template_id")
     diagnostics: list[dict[str, Any]] = []
     source_started = perf_counter()
@@ -1278,6 +1301,7 @@ def _build_cashflow_result(
             journal_template_id=configured_template_id,
             period_start=start,
             period_end=end,
+            cashflow_group_by=grouping,
             query_fn=execute_query_pg,
             account_category_source="cashflow",
             treasury_account_codes=[
@@ -1347,12 +1371,15 @@ def _build_cashflow_result(
     total_seconds = perf_counter() - request_started
     logger.info(
         "cashflows_performance client_id=%s period_start=%s period_end=%s group_by=%s "
-        "source_seconds=%.3f summary_seconds=%.3f format_seconds=%.3f total_seconds=%.3f "
+        "validation_seconds=%.3f configuration_seconds=%.3f source_seconds=%.3f "
+        "summary_seconds=%.3f format_seconds=%.3f total_seconds=%.3f "
         "source_rows=%s valid_rows=%s selected_vouchers=%s summary_status=%s",
         client_id,
         start.date().isoformat(),
         end.date().isoformat(),
         grouping,
+        validation_seconds,
+        configuration_seconds,
         source_seconds,
         summary_seconds,
         format_seconds,

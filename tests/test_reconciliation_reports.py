@@ -145,6 +145,39 @@ def test_cashflows_preview_passes_grouping_and_returns_period_descriptors():
     assert response["preview"]["periods"][1]["label"] == "Q2 2026"
     assert response["preview"]["category_totals"][0]["2026-Q1"] == 125.0
     assert builder.call_args.kwargs["group_by"] == "quarter"
+    assert builder.call_args.kwargs["group_by"] == response["group_by"]
+
+
+def test_cashflow_configuration_uses_one_query_and_preserves_sections():
+    calls = []
+
+    def query_fn(query, params):
+        calls.append((query, params))
+        return [{
+            "mappings": [{"account_code": "EXP", "category_key": "operating", "label": "Operating expense"}],
+            "treasury": [
+                {"account_code": "CASH", "treasury_type": "cash"},
+                {"account_code": "BANK", "treasury_type": "bank"},
+            ],
+            "settings": {
+                "match_internal_transfers": True,
+                "receipt_presentation": "gross",
+                "source_upload_id": None,
+                "source_template_id": 9,
+            },
+        }]
+
+    with patch.object(reconciliation, "execute_query_pg", side_effect=query_fn):
+        result = reconciliation._cashflow_configuration(7)
+
+    assert len(calls) == 1
+    assert calls[0][1] == (7, 7, 7)
+    assert result["category_mappings"] == {"EXP": "Operating expense"}
+    assert result["cash_account_codes"] == ["CASH"]
+    assert result["bank_account_codes"] == ["BANK"]
+    assert result["match_internal_transfers"] is True
+    assert result["receipt_presentation"] == "gross"
+    assert result["source_template_id"] == 9
 
 
 def test_cashflows_preview_logs_performance_stages(caplog):
@@ -174,6 +207,8 @@ def test_cashflows_preview_logs_performance_stages(caplog):
     performance_records = [record for record in caplog.records if record.getMessage().startswith("cashflows_performance ")]
     assert len(performance_records) == 1
     message = performance_records[0].getMessage()
+    assert "validation_seconds=" in message
+    assert "configuration_seconds=" in message
     assert "source_seconds=" in message
     assert "summary_seconds=" in message
     assert "format_seconds=" in message

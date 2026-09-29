@@ -138,6 +138,21 @@ def _parse_date(value: Any) -> str | None:
         return None
 
 
+def _transaction_period_keys(transaction_date: str | None) -> tuple[str | None, str | None]:
+    """Derive stable month and fortnight keys from the canonical ISO date."""
+    if not transaction_date:
+        return None, None
+    try:
+        month_key = transaction_date[:7]
+        day = int(transaction_date[8:10])
+    except (IndexError, TypeError, ValueError):
+        return None, None
+    if len(month_key) != 7 or transaction_date[4] != "-" or transaction_date[7] != "-":
+        return None, None
+    fortnight = "F1" if day <= 14 else "F2"
+    return month_key, f"{month_key}-{fortnight}"
+
+
 def build_treasury_mapping(rows: list[Mapping[str, Any]]) -> dict[str, set[str]]:
     """Return normalized account-code -> one or more treasury types."""
     mapping: dict[str, set[str]] = {}
@@ -161,6 +176,7 @@ def build_classification_row(
     transaction_date = _parse_date(_field_value(row_data, "transaction_date"))
     if transaction_date is None:
         transaction_date = _parse_date(source_row.get("extract_date"))
+    transaction_month, transaction_fortnight = _transaction_period_keys(transaction_date)
 
     treasury_types = treasury_mapping.get(account_code, set())
     if len(treasury_types) == 1:
@@ -184,6 +200,8 @@ def build_classification_row(
         "voucher_id": voucher_id or None,
         "account_code": account_code or None,
         "transaction_date": transaction_date,
+        "transaction_month": transaction_month,
+        "transaction_fortnight": transaction_fortnight,
         "debit": _parse_amount(_field_value(row_data, "debit")),
         "credit": _parse_amount(_field_value(row_data, "credit")),
         "treasury_type": treasury_type,
@@ -381,6 +399,8 @@ def upsert_classification_rows_postgres(
             row["voucher_id"],
             row["account_code"],
             row["transaction_date"],
+            row["transaction_month"],
+            row["transaction_fortnight"],
             row["debit"],
             row["credit"],
             row["treasury_type"],
@@ -397,7 +417,7 @@ def upsert_classification_rows_postgres(
             """
             INSERT INTO cash_bank_transaction_classifications (
                 client_data_id, client_id, template_id, upload_id,
-                voucher_id, account_code, transaction_date, debit, credit,
+                voucher_id, account_code, transaction_date, transaction_month, transaction_fortnight, debit, credit,
                 treasury_type, treasury_account_code, configuration_version,
                 classification_status, is_current
             ) VALUES %s
@@ -409,6 +429,8 @@ def upsert_classification_rows_postgres(
                 voucher_id = EXCLUDED.voucher_id,
                 account_code = EXCLUDED.account_code,
                 transaction_date = EXCLUDED.transaction_date,
+                transaction_month = EXCLUDED.transaction_month,
+                transaction_fortnight = EXCLUDED.transaction_fortnight,
                 debit = EXCLUDED.debit,
                 credit = EXCLUDED.credit,
                 treasury_type = EXCLUDED.treasury_type,
@@ -629,10 +651,10 @@ def backfill_sqlite(
     insert_sql = """
         INSERT OR IGNORE INTO cash_bank_transaction_classifications (
             client_data_id, client_id, template_id, upload_id,
-            voucher_id, account_code, transaction_date, debit, credit,
+            voucher_id, account_code, transaction_date, transaction_month, transaction_fortnight, debit, credit,
             treasury_type, treasury_account_code, configuration_version,
             classification_status, is_current
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
 
     for current_client_id in client_ids:
@@ -695,6 +717,8 @@ def backfill_sqlite(
                                 row["voucher_id"],
                                 row["account_code"],
                                 row["transaction_date"],
+                                row["transaction_month"],
+                                row["transaction_fortnight"],
                                 row["debit"],
                                 row["credit"],
                                 row["treasury_type"],
@@ -741,7 +765,7 @@ def backfill_postgres(
     insert_sql = """
         INSERT INTO cash_bank_transaction_classifications (
             client_data_id, client_id, template_id, upload_id,
-            voucher_id, account_code, transaction_date, debit, credit,
+            voucher_id, account_code, transaction_date, transaction_month, transaction_fortnight, debit, credit,
             treasury_type, treasury_account_code, configuration_version,
             classification_status, is_current
         ) VALUES %s
@@ -816,6 +840,8 @@ def backfill_postgres(
                                     row["voucher_id"],
                                     row["account_code"],
                                     row["transaction_date"],
+                                    row["transaction_month"],
+                                    row["transaction_fortnight"],
                                     row["debit"],
                                     row["credit"],
                                     row["treasury_type"],

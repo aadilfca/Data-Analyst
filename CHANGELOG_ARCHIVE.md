@@ -1,4 +1,12 @@
 # Changelog Archive
+## Cashflows prepared Month/Fortnight aggregation - 2026-09-29
+
+**Scope:** Use upload-time Month and Fortnight classification keys for Cashflows grouping while preserving exact transaction-date filtering and existing report totals.
+
+**Implementation:** The SQL-derived Cashflows source now carries the prepared period fields into the summary engine. Monthly and fortnightly grouping uses those fields when complete and valid, with safe date-based fallback for older or incomplete derived rows. Day, quarter, half-year, and annual grouping retain date-based assignment.
+
+**Verification:** Focused source, summary, reconciliation, and classification coverage passed 43 tests. Prepared-key results matched date-based totals for monthly and fortnightly reports. No source transaction rows were modified.
+
 ## Cashflows repeated-load navigation fix - 2026-09-29
 
 **Scope:** Keep repeated Cashflows summary generation on the report page.

@@ -106,6 +106,32 @@ def test_cashflow_summary_buckets_transactions_by_own_date_and_zero_fills_period
     assert categories.loc["Customers", "2026-03"] == 0
     assert result["group_by"] == "month"
 
+def test_cashflow_summary_uses_prepared_month_and_fortnight_keys_without_changing_totals():
+    journal, coa = _fixture_data()
+    parsed_dates = pd.to_datetime(journal["date"])
+    journal["transaction_month"] = parsed_dates.dt.strftime("%Y-%m")
+    journal["transaction_fortnight"] = (
+        parsed_dates.dt.strftime("%Y-%m")
+        + "-F"
+        + parsed_dates.dt.day.map(lambda day: "1" if day <= 14 else "2")
+    )
+
+    prepared_months = build_cashflow_summary(
+        journal, coa, ["C1"], ["B1", "B2"], "2026-01-01", "2026-03-31", group_by="month"
+    )
+    prepared_fortnights = build_cashflow_summary(
+        journal, coa, ["C1"], ["B1", "B2"], "2026-01-01", "2026-02-28", group_by="fortnight"
+    )
+    baseline = journal.drop(columns=["transaction_month", "transaction_fortnight"])
+    baseline_months = build_cashflow_summary(
+        baseline, coa, ["C1"], ["B1", "B2"], "2026-01-01", "2026-03-31", group_by="month"
+    )
+    baseline_fortnights = build_cashflow_summary(
+        baseline, coa, ["C1"], ["B1", "B2"], "2026-01-01", "2026-02-28", group_by="fortnight"
+    )
+
+    pd.testing.assert_frame_equal(prepared_months["category_totals"], baseline_months["category_totals"])
+    pd.testing.assert_frame_equal(prepared_fortnights["category_totals"], baseline_fortnights["category_totals"])
 
 @pytest.mark.parametrize(
     ("grouping", "period_start", "period_end", "expected_keys"),

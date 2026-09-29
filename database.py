@@ -504,6 +504,8 @@ def init_db():
                 voucher_id TEXT,
                 account_code TEXT,
                 transaction_date TEXT,
+                transaction_month TEXT,
+                transaction_fortnight TEXT,
                 debit REAL NOT NULL DEFAULT 0,
                 credit REAL NOT NULL DEFAULT 0,
                 treasury_type TEXT,
@@ -520,10 +522,19 @@ def init_db():
                 UNIQUE(client_data_id, configuration_version)
             )
         ''')
+        try:
+            columns = [row[1] for row in conn.execute("PRAGMA table_info(cash_bank_transaction_classifications)").fetchall()]
+            if 'transaction_month' not in columns:
+                conn.execute("ALTER TABLE cash_bank_transaction_classifications ADD COLUMN transaction_month TEXT")
+            if 'transaction_fortnight' not in columns:
+                conn.execute("ALTER TABLE cash_bank_transaction_classifications ADD COLUMN transaction_fortnight TEXT")
+        except Exception as error:
+            print("⚠️ Could not add Cashflows period columns:", error)
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_date ON cash_bank_transaction_classifications (client_id, transaction_date, is_current)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_voucher ON cash_bank_transaction_classifications (client_id, voucher_id, is_current)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_account_date ON cash_bank_transaction_classifications (client_id, account_code, transaction_date, is_current)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_source_version ON cash_bank_transaction_classifications (client_data_id, configuration_version)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_period ON cash_bank_transaction_classifications (client_id, transaction_month, transaction_fortnight, is_current)")
 
         conn.execute('''
             CREATE TABLE IF NOT EXISTS error_codes (
@@ -4113,6 +4124,8 @@ def _ensure_postgres_cash_bank_transaction_classifications(conn):
                 voucher_id TEXT,
                 account_code TEXT,
                 transaction_date DATE,
+                transaction_month TEXT,
+                transaction_fortnight TEXT,
                 debit NUMERIC NOT NULL DEFAULT 0,
                 credit NUMERIC NOT NULL DEFAULT 0,
                 treasury_type TEXT,
@@ -4125,10 +4138,13 @@ def _ensure_postgres_cash_bank_transaction_classifications(conn):
                 UNIQUE(client_data_id, configuration_version)
             )
         ''')
+        cur.execute("ALTER TABLE cash_bank_transaction_classifications ADD COLUMN IF NOT EXISTS transaction_month TEXT")
+        cur.execute("ALTER TABLE cash_bank_transaction_classifications ADD COLUMN IF NOT EXISTS transaction_fortnight TEXT")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_date ON cash_bank_transaction_classifications (client_id, transaction_date, is_current)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_voucher ON cash_bank_transaction_classifications (client_id, voucher_id, is_current)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_account_date ON cash_bank_transaction_classifications (client_id, account_code, transaction_date, is_current)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_source_version ON cash_bank_transaction_classifications (client_data_id, configuration_version)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_period ON cash_bank_transaction_classifications (client_id, transaction_month, transaction_fortnight, is_current)")
     except Exception:
         conn.rollback()
         raise
@@ -4376,10 +4392,13 @@ def init_db_postgres(conn):
             UNIQUE(client_data_id, configuration_version)
         )
     ''', "cash_bank_transaction_classifications")
+    run("ALTER TABLE cash_bank_transaction_classifications ADD COLUMN IF NOT EXISTS transaction_month TEXT")
+    run("ALTER TABLE cash_bank_transaction_classifications ADD COLUMN IF NOT EXISTS transaction_fortnight TEXT")
     run("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_date ON cash_bank_transaction_classifications (client_id, transaction_date, is_current)")
     run("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_voucher ON cash_bank_transaction_classifications (client_id, voucher_id, is_current)")
     run("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_account_date ON cash_bank_transaction_classifications (client_id, account_code, transaction_date, is_current)")
     run("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_source_version ON cash_bank_transaction_classifications (client_data_id, configuration_version)")
+    run("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_period ON cash_bank_transaction_classifications (client_id, transaction_month, transaction_fortnight, is_current)")
     # ---------- 10. error_codes ----------
     run('''
         CREATE TABLE IF NOT EXISTS error_codes (
