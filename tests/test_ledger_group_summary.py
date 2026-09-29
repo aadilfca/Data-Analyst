@@ -136,6 +136,39 @@ def test_cashflow_summary_supports_all_phase_one_groupings(grouping, period_star
     assert result["periods"][-1]["end"] == period_end
 
 
+def test_cashflow_summary_nets_customer_receipt_and_keeps_deduction_detail():
+    journal = pd.DataFrame(
+        [
+            ["V1", "2026-01-05", "B1", "Bank A", "Customer receipt", 110, 0],
+            ["V1", "2026-01-05", "CUST", "Customer", "Customer receipt", 0, 100],
+            ["V1", "2026-01-05", "CHG", "Bank charge", "Customer receipt", 0, 10],
+        ],
+        columns=["voucher_id", "date", "account_code", "account_name", "voucher_detail", "debit", "credit"],
+    )
+    coa = pd.DataFrame(
+        [
+            ["B1", "Bank A", "Bank", "Bank"],
+            ["CUST", "Customer", "Receivable", "Customer receipts"],
+            ["CHG", "Bank charge", "Expense", "Bank charges"],
+        ],
+        columns=["account_code", "account_title", "account_type", "category"],
+    )
+
+    result = build_cashflow_summary(
+        journal,
+        coa,
+        [],
+        ["B1"],
+        "2026-01-01",
+        "2026-01-31",
+        receipt_presentation="net",
+    )
+
+    assert result["category_totals"].loc["Customer receipts", "2026-01"] == 110
+    assert result["deduction_details"]["presentation"].tolist() == ["netted_from_customer_receipt"]
+    assert result["deduction_details"]["amount"].tolist() == [10.0]
+
+
 def test_unbalanced_voucher_stops_report_generation():
     journal, coa = _fixture_data()
     journal.loc[len(journal)] = ["BAD", "2026-02-25", "B1", "Bank A", "Broken", 10, 0]

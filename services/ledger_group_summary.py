@@ -467,19 +467,23 @@ def build_cashflow_summary(
     grouping = normalize_cashflow_grouping(group_by)
     periods = _cashflow_periods(start, end, grouping)
     period_keys = [period["key"] for period in periods]
-    period_ranges = [(period["key"], pd.Timestamp(period["start"]), pd.Timestamp(period["end"]), period["label"]) for period in periods]
-
-    def period_for_date(value: Any) -> tuple[str, str]:
-        timestamp = pd.Timestamp(value).normalize()
-        for key, bucket_start, bucket_end, label in period_ranges:
-            if bucket_start <= timestamp <= bucket_end:
-                return key, label
-        raise ValueError("A transaction date did not fall inside the requested reporting periods")
+    period_lookup: dict[pd.Timestamp, tuple[str, str]] = {}
+    for period in periods:
+        for day in pd.date_range(period["start"], period["end"], freq="D"):
+            period_lookup[day.normalize()] = (period["key"], period["label"])
 
     months = _period_labels(start, end)
     journal = _prepare_journal(journal_df, start, end)
     if not journal.empty:
-        journal[["period_key", "period_label"]] = journal["date"].map(period_for_date).apply(pd.Series)
+        period_values = journal["date"].dt.normalize().map(period_lookup)
+        if period_values.isna().any():
+            raise ValueError("A transaction date did not fall inside the requested reporting periods")
+        period_frame = pd.DataFrame(
+            period_values.tolist(),
+            index=journal.index,
+            columns=["period_key", "period_label"],
+        )
+        journal[["period_key", "period_label"]] = period_frame
     coa = _prepare_coa(coa_df)
     category_by_code = (
         coa.drop_duplicates("account_code", keep="last").set_index("account_code")["category"].to_dict()
@@ -491,139 +495,122 @@ def build_cashflow_summary(
     treasury_type.update({code: "Bank" for code in bank_codes})
     selected_vouchers = journal.loc[journal["account_code"].isin(treasury_codes), "voucher_id"].drop_duplicates().tolist()
     working = journal.loc[journal["voucher_id"].isin(selected_vouchers)].copy()
-    category_rows: list[dict[str, Any]] = []
-    transfer_rows: list[dict[str, Any]] = []
-    deduction_rows: list[dict[str, Any]] = []
-    review_rows: list[dict[str, Any]] = []
-    balance_rows: list[dict[str, Any]] = []
 
     def is_customer_category(label: str) -> bool:
         value = label.casefold()
         return "customer" in value and ("receipt" in value or "payment" in value)
 
-    def is_deduction_category(label: str) -> bool:
-        value = label.casefold()
-        return "charge" in value or "withholding" in value or "wht" in value or "deduction" in value
+    if working.empty:
+        balance_checks = pd.DataFrame(columns=["voucher_id", "treasury_net", "counter_net", "variance", "balanced"])
+        transfer_details = pd.DataFrame(columns=["voucher_id", "date", "month", "period_key", "period_label", "transfer_type", "amount", "matched", "voucher_detail"])
+        category_frame = pd.DataFrame(columns=["category", "month", "period_key", "amount"])
+        review = pd.DataFrame(columns=["voucher_id", "date", "month", "period_key", "period_label", "account_code", "account_name", "voucher_detail", "debit", "credit", "fallback_category"])
+        deductions = pd.DataFrame(columns=["category", "month", "period_key", "period_label", "amount", "account_code", "account_name", "date", "presentation"])
+    else:
+        working["is_treasury"] = working["account_code"].isin(treasury_codes)
+        working["treasury_movement"] = (working["debit"] - working["credit"]).where(working["is_treasury"], 0.0)
+        working["counter_movement"] = (working["credit"] - working["debit"]).where(~working["is_treasury"], 0.0)
+        voucher_order = pd.Index(working["voucher_id"].drop_duplicates(), name="voucher_id")
+        balance_checks = working.groupby("voucher_id", sort=False)[["treasury_movement", "counter_movement"]].sum()
+        balance_checks = balance_checks.rename(columns={"treasury_movement": "treasury_net", "counter_movement": "counter_net"}).reindex(voucher_order)
+        balance_checks["variance"] = balance_checks["treasury_net"] - balance_checks["counter_net"]
+        balance_checks["balanced"] = balance_checks["variance"].abs() <= tolerance
+        balance_checks = balance_checks.reset_index()
 
-    for voucher_id, voucher in working.groupby("voucher_id", sort=False):
-        treasury = voucher.loc[voucher["account_code"].isin(treasury_codes)].copy()
-        contra = voucher.loc[~voucher["account_code"].isin(treasury_codes)].copy()
-        treasury_net = float((treasury["debit"] - treasury["credit"]).sum())
-        contra_net = float((contra["credit"] - contra["debit"]).sum())
-        balance_rows.append(
-            {
-                "voucher_id": voucher_id,
-                "treasury_net": treasury_net,
-                "counter_net": contra_net,
-                "variance": treasury_net - contra_net,
-                "balanced": abs(treasury_net - contra_net) <= tolerance,
-            }
+        voucher_meta = working.groupby("voucher_id", sort=False).agg(
+            date=("date", "min"),
+            month=("month", "first"),
+            period_key=("period_key", "first"),
+            period_label=("period_label", "first"),
+            voucher_detail=("voucher_detail", lambda values: next((value for value in values if value), "")),
+        ).reindex(voucher_order)
+        treasury = working.loc[working["is_treasury"]].copy()
+        treasury["treasury_type"] = treasury["account_code"].map(treasury_type).fillna("Treasury")
+        treasury_counts = treasury.groupby("voucher_id", sort=False).agg(
+            treasury_account_count=("account_code", "nunique"),
+            amount=("debit", "sum"),
+        ).reindex(voucher_order)
+        type_values = treasury.groupby("voucher_id", sort=False)["treasury_type"].agg(lambda values: tuple(sorted(set(values)))).reindex(voucher_order)
+        transfer_mask = treasury_counts["treasury_account_count"].gt(1)
+        transfer_details = voucher_meta.loc[transfer_mask].copy()
+        transfer_details["transfer_type"] = type_values.loc[transfer_mask].map(
+            lambda values: " to ".join(values) if len(values) > 1 else f"{values[0]} to {values[0]}"
         )
-        types = {treasury_type.get(code, "Treasury") for code in treasury["account_code"]}
-        is_transfer = treasury["account_code"].nunique() > 1
-        if is_transfer:
-            same_type = len(types) == 1
-            transfer_rows.append(
-                {
-                    "voucher_id": voucher_id,
-                    "date": voucher["date"].min(),
-                    "month": voucher["month"].iloc[0],
-                    "period_key": voucher["period_key"].iloc[0],
-                    "period_label": voucher["period_label"].iloc[0],
-                    "transfer_type": " to ".join(sorted(types)) if len(types) > 1 else f"{next(iter(types))} to {next(iter(types))}",
-                    "amount": float(treasury["debit"].sum()),
-                    "matched": bool(match_internal_transfers and same_type),
-                    "voucher_detail": next((value for value in voucher["voucher_detail"] if value), ""),
-                }
-            )
-            if match_internal_transfers and same_type and contra.empty:
-                continue
+        transfer_details["amount"] = treasury_counts.loc[transfer_mask, "amount"]
+        transfer_details["matched"] = type_values.loc[transfer_mask].map(lambda values: bool(match_internal_transfers and len(values) == 1))
+        transfer_details = transfer_details.reset_index()[["voucher_id", "date", "month", "period_key", "period_label", "transfer_type", "amount", "matched", "voucher_detail"]]
 
-        if contra.empty:
-            continue
-        line_rows: list[dict[str, Any]] = []
-        for _, line in contra.iterrows():
-            account_code = line["account_code"]
-            category = _clean_text(category_by_code.get(account_code))
-            if not category:
-                category = line["account_name"] or "Unmapped account"
-                review_rows.append(
-                    {
-                        "voucher_id": voucher_id,
-                        "date": line["date"],
-                        "month": line["month"],
-                        "period_key": line["period_key"],
-                        "period_label": line["period_label"],
-                        "account_code": account_code,
-                        "account_name": line["account_name"],
-                        "voucher_detail": line["voucher_detail"],
-                        "debit": line["debit"],
-                        "credit": line["credit"],
-                        "fallback_category": category,
-                    }
-                )
-            line_rows.append(
-                {
-                    "category": category,
-                    "month": line["month"],
-                    "period_key": line["period_key"],
-                    "period_label": line["period_label"],
-                    "amount": float(line["credit"] - line["debit"]),
-                    "account_code": account_code,
-                    "account_name": line["account_name"],
-                    "date": line["date"],
-                }
-            )
-        customer_lines = [row for row in line_rows if is_customer_category(row["category"])]
-        deduction_lines = [row for row in line_rows if is_deduction_category(row["category"])]
-        if presentation == "net" and customer_lines and deduction_lines:
-            customer_total = sum(row["amount"] for row in customer_lines)
-            deduction_total = sum(row["amount"] for row in deduction_lines)
-            first_customer = customer_lines[0]
-            category_rows.append({"category": first_customer["category"], "month": first_customer["month"], "period_key": first_customer["period_key"], "amount": customer_total + deduction_total})
-            for row in deduction_lines:
-                deduction_rows.append({**row, "presentation": "netted_from_customer_receipt"})
-            for row in line_rows:
-                if row not in customer_lines and row not in deduction_lines:
-                    category_rows.append({"category": row["category"], "month": row["month"], "period_key": row["period_key"], "amount": row["amount"]})
+        contra = working.loc[~working["is_treasury"]].copy()
+        mapped_categories = contra["account_code"].map(category_by_code).fillna("")
+        contra["category"] = mapped_categories.where(
+            mapped_categories.ne(""),
+            contra["account_name"].where(contra["account_name"].ne(""), "Unmapped account"),
+        )
+        contra["amount"] = contra["credit"] - contra["debit"]
+        category_text = contra["category"].str.casefold()
+        contra["is_customer"] = category_text.str.contains("customer", regex=False) & (
+            category_text.str.contains("receipt", regex=False) | category_text.str.contains("payment", regex=False)
+        )
+        contra["is_deduction"] = (
+            category_text.str.contains("charge", regex=False)
+            | category_text.str.contains("withholding", regex=False)
+            | category_text.str.contains("wht", regex=False)
+            | category_text.str.contains("deduction", regex=False)
+        )
+        review = contra.loc[
+            mapped_categories.eq(""),
+            ["voucher_id", "date", "month", "period_key", "period_label", "account_code", "account_name", "voucher_detail", "debit", "credit", "category"],
+        ].rename(columns={"category": "fallback_category"})
+
+        has_customer = contra.groupby("voucher_id", sort=False)["is_customer"].any().reindex(voucher_order, fill_value=False).to_numpy()
+        has_deduction = contra.groupby("voucher_id", sort=False)["is_deduction"].any().reindex(voucher_order, fill_value=False).to_numpy()
+        net_vouchers = voucher_order[has_customer & has_deduction] if presentation == "net" else pd.Index([], dtype=object)
+        net_special = contra["voucher_id"].isin(net_vouchers) & (contra["is_customer"] | contra["is_deduction"])
+        category_lines = contra.loc[~net_special, ["category", "month", "period_key", "period_label", "amount"]]
+        if len(net_vouchers):
+            special = contra.loc[net_special]
+            net_rows = special.loc[special["is_customer"]].drop_duplicates("voucher_id", keep="first")[["voucher_id", "category", "month", "period_key", "period_label"]].copy()
+            net_amounts = special.groupby("voucher_id", sort=False)["amount"].sum()
+            net_rows["amount"] = net_rows["voucher_id"].map(net_amounts)
+            category_frame = pd.concat([category_lines, net_rows[["category", "month", "period_key", "period_label", "amount"]]], ignore_index=True)
         else:
-            category_rows.extend({"category": row["category"], "month": row["month"], "period_key": row["period_key"], "amount": row["amount"]} for row in line_rows)
-            if deduction_lines:
-                deduction_rows.extend({**row, "presentation": "shown_separately"} for row in deduction_lines)
+            category_frame = category_lines.copy()
 
-    balance_checks = pd.DataFrame(balance_rows)
+        deduction_rows = contra.loc[contra["is_deduction"], ["voucher_id", "category", "month", "period_key", "period_label", "amount", "account_code", "account_name", "date"]].copy()
+        deduction_rows["presentation"] = "shown_separately"
+        if len(net_vouchers):
+            deduction_rows.loc[deduction_rows["voucher_id"].isin(net_vouchers), "presentation"] = "netted_from_customer_receipt"
+        deductions = deduction_rows.drop(columns=["voucher_id"])
+
     unbalanced = balance_checks.loc[~balance_checks["balanced"]] if not balance_checks.empty else balance_checks
     if not unbalanced.empty:
         examples = unbalanced[["voucher_id", "variance"]].head(5).to_dict("records")
         raise LedgerBalanceError(f"Cash/Bank selection contains {len(unbalanced)} unbalanced voucher(s); examples: {examples}", balance_checks)
 
-    category_frame = pd.DataFrame(category_rows, columns=["category", "month", "period_key", "amount"])
     if category_frame.empty:
         category_totals = pd.DataFrame(index=pd.Index([], name="category"), columns=[*period_keys, "Total"], dtype=float)
     else:
         pivot = category_frame.pivot_table(index="category", columns="period_key", values="amount", aggfunc="sum", fill_value=0.0)
         category_totals = _reindex_periods(pivot.sort_index(), period_keys, "category")
         category_totals["Total"] = category_totals.sum(axis=1)
-    review = pd.DataFrame(review_rows, columns=["voucher_id", "date", "month", "period_key", "period_label", "account_code", "account_name", "voucher_detail", "debit", "credit", "fallback_category"])
-    deductions = pd.DataFrame(deduction_rows, columns=["category", "month", "period_key", "period_label", "amount", "account_code", "account_name", "date", "presentation"])
-    transfers = pd.DataFrame(transfer_rows, columns=["voucher_id", "date", "month", "period_key", "period_label", "transfer_type", "amount", "matched", "voucher_detail"])
+    review = review.reset_index(drop=True)
+    deductions = deductions[["category", "month", "period_key", "period_label", "amount", "account_code", "account_name", "date", "presentation"]].reset_index(drop=True)
     return {
         "months": months,
         "periods": periods,
         "group_by": grouping,
         "category_totals": category_totals,
-        "transfer_details": transfers,
+        "transfer_details": transfer_details,
         "deduction_details": deductions,
         "categories_needing_review": review,
         "balance_checks": balance_checks,
         "selected_vouchers": selected_vouchers,
         "selected_voucher_count": len(selected_vouchers),
         "source_line_count": len(working),
-        "internal_transfer_count": len(transfers),
+        "internal_transfer_count": len(transfer_details),
         "category_review_count": len(review),
         "receipt_presentation": presentation,
     }
-
 
 def build_group_summary(
     journal_df: pd.DataFrame,

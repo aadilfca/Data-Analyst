@@ -1,4 +1,22 @@
 # Changelog Archive
+## Cashflows repeated-load navigation fix - 2026-09-29
+
+**Scope:** Keep repeated Cashflows summary generation on the report page.
+
+**Implementation:** Restored the missing form submit listener so `generateCashflows()` prevents native navigation and reloads the selected summary in place.
+
+**Verification:** Focused Cashflows/reconciliation tests passed (10); JavaScript syntax and whitespace validation passed.
+
+Files: static/reconciliation.js.
+
+## Cashflows Phase 2A performance instrumentation - 2026-09-28
+
+**Scope:** Add read-only timing for Cashflows source loading, summary calculation, response formatting, and total endpoint duration.
+
+**Implementation:** The preview route now logs stage timings with source/valid row counts and selected voucher count. The API payload and report calculations are unchanged; no caching or SQL changes were introduced.
+
+**Verification:** Focused Cashflows/reconciliation tests passed (20); Python compilation and whitespace validation passed.
+
 ## Cashflows backfill completeness and period matrix orientation - 2026-09-28
 
 **Scope:** Ensure PostgreSQL Cash/Bank classification backfills process every source batch and keep Cashflows daily and fortnightly summaries readable.

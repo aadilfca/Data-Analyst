@@ -5,8 +5,10 @@ from __future__ import annotations
 from contextlib import nullcontext
 from datetime import date, datetime
 from io import BytesIO
+import logging
 import math
 import re
+from time import perf_counter
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -26,6 +28,7 @@ from services.reconciliation_xlsx import export_reconciliation_xlsx
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class AccountGroupUpdate(BaseModel):
@@ -1258,6 +1261,7 @@ def _build_cashflow_result(
     detail_sections: set[str] | None = None,
     group_by: str = "month",
 ) -> dict[str, Any]:
+    request_started = perf_counter()
     _require_active_client(client_id)
     start, end = _parse_report_period(period_start, period_end)
     try:
@@ -1267,6 +1271,7 @@ def _build_cashflow_result(
     configuration = _cashflow_configuration(client_id)
     configured_template_id = configuration.get("source_template_id")
     diagnostics: list[dict[str, Any]] = []
+    source_started = perf_counter()
     try:
         source = load_ledger_report_source(
             client_id,
@@ -1282,6 +1287,7 @@ def _build_cashflow_result(
         )
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
+    source_seconds = perf_counter() - source_started
     diagnostics.extend(source.diagnostics)
     if configured_template_id is None:
         diagnostics.append(_report_diagnostic("cashflow_template_not_configured", "error", "Configure and map the Transaction Report template in Account Control Centre before generating Cashflows."))
@@ -1289,7 +1295,11 @@ def _build_cashflow_result(
         diagnostics.append(_report_diagnostic("no_treasury_accounts", "error", "Select at least one Cash or Bank account in Account Control Centre before generating Cashflows."))
 
     summary: dict[str, Any] | None = None
+    summary_seconds = 0.0
+    summary_status = "skipped_source_not_ready"
     if source.ready and not any(item.get("severity") == "error" for item in diagnostics):
+        summary_started = perf_counter()
+        summary_status = "completed"
         try:
             summary = build_cashflow_summary(
                 source.journal,
@@ -1303,9 +1313,13 @@ def _build_cashflow_result(
                 group_by=grouping,
             )
         except LedgerBalanceError as error:
+            summary_status = "failed"
             diagnostics.append(_report_diagnostic("unbalanced_cashflow_vouchers", "error", str(error), checks=_frame_records(error.checks, limit=20)))
         except ValueError as error:
+            summary_status = "failed"
             diagnostics.append(_report_diagnostic("cashflow_input_error", "error", str(error)))
+        finally:
+            summary_seconds = perf_counter() - summary_started
 
     review_count = int(summary.get("category_review_count", 0)) if summary else 0
     transfer_count = int(summary.get("internal_transfer_count", 0)) if summary else 0
@@ -1327,6 +1341,27 @@ def _build_cashflow_result(
         "out_of_period_row_count": int(source_metadata.get("out_of_period_row_count") or 0),
         "rejected_rows_sample": source_metadata.get("rejected_rows_sample") or [],
     }
+    preview_started = perf_counter()
+    preview = _cashflow_preview(summary, detail_sections)
+    format_seconds = perf_counter() - preview_started
+    total_seconds = perf_counter() - request_started
+    logger.info(
+        "cashflows_performance client_id=%s period_start=%s period_end=%s group_by=%s "
+        "source_seconds=%.3f summary_seconds=%.3f format_seconds=%.3f total_seconds=%.3f "
+        "source_rows=%s valid_rows=%s selected_vouchers=%s summary_status=%s",
+        client_id,
+        start.date().isoformat(),
+        end.date().isoformat(),
+        grouping,
+        source_seconds,
+        summary_seconds,
+        format_seconds,
+        total_seconds,
+        source_quality["source_row_count"],
+        source_quality["valid_row_count"],
+        int(summary.get("selected_voucher_count", 0)) if summary else 0,
+        summary_status,
+    )
     return {
         "client_id": client_id,
         "period_start": start.date().isoformat(),
@@ -1342,7 +1377,7 @@ def _build_cashflow_result(
         "source": {"metadata": source_metadata, "quality": source_quality, "diagnostics": diagnostics, "ready": source.ready and not any(item.get("severity") == "error" for item in diagnostics)},
         "controls": controls,
         "blocking_reasons": blocking_reasons,
-        "preview": _cashflow_preview(summary, detail_sections),
+        "preview": preview,
     }
 
 

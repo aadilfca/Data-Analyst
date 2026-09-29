@@ -356,6 +356,7 @@
         if (blockingReasons.length) showCashflowToast(blockingReasons.join(' '), true);
         else if (reviewCount) showCashflowToast(String(reviewCount) + ' counter-account line(s) need category review.', false);
     }
+
     async function generateCashflows(event) {
         if (event) event.preventDefault();
         showCashflowProcessing();
@@ -587,6 +588,7 @@
                 : !!event.target.closest('.cashflows-period-control');
             if (!insidePeriodControl && !popover.hidden) closeCashflowPopover();
         });
+
         element('cashflowsReportForm').addEventListener('submit', generateCashflows);
         element('cashflowsViewTransactionsButton').addEventListener('click', toggleClassifiedTransactions);
         element('cashflowsLoadTransfersButton').addEventListener('click', function () { loadCashflowChild('transfers'); });

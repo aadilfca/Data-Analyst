@@ -1,4 +1,5 @@
 from pathlib import Path
+import logging
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -144,6 +145,41 @@ def test_cashflows_preview_passes_grouping_and_returns_period_descriptors():
     assert response["preview"]["periods"][1]["label"] == "Q2 2026"
     assert response["preview"]["category_totals"][0]["2026-Q1"] == 125.0
     assert builder.call_args.kwargs["group_by"] == "quarter"
+
+
+def test_cashflows_preview_logs_performance_stages(caplog):
+    configuration = {
+        "source_template_id": 9,
+        "cash_account_codes": [],
+        "bank_account_codes": ["B1"],
+        "match_internal_transfers": False,
+        "receipt_presentation": "net",
+    }
+    with (
+        caplog.at_level(logging.INFO, logger="routers.reconciliation"),
+        patch.object(reconciliation, "_require_active_client"),
+        patch.object(reconciliation, "_cashflow_configuration", return_value=configuration),
+        patch.object(reconciliation, "load_ledger_report_source", return_value=_source()),
+        patch.object(reconciliation, "build_cashflow_summary", return_value=_cashflow_summary()),
+    ):
+        response = reconciliation.preview_cashflows(
+            7,
+            "2026-02-10",
+            "2026-04-18",
+            group_by="quarter",
+            details="summary",
+            session=None,
+        )
+
+    performance_records = [record for record in caplog.records if record.getMessage().startswith("cashflows_performance ")]
+    assert len(performance_records) == 1
+    message = performance_records[0].getMessage()
+    assert "source_seconds=" in message
+    assert "summary_seconds=" in message
+    assert "format_seconds=" in message
+    assert "total_seconds=" in message
+    assert "source_rows=4" in message
+    assert response["preview"]["group_by"] == "quarter"
 
 
 def test_download_report_returns_professional_xlsx_when_controls_pass():
