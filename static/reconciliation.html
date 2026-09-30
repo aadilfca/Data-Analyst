@@ -4,7 +4,7 @@
     <meta charset='UTF-8'>
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
     <title>Reports | Internal Audit App</title>
-    <link rel='stylesheet' href='/static/style.css?v=35'>
+    <link rel='stylesheet' href='/static/style.css?v=36'>
 </head>
 <body class='reconciliation-page' data-nav-module='Reports' data-nav-parent='index.html'>
     <nav class='navbar'>
@@ -82,16 +82,18 @@
                 <input id='cashflowsPeriodEnd' type='date' required hidden>
                 <button type='submit' class='cashflows-primary'>Load summary</button>
                 <div class='cashflows-report-actions'>
-                    <button type='button' id='cashflowsViewTransactionsButton' class='cashflows-secondary' hidden>View classified transactions</button>
-                    <button type='button' id='cashflowsHideZeroRowsButton' class='cashflows-secondary' hidden>Hide zero rows</button>
+                    <button type='button' id='cashflowsHideZeroRowsButton' class='cashflows-secondary' disabled>Hide zero rows</button>
                     <button type='button' id='cashflowsExportButton' class='cashflows-secondary cashflows-export-button' hidden>Export XLSX</button>
                 </div>
             </form>
-            <section class='cashflows-report-section'><div class='cashflows-section-heading'><h3>Cash Flow summary</h3><span id='cashflowsReceiptMode'></span></div><div class='cashflows-summary-tools'><div class='cashflows-search-control'><input id='cashflowsSummaryFilter' type='search' placeholder='Filter category' aria-label='Filter Cashflows categories'><button type='button' id='cashflowsSummaryClear' class='cashflows-search-clear' aria-label='Clear category filter' title='Clear category filter'>×</button></div></div><div class='cashflows-table-wrap'><table id='cashflowsSummaryTable' class='cashflows-table'></table></div></section>
+            <section class='cashflows-report-section'><div class='cashflows-section-heading'><h3>Cash Flow summary</h3><span id='cashflowsReceiptMode'></span></div><div class='cashflows-summary-tools'><div class='cashflows-search-control'><input id='cashflowsSummaryFilter' type='text' placeholder='Filter category' aria-label='Filter Cashflows categories'><button type='button' id='cashflowsSummaryClear' class='cashflows-search-clear' aria-label='Clear category filter' title='Clear category filter' hidden>×</button></div></div><div class='cashflows-table-wrap'><table id='cashflowsSummaryTable' class='cashflows-table'></table></div></section>
             <div id='cashflowsLazyActions' class='cashflows-lazy-actions'>
-                <button type='button' id='cashflowsLoadTransfersButton' class='cashflows-secondary'>Load internal transfers</button>
-                <button type='button' id='cashflowsLoadDeductionsButton' class='cashflows-secondary'>Load customer deductions</button>
-                <button type='button' id='cashflowsLoadReviewButton' class='cashflows-secondary'>Load review required</button>
+                <div class='cashflows-detail-actions'>
+                    <button type='button' id='cashflowsLoadTransfersButton' class='cashflows-secondary'>Load internal transfers</button>
+                    <button type='button' id='cashflowsLoadDeductionsButton' class='cashflows-secondary'>Load customer deductions</button>
+                    <button type='button' id='cashflowsLoadReviewButton' class='cashflows-secondary'>Load review required</button>
+                </div>
+                <button type='button' id='cashflowsViewTransactionsButton' class='cashflows-secondary' hidden>View classified transactions</button>
             </div>
             <div class='cashflows-detail-grid'>
                 <section id='cashflowsTransfersSection' class='cashflows-report-section' hidden><div class='cashflows-section-heading'><h3>Internal transfers</h3><span id='cashflowsTransferCount'></span></div><div class='cashflows-table-wrap'><table id='cashflowsTransfersTable' class='cashflows-table'></table></div></section>
@@ -149,6 +151,6 @@
         </footer>
     </main>
     <script src='/static/client_context.js?v=18'></script>
-    <script src='/static/reconciliation.js?v=10'></script>
+    <script src='/static/reconciliation.js?v=11'></script>
 </body>
 </html>

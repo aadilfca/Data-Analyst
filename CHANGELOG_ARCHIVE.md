@@ -1,4 +1,19 @@
 # Changelog Archive
+## Cashflows report presentation and filtering - Phase A - 2026-09-30
+
+**Scope:** Finalize the report-only formatting and filtering layer without changing Cashflows data-fetching or performance-sensitive backend paths.
+
+**Implementation:** Kept `Hide zero rows` and `Export XLSX` in the top action row; kept classified-transaction viewing in the lower action row; replaced the summary search with one controlled clear button; applied dynamic zero-row filtering across displayed periods, Total, child previews, and classified transactions; cached loaded child previews so toggling visibility does not refetch data; synchronized the zero-row button after report-processing cleanup; changed the summary filter to a text input so Chrome cannot add a second native search cross; bumped frontend asset versions.
+
+**Verification:** Aadil confirmed both the single-clear-control and zero-row behaviors in the local browser. Focused Cashflows/reconciliation coverage passed 20 tests; JavaScript syntax and `git diff --check` passed. No backend, API, database, source-data, or speed-sensitive fetch code changed.
+
+**Pending phases from the approved Cashflows plan:**
+
+1. **Child-load performance phase:** optimize `Load internal transfers`, `Load customer deductions`, and `Load review required` using the established fast-fetch/read-model approach; benchmark before/after and reconcile totals.
+2. **Inter-account transfers phase:** report Bank-to-Bank, Bank-to-Cash, Cash-to-Bank, and Cash-account transfers with transferor and transferee account names on each relevant row.
+3. **Customer payments phase:** report payments to customers with their bank-account details.
+4. **Vendor payments phase:** report payments to vendors through Bank/Cash accounts.
+
 ## Cashflows XLSX export parity - Phase 2 - 2026-09-30
 
 **Scope:** Added an administrator-only Cashflows XLSX export that uses the visible report range and grouping.

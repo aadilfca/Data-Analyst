@@ -21,6 +21,14 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert "details: 'summary'" in script
     assert "loadCashflowChild" in script
     assert ".cashflows-lazy-actions" in styles
+    assert "cashflows-detail-actions" in html
+    assert ".cashflows-search-control input[type='search']::-webkit-search-cancel-button" in styles
+    assert "toggleCashflowZeroRows" in script
+    assert "cashflowRowsWithNonZeroAmounts" in script
+    assert "cashflowChildPreviews" in script
+    assert html.index("cashflowsLazyActions") < html.index("cashflowsViewTransactionsButton")
+    assert html.index("cashflowsHideZeroRowsButton") < html.index("cashflowsLazyActions")
+    assert html.index("cashflowsExportButton") < html.index("cashflowsLazyActions")
     assert ".cashflows-transactions-section .cashflows-table th" in styles
     assert "assignedCategoryIndex" in script
     assert "cashflows-classified-cash" in script
@@ -104,6 +112,13 @@ def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
     assert "cashflowsHideZeroRowsButton" in reconciliation_html
     assert "cashflowsSummaryFilter" in reconciliation_html
     assert "cashflowsSummaryClear" in reconciliation_html
+    assert "type='text'" in reconciliation_html
+    assert "id='cashflowsSummaryFilter' type='search'" not in reconciliation_html
+    assert "cashflowsSummaryClear" in reconciliation_script
+    assert "cashflowPreviewPeriods" in reconciliation_script
+    assert "syncCashflowZeroRowsButton" in reconciliation_script
+    assert "style.css?v=36" in reconciliation_html
+    assert "reconciliation.js?v=11" in reconciliation_html
     assert "cashflowsSummaryBasis" not in reconciliation_html
     assert "cashflows-transactions-note" not in reconciliation_html
     assert "renderCashflowSummary" in reconciliation_script
