@@ -81,3 +81,20 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert ".cashflows-toast" in styles
     assert ".cashflows-processing" in styles
     assert ".cashflows-processing-panel" in styles
+
+def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
+    settings_html = (ROOT / "static" / "settings.html").read_text(encoding="utf-8")
+    settings_script = (ROOT / "static" / "settings.js").read_text(encoding="utf-8")
+    reconciliation_script = (ROOT / "static" / "reconciliation.js").read_text(encoding="utf-8")
+
+    assert "cashflowDefaultsContainer" in settings_html
+    assert "Reports -&gt; Defaults" in settings_script
+    assert "/api/settings/cashflows-defaults" in settings_script
+    assert "cashflowFiscalYearStartMonth" in settings_script
+    assert "cashflowDefaultPeriod" in settings_script
+    assert "cashflowCustomStart" in settings_script
+    assert "cashflowCustomEnd" in settings_script
+    assert "/api/settings/cashflows-defaults" in reconciliation_script
+    assert "await loadCashflowDefaultPeriods();" in reconciliation_script
+    assert "defaultPeriods();" in reconciliation_script
+    assert "groupBy: 'month'" in reconciliation_script

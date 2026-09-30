@@ -8,6 +8,7 @@ import pandas as pd
 
 from routers import reconciliation
 from services.ledger_group_summary import build_financial_statement_summary
+from routers import settings as settings_router
 
 
 def _source():
@@ -70,6 +71,40 @@ def _cashflow_summary():
 
 def _saved_codes(_client_id, group_label=None):
     return {"B1"} if not group_label or group_label.casefold() == "bank" else set()
+def test_cashflow_defaults_resolve_fiscal_year_and_ytd_dynamically():
+    values = {
+        "cashflow_fiscal_year_start_month": "4",
+        "cashflow_default_period": "ytd",
+        "cashflow_custom_start": "",
+        "cashflow_custom_end": "",
+    }
+    result = settings_router._resolved_cashflow_defaults(values, pd.Timestamp("2026-09-29").date())
+    assert result["resolved_period"] == {
+        "start": "2026-04-01",
+        "end": "2026-09-29",
+        "group_by": "month",
+    }
+
+    values["cashflow_default_period"] = "financial_year"
+    result = settings_router._resolved_cashflow_defaults(values, pd.Timestamp("2026-02-10").date())
+    assert result["resolved_period"]["start"] == "2025-04-01"
+    assert result["resolved_period"]["end"] == "2026-03-31"
+
+
+def test_cashflow_defaults_fall_back_to_safe_ytd_for_invalid_stored_values():
+    result = settings_router._resolved_cashflow_defaults(
+        {
+            "cashflow_fiscal_year_start_month": "not-a-month",
+            "cashflow_default_period": "unknown",
+            "cashflow_custom_start": "not-a-date",
+            "cashflow_custom_end": "also-not-a-date",
+        },
+        pd.Timestamp("2026-09-29").date(),
+    )
+    assert result["default_period"] == "ytd"
+    assert result["resolved_period"]["start"] == "2026-01-01"
+    assert result["resolved_period"]["end"] == "2026-09-29"
+
 
 
 def test_preview_report_returns_controls_and_category_preview():

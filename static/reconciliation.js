@@ -536,15 +536,27 @@
     }
     function defaultPeriods() {
         const today = new Date();
-        cashflowGroupingPreference = 'suggested';
+        cashflowGroupingPreference = 'month';
         const start = toIso(yearStart(today)); const end = toIso(today);
-        cashflowSelection = { start: start, end: end, groupBy: autoCashflowGrouping(start, end) };
+        cashflowSelection = { start: start, end: end, groupBy: 'month' };
         syncCashflowSelection();
+    }
+    async function loadCashflowDefaultPeriods() {
+        try {
+            const result = await api('/api/settings/cashflows-defaults');
+            const resolved = result.resolved_period || {};
+            if (!resolved.start || !resolved.end) throw new Error('Incomplete Cashflows defaults');
+            cashflowGroupingPreference = 'month';
+            cashflowSelection = { start: resolved.start, end: resolved.end, groupBy: 'month' };
+            syncCashflowSelection();
+        } catch (error) {
+            defaultPeriods();
+        }
     }
     async function initialise() {
         if (window.clientContextReady) await window.clientContextReady;
         clientId = window.getSelectedClientId ? window.getSelectedClientId() : null;
-        defaultPeriods();
+        await loadCashflowDefaultPeriods();
         element('cashflowsPeriodButton').addEventListener('click', function () {
             const popover = element('cashflowsPeriodPopover');
             if (popover.hidden) openCashflowPopover(); else closeCashflowPopover();

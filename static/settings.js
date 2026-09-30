@@ -67,6 +67,68 @@ const SETTINGS_DEF = {
 };
 
 let currentSettings = {};
+let currentCashflowDefaults = {};
+
+async function loadCashflowDefaults() {
+    try {
+        const res = await fetch(`${API_BASE}/api/settings/cashflows-defaults`);
+        if (!res.ok) throw new Error('Failed to load Cashflows defaults');
+        currentCashflowDefaults = await res.json();
+        renderCashflowDefaults();
+    } catch (error) {
+        showStatus('Error loading Cashflows defaults: ' + error.message, 'error');
+    }
+}
+
+function renderCashflowDefaults() {
+    const container = document.getElementById('cashflowDefaultsContainer');
+    if (!container) return;
+    const period = currentCashflowDefaults.default_period || 'ytd';
+    const custom = period === 'custom';
+    container.innerHTML = `
+        <div class="settings-group">
+            <h3>Reports -&gt; Defaults</h3>
+            <div class="setting-row">
+                <label for="cashflowFiscalYearStartMonth">Fiscal-year start month</label>
+                <select id="cashflowFiscalYearStartMonth">
+                    ${Array.from({ length: 12 }, (_, index) => `<option value="${index + 1}" ${Number(currentCashflowDefaults.fiscal_year_start_month || 1) === index + 1 ? 'selected' : ''}>${new Date(2000, index, 1).toLocaleString(undefined, { month: 'long' })}</option>`).join('')}
+                </select>
+                <span class="hint">Used for This Financial Year and Year to date.</span>
+            </div>
+            <div class="setting-row">
+                <label for="cashflowDefaultPeriod">Default period</label>
+                <select id="cashflowDefaultPeriod">
+                    <option value="financial_year" ${period === 'financial_year' ? 'selected' : ''}>This financial year</option>
+                    <option value="ytd" ${period === 'ytd' ? 'selected' : ''}>Year to date</option>
+                    <option value="last_12_months" ${period === 'last_12_months' ? 'selected' : ''}>Last 12 months</option>
+                    <option value="custom" ${period === 'custom' ? 'selected' : ''}>Custom period</option>
+                </select>
+                <span class="hint">Cashflows opens with this period for all users.</span>
+            </div>
+            <div class="setting-row">
+                <label for="cashflowCustomStart">Custom start date</label>
+                <input type="date" id="cashflowCustomStart" value="${currentCashflowDefaults.custom_start || ''}" ${custom ? '' : 'disabled'}>
+            </div>
+            <div class="setting-row">
+                <label for="cashflowCustomEnd">Custom end date</label>
+                <input type="date" id="cashflowCustomEnd" value="${currentCashflowDefaults.custom_end || ''}" ${custom ? '' : 'disabled'}>
+            </div>
+            <div style="text-align:right; margin-top:12px;">
+                <button class="save-btn" id="saveCashflowDefaultsBtn">Save Report Defaults</button>
+            </div>
+        </div>
+    `;
+    document.getElementById('cashflowDefaultPeriod')?.addEventListener('change', toggleCashflowCustomDates);
+    document.getElementById('saveCashflowDefaultsBtn')?.addEventListener('click', saveCashflowDefaults);
+}
+
+function toggleCashflowCustomDates() {
+    const enabled = document.getElementById('cashflowDefaultPeriod')?.value === 'custom';
+    ['cashflowCustomStart', 'cashflowCustomEnd'].forEach(id => {
+        const input = document.getElementById(id);
+        if (input) input.disabled = !enabled;
+    });
+}
 
 async function loadSettings() {
     try {
@@ -150,6 +212,39 @@ function showStatus(msg, type) {
     setTimeout(() => {
         statusDiv.style.display = 'none';
     }, 5000);
+}
+
+async function saveCashflowDefaults() {
+    const period = document.getElementById('cashflowDefaultPeriod')?.value || 'ytd';
+    const customStart = document.getElementById('cashflowCustomStart')?.value || '';
+    const customEnd = document.getElementById('cashflowCustomEnd')?.value || '';
+    if (period === 'custom' && (!customStart || !customEnd)) {
+        showStatus('Enter both custom start and end dates.', 'error');
+        return;
+    }
+    if (period === 'custom' && customStart > customEnd) {
+        showStatus('Custom start date cannot be after custom end date.', 'error');
+        return;
+    }
+    try {
+        const res = await fetch(`${API_BASE}/api/settings/cashflows-defaults`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                fiscal_year_start_month: Number(document.getElementById('cashflowFiscalYearStartMonth')?.value || 1),
+                default_period: period,
+                custom_start: customStart || null,
+                custom_end: customEnd || null
+            })
+        });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || 'Failed to save Cashflows defaults');
+        currentCashflowDefaults = result;
+        renderCashflowDefaults();
+        showStatus('Cashflows report defaults saved.', 'success');
+    } catch (error) {
+        showStatus('Error saving Cashflows defaults: ' + error.message, 'error');
+    }
 }
 
 // ==============================================
@@ -242,6 +337,7 @@ async function deleteHoliday(id) {
 window.onload = function() {
     loadSettings();
     loadHolidays();
+    loadCashflowDefaults();
     document.getElementById('addHolidayBtn')?.addEventListener('click', addHoliday);
     // Event delegation for delete buttons - #holidayListContainer's rows are rebuilt
     // on every loadHolidays(), so a single listener here avoids rebinding per row.

@@ -1,4 +1,14 @@
 # Changelog Archive
+## Cashflows administrator default reporting periods - Phase 1 - 2026-09-30
+
+**Scope:** Added firm-wide administrator defaults for Cashflows reporting without changing the existing period picker, summary calculations, or performance-frozen source/read-model paths.
+
+**Implementation:** Added persisted fiscal-year start month, default period (this financial year, YTD, last 12 months, or custom), and custom date settings with SQLite/PostgreSQL seeds. Added admin-only save and authenticated read APIs with date validation and safe fallback behavior. Added the Settings Reports -> Defaults controls. Cashflows now awaits the defaults API on startup, applies the saved range with monthly grouping, and falls back to calendar YTD if the API is unavailable. A local acceptance follow-up corrected an initialization call that had bypassed the loader.
+
+**Verification:** Aadil confirmed the local browser workflow and saved custom range load correctly in Reports. Directly relevant backend/UI coverage passed 4 tests; Python compilation, JavaScript syntax checks, and git diff --check passed. No packages were installed and no source data was changed.
+
+**Next phase:** Verify that every export matches the visible Cashflows report for daily, fortnightly, monthly, quarterly, half-yearly, annual, and custom selections.
+
 ## Cashflows performance-balancing plan — 2026-09-29
 
 **Desi operating model:** upload transactions once, derive Month/Fortnight and other period keys at upload time, store the prepared rows, and let Cashflows read them like an Excel PivotTable. Raw transaction rows remain read-only; a re-upload replaces the active source, while a category or treasury change invalidates and rebuilds affected preparation.

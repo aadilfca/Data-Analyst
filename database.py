@@ -1057,6 +1057,10 @@ def init_db():
         
         # Seed default settings
         default_settings = [
+            ('cashflow_fiscal_year_start_month', '1', 'Cashflows fiscal-year start month (1-12)'),
+            ('cashflow_default_period', 'ytd', 'Cashflows default period: financial_year, ytd, last_12_months, or custom'),
+            ('cashflow_custom_start', '', 'Cashflows custom default period start date (YYYY-MM-DD)'),
+            ('cashflow_custom_end', '', 'Cashflows custom default period end date (YYYY-MM-DD)'),
             ('date_format', 'DD/MM/YYYY', 'Global date format for display'),
             ('amount_grouping', '000', 'Amount grouping: 000 (thousands) or Lacs'),
             ('decimal_precision', '0', 'Default decimal places for amounts (0, 2, 4)'),
@@ -5584,7 +5588,7 @@ def _seed_postgres_data(conn):
             )
         print(f"[postgres] attached Rate column to template '{tpl_name}' (positioned after Quantity)")
 
-    # ---- app_settings (6 keys) ----
+    # ---- app_settings (10 keys) ----
     default_settings = [
         ('date_format', 'DD/MM/YYYY', 'Global date format for display'),
         ('amount_grouping', '000', 'Amount grouping: 000 (thousands) or Lacs'),
@@ -5592,6 +5596,10 @@ def _seed_postgres_data(conn):
         ('rate_precision', '0', 'Decimal places for derived/imported Rate column (0, 2, 4)'),
         ('default_date_range', 'Current Month', 'Default date range for dashboards'),
         ('materiality_threshold', '50000', 'Threshold for flagging high-value items'),
+        ('cashflow_fiscal_year_start_month', '1', 'Cashflows fiscal-year start month (1-12)'),
+        ('cashflow_default_period', 'ytd', 'Cashflows default period: financial_year, ytd, last_12_months, or custom'),
+        ('cashflow_custom_start', '', 'Cashflows custom default period start date (YYYY-MM-DD)'),
+        ('cashflow_custom_end', '', 'Cashflows custom default period end date (YYYY-MM-DD)'),
     ]
     cur.executemany(
         """

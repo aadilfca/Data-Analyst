@@ -2,16 +2,23 @@
 # ⚙️ APP SETTINGS ROUTER
 # ==============================================
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from database import execute_query, execute_write, log_audit
 from pydantic import BaseModel
 from typing import Optional
-from datetime import datetime
+from routers.auth import get_current_user, require_admin
+from datetime import date, datetime, timedelta
 
 router = APIRouter()
 
 class SettingUpdate(BaseModel):
     value: str
+
+class CashflowDefaultsUpdate(BaseModel):
+    fiscal_year_start_month: int = 1
+    default_period: str = "ytd"
+    custom_start: Optional[str] = None
+    custom_end: Optional[str] = None
 
 class HolidayCreate(BaseModel):
     date: str  # 'YYYY-MM-DD'
@@ -42,6 +49,99 @@ def row_to_holiday(row: dict) -> dict:
     }
 
 # ---------- HOLIDAYS (Phase 1 of 6: Client Data Availability & Coverage Redesign) ----------
+CASHFLOW_DEFAULT_KEYS = (
+    "cashflow_fiscal_year_start_month",
+    "cashflow_default_period",
+    "cashflow_custom_start",
+    "cashflow_custom_end",
+)
+CASHFLOW_DEFAULT_PERIODS = {"financial_year", "ytd", "last_12_months", "custom"}
+
+def _cashflow_setting_map() -> dict:
+    rows = execute_query(
+        "SELECT key, value FROM app_settings WHERE key IN (?, ?, ?, ?)",
+        CASHFLOW_DEFAULT_KEYS,
+    )
+    return {row["key"]: row["value"] for row in rows}
+
+def _parse_cashflow_date(value: Optional[str], field_name: str, required: bool = False) -> Optional[date]:
+    if not value:
+        if required:
+            raise HTTPException(400, f"{field_name} is required for a custom period")
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise HTTPException(400, f"{field_name} must use YYYY-MM-DD format")
+
+def _month_start_after_months(value: date, offset: int) -> date:
+    month_index = value.year * 12 + value.month - 1 + offset
+    year, month_zero_based = divmod(month_index, 12)
+    return date(year, month_zero_based + 1, 1)
+
+def _resolved_cashflow_defaults(values: dict, today: Optional[date] = None) -> dict:
+    today = today or date.today()
+    try:
+        fiscal_month = int(values.get("cashflow_fiscal_year_start_month", "1"))
+    except (TypeError, ValueError):
+        fiscal_month = 1
+    if fiscal_month not in range(1, 13):
+        fiscal_month = 1
+
+    period = values.get("cashflow_default_period", "ytd")
+    if period not in CASHFLOW_DEFAULT_PERIODS:
+        period = "ytd"
+
+    try:
+        custom_start = _parse_cashflow_date(values.get("cashflow_custom_start"), "Custom start date")
+        custom_end = _parse_cashflow_date(values.get("cashflow_custom_end"), "Custom end date")
+    except HTTPException:
+        custom_start = custom_end = None
+    if period == "custom" and (not custom_start or not custom_end or custom_start > custom_end):
+        period = "ytd"
+
+    fiscal_year_start = date(
+        today.year if today.month >= fiscal_month else today.year - 1,
+        fiscal_month,
+        1,
+    )
+    if period == "financial_year":
+        start = fiscal_year_start
+        end = date(fiscal_year_start.year + 1, fiscal_month, 1) - timedelta(days=1)
+    elif period == "last_12_months":
+        start = _month_start_after_months(today, -11)
+        end = today
+    elif period == "custom" and custom_start and custom_end:
+        start = custom_start
+        end = custom_end
+    else:
+        start = fiscal_year_start
+        end = today
+
+    return {
+        "fiscal_year_start_month": fiscal_month,
+        "default_period": period,
+        "custom_start": custom_start.isoformat() if custom_start else "",
+        "custom_end": custom_end.isoformat() if custom_end else "",
+        "resolved_period": {
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "group_by": "month",
+        },
+    }
+
+def _validate_cashflow_defaults(update: CashflowDefaultsUpdate) -> tuple[date | None, date | None]:
+    if update.fiscal_year_start_month not in range(1, 13):
+        raise HTTPException(400, "Fiscal-year start month must be between 1 and 12")
+    if update.default_period not in CASHFLOW_DEFAULT_PERIODS:
+        raise HTTPException(400, "Invalid Cashflows default period")
+    custom_start = _parse_cashflow_date(update.custom_start, "Custom start date", update.default_period == "custom")
+
+    custom_end = _parse_cashflow_date(update.custom_end, "Custom end date", update.default_period == "custom")
+    if custom_start and custom_end and custom_start > custom_end:
+        raise HTTPException(400, "Custom start date cannot be after custom end date")
+    return custom_start, custom_end
+
 # Firm-wide holiday list (Sundays are separate hardcoded day-of-week logic, not stored here).
 # Registered above the generic /api/settings/{key} routes below - FastAPI matches routes in
 # registration order, and /api/settings/holidays would otherwise be swallowed by that
@@ -88,6 +188,30 @@ def delete_holiday(holiday_id: int):
     execute_write("DELETE FROM holidays WHERE id = ?", (holiday_id,))
     log_audit("Admin", "Delete", "Settings", f"Deleted holiday: {existing[0]['label']} ({existing[0]['holiday_date']})")
     return {"message": f"Holiday ID {holiday_id} deleted successfully"}
+
+
+@router.get("/api/settings/cashflows-defaults")
+def get_cashflow_defaults(session=Depends(get_current_user)):
+    """Return stored Cashflows defaults plus the current dynamically resolved range."""
+    return _resolved_cashflow_defaults(_cashflow_setting_map())
+
+@router.post("/api/settings/cashflows-defaults")
+def update_cashflow_defaults(update: CashflowDefaultsUpdate, session=Depends(require_admin)):
+    """Update the firm-wide Cashflows reporting defaults."""
+    custom_start, custom_end = _validate_cashflow_defaults(update)
+    values = {
+        "cashflow_fiscal_year_start_month": str(update.fiscal_year_start_month),
+        "cashflow_default_period": update.default_period,
+        "cashflow_custom_start": custom_start.isoformat() if custom_start else "",
+        "cashflow_custom_end": custom_end.isoformat() if custom_end else "",
+    }
+    for key, value in values.items():
+        if execute_query("SELECT id FROM app_settings WHERE key = ?", (key,)):
+            execute_write("UPDATE app_settings SET value = ? WHERE key = ?", (value, key))
+        else:
+            execute_write("INSERT INTO app_settings (key, value) VALUES (?, ?)", (key, value))
+    log_audit("Admin", "Update", "Settings", "Updated Cashflows reporting defaults")
+    return _resolved_cashflow_defaults(values)
 
 @router.get("/api/settings")
 def get_settings():
