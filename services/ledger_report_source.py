@@ -30,6 +30,7 @@ JOURNAL_COLUMNS = (
 )
 CASHFLOW_PREPARED_PERIOD_COLUMNS = ("transaction_month", "transaction_fortnight")
 COA_COLUMNS = ("account_code", "account_title", "account_type", "category")
+CASHFLOW_CHILD_DETAILS_VERSION = 2
 
 _JOURNAL_ALIASES: Mapping[str, tuple[str, ...]] = {
     "voucher_id": (
@@ -877,6 +878,7 @@ def _cashflow_summary_payload(summary: Mapping[str, Any]) -> dict[str, Any]:
         "internal_transfer_count": int(summary.get("internal_transfer_count", 0) or 0),
         "category_review_count": int(summary.get("category_review_count", 0) or 0),
         "child_details_prepared": child_details_prepared,
+        "child_details_version": CASHFLOW_CHILD_DETAILS_VERSION if child_details_prepared else 0,
         "transfer_details": _cashflow_detail_records(summary.get("transfer_details")),
         "deduction_details": _cashflow_detail_records(summary.get("deduction_details")),
         "categories_needing_review": _cashflow_detail_records(summary.get("categories_needing_review")),
@@ -902,14 +904,16 @@ def _cashflow_summary_from_payload(payload: Mapping[str, Any], group_by: str) ->
     else:
         category_totals = pd.DataFrame(columns=[*period_keys, "Total"], dtype=float)
         category_totals.index.name = "category"
+    child_details_version = int(payload.get("child_details_version", 0) or 0)
+    child_details_prepared = bool(payload.get("child_details_prepared")) and child_details_version >= CASHFLOW_CHILD_DETAILS_VERSION
     return {
         "months": [str(month) for month in payload.get("months", [])],
         "periods": periods,
         "group_by": group_by,
         "category_totals": category_totals,
-        "transfer_details": _cashflow_detail_frame(payload, "transfer_details") if payload.get("child_details_prepared") else pd.DataFrame(),
-        "deduction_details": _cashflow_detail_frame(payload, "deduction_details") if payload.get("child_details_prepared") else pd.DataFrame(),
-        "categories_needing_review": _cashflow_detail_frame(payload, "categories_needing_review") if payload.get("child_details_prepared") else pd.DataFrame(),
+        "transfer_details": _cashflow_detail_frame(payload, "transfer_details") if child_details_prepared else pd.DataFrame(),
+        "deduction_details": _cashflow_detail_frame(payload, "deduction_details") if child_details_prepared else pd.DataFrame(),
+        "categories_needing_review": _cashflow_detail_frame(payload, "categories_needing_review") if child_details_prepared else pd.DataFrame(),
         "selected_vouchers": [],
         "selected_voucher_count": int(payload.get("selected_voucher_count", 0) or 0),
         "internal_transfer_count": int(payload.get("internal_transfer_count", 0) or 0),
@@ -917,7 +921,8 @@ def _cashflow_summary_from_payload(payload: Mapping[str, Any], group_by: str) ->
         "source_line_count": int(payload.get("source_line_count", 0) or 0),
         "period_metrics": payload.get("period_metrics") or {},
         "receipt_presentation": payload.get("receipt_presentation") or "net",
-        "child_details_prepared": bool(payload.get("child_details_prepared")),
+        "child_details_prepared": child_details_prepared,
+        "child_details_version": child_details_version,
     }
 
 
@@ -1053,7 +1058,8 @@ def _cashflow_daily_rollup(
         metric: sum(values[metric] for values in period_metrics.values())
         for metric in ("source_line_count", "selected_voucher_count", "internal_transfer_count", "category_review_count")
     }
-    child_details_prepared = bool(payload.get("child_details_prepared"))
+    child_details_version = int(payload.get("child_details_version", 0) or 0)
+    child_details_prepared = bool(payload.get("child_details_prepared")) and child_details_version >= CASHFLOW_CHILD_DETAILS_VERSION
     transfer_details = _cashflow_rollup_detail_frame(payload, "transfer_details", periods) if child_details_prepared else pd.DataFrame()
     deduction_details = _cashflow_rollup_detail_frame(payload, "deduction_details", periods) if child_details_prepared else pd.DataFrame()
     review = _cashflow_rollup_detail_frame(payload, "categories_needing_review", periods) if child_details_prepared else pd.DataFrame()
@@ -1080,6 +1086,7 @@ def _cashflow_daily_rollup(
         "period_metrics": period_metrics,
         "receipt_presentation": payload.get("receipt_presentation") or "net",
         "child_details_prepared": child_details_prepared,
+        "child_details_version": child_details_version,
     }
 
 
@@ -1145,6 +1152,7 @@ def load_cashflow_prepared_summary(
         "raw_json_parsing": False,
         "summary_read_model": "prepared_snapshot",
         "child_details_prepared": bool(summary.get("child_details_prepared")),
+        "child_details_version": int(summary.get("child_details_version", 0) or 0),
         "classification_configuration_version": rows[0].get("configuration_version"),
         "summary_read_model_created_at": rows[0].get("created_at"),
     }
@@ -1280,6 +1288,7 @@ def load_cashflow_summary_read_model(
         "raw_json_parsing": False,
         "summary_read_model": "hit",
         "child_details_prepared": bool(payload.get("child_details_prepared")),
+        "child_details_version": int(payload.get("child_details_version", 0) or 0),
         "classification_configuration_version": rows[0].get("configuration_version"),
         "summary_read_model_created_at": rows[0].get("created_at"),
     }

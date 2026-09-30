@@ -9,7 +9,7 @@ import pandas as pd
 from openpyxl import load_workbook
 
 from routers import reconciliation
-from services.ledger_group_summary import build_financial_statement_summary
+from services.ledger_group_summary import build_cashflow_summary, build_financial_statement_summary
 from routers import settings as settings_router
 from services.reconciliation_xlsx import export_cashflow_xlsx
 
@@ -74,6 +74,56 @@ def _cashflow_summary():
 
 def _saved_codes(_client_id, group_label=None):
     return {"B1"} if not group_label or group_label.casefold() == "bank" else set()
+
+
+def test_cashflow_transfer_details_identify_legs_and_preserve_category_totals():
+    journal = pd.DataFrame(
+        [
+            {"voucher_id": "T1", "date": "2026-01-05", "account_code": "BA", "account_name": "Bank Alpha", "voucher_detail": "Bank transfer", "debit": 0, "credit": 100},
+            {"voucher_id": "T1", "date": "2026-01-05", "account_code": "BB", "account_name": "Bank Beta", "voucher_detail": "Bank transfer", "debit": 100, "credit": 0},
+            {"voucher_id": "T2", "date": "2026-01-06", "account_code": "BA", "account_name": "Bank Alpha", "voucher_detail": "Transfer with fee", "debit": 0, "credit": 100},
+            {"voucher_id": "T2", "date": "2026-01-06", "account_code": "BB", "account_name": "Bank Beta", "voucher_detail": "Transfer with fee", "debit": 95, "credit": 0},
+            {"voucher_id": "T2", "date": "2026-01-06", "account_code": "CH", "account_name": "Bank charges", "voucher_detail": "Transfer with fee", "debit": 5, "credit": 0},
+            {"voucher_id": "T3", "date": "2026-01-07", "account_code": "BA", "account_name": "Bank Alpha", "voucher_detail": "Split transfer", "debit": 0, "credit": 100},
+            {"voucher_id": "T3", "date": "2026-01-07", "account_code": "BB", "account_name": "Bank Beta", "voucher_detail": "Split transfer", "debit": 60, "credit": 0},
+            {"voucher_id": "T3", "date": "2026-01-07", "account_code": "BC", "account_name": "Bank Central", "voucher_detail": "Split transfer", "debit": 40, "credit": 0},
+        ]
+    )
+    coa = pd.DataFrame(
+        [
+            {"account_code": "BA", "account_title": "Bank Alpha", "account_type": "Bank", "category": ""},
+            {"account_code": "BB", "account_title": "Bank Beta", "account_type": "Bank", "category": ""},
+            {"account_code": "BC", "account_title": "Bank Central", "account_type": "Bank", "category": ""},
+            {"account_code": "CH", "account_title": "Bank charges", "account_type": "Expense", "category": "Bank charges"},
+        ]
+    )
+
+    result = build_cashflow_summary(
+        journal,
+        coa,
+        cash_account_codes=[],
+        bank_account_codes=["BA", "BB", "BC"],
+        period_start="2026-01-01",
+        period_end="2026-01-31",
+        match_internal_transfers=True,
+    )
+
+    details = result["transfer_details"].set_index("voucher_id")
+    assert details.loc["T1", "classification"] == "confirmed"
+    assert details.loc["T1", "transferor_account_code"] == "BA"
+    assert details.loc["T1", "transferor_account_name"] == "Bank Alpha"
+    assert details.loc["T1", "transferee_account_code"] == "BB"
+    assert details.loc["T1", "transferee_account_name"] == "Bank Beta"
+    assert details.loc["T1", "amount"] == 100
+    assert details.loc["T1", "variance"] == 0
+    assert bool(details.loc["T1", "matched"]) is True
+    assert details.loc["T2", "classification"] == "mixed"
+    assert details.loc["T2", "status"] == "Review required - mixed voucher"
+    assert details.loc["T2", "variance"] == -5
+    assert details.loc["T3", "classification"] == "ambiguous"
+    assert details.loc["T3", "transferee_account_code"] == "BB / BC"
+    assert details.loc["T3", "status"] == "Review required - multi-leg or unbalanced"
+    assert result["category_totals"].loc["Bank charges", "2026-01"] == -5
 def test_cashflow_defaults_resolve_fiscal_year_and_ytd_dynamically():
     values = {
         "cashflow_fiscal_year_start_month": "4",
@@ -260,6 +310,7 @@ def test_cashflows_preview_uses_prepared_details_for_combined_child_sections():
             "source_row_count": 4,
             "valid_row_count": 4,
             "child_details_prepared": True,
+            "child_details_version": 2,
             "summary_read_model": "hit",
         },
         "summary": summary,
@@ -299,6 +350,7 @@ def test_cashflows_preview_falls_back_for_legacy_summary_cache_on_child_request(
             "selected_template_upload_ids": [21],
             "source_row_count": 4,
             "valid_row_count": 4,
+            "child_details_prepared": True,
             "summary_read_model": "hit",
         },
         "summary": _cashflow_summary(),
@@ -399,6 +451,7 @@ def test_cashflow_summary_read_model_round_trip_preserves_period_totals():
     assert cached["summary"]["category_totals"].loc["Customers", "2026-Q1"] == 125.0
     assert cached["metadata"]["summary_read_model"] == "hit"
     assert cached["metadata"]["child_details_prepared"] is True
+    assert cached["metadata"]["child_details_version"] == 2
     assert cached["summary"]["transfer_details"].loc[0, "amount"] == 20.0
     assert cached["summary"]["deduction_details"].loc[0, "account_name"] == "Tax"
     assert cached["summary"]["categories_needing_review"].loc[0, "account_code"] == "4100"
@@ -414,6 +467,7 @@ def test_prepared_daily_snapshot_rolls_up_to_requested_months():
         ],
         "categories": [{"category": "Customers", "values": {"2026-01-01": 10, "2026-01-02": 15, "2026-02-01": 20}}],
         "child_details_prepared": True,
+        "child_details_version": 2,
         "transfer_details": [{
             "voucher_id": "TR-1",
             "date": "2026-01-02",
@@ -730,6 +784,7 @@ def test_reports_view_and_dashboard_entry_are_wired():
     root = Path(__file__).resolve().parents[1]
     html = root.joinpath("static", "reconciliation.html").read_text(encoding="utf-8")
     javascript = root.joinpath("static", "reconciliation.js").read_text(encoding="utf-8")
+    stylesheet = root.joinpath("static", "style.css").read_text(encoding="utf-8")
     dashboard = root.joinpath("static", "index.html").read_text(encoding="utf-8")
     navigation = root.joinpath("static", "client_context.js").read_text(encoding="utf-8")
 
@@ -743,6 +798,13 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert 'onclick=' not in html
     assert "details: 'transfers,deductions,review'" in javascript
     assert "cashflowChildRequest" in javascript
+    assert "formatCashflowTransferParty" in javascript
+    assert "prefix + '_account_name'" in javascript
+    assert "status_display" in javascript
+    assert "setActiveCashflowWindow" in javascript
+    assert "cashflows-table-number" in javascript
+    assert "grid-template-columns: minmax(0, 1fr)" in stylesheet
+    assert ".cashflows-table td.cashflows-table-text" in stylesheet
 
 
 def test_financial_statement_summary_aggregates_central_categories_and_flags_unmapped():

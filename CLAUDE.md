@@ -222,6 +222,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-29: Cashflows gained an invalidated summary read model for repeat summary requests, with detailed-path fallback on cache misses.
 - 2026-09-29: Cashflows balancing added exact set-based validation counts and row-order-safe import detection; snapshot preparation remains post-response.
 - 2026-09-30: Cashflows child sections now use prepared detail read models with legacy fallback; the main summary path remains unchanged.
+- 2026-09-30: Cashflows inter-account transfers now expose transfer legs, review status, cache-version fallback, and exclusive full-width detail windows; main summary unchanged.
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
 - Findings from a Code Health Review session go to `KNOWN_ISSUES.md`, not the Status log — the Status log records changes made, that file records issues found

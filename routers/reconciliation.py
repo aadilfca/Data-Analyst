@@ -20,6 +20,7 @@ from database import execute_query_pg, execute_write_pg, log_audit, pg_transacti
 from routers.auth import require_admin
 from services.ledger_group_summary import LedgerBalanceError, build_cashflow_summary, build_cross_group_check, build_financial_statement_summary, build_group_summary, normalize_cashflow_grouping
 from services.ledger_report_source import (
+    CASHFLOW_CHILD_DETAILS_VERSION,
     CASHFLOW_COLUMN_ROLE_LABELS,
     CASHFLOW_REQUIRED_COLUMN_ROLES,
     LedgerReportSource,
@@ -1288,7 +1289,11 @@ def _cashflow_cache_can_serve_details(
     if cached_summary is None:
         return False
     if detail_sections:
-        return bool(cached_summary.get("metadata", {}).get("child_details_prepared"))
+        metadata = cached_summary.get("metadata", {})
+        return (
+            bool(metadata.get("child_details_prepared"))
+            and int(metadata.get("child_details_version", 0) or 0) >= CASHFLOW_CHILD_DETAILS_VERSION
+        )
     return True
 
 

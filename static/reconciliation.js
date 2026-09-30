@@ -22,6 +22,13 @@
     let cashflowChildPreviews = {};
     let cashflowChildRequest = null;
     let cashflowChildGeneration = 0;
+    let activeCashflowWindow = null;
+    const cashflowWindowSections = {
+        transfers: 'cashflowsTransfersSection',
+        deductions: 'cashflowsDeductionsSection',
+        review: 'cashflowsReviewSection',
+        transactions: 'cashflowsTransactionsSection',
+    };
 
     function localDate(year, month, day) { return new Date(year, month, day, 12, 0, 0, 0); }
     function toIso(date) {
@@ -309,12 +316,23 @@
             table.innerHTML = '<tbody><tr><td class="cashflows-empty" colspan="' + Math.max(columns.length, 1) + '">' + escapeHtml(emptyMessage) + '</td></tr></tbody>';
             return;
         }
-        table.innerHTML = '<thead><tr>' + columns.map(function (column) { return '<th>' + escapeHtml(column.label) + '</th>'; }).join('') + '</tr></thead><tbody>' + visibleRows.map(function (row) {
+        table.innerHTML = '<thead><tr>' + columns.map(function (column) { return '<th class="' + (column.amount ? 'cashflows-table-number' : 'cashflows-table-text') + '">' + escapeHtml(column.label) + '</th>'; }).join('') + '</tr></thead><tbody>' + visibleRows.map(function (row) {
             return '<tr>' + columns.map(function (column) {
                 const value = row[column.key];
-                return '<td>' + escapeHtml(column.amount ? formatInternationalAmount(value) : (value == null ? '' : value)) + '</td>';
+                return '<td class="' + (column.amount ? 'cashflows-table-number' : 'cashflows-table-text') + '">' + escapeHtml(column.amount ? formatInternationalAmount(value) : (value == null ? '' : value)) + '</td>';
             }).join('') + '</tr>';
         }).join('') + '</tbody>';
+    }
+    function formatCashflowTransferParty(row, prefix) {
+        const code = String(row[prefix + '_account_code'] || '').trim();
+        const name = String(row[prefix + '_account_name'] || '').trim();
+        const type = String(row[prefix + '_type'] || '').trim();
+        const account = name && code && name !== code ? name + ' (' + code + ')' : (name || code);
+        return [account, type].filter(Boolean).join(' · ') || '—';
+    }
+    function formatCashflowTransferDate(value) {
+        const text = String(value || '');
+        return text.includes('T') ? text.slice(0, 10) : text;
     }
     function renderCategoryOptions(values, replaceExisting) {
         const datalist = element('cashflowsTransactionsCategoryOptions');
@@ -333,38 +351,47 @@
     function resetLazyCashflowSections() {
         cashflowChildGeneration += 1;
         cashflowChildRequest = null;
-        ['cashflowsTransfersSection', 'cashflowsDeductionsSection', 'cashflowsReviewSection'].forEach(function (id) {
-            element(id).hidden = true;
-        });
+        setActiveCashflowWindow(null);
         ['cashflowsLoadTransfersButton', 'cashflowsLoadDeductionsButton', 'cashflowsLoadReviewButton'].forEach(function (id) {
             element(id).disabled = false;
         });
         cashflowChildPreviews = {};
     }
+    function setActiveCashflowWindow(windowKey) {
+        activeCashflowWindow = windowKey;
+        Object.keys(cashflowWindowSections).forEach(function (key) {
+            element(cashflowWindowSections[key]).hidden = key !== windowKey;
+        });
+    }
     function renderCashflowChild(section, preview) {
         if (section === 'transfers') {
             const rows = (preview.transfer_details || []).map(function (row) {
-                return Object.assign({}, row, { matched: row.matched ? 'Yes' : 'Shown separately' });
+                return Object.assign({}, row, {
+                    date_display: formatCashflowTransferDate(row.date || row.period_label || row.month),
+                    transferor: formatCashflowTransferParty(row, 'transferor'),
+                    transferee: formatCashflowTransferParty(row, 'transferee'),
+                    status_display: row.status || (row.matched ? 'Confirmed' : 'Review required'),
+                });
             });
             renderTable(element('cashflowsTransfersTable'), [
-                { key: 'voucher_id', label: 'Voucher' }, { key: 'month', label: 'Month' }, { key: 'transfer_type', label: 'Transfer' }, { key: 'amount', label: 'Amount', amount: true }, { key: 'matched', label: 'Matched' },
+                { key: 'date_display', label: 'Date' }, { key: 'voucher_id', label: 'Voucher' }, { key: 'transferor', label: 'Transferor' }, { key: 'transferee', label: 'Transferee' }, { key: 'amount', label: 'Amount', amount: true }, { key: 'variance', label: 'Variance', amount: true }, { key: 'status_display', label: 'Status' }, { key: 'voucher_detail', label: 'Description' },
             ], rows, 'No internal transfers identified.');
             element('cashflowsTransferCount').textContent = String(preview.internal_transfer_count || rows.length || 0) + ' voucher(s)';
-            element('cashflowsTransfersSection').hidden = false;
+            if (activeCashflowWindow === section) element('cashflowsTransfersSection').hidden = false;
         } else if (section === 'deductions') {
             const rows = preview.deduction_details || [];
             renderTable(element('cashflowsDeductionsTable'), [
                 { key: 'month', label: 'Month' }, { key: 'category', label: 'Category' }, { key: 'account_name', label: 'Account' }, { key: 'amount', label: 'Amount', amount: true },
             ], rows, 'No customer deductions identified.');
             element('cashflowsDeductionCount').textContent = String(preview.deduction_count || rows.length || 0) + ' line(s)';
-            element('cashflowsDeductionsSection').hidden = false;
+            if (activeCashflowWindow === section) element('cashflowsDeductionsSection').hidden = false;
         } else if (section === 'review') {
             const rows = preview.categories_needing_review || [];
             renderTable(element('cashflowsReviewTable'), [
                 { key: 'voucher_id', label: 'Voucher' }, { key: 'account_code', label: 'Account code' }, { key: 'account_name', label: 'Account' }, { key: 'fallback_category', label: 'Review category' },
             ], rows, 'No review items.');
             element('cashflowsReviewCount').textContent = String(preview.category_review_count || rows.length || 0) + ' line(s)';
-            element('cashflowsReviewSection').hidden = false;
+            if (activeCashflowWindow === section) element('cashflowsReviewSection').hidden = false;
         }
     }
     function renderCashflowSummary(preview) {
@@ -666,11 +693,12 @@
         const section = element('cashflowsTransactionsSection');
         const button = element('cashflowsViewTransactionsButton');
         if (section.hidden) {
+            setActiveCashflowWindow('transactions');
             section.hidden = false;
             button.textContent = 'Hide classified transactions';
             await loadClassifiedTransactions(true);
         } else {
-            section.hidden = true;
+            setActiveCashflowWindow(null);
             button.textContent = 'View classified transactions';
         }
     }
@@ -730,6 +758,7 @@
         return cashflowChildRequest;
     }
     async function loadCashflowChild(section) {
+        setActiveCashflowWindow(section);
         if (Object.prototype.hasOwnProperty.call(cashflowChildPreviews, section)) {
             renderCashflowChild(section, cashflowChildPreviews[section]);
             return;

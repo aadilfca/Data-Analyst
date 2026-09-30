@@ -1,4 +1,19 @@
 # Changelog Archive
+## Cashflows inter-account transfers - Mini-phases 1-2 - 2026-09-30
+
+**Scope:** Refine the existing Inter-account transfers window without changing the main Cashflows summary or speed-sensitive retrieval path.
+
+**Implementation:** Transfer details now identify credit-side transferors and debit-side transferees with account codes, names, types, amounts, variance, and confirmed/mixed/ambiguous status. Pure transfers, mixed vouchers, and multi-leg cases are distinguished. Prepared child caches use a version marker so older payloads safely fall back. The transfer, deductions, review, and classified-transaction windows are mutually exclusive and full width; text cells align left while numeric cells remain right-aligned.
+
+**Verification:** Aadil confirmed the local browser behavior. Focused Cashflows/reconciliation coverage passed 27 tests; Python compilation, JavaScript syntax validation, and git diff --check passed. No schema, dependency, or source-data changes were made.
+
+**Pending Cashflows tasks:**
+
+1. **Internal Transfers XLSX parity:** update the Excel Internal Transfers sheet to match the refined report columns and statuses.
+2. **Transfer source reconciliation:** verify pure, mixed, and ambiguous transfer totals against source vouchers and finalize accounting acceptance.
+3. **Customer payments phase:** report payments to customers with bank-account details.
+4. **Vendor payments phase:** report payments to vendors through Bank/Cash accounts.
+
 ## Cashflows child-load performance and prepared detail read model - Phase 1 - 2026-09-30
 
 **Scope:** Complete the approved child-load performance phase while preserving the existing Cashflows summary calculations and speed-sensitive source path.
@@ -7,7 +22,7 @@
 
 **Verification:** Focused Cashflows/reconciliation coverage passed 26 tests; Python compilation, JavaScript syntax validation, and git diff --check passed. No schema, dependency, or source-data changes were made. The full-suite failures remain outside this phase and are documented in the session handoff.
 
-**Next phase:** Inter-account transfers with transferor and transferee account names for Bank-to-Bank, Bank-to-Cash, Cash-to-Bank, and Cash-account transfers.
+**Completed by:** Cashflows inter-account transfers - Mini-phases 1-2 above.
 
 ## Cashflows report presentation and filtering - Phase A - 2026-09-30
 
@@ -19,9 +34,10 @@
 
 **Pending phases from the approved Cashflows plan:**
 
-1. **Inter-account transfers phase:** report Bank-to-Bank, Bank-to-Cash, Cash-to-Bank, and Cash-account transfers with transferor and transferee account names on each relevant row.
-2. **Customer payments phase:** report payments to customers with their bank-account details.
-3. **Vendor payments phase:** report payments to vendors through Bank/Cash accounts.
+1. **Internal Transfers XLSX parity:** update the Excel Internal Transfers sheet to match the refined report columns and statuses.
+2. **Transfer source reconciliation:** verify pure, mixed, and ambiguous transfer totals against source vouchers and finalize accounting acceptance.
+3. **Customer payments phase:** report payments to customers with bank-account details.
+4. **Vendor payments phase:** report payments to vendors through Bank/Cash accounts.
 
 ## Cashflows XLSX export parity - Phase 2 - 2026-09-30
 

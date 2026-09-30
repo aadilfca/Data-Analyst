@@ -152,6 +152,204 @@ def normalize_cashflow_grouping(value: Any) -> str:
     return grouping
 
 
+def _empty_internal_transfer_details() -> pd.DataFrame:
+    return pd.DataFrame(
+        columns=[
+            "voucher_id",
+            "date",
+            "month",
+            "period_key",
+            "period_label",
+            "transfer_type",
+            "transferor_account_code",
+            "transferor_account_name",
+            "transferor_type",
+            "transferee_account_code",
+            "transferee_account_name",
+            "transferee_type",
+            "transferor_amount",
+            "transferee_amount",
+            "amount",
+            "variance",
+            "classification",
+            "status",
+            "matched",
+            "voucher_detail",
+        ]
+    )
+
+
+def _join_unique_leg_values(values: Any) -> str:
+    seen: list[str] = []
+    for value in values:
+        text = _clean_text(value)
+        if text and text not in seen:
+            seen.append(text)
+    return " / ".join(seen)
+
+
+def _build_cashflow_transfer_details(
+    working: pd.DataFrame,
+    coa: pd.DataFrame,
+    treasury_type: Mapping[str, str],
+    voucher_order: pd.Index,
+    *,
+    match_internal_transfers: bool,
+    tolerance: float,
+) -> pd.DataFrame:
+    """Identify treasury-to-treasury vouchers without changing summary totals."""
+    if working.empty:
+        return _empty_internal_transfer_details()
+
+    treasury = working.loc[working["is_treasury"]].copy()
+    if treasury.empty:
+        return _empty_internal_transfer_details()
+    treasury["treasury_type"] = treasury["account_code"].map(treasury_type).fillna("Treasury")
+    account_title_by_code = (
+        coa.drop_duplicates("account_code", keep="last")
+        .set_index("account_code")["account_title"]
+        .to_dict()
+    )
+    treasury["resolved_account_name"] = treasury["account_name"].where(
+        treasury["account_name"].ne(""),
+        treasury["account_code"].map(account_title_by_code).fillna(""),
+    )
+    treasury["net_movement"] = treasury["debit"] - treasury["credit"]
+    account_legs = (
+        treasury.groupby(["voucher_id", "account_code"], sort=False)
+        .agg(
+            account_name=("resolved_account_name", "first"),
+            treasury_type=("treasury_type", "first"),
+            debit=("debit", "sum"),
+            credit=("credit", "sum"),
+            net_movement=("net_movement", "sum"),
+        )
+        .reset_index()
+    )
+    candidate_ids = (
+        account_legs.groupby("voucher_id", sort=False)["account_code"]
+        .nunique()
+        .loc[lambda values: values.gt(1)]
+        .index
+    )
+    if len(candidate_ids) == 0:
+        return _empty_internal_transfer_details()
+
+    voucher_meta = (
+        working.groupby("voucher_id", sort=False)
+        .agg(
+            date=("date", "min"),
+            month=("month", "first"),
+            period_key=("period_key", "first"),
+            period_label=("period_label", "first"),
+            voucher_detail=("voucher_detail", lambda values: next((value for value in values if value), "")),
+        )
+        .reindex(voucher_order)
+        .loc[lambda frame: frame.index.isin(candidate_ids)]
+    )
+    debit_legs = account_legs.loc[
+        account_legs["net_movement"].gt(tolerance) & account_legs["voucher_id"].isin(candidate_ids)
+    ]
+    credit_legs = account_legs.loc[
+        account_legs["net_movement"].lt(-tolerance) & account_legs["voucher_id"].isin(candidate_ids)
+    ]
+
+    def aggregate_side(legs: pd.DataFrame, prefix: str) -> pd.DataFrame:
+        if legs.empty:
+            return pd.DataFrame(index=pd.Index([], name="voucher_id"))
+        result = legs.groupby("voucher_id", sort=False).agg(
+            account_code=("account_code", _join_unique_leg_values),
+            account_name=("account_name", _join_unique_leg_values),
+            treasury_type=("treasury_type", _join_unique_leg_values),
+            amount=("net_movement", lambda values: float(values.abs().sum())),
+            leg_count=("account_code", "nunique"),
+        )
+        return result.rename(
+            columns={
+                "account_code": f"{prefix}_account_code",
+                "account_name": f"{prefix}_account_name",
+                "treasury_type": f"{prefix}_type",
+                "amount": f"{prefix}_amount",
+                "leg_count": f"{prefix}_leg_count",
+            }
+        )
+
+    details = voucher_meta.reset_index()
+    details = details.merge(aggregate_side(credit_legs, "transferor"), on="voucher_id", how="left")
+    details = details.merge(aggregate_side(debit_legs, "transferee"), on="voucher_id", how="left")
+    non_treasury_counts = (
+        working.loc[~working["is_treasury"]]
+        .groupby("voucher_id", sort=False)
+        .size()
+        .rename("non_treasury_line_count")
+    )
+    details = details.merge(non_treasury_counts, on="voucher_id", how="left")
+    for column in (
+        "transferor_account_code",
+        "transferor_account_name",
+        "transferor_type",
+        "transferee_account_code",
+        "transferee_account_name",
+        "transferee_type",
+    ):
+        details[column] = details[column].fillna("")
+    for column in ("transferor_amount", "transferee_amount", "transferor_leg_count", "transferee_leg_count", "non_treasury_line_count"):
+        details[column] = details[column].fillna(0.0)
+    details["amount"] = details["transferee_amount"]
+    details["variance"] = details["transferee_amount"] - details["transferor_amount"]
+    details["transfer_type"] = (
+        details["transferor_type"].replace("", "Unknown")
+        + " to "
+        + details["transferee_type"].replace("", "Unknown")
+    )
+    balanced = details["variance"].abs().le(tolerance)
+    simple = details["transferor_leg_count"].eq(1) & details["transferee_leg_count"].eq(1)
+    pure = details["non_treasury_line_count"].eq(0)
+    details["classification"] = "ambiguous"
+    details.loc[~pure, "classification"] = "mixed"
+    details.loc[pure & simple & balanced, "classification"] = "confirmed"
+    details["status"] = details["classification"].map(
+        {
+            "confirmed": "Confirmed",
+            "mixed": "Review required - mixed voucher",
+            "ambiguous": "Review required - multi-leg or unbalanced",
+        }
+    )
+    same_type = (
+        details["transferor_type"].ne("")
+        & details["transferor_type"].eq(details["transferee_type"])
+    )
+    details["matched"] = (
+        bool(match_internal_transfers)
+        & same_type
+        & details["classification"].eq("confirmed")
+    )
+    return details[
+        [
+            "voucher_id",
+            "date",
+            "month",
+            "period_key",
+            "period_label",
+            "transfer_type",
+            "transferor_account_code",
+            "transferor_account_name",
+            "transferor_type",
+            "transferee_account_code",
+            "transferee_account_name",
+            "transferee_type",
+            "transferor_amount",
+            "transferee_amount",
+            "amount",
+            "variance",
+            "classification",
+            "status",
+            "matched",
+            "voucher_detail",
+        ]
+    ].sort_values(["date", "voucher_id"]).reset_index(drop=True)
+
+
 def _period_descriptor(key: str, start: pd.Timestamp, end: pd.Timestamp, label: str) -> dict[str, str]:
     return {'key': key, 'start': start.date().isoformat(), 'end': end.date().isoformat(), 'label': label}
 
@@ -530,7 +728,7 @@ def build_cashflow_summary(
 
     if working.empty:
         balance_checks = pd.DataFrame(columns=["voucher_id", "treasury_net", "counter_net", "variance", "balanced"])
-        transfer_details = pd.DataFrame(columns=["voucher_id", "date", "month", "period_key", "period_label", "transfer_type", "amount", "matched", "voucher_detail"])
+        transfer_details = _empty_internal_transfer_details()
         category_frame = pd.DataFrame(columns=["category", "month", "period_key", "amount"])
         review = pd.DataFrame(columns=["voucher_id", "date", "month", "period_key", "period_label", "account_code", "account_name", "voucher_detail", "debit", "credit", "fallback_category"])
         deductions = pd.DataFrame(columns=["category", "month", "period_key", "period_label", "amount", "account_code", "account_name", "date", "presentation"])
@@ -545,28 +743,14 @@ def build_cashflow_summary(
         balance_checks["balanced"] = balance_checks["variance"].abs() <= tolerance
         balance_checks = balance_checks.reset_index()
 
-        voucher_meta = working.groupby("voucher_id", sort=False).agg(
-            date=("date", "min"),
-            month=("month", "first"),
-            period_key=("period_key", "first"),
-            period_label=("period_label", "first"),
-            voucher_detail=("voucher_detail", lambda values: next((value for value in values if value), "")),
-        ).reindex(voucher_order)
-        treasury = working.loc[working["is_treasury"]].copy()
-        treasury["treasury_type"] = treasury["account_code"].map(treasury_type).fillna("Treasury")
-        treasury_counts = treasury.groupby("voucher_id", sort=False).agg(
-            treasury_account_count=("account_code", "nunique"),
-            amount=("debit", "sum"),
-        ).reindex(voucher_order)
-        type_values = treasury.groupby("voucher_id", sort=False)["treasury_type"].agg(lambda values: tuple(sorted(set(values)))).reindex(voucher_order)
-        transfer_mask = treasury_counts["treasury_account_count"].gt(1)
-        transfer_details = voucher_meta.loc[transfer_mask].copy()
-        transfer_details["transfer_type"] = type_values.loc[transfer_mask].map(
-            lambda values: " to ".join(values) if len(values) > 1 else f"{values[0]} to {values[0]}"
+        transfer_details = _build_cashflow_transfer_details(
+            working,
+            coa,
+            treasury_type,
+            voucher_order,
+            match_internal_transfers=match_internal_transfers,
+            tolerance=tolerance,
         )
-        transfer_details["amount"] = treasury_counts.loc[transfer_mask, "amount"]
-        transfer_details["matched"] = type_values.loc[transfer_mask].map(lambda values: bool(match_internal_transfers and len(values) == 1))
-        transfer_details = transfer_details.reset_index()[["voucher_id", "date", "month", "period_key", "period_label", "transfer_type", "amount", "matched", "voucher_detail"]]
 
         contra = working.loc[~working["is_treasury"]].copy()
         mapped_categories = contra["account_code"].map(category_by_code).fillna("")
