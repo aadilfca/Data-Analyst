@@ -85,6 +85,7 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
 def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
     settings_html = (ROOT / "static" / "settings.html").read_text(encoding="utf-8")
     settings_script = (ROOT / "static" / "settings.js").read_text(encoding="utf-8")
+    reconciliation_html = (ROOT / "static" / "reconciliation.html").read_text(encoding="utf-8")
     reconciliation_script = (ROOT / "static" / "reconciliation.js").read_text(encoding="utf-8")
 
     assert "cashflowDefaultsContainer" in settings_html
@@ -98,3 +99,6 @@ def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
     assert "await loadCashflowDefaultPeriods();" in reconciliation_script
     assert "defaultPeriods();" in reconciliation_script
     assert "groupBy: 'month'" in reconciliation_script
+    assert "cashflowsExportButton" in reconciliation_html
+    assert "/api/reconciliation/cashflows/export?" in reconciliation_script
+    assert "downloadCashflowReport" in reconciliation_script

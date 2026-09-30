@@ -1,14 +1,17 @@
 import json
+from io import BytesIO
 from pathlib import Path
 import logging
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pandas as pd
+from openpyxl import load_workbook
 
 from routers import reconciliation
 from services.ledger_group_summary import build_financial_statement_summary
 from routers import settings as settings_router
+from services.reconciliation_xlsx import export_cashflow_xlsx
 
 
 def _source():
@@ -450,9 +453,41 @@ def test_download_report_returns_professional_xlsx_when_controls_pass():
             journal_template_id=None,
             session=None,
         )
-
     assert response.media_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     assert "Bank_Monthly_Summary_2026-01_to_2026-01.xlsx" in response.headers["content-disposition"]
+
+def test_cashflow_export_preserves_visible_periods_and_totals():
+    preview = {
+        "periods": [
+            {"key": "2026-Q1", "start": "2026-01-01", "end": "2026-03-31", "label": "Q1 2026"},
+            {"key": "2026-Q2", "start": "2026-04-01", "end": "2026-06-30", "label": "Q2 2026"},
+        ],
+        "group_by": "quarter",
+        "category_totals": [
+            {"category": "Customers", "2026-Q1": 125.0, "2026-Q2": 50.0, "Total": 175.0},
+        ],
+        "transfer_details": [{"voucher_id": "TR-1", "period_label": "Q1 2026", "transfer_type": "Bank to Cash", "amount": 20.0, "matched": True}],
+        "deduction_details": [{"period_label": "Q2 2026", "category": "Withholding", "account_name": "Tax", "amount": 5.0}],
+        "categories_needing_review": [{"voucher_id": "JV-1", "period_label": "Q2 2026", "account_code": "4100", "account_name": "Other", "fallback_category": "Review"}],
+        "selected_voucher_count": 3,
+        "internal_transfer_count": 1,
+        "deduction_count": 1,
+        "category_review_count": 1,
+        "receipt_presentation": "net",
+    }
+
+    workbook = load_workbook(
+        BytesIO(export_cashflow_xlsx(preview, period_start="2026-01-01", period_end="2026-06-30", group_by="quarter")),
+        data_only=True,
+    )
+
+    summary = workbook["Cashflows Summary"]
+    assert [summary.cell(4, column).value for column in range(1, 5)] == ["Category", "Q1 2026", "Q2 2026", "Total"]
+    assert [summary.cell(5, column).value for column in range(1, 5)] == ["Customers", 125, 50, 175]
+    assert [summary.cell(6, column).value for column in range(1, 5)] == ["Total", 125, 50, 175]
+    assert set(workbook.sheetnames) == {"Cashflows Summary", "Internal Transfers", "Customer Deductions", "Review Required", "Export Controls"}
+
+
 
 
 def test_reports_view_and_dashboard_entry_are_wired():

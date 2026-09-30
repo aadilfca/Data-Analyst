@@ -228,4 +228,4 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - If a new convention or rule emerges from a mistake, add it under Conventions
 Do this automatically at the end of the session without being asked.
 - 2026-09-29: Cashflows speed work is paused after commit 2b90255; deferred work and the next feature backlog are recorded in CHANGELOG_ARCHIVE.md.
-- 2026-09-30: Cashflows administrator-controlled default reporting periods shipped and were confirmed locally; export parity is the next phase.
+- 2026-09-30: Cashflows gained administrator-default period settings and XLSX export parity; export timing is server-side report preparation under the existing performance freeze.

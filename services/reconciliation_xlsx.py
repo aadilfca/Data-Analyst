@@ -114,6 +114,152 @@ def export_reconciliation_xlsx(
     return output.getvalue()
 
 
+def build_cashflow_workbook(
+    preview: Mapping[str, Any],
+    *,
+    period_start: str | None = None,
+    period_end: str | None = None,
+    group_by: str | None = None,
+) -> Workbook:
+    """Build an XLSX workbook from the serialized Cashflows report preview."""
+    periods = [item for item in (preview.get("periods") or []) if isinstance(item, Mapping)]
+    period_keys = [str(item.get("key") or "") for item in periods]
+    period_labels = [str(item.get("label") or item.get("key") or "") for item in periods]
+    if not period_keys or any(not key for key in period_keys):
+        raise ValueError("Cashflows export requires reporting periods")
+
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    workbook.calculation.calcMode = "auto"
+    workbook.calculation.fullCalcOnLoad = True
+    workbook.calculation.forceFullCalc = True
+
+    summary_sheet = workbook.create_sheet("Cashflows Summary")
+    _write_cashflow_summary_sheet(
+        summary_sheet,
+        preview,
+        period_keys,
+        period_labels,
+        period_start=period_start,
+        period_end=period_end,
+        group_by=group_by,
+    )
+    _write_cashflow_detail_sheet(
+        workbook.create_sheet("Internal Transfers"),
+        "Internal Transfers",
+        preview.get("transfer_details") or [],
+        [("voucher_id", "Voucher", False), ("period", "Period", False), ("transfer_type", "Transfer", False), ("amount", "Amount", True), ("matched", "Matched", False)],
+    )
+    _write_cashflow_detail_sheet(
+        workbook.create_sheet("Customer Deductions"),
+        "Customer Deductions",
+        preview.get("deduction_details") or [],
+        [("period", "Period", False), ("category", "Category", False), ("account_name", "Account", False), ("amount", "Amount", True)],
+    )
+    _write_cashflow_detail_sheet(
+        workbook.create_sheet("Review Required"),
+        "Review Required",
+        preview.get("categories_needing_review") or [],
+        [("voucher_id", "Voucher", False), ("period", "Period", False), ("account_code", "Account code", False), ("account_name", "Account", False), ("fallback_category", "Review category", False)],
+    )
+
+    controls = workbook.create_sheet("Export Controls")
+    _write_title(controls, "Cashflows Export Controls", "Control totals and selection used for this workbook.", 2)
+    control_rows = [
+        ("Period start", period_start or ""),
+        ("Period end", period_end or ""),
+        ("Grouping", group_by or preview.get("group_by") or "month"),
+        ("Receipt presentation", preview.get("receipt_presentation") or "net"),
+        ("Selected vouchers", int(preview.get("selected_voucher_count") or 0)),
+        ("Internal transfers", int(preview.get("internal_transfer_count") or 0)),
+        ("Customer deductions", int(preview.get("deduction_count") or 0)),
+        ("Review required", int(preview.get("category_review_count") or 0)),
+    ]
+    row = 4
+    _write_table(controls, row, ["Control", "Value"], header=True)
+    for control, value in control_rows:
+        row += 1
+        _write_table(controls, row, [control, value])
+
+    for sheet in workbook.worksheets:
+        _finish_sheet(sheet)
+    return workbook
+
+
+def export_cashflow_xlsx(
+    preview: Mapping[str, Any],
+    *,
+    period_start: str | None = None,
+    period_end: str | None = None,
+    group_by: str | None = None,
+) -> bytes:
+    """Return a Cashflows workbook matching the visible report payload."""
+    workbook = build_cashflow_workbook(
+        preview,
+        period_start=period_start,
+        period_end=period_end,
+        group_by=group_by,
+    )
+    output = BytesIO()
+    workbook.save(output)
+    return output.getvalue()
+
+
+def _write_cashflow_summary_sheet(
+    ws,
+    preview: Mapping[str, Any],
+    period_keys: list[str],
+    period_labels: list[str],
+    *,
+    period_start: str | None,
+    period_end: str | None,
+    group_by: str | None,
+) -> None:
+    _write_title(
+        ws,
+        f"Cashflows Summary ({period_labels[0]} to {period_labels[-1]})",
+        f"Visible Cashflows report for {period_start or 'selected start'} to {period_end or 'selected end'}; grouping: {group_by or preview.get('group_by') or 'month'}.",
+        len(period_keys) + 2,
+    )
+    row = 4
+    _write_table(ws, row, ["Category", *period_labels, "Total"], header=True)
+    records = preview.get("category_totals") or []
+    for record in records:
+        row += 1
+        values = [_number(record.get(key)) or 0.0 for key in period_keys]
+        total = _number(record.get("Total"))
+        _write_table(ws, row, [record.get("category") or "Unlabelled", *values, total if total is not None else sum(values)])
+    if not records:
+        row += 1
+        _write_table(ws, row, ["No Cash Flow activity was found."])
+    else:
+        row += 1
+        totals = [sum(_number(record.get(key)) or 0.0 for record in records) for key in period_keys]
+        _write_table(ws, row, ["Total", *totals, sum(totals)], total=True)
+    ws.freeze_panes = "B5"
+
+
+def _write_cashflow_detail_sheet(ws, title: str, records: list[Mapping[str, Any]], columns: list[tuple[str, str, bool]]) -> None:
+    _write_title(ws, title, "Detail rows included in the selected Cashflows report.", len(columns))
+    row = 4
+    _write_table(ws, row, [label for _, label, _ in columns], header=True)
+    if not records:
+        _write_table(ws, row + 1, ["No rows identified."])
+        return
+    for record in records:
+        row += 1
+        values = []
+        for key, _, numeric in columns:
+            value = record.get(key)
+            if key == "period":
+                value = record.get("period_label") or record.get("month") or record.get("period_key")
+            if key == "matched":
+                value = "Yes" if value else "Shown separately"
+            values.append(_number(value) if numeric else value)
+        _write_table(ws, row, values)
+    ws.freeze_panes = "A5"
+
+
 def save_reconciliation_xlsx(
     summary: Mapping[str, Any],
     path: str | Path,

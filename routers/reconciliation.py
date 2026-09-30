@@ -32,7 +32,7 @@ from services.reconciliation_balance_source import (
     load_reconciliation_balance_source,
     normalize_balance_month,
 )
-from services.reconciliation_xlsx import export_reconciliation_xlsx
+from services.reconciliation_xlsx import export_cashflow_xlsx, export_reconciliation_xlsx
 
 
 router = APIRouter()
@@ -1580,6 +1580,44 @@ def preview_cashflows(
         detail_sections=_parse_cashflow_detail_sections(detail_value),
         group_by=group_by,
     )
+
+@router.get("/api/reconciliation/cashflows/export")
+def export_cashflows_report(
+    client_id: int = Query(..., ge=1),
+    period_start: str = Query(...),
+    period_end: str = Query(...),
+    group_by: str = Query("month"),
+    session=Depends(require_admin),
+):
+    """Export the same Cashflows period and grouping shown in Reports."""
+    result = _build_cashflow_result(
+        client_id,
+        period_start,
+        period_end,
+        detail_sections=None,
+        group_by=group_by,
+    )
+    if not result["source"]["ready"] or not result["preview"].get("periods"):
+        raise HTTPException(
+            409,
+            detail={
+                "message": "The Cashflows report is not ready for export.",
+                "blocking_reasons": result["blocking_reasons"],
+            },
+        )
+    content = export_cashflow_xlsx(
+        result["preview"],
+        period_start=result["period_start"],
+        period_end=result["period_end"],
+        group_by=result["group_by"],
+    )
+    filename = f"Cashflows_{result['group_by']}_{result['period_start']}_to_{result['period_end']}.xlsx"
+    return StreamingResponse(
+        BytesIO(content),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
 
 @router.get("/api/reconciliation/cashflows/sources")
 def list_cashflow_sources(

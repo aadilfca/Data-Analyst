@@ -1,4 +1,14 @@
 # Changelog Archive
+## Cashflows XLSX export parity - Phase 2 - 2026-09-30
+
+**Scope:** Added an administrator-only Cashflows XLSX export that uses the visible report range and grouping.
+
+**Implementation:** The workbook contains summary, internal transfers, customer deductions, review-required, and export-control sheets. The route reuses the canonical full Cashflows calculation, so downloaded totals and detail rows remain aligned with Reports. The browser disables the export action while the file is prepared and downloads the server-generated workbook.
+
+**Verification:** The supplied local HAR recorded HTTP 200, 9.13 seconds total, approximately 9.03 seconds server wait, and 88 ms response transfer; the delay is report preparation under the existing remote-database performance freeze, not browser JavaScript or file transfer. Focused Cashflows/reconciliation coverage passed 20 tests; JavaScript syntax, Python compilation, and `git diff --check` passed. No packages were installed or source data was changed.
+
+**Next phase:** Formal reconciliation coverage for opening/closing balances, empty periods, partial periods, boundaries, and category totals.
+
 ## Cashflows administrator default reporting periods - Phase 1 - 2026-09-30
 
 **Scope:** Added firm-wide administrator defaults for Cashflows reporting without changing the existing period picker, summary calculations, or performance-frozen source/read-model paths.

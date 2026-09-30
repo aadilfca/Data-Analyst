@@ -332,6 +332,8 @@
         renderCategoryOptions(summaryRows, true);
         element('cashflowsReceiptMode').textContent = 'Receipt presentation: ' + String(preview.receipt_presentation || 'net').toUpperCase();
         const source = result.source || {};
+        const exportButton = element('cashflowsExportButton');
+        if (exportButton) exportButton.hidden = !source.ready || !(preview.periods || []).length;
 
         resetLazyCashflowSections();
         const lazyActions = element('cashflowsLazyActions');
@@ -356,9 +358,54 @@
         if (blockingReasons.length) showCashflowToast(blockingReasons.join(' '), true);
         else if (reviewCount) showCashflowToast(String(reviewCount) + ' counter-account line(s) need category review.', false);
     }
+    async function downloadCashflowReport() {
+        const button = element('cashflowsExportButton');
+        const start = element('cashflowsPeriodStart').value;
+        const end = element('cashflowsPeriodEnd').value;
+        if (!button || !start || !end) return;
+        button.disabled = true;
+        button.textContent = 'Preparing export.';
+        try {
+            const query = new URLSearchParams({
+                client_id: clientId,
+                period_start: start,
+                period_end: end,
+                group_by: cashflowSelection.groupBy || 'month',
+            });
+            const response = await fetch('/api/reconciliation/cashflows/export?' + query.toString());
+            if (!response.ok) {
+                const payload = await response.json().catch(function () { return {}; });
+                const detail = payload.detail;
+                const message = typeof detail === 'string'
+                    ? detail
+                    : (detail && detail.message) || 'The Cashflows export could not be created.';
+                throw new Error(message);
+            }
+            const blob = await response.blob();
+            const disposition = response.headers.get('Content-Disposition') || '';
+            const filenameMatch = disposition.match(/filename="?([^";]+)"?/i);
+            const filename = filenameMatch ? filenameMatch[1] : 'Cashflows_Report.xlsx';
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            window.setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+            showCashflowToast('Cashflows export downloaded.', false);
+        } catch (error) {
+            showCashflowToast(error.message, true);
+        } finally {
+            button.disabled = false;
+            button.textContent = 'Export XLSX';
+        }
+    }
 
     async function generateCashflows(event) {
         if (event) event.preventDefault();
+        const exportButton = element('cashflowsExportButton');
+        if (exportButton) exportButton.hidden = true;
         showCashflowProcessing();
         const start = element('cashflowsPeriodStart').value;
         const end = element('cashflowsPeriodEnd').value;
@@ -554,6 +601,7 @@
         }
     }
     async function initialise() {
+        element('cashflowsExportButton').addEventListener('click', downloadCashflowReport);
         if (window.clientContextReady) await window.clientContextReady;
         clientId = window.getSelectedClientId ? window.getSelectedClientId() : null;
         await loadCashflowDefaultPeriods();
