@@ -20,6 +20,8 @@
     let hideCashflowZeroRows = false;
     let lastClassifiedTransactionsResult = null;
     let cashflowChildPreviews = {};
+    let cashflowChildRequest = null;
+    let cashflowChildGeneration = 0;
 
     function localDate(year, month, day) { return new Date(year, month, day, 12, 0, 0, 0); }
     function toIso(date) {
@@ -329,6 +331,8 @@
         }).join('');
     }
     function resetLazyCashflowSections() {
+        cashflowChildGeneration += 1;
+        cashflowChildRequest = null;
         ['cashflowsTransfersSection', 'cashflowsDeductionsSection', 'cashflowsReviewSection'].forEach(function (id) {
             element(id).hidden = true;
         });
@@ -670,28 +674,69 @@
             button.textContent = 'View classified transactions';
         }
     }
-    async function loadCashflowChild(section) {
+    function loadCashflowChildren() {
+        if (cashflowChildRequest) return cashflowChildRequest;
         const configuration = (lastCashflowsResult || {}).configuration || {};
         const start = element('cashflowsPeriodStart').value;
         const end = element('cashflowsPeriodEnd').value;
-        if (!configuration.source_template_id || !clientId || !start || !end) return;
+        if (!configuration.source_template_id || !clientId || !start || !end) return Promise.resolve(null);
         const buttonIds = { transfers: 'cashflowsLoadTransfersButton', deductions: 'cashflowsLoadDeductionsButton', review: 'cashflowsLoadReviewButton' };
         const labels = { transfers: 'Load internal transfers', deductions: 'Load customer deductions', review: 'Load review required' };
-        const button = element(buttonIds[section]);
-        if (!button) return;
-        button.disabled = true;
-        button.textContent = 'Loading…';
-        const params = new URLSearchParams({ client_id: String(clientId), period_start: start, period_end: end, group_by: cashflowSelection.groupBy, details: section });
-        try {
-            const result = await api('/api/reconciliation/cashflows/preview?' + params.toString());
-            cashflowChildPreviews[section] = result.preview || {};
+        const generation = cashflowChildGeneration;
+        Object.keys(buttonIds).forEach(function (name) {
+            const button = element(buttonIds[name]);
+            if (button) {
+                button.disabled = true;
+                button.textContent = 'Loading…';
+            }
+        });
+        const params = new URLSearchParams({
+            client_id: String(clientId),
+            period_start: start,
+            period_end: end,
+            group_by: cashflowSelection.groupBy,
+            details: 'transfers,deductions,review'
+        });
+        cashflowChildRequest = api('/api/reconciliation/cashflows/preview?' + params.toString())
+            .then(function (result) {
+                if (generation !== cashflowChildGeneration) return null;
+                const preview = result.preview || {};
+                Object.keys(buttonIds).forEach(function (name) {
+                    cashflowChildPreviews[name] = preview;
+                    const button = element(buttonIds[name]);
+                    if (button) {
+                        button.disabled = false;
+                        button.textContent = labels[name] + ' (loaded)';
+                    }
+                });
+                return preview;
+            })
+            .catch(function (error) {
+                if (generation === cashflowChildGeneration) {
+                    Object.keys(buttonIds).forEach(function (name) {
+                        const button = element(buttonIds[name]);
+                        if (button) {
+                            button.disabled = false;
+                            button.textContent = labels[name];
+                        }
+                    });
+                    showCashflowToast(error.message, true);
+                }
+                return null;
+            })
+            .finally(function () {
+                if (generation === cashflowChildGeneration) cashflowChildRequest = null;
+            });
+        return cashflowChildRequest;
+    }
+    async function loadCashflowChild(section) {
+        if (Object.prototype.hasOwnProperty.call(cashflowChildPreviews, section)) {
             renderCashflowChild(section, cashflowChildPreviews[section]);
-            button.textContent = labels[section] + ' (loaded)';
-        } catch (error) {
-            button.textContent = labels[section];
-            showCashflowToast(error.message, true);
-        } finally {
-            button.disabled = false;
+            return;
+        }
+        const preview = await loadCashflowChildren();
+        if (preview && Object.prototype.hasOwnProperty.call(cashflowChildPreviews, section)) {
+            renderCashflowChild(section, cashflowChildPreviews[section]);
         }
     }
     function setReportView(isReport) {

@@ -1281,6 +1281,17 @@ def _cashflow_preview(
     }
 
 
+def _cashflow_cache_can_serve_details(
+    cached_summary: dict[str, Any] | None,
+    detail_sections: set[str] | None,
+) -> bool:
+    if cached_summary is None:
+        return False
+    if detail_sections:
+        return bool(cached_summary.get("metadata", {}).get("child_details_prepared"))
+    return True
+
+
 def _build_cashflow_result(
     client_id: int,
     period_start: Any,
@@ -1304,7 +1315,7 @@ def _build_cashflow_result(
     diagnostics: list[dict[str, Any]] = []
     source_started = perf_counter()
     cached_summary = None
-    if detail_sections == set() and configured_template_id is not None:
+    if detail_sections is not None and configured_template_id is not None:
         try:
             cached_summary = load_cashflow_summary_read_model(
                 client_id,
@@ -1315,9 +1326,11 @@ def _build_cashflow_result(
                 receipt_presentation=configuration["receipt_presentation"],
                 query_fn=execute_query_pg,
             )
+            if not _cashflow_cache_can_serve_details(cached_summary, detail_sections):
+                cached_summary = None
         except Exception as error:
             logger.warning("cashflows_summary_read_model_lookup_failed client_id=%s error=%s", client_id, error)
-    if cached_summary is None and detail_sections == set() and configured_template_id is not None:
+    if cached_summary is None and detail_sections is not None and configured_template_id is not None:
         try:
             cached_summary = load_cashflow_prepared_summary(
                 client_id,
@@ -1328,6 +1341,8 @@ def _build_cashflow_result(
                 receipt_presentation=configuration["receipt_presentation"],
                 query_fn=execute_query_pg,
             )
+            if not _cashflow_cache_can_serve_details(cached_summary, detail_sections):
+                cached_summary = None
         except Exception as error:
             logger.warning("cashflows_prepared_snapshot_lookup_failed client_id=%s error=%s", client_id, error)
     if cached_summary is not None:
@@ -1388,7 +1403,7 @@ def _build_cashflow_result(
             diagnostics.append(_report_diagnostic("cashflow_input_error", "error", str(error)))
         finally:
             summary_seconds = perf_counter() - summary_started
-    if summary is not None and detail_sections == set() and configured_template_id is not None and (cached_summary is None or cached_summary["metadata"].get("summary_read_model") == "prepared_snapshot"):
+    if summary is not None and detail_sections is not None and configured_template_id is not None and (cached_summary is None or cached_summary["metadata"].get("summary_read_model") == "prepared_snapshot"):
         try:
             source_metadata_for_cache = source.metadata
             store_cashflow_summary_read_model(
@@ -1429,7 +1444,7 @@ def _build_cashflow_result(
     format_seconds = perf_counter() - preview_started
     total_seconds = perf_counter() - request_started
     logger.info(
-        "cashflows_performance client_id=%s period_start=%s period_end=%s group_by=%s "
+        "cashflows_performance client_id=%s period_start=%s period_end=%s group_by=%s details=%s "
         "validation_seconds=%.3f configuration_seconds=%.3f source_seconds=%.3f "
         "summary_seconds=%.3f format_seconds=%.3f total_seconds=%.3f "
         "source_rows=%s valid_rows=%s selected_vouchers=%s summary_status=%s",
@@ -1437,6 +1452,7 @@ def _build_cashflow_result(
         start.date().isoformat(),
         end.date().isoformat(),
         grouping,
+        ",".join(sorted(detail_sections)) if detail_sections is not None else "all",
         validation_seconds,
         configuration_seconds,
         source_seconds,

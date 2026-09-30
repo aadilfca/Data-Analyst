@@ -223,10 +223,146 @@ def test_cashflows_preview_uses_summary_read_model_without_loading_detail_source
     assert response["preview"]["group_by"] == "quarter"
     assert response["preview"]["category_totals"][0]["2026-Q1"] == 125.0
 
+
+def test_cashflows_preview_uses_prepared_details_for_combined_child_sections():
+    configuration = {
+        "source_template_id": 9,
+        "cash_account_codes": [],
+        "bank_account_codes": ["B1"],
+        "match_internal_transfers": False,
+        "receipt_presentation": "net",
+    }
+    summary = _cashflow_summary()
+    summary["transfer_details"] = pd.DataFrame([{
+        "voucher_id": "TR-1",
+        "period_label": "Q1 2026",
+        "transfer_type": "Bank to Cash",
+        "amount": 20.0,
+        "matched": True,
+    }])
+    summary["deduction_details"] = pd.DataFrame([{
+        "period_label": "Q2 2026",
+        "category": "Withholding",
+        "account_name": "Tax",
+        "amount": 5.0,
+    }])
+    summary["categories_needing_review"] = pd.DataFrame([{
+        "voucher_id": "JV-1",
+        "period_label": "Q2 2026",
+        "account_code": "4100",
+        "account_name": "Other",
+        "fallback_category": "Review",
+    }])
+    cached = {
+        "metadata": {
+            "source_upload_ids": [21],
+            "selected_template_upload_ids": [21],
+            "source_row_count": 4,
+            "valid_row_count": 4,
+            "child_details_prepared": True,
+            "summary_read_model": "hit",
+        },
+        "summary": summary,
+    }
+    with (
+        patch.object(reconciliation, "_require_active_client"),
+        patch.object(reconciliation, "_cashflow_configuration", return_value=configuration),
+        patch.object(reconciliation, "load_cashflow_summary_read_model", return_value=cached),
+        patch.object(reconciliation, "load_ledger_report_source") as loader,
+    ):
+        response = reconciliation.preview_cashflows(
+            7,
+            "2026-02-10",
+            "2026-04-18",
+            group_by="quarter",
+            details="transfers,deductions,review",
+            session=None,
+        )
+
+    loader.assert_not_called()
+    assert len(response["preview"]["transfer_details"]) == 1
+    assert len(response["preview"]["deduction_details"]) == 1
+    assert len(response["preview"]["categories_needing_review"]) == 1
+
+
+def test_cashflows_preview_falls_back_for_legacy_summary_cache_on_child_request():
+    configuration = {
+        "source_template_id": 9,
+        "cash_account_codes": [],
+        "bank_account_codes": ["B1"],
+        "match_internal_transfers": False,
+        "receipt_presentation": "net",
+    }
+    cached = {
+        "metadata": {
+            "source_upload_ids": [21],
+            "selected_template_upload_ids": [21],
+            "source_row_count": 4,
+            "valid_row_count": 4,
+            "summary_read_model": "hit",
+        },
+        "summary": _cashflow_summary(),
+    }
+    with (
+        patch.object(reconciliation, "_require_active_client"),
+        patch.object(reconciliation, "_cashflow_configuration", return_value=configuration),
+        patch.object(reconciliation, "load_cashflow_summary_read_model", return_value=cached),
+        patch.object(reconciliation, "load_cashflow_prepared_summary", return_value=None),
+        patch.object(reconciliation, "load_ledger_report_source", return_value=_source()) as loader,
+        patch.object(reconciliation, "build_cashflow_summary", return_value=_cashflow_summary()) as builder,
+    ):
+        reconciliation.preview_cashflows(
+            7,
+            "2026-02-10",
+            "2026-04-18",
+            group_by="quarter",
+            details="transfers,deductions,review",
+            session=None,
+        )
+
+    loader.assert_called_once()
+    builder.assert_called_once()
+
+
 def test_cashflow_summary_read_model_round_trip_preserves_period_totals():
     from services import ledger_report_source
 
     writes = []
+    summary = _cashflow_summary()
+    summary["transfer_details"] = pd.DataFrame([{
+        "voucher_id": "TR-1",
+        "date": pd.Timestamp("2026-02-12"),
+        "month": "2026-02",
+        "period_key": "2026-Q1",
+        "period_label": "Q1 2026",
+        "transfer_type": "Bank to Cash",
+        "amount": 20.0,
+        "matched": True,
+        "voucher_detail": "Transfer",
+    }])
+    summary["deduction_details"] = pd.DataFrame([{
+        "category": "Withholding",
+        "month": "2026-04",
+        "period_key": "2026-Q2",
+        "period_label": "Q2 2026",
+        "amount": 5.0,
+        "account_code": "TAX",
+        "account_name": "Tax",
+        "date": pd.Timestamp("2026-04-04"),
+        "presentation": "shown_separately",
+    }])
+    summary["categories_needing_review"] = pd.DataFrame([{
+        "voucher_id": "JV-1",
+        "date": pd.Timestamp("2026-04-04"),
+        "period_key": "2026-Q2",
+        "period_label": "Q2 2026",
+        "account_code": "4100",
+        "account_name": "Other",
+        "voucher_detail": "Review",
+        "debit": 5.0,
+        "credit": 0.0,
+        "fallback_category": "Review",
+    }])
     ledger_report_source.store_cashflow_summary_read_model(
         7,
         journal_template_id=9,
@@ -235,7 +371,7 @@ def test_cashflow_summary_read_model_round_trip_preserves_period_totals():
         period_start="2026-02-10",
         period_end="2026-04-18",
         group_by="quarter",
-        summary=_cashflow_summary(),
+        summary=summary,
         write_fn=lambda query, params: writes.append((query, params)),
     )
 
@@ -262,6 +398,10 @@ def test_cashflow_summary_read_model_round_trip_preserves_period_totals():
 
     assert cached["summary"]["category_totals"].loc["Customers", "2026-Q1"] == 125.0
     assert cached["metadata"]["summary_read_model"] == "hit"
+    assert cached["metadata"]["child_details_prepared"] is True
+    assert cached["summary"]["transfer_details"].loc[0, "amount"] == 20.0
+    assert cached["summary"]["deduction_details"].loc[0, "account_name"] == "Tax"
+    assert cached["summary"]["categories_needing_review"].loc[0, "account_code"] == "4100"
 
 def test_prepared_daily_snapshot_rolls_up_to_requested_months():
     from services.ledger_report_source import _cashflow_daily_rollup
@@ -273,6 +413,41 @@ def test_prepared_daily_snapshot_rolls_up_to_requested_months():
             {"key": "2026-02-01", "start": "2026-02-01", "end": "2026-02-01", "label": "01-Feb-26"},
         ],
         "categories": [{"category": "Customers", "values": {"2026-01-01": 10, "2026-01-02": 15, "2026-02-01": 20}}],
+        "child_details_prepared": True,
+        "transfer_details": [{
+            "voucher_id": "TR-1",
+            "date": "2026-01-02",
+            "month": "2026-01",
+            "period_key": "2026-01-02",
+            "period_label": "02-Jan-26",
+            "transfer_type": "Bank to Cash",
+            "amount": 20.0,
+            "matched": True,
+            "voucher_detail": "Transfer",
+        }],
+        "deduction_details": [{
+            "category": "Withholding",
+            "month": "2026-02",
+            "period_key": "2026-02-01",
+            "period_label": "01-Feb-26",
+            "amount": 5.0,
+            "account_code": "TAX",
+            "account_name": "Tax",
+            "date": "2026-02-01",
+            "presentation": "shown_separately",
+        }],
+        "categories_needing_review": [{
+            "voucher_id": "JV-1",
+            "date": "2026-02-01",
+            "period_key": "2026-02-01",
+            "period_label": "01-Feb-26",
+            "account_code": "4100",
+            "account_name": "Other",
+            "voucher_detail": "Review",
+            "debit": 5.0,
+            "credit": 0.0,
+            "fallback_category": "Review",
+        }],
         "period_metrics": {
             "2026-01-01": {"source_line_count": 2, "selected_voucher_count": 1, "internal_transfer_count": 0, "category_review_count": 0},
             "2026-01-02": {"source_line_count": 2, "selected_voucher_count": 1, "internal_transfer_count": 1, "category_review_count": 0},
@@ -288,6 +463,9 @@ def test_prepared_daily_snapshot_rolls_up_to_requested_months():
     assert summary["selected_voucher_count"] == 3
     assert summary["internal_transfer_count"] == 1
     assert summary["category_review_count"] == 1
+    assert summary["transfer_details"].loc[0, "period_key"] == "2026-01"
+    assert summary["deduction_details"].loc[0, "period_key"] == "2026-02"
+    assert summary["categories_needing_review"].loc[0, "period_key"] == "2026-02"
 
 
 def test_cashflows_preview_uses_prepared_snapshot_when_exact_cache_misses():
@@ -431,6 +609,60 @@ def test_cashflows_preview_logs_performance_stages(caplog):
     assert response["preview"]["group_by"] == "quarter"
 
 
+def test_cashflows_preview_accepts_combined_child_sections(caplog):
+    configuration = {
+        "source_template_id": 9,
+        "cash_account_codes": [],
+        "bank_account_codes": ["B1"],
+        "match_internal_transfers": False,
+        "receipt_presentation": "net",
+    }
+    summary = _cashflow_summary()
+    summary["transfer_details"] = pd.DataFrame([{
+        "voucher_id": "TR-1",
+        "period_label": "Q1 2026",
+        "transfer_type": "Bank to Cash",
+        "amount": 20.0,
+        "matched": True,
+    }])
+    summary["deduction_details"] = pd.DataFrame([{
+        "period_label": "Q2 2026",
+        "category": "Withholding",
+        "account_name": "Tax",
+        "amount": 5.0,
+    }])
+    summary["categories_needing_review"] = pd.DataFrame([{
+        "voucher_id": "JV-1",
+        "period_label": "Q2 2026",
+        "account_code": "4100",
+        "account_name": "Other",
+        "fallback_category": "Review",
+    }])
+    with (
+        caplog.at_level(logging.INFO, logger="routers.reconciliation"),
+        patch.object(reconciliation, "_require_active_client"),
+        patch.object(reconciliation, "_cashflow_configuration", return_value=configuration),
+        patch.object(reconciliation, "load_ledger_report_source", return_value=_source()),
+        patch.object(reconciliation, "build_cashflow_summary", return_value=summary) as builder,
+    ):
+        response = reconciliation.preview_cashflows(
+            7,
+            "2026-02-10",
+            "2026-04-18",
+            group_by="quarter",
+            details="transfers,deductions,review",
+            session=None,
+        )
+
+    builder.assert_called_once()
+    assert response["preview"]["detail_sections_loaded"] == ["deductions", "review", "transfers"]
+    assert len(response["preview"]["transfer_details"]) == 1
+    assert len(response["preview"]["deduction_details"]) == 1
+    assert len(response["preview"]["categories_needing_review"]) == 1
+    performance_records = [record for record in caplog.records if record.getMessage().startswith("cashflows_performance ")]
+    assert "details=deductions,review,transfers" in performance_records[0].getMessage()
+
+
 def test_download_report_returns_professional_xlsx_when_controls_pass():
     result = {
         "can_download": True,
@@ -509,6 +741,8 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert 'id="reportsCard"' in dashboard
     assert "reconciliation.html?view=reports" in navigation
     assert 'onclick=' not in html
+    assert "details: 'transfers,deductions,review'" in javascript
+    assert "cashflowChildRequest" in javascript
 
 
 def test_financial_statement_summary_aggregates_central_categories_and_flags_unmapped():

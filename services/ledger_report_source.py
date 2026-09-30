@@ -785,9 +785,78 @@ def _cashflow_upload_ids_key(upload_ids: Sequence[int]) -> str:
     return ",".join(str(int(upload_id)) for upload_id in sorted(set(upload_ids)))
 
 
+def _cashflow_json_scalar(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, pd.Timestamp):
+        return value.date().isoformat()
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    try:
+        if bool(pd.isna(value)):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if hasattr(value, "item"):
+        try:
+            return _cashflow_json_scalar(value.item())
+        except (TypeError, ValueError):
+            pass
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def _cashflow_detail_records(frame: Any) -> list[dict[str, Any]]:
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return []
+    return [
+        {str(column): _cashflow_json_scalar(value) for column, value in record.items()}
+        for record in frame.to_dict("records")
+    ]
+
+
+def _cashflow_detail_frame(payload: Mapping[str, Any], key: str) -> pd.DataFrame:
+    records = payload.get(key) or []
+    if not isinstance(records, list):
+        return pd.DataFrame()
+    valid_records = [record for record in records if isinstance(record, Mapping)]
+    return pd.DataFrame(valid_records)
+
+
+def _cashflow_rollup_detail_frame(
+    payload: Mapping[str, Any],
+    key: str,
+    periods: Sequence[Mapping[str, Any]],
+) -> pd.DataFrame:
+    frame = _cashflow_detail_frame(payload, key)
+    if frame.empty or "date" not in frame.columns:
+        return frame
+    dates = pd.to_datetime(frame["date"], errors="coerce").dt.normalize()
+    period_frames: list[pd.DataFrame] = []
+    for period in periods:
+        start = pd.Timestamp(period["start"]).normalize()
+        end = pd.Timestamp(period["end"]).normalize()
+        selected = frame.loc[dates.between(start, end, inclusive="both")].copy()
+        if selected.empty:
+            continue
+        selected["period_key"] = period["key"]
+        selected["period_label"] = period["label"]
+        period_frames.append(selected)
+    if not period_frames:
+        return frame.iloc[0:0].copy()
+    return pd.concat(period_frames, ignore_index=True)
+
+
 def _cashflow_summary_payload(summary: Mapping[str, Any]) -> dict[str, Any]:
     periods = [dict(period) for period in summary.get("periods", [])]
     period_keys = [str(period["key"]) for period in periods]
+    child_details_prepared = all(
+        key in summary
+        for key in ("transfer_details", "deduction_details", "categories_needing_review")
+    )
     category_totals = summary.get("category_totals")
     categories: list[dict[str, Any]] = []
     if isinstance(category_totals, pd.DataFrame):
@@ -807,6 +876,10 @@ def _cashflow_summary_payload(summary: Mapping[str, Any]) -> dict[str, Any]:
         "selected_voucher_count": int(summary.get("selected_voucher_count", 0) or 0),
         "internal_transfer_count": int(summary.get("internal_transfer_count", 0) or 0),
         "category_review_count": int(summary.get("category_review_count", 0) or 0),
+        "child_details_prepared": child_details_prepared,
+        "transfer_details": _cashflow_detail_records(summary.get("transfer_details")),
+        "deduction_details": _cashflow_detail_records(summary.get("deduction_details")),
+        "categories_needing_review": _cashflow_detail_records(summary.get("categories_needing_review")),
         "period_metrics": summary.get("period_metrics") or {},
         "receipt_presentation": summary.get("receipt_presentation") or "net",
     }
@@ -834,9 +907,9 @@ def _cashflow_summary_from_payload(payload: Mapping[str, Any], group_by: str) ->
         "periods": periods,
         "group_by": group_by,
         "category_totals": category_totals,
-        "transfer_details": pd.DataFrame(),
-        "deduction_details": pd.DataFrame(),
-        "categories_needing_review": pd.DataFrame(),
+        "transfer_details": _cashflow_detail_frame(payload, "transfer_details") if payload.get("child_details_prepared") else pd.DataFrame(),
+        "deduction_details": _cashflow_detail_frame(payload, "deduction_details") if payload.get("child_details_prepared") else pd.DataFrame(),
+        "categories_needing_review": _cashflow_detail_frame(payload, "categories_needing_review") if payload.get("child_details_prepared") else pd.DataFrame(),
         "selected_vouchers": [],
         "selected_voucher_count": int(payload.get("selected_voucher_count", 0) or 0),
         "internal_transfer_count": int(payload.get("internal_transfer_count", 0) or 0),
@@ -844,6 +917,7 @@ def _cashflow_summary_from_payload(payload: Mapping[str, Any], group_by: str) ->
         "source_line_count": int(payload.get("source_line_count", 0) or 0),
         "period_metrics": payload.get("period_metrics") or {},
         "receipt_presentation": payload.get("receipt_presentation") or "net",
+        "child_details_prepared": bool(payload.get("child_details_prepared")),
     }
 
 
@@ -979,6 +1053,13 @@ def _cashflow_daily_rollup(
         metric: sum(values[metric] for values in period_metrics.values())
         for metric in ("source_line_count", "selected_voucher_count", "internal_transfer_count", "category_review_count")
     }
+    child_details_prepared = bool(payload.get("child_details_prepared"))
+    transfer_details = _cashflow_rollup_detail_frame(payload, "transfer_details", periods) if child_details_prepared else pd.DataFrame()
+    deduction_details = _cashflow_rollup_detail_frame(payload, "deduction_details", periods) if child_details_prepared else pd.DataFrame()
+    review = _cashflow_rollup_detail_frame(payload, "categories_needing_review", periods) if child_details_prepared else pd.DataFrame()
+    if child_details_prepared:
+        totals["internal_transfer_count"] = len(transfer_details)
+        totals["category_review_count"] = len(review)
     months = [
         str(period)
         for period in pd.period_range(pd.Timestamp(period_start).to_period("M"), pd.Timestamp(period_end).to_period("M"), freq="M")
@@ -988,9 +1069,9 @@ def _cashflow_daily_rollup(
         "periods": periods,
         "group_by": grouping,
         "category_totals": category_totals,
-        "transfer_details": pd.DataFrame(),
-        "deduction_details": pd.DataFrame(),
-        "categories_needing_review": pd.DataFrame(),
+        "transfer_details": transfer_details,
+        "deduction_details": deduction_details,
+        "categories_needing_review": review,
         "selected_vouchers": [],
         "source_line_count": totals["source_line_count"],
         "selected_voucher_count": totals["selected_voucher_count"],
@@ -998,6 +1079,7 @@ def _cashflow_daily_rollup(
         "category_review_count": totals["category_review_count"],
         "period_metrics": period_metrics,
         "receipt_presentation": payload.get("receipt_presentation") or "net",
+        "child_details_prepared": child_details_prepared,
     }
 
 
@@ -1062,6 +1144,7 @@ def load_cashflow_prepared_summary(
         "sql_aggregated": True,
         "raw_json_parsing": False,
         "summary_read_model": "prepared_snapshot",
+        "child_details_prepared": bool(summary.get("child_details_prepared")),
         "classification_configuration_version": rows[0].get("configuration_version"),
         "summary_read_model_created_at": rows[0].get("created_at"),
     }
@@ -1196,6 +1279,7 @@ def load_cashflow_summary_read_model(
         "sql_aggregated": True,
         "raw_json_parsing": False,
         "summary_read_model": "hit",
+        "child_details_prepared": bool(payload.get("child_details_prepared")),
         "classification_configuration_version": rows[0].get("configuration_version"),
         "summary_read_model_created_at": rows[0].get("created_at"),
     }

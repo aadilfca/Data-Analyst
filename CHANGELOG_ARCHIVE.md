@@ -1,4 +1,14 @@
 # Changelog Archive
+## Cashflows child-load performance and prepared detail read model - Phase 1 - 2026-09-30
+
+**Scope:** Complete the approved child-load performance phase while preserving the existing Cashflows summary calculations and speed-sensitive source path.
+
+**Implementation:** Combined the three child-preview requests into one cached request, then extended the existing prepared summary/read model with transfer, deduction, and review detail records. Daily prepared details roll into the requested grouping periods. A child_details_prepared marker prevents incomplete legacy summary caches from serving child requests; those requests safely fall back to the canonical calculation and populate a complete exact cache for later reads.
+
+**Verification:** Focused Cashflows/reconciliation coverage passed 26 tests; Python compilation, JavaScript syntax validation, and git diff --check passed. No schema, dependency, or source-data changes were made. The full-suite failures remain outside this phase and are documented in the session handoff.
+
+**Next phase:** Inter-account transfers with transferor and transferee account names for Bank-to-Bank, Bank-to-Cash, Cash-to-Bank, and Cash-account transfers.
+
 ## Cashflows report presentation and filtering - Phase A - 2026-09-30
 
 **Scope:** Finalize the report-only formatting and filtering layer without changing Cashflows data-fetching or performance-sensitive backend paths.
@@ -9,10 +19,9 @@
 
 **Pending phases from the approved Cashflows plan:**
 
-1. **Child-load performance phase:** optimize `Load internal transfers`, `Load customer deductions`, and `Load review required` using the established fast-fetch/read-model approach; benchmark before/after and reconcile totals.
-2. **Inter-account transfers phase:** report Bank-to-Bank, Bank-to-Cash, Cash-to-Bank, and Cash-account transfers with transferor and transferee account names on each relevant row.
-3. **Customer payments phase:** report payments to customers with their bank-account details.
-4. **Vendor payments phase:** report payments to vendors through Bank/Cash accounts.
+1. **Inter-account transfers phase:** report Bank-to-Bank, Bank-to-Cash, Cash-to-Bank, and Cash-account transfers with transferor and transferee account names on each relevant row.
+2. **Customer payments phase:** report payments to customers with their bank-account details.
+3. **Vendor payments phase:** report payments to vendors through Bank/Cash accounts.
 
 ## Cashflows XLSX export parity - Phase 2 - 2026-09-30
 
