@@ -6851,3 +6851,13 @@ The 2-3 second target is not a guaranteed requirement for the current free remot
 ### Fresh-chat starting point
 
 Begin the next feature chat with: "Cashflows performance balancing is complete and frozen under current infrastructure. Do not optimize speed unless new evidence or a commercial deployment is available. Continue with the product backlog in this note, starting with default reporting-period settings."
+
+## Cashflows report presentation and display formatting - 2026-09-30
+
+**Scope:** Complete the accepted Cashflows formatting/filtering phase while keeping SQL-first retrieval, prepared summaries, caching, and lazy detail loading unchanged.
+
+**Implementation:** Summary now separates Receipts and Payments, supports category filtering with an inline clear control, keeps wide tables horizontally scrollable, aligns report actions to the right, and adds a client-side Hide zero rows toggle for classified transactions. XLSX output mirrors the section layout.
+
+**Formatting:** Period columns and `Total` use international comma grouping without `Rs`; only `Local total` uses thousand/lakh/crore labels. Numeric export cells remain numeric with international formatting.
+
+**Verification:** Aadil confirmed the local behavior. Focused UI/reconciliation coverage passed 20 tests; JavaScript syntax, Python compilation, and `git diff --check` passed. No packages, source data, router changes, or performance-path changes were introduced.

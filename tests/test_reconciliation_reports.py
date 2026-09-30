@@ -465,6 +465,7 @@ def test_cashflow_export_preserves_visible_periods_and_totals():
         "group_by": "quarter",
         "category_totals": [
             {"category": "Customers", "2026-Q1": 125.0, "2026-Q2": 50.0, "Total": 175.0},
+            {"category": "Vendors", "2026-Q1": -80.0, "2026-Q2": -20.0, "Total": -100.0},
         ],
         "transfer_details": [{"voucher_id": "TR-1", "period_label": "Q1 2026", "transfer_type": "Bank to Cash", "amount": 20.0, "matched": True}],
         "deduction_details": [{"period_label": "Q2 2026", "category": "Withholding", "account_name": "Tax", "amount": 5.0}],
@@ -482,9 +483,12 @@ def test_cashflow_export_preserves_visible_periods_and_totals():
     )
 
     summary = workbook["Cashflows Summary"]
-    assert [summary.cell(4, column).value for column in range(1, 5)] == ["Category", "Q1 2026", "Q2 2026", "Total"]
-    assert [summary.cell(5, column).value for column in range(1, 5)] == ["Customers", 125, 50, 175]
-    assert [summary.cell(6, column).value for column in range(1, 5)] == ["Total", 125, 50, 175]
+    assert summary.cell(4, 1).value == "Receipts — percentages calculated within this section"
+    assert [summary.cell(5, column).value for column in range(1, 7)] == ["Category", "Q1 2026", "Q2 2026", "Total", "% of section", "Local total"]
+    assert [summary.cell(6, column).value for column in range(1, 7)] == ["Customers", 125, 50, 175, "100.00%", "175.00 Rs"]
+    assert [summary.cell(7, column).value for column in range(1, 5)] == ["Total Receipts", 125, 50, 175]
+    assert summary.cell(10, 1).value == "Payments — percentages calculated within this section"
+    assert [summary.cell(12, column).value for column in range(1, 5)] == ["Vendors", 80, 20, 100]
     assert set(workbook.sheetnames) == {"Cashflows Summary", "Internal Transfers", "Customer Deductions", "Review Required", "Export Controls"}
 
 

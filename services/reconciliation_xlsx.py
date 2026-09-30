@@ -205,6 +205,39 @@ def export_cashflow_xlsx(
     return output.getvalue()
 
 
+def _cashflow_section_records(
+    preview: Mapping[str, Any],
+    period_keys: list[str],
+    section: str,
+) -> list[tuple[str, list[float], float]]:
+    records: list[tuple[str, list[float], float]] = []
+    for record in preview.get("category_totals") or []:
+        values = [_number(record.get(key)) or 0.0 for key in period_keys]
+        signed_total = _number(record.get("Total"))
+        if signed_total is None:
+            signed_total = sum(values)
+        if section == "Receipts" and signed_total < 0:
+            continue
+        if section == "Payments" and signed_total >= 0:
+            continue
+        records.append((str(record.get("category") or "Unlabelled"), [abs(value) for value in values], abs(signed_total)))
+    return records
+
+
+def _local_amount_label(value: float | None) -> str:
+    amount = _number(value) or 0.0
+    absolute = abs(amount)
+    if absolute >= 10000000:
+        label = f"{absolute / 10000000:.2f} crore"
+    elif absolute >= 100000:
+        label = f"{absolute / 100000:.2f} lakh"
+    elif absolute >= 1000:
+        label = f"{absolute / 1000:.2f} thousand"
+    else:
+        label = f"{absolute:.2f} Rs"
+    return f"({label})" if amount < 0 else label
+
+
 def _write_cashflow_summary_sheet(
     ws,
     preview: Mapping[str, Any],
@@ -218,25 +251,39 @@ def _write_cashflow_summary_sheet(
     _write_title(
         ws,
         f"Cashflows Summary ({period_labels[0]} to {period_labels[-1]})",
-        f"Visible Cashflows report for {period_start or 'selected start'} to {period_end or 'selected end'}; grouping: {group_by or preview.get('group_by') or 'month'}.",
-        len(period_keys) + 2,
+        f"Visible Cashflows report for {period_start or 'selected start'} to {period_end or 'selected end'}; grouping: {group_by or preview.get('group_by') or 'month'}. Receipts and payments use separate percentage bases.",
+        len(period_keys) + 5,
     )
     row = 4
-    _write_table(ws, row, ["Category", *period_labels, "Total"], header=True)
-    records = preview.get("category_totals") or []
-    for record in records:
+    headers = ["Category", *period_labels, "Total", "% of section", "Local total"]
+    for section in ("Receipts", "Payments"):
+        records = _cashflow_section_records(preview, period_keys, section)
+        ws.cell(row, 1, f"{section} — percentages calculated within this section")
+        _style_section_band(ws, row, len(headers))
         row += 1
-        values = [_number(record.get(key)) or 0.0 for key in period_keys]
-        total = _number(record.get("Total"))
-        _write_table(ws, row, [record.get("category") or "Unlabelled", *values, total if total is not None else sum(values)])
-    if not records:
+        _write_table(ws, row, headers, header=True)
         row += 1
-        _write_table(ws, row, ["No Cash Flow activity was found."])
-    else:
-        row += 1
-        totals = [sum(_number(record.get(key)) or 0.0 for record in records) for key in period_keys]
-        _write_table(ws, row, ["Total", *totals, sum(totals)], total=True)
-    ws.freeze_panes = "B5"
+        if not records:
+            _write_table(ws, row, [f"No {section.casefold()} identified"])
+            row += 2
+            continue
+        basis = sum(total for _, _, total in records)
+        for category, values, total in records:
+            _write_table(
+                ws,
+                row,
+                [category, *values, total, f"{(total / basis * 100) if basis else 0:.2f}%", _local_amount_label(total)],
+            )
+            row += 1
+        period_totals = [sum(values[index] for _, values, _ in records) for index in range(len(period_keys))]
+        _write_table(
+            ws,
+            row,
+            [f"Total {section}", *period_totals, basis, "100.00%", _local_amount_label(basis)],
+            total=True,
+        )
+        row += 3
+    ws.freeze_panes = "B6"
 
 
 def _write_cashflow_detail_sheet(ws, title: str, records: list[Mapping[str, Any]], columns: list[tuple[str, str, bool]]) -> None:

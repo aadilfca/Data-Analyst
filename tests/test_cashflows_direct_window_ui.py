@@ -100,5 +100,15 @@ def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
     assert "defaultPeriods();" in reconciliation_script
     assert "groupBy: 'month'" in reconciliation_script
     assert "cashflowsExportButton" in reconciliation_html
+    assert "cashflows-report-actions" in reconciliation_html
+    assert "cashflowsHideZeroRowsButton" in reconciliation_html
+    assert "cashflowsSummaryFilter" in reconciliation_html
+    assert "cashflowsSummaryClear" in reconciliation_html
+    assert "cashflowsSummaryBasis" not in reconciliation_html
+    assert "cashflows-transactions-note" not in reconciliation_html
+    assert "renderCashflowSummary" in reconciliation_script
+    assert "formatInternationalAmount" in reconciliation_script
+    assert "formatLocalAmount" in reconciliation_script
+    assert "formatPercentage" in reconciliation_script
     assert "/api/reconciliation/cashflows/export?" in reconciliation_script
     assert "downloadCashflowReport" in reconciliation_script

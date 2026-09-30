@@ -16,6 +16,9 @@
     let cashflowPickerView = null;
     let cashflowToastTimer = null;
     let cashflowProcessingControls = [];
+    let cashflowSummaryFilter = '';
+    let hideClassifiedZeroRows = false;
+    let lastClassifiedTransactionsResult = null;
 
     function localDate(year, month, day) { return new Date(year, month, day, 12, 0, 0, 0); }
     function toIso(date) {
@@ -206,9 +209,24 @@
             return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character];
         });
     }
-    function formatAmount(value) {
+    function formatInternationalAmount(value) {
         const amount = Number(value || 0);
         return amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function formatLocalAmount(value) {
+        const amount = Number(value || 0);
+        const absolute = Math.abs(amount);
+        let divisor = 1;
+        let unit = 'Rs';
+        if (absolute >= 10000000) { divisor = 10000000; unit = 'crore'; }
+        else if (absolute >= 100000) { divisor = 100000; unit = 'lakh'; }
+        else if (absolute >= 1000) { divisor = 1000; unit = 'thousand'; }
+        const label = (absolute / divisor).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ' + unit;
+        return amount < 0 ? '(' + label + ')' : label;
+    }
+    function formatPercentage(value) {
+        return (Number(value || 0) * 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '%';
     }
     async function api(url, options) {
         const response = await fetch(url, options);
@@ -267,7 +285,7 @@
         table.innerHTML = '<thead><tr>' + columns.map(function (column) { return '<th>' + escapeHtml(column.label) + '</th>'; }).join('') + '</tr></thead><tbody>' + rows.map(function (row) {
             return '<tr>' + columns.map(function (column) {
                 const value = row[column.key];
-                return '<td>' + escapeHtml(column.amount ? formatAmount(value) : (value == null ? '' : value)) + '</td>';
+                return '<td>' + escapeHtml(column.amount ? formatInternationalAmount(value) : (value == null ? '' : value)) + '</td>';
             }).join('') + '</tr>';
         }).join('') + '</tbody>';
     }
@@ -319,17 +337,58 @@
             element('cashflowsReviewSection').hidden = false;
         }
     }
+    function renderCashflowSummary(preview) {
+        const table = element('cashflowsSummaryTable');
+        const periods = preview.periods || (preview.months || []).map(function (month) { return { key: month, label: month }; });
+        const periodKeys = periods.map(function (period) { return period.key; });
+        const rawRows = preview.category_totals || [];
+        const filter = cashflowSummaryFilter.trim().toLowerCase();
+        const filteredRows = rawRows.filter(function (row) {
+            return !filter || String(row.category || '').toLowerCase().indexOf(filter) >= 0;
+        });
+        const sectionRows = { Receipts: [], Payments: [] };
+        filteredRows.forEach(function (row) {
+            const total = Number.isFinite(Number(row.Total))
+                ? Number(row.Total)
+                : periodKeys.reduce(function (sum, key) { return sum + (Number(row[key]) || 0); }, 0);
+            sectionRows[total < 0 ? 'Payments' : 'Receipts'].push({
+                category: row.category || 'Unlabelled',
+                values: periodKeys.map(function (key) { return Math.abs(Number(row[key]) || 0); }),
+                total: Math.abs(total)
+            });
+        });
+        const columns = ['Category'].concat(periods.map(function (period) { return period.label; })).concat(['Total', '% of section', 'Local total']);
+        if (!filteredRows.length) {
+            table.innerHTML = '<tbody><tr><td class="cashflows-empty" colspan="' + Math.max(columns.length, 1) + '">No Cash Flow activity was found for this period.</td></tr></tbody>';
+            return;
+        }
+        let html = '<thead><tr>' + columns.map(function (label) { return '<th>' + escapeHtml(label) + '</th>'; }).join('') + '</tr></thead><tbody>';
+        ['Receipts', 'Payments'].forEach(function (section) {
+            const rows = sectionRows[section];
+            if (!rows.length) return;
+            const basis = rows.reduce(function (sum, row) { return sum + row.total; }, 0);
+            html += '<tr><th colspan="' + columns.length + '">' + escapeHtml(section) + '</th></tr>';
+            rows.forEach(function (row) {
+                const cells = [escapeHtml(row.category)];
+                row.values.forEach(function (value) { cells.push(escapeHtml(formatInternationalAmount(value))); });
+                cells.push(escapeHtml(formatInternationalAmount(row.total)));
+                cells.push(escapeHtml(formatPercentage(basis ? row.total / basis : 0)));
+                cells.push(escapeHtml(formatLocalAmount(row.total)));
+                html += '<tr>' + cells.map(function (cell) { return '<td>' + cell + '</td>'; }).join('') + '</tr>';
+            });
+            const periodTotals = periodKeys.map(function (_, index) { return rows.reduce(function (sum, row) { return sum + row.values[index]; }, 0); });
+            html += '<tr><th>' + escapeHtml('Total ' + section) + '</th>';
+            periodTotals.forEach(function (value) { html += '<td>' + escapeHtml(formatInternationalAmount(value)) + '</td>'; });
+            html += '<td>' + escapeHtml(formatInternationalAmount(basis)) + '</td><td>100.00%</td><td>' + escapeHtml(formatLocalAmount(basis)) + '</td></tr>';
+        });
+        table.innerHTML = html + '</tbody>';
+
+    }
     function renderResult(result) {
         lastCashflowsResult = result;
         const preview = result.preview || {};
-        const summaryRows = preview.category_totals || [];
-        const periods = preview.periods || (preview.months || []).map(function (month) { return { key: month, label: month }; });
-        const columns = [{ key: 'category', label: 'Category' }]
-            .concat(periods.map(function (period) { return { key: period.key, label: period.label, amount: true }; }))
-            .concat([{ key: 'Total', label: 'Total', amount: true }]);
-        const tableRows = summaryRows;
-        renderTable(element('cashflowsSummaryTable'), columns, tableRows, 'No Cash Flow activity was found for this period.');
-        renderCategoryOptions(summaryRows, true);
+        renderCashflowSummary(preview);
+        renderCategoryOptions((preview.category_totals || []).map(function (row) { return row.category; }), true);
         element('cashflowsReceiptMode').textContent = 'Receipt presentation: ' + String(preview.receipt_presentation || 'net').toUpperCase();
         const source = result.source || {};
         const exportButton = element('cashflowsExportButton');
@@ -343,9 +402,11 @@
         element('cashflowsLoadReviewButton').textContent = 'Load review required (' + String(preview.category_review_count || 0) + ')';
 
         const viewTransactionsButton = element('cashflowsViewTransactionsButton');
+        const hideZeroRowsButton = element('cashflowsHideZeroRowsButton');
         const transactionsSection = element('cashflowsTransactionsSection');
         const hasSourceTemplate = !!((result.configuration || {}).source_template_id);
         if (viewTransactionsButton) viewTransactionsButton.hidden = !hasSourceTemplate;
+        if (hideZeroRowsButton) hideZeroRowsButton.hidden = !hasSourceTemplate || transactionsSection.hidden;
         if (!hasSourceTemplate) {
             transactionsSection.hidden = true;
             viewTransactionsButton.textContent = 'View classified transactions';
@@ -406,6 +467,10 @@
         if (event) event.preventDefault();
         const exportButton = element('cashflowsExportButton');
         if (exportButton) exportButton.hidden = true;
+        cashflowSummaryFilter = '';
+        element('cashflowsSummaryFilter').value = '';
+        hideClassifiedZeroRows = false;
+        element('cashflowsHideZeroRowsButton').hidden = true;
         showCashflowProcessing();
         const start = element('cashflowsPeriodStart').value;
         const end = element('cashflowsPeriodEnd').value;
@@ -444,24 +509,49 @@
         return { rawColumns: rawColumns, columns: columns, assignedCategoryIndex: assignedCategoryIndex };
     }
 
+    function classifiedRowHasNonZeroAmount(row, rawColumns) {
+        const raw = row.row_data || {};
+        const amountColumns = rawColumns.filter(function (column) {
+            return /amount|debit|credit|balance|total|value|net|tax/i.test(String(column)) || /^(dr|cr)$/i.test(String(column).trim());
+        });
+        if (!amountColumns.length) return true;
+        return amountColumns.some(function (column) {
+            const value = Number(raw[column]);
+            return Number.isFinite(value) && Math.abs(value) > 0;
+        });
+    }
+
     function renderClassifiedTransactions(result) {
+        if (result) lastClassifiedTransactionsResult = result;
+        result = result || lastClassifiedTransactionsResult || {};
         const table = element('cashflowsTransactionsTable');
         const rows = result.rows || [];
         const layout = classifiedTransactionLayout(result);
         renderCategoryOptions(rows.map(function (row) { return row.classification && row.classification.assigned_category; }));
         const rawColumns = layout.rawColumns;
         const columns = layout.columns;
+        const visibleRows = hideClassifiedZeroRows
+            ? rows.map(function (row, index) { return { row: row, index: index }; }).filter(function (item) { return classifiedRowHasNonZeroAmount(item.row, rawColumns); })
+            : rows.map(function (row, index) { return { row: row, index: index }; });
+        const zeroRowsButton = element('cashflowsHideZeroRowsButton');
+        if (zeroRowsButton) {
+            zeroRowsButton.hidden = !rows.length;
+            zeroRowsButton.textContent = hideClassifiedZeroRows ? 'Show zero rows' : 'Hide zero rows';
+        }
         const totalPages = Math.max(1, Math.ceil(classifiedTransactionsTotal / classifiedTransactionsLimit));
         element('cashflowsTransactionsCount').textContent = String(classifiedTransactionsTotal) + ' line(s)';
         element('cashflowsTransactionsPageInfo').textContent = 'Page ' + String(classifiedTransactionsPage) + ' of ' + String(totalPages);
         element('cashflowsTransactionsPrevious').disabled = classifiedTransactionsPage <= 1;
         element('cashflowsTransactionsNext').disabled = classifiedTransactionsPage >= totalPages;
-        if (!rows.length) {
-            table.innerHTML = '<tbody><tr><td class="cashflows-empty" colspan="' + Math.max(columns.length + 1, 1) + '">No classified transactions found for the selected criteria.</td></tr></tbody>';
+        if (!visibleRows.length) {
+            const emptyMessage = rows.length ? 'No non-zero transaction rows on this page.' : 'No classified transactions found for the selected criteria.';
+            table.innerHTML = '<tbody><tr><td class="cashflows-empty" colspan="' + Math.max(columns.length + 1, 1) + '">' + emptyMessage + '</td></tr></tbody>';
             return;
         }
         const headerCells = ['S.No'].concat(columns).map(function (label) { return '<th>' + escapeHtml(label) + '</th>'; }).join('');
-        const bodyRows = rows.map(function (row, index) {
+        const bodyRows = visibleRows.map(function (item) {
+            const row = item.row;
+            const index = item.index;
             const raw = row.row_data || {};
             const classification = row.classification || {};
             const account = [classification.account_code, classification.account_name].filter(Boolean).join(' — ') || '—';
@@ -491,7 +581,10 @@
         const start = element('cashflowsPeriodStart').value;
         const end = element('cashflowsPeriodEnd').value;
         if (!templateId || !clientId || !start || !end) return;
-        if (resetPage) classifiedTransactionsPage = 1;
+        if (resetPage) {
+            classifiedTransactionsPage = 1;
+            hideClassifiedZeroRows = false;
+        }
         if (classifiedTransactionsRequest) classifiedTransactionsRequest.abort();
         classifiedTransactionsRequest = new AbortController();
         const table = element('cashflowsTransactionsTable');
@@ -525,16 +618,24 @@
             showCashflowToast(error.message, true);
         }
     }
+    function toggleClassifiedZeroRows() {
+        hideClassifiedZeroRows = !hideClassifiedZeroRows;
+        renderClassifiedTransactions();
+    }
+
     async function toggleClassifiedTransactions() {
         const section = element('cashflowsTransactionsSection');
         const button = element('cashflowsViewTransactionsButton');
+        const zeroRowsButton = element('cashflowsHideZeroRowsButton');
         if (section.hidden) {
             section.hidden = false;
             button.textContent = 'Hide classified transactions';
+            if (zeroRowsButton) zeroRowsButton.hidden = false;
             await loadClassifiedTransactions(true);
         } else {
             section.hidden = true;
             button.textContent = 'View classified transactions';
+            if (zeroRowsButton) zeroRowsButton.hidden = true;
         }
     }
     async function loadCashflowChild(section) {
@@ -650,7 +751,17 @@
         });
 
         element('cashflowsReportForm').addEventListener('submit', generateCashflows);
+        element('cashflowsSummaryFilter').addEventListener('input', function (event) {
+            cashflowSummaryFilter = event.target.value || '';
+            if (lastCashflowsResult) renderCashflowSummary(lastCashflowsResult.preview || {});
+        });
+        element('cashflowsSummaryClear').addEventListener('click', function () {
+            cashflowSummaryFilter = '';
+            element('cashflowsSummaryFilter').value = '';
+            if (lastCashflowsResult) renderCashflowSummary(lastCashflowsResult.preview || {});
+        });
         element('cashflowsViewTransactionsButton').addEventListener('click', toggleClassifiedTransactions);
+        element('cashflowsHideZeroRowsButton').addEventListener('click', toggleClassifiedZeroRows);
         element('cashflowsLoadTransfersButton').addEventListener('click', function () { loadCashflowChild('transfers'); });
         element('cashflowsLoadDeductionsButton').addEventListener('click', function () { loadCashflowChild('deductions'); });
         element('cashflowsLoadReviewButton').addEventListener('click', function () { loadCashflowChild('review'); });
