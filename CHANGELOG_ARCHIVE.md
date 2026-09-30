@@ -1,4 +1,17 @@
 # Changelog Archive
+## Cashflows transfer reconciliation and UI - 2026-09-30
+
+**Scope:** Complete transfer-source reconciliation and make its accounting acceptance visible in the Internal transfers window.
+
+**Implementation:** Added in-memory reconciliation totals for candidate, confirmed, mixed, and ambiguous vouchers, transferor/transferee totals, variance, and Matched/Review required status. Prepared child payloads use version 3 with legacy fallback. The Internal transfers window now displays a responsive reconciliation strip above the existing detail table; the main Cashflows summary, source retrieval, and speed-sensitive path are unchanged.
+
+**Verification:** Aadil confirmed the local browser result. Focused Cashflows/reconciliation and performance coverage passed 25 tests; Python compilation and git diff --check passed. No schema, dependency, or source-data changes were made.
+
+**Pending Cashflows tasks:**
+
+1. **Customer payments phase:** report payments to customers with bank-account details.
+2. **Vendor payments phase:** report payments to vendors through Bank/Cash accounts.
+
 ## Cashflows Internal Transfers XLSX parity - 2026-09-30
 
 **Scope:** Align the downloaded Internal Transfers worksheet with the confirmed Cashflows report window.
@@ -7,7 +20,7 @@
 
 **Verification:** Aadil confirmed the downloaded workbook. Focused Cashflows/reconciliation coverage passed 27 tests; Python compilation and git diff --check passed. No summary, database, dependency, or source-data changes were made.
 
-**Next phase:** Reconcile pure, mixed, and ambiguous transfer totals against source vouchers and finalize accounting acceptance.
+**Next phase:** Add customer-payment reporting with bank-account details.
 
 ## Cashflows inter-account transfers - Mini-phases 1-2 - 2026-09-30
 
@@ -19,9 +32,8 @@
 
 **Pending Cashflows tasks:**
 
-1. **Transfer source reconciliation:** verify pure, mixed, and ambiguous transfer totals against source vouchers and finalize accounting acceptance.
-2. **Customer payments phase:** report payments to customers with bank-account details.
-3. **Vendor payments phase:** report payments to vendors through Bank/Cash accounts.
+1. **Customer payments phase:** report payments to customers with bank-account details.
+2. **Vendor payments phase:** report payments to vendors through Bank/Cash accounts.
 
 ## Cashflows child-load performance and prepared detail read model - Phase 1 - 2026-09-30
 

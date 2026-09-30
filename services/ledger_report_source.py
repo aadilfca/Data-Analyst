@@ -30,7 +30,7 @@ JOURNAL_COLUMNS = (
 )
 CASHFLOW_PREPARED_PERIOD_COLUMNS = ("transaction_month", "transaction_fortnight")
 COA_COLUMNS = ("account_code", "account_title", "account_type", "category")
-CASHFLOW_CHILD_DETAILS_VERSION = 2
+CASHFLOW_CHILD_DETAILS_VERSION = 3
 
 _JOURNAL_ALIASES: Mapping[str, tuple[str, ...]] = {
     "voucher_id": (
@@ -852,6 +852,8 @@ def _cashflow_rollup_detail_frame(
 
 
 def _cashflow_summary_payload(summary: Mapping[str, Any]) -> dict[str, Any]:
+    from services.ledger_group_summary import build_cashflow_transfer_reconciliation
+
     periods = [dict(period) for period in summary.get("periods", [])]
     period_keys = [str(period["key"]) for period in periods]
     child_details_prepared = all(
@@ -869,6 +871,10 @@ def _cashflow_summary_payload(summary: Mapping[str, Any]) -> dict[str, Any]:
                     for key in period_keys
                 },
             })
+    transfer_details = summary.get("transfer_details")
+    transfer_reconciliation = summary.get("transfer_reconciliation")
+    if not isinstance(transfer_reconciliation, Mapping):
+        transfer_reconciliation = build_cashflow_transfer_reconciliation(transfer_details)
     return {
         "months": [str(month) for month in summary.get("months", [])],
         "periods": periods,
@@ -879,7 +885,8 @@ def _cashflow_summary_payload(summary: Mapping[str, Any]) -> dict[str, Any]:
         "category_review_count": int(summary.get("category_review_count", 0) or 0),
         "child_details_prepared": child_details_prepared,
         "child_details_version": CASHFLOW_CHILD_DETAILS_VERSION if child_details_prepared else 0,
-        "transfer_details": _cashflow_detail_records(summary.get("transfer_details")),
+        "transfer_details": _cashflow_detail_records(transfer_details),
+        "transfer_reconciliation": dict(transfer_reconciliation),
         "deduction_details": _cashflow_detail_records(summary.get("deduction_details")),
         "categories_needing_review": _cashflow_detail_records(summary.get("categories_needing_review")),
         "period_metrics": summary.get("period_metrics") or {},
@@ -888,6 +895,8 @@ def _cashflow_summary_payload(summary: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _cashflow_summary_from_payload(payload: Mapping[str, Any], group_by: str) -> dict[str, Any]:
+    from services.ledger_group_summary import build_cashflow_transfer_reconciliation
+
     periods = [dict(period) for period in payload.get("periods", [])]
     period_keys = [str(period["key"]) for period in periods]
     rows: list[dict[str, Any]] = []
@@ -906,12 +915,16 @@ def _cashflow_summary_from_payload(payload: Mapping[str, Any], group_by: str) ->
         category_totals.index.name = "category"
     child_details_version = int(payload.get("child_details_version", 0) or 0)
     child_details_prepared = bool(payload.get("child_details_prepared")) and child_details_version >= CASHFLOW_CHILD_DETAILS_VERSION
+    transfer_details = _cashflow_detail_frame(payload, "transfer_details") if child_details_prepared else pd.DataFrame()
     return {
         "months": [str(month) for month in payload.get("months", [])],
         "periods": periods,
         "group_by": group_by,
         "category_totals": category_totals,
-        "transfer_details": _cashflow_detail_frame(payload, "transfer_details") if child_details_prepared else pd.DataFrame(),
+        "transfer_details": transfer_details,
+        "transfer_reconciliation": (
+            payload.get("transfer_reconciliation") or build_cashflow_transfer_reconciliation(transfer_details)
+        ) if child_details_prepared else None,
         "deduction_details": _cashflow_detail_frame(payload, "deduction_details") if child_details_prepared else pd.DataFrame(),
         "categories_needing_review": _cashflow_detail_frame(payload, "categories_needing_review") if child_details_prepared else pd.DataFrame(),
         "selected_vouchers": [],
@@ -1015,7 +1028,7 @@ def _cashflow_daily_rollup(
     period_end: Any,
     group_by: str,
 ) -> dict[str, Any]:
-    from services.ledger_group_summary import _cashflow_periods, normalize_cashflow_grouping
+    from services.ledger_group_summary import _cashflow_periods, build_cashflow_transfer_reconciliation, normalize_cashflow_grouping
 
     grouping = normalize_cashflow_grouping(group_by)
     periods = _cashflow_periods(period_start, period_end, grouping)
@@ -1063,6 +1076,7 @@ def _cashflow_daily_rollup(
     transfer_details = _cashflow_rollup_detail_frame(payload, "transfer_details", periods) if child_details_prepared else pd.DataFrame()
     deduction_details = _cashflow_rollup_detail_frame(payload, "deduction_details", periods) if child_details_prepared else pd.DataFrame()
     review = _cashflow_rollup_detail_frame(payload, "categories_needing_review", periods) if child_details_prepared else pd.DataFrame()
+    transfer_reconciliation = build_cashflow_transfer_reconciliation(transfer_details) if child_details_prepared else None
     if child_details_prepared:
         totals["internal_transfer_count"] = len(transfer_details)
         totals["category_review_count"] = len(review)
@@ -1076,6 +1090,7 @@ def _cashflow_daily_rollup(
         "group_by": grouping,
         "category_totals": category_totals,
         "transfer_details": transfer_details,
+        "transfer_reconciliation": transfer_reconciliation,
         "deduction_details": deduction_details,
         "categories_needing_review": review,
         "selected_vouchers": [],

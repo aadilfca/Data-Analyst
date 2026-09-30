@@ -363,8 +363,36 @@
             element(cashflowWindowSections[key]).hidden = key !== windowKey;
         });
     }
+    function renderCashflowTransferReconciliation(preview) {
+        const panel = element('cashflowsTransferReconciliation');
+        const reconciliation = preview && preview.transfer_reconciliation;
+        if (!panel || !reconciliation || !reconciliation.status || reconciliation.status === 'No transfers') {
+            if (panel) {
+                panel.hidden = true;
+                panel.innerHTML = '';
+            }
+            return;
+        }
+        const status = String(reconciliation.status);
+        const statusClass = status === 'Matched' ? 'is-matched' : 'is-review';
+        const metric = function (label, value) {
+            return '<div class="cashflows-transfer-metric"><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(value) + '</strong></div>';
+        };
+        panel.innerHTML = '<div class="cashflows-transfer-reconciliation-heading"><strong>Source reconciliation</strong><span class="cashflows-transfer-status ' + statusClass + '">' + escapeHtml(status) + '</span></div>'
+            + '<div class="cashflows-transfer-metrics">'
+            + metric('Candidate vouchers', String(reconciliation.candidate_voucher_count || 0))
+            + metric('Confirmed', String(reconciliation.confirmed_count || 0))
+            + metric('Mixed', String(reconciliation.mixed_count || 0))
+            + metric('Ambiguous', String(reconciliation.ambiguous_count || 0))
+            + metric('Transferor total', formatInternationalAmount(reconciliation.transferor_total))
+            + metric('Transferee total', formatInternationalAmount(reconciliation.transferee_total))
+            + metric('Variance', formatInternationalAmount(reconciliation.variance_total))
+            + '</div>';
+        panel.hidden = false;
+    }
     function renderCashflowChild(section, preview) {
         if (section === 'transfers') {
+            renderCashflowTransferReconciliation(preview);
             const rows = (preview.transfer_details || []).map(function (row) {
                 return Object.assign({}, row, {
                     date_display: formatCashflowTransferDate(row.date || row.period_label || row.month),

@@ -124,6 +124,51 @@ def test_cashflow_transfer_details_identify_legs_and_preserve_category_totals():
     assert details.loc["T3", "transferee_account_code"] == "BB / BC"
     assert details.loc["T3", "status"] == "Review required - multi-leg or unbalanced"
     assert result["category_totals"].loc["Bank charges", "2026-01"] == -5
+    assert result["transfer_reconciliation"] == {
+        "candidate_voucher_count": 3,
+        "confirmed_count": 1,
+        "mixed_count": 1,
+        "ambiguous_count": 1,
+        "transferor_total": 300.0,
+        "transferee_total": 295.0,
+        "variance_total": -5.0,
+        "status": "Review required",
+    }
+
+
+def test_cashflow_transfer_reconciliation_confirms_cash_and_bank_routes():
+    journal = pd.DataFrame(
+        [
+            {"voucher_id": "BANK-BANK", "date": "2026-01-01", "account_code": "BA", "account_name": "Bank Alpha", "voucher_detail": "Transfer", "debit": 0, "credit": 50},
+            {"voucher_id": "BANK-BANK", "date": "2026-01-01", "account_code": "BB", "account_name": "Bank Beta", "voucher_detail": "Transfer", "debit": 50, "credit": 0},
+            {"voucher_id": "BANK-CASH", "date": "2026-01-02", "account_code": "BA", "account_name": "Bank Alpha", "voucher_detail": "Transfer", "debit": 0, "credit": 75},
+            {"voucher_id": "BANK-CASH", "date": "2026-01-02", "account_code": "CA", "account_name": "Cash Alpha", "voucher_detail": "Transfer", "debit": 75, "credit": 0},
+            {"voucher_id": "CASH-BANK", "date": "2026-01-03", "account_code": "CA", "account_name": "Cash Alpha", "voucher_detail": "Transfer", "debit": 0, "credit": 25},
+            {"voucher_id": "CASH-BANK", "date": "2026-01-03", "account_code": "BB", "account_name": "Bank Beta", "voucher_detail": "Transfer", "debit": 25, "credit": 0},
+        ]
+    )
+    coa = pd.DataFrame(
+        [
+            {"account_code": "BA", "account_title": "Bank Alpha", "account_type": "Bank", "category": ""},
+            {"account_code": "BB", "account_title": "Bank Beta", "account_type": "Bank", "category": ""},
+            {"account_code": "CA", "account_title": "Cash Alpha", "account_type": "Cash", "category": ""},
+        ]
+    )
+
+    result = build_cashflow_summary(
+        journal,
+        coa,
+        cash_account_codes=["CA"],
+        bank_account_codes=["BA", "BB"],
+        period_start="2026-01-01",
+        period_end="2026-01-31",
+        match_internal_transfers=True,
+    )
+
+    assert result["transfer_reconciliation"]["status"] == "Matched"
+    assert result["transfer_reconciliation"]["candidate_voucher_count"] == 3
+    assert result["transfer_reconciliation"]["confirmed_count"] == 3
+    assert result["transfer_reconciliation"]["variance_total"] == 0.0
 def test_cashflow_defaults_resolve_fiscal_year_and_ytd_dynamically():
     values = {
         "cashflow_fiscal_year_start_month": "4",
@@ -310,7 +355,7 @@ def test_cashflows_preview_uses_prepared_details_for_combined_child_sections():
             "source_row_count": 4,
             "valid_row_count": 4,
             "child_details_prepared": True,
-            "child_details_version": 2,
+            "child_details_version": 3,
             "summary_read_model": "hit",
         },
         "summary": summary,
@@ -451,7 +496,7 @@ def test_cashflow_summary_read_model_round_trip_preserves_period_totals():
     assert cached["summary"]["category_totals"].loc["Customers", "2026-Q1"] == 125.0
     assert cached["metadata"]["summary_read_model"] == "hit"
     assert cached["metadata"]["child_details_prepared"] is True
-    assert cached["metadata"]["child_details_version"] == 2
+    assert cached["metadata"]["child_details_version"] == 3
     assert cached["summary"]["transfer_details"].loc[0, "amount"] == 20.0
     assert cached["summary"]["deduction_details"].loc[0, "account_name"] == "Tax"
     assert cached["summary"]["categories_needing_review"].loc[0, "account_code"] == "4100"
@@ -467,7 +512,7 @@ def test_prepared_daily_snapshot_rolls_up_to_requested_months():
         ],
         "categories": [{"category": "Customers", "values": {"2026-01-01": 10, "2026-01-02": 15, "2026-02-01": 20}}],
         "child_details_prepared": True,
-        "child_details_version": 2,
+        "child_details_version": 3,
         "transfer_details": [{
             "voucher_id": "TR-1",
             "date": "2026-01-02",
@@ -827,6 +872,8 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "details: 'transfers,deductions,review'" in javascript
     assert "cashflowChildRequest" in javascript
     assert "formatCashflowTransferParty" in javascript
+    assert "renderCashflowTransferReconciliation" in javascript
+    assert "cashflowsTransferReconciliation" in html
     assert "prefix + '_account_name'" in javascript
     assert "status_display" in javascript
     assert "setActiveCashflowWindow" in javascript

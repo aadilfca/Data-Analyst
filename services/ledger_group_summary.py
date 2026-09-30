@@ -188,6 +188,52 @@ def _join_unique_leg_values(values: Any) -> str:
     return " / ".join(seen)
 
 
+def build_cashflow_transfer_reconciliation(
+    details: pd.DataFrame | None,
+    *,
+    tolerance: float = DEFAULT_TOLERANCE,
+) -> dict[str, Any]:
+    """Summarise transfer-source agreement without changing Cashflow totals."""
+    if details is None or details.empty:
+        return {
+            "candidate_voucher_count": 0,
+            "confirmed_count": 0,
+            "mixed_count": 0,
+            "ambiguous_count": 0,
+            "transferor_total": 0.0,
+            "transferee_total": 0.0,
+            "variance_total": 0.0,
+            "status": "No transfers",
+        }
+
+    def numeric_total(column: str) -> float:
+        if column not in details.columns:
+            return 0.0
+        return float(pd.to_numeric(details[column], errors="coerce").fillna(0.0).sum())
+
+    classifications = details.get("classification", pd.Series("", index=details.index)).fillna("").astype(str)
+    candidate_count = int(len(details))
+    confirmed_count = int(classifications.eq("confirmed").sum())
+    mixed_count = int(classifications.eq("mixed").sum())
+    ambiguous_count = int(classifications.eq("ambiguous").sum())
+    variance_total = numeric_total("variance")
+    matched = (
+        candidate_count > 0
+        and confirmed_count == candidate_count
+        and abs(variance_total) <= tolerance
+    )
+    return {
+        "candidate_voucher_count": candidate_count,
+        "confirmed_count": confirmed_count,
+        "mixed_count": mixed_count,
+        "ambiguous_count": ambiguous_count,
+        "transferor_total": numeric_total("transferor_amount"),
+        "transferee_total": numeric_total("transferee_amount"),
+        "variance_total": variance_total,
+        "status": "Matched" if matched else "Review required",
+    }
+
+
 def _build_cashflow_transfer_details(
     working: pd.DataFrame,
     coa: pd.DataFrame,
@@ -807,6 +853,7 @@ def build_cashflow_summary(
         category_totals["Total"] = category_totals.sum(axis=1)
     review = review.reset_index(drop=True)
     deductions = deductions[["category", "month", "period_key", "period_label", "amount", "account_code", "account_name", "date", "presentation"]].reset_index(drop=True)
+    transfer_reconciliation = build_cashflow_transfer_reconciliation(transfer_details, tolerance=tolerance)
     period_metrics = {
         period["key"]: {
             "source_line_count": int((working["period_key"] == period["key"]).sum()) if not working.empty else 0,
@@ -822,6 +869,7 @@ def build_cashflow_summary(
         "group_by": grouping,
         "category_totals": category_totals,
         "transfer_details": transfer_details,
+        "transfer_reconciliation": transfer_reconciliation,
         "deduction_details": deductions,
         "categories_needing_review": review,
         "balance_checks": balance_checks,
