@@ -1,4 +1,14 @@
 # Changelog Archive
+## Cashflows Internal Transfers XLSX parity - 2026-09-30
+
+**Scope:** Align the downloaded Internal Transfers worksheet with the confirmed Cashflows report window.
+
+**Implementation:** Replaced the legacy transfer columns with Date, Voucher, Transferor, Transferee, Amount, Variance, Status, and Description. Account names include codes and Cash/Bank types; dates are typed Excel dates; text and numeric cells use report-consistent alignment; transfer statuses receive review-friendly fills.
+
+**Verification:** Aadil confirmed the downloaded workbook. Focused Cashflows/reconciliation coverage passed 27 tests; Python compilation and git diff --check passed. No summary, database, dependency, or source-data changes were made.
+
+**Next phase:** Reconcile pure, mixed, and ambiguous transfer totals against source vouchers and finalize accounting acceptance.
+
 ## Cashflows inter-account transfers - Mini-phases 1-2 - 2026-09-30
 
 **Scope:** Refine the existing Inter-account transfers window without changing the main Cashflows summary or speed-sensitive retrieval path.
@@ -9,10 +19,9 @@
 
 **Pending Cashflows tasks:**
 
-1. **Internal Transfers XLSX parity:** update the Excel Internal Transfers sheet to match the refined report columns and statuses.
-2. **Transfer source reconciliation:** verify pure, mixed, and ambiguous transfer totals against source vouchers and finalize accounting acceptance.
-3. **Customer payments phase:** report payments to customers with bank-account details.
-4. **Vendor payments phase:** report payments to vendors through Bank/Cash accounts.
+1. **Transfer source reconciliation:** verify pure, mixed, and ambiguous transfer totals against source vouchers and finalize accounting acceptance.
+2. **Customer payments phase:** report payments to customers with bank-account details.
+3. **Vendor payments phase:** report payments to vendors through Bank/Cash accounts.
 
 ## Cashflows child-load performance and prepared detail read model - Phase 1 - 2026-09-30
 

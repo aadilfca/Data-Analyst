@@ -147,8 +147,17 @@ def build_cashflow_workbook(
     _write_cashflow_detail_sheet(
         workbook.create_sheet("Internal Transfers"),
         "Internal Transfers",
-        preview.get("transfer_details") or [],
-        [("voucher_id", "Voucher", False), ("period", "Period", False), ("transfer_type", "Transfer", False), ("amount", "Amount", True), ("matched", "Matched", False)],
+        [_cashflow_transfer_export_record(record) for record in (preview.get("transfer_details") or [])],
+        [
+            ("date", "Date", False),
+            ("voucher_id", "Voucher", False),
+            ("transferor", "Transferor", False),
+            ("transferee", "Transferee", False),
+            ("amount", "Amount", True),
+            ("variance", "Variance", True),
+            ("status", "Status", False),
+            ("voucher_detail", "Description", False),
+        ],
     )
     _write_cashflow_detail_sheet(
         workbook.create_sheet("Customer Deductions"),
@@ -286,6 +295,24 @@ def _write_cashflow_summary_sheet(
     ws.freeze_panes = "B6"
 
 
+def _cashflow_transfer_party_label(record: Mapping[str, Any], prefix: str) -> str:
+    code = str(record.get(f"{prefix}_account_code") or "").strip()
+    name = str(record.get(f"{prefix}_account_name") or "").strip()
+    account_type = str(record.get(f"{prefix}_type") or "").strip()
+    account = f"{name} ({code})" if name and code and name != code else (name or code)
+    return " · ".join(part for part in (account, account_type) if part) or "—"
+
+
+def _cashflow_transfer_export_record(record: Mapping[str, Any]) -> dict[str, Any]:
+    output = dict(record)
+    output["transferor"] = _cashflow_transfer_party_label(record, "transferor")
+    output["transferee"] = _cashflow_transfer_party_label(record, "transferee")
+    output["status"] = str(record.get("status") or "").strip() or (
+        "Confirmed" if record.get("matched") else "Review required"
+    )
+    return output
+
+
 def _write_cashflow_detail_sheet(ws, title: str, records: list[Mapping[str, Any]], columns: list[tuple[str, str, bool]]) -> None:
     _write_title(ws, title, "Detail rows included in the selected Cashflows report.", len(columns))
     row = 4
@@ -300,10 +327,19 @@ def _write_cashflow_detail_sheet(ws, title: str, records: list[Mapping[str, Any]
             value = record.get(key)
             if key == "period":
                 value = record.get("period_label") or record.get("month") or record.get("period_key")
+            if key == "date":
+                value = _date_value(value)
             if key == "matched":
                 value = "Yes" if value else "Shown separately"
             values.append(_number(value) if numeric else value)
         _write_table(ws, row, values)
+        for column, (key, _, numeric) in enumerate(columns, 1):
+            ws.cell(row, column).alignment = Alignment(
+                horizontal="right" if numeric else "left",
+                vertical="center",
+            )
+            if key == "status":
+                _style_status(ws.cell(row, column), record.get(key))
     ws.freeze_panes = "A5"
 
 
@@ -687,9 +723,9 @@ def _style_section_band(ws, row: int, width: int) -> None:
 
 def _style_status(cell, status: Any) -> None:
     value = str(status or "").casefold()
-    if value == "matched":
+    if value in {"matched", "confirmed"}:
         cell.fill = PatternFill("solid", fgColor=PALE_GREEN)
-    elif value in {"variance", "not tested"}:
+    elif value in {"variance", "not tested"} or value.startswith("review required"):
         cell.fill = PatternFill("solid", fgColor=PALE_ORANGE)
     elif value in {"failed", "error"}:
         cell.fill = PatternFill("solid", fgColor=PALE_RED)

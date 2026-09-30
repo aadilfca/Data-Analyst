@@ -753,7 +753,21 @@ def test_cashflow_export_preserves_visible_periods_and_totals():
             {"category": "Customers", "2026-Q1": 125.0, "2026-Q2": 50.0, "Total": 175.0},
             {"category": "Vendors", "2026-Q1": -80.0, "2026-Q2": -20.0, "Total": -100.0},
         ],
-        "transfer_details": [{"voucher_id": "TR-1", "period_label": "Q1 2026", "transfer_type": "Bank to Cash", "amount": 20.0, "matched": True}],
+        "transfer_details": [{
+            "voucher_id": "TR-1",
+            "date": "2026-01-05",
+            "transferor_account_code": "BA",
+            "transferor_account_name": "Bank Alpha",
+            "transferor_type": "Bank",
+            "transferee_account_code": "CB",
+            "transferee_account_name": "Cash Book",
+            "transferee_type": "Cash",
+            "amount": 20.0,
+            "variance": 0.0,
+            "status": "Confirmed",
+            "voucher_detail": "Bank to cash transfer",
+            "matched": True,
+        }],
         "deduction_details": [{"period_label": "Q2 2026", "category": "Withholding", "account_name": "Tax", "amount": 5.0}],
         "categories_needing_review": [{"voucher_id": "JV-1", "period_label": "Q2 2026", "account_code": "4100", "account_name": "Other", "fallback_category": "Review"}],
         "selected_voucher_count": 3,
@@ -775,6 +789,20 @@ def test_cashflow_export_preserves_visible_periods_and_totals():
     assert [summary.cell(7, column).value for column in range(1, 5)] == ["Total Receipts", 125, 50, 175]
     assert summary.cell(10, 1).value == "Payments — percentages calculated within this section"
     assert [summary.cell(12, column).value for column in range(1, 5)] == ["Vendors", 80, 20, 100]
+    transfers = workbook["Internal Transfers"]
+    assert [transfers.cell(4, column).value for column in range(1, 9)] == [
+        "Date", "Voucher", "Transferor", "Transferee", "Amount", "Variance", "Status", "Description"
+    ]
+    assert transfers.cell(5, 1).value.date().isoformat() == "2026-01-05"
+    assert transfers.cell(5, 2).value == "TR-1"
+    assert transfers.cell(5, 3).value == "Bank Alpha (BA) · Bank"
+    assert transfers.cell(5, 4).value == "Cash Book (CB) · Cash"
+    assert transfers.cell(5, 5).value == 20
+    assert transfers.cell(5, 6).value == 0
+    assert transfers.cell(5, 7).value == "Confirmed"
+    assert transfers.cell(5, 8).value == "Bank to cash transfer"
+    assert transfers.cell(5, 3).alignment.horizontal == "left"
+    assert transfers.cell(5, 5).alignment.horizontal == "right"
     assert set(workbook.sheetnames) == {"Cashflows Summary", "Internal Transfers", "Customer Deductions", "Review Required", "Export Controls"}
 
 
