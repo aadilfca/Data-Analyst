@@ -1,4 +1,14 @@
 # Changelog Archive
+## Cashflows customer-payment residual deductions - CP-3 - 2026-10-01
+
+**Scope:** Classify residual debit counter lines in configured customer-receipt vouchers as `Other deductions` while retaining residual credits for review.
+
+**Implementation:** Unmapped debit counter lines now contribute to customer-payment deductions. Residual credit lines, including mapped-but-unconfigured categories, remain in the review output. Explicit customer, bank-charge, withholding-tax, and other-deduction roles remain authoritative; technical treasury credits remain outside this rule for CP-4.
+
+**Verification:** Focused classification and report coverage passed 43 tests; Python compilation and `git diff --check` passed. No UI, schema, source-data, or speed-sensitive fetch changes were introduced.
+
+**Pending CP phases:** CP-4 Gross/Net reconciliation; CP-5 report columns; CP-6 prepared snapshot/cache versioning; CP-7 full scenario matrix; CP-8 documentation and release closeout.
+
 ## Cashflows customer-payment classification - CP-2 - 2026-10-01
 
 **Scope:** Verify category-driven identification of customer receipts across configured Cash and Bank treasury accounts, without changing CP-3 residual deductions or the speed-sensitive summary path.

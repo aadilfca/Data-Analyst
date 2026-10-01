@@ -241,6 +241,46 @@ def test_configured_customer_roles_classify_other_categorized_lines_as_other_ded
     assert detail["status"] == "Matched"
 
 
+def test_customer_voucher_residual_debits_are_deductions_and_credits_need_review():
+    journal = pd.DataFrame(
+        [
+            ["V1", "2026-01-05", "BANK", "Export bank", "Customer receipt", 100, 0],
+            ["V1", "2026-01-05", "CUSTOMER", "Export customer", "Customer receipt", 0, 100],
+            ["V1", "2026-01-05", "UNMAPPED-DEBIT", "Unmapped debit counter", "Customer receipt", 2, 0],
+            ["V1", "2026-01-05", "RESIDUAL-CREDIT", "Residual credit", "Customer receipt", 0, 2],
+        ],
+        columns=["voucher_id", "date", "account_code", "account_name", "voucher_detail", "debit", "credit"],
+    )
+    coa = pd.DataFrame(
+        [
+            ["BANK", "Export bank", "Bank", ""],
+            ["CUSTOMER", "Export customer", "Receivable", "Received from customers"],
+            ["RESIDUAL-CREDIT", "Residual credit", "Receivable", "Unconfigured receipt credit"],
+        ],
+        columns=["account_code", "account_title", "account_type", "category"],
+    )
+
+    result = build_cashflow_summary(
+        journal,
+        coa,
+        cash_account_codes=[],
+        bank_account_codes=["BANK"],
+        period_start="2026-01-01",
+        period_end="2026-01-31",
+        cashflow_role_categories={
+            "customer_receipt": ["Received from customers"],
+            "bank_charge": [],
+            "withholding_tax": [],
+            "other_deduction": [],
+        },
+    )
+
+    detail = result["customer_payment_details"].iloc[0]
+    assert detail["other_deductions"] == 2
+    assert result["deduction_details"]["account_code"].tolist() == ["UNMAPPED-DEBIT"]
+    assert result["categories_needing_review"]["account_code"].tolist() == ["RESIDUAL-CREDIT"]
+
+
 def test_configured_customer_role_identifies_cash_and_bank_with_client_specific_labels():
     journal = pd.DataFrame(
         [

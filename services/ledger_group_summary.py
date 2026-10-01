@@ -1065,14 +1065,27 @@ def build_cashflow_summary(
         contra["has_cashflow_category"] = mapped_categories.ne("")
         customer_vouchers = set(contra.loc[contra["is_customer"], "voucher_id"].drop_duplicates())
         if configured_roles is not None and customer_vouchers:
-            residual = (
+            residual_role = (
                 contra["voucher_id"].isin(customer_vouchers)
                 & ~contra["is_customer"]
                 & contra["has_cashflow_category"]
                 & ~contra["is_bank_charge"]
                 & ~contra["is_withholding_tax"]
+                & ~contra["is_other_deduction"]
             )
-            contra["is_other_deduction"] = contra["is_other_deduction"] | residual
+            residual_role = residual_role | (
+                contra["voucher_id"].isin(customer_vouchers)
+                & ~contra["is_customer"]
+                & ~contra["is_bank_charge"]
+                & ~contra["is_withholding_tax"]
+                & ~contra["has_cashflow_category"]
+                & ~contra["is_other_deduction"]
+            )
+            residual_debit = residual_role & contra["amount"].lt(-tolerance)
+            residual_credit = residual_role & contra["amount"].gt(tolerance)
+            contra["is_other_deduction"] = contra["is_other_deduction"] | residual_debit
+        else:
+            residual_credit = pd.Series(False, index=contra.index)
         contra["is_deduction"] = (
             contra["is_bank_charge"]
             | contra["is_withholding_tax"]
@@ -1086,8 +1099,11 @@ def build_cashflow_summary(
             receipt_presentation=presentation,
             tolerance=tolerance,
         )
+        review_mask = mapped_categories.eq("") & ~contra["is_deduction"]
+        if configured_roles is not None and customer_vouchers:
+            review_mask = review_mask | residual_credit
         review = contra.loc[
-            mapped_categories.eq(""),
+            review_mask,
             ["voucher_id", "date", "month", "period_key", "period_label", "account_code", "account_name", "voucher_detail", "debit", "credit", "category"],
         ].rename(columns={"category": "fallback_category"})
 
