@@ -241,6 +241,52 @@ def test_configured_customer_roles_classify_other_categorized_lines_as_other_ded
     assert detail["status"] == "Matched"
 
 
+def test_configured_customer_role_identifies_cash_and_bank_with_client_specific_labels():
+    journal = pd.DataFrame(
+        [
+            ["CASH-CLIENT", "2026-01-05", "CASH", "Cash in hand", "Cash receipt", 50, 0],
+            ["CASH-CLIENT", "2026-01-05", "CUST-C", "Overseas customer cash", "Cash receipt", 0, 50],
+            ["BANK-CLIENT", "2026-01-06", "BANK", "Export bank", "Bank receipt", 75, 0],
+            ["BANK-CLIENT", "2026-01-06", "CUST-B", "Overseas customer bank", "Bank receipt", 0, 75],
+            ["UNMAPPED", "2026-01-07", "BANK", "Export bank", "Unmapped receipt", 10, 0],
+            ["UNMAPPED", "2026-01-07", "LOOKS-LIKE-CUSTOMER", "Customer-looking account", "Unmapped receipt", 0, 10],
+        ],
+        columns=["voucher_id", "date", "account_code", "account_name", "voucher_detail", "debit", "credit"],
+    )
+    coa = pd.DataFrame(
+        [
+            ["CASH", "Cash in hand", "Cash", ""],
+            ["BANK", "Export bank", "Bank", ""],
+            ["CUST-C", "Overseas customer cash", "Receivable", "Export customer collections"],
+            ["CUST-B", "Overseas customer bank", "Receivable", "Export customer collections"],
+            ["LOOKS-LIKE-CUSTOMER", "Customer-looking account", "Receivable", "Other income"],
+        ],
+        columns=["account_code", "account_title", "account_type", "category"],
+    )
+
+    result = build_cashflow_summary(
+        journal,
+        coa,
+        cash_account_codes=["CASH"],
+        bank_account_codes=["BANK"],
+        period_start="2026-01-01",
+        period_end="2026-01-31",
+        cashflow_role_categories={
+            "customer_receipt": ["Export customer collections"],
+            "bank_charge": [],
+            "withholding_tax": [],
+            "other_deduction": [],
+        },
+    )
+
+    details = result["customer_payment_details"].set_index("voucher_id")
+    assert set(details.index) == {"CASH-CLIENT", "BANK-CLIENT"}
+    assert details.loc["CASH-CLIENT", "bank_account_type"] == "Cash"
+    assert details.loc["BANK-CLIENT", "bank_account_type"] == "Bank"
+    assert details["status"].eq("Matched").all()
+    assert "UNMAPPED" not in details.index
+
+
 def test_cashflow_summary_exposes_period_metrics_for_prepared_snapshot():
     journal, coa = _fixture_data()
     result = build_cashflow_summary(

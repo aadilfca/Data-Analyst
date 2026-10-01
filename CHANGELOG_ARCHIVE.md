@@ -1,4 +1,14 @@
 # Changelog Archive
+## Cashflows customer-payment classification - CP-2 - 2026-10-01
+
+**Scope:** Verify category-driven identification of customer receipts across configured Cash and Bank treasury accounts, without changing CP-3 residual deductions or the speed-sensitive summary path.
+
+**Implementation:** The existing customer-payment role mapping is now regression-tested with client-specific customer categories for both Cash and Bank receipts. A customer-looking account with an unconfigured category remains outside the customer-payment report for later review handling. Live and prepared-report paths already pass the configured roles to the shared summary engine.
+
+**Verification:** Focused classification and report coverage passed 42 tests; Python compilation and `git diff --check` passed. No packages, schema, UI, source data, or performance-path changes were introduced in this closeout.
+
+**Pending CP phases:** CP-3 residual debit deductions; CP-4 Gross/Net reconciliation; CP-5 report columns; CP-6 prepared snapshot/cache versioning; CP-7 full scenario matrix. CP-8 documentation and release closeout is being completed with this commit.
+
 ## Cashflows transfer reconciliation and UI - 2026-09-30
 
 **Scope:** Complete transfer-source reconciliation and make its accounting acceptance visible in the Internal transfers window.
