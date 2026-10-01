@@ -6959,3 +6959,19 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Formatting:** Period columns and `Total` use international comma grouping without `Rs`; only `Local total` uses thousand/lakh/crore labels. Numeric export cells remain numeric with international formatting.
 
 **Verification:** Aadil confirmed the local behavior. Focused UI/reconciliation coverage passed 20 tests; JavaScript syntax, Python compilation, and `git diff --check` passed. No packages, source data, router changes, or performance-path changes were introduced.
+
+## Cashflows prepared-detail cache version - CP-6 - 2026-10-01
+
+**Scope:** Invalidate older prepared Cashflows child-detail snapshots after the customer-payment report schema changes, while preserving the fast main summary path.
+
+**Implementation:** Advanced the prepared child-detail cache version from 5 to 6. Version-mismatched detail snapshots now use the existing canonical/prepared fallback instead of being served as current data. No source query or summary-fetching logic changed.
+
+**Verification:** Source/cache and reconciliation report tests passed: 42 tests, plus 22 relevant reconciliation tests. Python compilation and `git diff --check` passed. The unrelated legacy Reports Hub assertion remains outside this phase.
+
+## Cashflows customer-payment accounting matrix - CP-7 - 2026-10-01
+
+**Scope:** Complete the approved customer-payment accounting matrix across receipt methods, deductions, missing mappings, multiple customers, multiple receiving accounts, technical credits, and prepared-cache fallback.
+
+**Implementation:** Added regression coverage for explicit Other deductions, missing customer categories, and multiple receiving accounts. Fixed empty transfer-leg result normalization so a customer voucher with multiple receiving treasury accounts is reviewed safely instead of raising a schema error. The main Cashflows summary and speed-sensitive fetch path remain unchanged.
+
+**Verification:** Approved relevant matrix passed 84 tests; Python compilation and `git diff --check` passed. No packages were installed and no source data was changed.

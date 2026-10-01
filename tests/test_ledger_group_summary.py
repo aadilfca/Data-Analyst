@@ -388,6 +388,120 @@ def test_customer_payment_reconciliation_separates_technical_bank_credit_from_de
     assert result["category_totals"].loc["Customer receipts", "Total"] == 244
 
 
+def test_explicit_other_deduction_role_reconciles_customer_payment():
+    journal = pd.DataFrame(
+        [
+            ["OTHER-ROLE", "2026-01-08", "BANK", "Export bank", "Customer receipt", 90, 0],
+            ["OTHER-ROLE", "2026-01-08", "CUSTOMER", "Export customer", "Customer receipt", 0, 100],
+            ["OTHER-ROLE", "2026-01-08", "OTHER", "Export deduction", "Customer receipt", 10, 0],
+        ],
+        columns=["voucher_id", "date", "account_code", "account_name", "voucher_detail", "debit", "credit"],
+    )
+    coa = pd.DataFrame(
+        [
+            ["BANK", "Export bank", "Bank", ""],
+            ["CUSTOMER", "Export customer", "Receivable", "Customer receipts"],
+            ["OTHER", "Export deduction", "Expense", "Export deductions"],
+        ],
+        columns=["account_code", "account_title", "account_type", "category"],
+    )
+
+    result = build_cashflow_summary(
+        journal,
+        coa,
+        cash_account_codes=[],
+        bank_account_codes=["BANK"],
+        period_start="2026-01-01",
+        period_end="2026-01-31",
+        cashflow_role_categories={
+            "customer_receipt": ["Customer receipts"],
+            "bank_charge": [],
+            "withholding_tax": [],
+            "other_deduction": ["Export deductions"],
+        },
+    )
+
+    detail = result["customer_payment_details"].iloc[0]
+    assert detail["other_deductions"] == 10
+    assert detail["expected_net_settlement"] == 90
+    assert detail["status"] == "Matched"
+    assert result["categories_needing_review"].empty
+
+
+def test_missing_customer_category_stays_out_of_customer_payments_and_needs_review():
+    journal = pd.DataFrame(
+        [
+            ["MISSING-CUSTOMER", "2026-01-09", "BANK", "Export bank", "Receipt", 50, 0],
+            ["MISSING-CUSTOMER", "2026-01-09", "CUSTOMER", "Foreign customer", "Receipt", 0, 50],
+        ],
+        columns=["voucher_id", "date", "account_code", "account_name", "voucher_detail", "debit", "credit"],
+    )
+    coa = pd.DataFrame(
+        [
+            ["BANK", "Export bank", "Bank", ""],
+            ["CUSTOMER", "Foreign customer", "Receivable", ""],
+        ],
+        columns=["account_code", "account_title", "account_type", "category"],
+    )
+
+    result = build_cashflow_summary(
+        journal,
+        coa,
+        cash_account_codes=[],
+        bank_account_codes=["BANK"],
+        period_start="2026-01-01",
+        period_end="2026-01-31",
+        cashflow_role_categories={
+            "customer_receipt": ["Customer receipts"],
+            "bank_charge": [],
+            "withholding_tax": [],
+            "other_deduction": [],
+        },
+    )
+
+    assert result["customer_payment_details"].empty
+    assert result["categories_needing_review"]["account_code"].tolist() == ["CUSTOMER"]
+
+
+def test_multiple_receiving_accounts_require_customer_payment_review():
+    journal = pd.DataFrame(
+        [
+            ["MULTI-RECEIVING", "2026-01-10", "BANK-1", "Export bank one", "Receipt", 60, 0],
+            ["MULTI-RECEIVING", "2026-01-10", "BANK-2", "Export bank two", "Receipt", 40, 0],
+            ["MULTI-RECEIVING", "2026-01-10", "CUSTOMER", "Export customer", "Receipt", 0, 100],
+        ],
+        columns=["voucher_id", "date", "account_code", "account_name", "voucher_detail", "debit", "credit"],
+    )
+    coa = pd.DataFrame(
+        [
+            ["BANK-1", "Export bank one", "Bank", ""],
+            ["BANK-2", "Export bank two", "Bank", ""],
+            ["CUSTOMER", "Export customer", "Receivable", "Customer receipts"],
+        ],
+        columns=["account_code", "account_title", "account_type", "category"],
+    )
+
+    result = build_cashflow_summary(
+        journal,
+        coa,
+        cash_account_codes=[],
+        bank_account_codes=["BANK-1", "BANK-2"],
+        period_start="2026-01-01",
+        period_end="2026-01-31",
+        cashflow_role_categories={
+            "customer_receipt": ["Customer receipts"],
+            "bank_charge": [],
+            "withholding_tax": [],
+            "other_deduction": [],
+        },
+    )
+
+    detail = result["customer_payment_details"].iloc[0]
+    assert detail["bank_account_name"] == "Export bank one / Export bank two"
+    assert detail["method"] == "Review"
+    assert detail["status"] == "Review required"
+
+
 def test_cashflow_summary_exposes_period_metrics_for_prepared_snapshot():
     journal, coa = _fixture_data()
     result = build_cashflow_summary(

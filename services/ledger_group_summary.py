@@ -533,7 +533,19 @@ def _build_cashflow_transfer_details(
 
     def aggregate_side(legs: pd.DataFrame, prefix: str) -> pd.DataFrame:
         if legs.empty:
-            return pd.DataFrame(index=pd.Index([], name="voucher_id"))
+            # Keep the merge schema stable when a candidate voucher has no
+            # transferor/transferee leg on this side (for example, a
+            # customer receipt with two receiving treasury accounts).
+            return pd.DataFrame(
+                columns=[
+                    f"{prefix}_account_code",
+                    f"{prefix}_account_name",
+                    f"{prefix}_type",
+                    f"{prefix}_amount",
+                    f"{prefix}_leg_count",
+                ],
+                index=pd.Index([], name="voucher_id"),
+            )
         result = legs.groupby("voucher_id", sort=False).agg(
             account_code=("account_code", _join_unique_leg_values),
             account_name=("account_name", _join_unique_leg_values),

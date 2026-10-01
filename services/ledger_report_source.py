@@ -30,7 +30,7 @@ JOURNAL_COLUMNS = (
 )
 CASHFLOW_PREPARED_PERIOD_COLUMNS = ("transaction_month", "transaction_fortnight")
 COA_COLUMNS = ("account_code", "account_title", "account_type", "category")
-CASHFLOW_CHILD_DETAILS_VERSION = 5
+CASHFLOW_CHILD_DETAILS_VERSION = 6
 
 _JOURNAL_ALIASES: Mapping[str, tuple[str, ...]] = {
     "voucher_id": (

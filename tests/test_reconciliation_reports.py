@@ -10,6 +10,7 @@ from openpyxl import load_workbook
 
 from routers import reconciliation
 from services.ledger_group_summary import build_cashflow_summary, build_financial_statement_summary
+from services.ledger_report_source import CASHFLOW_CHILD_DETAILS_VERSION
 from routers import settings as settings_router
 from services.reconciliation_xlsx import export_cashflow_xlsx
 
@@ -479,7 +480,7 @@ def test_cashflows_preview_uses_prepared_details_for_combined_child_sections():
             "source_row_count": 4,
             "valid_row_count": 4,
             "child_details_prepared": True,
-            "child_details_version": 5,
+            "child_details_version": CASHFLOW_CHILD_DETAILS_VERSION,
             "summary_read_model": "hit",
         },
         "summary": summary,
@@ -549,11 +550,12 @@ def test_cashflows_preview_rejects_previous_child_details_version():
     cached = {
         "metadata": {
             "child_details_prepared": True,
-            "child_details_version": 4,
+            "child_details_version": CASHFLOW_CHILD_DETAILS_VERSION - 1,
         },
         "summary": _cashflow_summary(),
     }
 
+    assert CASHFLOW_CHILD_DETAILS_VERSION == 6
     assert reconciliation._cashflow_cache_can_serve_details(cached, {"customer_payments"}) is False
 
 
@@ -644,7 +646,7 @@ def test_cashflow_summary_read_model_round_trip_preserves_period_totals():
     assert cached["summary"]["category_totals"].loc["Customers", "2026-Q1"] == 125.0
     assert cached["metadata"]["summary_read_model"] == "hit"
     assert cached["metadata"]["child_details_prepared"] is True
-    assert cached["metadata"]["child_details_version"] == 5
+    assert cached["metadata"]["child_details_version"] == CASHFLOW_CHILD_DETAILS_VERSION
     assert cached["summary"]["transfer_details"].loc[0, "amount"] == 20.0
     assert cached["summary"]["customer_payment_details"].loc[0, "method"] == "Gross"
     assert cached["summary"]["deduction_details"].loc[0, "account_name"] == "Tax"
@@ -661,7 +663,7 @@ def test_prepared_daily_snapshot_rolls_up_to_requested_months():
         ],
         "categories": [{"category": "Customers", "values": {"2026-01-01": 10, "2026-01-02": 15, "2026-02-01": 20}}],
         "child_details_prepared": True,
-        "child_details_version": 5,
+        "child_details_version": CASHFLOW_CHILD_DETAILS_VERSION,
         "transfer_details": [{
             "voucher_id": "TR-1",
             "date": "2026-01-02",
