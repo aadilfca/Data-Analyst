@@ -227,6 +227,8 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-30: Cashflows transfer reconciliation now shows matched/review controls for pure, mixed, and ambiguous vouchers without changing main totals.
 - 2026-10-01: Cashflows customer-payment roles now drive Cash/Bank receipt classification through live and prepared paths; regression coverage added.
 - 2026-10-01: Cashflows customer-payment residual debits now classify as Other deductions while residual credits remain for review.
+- 2026-10-01: Cashflows customer-payment Gross/Net reconciliation now separates technical Bank credits from receipt deductions; CP-4 coverage added.
+- 2026-10-01: Customer-payment report now presents receiving account, deduction totals, settlement values, and difference with wide-table scrolling.
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
 - Findings from a Code Health Review session go to `KNOWN_ISSUES.md`, not the Status log — the Status log records changes made, that file records issues found

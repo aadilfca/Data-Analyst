@@ -1,4 +1,21 @@
 # Changelog Archive
+## Cashflows customer-payment Gross/Net reconciliation - CP-4 - 2026-10-01
+
+**Scope:** Separate technical Bank credits from customer receipts and deductions while preserving Gross, Net, and Cash settlement calculations.
+
+**Implementation:** Technical offsets now use only Bank treasury credits. Gross settlement subtracts the technical Bank credit; Net and Cash receipts have no technical offset. Technical credits are excluded from deduction totals and customer receipt category amounts.
+
+**Verification:** Focused classification and report coverage passed 44 tests; Python compilation and git diff --check passed. The main Cashflows speed-sensitive path was unchanged.
+
+## Cashflows customer-payment report presentation - CP-5 - 2026-10-01
+
+**Scope:** Present the complete customer-payment reconciliation columns with clear business-facing labels and a wide, horizontally scrollable table.
+
+**Implementation:** Added Total deductions and renamed Receiving account, Technical Bank credit, Expected settlement, Actual settlement, and Difference. Numeric and text alignment remain controlled by the shared report renderer.
+
+**Verification:** Focused report coverage passed 27 tests; JavaScript syntax and git diff --check passed. No backend calculation, schema, cache, or source-data changes were introduced.
+
+**Next phase:** CP-6 prepared snapshot/cache version refresh.
 ## Cashflows customer-payment residual deductions - CP-3 - 2026-10-01
 
 **Scope:** Classify residual debit counter lines in configured customer-receipt vouchers as `Other deductions` while retaining residual credits for review.

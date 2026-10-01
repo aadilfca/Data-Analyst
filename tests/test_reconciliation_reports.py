@@ -1048,7 +1048,14 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "cashflowsCustomerPaymentsSection" in html
     assert "customer_payments" in javascript
     assert "customer_payment_details" in javascript
+    assert "label: 'Receiving account'" in javascript
+    assert "label: 'Total deductions'" in javascript
+    assert "label: 'Technical Bank credit'" in javascript
+    assert "label: 'Expected settlement'" in javascript
+    assert "label: 'Actual settlement'" in javascript
+    assert "label: 'Difference'" in javascript
     assert "cashflows-customer-payments-table" in stylesheet
+    assert ".cashflows-customer-payments-table { min-width: 1750px; }" in stylesheet
     assert "formatCashflowTransferParty" in javascript
     assert "renderCashflowTransferReconciliation" in javascript
     assert "cashflowsTransferReconciliation" in html

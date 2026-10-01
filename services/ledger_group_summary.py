@@ -320,6 +320,10 @@ def _build_cashflow_customer_payment_details(
         return _empty_customer_payment_details()
 
     treasury["treasury_type"] = treasury["account_code"].map(treasury_type).fillna("Treasury")
+    treasury["technical_bank_credit"] = treasury["credit"].where(
+        treasury["treasury_type"].eq("Bank"),
+        0.0,
+    )
     treasury_totals = (
         treasury.groupby("voucher_id", sort=False)
         .agg(
@@ -327,7 +331,7 @@ def _build_cashflow_customer_payment_details(
             bank_account_name=("account_name", _join_unique_leg_values),
             bank_account_type=("treasury_type", _join_unique_leg_values),
             bank_statement_amount=("debit", "sum"),
-            bank_credit_amount=("credit", "sum"),
+            bank_credit_amount=("technical_bank_credit", "sum"),
             bank_account_count=("account_code", "nunique"),
         )
         .reindex(voucher_order)

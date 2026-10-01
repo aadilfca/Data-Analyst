@@ -327,6 +327,67 @@ def test_configured_customer_role_identifies_cash_and_bank_with_client_specific_
     assert "UNMAPPED" not in details.index
 
 
+def test_customer_payment_reconciliation_separates_technical_bank_credit_from_deductions():
+    journal = pd.DataFrame(
+        [
+            ["GROSS", "2026-01-05", "BANK", "Export bank", "Gross receipt", 100, 2],
+            ["GROSS", "2026-01-05", "BANK", "Export bank", "Gross receipt", 0, 1],
+            ["GROSS", "2026-01-05", "CUSTOMER-G", "Customer gross", "Gross receipt", 0, 100],
+            ["GROSS", "2026-01-05", "CHARGE", "Bank charge", "Gross receipt", 1, 0],
+            ["GROSS", "2026-01-05", "WHT", "Withholding tax", "Gross receipt", 2, 0],
+            ["NET", "2026-01-06", "BANK", "Export bank", "Net receipt", 97, 0],
+            ["NET", "2026-01-06", "CUSTOMER-N", "Customer net", "Net receipt", 0, 100],
+            ["NET", "2026-01-06", "CHARGE", "Bank charge", "Net receipt", 1, 0],
+            ["NET", "2026-01-06", "WHT", "Withholding tax", "Net receipt", 2, 0],
+            ["CASH", "2026-01-07", "CASH", "Cash in hand", "Cash receipt", 50, 0],
+            ["CASH", "2026-01-07", "CUSTOMER-C", "Customer cash", "Cash receipt", 0, 50],
+        ],
+        columns=["voucher_id", "date", "account_code", "account_name", "voucher_detail", "debit", "credit"],
+    )
+    coa = pd.DataFrame(
+        [
+            ["BANK", "Export bank", "Bank", ""],
+            ["CASH", "Cash in hand", "Cash", ""],
+            ["CUSTOMER-G", "Customer gross", "Receivable", "Customer receipts"],
+            ["CUSTOMER-N", "Customer net", "Receivable", "Customer receipts"],
+            ["CUSTOMER-C", "Customer cash", "Receivable", "Customer receipts"],
+            ["CHARGE", "Bank charge", "Expense", "Bank charges"],
+            ["WHT", "Withholding tax", "Tax", "Withholding tax"],
+        ],
+        columns=["account_code", "account_title", "account_type", "category"],
+    )
+
+    result = build_cashflow_summary(
+        journal,
+        coa,
+        cash_account_codes=["CASH"],
+        bank_account_codes=["BANK"],
+        period_start="2026-01-01",
+        period_end="2026-01-31",
+        cashflow_role_categories={
+            "customer_receipt": ["Customer receipts"],
+            "bank_charge": ["Bank charges"],
+            "withholding_tax": ["Withholding tax"],
+            "other_deduction": [],
+        },
+    )
+
+    details = result["customer_payment_details"].set_index("voucher_id")
+    assert details.loc["GROSS", "method"] == "Gross"
+    assert details.loc["GROSS", "technical_bank_offset"] == 3
+    assert details.loc["GROSS", "net_bank_settlement"] == 97
+    assert details.loc["GROSS", "expected_net_settlement"] == 97
+    assert details.loc["GROSS", "deductions_total"] == 3
+    assert details.loc["NET", "method"] == "Net"
+    assert details.loc["NET", "technical_bank_offset"] == 0
+    assert details.loc["NET", "status"] == "Matched"
+    assert details.loc["CASH", "bank_account_type"] == "Cash"
+    assert details.loc["CASH", "technical_bank_offset"] == 0
+    assert details.loc["CASH", "method"] == "Net"
+    assert result["deduction_details"]["account_code"].tolist() == ["CHARGE", "WHT", "CHARGE", "WHT"]
+    assert result["category_totals"].loc["Customer receipts", "Total"] == 244
+
+
 def test_cashflow_summary_exposes_period_metrics_for_prepared_snapshot():
     journal, coa = _fixture_data()
     result = build_cashflow_summary(
