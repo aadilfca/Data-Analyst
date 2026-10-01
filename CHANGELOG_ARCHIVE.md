@@ -1,4 +1,14 @@
 # Changelog Archive
+## Cash Flow historical/orphan row alignment - 2026-10-01
+
+**Scope:** Make historical/orphan Cash Flow Setup rows behave like current Trial Balance rows while retaining their historical identity.
+
+**Implementation:** Shared the five-column row renderer and hierarchy indentation, leaving Historical / orphan as the Type distinction. Persisted orphan category values in setup responses, and included orphans whose surviving parent falls under a selected parent during bulk category assignment.
+
+**Verification:** User-confirmed local UI behavior. Focused Account Control Centre backend/UI tests passed (27); Python compilation, JavaScript syntax, and git diff --check passed. No source data or dependencies changed.
+
+Files: routers/account_control_center.py, static/account_control_center.html, static/account_control_center.js, static/style.css, tests/test_account_control_center.py, tests/test_account_control_center_ui.py.
+
 ## Cashflows customer-payment Gross/Net reconciliation - CP-4 - 2026-10-01
 
 **Scope:** Separate technical Bank credits from customer receipts and deductions while preserving Gross, Net, and Cash settlement calculations.

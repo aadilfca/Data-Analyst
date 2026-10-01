@@ -1013,6 +1013,10 @@ def get_cashflow_setup(client_id: int = Query(..., ge=1), session=Depends(requir
         (client_id,),
     )
     assignment_by_code = {_normalise_account_code(row["account_code"]): row.get("category_id") for row in assignments}
+    historical_orphans = [
+        {**dict(orphan), "category_id": assignment_by_code.get(_normalise_account_code(orphan.get("account_code")))}
+        for orphan in historical_orphans
+    ]
     treasury_rows = execute_query_pg(
         """SELECT account_code, treasury_type
            FROM account_control_cashflow_treasury_accounts
@@ -1146,11 +1150,16 @@ def apply_cashflow_category_to_children(payload: CashFlowCategoryBulkAssignmentP
         if row["classification"] == "leaf"
         and (_normalise_account_code(row["account_code"]) == parent_code or _normalise_account_code(row["account_code"]).startswith(parent_code + "-"))
     ]
-    if not leaves:
+    historical_orphans = discover_historical_orphan_accounts_postgres(payload.client_id, accounts)
+    historical_children = [
+        row for row in historical_orphans
+        if _account_code_is_within(_normalise_account_code(row.get("parent_account_code")), parent_code)
+    ]
+    if not leaves and not historical_children:
         raise HTTPException(400, "No leaf accounts were found below the selected account")
     actor = _actor_name(session)
     with pg_transaction():
-        for row in leaves:
+        for row in leaves + historical_children:
             _upsert_cashflow_category_assignment(
                 {"client_id": payload.client_id, "account_code": row["account_code"], "category_id": payload.category_id},
                 actor,
@@ -1158,7 +1167,7 @@ def apply_cashflow_category_to_children(payload: CashFlowCategoryBulkAssignmentP
     _refresh_cashflow_snapshot(payload.client_id, "category_bulk_assignment")
 
 
-    return {"saved": True, "parent_account_code": parent_code, "leaf_count": len(leaves)}
+    return {"saved": True, "parent_account_code": parent_code, "leaf_count": len(leaves) + len(historical_children), "historical_orphan_count": len(historical_children)}
 
 @router.put("/api/account-control-center/cashflow/treasury-accounts")
 def save_cashflow_treasury_accounts(payload: CashFlowTreasuryAccountsPayload, session=Depends(require_admin)):

@@ -10082,11 +10082,7 @@ body {
 .acc2-table th { position: sticky; top: 0; z-index: 1; background: #f8fafc; color: #64748b; font-size: 10px; letter-spacing: .04em; text-transform: uppercase; }
 .acc2-table tr:last-child td { border-bottom: 0; }
 .acc2-table tr.acc2-parent td { background: #f8fafc; font-weight: 600; }
-.acc2-table tr.acc2-historical-orphan td { background: #f8fbff; color: #124d7d; }
-.acc2-table tr.acc2-historical-orphan .acc2-code { color: #124d7d; font-weight: 800; }
 .acc2-type.historical { background: #dbeafe; color: #124d7d; }
-.acc2-orphan-parent, .acc2-orphan-detail { display: block; margin-top: 3px; color: #48657b; font-size: 10px; font-weight: 600; }
-.acc2-orphan-readonly { color: #124d7d; font-size: 11px; font-weight: 800; }
 .acc2-orphan-notice { margin: 0 0 12px; padding: 9px 11px; border: 1px solid #bfdbfe; border-radius: 7px; background: #eff6ff; color: #124d7d; font-size: 12px; }
 .acc2-code { color: #334155; font-family: Consolas, monospace; white-space: nowrap; }
 .acc2-type { display: inline-block; border-radius: 999px; padding: 3px 7px; background: #dcfce7; color: #166534; font-size: 10px; font-weight: 800; }

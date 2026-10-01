@@ -322,10 +322,45 @@ function accSetCashflowGridState(message, isError) {
 function accEffectiveCashflowCategory(account) {
     const direct = account.category_id;
     if (account.is_leaf || direct != null) return direct == null ? '' : String(direct);
-    const values = Array.from(new Set(accLeavesBelow(account.account_code).map(function (leaf) {
+    const values = Array.from(new Set(accCashflowLeavesBelow(account.account_code).map(function (leaf) {
         return leaf.category_id == null ? '' : String(leaf.category_id);
     })));
     return values.length === 1 ? values[0] : (values.length > 1 ? '__mixed' : '');
+}
+function accCashflowLeavesBelow(parentCode) {
+    const currentLeaves = accLeavesBelow(parentCode);
+    const normalisedParent = accNormaliseCode(parentCode);
+    const historicalLeaves = accCashflowHistoricalOrphans.filter(function (orphan) {
+        const survivingParent = accNormaliseCode(orphan.parent_account_code);
+        return survivingParent && (survivingParent === normalisedParent || survivingParent.indexOf(normalisedParent + '-') === 0);
+    });
+    return currentLeaves.concat(historicalLeaves);
+}
+function accCashflowRowIndent(account, isHistorical) {
+    if (!isHistorical) return Math.max(0, Number(account.level || 1) - 1) * 16;
+    const parent = accAccounts.find(function (candidate) {
+        return accNormaliseCode(candidate.account_code) === accNormaliseCode(account.parent_account_code);
+    });
+    const level = parent ? Number(parent.level || 1) + 1 : Number(account.level || 1);
+    return Math.max(0, level - 1) * 16;
+}
+function accCashflowRowMarkup(account, isHistorical) {
+    const isParent = !isHistorical && !account.is_leaf;
+    const selected = isParent ? accEffectiveCashflowCategory(account) : (account.category_id == null ? '' : String(account.category_id));
+    const rowClasses = [];
+    if (isParent) rowClasses.push('acc2-parent');
+    if (isHistorical) rowClasses.push('acc2-historical-orphan');
+    const typeClass = isHistorical ? 'historical' : (isParent ? 'parent' : 'leaf');
+    const typeLabel = isHistorical ? 'Historical / orphan' : (isParent ? 'Parent' : 'Leaf');
+    const result = isParent ? '<span class="acc2-parent-help">Applies to children</span>' : '<span class="acc2-saved" data-acc-cashflow-result="' + accEscape(account.account_code) + '">Saved</span>';
+    const historicalAttribute = isHistorical ? ' data-acc-historical-orphan="true"' : '';
+    return '<tr class="' + rowClasses.join(' ') + '"' + historicalAttribute + '>' +
+        '<td class="acc2-code" style="padding-left:' + (accCashflowRowIndent(account, isHistorical) + 10) + 'px">' + accEscape(account.account_code) + '</td>' +
+        '<td>' + accEscape(account.account_name || (isHistorical ? 'Historical account' : 'Unknown account')) + '</td>' +
+        '<td><span class="acc2-type ' + typeClass + '">' + typeLabel + '</span></td>' +
+        '<td><select class="acc2-cashflow-category" data-acc-code="' + accEscape(account.account_code) + '" data-acc-parent="' + (isParent ? 'true' : 'false') + '"' + (isHistorical ? ' data-acc-historical-orphan="true"' : '') + (!accIsAdmin ? ' disabled' : '') + '>' + accCashflowCategoryOptionMarkup(selected) + '</select></td>' +
+        '<td>' + result + '</td>' +
+        '</tr>';
 }
 function accRenderCashflowRows() {
     const filter = String(accElement('accCashflowFilter').value || '').trim().toLowerCase();
@@ -338,19 +373,6 @@ function accRenderCashflowRows() {
     accElement('accCashflowCount').textContent = (visible.length + visibleOrphans.length) + ' of ' + (accAccounts.length + accCashflowHistoricalOrphans.length) + ' accounts';
     accElement('accCashflowOrphanNotice').hidden = !accCashflowHistoricalOrphans.length;
     const rows = accElement('accCashflowRows');
-    function orphanMarkup(orphan) {
-        const parent = orphan.parent_account_code ? 'Under ' + orphan.parent_account_code + (orphan.parent_account_name ? ' — ' + orphan.parent_account_name : '') : 'No surviving parent found';
-        const detail = (orphan.transaction_count || 0) + ' transaction(s), ' + (orphan.voucher_count || 0) + ' voucher(s)';
-        const selected = orphan.category_id == null ? '' : String(orphan.category_id);
-        const result = '<span class="acc2-saved" data-acc-cashflow-result="' + accEscape(orphan.account_code) + '">Saved</span>';
-        return '<tr class="acc2-historical-orphan" data-acc-historical-orphan="' + accEscape(orphan.account_code) + '">' +
-            '<td class="acc2-code">' + accEscape(orphan.account_code) + '</td>' +
-            '<td><strong>' + accEscape(orphan.account_name || 'Historical account') + '</strong><small class="acc2-orphan-parent">' + accEscape(parent) + '</small></td>' +
-            '<td><span class="acc2-type historical">Historical / orphan</span></td>' +
-            '<td><select class="acc2-cashflow-category" data-acc-code="' + accEscape(orphan.account_code) + '" data-acc-parent="false" data-acc-historical-orphan="true"' + (!accIsAdmin ? ' disabled' : '') + '>' + accCashflowCategoryOptionMarkup(selected) + '</select></td>' +
-            '<td>' + result + '<small class="acc2-orphan-detail">' + accEscape(detail) + '</small></td>' +
-            '</tr>';
-    }
     const orphanByInsertIndex = {};
     visibleOrphans.forEach(function (orphan) {
         const parentCode = accNormaliseCode(orphan.parent_account_code);
@@ -370,21 +392,11 @@ function accRenderCashflowRows() {
     } else {
         const rendered = [];
         if (!visible.length) {
-            (orphanByInsertIndex['0'] || []).forEach(function (orphan) { rendered.push(orphanMarkup(orphan)); });
+            (orphanByInsertIndex['0'] || []).forEach(function (orphan) { rendered.push(accCashflowRowMarkup(orphan, true)); });
         } else {
             visible.forEach(function (account, index) {
-                const isParent = !account.is_leaf;
-                const selected = isParent ? accEffectiveCashflowCategory(account) : (account.category_id == null ? '' : String(account.category_id));
-                const indent = Math.max(0, Number(account.level || 1) - 1) * 16;
-                const result = isParent ? '<span class="acc2-parent-help">Applies to children</span>' : '<span class="acc2-saved" data-acc-cashflow-result="' + accEscape(account.account_code) + '">Saved</span>';
-                rendered.push('<tr class="' + (isParent ? 'acc2-parent' : '') + '">' +
-                    '<td class="acc2-code" style="padding-left:' + (indent + 10) + 'px">' + accEscape(account.account_code) + '</td>' +
-                    '<td>' + accEscape(account.account_name || 'Unknown account') + '</td>' +
-                    '<td><span class="acc2-type ' + (isParent ? 'parent' : 'leaf') + '">' + (isParent ? 'Parent' : 'Leaf') + '</span></td>' +
-                    '<td><select class="acc2-cashflow-category" data-acc-code="' + accEscape(account.account_code) + '" data-acc-parent="' + (isParent ? 'true' : 'false') + '"' + (!accIsAdmin ? ' disabled' : '') + '>' + accCashflowCategoryOptionMarkup(selected) + '</select></td>' +
-                    '<td>' + result + '</td>' +
-                    '</tr>');
-                (orphanByInsertIndex[String(index + 1)] || []).forEach(function (orphan) { rendered.push(orphanMarkup(orphan)); });
+                rendered.push(accCashflowRowMarkup(account, false));
+                (orphanByInsertIndex[String(index + 1)] || []).forEach(function (orphan) { rendered.push(accCashflowRowMarkup(orphan, true)); });
             });
         }
         rows.innerHTML = rendered.join('');

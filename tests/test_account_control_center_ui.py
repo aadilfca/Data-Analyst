@@ -183,6 +183,7 @@ def test_cashflow_setup_uses_categories_and_configuration_popups(browser, static
         {"id": 3, "account_code": "10-15-0002", "account_name": "Bank account", "parent_account_code": "10-15", "level": 3, "is_leaf": True, "category_id": None},
     ]
     categories = [{"id": 1, "client_id": 1, "category_key": "customer_receipts", "label": "Customer receipts", "sort_order": 0, "is_active": True}]
+    historical_orphans = [{"account_code": "10-15-0009", "account_name": "Historical cash account", "parent_account_code": "10-15", "transaction_count": 2, "voucher_count": 1, "is_historical_orphan": True, "is_read_only": True, "category_id": None}]
     calls = []
 
     def handle_api(route, request):
@@ -207,7 +208,7 @@ def test_cashflow_setup_uses_categories_and_configuration_popups(browser, static
                 "upload": {"id": 77, "file_name": "January Trial Balance.xlsx", "as_of_date": "2026-01-31"},
                 "categories": categories,
                 "accounts": accounts,
-                "historical_orphans": [{"account_code": "10-15-0009", "account_name": "Historical cash account", "parent_account_code": "10-15", "parent_account_name": "Receipts", "transaction_count": 2, "voucher_count": 1, "is_historical_orphan": True, "is_read_only": True}],
+                "historical_orphans": historical_orphans,
                 "treasury_accounts": {"cash": [], "bank": []},
                 "settings": {"match_internal_transfers": False, "receipt_presentation": "net", "source_template_id": None, "role_categories": {"customer_receipt": [1], "bank_charge": [], "withholding_tax": [], "other_deduction": []}},
             }))
@@ -242,6 +243,17 @@ def test_cashflow_setup_uses_categories_and_configuration_popups(browser, static
             categories.append({"id": 2, "client_id": 1, "category_key": body["category_key"], "label": body["label"], "sort_order": 1, "is_active": True})
             route.fulfill(status=201, content_type="application/json", body=json.dumps({"saved": True, "category": categories[-1]}))
             return
+        if base.endswith("/api/account-control-center/cashflow/category-assignment/apply-to-children"):
+            body = json.loads(request.post_data or "{}")
+            calls.append((request.method, body))
+            for account in accounts:
+                if account["account_code"].startswith(body["parent_account_code"] + "-") or account["account_code"] == body["parent_account_code"]:
+                    account["category_id"] = body.get("category_id")
+            for orphan in historical_orphans:
+                if orphan["parent_account_code"].startswith(body["parent_account_code"]):
+                    orphan["category_id"] = body.get("category_id")
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({"saved": True, "leaf_count": 3, "historical_orphan_count": 1}))
+            return
         if base.endswith("/api/account-control-center/cashflow/category-assignment"):
             body = json.loads(request.post_data or "{}")
             calls.append((request.method, body))
@@ -269,6 +281,8 @@ def test_cashflow_setup_uses_categories_and_configuration_popups(browser, static
     assert page.locator("#accCashflowRows tr").count() == 4
     assert page.locator("#accCashflowRows .acc2-historical-orphan").count() == 1
     assert page.locator("#accCashflowRows .acc2-historical-orphan .acc2-cashflow-category").count() == 1
+    assert page.locator("#accCashflowRows .acc2-historical-orphan td").count() == 5
+    assert page.locator("#accCashflowRows .acc2-historical-orphan .acc2-type").text_content() == "Historical / orphan"
     page.locator("select.acc2-cashflow-category[data-acc-code='10-15-0009']").select_option("1")
     page.wait_for_timeout(150)
     assert any(method == "PUT" and body.get("account_code") == "10-15-0009" and body.get("category_id") == 1 for method, body in calls)
@@ -276,6 +290,13 @@ def test_cashflow_setup_uses_categories_and_configuration_popups(browser, static
     assert page.locator("#accCashflowRows .acc2-cashflow-section").count() == 0
     assert page.locator("#accCashflowRows .acc2-cashflow-role").count() == 0
     assert page.locator("#accCashflowRows .acc2-cashflow-treatment").count() == 0
+    page.once("dialog", lambda dialog: dialog.accept())
+    page.locator("select.acc2-cashflow-category[data-acc-code='10-15']").select_option("1")
+    page.wait_for_timeout(200)
+    assert any(method == "POST" and body.get("parent_account_code") == "10-15" and body.get("category_id") == 1 for method, body in calls)
+    assert page.locator("select.acc2-cashflow-category[data-acc-code='10-15-0001']").input_value() == "1"
+    assert page.locator("select.acc2-cashflow-category[data-acc-code='10-15-0002']").input_value() == "1"
+    assert page.locator("select.acc2-cashflow-category[data-acc-code='10-15-0009']").input_value() == "1"
     page.locator("#accCashflowCategoryFab").click()
     page.locator("#accCashflowCategoryKey").fill("supplier_payments")
     page.locator("#accCashflowCategoryLabel").fill("Supplier payments")
