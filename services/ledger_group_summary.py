@@ -43,6 +43,35 @@ def _clean_text(value: Any) -> str:
     return str(value).strip()
 
 
+_CUSTOMER_PAYMENT_ROLE_KEYS = (
+    "customer_receipt",
+    "bank_charge",
+    "withholding_tax",
+    "other_deduction",
+)
+
+
+def _normalise_customer_payment_roles(
+    role_categories: Mapping[str, Sequence[Any]] | None,
+) -> dict[str, set[str]] | None:
+    if role_categories is None:
+        return None
+    normalised: dict[str, set[str]] = {}
+    for role in _CUSTOMER_PAYMENT_ROLE_KEYS:
+        values = role_categories.get(role, [])
+        if isinstance(values, (str, bytes)):
+            values = [values]
+        labels: set[str] = set()
+        for value in values:
+            if isinstance(value, Mapping):
+                value = value.get("label") or value.get("category")
+            label = _clean_text(value).casefold()
+            if label:
+                labels.add(label)
+        normalised[role] = labels
+    return normalised
+
+
 def _resolve_column(frame: pd.DataFrame, candidates: Sequence[str], required: bool = True) -> str | None:
     by_normalized = {str(column).strip().casefold(): column for column in frame.columns}
     for candidate in candidates:
@@ -232,6 +261,204 @@ def build_cashflow_transfer_reconciliation(
         "variance_total": variance_total,
         "status": "Matched" if matched else "Review required",
     }
+
+
+def _empty_customer_payment_details() -> pd.DataFrame:
+    return pd.DataFrame(
+        columns=[
+            "voucher_id",
+            "date",
+            "month",
+            "period_key",
+            "period_label",
+            "customer_account_code",
+            "customer_account_name",
+            "bank_account_code",
+            "bank_account_name",
+            "bank_account_type",
+            "method",
+            "configured_presentation",
+            "customer_gross_amount",
+            "bank_statement_amount",
+            "bank_charges",
+            "withholding_tax",
+            "other_deductions",
+            "deductions_total",
+            "technical_bank_offset",
+            "net_bank_settlement",
+            "expected_net_settlement",
+            "variance",
+            "status",
+            "voucher_detail",
+        ]
+    )
+
+
+def _build_cashflow_customer_payment_details(
+    working: pd.DataFrame,
+    contra: pd.DataFrame,
+    voucher_order: pd.Index,
+    treasury_type: Mapping[str, str],
+    *,
+    receipt_presentation: str,
+    tolerance: float,
+) -> pd.DataFrame:
+    """Build source-reconciled customer receipt rows without changing totals."""
+    if working.empty or contra.empty:
+        return _empty_customer_payment_details()
+
+    customer = contra.loc[
+        contra["is_customer"] & contra["amount"].gt(tolerance)
+    ].copy()
+    if customer.empty:
+        return _empty_customer_payment_details()
+    voucher_ids = customer["voucher_id"].drop_duplicates()
+    treasury = working.loc[
+        working["is_treasury"] & working["voucher_id"].isin(voucher_ids)
+    ].copy()
+    if treasury.empty:
+        return _empty_customer_payment_details()
+
+    treasury["treasury_type"] = treasury["account_code"].map(treasury_type).fillna("Treasury")
+    treasury_totals = (
+        treasury.groupby("voucher_id", sort=False)
+        .agg(
+            bank_account_code=("account_code", _join_unique_leg_values),
+            bank_account_name=("account_name", _join_unique_leg_values),
+            bank_account_type=("treasury_type", _join_unique_leg_values),
+            bank_statement_amount=("debit", "sum"),
+            bank_credit_amount=("credit", "sum"),
+            bank_account_count=("account_code", "nunique"),
+        )
+        .reindex(voucher_order)
+        .loc[lambda frame: frame.index.isin(voucher_ids)]
+        .reset_index()
+    )
+    customer_totals = (
+        customer.groupby("voucher_id", sort=False)
+        .agg(
+            customer_account_code=("account_code", _join_unique_leg_values),
+            customer_account_name=("account_name", _join_unique_leg_values),
+            customer_gross_amount=("amount", "sum"),
+            customer_account_count=("account_code", "nunique"),
+        )
+        .reset_index()
+    )
+    deductions = contra.loc[
+        contra["is_deduction"] & contra["voucher_id"].isin(voucher_ids)
+    ].copy()
+    if deductions.empty:
+        deduction_totals = pd.DataFrame({"voucher_id": voucher_ids})
+        deduction_totals["bank_charges"] = 0.0
+        deduction_totals["withholding_tax"] = 0.0
+        deduction_totals["other_deductions"] = 0.0
+    else:
+        deduction_amount = deductions["debit"] - deductions["credit"]
+        deductions["deduction_amount"] = deduction_amount
+        deductions["is_charge"] = deductions["is_bank_charge"].astype(bool)
+        deductions["is_withholding"] = deductions["is_withholding_tax"].astype(bool)
+        deduction_totals = deductions.groupby("voucher_id", sort=False).agg(
+            bank_charges=("deduction_amount", lambda values: float(values[deductions.loc[values.index, "is_charge"]].sum())),
+            withholding_tax=("deduction_amount", lambda values: float(values[deductions.loc[values.index, "is_withholding"]].sum())),
+            other_deductions=("deduction_amount", lambda values: float(values[
+                ~deductions.loc[values.index, "is_charge"] & ~deductions.loc[values.index, "is_withholding"]
+            ].sum())),
+        ).reset_index()
+
+    details = customer_totals.merge(treasury_totals, on="voucher_id", how="left")
+    details = details.merge(deduction_totals, on="voucher_id", how="left")
+    voucher_meta = (
+        working.groupby("voucher_id", sort=False)
+        .agg(
+            date=("date", "min"),
+            month=("month", "first"),
+            period_key=("period_key", "first"),
+            period_label=("period_label", "first"),
+            voucher_detail=("voucher_detail", lambda values: next((value for value in values if value), "")),
+        )
+        .reindex(voucher_order)
+        .loc[lambda frame: frame.index.isin(voucher_ids)]
+        .reset_index()
+    )
+    details = voucher_meta.merge(details, on="voucher_id", how="left")
+    for column in (
+        "bank_account_code",
+        "bank_account_name",
+        "bank_account_type",
+    ):
+        details[column] = details[column].fillna("")
+    for column in (
+        "bank_statement_amount",
+        "bank_credit_amount",
+        "bank_account_count",
+        "customer_gross_amount",
+        "customer_account_count",
+        "bank_charges",
+        "withholding_tax",
+        "other_deductions",
+    ):
+        details[column] = details[column].fillna(0.0)
+    details["deductions_total"] = (
+        details["bank_charges"] + details["withholding_tax"] + details["other_deductions"]
+    )
+    details["technical_bank_offset"] = details["bank_credit_amount"]
+    details["net_bank_settlement"] = (
+        details["bank_statement_amount"] - details["technical_bank_offset"]
+    )
+    details["expected_net_settlement"] = (
+        details["customer_gross_amount"] - details["deductions_total"]
+    )
+    details["variance"] = (
+        details["net_bank_settlement"] - details["expected_net_settlement"]
+    )
+    details["method"] = "Review"
+    gross_pattern = (
+        details["bank_account_count"].eq(1)
+        & details["bank_credit_amount"].gt(tolerance)
+    )
+    net_pattern = (
+        details["bank_account_count"].eq(1)
+        & details["bank_credit_amount"].abs().le(tolerance)
+    )
+    details.loc[gross_pattern, "method"] = "Gross"
+    details.loc[net_pattern, "method"] = "Net"
+    details["configured_presentation"] = receipt_presentation
+    details["status"] = "Review required"
+    matched = (
+        details["method"].isin(["Gross", "Net"])
+        & details["customer_account_count"].eq(1)
+        & details["bank_account_count"].eq(1)
+        & details["variance"].abs().le(tolerance)
+    )
+    details.loc[matched, "status"] = "Matched"
+    return details[
+        [
+            "voucher_id",
+            "date",
+            "month",
+            "period_key",
+            "period_label",
+            "customer_account_code",
+            "customer_account_name",
+            "bank_account_code",
+            "bank_account_name",
+            "bank_account_type",
+            "method",
+            "configured_presentation",
+            "customer_gross_amount",
+            "bank_statement_amount",
+            "bank_charges",
+            "withholding_tax",
+            "other_deductions",
+            "deductions_total",
+            "technical_bank_offset",
+            "net_bank_settlement",
+            "expected_net_settlement",
+            "variance",
+            "status",
+            "voucher_detail",
+        ]
+    ].sort_values(["date", "voucher_id"]).reset_index(drop=True)
 
 
 def _build_cashflow_transfer_details(
@@ -716,6 +943,7 @@ def build_cashflow_summary(
     group_by: str = 'month',
     match_internal_transfers: bool = False,
     receipt_presentation: str = "net",
+    cashflow_role_categories: Mapping[str, Sequence[Any]] | None = None,
     tolerance: float = DEFAULT_TOLERANCE,
 ) -> dict[str, Any]:
     """Summarise vouchers containing configured Cash or Bank accounts.
@@ -768,13 +996,10 @@ def build_cashflow_summary(
     selected_vouchers = journal.loc[journal["account_code"].isin(treasury_codes), "voucher_id"].drop_duplicates().tolist()
     working = journal.loc[journal["voucher_id"].isin(selected_vouchers)].copy()
 
-    def is_customer_category(label: str) -> bool:
-        value = label.casefold()
-        return "customer" in value and ("receipt" in value or "payment" in value)
-
     if working.empty:
         balance_checks = pd.DataFrame(columns=["voucher_id", "treasury_net", "counter_net", "variance", "balanced"])
         transfer_details = _empty_internal_transfer_details()
+        customer_payment_details = _empty_customer_payment_details()
         category_frame = pd.DataFrame(columns=["category", "month", "period_key", "amount"])
         review = pd.DataFrame(columns=["voucher_id", "date", "month", "period_key", "period_label", "account_code", "account_name", "voucher_detail", "debit", "credit", "fallback_category"])
         deductions = pd.DataFrame(columns=["category", "month", "period_key", "period_label", "amount", "account_code", "account_name", "date", "presentation"])
@@ -805,15 +1030,61 @@ def build_cashflow_summary(
             contra["account_name"].where(contra["account_name"].ne(""), "Unmapped account"),
         )
         contra["amount"] = contra["credit"] - contra["debit"]
-        category_text = contra["category"].fillna("").astype(str).str.casefold()
-        contra["is_customer"] = category_text.str.contains("customer", regex=False) & (
-            category_text.str.contains("receipt", regex=False) | category_text.str.contains("payment", regex=False)
+        category_text = (
+            contra["category"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.casefold()
         )
+        configured_roles = _normalise_customer_payment_roles(cashflow_role_categories)
+        if configured_roles is None:
+            # Direct callers from older integrations may not yet provide the
+            # role configuration. Keep their legacy behavior during migration;
+            # report routes always pass the Account Control Centre mapping.
+            contra["is_customer"] = category_text.isin({
+                "received from customers",
+                "customer receipts",
+                "customer receipt",
+            })
+            contra["is_bank_charge"] = category_text.str.contains("charge", regex=False)
+            contra["is_withholding_tax"] = (
+                category_text.str.contains("withholding", regex=False)
+                | category_text.str.contains("wht", regex=False)
+            )
+            contra["is_other_deduction"] = (
+                category_text.str.contains("deduction", regex=False)
+                & ~contra["is_bank_charge"]
+                & ~contra["is_withholding_tax"]
+            )
+        else:
+            contra["is_customer"] = category_text.isin(configured_roles["customer_receipt"])
+            contra["is_bank_charge"] = category_text.isin(configured_roles["bank_charge"])
+            contra["is_withholding_tax"] = category_text.isin(configured_roles["withholding_tax"])
+            contra["is_other_deduction"] = category_text.isin(configured_roles["other_deduction"])
+        contra["has_cashflow_category"] = mapped_categories.ne("")
+        customer_vouchers = set(contra.loc[contra["is_customer"], "voucher_id"].drop_duplicates())
+        if configured_roles is not None and customer_vouchers:
+            residual = (
+                contra["voucher_id"].isin(customer_vouchers)
+                & ~contra["is_customer"]
+                & contra["has_cashflow_category"]
+                & ~contra["is_bank_charge"]
+                & ~contra["is_withholding_tax"]
+            )
+            contra["is_other_deduction"] = contra["is_other_deduction"] | residual
         contra["is_deduction"] = (
-            category_text.str.contains("charge", regex=False)
-            | category_text.str.contains("withholding", regex=False)
-            | category_text.str.contains("wht", regex=False)
-            | category_text.str.contains("deduction", regex=False)
+            contra["is_bank_charge"]
+            | contra["is_withholding_tax"]
+            | contra["is_other_deduction"]
+        )
+        customer_payment_details = _build_cashflow_customer_payment_details(
+            working,
+            contra,
+            voucher_order,
+            treasury_type,
+            receipt_presentation=presentation,
+            tolerance=tolerance,
         )
         review = contra.loc[
             mapped_categories.eq(""),
@@ -870,6 +1141,7 @@ def build_cashflow_summary(
         "category_totals": category_totals,
         "transfer_details": transfer_details,
         "transfer_reconciliation": transfer_reconciliation,
+        "customer_payment_details": customer_payment_details,
         "deduction_details": deductions,
         "categories_needing_review": review,
         "balance_checks": balance_checks,

@@ -442,6 +442,12 @@ _CASHFLOW_ROLES = frozenset({"none", "cash", "bank", "both"})
 _CASHFLOW_TREATMENTS = frozenset({
     "standard", "customer_receipt", "withholding_tax", "bank_charge", "other_deduction", "non_cash",
 })
+_CASHFLOW_ROLE_CATEGORY_KEYS = (
+    "customer_receipt",
+    "bank_charge",
+    "withholding_tax",
+    "other_deduction",
+)
 
 
 class CashFlowAssignmentPayload(BaseModel):
@@ -499,6 +505,10 @@ class CashFlowSettingsPayload(BaseModel):
     client_id: int = Field(..., ge=1)
     match_internal_transfers: bool = False
     receipt_presentation: str = "net"
+    customer_receipt_category_ids: list[int] = Field(default_factory=list)
+    bank_charge_category_ids: list[int] = Field(default_factory=list)
+    withholding_tax_category_ids: list[int] = Field(default_factory=list)
+    other_deduction_category_ids: list[int] = Field(default_factory=list)
 
 
 def _clean_control_account_code(value: Any) -> str:
@@ -616,6 +626,19 @@ def _validate_cashflow_category(client_id: int, category_id: Optional[int]) -> N
     )
     if not rows:
         raise HTTPException(400, "Cash Flow category is invalid or inactive")
+
+
+def _clean_cashflow_role_categories(payload: CashFlowSettingsPayload) -> dict[str, list[int]]:
+    values = {
+        "customer_receipt": payload.customer_receipt_category_ids,
+        "bank_charge": payload.bank_charge_category_ids,
+        "withholding_tax": payload.withholding_tax_category_ids,
+        "other_deduction": payload.other_deduction_category_ids,
+    }
+    return {
+        role: sorted({int(category_id) for category_id in category_ids if int(category_id) > 0})
+        for role, category_ids in values.items()
+    }
 
 
 def _upsert_cashflow_category_assignment(assignment: dict[str, Any], updated_by: str) -> None:
@@ -1003,7 +1026,19 @@ def get_cashflow_setup(client_id: int = Query(..., ge=1), session=Depends(requir
            WHERE client_id = %s""",
         (client_id,),
     )
+    role_rows = execute_query_pg(
+        """SELECT role_key, category_id
+           FROM account_control_cashflow_role_categories
+           WHERE client_id = %s
+           ORDER BY role_key, category_id""",
+        (client_id,),
+    )
     settings = settings_rows[0] if settings_rows else {"match_internal_transfers": False, "receipt_presentation": "net", "source_template_id": None}
+    role_categories = {role: [] for role in _CASHFLOW_ROLE_CATEGORY_KEYS}
+    for row in role_rows:
+        role = row.get("role_key")
+        if role in role_categories:
+            role_categories[role].append(int(row["category_id"]))
     return {
         "client_id": client_id,
         "upload": upload,
@@ -1029,6 +1064,7 @@ def get_cashflow_setup(client_id: int = Query(..., ge=1), session=Depends(requir
             "match_internal_transfers": bool(settings.get("match_internal_transfers")),
             "receipt_presentation": settings.get("receipt_presentation") or "net",
             "source_template_id": settings.get("source_template_id"),
+            "role_categories": role_categories,
         },
     }
 
@@ -1159,19 +1195,42 @@ def save_cashflow_settings(payload: CashFlowSettingsPayload, session=Depends(req
     if presentation not in {"net", "gross"}:
         raise HTTPException(400, "Customer payment presentation must be net or gross")
     _require_active_client(payload.client_id)
-    execute_write_pg(
-        """INSERT INTO account_control_cashflow_settings
-           (client_id, match_internal_transfers, receipt_presentation, updated_by, updated_at)
-           VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
-           ON CONFLICT (client_id) DO UPDATE SET
-             match_internal_transfers = EXCLUDED.match_internal_transfers,
-             receipt_presentation = EXCLUDED.receipt_presentation,
-             updated_by = EXCLUDED.updated_by,
-             updated_at = CURRENT_TIMESTAMP""",
-        (payload.client_id, payload.match_internal_transfers, presentation, _actor_name(session)),
-    )
+    role_categories = _clean_cashflow_role_categories(payload)
+    for category_ids in role_categories.values():
+        for category_id in category_ids:
+            _validate_cashflow_category(payload.client_id, category_id)
+    actor = _actor_name(session)
+    with pg_transaction():
+        execute_write_pg(
+            """INSERT INTO account_control_cashflow_settings
+               (client_id, match_internal_transfers, receipt_presentation, updated_by, updated_at)
+               VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+               ON CONFLICT (client_id) DO UPDATE SET
+                 match_internal_transfers = EXCLUDED.match_internal_transfers,
+                 receipt_presentation = EXCLUDED.receipt_presentation,
+                 updated_by = EXCLUDED.updated_by,
+                 updated_at = CURRENT_TIMESTAMP""",
+            (payload.client_id, payload.match_internal_transfers, presentation, actor),
+        )
+        execute_write_pg(
+            "DELETE FROM account_control_cashflow_role_categories WHERE client_id = %s",
+            (payload.client_id,),
+        )
+        for role, category_ids in role_categories.items():
+            for category_id in category_ids:
+                execute_write_pg(
+                    """INSERT INTO account_control_cashflow_role_categories
+                       (client_id, role_key, category_id, updated_by, updated_at)
+                       VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)""",
+                    (payload.client_id, role, category_id, actor),
+                )
     _refresh_cashflow_snapshot(payload.client_id, "cashflow_settings")
-    return {"saved": True, "match_internal_transfers": payload.match_internal_transfers, "receipt_presentation": presentation}
+    return {
+        "saved": True,
+        "match_internal_transfers": payload.match_internal_transfers,
+        "receipt_presentation": presentation,
+        "role_categories": role_categories,
+    }
 
 @router.get("/api/account-control-center/sets")
 def list_account_sets(client_id: int = Query(..., ge=1), session=Depends(require_admin)):

@@ -10171,9 +10171,29 @@ body {
 .acc2-payment-format-card { padding: 16px; border: 1px solid #dbe4ea; border-radius: 12px; background: #fbfdff; }
 .acc2-payment-format-card h3 { margin-top: 0; color: #124d7d; }
 .acc2-payment-format-card p { margin: 7px 0; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.acc2-customer-role-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 20px; }
+.acc2-cashflow-role { position: relative; min-width: 0; }
+.acc2-cashflow-role > label { display: block; margin-bottom: 7px; color: #234b65; font-size: 12px; font-weight: 700; }
+.acc2-cashflow-role-input { width: 100%; min-width: 0; box-sizing: border-box; margin: 0 0 16px; padding: 9px 10px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; color: #1e293b; font: inherit; font-size: 12px; }
+.acc2-cashflow-role-input:focus { border-color: #2563eb; outline: 2px solid #bfdbfe; }
+.acc2-cashflow-role-input:disabled { cursor: not-allowed; opacity: .65; }
+.acc2-cashflow-role-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 42px; padding: 10px 12px; border: 1px solid #b9ccda; border-radius: 8px; background: #fff; color: #1d4058; font: inherit; text-align: left; cursor: pointer; }
+.acc2-cashflow-role-toggle:focus { outline: 3px solid rgba(23, 105, 170, .2); border-color: #1769aa; }
+.acc2-cashflow-role-toggle:disabled { cursor: not-allowed; opacity: .6; }
+.acc2-cashflow-role-menu { position: absolute; z-index: 20; top: 74px; right: 0; left: 0; max-height: 300px; overflow: auto; padding: 10px; border: 1px solid #b9ccda; border-radius: 10px; background: #fff; box-shadow: 0 12px 30px rgba(16, 37, 56, .18); }
+.acc2-cashflow-role-menu[hidden] { display: none; }
+.acc2-cashflow-role-menu-tools { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.acc2-cashflow-role-search { flex: 1; min-width: 0; padding: 8px 9px; border: 1px solid #dbe4ea; border-radius: 7px; }
+.acc2-cashflow-role-clear { flex: 0 0 auto; padding: 8px 9px; border: 0; border-radius: 7px; background: #eef4f8; color: #24536e; cursor: pointer; }
+.acc2-cashflow-role-options { display: grid; gap: 2px; }
+.acc2-cashflow-role-option { display: flex; align-items: center; gap: 8px; padding: 7px 6px; border-radius: 6px; color: #26475d; cursor: pointer; }
+.acc2-cashflow-role-option:hover { background: #f1f7fb; }
+.acc2-cashflow-role-option[hidden] { display: none; }
+.acc2-cashflow-role-empty { padding: 8px 6px; color: #64748b; font-size: 12px; }
 .acc2-modal-footer { display: flex; justify-content: flex-end; margin-top: 20px; padding-top: 16px; border-top: 1px solid #e5edf2; }
 @media (max-width: 680px) { .acc2-modal-backdrop { padding: 10px; } .acc2-modal { padding: 18px; } .acc2-payment-format-grid { grid-template-columns: 1fr; } .acc2-cashflow-fab { right: 18px; bottom: 18px; } }
 @media (max-width: 680px) { .acc2-treasury-picker-layout { grid-template-columns: 1fr; } .acc2-treasury-selected { position: static; max-height: 150px; } }
+@media (max-width: 680px) { .acc2-customer-role-grid { grid-template-columns: 1fr; } .acc2-cashflow-role-menu { position: static; margin-top: 8px; } }
 
 .acc2-template-source { display: grid; gap: 7px; margin-bottom: 18px; }
 .acc2-template-source > label { color: #29485f; font-size: 12px; font-weight: 800; }
@@ -10242,6 +10262,7 @@ body.cashflows-processing-open { overflow: hidden; }
 .cashflows-transfer-reconciliation { margin: 0 0 12px; padding: 11px 12px; border: 1px solid #dbe4ea; border-radius: 9px; background: #f8fbfd; }.cashflows-transfer-reconciliation[hidden] { display: none; }.cashflows-transfer-reconciliation-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 9px; color: #334e60; font-size: 12px; }.cashflows-transfer-status { padding: 4px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }.cashflows-transfer-status.is-matched { background: #e7f6ed; color: #167143; }.cashflows-transfer-status.is-review { background: #fff2df; color: #9a5a00; }.cashflows-transfer-metrics { display: grid; grid-template-columns: repeat(7, minmax(100px, 1fr)); gap: 8px; }.cashflows-transfer-metric { display: grid; gap: 3px; min-width: 0; padding: 7px 8px; border-left: 2px solid #dbe4ea; }.cashflows-transfer-metric span { color: #64748b; font-size: 10px; font-weight: 700; text-transform: uppercase; }.cashflows-transfer-metric strong { overflow: hidden; color: #334e60; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .cashflows-detail-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }.cashflows-detail-grid > .cashflows-report-section { width: 100%; box-sizing: border-box; }
 .cashflows-table-wrap { overflow-x: auto; overflow-y: visible; }.cashflows-table { width: 100%; border-collapse: collapse; font-size: 12px; }.cashflows-table th, .cashflows-table td { padding: 9px 10px; border-bottom: 1px solid #e6edf2; white-space: nowrap; }.cashflows-table th { background: #f4f8fa; color: #526675; font-size: 11px; text-transform: uppercase; }.cashflows-table th.cashflows-table-text, .cashflows-table td.cashflows-table-text { text-align: left; }.cashflows-table th.cashflows-table-number, .cashflows-table td.cashflows-table-number { text-align: right; }.cashflows-table tbody tr:hover { background: #f8fbfd; }.cashflows-empty { color: #71808c; text-align: center !important; }
+.cashflows-customer-payments-table { min-width: 1450px; }
 .cashflows-summary-tools { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .cashflows-search-control { position: relative; flex: 1 1 520px; min-width: 280px; }
 .cashflows-search-control input { width: 100%; box-sizing: border-box; min-width: 0; padding: 9px 38px 9px 11px; border: 1px solid #cbd5e1; border-radius: 7px; background: #fff; font: inherit; appearance: none; -webkit-appearance: none; }

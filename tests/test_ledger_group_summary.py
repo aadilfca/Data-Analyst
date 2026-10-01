@@ -195,6 +195,52 @@ def test_cashflow_summary_nets_customer_receipt_and_keeps_deduction_detail():
     assert result["deduction_details"]["amount"].tolist() == [10.0]
 
 
+def test_configured_customer_roles_classify_other_categorized_lines_as_other_deduction():
+    journal = pd.DataFrame(
+        [
+            ["V1", "2026-01-05", "BANK", "Export bank", "Gross receipt", 100, 7],
+            ["V1", "2026-01-05", "CUSTOMER", "Export customer", "Gross receipt", 0, 100],
+            ["V1", "2026-01-05", "CHARGE", "Bank charge", "Gross receipt", 1, 0],
+            ["V1", "2026-01-05", "WHT", "Withholding tax", "Gross receipt", 2, 0],
+            ["V1", "2026-01-05", "OTHER", "Export service deduction", "Gross receipt", 4, 0],
+        ],
+        columns=["voucher_id", "date", "account_code", "account_name", "voucher_detail", "debit", "credit"],
+    )
+    coa = pd.DataFrame(
+        [
+            ["BANK", "Export bank", "Bank", "Bank"],
+            ["CUSTOMER", "Export customer", "Receivable", "Received from customers"],
+            ["CHARGE", "Bank charge", "Expense", "Bank charges"],
+            ["WHT", "Withholding tax", "Tax", "Withholding tax on export"],
+            ["OTHER", "Export service deduction", "Expense", "Export service expense"],
+        ],
+        columns=["account_code", "account_title", "account_type", "category"],
+    )
+
+    result = build_cashflow_summary(
+        journal,
+        coa,
+        [],
+        ["BANK"],
+        "2026-01-01",
+        "2026-01-31",
+        cashflow_role_categories={
+            "customer_receipt": ["Received from customers"],
+            "bank_charge": ["Bank charges"],
+            "withholding_tax": ["Withholding tax on export"],
+            "other_deduction": [],
+        },
+    )
+
+    detail = result["customer_payment_details"].iloc[0]
+    assert detail["bank_charges"] == 1
+    assert detail["withholding_tax"] == 2
+    assert detail["other_deductions"] == 4
+    assert detail["expected_net_settlement"] == 93
+    assert detail["variance"] == 0
+    assert detail["status"] == "Matched"
+
+
 def test_cashflow_summary_exposes_period_metrics_for_prepared_snapshot():
     journal, coa = _fixture_data()
     result = build_cashflow_summary(

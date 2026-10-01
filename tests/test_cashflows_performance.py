@@ -59,6 +59,7 @@ def test_cashflow_sql_source_filters_dates_joins_vouchers_and_aggregates_lines()
     assert source.journal.loc[0, "account_code"] == "B1"
     assert source.coa.set_index("account_code").loc["EXP", "category"] == "Repairs"
 
+    assert len(calls) == 2
     source_sql, source_params = calls[1]
     assert "c.is_current = TRUE" in source_sql
     assert "c.transaction_date >= %s" in source_sql

@@ -1002,6 +1002,11 @@ def replace_report_category_assignments(
 def _cashflow_configuration(client_id: int) -> dict[str, Any]:
     rows = execute_query_pg(
         """
+        WITH request AS (
+            SELECT %s::bigint AS treasury_client_id,
+                   %s::bigint AS settings_client_id,
+                   %s::bigint AS role_client_id
+        )
         SELECT
             COALESCE((
                 SELECT json_agg(json_build_object(
@@ -1014,7 +1019,7 @@ def _cashflow_configuration(client_id: int) -> dict[str, Any]:
                   ON c.id = a.category_id
                  AND c.client_id = a.client_id
                  AND c.is_active = TRUE
-                WHERE a.client_id = %s
+                WHERE a.client_id = (SELECT settings_client_id FROM request)
             ), '[]'::json) AS mappings,
             COALESCE((
                 SELECT json_agg(json_build_object(
@@ -1022,7 +1027,7 @@ def _cashflow_configuration(client_id: int) -> dict[str, Any]:
                     'treasury_type', t.treasury_type
                 ) ORDER BY t.treasury_type, t.account_code)
                 FROM account_control_cashflow_treasury_accounts t
-                WHERE t.client_id = %s AND t.is_active = TRUE
+                WHERE t.client_id = (SELECT treasury_client_id FROM request) AND t.is_active = TRUE
             ), '[]'::json) AS treasury,
             COALESCE((
                 SELECT json_build_object(
@@ -1032,9 +1037,22 @@ def _cashflow_configuration(client_id: int) -> dict[str, Any]:
                     'source_template_id', s.source_template_id
                 )
                 FROM account_control_cashflow_settings s
-                WHERE s.client_id = %s
+                WHERE s.client_id = (SELECT settings_client_id FROM request)
                 LIMIT 1
-            ), '{}'::json) AS settings
+            ), '{}'::json) AS settings,
+            COALESCE((
+                SELECT json_agg(json_build_object(
+                    'role_key', r.role_key,
+                    'category_id', r.category_id,
+                    'label', c.label
+                ) ORDER BY r.role_key, r.category_id)
+                FROM account_control_cashflow_role_categories r
+                JOIN account_control_cashflow_categories c
+                  ON c.id = r.category_id
+                 AND c.client_id = r.client_id
+                 AND c.is_active = TRUE
+                WHERE r.client_id = (SELECT role_client_id FROM request)
+            ), '[]'::json) AS customer_payment_roles
         """,
         (client_id, client_id, client_id),
     )
@@ -1042,6 +1060,16 @@ def _cashflow_configuration(client_id: int) -> dict[str, Any]:
     mappings = row.get("mappings") or []
     treasury = row.get("treasury") or []
     settings = row.get("settings") or {}
+    customer_payment_roles = {
+        "customer_receipt": [],
+        "bank_charge": [],
+        "withholding_tax": [],
+        "other_deduction": [],
+    }
+    for role_row in row.get("customer_payment_roles") or []:
+        role = str(role_row.get("role_key") or "")
+        if role in customer_payment_roles and role_row.get("label"):
+            customer_payment_roles[role].append(role_row["label"])
     return {
         "category_mappings": {normalize_account_code(row["account_code"]): row.get("label") or "" for row in mappings},
         "cash_account_codes": [normalize_account_code(row["account_code"]) for row in treasury if row["treasury_type"] == "cash"],
@@ -1050,6 +1078,7 @@ def _cashflow_configuration(client_id: int) -> dict[str, Any]:
         "bank_account_codes": [normalize_account_code(row["account_code"]) for row in treasury if row["treasury_type"] == "bank"],
         "match_internal_transfers": bool(settings.get("match_internal_transfers")),
         "receipt_presentation": settings.get("receipt_presentation") or "net",
+        "customer_payment_roles": customer_payment_roles,
     }
 
 def _cashflow_template_mapping_view(client_id: int, template_id: int) -> dict[str, Any]:
@@ -1255,6 +1284,7 @@ def _cashflow_preview(
             "category_totals": [],
             "transfer_details": [],
             "transfer_reconciliation": None,
+            "customer_payment_details": [],
             "deduction_details": [],
             "categories_needing_review": [],
             "selected_voucher_count": 0,
@@ -1264,7 +1294,7 @@ def _cashflow_preview(
             "receipt_presentation": "net",
             "detail_sections_loaded": [],
         }
-    loaded = {"transfers", "deductions", "review"} if detail_sections is None else set(detail_sections)
+    loaded = {"transfers", "customer_payments", "deductions", "review"} if detail_sections is None else set(detail_sections)
     review = summary.get("categories_needing_review")
     return {
         "months": [str(month) for month in summary.get("months", [])],
@@ -1273,6 +1303,7 @@ def _cashflow_preview(
         "category_totals": _category_total_records(summary.get("category_totals")),
         "transfer_details": _frame_records(summary.get("transfer_details")) if "transfers" in loaded else [],
         "transfer_reconciliation": summary.get("transfer_reconciliation") if "transfers" in loaded else None,
+        "customer_payment_details": _frame_records(summary.get("customer_payment_details")) if "customer_payments" in loaded else [],
         "deduction_details": _frame_records(summary.get("deduction_details")) if "deductions" in loaded else [],
         "categories_needing_review": _frame_records(review) if "review" in loaded else [],
         "selected_voucher_count": int(summary.get("selected_voucher_count", 0)),
@@ -1400,6 +1431,7 @@ def _build_cashflow_result(
                 end,
                 match_internal_transfers=configuration["match_internal_transfers"],
                 receipt_presentation=configuration["receipt_presentation"],
+                cashflow_role_categories=configuration.get("customer_payment_roles"),
                 group_by=grouping,
             )
         except LedgerBalanceError as error:
@@ -1577,7 +1609,7 @@ def _parse_cashflow_detail_sections(value: str | None) -> set[str] | None:
     raw = value.strip().casefold()
     if raw in {"", "summary"}:
         return set()
-    allowed = {"transfers", "deductions", "review"}
+    allowed = {"transfers", "customer_payments", "deductions", "review"}
     sections = {item.strip() for item in raw.split(",") if item.strip()}
     if sections - allowed:
         raise HTTPException(400, "Invalid Cashflows detail section requested.")

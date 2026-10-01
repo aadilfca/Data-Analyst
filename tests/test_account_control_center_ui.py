@@ -209,7 +209,7 @@ def test_cashflow_setup_uses_categories_and_configuration_popups(browser, static
                 "accounts": accounts,
                 "historical_orphans": [{"account_code": "10-15-0009", "account_name": "Historical cash account", "parent_account_code": "10-15", "parent_account_name": "Receipts", "transaction_count": 2, "voucher_count": 1, "is_historical_orphan": True, "is_read_only": True}],
                 "treasury_accounts": {"cash": [], "bank": []},
-                "settings": {"match_internal_transfers": False, "receipt_presentation": "net", "source_template_id": None},
+                "settings": {"match_internal_transfers": False, "receipt_presentation": "net", "source_template_id": None, "role_categories": {"customer_receipt": [1], "bank_charge": [], "withholding_tax": [], "other_deduction": []}},
             }))
             return
         if base.endswith("/api/reconciliation/cashflows/sources"):
@@ -303,6 +303,12 @@ def test_cashflow_setup_uses_categories_and_configuration_popups(browser, static
     assert page.locator("#accCashflowMatchTransfers").is_visible()
     page.locator("[data-acc-cashflow-config-tab='customer']").click()
     assert page.locator(".acc2-payment-format-card").count() == 2
+    assert page.locator("#accCashflowCustomerReceiptCategories").input_value() == "Customer receipts"
+    assert page.locator("#accCashflowCustomerReceiptCategoryOptions option[value='Customer receipts']").count() == 1
+    page.locator("#accCashflowCustomerReceiptCategories").fill("Customer receipts")
+    page.locator("#accCashflowCustomerSettingsSave").click()
+    page.wait_for_timeout(150)
+    assert any(method == "PUT" and body.get("customer_receipt_category_ids") == [1] for method, body in calls)
     page.locator("[data-acc-cashflow-config-tab='transfers']").click()
     page.locator("#accCashflowAccountsClose").click()
     page.locator("#accCashflowTemplateButton").click()

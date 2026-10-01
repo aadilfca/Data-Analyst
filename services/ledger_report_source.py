@@ -30,7 +30,7 @@ JOURNAL_COLUMNS = (
 )
 CASHFLOW_PREPARED_PERIOD_COLUMNS = ("transaction_month", "transaction_fortnight")
 COA_COLUMNS = ("account_code", "account_title", "account_type", "category")
-CASHFLOW_CHILD_DETAILS_VERSION = 3
+CASHFLOW_CHILD_DETAILS_VERSION = 5
 
 _JOURNAL_ALIASES: Mapping[str, tuple[str, ...]] = {
     "voucher_id": (
@@ -858,7 +858,7 @@ def _cashflow_summary_payload(summary: Mapping[str, Any]) -> dict[str, Any]:
     period_keys = [str(period["key"]) for period in periods]
     child_details_prepared = all(
         key in summary
-        for key in ("transfer_details", "deduction_details", "categories_needing_review")
+        for key in ("transfer_details", "customer_payment_details", "deduction_details", "categories_needing_review")
     )
     category_totals = summary.get("category_totals")
     categories: list[dict[str, Any]] = []
@@ -887,6 +887,7 @@ def _cashflow_summary_payload(summary: Mapping[str, Any]) -> dict[str, Any]:
         "child_details_version": CASHFLOW_CHILD_DETAILS_VERSION if child_details_prepared else 0,
         "transfer_details": _cashflow_detail_records(transfer_details),
         "transfer_reconciliation": dict(transfer_reconciliation),
+        "customer_payment_details": _cashflow_detail_records(summary.get("customer_payment_details")),
         "deduction_details": _cashflow_detail_records(summary.get("deduction_details")),
         "categories_needing_review": _cashflow_detail_records(summary.get("categories_needing_review")),
         "period_metrics": summary.get("period_metrics") or {},
@@ -916,6 +917,7 @@ def _cashflow_summary_from_payload(payload: Mapping[str, Any], group_by: str) ->
     child_details_version = int(payload.get("child_details_version", 0) or 0)
     child_details_prepared = bool(payload.get("child_details_prepared")) and child_details_version >= CASHFLOW_CHILD_DETAILS_VERSION
     transfer_details = _cashflow_detail_frame(payload, "transfer_details") if child_details_prepared else pd.DataFrame()
+    customer_payment_details = _cashflow_detail_frame(payload, "customer_payment_details") if child_details_prepared else pd.DataFrame()
     return {
         "months": [str(month) for month in payload.get("months", [])],
         "periods": periods,
@@ -925,6 +927,7 @@ def _cashflow_summary_from_payload(payload: Mapping[str, Any], group_by: str) ->
         "transfer_reconciliation": (
             payload.get("transfer_reconciliation") or build_cashflow_transfer_reconciliation(transfer_details)
         ) if child_details_prepared else None,
+        "customer_payment_details": customer_payment_details,
         "deduction_details": _cashflow_detail_frame(payload, "deduction_details") if child_details_prepared else pd.DataFrame(),
         "categories_needing_review": _cashflow_detail_frame(payload, "categories_needing_review") if child_details_prepared else pd.DataFrame(),
         "selected_vouchers": [],
@@ -972,15 +975,40 @@ def _cashflow_preparation_configuration(
                 FROM account_control_cashflow_settings s
                 WHERE s.client_id = %s
                 LIMIT 1
-            ), '{}'::json) AS settings
+            ), '{}'::json) AS settings,
+            COALESCE((
+                SELECT json_agg(json_build_object(
+                    'role_key', r.role_key,
+                    'category_id', r.category_id,
+                    'label', c.label
+                ) ORDER BY r.role_key, r.category_id)
+                FROM account_control_cashflow_role_categories r
+                JOIN account_control_cashflow_categories c
+                  ON c.id = r.category_id
+                 AND c.client_id = r.client_id
+                 AND c.is_active = TRUE
+                WHERE r.client_id = %s
+            ), '[]'::json) AS customer_payment_roles
         """,
-        (client_id, client_id),
+        (client_id, client_id, client_id),
     )
     row = rows[0] if rows else {}
     treasury = _cashflow_json_value(row.get("treasury"))
     settings = _cashflow_json_value(row.get("settings"))
+    role_rows = _cashflow_json_value(row.get("customer_payment_roles"))
     treasury = treasury if isinstance(treasury, list) else []
     settings = settings if isinstance(settings, Mapping) else {}
+    role_rows = role_rows if isinstance(role_rows, list) else []
+    customer_payment_roles = {
+        "customer_receipt": [],
+        "bank_charge": [],
+        "withholding_tax": [],
+        "other_deduction": [],
+    }
+    for role_row in role_rows:
+        role = str(role_row.get("role_key") or "")
+        if role in customer_payment_roles and role_row.get("label"):
+            customer_payment_roles[role].append(role_row["label"])
     return {
         "source_template_id": settings.get("source_template_id"),
         "cash_account_codes": [
@@ -995,6 +1023,7 @@ def _cashflow_preparation_configuration(
         ],
         "match_internal_transfers": bool(settings.get("match_internal_transfers")),
         "receipt_presentation": str(settings.get("receipt_presentation") or "net").casefold(),
+        "customer_payment_roles": customer_payment_roles,
     }
 
 
@@ -1074,6 +1103,7 @@ def _cashflow_daily_rollup(
     child_details_version = int(payload.get("child_details_version", 0) or 0)
     child_details_prepared = bool(payload.get("child_details_prepared")) and child_details_version >= CASHFLOW_CHILD_DETAILS_VERSION
     transfer_details = _cashflow_rollup_detail_frame(payload, "transfer_details", periods) if child_details_prepared else pd.DataFrame()
+    customer_payment_details = _cashflow_rollup_detail_frame(payload, "customer_payment_details", periods) if child_details_prepared else pd.DataFrame()
     deduction_details = _cashflow_rollup_detail_frame(payload, "deduction_details", periods) if child_details_prepared else pd.DataFrame()
     review = _cashflow_rollup_detail_frame(payload, "categories_needing_review", periods) if child_details_prepared else pd.DataFrame()
     transfer_reconciliation = build_cashflow_transfer_reconciliation(transfer_details) if child_details_prepared else None
@@ -1091,6 +1121,7 @@ def _cashflow_daily_rollup(
         "category_totals": category_totals,
         "transfer_details": transfer_details,
         "transfer_reconciliation": transfer_reconciliation,
+        "customer_payment_details": customer_payment_details,
         "deduction_details": deduction_details,
         "categories_needing_review": review,
         "selected_vouchers": [],
@@ -1224,6 +1255,7 @@ def prepare_cashflow_summary_snapshot(
         source_end,
         match_internal_transfers=configuration["match_internal_transfers"],
         receipt_presentation=configuration["receipt_presentation"],
+        cashflow_role_categories=configuration["customer_payment_roles"],
         group_by="day",
     )
     store_cashflow_summary_read_model(

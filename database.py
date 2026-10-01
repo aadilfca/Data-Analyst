@@ -2715,6 +2715,21 @@ def init_db():
             )
         ''')
         conn.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_cashflow_role_categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                role_key TEXT NOT NULL
+                    CHECK (role_key IN ('customer_receipt', 'bank_charge', 'withholding_tax', 'other_deduction')),
+                category_id INTEGER NOT NULL,
+                updated_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                FOREIGN KEY (category_id) REFERENCES account_control_cashflow_categories(id) ON DELETE CASCADE,
+                UNIQUE(client_id, role_key, category_id)
+            )
+        ''')
+        conn.execute('''
             CREATE TABLE IF NOT EXISTS account_control_cashflow_treasury_accounts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 client_id INTEGER NOT NULL,
@@ -2769,6 +2784,7 @@ def init_db():
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_source_mappings_client_template ON account_control_cashflow_source_mappings (client_id, template_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_categories_client ON account_control_cashflow_categories (client_id, is_active)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_category_assignments_client ON account_control_cashflow_category_assignments (client_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_role_categories_client ON account_control_cashflow_role_categories (client_id, role_key)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_treasury_client ON account_control_cashflow_treasury_accounts (client_id, treasury_type)")
         try:
             cur = conn.execute("PRAGMA table_info(account_control_cashflow_treasury_accounts)")
@@ -3808,6 +3824,18 @@ def _ensure_postgres_account_set_tables(conn):
             )
         ''')
         cur.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_cashflow_role_categories (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                role_key TEXT NOT NULL CHECK (role_key IN ('customer_receipt', 'bank_charge', 'withholding_tax', 'other_deduction')),
+                category_id INTEGER NOT NULL REFERENCES account_control_cashflow_categories(id) ON DELETE CASCADE,
+                updated_by TEXT,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                updated_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(client_id, role_key, category_id)
+            )
+        ''')
+        cur.execute('''
             CREATE TABLE IF NOT EXISTS account_control_cashflow_treasury_accounts (
                 id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
                 client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
@@ -3850,6 +3878,7 @@ def _ensure_postgres_account_set_tables(conn):
         cur.execute("CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_source_mappings_client_template ON account_control_cashflow_source_mappings (client_id, template_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_categories_client ON account_control_cashflow_categories (client_id, is_active)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_category_assignments_client ON account_control_cashflow_category_assignments (client_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_role_categories_client ON account_control_cashflow_role_categories (client_id, role_key)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_account_control_cashflow_treasury_client ON account_control_cashflow_treasury_accounts (client_id, treasury_type)")
         cur.execute("ALTER TABLE account_control_cashflow_treasury_accounts ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE")
         cur.execute('''

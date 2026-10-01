@@ -63,6 +63,7 @@ def _cashflow_summary():
         "group_by": "quarter",
         "category_totals": pd.DataFrame({"2026-Q1": [125.0], "2026-Q2": [50.0], "Total": [175.0]}, index=["Customers"]),
         "transfer_details": pd.DataFrame(),
+        "customer_payment_details": pd.DataFrame(),
         "deduction_details": pd.DataFrame(),
         "categories_needing_review": pd.DataFrame(),
         "selected_voucher_count": 2,
@@ -169,6 +170,129 @@ def test_cashflow_transfer_reconciliation_confirms_cash_and_bank_routes():
     assert result["transfer_reconciliation"]["candidate_voucher_count"] == 3
     assert result["transfer_reconciliation"]["confirmed_count"] == 3
     assert result["transfer_reconciliation"]["variance_total"] == 0.0
+
+
+def test_cashflow_customer_payment_details_reconcile_gross_and_net_methods():
+    journal = pd.DataFrame(
+        [
+            {"voucher_id": "GROSS", "date": "2026-01-01", "account_code": "BANK", "account_name": "Export Bank", "voucher_detail": "Gross receipt", "debit": 100, "credit": 3},
+            {"voucher_id": "GROSS", "date": "2026-01-01", "account_code": "CHG", "account_name": "Bank charges", "voucher_detail": "Gross receipt", "debit": 1, "credit": 0},
+            {"voucher_id": "GROSS", "date": "2026-01-01", "account_code": "WHT", "account_name": "Withholding tax", "voucher_detail": "Gross receipt", "debit": 2, "credit": 0},
+            {"voucher_id": "GROSS", "date": "2026-01-01", "account_code": "CUST-G", "account_name": "Customer Gross", "voucher_detail": "Gross receipt", "debit": 0, "credit": 100},
+            {"voucher_id": "NET", "date": "2026-01-02", "account_code": "BANK", "account_name": "Export Bank", "voucher_detail": "Net receipt", "debit": 97, "credit": 0},
+            {"voucher_id": "NET", "date": "2026-01-02", "account_code": "CHG", "account_name": "Bank charges", "voucher_detail": "Net receipt", "debit": 1, "credit": 0},
+            {"voucher_id": "NET", "date": "2026-01-02", "account_code": "WHT", "account_name": "Withholding tax", "voucher_detail": "Net receipt", "debit": 2, "credit": 0},
+            {"voucher_id": "NET", "date": "2026-01-02", "account_code": "CUST-N", "account_name": "Customer Net", "voucher_detail": "Net receipt", "debit": 0, "credit": 100},
+        ]
+    )
+    coa = pd.DataFrame(
+        [
+            {"account_code": "BANK", "account_title": "Export Bank", "account_type": "Bank", "category": ""},
+            {"account_code": "CHG", "account_title": "Bank charges", "account_type": "Expense", "category": "Bank charges"},
+            {"account_code": "WHT", "account_title": "Withholding tax", "account_type": "Tax", "category": "Withholding tax"},
+            {"account_code": "CUST-G", "account_title": "Customer Gross", "account_type": "Customer", "category": "Received from customers"},
+            {"account_code": "CUST-N", "account_title": "Customer Net", "account_type": "Customer", "category": "Received from customers"},
+        ]
+    )
+
+    result = build_cashflow_summary(
+        journal,
+        coa,
+        cash_account_codes=[],
+        bank_account_codes=["BANK"],
+        period_start="2026-01-01",
+        period_end="2026-01-31",
+        receipt_presentation="gross",
+    )
+
+    details = result["customer_payment_details"].set_index("voucher_id")
+    assert details.loc["GROSS", "method"] == "Gross"
+    assert details.loc["GROSS", "bank_statement_amount"] == 100
+    assert details.loc["GROSS", "technical_bank_offset"] == 3
+    assert details.loc["GROSS", "net_bank_settlement"] == 97
+    assert details.loc["GROSS", "expected_net_settlement"] == 97
+    assert details.loc["GROSS", "status"] == "Matched"
+    assert details.loc["NET", "method"] == "Net"
+    assert details.loc["NET", "technical_bank_offset"] == 0
+    assert details.loc["NET", "status"] == "Matched"
+
+
+def test_cashflow_customer_category_identifies_cash_and_bank_child_accounts():
+    journal = pd.DataFrame(
+        [
+            {"voucher_id": "CASH-RECEIPT", "date": "2026-01-01", "account_code": "CASH", "account_name": "Cash in hand", "voucher_detail": "Cash receipt", "debit": 50, "credit": 0},
+            {"voucher_id": "CASH-RECEIPT", "date": "2026-01-01", "account_code": "10-15-55-10-10-0001", "account_name": "Export customer one", "voucher_detail": "Cash receipt", "debit": 0, "credit": 50},
+            {"voucher_id": "BANK-RECEIPT", "date": "2026-01-02", "account_code": "BANK", "account_name": "Export Bank", "voucher_detail": "Bank receipt", "debit": 75, "credit": 0},
+            {"voucher_id": "BANK-RECEIPT", "date": "2026-01-02", "account_code": "10-15-55-10-10-0002", "account_name": "Export customer two", "voucher_detail": "Bank receipt", "debit": 0, "credit": 75},
+        ]
+    )
+    coa = pd.DataFrame(
+        [
+            {"account_code": "CASH", "account_title": "Cash in hand", "account_type": "Cash", "category": ""},
+            {"account_code": "BANK", "account_title": "Export Bank", "account_type": "Bank", "category": ""},
+            {"account_code": "10-15-55-10-10-0001", "account_title": "Export customer one", "account_type": "Customer", "category": " Received from customers "},
+            {"account_code": "10-15-55-10-10-0002", "account_title": "Export customer two", "account_type": "Customer", "category": "RECEIVED FROM CUSTOMERS"},
+        ]
+    )
+
+    result = build_cashflow_summary(
+        journal,
+        coa,
+        cash_account_codes=["CASH"],
+        bank_account_codes=["BANK"],
+        period_start="2026-01-01",
+        period_end="2026-01-31",
+    )
+
+    details = result["customer_payment_details"].set_index("voucher_id")
+    assert set(details.index) == {"CASH-RECEIPT", "BANK-RECEIPT"}
+    assert details.loc["CASH-RECEIPT", "bank_account_type"] == "Cash"
+    assert details.loc["BANK-RECEIPT", "bank_account_type"] == "Bank"
+    assert details.loc["CASH-RECEIPT", "customer_account_code"] == "10-15-55-10-10-0001"
+    assert details.loc["BANK-RECEIPT", "customer_account_code"] == "10-15-55-10-10-0002"
+    assert details["status"].eq("Matched").all()
+
+
+def test_cashflow_customer_payment_details_flags_gross_mismatch_and_multi_customer():
+    journal = pd.DataFrame(
+        [
+            {"voucher_id": "MISMATCH", "date": "2026-01-01", "account_code": "BANK", "account_name": "Export Bank", "voucher_detail": "Mismatch", "debit": 100, "credit": 4},
+            {"voucher_id": "MISMATCH", "date": "2026-01-01", "account_code": "CHG", "account_name": "Bank charges", "voucher_detail": "Mismatch", "debit": 1, "credit": 0},
+            {"voucher_id": "MISMATCH", "date": "2026-01-01", "account_code": "WHT", "account_name": "Withholding tax", "voucher_detail": "Mismatch", "debit": 2, "credit": 0},
+            {"voucher_id": "MISMATCH", "date": "2026-01-01", "account_code": "OTHER", "account_name": "Unexplained debit", "voucher_detail": "Mismatch", "debit": 1, "credit": 0},
+            {"voucher_id": "MISMATCH", "date": "2026-01-01", "account_code": "CUST", "account_name": "Customer", "voucher_detail": "Mismatch", "debit": 0, "credit": 100},
+            {"voucher_id": "MULTI", "date": "2026-01-02", "account_code": "BANK", "account_name": "Export Bank", "voucher_detail": "Multiple customers", "debit": 100, "credit": 0},
+            {"voucher_id": "MULTI", "date": "2026-01-02", "account_code": "CUST-1", "account_name": "Customer One", "voucher_detail": "Multiple customers", "debit": 0, "credit": 60},
+            {"voucher_id": "MULTI", "date": "2026-01-02", "account_code": "CUST-2", "account_name": "Customer Two", "voucher_detail": "Multiple customers", "debit": 0, "credit": 40},
+        ]
+    )
+    coa = pd.DataFrame(
+        [
+            {"account_code": "BANK", "account_title": "Export Bank", "account_type": "Bank", "category": ""},
+            {"account_code": "CHG", "account_title": "Bank charges", "account_type": "Expense", "category": "Bank charges"},
+            {"account_code": "WHT", "account_title": "Withholding tax", "account_type": "Tax", "category": "Withholding tax"},
+            {"account_code": "OTHER", "account_title": "Unexplained debit", "account_type": "Expense", "category": "Other expense"},
+            {"account_code": "CUST", "account_title": "Customer", "account_type": "Customer", "category": "Received from customers"},
+            {"account_code": "CUST-1", "account_title": "Customer One", "account_type": "Customer", "category": "Received from customers"},
+            {"account_code": "CUST-2", "account_title": "Customer Two", "account_type": "Customer", "category": "Received from customers"},
+        ]
+    )
+
+    result = build_cashflow_summary(
+        journal,
+        coa,
+        cash_account_codes=[],
+        bank_account_codes=["BANK"],
+        period_start="2026-01-01",
+        period_end="2026-01-31",
+    )
+
+    details = result["customer_payment_details"].set_index("voucher_id")
+    assert details.loc["MISMATCH", "method"] == "Gross"
+    assert details.loc["MISMATCH", "variance"] == -1
+    assert details.loc["MISMATCH", "status"] == "Review required"
+    assert details.loc["MULTI", "customer_account_name"] == "Customer One / Customer Two"
+    assert details.loc["MULTI", "status"] == "Review required"
 def test_cashflow_defaults_resolve_fiscal_year_and_ytd_dynamically():
     values = {
         "cashflow_fiscal_year_start_month": "4",
@@ -355,7 +479,7 @@ def test_cashflows_preview_uses_prepared_details_for_combined_child_sections():
             "source_row_count": 4,
             "valid_row_count": 4,
             "child_details_prepared": True,
-            "child_details_version": 3,
+            "child_details_version": 5,
             "summary_read_model": "hit",
         },
         "summary": summary,
@@ -421,6 +545,18 @@ def test_cashflows_preview_falls_back_for_legacy_summary_cache_on_child_request(
     builder.assert_called_once()
 
 
+def test_cashflows_preview_rejects_previous_child_details_version():
+    cached = {
+        "metadata": {
+            "child_details_prepared": True,
+            "child_details_version": 4,
+        },
+        "summary": _cashflow_summary(),
+    }
+
+    assert reconciliation._cashflow_cache_can_serve_details(cached, {"customer_payments"}) is False
+
+
 def test_cashflow_summary_read_model_round_trip_preserves_period_totals():
     from services import ledger_report_source
 
@@ -436,6 +572,18 @@ def test_cashflow_summary_read_model_round_trip_preserves_period_totals():
         "amount": 20.0,
         "matched": True,
         "voucher_detail": "Transfer",
+    }])
+    summary["customer_payment_details"] = pd.DataFrame([{
+        "voucher_id": "CP-1",
+        "date": pd.Timestamp("2026-02-13"),
+        "period_key": "2026-Q1",
+        "period_label": "Q1 2026",
+        "customer_account_name": "Customer Export",
+        "bank_account_name": "Export Bank",
+        "method": "Gross",
+        "customer_gross_amount": 100.0,
+        "net_bank_settlement": 97.0,
+        "status": "Matched",
     }])
     summary["deduction_details"] = pd.DataFrame([{
         "category": "Withholding",
@@ -496,8 +644,9 @@ def test_cashflow_summary_read_model_round_trip_preserves_period_totals():
     assert cached["summary"]["category_totals"].loc["Customers", "2026-Q1"] == 125.0
     assert cached["metadata"]["summary_read_model"] == "hit"
     assert cached["metadata"]["child_details_prepared"] is True
-    assert cached["metadata"]["child_details_version"] == 3
+    assert cached["metadata"]["child_details_version"] == 5
     assert cached["summary"]["transfer_details"].loc[0, "amount"] == 20.0
+    assert cached["summary"]["customer_payment_details"].loc[0, "method"] == "Gross"
     assert cached["summary"]["deduction_details"].loc[0, "account_name"] == "Tax"
     assert cached["summary"]["categories_needing_review"].loc[0, "account_code"] == "4100"
 
@@ -512,7 +661,7 @@ def test_prepared_daily_snapshot_rolls_up_to_requested_months():
         ],
         "categories": [{"category": "Customers", "values": {"2026-01-01": 10, "2026-01-02": 15, "2026-02-01": 20}}],
         "child_details_prepared": True,
-        "child_details_version": 3,
+        "child_details_version": 5,
         "transfer_details": [{
             "voucher_id": "TR-1",
             "date": "2026-01-02",
@@ -523,6 +672,18 @@ def test_prepared_daily_snapshot_rolls_up_to_requested_months():
             "amount": 20.0,
             "matched": True,
             "voucher_detail": "Transfer",
+        }],
+        "customer_payment_details": [{
+            "voucher_id": "CP-1",
+            "date": "2026-01-02",
+            "period_key": "2026-01-02",
+            "period_label": "02-Jan-26",
+            "customer_account_name": "Customer Export",
+            "bank_account_name": "Export Bank",
+            "method": "Gross",
+            "customer_gross_amount": 100.0,
+            "net_bank_settlement": 97.0,
+            "status": "Matched",
         }],
         "deduction_details": [{
             "category": "Withholding",
@@ -563,6 +724,7 @@ def test_prepared_daily_snapshot_rolls_up_to_requested_months():
     assert summary["internal_transfer_count"] == 1
     assert summary["category_review_count"] == 1
     assert summary["transfer_details"].loc[0, "period_key"] == "2026-01"
+    assert summary["customer_payment_details"].loc[0, "period_key"] == "2026-01"
     assert summary["deduction_details"].loc[0, "period_key"] == "2026-02"
     assert summary["categories_needing_review"].loc[0, "period_key"] == "2026-02"
 
@@ -724,6 +886,16 @@ def test_cashflows_preview_accepts_combined_child_sections(caplog):
         "amount": 20.0,
         "matched": True,
     }])
+    summary["customer_payment_details"] = pd.DataFrame([{
+        "voucher_id": "CP-1",
+        "period_label": "Q1 2026",
+        "customer_account_name": "Customer Export",
+        "bank_account_name": "Export Bank",
+        "method": "Gross",
+        "customer_gross_amount": 100.0,
+        "net_bank_settlement": 97.0,
+        "status": "Matched",
+    }])
     summary["deduction_details"] = pd.DataFrame([{
         "period_label": "Q2 2026",
         "category": "Withholding",
@@ -749,17 +921,18 @@ def test_cashflows_preview_accepts_combined_child_sections(caplog):
             "2026-02-10",
             "2026-04-18",
             group_by="quarter",
-            details="transfers,deductions,review",
+            details="transfers,customer_payments,deductions,review",
             session=None,
         )
 
     builder.assert_called_once()
-    assert response["preview"]["detail_sections_loaded"] == ["deductions", "review", "transfers"]
+    assert response["preview"]["detail_sections_loaded"] == ["customer_payments", "deductions", "review", "transfers"]
     assert len(response["preview"]["transfer_details"]) == 1
+    assert len(response["preview"]["customer_payment_details"]) == 1
     assert len(response["preview"]["deduction_details"]) == 1
     assert len(response["preview"]["categories_needing_review"]) == 1
     performance_records = [record for record in caplog.records if record.getMessage().startswith("cashflows_performance ")]
-    assert "details=deductions,review,transfers" in performance_records[0].getMessage()
+    assert "details=customer_payments,deductions,review,transfers" in performance_records[0].getMessage()
 
 
 def test_download_report_returns_professional_xlsx_when_controls_pass():
@@ -869,8 +1042,13 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert 'id="reportsCard"' in dashboard
     assert "reconciliation.html?view=reports" in navigation
     assert 'onclick=' not in html
-    assert "details: 'transfers,deductions,review'" in javascript
+    assert "details: 'transfers,customer_payments,deductions,review'" in javascript
     assert "cashflowChildRequest" in javascript
+    assert "cashflowsLoadCustomerPaymentsButton" in html
+    assert "cashflowsCustomerPaymentsSection" in html
+    assert "customer_payments" in javascript
+    assert "customer_payment_details" in javascript
+    assert "cashflows-customer-payments-table" in stylesheet
     assert "formatCashflowTransferParty" in javascript
     assert "renderCashflowTransferReconciliation" in javascript
     assert "cashflowsTransferReconciliation" in html

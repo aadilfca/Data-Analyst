@@ -7,7 +7,7 @@ let accNoteCategories = [];
 let accCashflowCategories = [];
 let accCashflowHistoricalOrphans = [];
 let accCashflowTreasury = { cash: [], bank: [] };
-let accCashflowSettings = { match_internal_transfers: false, receipt_presentation: 'net', source_template_id: null };
+let accCashflowSettings = { match_internal_transfers: false, receipt_presentation: 'net', source_template_id: null, role_categories: { customer_receipt: [], bank_charge: [], withholding_tax: [], other_deduction: [] } };
 let accCashflowTemplateMapping = null;
 let accFinancialLoaded = false;
 let accNotesLoaded = false;
@@ -99,6 +99,177 @@ function accCategoryOptionMarkupFor(categories, selected) {
 function accCategoryOptionMarkup(selected) { return accCategoryOptionMarkupFor(accFinancialCategories, selected); }
 function accNoteCategoryOptionMarkup(selected) { return accCategoryOptionMarkupFor(accNoteCategories, selected); }
 function accCashflowCategoryOptionMarkup(selected) { return accCategoryOptionMarkupFor(accCashflowCategories, selected); }
+const ACC_CASHFLOW_ROLE_DEFINITIONS = [
+    { key: 'customer_receipt', controlId: 'accCashflowCustomerReceiptCategories', menuId: 'accCashflowCustomerReceiptMenu', optionsId: 'accCashflowCustomerReceiptOptions', searchId: 'accCashflowCustomerReceiptSearch', label: 'Customer receipt categories' },
+    { key: 'bank_charge', controlId: 'accCashflowBankChargeCategories', menuId: 'accCashflowBankChargeMenu', optionsId: 'accCashflowBankChargeOptions', searchId: 'accCashflowBankChargeSearch', label: 'Bank charge categories' },
+    { key: 'withholding_tax', controlId: 'accCashflowWithholdingCategories', menuId: 'accCashflowWithholdingMenu', optionsId: 'accCashflowWithholdingOptions', searchId: 'accCashflowWithholdingSearch', label: 'Withholding tax categories' },
+    { key: 'other_deduction', controlId: 'accCashflowOtherDeductionCategories', menuId: 'accCashflowOtherDeductionMenu', optionsId: 'accCashflowOtherDeductionOptions', searchId: 'accCashflowOtherDeductionSearch', label: 'Other deduction categories' },
+];
+function accEnsureCashflowRoleControls() {
+    if (accElement(ACC_CASHFLOW_ROLE_DEFINITIONS[0].controlId)) return;
+    const panel = document.querySelector('[data-acc-cashflow-config-panel="customer"]');
+    if (!panel) return;
+    const grid = document.createElement('div');
+    grid.className = 'acc2-customer-role-grid';
+    grid.innerHTML = ACC_CASHFLOW_ROLE_DEFINITIONS.map(function (definition) {
+        return '<div class="acc2-cashflow-role"><label for="' + definition.controlId + '">' + accEscape(definition.label) + '</label><button type="button" id="' + definition.controlId + '" class="acc2-cashflow-role-toggle" data-acc-cashflow-role-toggle="' + definition.key + '" aria-expanded="false"><span data-acc-cashflow-role-summary="' + definition.key + '">Select categories</span><span aria-hidden="true">▾</span></button><div id="' + definition.menuId + '" class="acc2-cashflow-role-menu" data-acc-cashflow-role-menu="' + definition.key + '" hidden><div class="acc2-cashflow-role-menu-tools"><input id="' + definition.searchId + '" type="search" placeholder="Search categories" data-acc-cashflow-role-search="' + definition.key + '"><button type="button" class="acc2-cashflow-role-clear" data-acc-cashflow-role-clear="' + definition.key + '">Clear</button></div><div id="' + definition.optionsId + '" class="acc2-cashflow-role-options" data-acc-cashflow-role-options="' + definition.key + '"></div></div></div>';
+    }).join('');
+    panel.appendChild(grid);
+    const save = document.createElement('button');
+    save.type = 'button';
+    save.id = 'accCashflowCustomerSettingsSave';
+    save.className = 'acc2-action-btn';
+    save.textContent = 'Save customer payment categories';
+    panel.appendChild(save);
+}
+function accCloseCashflowRoleMenus(exceptRole) {
+    document.querySelectorAll('[data-acc-cashflow-role-menu]').forEach(function (menu) {
+        const role = menu.dataset.accCashflowRoleMenu;
+        const open = role === exceptRole;
+        menu.hidden = !open;
+        const toggle = document.querySelector('[data-acc-cashflow-role-toggle="' + CSS.escape(role) + '"]');
+        if (toggle) toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+}
+function accUpdateCashflowRoleSummary(role) {
+    const definition = ACC_CASHFLOW_ROLE_DEFINITIONS.find(function (item) { return item.key === role; });
+    if (!definition) return;
+    const options = accElement(definition.optionsId);
+    const summary = document.querySelector('[data-acc-cashflow-role-summary="' + CSS.escape(role) + '"]');
+    if (!options || !summary) return;
+    const selected = Array.from(options.querySelectorAll('input[type="checkbox"]:checked'));
+    if (!selected.length) summary.textContent = 'Select categories';
+    else if (selected.length === 1) summary.textContent = selected[0].dataset.label || selected[0].value;
+    else summary.textContent = selected.length + ' categories selected';
+}
+function accHandleCashflowRoleClick(event) {
+    const toggle = event.target.closest('[data-acc-cashflow-role-toggle]');
+    if (toggle) {
+        const role = toggle.dataset.accCashflowRoleToggle;
+        const menu = accElement(ACC_CASHFLOW_ROLE_DEFINITIONS.find(function (item) { return item.key === role; }).menuId);
+        const shouldOpen = menu && menu.hidden;
+        accCloseCashflowRoleMenus(shouldOpen ? role : null);
+        return;
+    }
+    const clear = event.target.closest('[data-acc-cashflow-role-clear]');
+    if (clear) {
+        const definition = ACC_CASHFLOW_ROLE_DEFINITIONS.find(function (item) { return item.key === clear.dataset.accCashflowRoleClear; });
+        const options = definition && accElement(definition.optionsId);
+        if (options) options.querySelectorAll('input[type="checkbox"]').forEach(function (input) { input.checked = false; });
+        if (definition) accUpdateCashflowRoleSummary(definition.key);
+        return;
+    }
+    if (!event.target.closest('.acc2-cashflow-role')) accCloseCashflowRoleMenus(null);
+}
+function accHandleCashflowRoleSearch(event) {
+    const search = event.target.closest('[data-acc-cashflow-role-search]');
+    if (!search) return;
+    const definition = ACC_CASHFLOW_ROLE_DEFINITIONS.find(function (item) { return item.key === search.dataset.accCashflowRoleSearch; });
+    const options = definition && accElement(definition.optionsId);
+    const term = String(search.value || '').trim().toLowerCase();
+    if (!options) return;
+    options.querySelectorAll('[data-acc-cashflow-role-option]').forEach(function (option) {
+        option.hidden = term && !String(option.dataset.label || '').toLowerCase().includes(term);
+    });
+}
+function accHandleCashflowRoleChange(event) {
+    const input = event.target.closest('[data-acc-cashflow-role-input]');
+    if (input) accUpdateCashflowRoleSummary(input.dataset.accCashflowRoleInput);
+}
+function accCashflowRoleCategoryIds(role) {
+    const settings = accCashflowSettings && accCashflowSettings.role_categories;
+    return Array.isArray(settings && settings[role]) ? settings[role].map(function (value) { return Number(value); }).filter(function (value) { return Number.isInteger(value) && value > 0; }) : [];
+}
+function accRenderCashflowRoleCategories() {
+    accEnsureCashflowRoleControls();
+    ACC_CASHFLOW_ROLE_DEFINITIONS.forEach(function (definition) {
+        const options = accElement(definition.optionsId);
+        if (!options) return;
+        const selected = new Set(accCashflowRoleCategoryIds(definition.key));
+        const categories = accCashflowCategories.filter(function (category) { return category.is_active !== false && Number(category.is_active) !== 0; });
+        options.innerHTML = categories.length ? categories.map(function (category) {
+            const id = Number(category.id);
+            const label = category.label || category.category_key || ('Category ' + id);
+            return '<label class="acc2-cashflow-role-option" data-acc-cashflow-role-option data-label="' + accEscape(label) + '"><input type="checkbox" value="' + accEscape(id) + '" data-acc-cashflow-role-input="' + definition.key + '" data-label="' + accEscape(label) + '"' + (selected.has(id) ? ' checked' : '') + (!accIsAdmin ? ' disabled' : '') + '><span>' + accEscape(label) + '</span></label>';
+        }).join('') : '<span class="acc2-cashflow-role-empty">No active categories</span>';
+        const toggle = accElement(definition.controlId);
+        if (toggle) toggle.disabled = !accIsAdmin || !categories.length;
+        accUpdateCashflowRoleSummary(definition.key);
+    });
+}
+function accCollectCashflowRoleCategories() {
+    const roles = {};
+    ACC_CASHFLOW_ROLE_DEFINITIONS.forEach(function (definition) {
+        const options = accElement(definition.optionsId);
+        roles[definition.key] = options ? Array.from(options.querySelectorAll('input[type="checkbox"]:checked')).map(function (input) { return Number(input.value); }).filter(function (value) { return Number.isInteger(value) && value > 0; }) : [];
+    });
+    return roles;
+}
+const ACC_CASHFLOW_COMBO_ROLE_DEFINITIONS = [
+    { key: 'customer_receipt', inputId: 'accCashflowCustomerReceiptCategories', listId: 'accCashflowCustomerReceiptCategoryOptions', label: 'Customer receipt categories' },
+    { key: 'bank_charge', inputId: 'accCashflowBankChargeCategories', listId: 'accCashflowBankChargeCategoryOptions', label: 'Bank charge categories' },
+    { key: 'withholding_tax', inputId: 'accCashflowWithholdingCategories', listId: 'accCashflowWithholdingCategoryOptions', label: 'Withholding tax categories' },
+    { key: 'other_deduction', inputId: 'accCashflowOtherDeductionCategories', listId: 'accCashflowOtherDeductionCategoryOptions', label: 'Other deduction categories' },
+];
+function accEnsureCashflowComboboxControls() {
+    if (accElement(ACC_CASHFLOW_COMBO_ROLE_DEFINITIONS[0].inputId)) return;
+    const panel = document.querySelector('[data-acc-cashflow-config-panel="customer"]');
+    if (!panel) return;
+    const grid = document.createElement('div');
+    grid.className = 'acc2-customer-role-grid';
+    grid.innerHTML = ACC_CASHFLOW_COMBO_ROLE_DEFINITIONS.map(function (definition) {
+        return '<div class="acc2-cashflow-role"><label for="' + definition.inputId + '">' + accEscape(definition.label) + '</label><input id="' + definition.inputId + '" class="acc2-cashflow-role-input" list="' + definition.listId + '" type="search" placeholder="Assign category" autocomplete="off" data-acc-cashflow-role-input="' + definition.key + '"><datalist id="' + definition.listId + '"></datalist></div>';
+    }).join('');
+    panel.appendChild(grid);
+    if (!accElement('accCashflowCustomerSettingsSave')) {
+        const save = document.createElement('button');
+        save.type = 'button';
+        save.id = 'accCashflowCustomerSettingsSave';
+        save.className = 'acc2-action-btn';
+        save.textContent = 'Save customer payment categories';
+        panel.appendChild(save);
+    }
+}
+function accHandleCashflowComboboxInput(event) {
+    const input = event.target.closest('[data-acc-cashflow-role-input]');
+    if (!input) return;
+    const categories = accCashflowCategories.filter(function (category) { return category.is_active !== false && Number(category.is_active) !== 0; });
+    const byLabel = new Map();
+    categories.forEach(function (category) {
+        const label = category.label || category.category_key || '';
+        byLabel.set(String(label).trim().toLowerCase(), Number(category.id));
+    });
+    const tokens = String(input.value || '').split(',').map(function (value) { return value.trim(); }).filter(Boolean);
+    const selected = tokens.map(function (value) { return byLabel.get(value.toLowerCase()); });
+    if (!tokens.length || selected.every(function (value) { return Number.isInteger(value) && value > 0; })) {
+        input.dataset.selectedIds = selected.filter(function (value) { return Number.isInteger(value) && value > 0; }).join(',');
+    }
+}
+function accRenderCashflowComboboxCategories() {
+    accEnsureCashflowComboboxControls();
+    ACC_CASHFLOW_COMBO_ROLE_DEFINITIONS.forEach(function (definition) {
+        const input = accElement(definition.inputId);
+        const datalist = accElement(definition.listId);
+        if (!input || !datalist) return;
+        const selected = new Set(accCashflowRoleCategoryIds(definition.key));
+        const categories = accCashflowCategories.filter(function (category) { return category.is_active !== false && Number(category.is_active) !== 0; });
+        datalist.innerHTML = categories.map(function (category) {
+            const label = category.label || category.category_key || ('Category ' + category.id);
+            return '<option value="' + accEscape(label) + '">';
+        }).join('');
+        input.value = categories.filter(function (category) { return selected.has(Number(category.id)); }).map(function (category) { return category.label || category.category_key || ''; }).join(', ');
+        input.dataset.selectedIds = Array.from(selected).join(',');
+        input.disabled = !accIsAdmin || !categories.length;
+    });
+}
+function accCollectCashflowComboboxCategories() {
+    const roles = {};
+    ACC_CASHFLOW_COMBO_ROLE_DEFINITIONS.forEach(function (definition) {
+        const input = accElement(definition.inputId);
+        roles[definition.key] = input ? String(input.dataset.selectedIds || '').split(',').map(function (value) { return Number(value); }).filter(function (value) { return Number.isInteger(value) && value > 0; }) : [];
+    });
+    return roles;
+}
 function accSetGridState(message, isError) {
     const state = accElement('accGridState');
     state.textContent = message;
@@ -429,9 +600,11 @@ async function accSaveCashflowTreasury() {
     accShowStatus('Cash and Bank account selections saved.', 'success');
 }
 async function accSaveCashflowSettings() {
-    const payload = { client_id: accClientId, match_internal_transfers: accElement('accCashflowMatchTransfers').checked, receipt_presentation: accElement('accCashflowReceiptPresentation').value };
-    await accApi('/api/account-control-center/cashflow/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-    accCashflowSettings = { match_internal_transfers: payload.match_internal_transfers, receipt_presentation: payload.receipt_presentation };
+    const roleCategories = accCollectCashflowComboboxCategories();
+    const payload = { client_id: accClientId, match_internal_transfers: accElement('accCashflowMatchTransfers').checked, receipt_presentation: accElement('accCashflowReceiptPresentation').value, customer_receipt_category_ids: roleCategories.customer_receipt, bank_charge_category_ids: roleCategories.bank_charge, withholding_tax_category_ids: roleCategories.withholding_tax, other_deduction_category_ids: roleCategories.other_deduction };
+    const result = await accApi('/api/account-control-center/cashflow/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    accCashflowSettings = Object.assign({}, accCashflowSettings, { match_internal_transfers: payload.match_internal_transfers, receipt_presentation: payload.receipt_presentation, role_categories: result.role_categories || roleCategories });
+    accRenderCashflowComboboxCategories();
     accShowStatus('Cash Flow transfer and customer receipt settings saved.', 'success');
 }
 async function accLoadMapping() {
@@ -556,11 +729,12 @@ async function accLoadCashflow() {
     accCashflowCategories = result.categories || [];
     accCashflowHistoricalOrphans = result.historical_orphans || [];
     accCashflowTreasury = result.treasury_accounts || { cash: [], bank: [] };
-    accCashflowSettings = result.settings || { match_internal_transfers: false, receipt_presentation: 'net', source_template_id: null };
+    accCashflowSettings = result.settings || { match_internal_transfers: false, receipt_presentation: 'net', source_template_id: null, role_categories: { customer_receipt: [], bank_charge: [], withholding_tax: [], other_deduction: [] } };
     accCashflowLoaded = true;
     accRenderCashflowRows();
     accRenderCashflowCategoryList();
     accRenderCashflowAccountOptions();
+    accRenderCashflowComboboxCategories();
     accElement('accCashflowMatchTransfers').checked = !!accCashflowSettings.match_internal_transfers;
     accElement('accCashflowReceiptPresentation').value = accCashflowSettings.receipt_presentation || 'net';
 }
@@ -831,6 +1005,8 @@ function accBindTreasuryGuidance() {
 }
 function accBindEvents() {
     accBindTreasuryGuidance();
+    accEnsureCashflowComboboxControls();
+    document.addEventListener('input', accHandleCashflowComboboxInput);
     document.querySelectorAll('[data-acc-tab]').forEach(function (tab) { tab.addEventListener('click', function () { accSetTab(tab.dataset.accTab); }); });
     accElement('accAccountFilter').addEventListener('input', accRenderRows);
     accElement('accAccountRows').addEventListener('change', function (event) { accHandleWorkstreamChange(event); });
@@ -852,6 +1028,7 @@ function accBindEvents() {
     accElement('accCashflowBankSelected').addEventListener('click', accRemoveCashflowTreasurySelection);
     accElement('accCashflowAccountsSave').addEventListener('click', function () { accSaveCashflowTreasury().catch(function (error) { accShowStatus(error.message, 'error'); }); });
     accElement('accCashflowSettingsSave').addEventListener('click', function () { accSaveCashflowSettings().catch(function (error) { accShowStatus(error.message, 'error'); }); });
+    accElement('accCashflowCustomerSettingsSave').addEventListener('click', function () { accSaveCashflowSettings().catch(function (error) { accShowStatus(error.message, 'error'); }); });
     accElement('accCashflowTemplateButton').addEventListener('click', function () { accOpenCashflowTemplateModal(); });
     accElement('accCashflowTemplateClose').addEventListener('click', function () { accSetCashflowModal('accCashflowTemplateModal', false); });
     accElement('accCashflowTemplateSelect').addEventListener('change', function (event) { accLoadCashflowTemplateMapping(event.target.value).catch(function (error) { accSetCashflowTemplateState(error.message, true); }); });

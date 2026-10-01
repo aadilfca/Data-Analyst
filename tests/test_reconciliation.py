@@ -11,7 +11,7 @@ import pandas as pd
 from fastapi import HTTPException
 
 import database
-from routers import reconciliation
+from routers import account_control_center, reconciliation
 
 
 def _account_rows():
@@ -50,6 +50,8 @@ def test_sqlite_init_creates_account_groups_table_and_indexes():
             try:
                 columns = {row[1] for row in conn.execute("PRAGMA table_info(account_groups)")}
                 indexes = {row[1] for row in conn.execute("PRAGMA index_list(account_groups)")}
+                role_columns = {row[1] for row in conn.execute("PRAGMA table_info(account_control_cashflow_role_categories)")}
+                role_indexes = {row[1] for row in conn.execute("PRAGMA index_list(account_control_cashflow_role_categories)")}
                 report_tables = {
                     row[0]
                     for row in conn.execute(
@@ -63,6 +65,8 @@ def test_sqlite_init_creates_account_groups_table_and_indexes():
             assert {"client_id", "group_label", "account_code", "is_active"}.issubset(columns)
             assert "idx_account_groups_client" in indexes
             assert "idx_account_groups_client_label" in indexes
+            assert {"client_id", "role_key", "category_id"}.issubset(role_columns)
+            assert "idx_account_control_cashflow_role_categories_client" in role_indexes
             assert report_tables == {
                 "report_category_sets",
                 "report_categories",
@@ -79,6 +83,22 @@ def test_sqlite_init_creates_account_groups_table_and_indexes():
 def test_normalizers_preserve_codes_and_clean_group_labels():
     assert reconciliation.normalize_group_label("  Bank   Accounts ") == "Bank Accounts"
     assert reconciliation.normalize_account_code(" 10-15-115-10-0001 ") == "10-15-115-10-0001"
+
+
+def test_cashflow_role_categories_are_deduplicated_and_sorted():
+    payload = account_control_center.CashFlowSettingsPayload(
+        client_id=5,
+        customer_receipt_category_ids=[9, 3, 9, 0],
+        bank_charge_category_ids=[7, 2, 7],
+        withholding_tax_category_ids=[4],
+        other_deduction_category_ids=[],
+    )
+    assert account_control_center._clean_cashflow_role_categories(payload) == {
+        "customer_receipt": [3, 9],
+        "bank_charge": [2, 7],
+        "withholding_tax": [4],
+        "other_deduction": [],
+    }
 
 
 def test_suggestions_are_advisory_and_show_saved_exact_codes():

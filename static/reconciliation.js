@@ -25,6 +25,7 @@
     let activeCashflowWindow = null;
     const cashflowWindowSections = {
         transfers: 'cashflowsTransfersSection',
+        customer_payments: 'cashflowsCustomerPaymentsSection',
         deductions: 'cashflowsDeductionsSection',
         review: 'cashflowsReviewSection',
         transactions: 'cashflowsTransactionsSection',
@@ -352,7 +353,7 @@
         cashflowChildGeneration += 1;
         cashflowChildRequest = null;
         setActiveCashflowWindow(null);
-        ['cashflowsLoadTransfersButton', 'cashflowsLoadDeductionsButton', 'cashflowsLoadReviewButton'].forEach(function (id) {
+        ['cashflowsLoadTransfersButton', 'cashflowsLoadCustomerPaymentsButton', 'cashflowsLoadDeductionsButton', 'cashflowsLoadReviewButton'].forEach(function (id) {
             element(id).disabled = false;
         });
         cashflowChildPreviews = {};
@@ -406,6 +407,32 @@
             ], rows, 'No internal transfers identified.');
             element('cashflowsTransferCount').textContent = String(preview.internal_transfer_count || rows.length || 0) + ' voucher(s)';
             if (activeCashflowWindow === section) element('cashflowsTransfersSection').hidden = false;
+        } else if (section === 'customer_payments') {
+            const rows = (preview.customer_payment_details || []).map(function (row) {
+                return Object.assign({}, row, {
+                    date_display: formatCashflowTransferDate(row.date || row.period_label || row.month),
+                    status_display: row.status || 'Review required',
+                });
+            });
+            renderTable(element('cashflowsCustomerPaymentsTable'), [
+                { key: 'date_display', label: 'Date' },
+                { key: 'voucher_id', label: 'Voucher' },
+                { key: 'customer_account_name', label: 'Customer' },
+                { key: 'bank_account_name', label: 'Receiving bank' },
+                { key: 'method', label: 'Method' },
+                { key: 'customer_gross_amount', label: 'Gross receipt', amount: true },
+                { key: 'bank_charges', label: 'Bank charges', amount: true },
+                { key: 'withholding_tax', label: 'WHT', amount: true },
+                { key: 'other_deductions', label: 'Other deductions', amount: true },
+                { key: 'technical_bank_offset', label: 'Technical offset', amount: true },
+                { key: 'expected_net_settlement', label: 'Expected net', amount: true },
+                { key: 'net_bank_settlement', label: 'Net settlement', amount: true },
+                { key: 'variance', label: 'Variance', amount: true },
+                { key: 'status_display', label: 'Status' },
+                { key: 'voucher_detail', label: 'Description' },
+            ], rows, 'No customer payments identified.');
+            element('cashflowsCustomerPaymentCount').textContent = String(rows.length) + ' payment(s)';
+            if (activeCashflowWindow === section) element('cashflowsCustomerPaymentsSection').hidden = false;
         } else if (section === 'deductions') {
             const rows = preview.deduction_details || [];
             renderTable(element('cashflowsDeductionsTable'), [
@@ -736,8 +763,8 @@
         const start = element('cashflowsPeriodStart').value;
         const end = element('cashflowsPeriodEnd').value;
         if (!configuration.source_template_id || !clientId || !start || !end) return Promise.resolve(null);
-        const buttonIds = { transfers: 'cashflowsLoadTransfersButton', deductions: 'cashflowsLoadDeductionsButton', review: 'cashflowsLoadReviewButton' };
-        const labels = { transfers: 'Load internal transfers', deductions: 'Load customer deductions', review: 'Load review required' };
+        const buttonIds = { transfers: 'cashflowsLoadTransfersButton', customer_payments: 'cashflowsLoadCustomerPaymentsButton', deductions: 'cashflowsLoadDeductionsButton', review: 'cashflowsLoadReviewButton' };
+        const labels = { transfers: 'Load internal transfers', customer_payments: 'Load customer payments', deductions: 'Load customer deductions', review: 'Load review required' };
         const generation = cashflowChildGeneration;
         Object.keys(buttonIds).forEach(function (name) {
             const button = element(buttonIds[name]);
@@ -751,7 +778,7 @@
             period_start: start,
             period_end: end,
             group_by: cashflowSelection.groupBy,
-            details: 'transfers,deductions,review'
+            details: 'transfers,customer_payments,deductions,review'
         });
         cashflowChildRequest = api('/api/reconciliation/cashflows/preview?' + params.toString())
             .then(function (result) {
@@ -900,6 +927,7 @@
         element('cashflowsViewTransactionsButton').addEventListener('click', toggleClassifiedTransactions);
         element('cashflowsHideZeroRowsButton').addEventListener('click', toggleCashflowZeroRows);
         element('cashflowsLoadTransfersButton').addEventListener('click', function () { loadCashflowChild('transfers'); });
+        element('cashflowsLoadCustomerPaymentsButton').addEventListener('click', function () { loadCashflowChild('customer_payments'); });
         element('cashflowsLoadDeductionsButton').addEventListener('click', function () { loadCashflowChild('deductions'); });
         element('cashflowsLoadReviewButton').addEventListener('click', function () { loadCashflowChild('review'); });
         element('cashflowsTransactionsApply').addEventListener('click', function () { loadClassifiedTransactions(true); });
