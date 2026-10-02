@@ -1302,6 +1302,13 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "cashflows-summary-section-row" in javascript
     assert "cashflows-summary-total-row" in javascript
     assert ".cashflows-summary-total-row th" in stylesheet
+    load_summary_index = html.index("<button type='submit' class='cashflows-primary'>Load summary</button>")
+    drilldown_index = html.index("id='cashflowsLedgerDrilldownButton'")
+    actions_index = html.index("class='cashflows-report-actions'")
+    hide_zero_index = html.index("id='cashflowsHideZeroRowsButton'")
+    export_index = html.index("id='cashflowsExportButton'")
+    assert load_summary_index < drilldown_index < actions_index
+    assert actions_index < hide_zero_index < export_index
 
 
 def test_financial_statement_summary_aggregates_central_categories_and_flags_unmapped():

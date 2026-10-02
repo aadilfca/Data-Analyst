@@ -7114,3 +7114,11 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Implementation:** Zero rows are hidden by default; the toggle reveals them. Browser and XLSX monetary displays now use whole numbers with an Excel-style dash for zero. Receipts/Payments use muted-green bands, and both complete total rows use consistent navy bold styling.
 
 **Verification:** JavaScript syntax, Python compilation, git diff check, and the full reconciliation report/XLSX regression files passed: 39 tests. No packages or source data were changed.
+
+## Cashflows control layout - Phase 6B - 2026-10-02
+
+**Scope:** Align the primary Cashflows report controls for faster review without changing report behavior or data flow.
+
+**Implementation:** Open ledger drill-down now sits immediately beside Load summary. Hide zero rows and Export XLSX remain grouped at the far right, with responsive wrapping preserved.
+
+**Verification:** DOM-order regression coverage and existing report wiring checks passed. No API, cache, summary, ledger, or accounting logic changed.

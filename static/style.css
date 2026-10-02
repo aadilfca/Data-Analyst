@@ -10283,6 +10283,7 @@ body.cashflows-processing-open { overflow: hidden; }
 .cashflows-detail-actions { display: flex; flex: 1 1 auto; flex-wrap: wrap; gap: 8px; }
 .cashflows-detail-actions .cashflows-secondary { min-width: 190px; }
 .cashflows-report-actions { display: flex; flex: 0 1 auto; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-left: auto; }
+.cashflows-filter-bar > #cashflowsLedgerDrilldownButton { flex: 0 0 auto; }
 .cashflows-report-actions .cashflows-secondary { min-width: 0; }
 /* Direct Cashflows classified-transactions window. */
 .cashflows-transactions-section { display: grid; gap: 12px; }
