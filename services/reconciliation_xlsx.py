@@ -172,17 +172,47 @@ def build_cashflow_workbook(
         [("voucher_id", "Voucher", False), ("period", "Period", False), ("account_code", "Account code", False), ("account_name", "Account", False), ("fallback_category", "Review category", False)],
     )
 
+    _write_cashflow_detail_sheet(
+        workbook.create_sheet("Cashflows Ledger Drill-down"),
+        "Cashflows Ledger Drill-down",
+        preview.get("ledger_rollups") or [],
+        [
+            ("category", "Category", False),
+            ("period", "Period", False),
+            ("account_name", "Ledger account", False),
+            ("account_code", "Account code", False),
+            ("treasury_type", "Cash / Bank", False),
+            ("amount", "Amount", True),
+            ("line_count", "Lines", True),
+        ],
+        note="Canonical ledger roll-ups matching the selected Cashflows report and active export filters.",
+    )
+
     controls = workbook.create_sheet("Export Controls")
     _write_title(controls, "Cashflows Export Controls", "Control totals and selection used for this workbook.", 2)
+    drilldown_split = _cashflow_drilldown_export_split(preview.get("ledger_rollups") or [])
+    export_filters = preview.get("export_filters") or {}
     control_rows = [
         ("Period start", period_start or ""),
         ("Period end", period_end or ""),
         ("Grouping", group_by or preview.get("group_by") or "month"),
         ("Receipt presentation", preview.get("receipt_presentation") or "net"),
+        ("Summary category filter", export_filters.get("summary_filter") or "All categories"),
+        ("Hide zero rows", "Yes" if export_filters.get("hide_zero_rows") else "No"),
+        ("Drill-down search", export_filters.get("search") or "All"),
+        ("Drill-down category", export_filters.get("category") or "All"),
+        ("Drill-down Cash / Bank", export_filters.get("treasury_type") or "All"),
+        ("Drill-down period", export_filters.get("period_key") or "All"),
         ("Selected vouchers", int(preview.get("selected_voucher_count") or 0)),
         ("Internal transfers", int(preview.get("internal_transfer_count") or 0)),
         ("Customer deductions", int(preview.get("deduction_count") or 0)),
         ("Review required", int(preview.get("category_review_count") or 0)),
+        ("Drill-down rows", drilldown_split["row_count"]),
+        ("Drill-down detail total", drilldown_split["detail_total"]),
+        ("Drill-down Bank amount", drilldown_split["bank_amount"]),
+        ("Drill-down Cash amount", drilldown_split["cash_amount"]),
+        ("Drill-down mixed / unresolved amount", drilldown_split["mixed_or_unresolved_amount"]),
+        ("Source Cash / Bank status", ((preview.get("drilldown_controls") or {}).get("cash_bank_split") or {}).get("status") or "Not loaded"),
     ]
     row = 4
     _write_table(controls, row, ["Control", "Value"], header=True)
@@ -313,8 +343,35 @@ def _cashflow_transfer_export_record(record: Mapping[str, Any]) -> dict[str, Any
     return output
 
 
-def _write_cashflow_detail_sheet(ws, title: str, records: list[Mapping[str, Any]], columns: list[tuple[str, str, bool]]) -> None:
-    _write_title(ws, title, "Detail rows included in the selected Cashflows report.", len(columns))
+def _cashflow_drilldown_export_split(records: list[Mapping[str, Any]]) -> dict[str, float | int]:
+    amounts = {"Bank": 0.0, "Cash": 0.0, "mixed_or_unresolved": 0.0}
+    for record in records:
+        amount = _number(record.get("amount")) or 0.0
+        treasury_type = str(record.get("treasury_type") or "").strip().casefold()
+        if treasury_type == "bank":
+            amounts["Bank"] += amount
+        elif treasury_type == "cash":
+            amounts["Cash"] += amount
+        else:
+            amounts["mixed_or_unresolved"] += amount
+    return {
+        "row_count": len(records),
+        "detail_total": sum(amounts.values()),
+        "bank_amount": amounts["Bank"],
+        "cash_amount": amounts["Cash"],
+        "mixed_or_unresolved_amount": amounts["mixed_or_unresolved"],
+    }
+
+
+def _write_cashflow_detail_sheet(
+    ws,
+    title: str,
+    records: list[Mapping[str, Any]],
+    columns: list[tuple[str, str, bool]],
+    *,
+    note: str | None = None,
+) -> None:
+    _write_title(ws, title, note or "Detail rows included in the selected Cashflows report.", len(columns))
     row = 4
     _write_table(ws, row, [label for _, label, _ in columns], header=True)
     if not records:

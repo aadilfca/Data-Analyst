@@ -697,8 +697,9 @@
         if (blockingReasons.length) showCashflowToast(blockingReasons.join(' '), true);
         else if (reviewCount) showCashflowToast(String(reviewCount) + ' counter-account line(s) need category review.', false);
     }
-    async function downloadCashflowReport() {
-        const button = element('cashflowsExportButton');
+    async function downloadCashflowReport(mode) {
+        const isDrilldown = mode === 'drilldown';
+        const button = element(isDrilldown ? 'cashflowsDrilldownExportButton' : 'cashflowsExportButton');
         const start = element('cashflowsPeriodStart').value;
         const end = element('cashflowsPeriodEnd').value;
         if (!button || !start || !end) return;
@@ -711,6 +712,15 @@
                 period_end: end,
                 group_by: cashflowSelection.groupBy || 'month',
             });
+            if (isDrilldown) {
+                query.set('search', element('cashflowsDrilldownSearch').value.trim());
+                query.set('category', element('cashflowsDrilldownCategory').value.trim());
+                query.set('treasury_type', element('cashflowsDrilldownTreasury').value);
+                query.set('period_key', element('cashflowsDrilldownPeriod').value);
+            } else {
+                query.set('summary_filter', cashflowSummaryFilter);
+                query.set('hide_zero_rows', hideCashflowZeroRows ? 'true' : 'false');
+            }
             const response = await fetch('/api/reconciliation/cashflows/export?' + query.toString());
             if (!response.ok) {
                 const payload = await response.json().catch(function () { return {}; });
@@ -737,7 +747,7 @@
             showCashflowToast(error.message, true);
         } finally {
             button.disabled = false;
-            button.textContent = 'Export XLSX';
+            button.textContent = isDrilldown ? 'Export filtered XLSX' : 'Export XLSX';
         }
     }
 
@@ -1026,7 +1036,8 @@
         }
     }
     async function initialise() {
-        element('cashflowsExportButton').addEventListener('click', downloadCashflowReport);
+        element('cashflowsExportButton').addEventListener('click', function () { downloadCashflowReport('summary'); });
+        element('cashflowsDrilldownExportButton').addEventListener('click', function () { downloadCashflowReport('drilldown'); });
         element('cashflowsLedgerDrilldownButton').addEventListener('click', openCashflowDrilldown);
         element('cashflowsLedgerDrilldownBack').addEventListener('click', closeCashflowDrilldown);
         element('cashflowsDrilldownApply').addEventListener('click', function () { loadCashflowDrilldown(true); });

@@ -1130,6 +1130,11 @@ def test_cashflow_export_preserves_visible_periods_and_totals():
             {"category": "Customers", "2026-Q1": 125.0, "2026-Q2": 50.0, "Total": 175.0},
             {"category": "Vendors", "2026-Q1": -80.0, "2026-Q2": -20.0, "Total": -100.0},
         ],
+        "ledger_rollups": [
+            {"category": "Customers", "period_key": "2026-Q1", "period_label": "Q1 2026", "account_code": "AR", "account_name": "Customers", "treasury_type": "Bank", "amount": 125.0, "line_count": 1},
+            {"category": "Vendors", "period_key": "2026-Q1", "period_label": "Q1 2026", "account_code": "AP", "account_name": "Vendors", "treasury_type": "Cash", "amount": -80.0, "line_count": 2},
+        ],
+        "drilldown_controls": {"cash_bank_split": {"status": "Matched"}},
         "transfer_details": [{
             "voucher_id": "TR-1",
             "date": "2026-01-05",
@@ -1180,10 +1185,68 @@ def test_cashflow_export_preserves_visible_periods_and_totals():
     assert transfers.cell(5, 8).value == "Bank to cash transfer"
     assert transfers.cell(5, 3).alignment.horizontal == "left"
     assert transfers.cell(5, 5).alignment.horizontal == "right"
-    assert set(workbook.sheetnames) == {"Cashflows Summary", "Internal Transfers", "Customer Deductions", "Review Required", "Export Controls"}
+    drilldown = workbook["Cashflows Ledger Drill-down"]
+    assert [drilldown.cell(4, column).value for column in range(1, 8)] == [
+        "Category", "Period", "Ledger account", "Account code", "Cash / Bank", "Amount", "Lines"
+    ]
+    assert [drilldown.cell(5, column).value for column in range(1, 8)] == [
+        "Customers", "Q1 2026", "Customers", "AR", "Bank", 125, 1
+    ]
+    controls = workbook["Export Controls"]
+    control_values = {controls.cell(row, 1).value: controls.cell(row, 2).value for row in range(5, controls.max_row + 1)}
+    assert control_values["Drill-down rows"] == 2
+    assert control_values["Drill-down Bank amount"] == 125
+    assert control_values["Drill-down Cash amount"] == -80
+    assert control_values["Drill-down detail total"] == 45
+    assert set(workbook.sheetnames) == {"Cashflows Summary", "Internal Transfers", "Customer Deductions", "Review Required", "Cashflows Ledger Drill-down", "Export Controls"}
 
 
 
+def test_cashflow_export_uses_canonical_drilldown_and_active_filters():
+    result = {
+        "period_start": "2026-01-01",
+        "period_end": "2026-01-31",
+        "group_by": "month",
+        "preview": {
+            "periods": [{"key": "2026-01", "start": "2026-01-01", "end": "2026-01-31", "label": "Jan 2026"}],
+            "category_totals": [
+                {"category": "Customers", "2026-01": 100.0, "Total": 100.0},
+                {"category": "Vendors", "2026-01": -20.0, "Total": -20.0},
+            ],
+            "ledger_rollups": [
+                {"category": "Customers", "period_key": "2026-01", "period_label": "Jan 2026", "account_code": "AR", "account_name": "Main customer", "treasury_type": "Bank", "amount": 100.0, "line_count": 1},
+                {"category": "Vendors", "period_key": "2026-01", "period_label": "Jan 2026", "account_code": "AP", "account_name": "Cash vendor", "treasury_type": "Cash", "amount": -20.0, "line_count": 1},
+            ],
+            "drilldown_controls": {"cash_bank_split": {"status": "Matched"}},
+        },
+        "source": {"ready": True},
+        "blocking_reasons": [],
+    }
+    with (
+        patch.object(reconciliation, "_build_cashflow_result", return_value=result) as builder,
+        patch.object(reconciliation, "export_cashflow_xlsx", return_value=b"xlsx") as exporter,
+    ):
+        response = reconciliation.export_cashflows_report(
+            7,
+            "2026-01-01",
+            "2026-01-31",
+            group_by="month",
+            search="Main",
+            category="Customers",
+            treasury_type="Bank",
+            period_key="2026-01",
+            summary_filter="customer",
+            hide_zero_rows=True,
+            session=None,
+        )
+
+    assert response.media_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    assert builder.call_args.kwargs["detail_sections"] == {"transfers", "customer_payments", "deductions", "review", "drilldown"}
+    export_preview = exporter.call_args.args[0]
+    assert [row["category"] for row in export_preview["category_totals"]] == ["Customers"]
+    assert len(export_preview["ledger_rollups"]) == 1
+    assert export_preview["ledger_rollups"][0]["account_code"] == "AR"
+    assert export_preview["export_filters"]["hide_zero_rows"] is True
 
 def test_reports_view_and_dashboard_entry_are_wired():
     root = Path(__file__).resolve().parents[1]
@@ -1224,6 +1287,10 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "cashflows-table-number" in javascript
     assert "grid-template-columns: minmax(0, 1fr)" in stylesheet
     assert ".cashflows-table td.cashflows-table-text" in stylesheet
+    assert "cashflowsDrilldownExportButton" in html
+    assert "downloadCashflowReport('drilldown')" in javascript
+    assert "summary_filter" in javascript
+    assert "hide_zero_rows" in javascript
 
 
 def test_financial_statement_summary_aggregates_central_categories_and_flags_unmapped():

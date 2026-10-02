@@ -1,4 +1,18 @@
 # Changelog Archive
+## Cashflows XLSX drill-down parity - Phase 5 - 2026-10-02
+
+**Scope:** Make XLSX output reconcile with the visible Cashflows summary and filtered ledger drill-down, including period, category, search, Cash/Bank, and zero-row selections.
+
+**Implementation:** Added a canonical Cashflows Ledger Drill-down worksheet with category, period, account, treasury type, amount, and line count. The export route now loads the same drill-down roll-ups as the report, applies shared server-side filters, and records selection and Cash/Bank controls in Export Controls. Added a filtered drill-down export button and cache-busted frontend wiring.
+
+**Verification:** Focused export, drill-down, route, workbook, and UI coverage passed 16 tests. The broader reconciliation/export/accounting-summary run passed 66 tests; one existing XLSX round-trip test could not create pytest temporary storage because the Windows temp directory returned Access Denied. Python compilation, JavaScript syntax, and git diff --check passed.
+
+**Evidence boundary:** Automated fixtures prove workbook and API parity; Aadil's local browser test must confirm downloaded workbook contents and filter behavior against the configured client data.
+
+**Pending phases:**
+
+1. **Phase 6 - Remaining business-detail schedules:** extend the canonical pattern to categories still needing detail, prioritizing vendor payments.
+2. **Phase 7 - Browser regression and release closeout:** add durable control, pagination, loading/abort, cache, and performance checks; complete release documentation.
 ## Cashflows reconciliation acceptance matrix - Phase 4 - 2026-10-02
 
 **Scope:** Formalize reconciliation evidence between Cashflows category summaries, ledger roll-ups, Cash/Bank splits, reporting boundaries, empty periods, and opening/closing balances.

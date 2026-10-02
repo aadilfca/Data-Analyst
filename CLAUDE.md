@@ -234,6 +234,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-10-02: Cashflows ledger drill-down shipped with paginated filters, Cash/Bank controls, loading feedback, category suggestions, and static-HTML revalidation.
 - 2026-10-02: Cashflows Phase 3 added cache-mode and drill-down endpoint timing logs; query optimization awaits authenticated cold/warm samples.
 - 2026-10-02: Cashflows Phase 4 added all-grouping summary/drill-down, boundary, zero-fill, Cash/Bank, and partial-balance acceptance coverage.
+- 2026-10-02: Cashflows Phase 5 added filtered XLSX ledger drill-down output with canonical summary, Cash/Bank, and export-control parity.
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
 - Findings from a Code Health Review session go to `KNOWN_ISSUES.md`, not the Status log — the Status log records changes made, that file records issues found
