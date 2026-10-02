@@ -243,3 +243,4 @@ Do this automatically at the end of the session without being asked.
 - 2026-10-01: Account Control Centre now reuses one page-scoped Trial Balance across tabs and searches; deferred bootstrap endpoint recorded.
 - 2026-10-02: Cash Flow account search now matches category keys, labels, and unassigned rows; regression coverage added.
 - 2026-10-02: Account Control Centre Phase 1 added accessible busy feedback for startup and lazy tab loading; regression coverage added.
+- 2026-10-02: Account Control Centre Phase 2 added inline leaf-save and parent-bulk processing feedback; regression coverage added.

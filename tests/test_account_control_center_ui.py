@@ -154,13 +154,53 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     assert page.locator("select[data-acc-code='10-15-115-10-0001']").input_value() == "cash"
     assert page.locator("select[data-acc-code='20-15-50'] option:checked").text_content() == "Mixed assignments - choose one"
 
+    page.evaluate("""() => {
+        window.__accOriginalFetch = window.fetch;
+        window.__accReleaseLeaf = null;
+        window.fetch = (input, init) => {
+            if (String(input).endsWith('/api/account-control-center/mapping')) {
+                return new Promise(resolve => {
+                    window.__accReleaseLeaf = () => window.__accOriginalFetch(input, init).then(resolve);
+                });
+            }
+            return window.__accOriginalFetch(input, init);
+        };
+    }""")
     page.locator("select[data-acc-code='10-15-115-10-0001']").select_option("local_vendor")
-    page.wait_for_timeout(150)
+    page.wait_for_function("window.__accReleaseLeaf !== null")
+    page.wait_for_function("!document.querySelector('#accPageBusy').hidden")
+    assert page.locator("select[data-acc-code='10-15-115-10-0001']").is_disabled()
+    assert page.locator("[data-acc-result='10-15-115-10-0001']").locator(".acc2-inline-saving").is_visible()
+    page.evaluate("window.__accReleaseLeaf()")
+    page.wait_for_function("document.querySelector('#accPageBusy').hidden")
+    assert page.locator("select[data-acc-code='10-15-115-10-0001']").is_enabled()
+    assert page.locator("[data-acc-result='10-15-115-10-0001']").text_content() == "Saved"
+    page.evaluate("window.fetch = window.__accOriginalFetch")
     assert any(call[0] == "PUT" and call[2]["verification_workstream"] == "local_vendor" for call in calls)
 
+    page.evaluate("""() => {
+        window.__accOriginalFetch = window.fetch;
+        window.__accReleaseParent = null;
+        window.fetch = (input, init) => {
+            if (String(input).includes('/api/account-control-center/mapping/apply-to-children')) {
+                return new Promise(resolve => {
+                    window.__accReleaseParent = () => window.__accOriginalFetch(input, init).then(resolve);
+                });
+            }
+            return window.__accOriginalFetch(input, init);
+        };
+    }""")
     page.once("dialog", lambda dialog: dialog.accept())
     page.locator("select[data-acc-code='20-15-50']").select_option("local_vendor")
-    page.wait_for_timeout(200)
+    page.wait_for_function("window.__accReleaseParent !== null")
+    page.wait_for_function("!document.querySelector('#accPageBusy').hidden")
+    assert page.locator("#accGridWrap").get_attribute("aria-busy") == "true"
+    assert page.locator("#accGridWrap.acc2-processing").is_visible()
+    assert page.locator("select[data-acc-code='20-15-50']").is_disabled()
+    page.evaluate("window.__accReleaseParent()")
+    page.wait_for_function("document.querySelector('#accPageBusy').hidden")
+    page.wait_for_timeout(100)
+    page.evaluate("window.fetch = window.__accOriginalFetch")
     assert any(call[0] == "POST" and call[2]["parent_account_code"] == "20-15-50" for call in calls)
     assert page.locator("select[data-acc-code='20-15-50']").input_value() == "local_vendor"
 

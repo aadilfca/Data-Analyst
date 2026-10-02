@@ -1,4 +1,14 @@
 # Changelog Archive
+## Account Control Centre processing UI - Phase 2 - 2026-10-02
+
+**Scope:** Show clear processing feedback while saving account assignments or applying parent assignments to child accounts.
+
+**Implementation:** Added inline saving spinners and control locking for Verification, Cash Flow, Financial Statement, and Notes leaf assignments. Parent bulk operations now use the shared page busy state, table overlay, `aria-busy`, and temporary control locking through the follow-up refresh.
+
+**Verification:** Account Control Centre backend/UI regression coverage passed 27 tests; delayed browser checks confirmed leaf and parent busy states appear and clear. JavaScript syntax, Python compilation, and git diff --check passed.
+
+Files: static/account_control_center.js, static/style.css, tests/test_account_control_center_ui.py.
+
 ## Account Control Centre processing UI - Phase 1 - 2026-10-02
 
 **Scope:** Make Account Control Centre startup and lazy-loaded tabs visibly show when processing is underway.

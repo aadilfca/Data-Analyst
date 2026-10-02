@@ -62,6 +62,34 @@ async function accWithBusy(message, operation) {
     const endBusy = accBeginBusy(message);
     try { return await operation(); } finally { endBusy(); }
 }
+function accSetSelectBusy(select, isBusy) {
+    if (!select || !select.isConnected) return;
+    select.disabled = isBusy || !accIsAdmin;
+    select.setAttribute('aria-busy', isBusy ? 'true' : 'false');
+}
+function accSetInlineBusy(select, result, message) {
+    accSetSelectBusy(select, true);
+    if (result) {
+        result.classList.add('acc2-saving');
+        result.innerHTML = '<span class="acc2-inline-saving"><span class="ui-spinner ui-spinner-sm" aria-hidden="true"></span><span>' + accEscape(message || 'Saving...') + '</span></span>';
+    }
+}
+function accSetInlineResult(select, result, saved) {
+    accSetSelectBusy(select, false);
+    if (!result) return;
+    result.classList.remove('acc2-saving');
+    result.textContent = saved ? 'Saved' : 'Retry';
+}
+function accSetTableBusy(wrapId, isBusy) {
+    const wrap = accElement(wrapId);
+    if (!wrap) return;
+    wrap.classList.toggle('acc2-processing', isBusy);
+    wrap.setAttribute('aria-busy', isBusy ? 'true' : 'false');
+}
+async function accWithTableBusy(wrapId, message, operation) {
+    accSetTableBusy(wrapId, true);
+    try { return await accWithBusy(message, operation); } finally { accSetTableBusy(wrapId, false); }
+}
 function accSetState(stateId, wrapId, message, isError, isLoading) {
     const state = accElement(stateId);
     state.className = 'acc2-grid-state' + (isError ? ' error' : '') + (isLoading ? ' loading' : '');
@@ -834,17 +862,31 @@ function accMappingPayload(accountCode, workstream) {
 }
 async function accSaveLeaf(account, select) {
     const result = accElement('accAccountRows').querySelector('[data-acc-result="' + CSS.escape(account.account_code) + '"]');
-    if (result) result.textContent = 'Saving...';
-    await accApi('/api/account-control-center/mapping', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(accMappingPayload(account.account_code, select.value)) });
-    accAssignment(account).verification_workstream = select.value || null;
-    if (result) result.textContent = 'Saved';
-    accShowStatus('Saved ' + account.account_code + '.', 'success');
+    accSetInlineBusy(select, result, 'Saving...');
+    let saved = false;
+    try {
+        await accWithBusy('Saving Verification assignment...', function () {
+            return accApi('/api/account-control-center/mapping', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(accMappingPayload(account.account_code, select.value)) });
+        });
+        accAssignment(account).verification_workstream = select.value || null;
+        saved = true;
+        accShowStatus('Saved ' + account.account_code + '.', 'success');
+    } finally {
+        accSetInlineResult(select, result, saved);
+    }
 }
 async function accApplyParent(account, select) {
     if (!window.confirm('Apply this verification sub-module to all leaf accounts below ' + account.account_code + '?')) { accRenderRows(); return; }
-    await accApi('/api/account-control-center/mapping/apply-to-children', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, parent_account_code: account.account_code, verification_workstream: select.value || null }) });
-    await accLoadMapping(true);
-    accShowStatus('Applied the assignment to the child accounts below ' + account.account_code + '.', 'success');
+    accSetSelectBusy(select, true);
+    try {
+        await accWithTableBusy('accGridWrap', 'Applying Verification assignment to child accounts...', async function () {
+            await accApi('/api/account-control-center/mapping/apply-to-children', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, parent_account_code: account.account_code, verification_workstream: select.value || null }) });
+            await accLoadMapping(true);
+        });
+        accShowStatus('Applied the assignment to the child accounts below ' + account.account_code + '.', 'success');
+    } finally {
+        accSetSelectBusy(select, false);
+    }
 }
 async function accHandleWorkstreamChange(event) {
     const select = event.target.closest('.acc2-workstream');
@@ -863,18 +905,32 @@ async function accHandleWorkstreamChange(event) {
 async function accSaveCashflowCategory(account, select) {
     const categoryId = select.value && select.value !== '__mixed' ? Number(select.value) : null;
     const result = accElement('accCashflowRows').querySelector('[data-acc-cashflow-result="' + CSS.escape(account.account_code) + '"]');
-    if (result) result.textContent = 'Saving...';
-    await accApi('/api/account-control-center/cashflow/category-assignment', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, account_code: account.account_code, category_id: categoryId }) });
-    account.category_id = categoryId;
-    if (result) result.textContent = 'Saved';
-    accShowStatus('Saved Cash Flow category for ' + account.account_code + '.', 'success');
+    accSetInlineBusy(select, result, 'Saving...');
+    let saved = false;
+    try {
+        await accWithBusy('Saving Cash Flow category...', function () {
+            return accApi('/api/account-control-center/cashflow/category-assignment', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, account_code: account.account_code, category_id: categoryId }) });
+        });
+        account.category_id = categoryId;
+        saved = true;
+        accShowStatus('Saved Cash Flow category for ' + account.account_code + '.', 'success');
+    } finally {
+        accSetInlineResult(select, result, saved);
+    }
 }
 async function accApplyCashflowCategoryParent(account, select) {
     if (!window.confirm('Apply this Cash Flow category to all leaf accounts below ' + account.account_code + '?')) { accRenderCashflowRows(); return; }
     const categoryId = select.value && select.value !== '__mixed' ? Number(select.value) : null;
-    await accApi('/api/account-control-center/cashflow/category-assignment/apply-to-children', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, parent_account_code: account.account_code, category_id: categoryId }) });
-    await accLoadCashflow();
-    accShowStatus('Applied the Cash Flow category to child accounts below ' + account.account_code + '.', 'success');
+    accSetSelectBusy(select, true);
+    try {
+        await accWithTableBusy('accCashflowGridWrap', 'Applying Cash Flow category to child accounts...', async function () {
+            await accApi('/api/account-control-center/cashflow/category-assignment/apply-to-children', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, parent_account_code: account.account_code, category_id: categoryId }) });
+            await accLoadCashflow();
+        });
+        accShowStatus('Applied the Cash Flow category to child accounts below ' + account.account_code + '.', 'success');
+    } finally {
+        accSetSelectBusy(select, false);
+    }
 }
 async function accHandleCashflowChange(event) {
     const select = event.target.closest('.acc2-cashflow-category');
@@ -894,19 +950,33 @@ async function accHandleCashflowChange(event) {
 }
 async function accSaveFinancialLeaf(account, select) {
     const result = accElement('accFinancialRows').querySelector('[data-acc-fs-result="' + CSS.escape(account.account_code) + '"]');
-    if (result) result.textContent = 'Saving...';
     const value = select.value ? Number(select.value) : null;
-    await accApi('/api/account-control-center/mapping', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, account_code: account.account_code, financial_statement_category_id: value }) });
-    accAssignment(account).financial_statement_category_id = value;
-    if (result) result.textContent = 'Saved';
-    accShowStatus('Saved Financial Statement category for ' + account.account_code + '.', 'success');
+    accSetInlineBusy(select, result, 'Saving...');
+    let saved = false;
+    try {
+        await accWithBusy('Saving Financial Statement category...', function () {
+            return accApi('/api/account-control-center/mapping', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, account_code: account.account_code, financial_statement_category_id: value }) });
+        });
+        accAssignment(account).financial_statement_category_id = value;
+        saved = true;
+        accShowStatus('Saved Financial Statement category for ' + account.account_code + '.', 'success');
+    } finally {
+        accSetInlineResult(select, result, saved);
+    }
 }
 async function accApplyFinancialParent(account, select) {
     if (!window.confirm('Apply this Financial Statement category to all leaf accounts below ' + account.account_code + '?')) { accRenderFinancialRows(); return; }
     const value = select.value ? Number(select.value) : null;
-    await accApi('/api/account-control-center/mapping/apply-to-children', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, parent_account_code: account.account_code, financial_statement_category_id: value }) });
-    await accLoadMapping(true);
-    accShowStatus('Applied the Financial Statement category to child accounts below ' + account.account_code + '.', 'success');
+    accSetSelectBusy(select, true);
+    try {
+        await accWithTableBusy('accFinancialGridWrap', 'Applying Financial Statement category to child accounts...', async function () {
+            await accApi('/api/account-control-center/mapping/apply-to-children', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, parent_account_code: account.account_code, financial_statement_category_id: value }) });
+            await accLoadMapping(true);
+        });
+        accShowStatus('Applied the Financial Statement category to child accounts below ' + account.account_code + '.', 'success');
+    } finally {
+        accSetSelectBusy(select, false);
+    }
 }
 async function accHandleFinancialChange(event) {
     const select = event.target.closest('.acc2-financial-category');
@@ -972,19 +1042,33 @@ async function accHandleFinancialCategoryAction(event) {
 }
 async function accSaveNoteLeaf(account, select) {
     const result = accElement('accNotesRows').querySelector('[data-acc-note-result="' + CSS.escape(account.account_code) + '"]');
-    if (result) result.textContent = 'Saving...';
     const value = select.value ? Number(select.value) : null;
-    await accApi('/api/account-control-center/mapping', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, account_code: account.account_code, note_category_id: value }) });
-    accAssignment(account).note_category_id = value;
-    if (result) result.textContent = 'Saved';
-    accShowStatus('Saved note category for ' + account.account_code + '.', 'success');
+    accSetInlineBusy(select, result, 'Saving...');
+    let saved = false;
+    try {
+        await accWithBusy('Saving note category...', function () {
+            return accApi('/api/account-control-center/mapping', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, account_code: account.account_code, note_category_id: value }) });
+        });
+        accAssignment(account).note_category_id = value;
+        saved = true;
+        accShowStatus('Saved note category for ' + account.account_code + '.', 'success');
+    } finally {
+        accSetInlineResult(select, result, saved);
+    }
 }
 async function accApplyNoteParent(account, select) {
     if (!window.confirm('Apply this note category to all leaf accounts below ' + account.account_code + '?')) { accRenderNotesRows(); return; }
     const value = select.value ? Number(select.value) : null;
-    await accApi('/api/account-control-center/mapping/apply-to-children', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, parent_account_code: account.account_code, note_category_id: value }) });
-    await accLoadMapping(true);
-    accShowStatus('Applied the note category to child accounts below ' + account.account_code + '.', 'success');
+    accSetSelectBusy(select, true);
+    try {
+        await accWithTableBusy('accNotesGridWrap', 'Applying note category to child accounts...', async function () {
+            await accApi('/api/account-control-center/mapping/apply-to-children', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, parent_account_code: account.account_code, note_category_id: value }) });
+            await accLoadMapping(true);
+        });
+        accShowStatus('Applied the note category to child accounts below ' + account.account_code + '.', 'success');
+    } finally {
+        accSetSelectBusy(select, false);
+    }
 }
 async function accHandleNoteChange(event) {
     const select = event.target.closest('.acc2-note-category');
