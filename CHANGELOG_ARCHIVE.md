@@ -1,4 +1,23 @@
 # Changelog Archive
+## Cashflows performance measurement and freeze validation - Phase 3 - 2026-10-02
+
+**Scope:** Make cold/warm Cashflows performance observable without changing accounting calculations, source selection, cache behavior, or API response contracts.
+
+**Implementation:** Extended the existing cashflows_performance record with cache_mode values such as source_rebuild, hit, and prepared_snapshot. Added cashflows_drilldown_performance timing for result construction, server filtering/pagination, row counts, and endpoint total.
+
+**Findings:** Existing instrumentation confirms that the earlier delay was in server-side report preparation, not browser transfer. No query or cache optimization is justified until authenticated cold/warm samples are captured against the configured dataset.
+
+**Verification:** User-confirmed local server behavior; focused Cashflows, drill-down, UI, and cache-smoke coverage passed 35 tests. JavaScript syntax, Python compilation, and git diff --check passed. No schema, package, or source-data changes.
+
+**Deferred evidence:** The local server was reachable but had no authenticated session for a real dataset run. The earlier supplied HAR showed about 9.03 seconds server wait within 9.13 seconds total.
+
+**Pending phases:**
+
+1. **Phase 4 - Formal reconciliation acceptance matrix:** prove summary totals, drill-down totals, balances, boundaries, empty periods, and Cash/Bank splits across supported groupings.
+2. **Phase 5 - Export parity:** verify drill-down and visible summary values against XLSX output for identical filters.
+3. **Phase 6 - Remaining business-detail schedules:** extend the canonical pattern to categories still needing detail, prioritizing vendor payments.
+4. **Phase 7 - Browser regression and release closeout:** add durable control, pagination, loading/abort, cache, and performance checks; complete release documentation.
+
 ## Cashflows ledger drill-down and loading resilience - Phase 2 - 2026-10-02
 
 **Scope:** Add a professional ledger-level drill-down beside the Cashflows summary, with server-side pagination, category/search/treasury/period filters, Cash/Bank separation, and visible processing feedback.

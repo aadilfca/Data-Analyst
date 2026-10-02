@@ -972,8 +972,62 @@ def test_cashflows_preview_logs_performance_stages(caplog):
     assert "format_seconds=" in message
     assert "total_seconds=" in message
     assert "source_rows=4" in message
+    assert "cache_mode=source_rebuild" in message
     assert response["preview"]["group_by"] == "quarter"
 
+
+
+def test_cashflow_drilldown_logs_endpoint_timing(caplog):
+    configuration = {
+        "source_template_id": 9,
+        "cash_account_codes": [],
+        "bank_account_codes": ["B1"],
+        "match_internal_transfers": False,
+        "receipt_presentation": "net",
+    }
+    summary = _cashflow_summary()
+    summary["cashflow_ledger_rollups"] = pd.DataFrame([{
+        "category": "Customers",
+        "account_code": "B1",
+        "account_name": "Bank One",
+        "period_key": "2026-Q1",
+        "period_label": "Q1 2026",
+        "treasury_type": "Bank",
+    }])
+    with (
+        caplog.at_level(logging.INFO, logger="routers.reconciliation"),
+        patch.object(reconciliation, "_require_active_client"),
+        patch.object(reconciliation, "_cashflow_configuration", return_value=configuration),
+        patch.object(reconciliation, "load_cashflow_summary_read_model", return_value=None),
+        patch.object(reconciliation, "load_cashflow_prepared_summary", return_value=None),
+        patch.object(reconciliation, "load_ledger_report_source", return_value=_source()),
+        patch.object(reconciliation, "build_cashflow_summary", return_value=summary),
+        patch.object(reconciliation, "store_cashflow_summary_read_model"),
+    ):
+        response = reconciliation.cashflow_drilldown(
+            7,
+            "2026-02-10",
+            "2026-04-18",
+            group_by="quarter",
+            search="customer",
+            page=1,
+            limit=1,
+            session=None,
+        )
+
+    performance_records = [
+        record for record in caplog.records
+        if record.getMessage().startswith("cashflows_drilldown_performance ")
+    ]
+    assert len(performance_records) == 1
+    message = performance_records[0].getMessage()
+    assert "build_seconds=" in message
+    assert "filter_seconds=" in message
+    assert "total_seconds=" in message
+    assert "filter_count=1" in message
+    assert "total_rows=1" in message
+    assert "returned_rows=1" in message
+    assert response["page_count"] == 1
 
 def test_cashflows_preview_accepts_combined_child_sections(caplog):
     configuration = {

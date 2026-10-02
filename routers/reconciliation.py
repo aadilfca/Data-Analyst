@@ -1375,8 +1375,10 @@ def _build_cashflow_result(
     configured_template_id = configuration.get("source_template_id")
     diagnostics: list[dict[str, Any]] = []
     source_started = perf_counter()
+    cache_mode = "not_requested"
     cached_summary = None
     if detail_sections is not None and configured_template_id is not None:
+        cache_mode = "source_rebuild"
         try:
             cached_summary = load_cashflow_summary_read_model(
                 client_id,
@@ -1407,6 +1409,7 @@ def _build_cashflow_result(
         except Exception as error:
             logger.warning("cashflows_prepared_snapshot_lookup_failed client_id=%s error=%s", client_id, error)
     if cached_summary is not None:
+        cache_mode = str((cached_summary.get("metadata") or {}).get("summary_read_model") or "cache_hit")
         source = LedgerReportSource(
             pd.DataFrame(),
             pd.DataFrame(),
@@ -1510,7 +1513,7 @@ def _build_cashflow_result(
         "cashflows_performance client_id=%s period_start=%s period_end=%s group_by=%s details=%s "
         "validation_seconds=%.3f configuration_seconds=%.3f source_seconds=%.3f "
         "summary_seconds=%.3f format_seconds=%.3f total_seconds=%.3f "
-        "source_rows=%s valid_rows=%s selected_vouchers=%s summary_status=%s",
+        "source_rows=%s valid_rows=%s selected_vouchers=%s summary_status=%s cache_mode=%s",
         client_id,
         start.date().isoformat(),
         end.date().isoformat(),
@@ -1526,6 +1529,7 @@ def _build_cashflow_result(
         source_quality["valid_row_count"],
         int(summary.get("selected_voucher_count", 0)) if summary else 0,
         summary_status,
+        cache_mode,
     )
     return {
         "client_id": client_id,
@@ -1676,6 +1680,8 @@ def cashflow_drilldown(
     session=Depends(require_admin),
 ):
     '''Return server-filtered, paginated compact Cashflows ledger roll-ups.'''
+    request_started = perf_counter()
+    build_started = perf_counter()
     result = _build_cashflow_result(
         client_id,
         period_start,
@@ -1683,6 +1689,8 @@ def cashflow_drilldown(
         detail_sections={'drilldown'},
         group_by=group_by,
     )
+    build_seconds = perf_counter() - build_started
+    filter_started = perf_counter()
     preview = result.get('preview') or {}
     rows = preview.get('ledger_rollups') or []
     search_text = search.strip().casefold() if isinstance(search, str) else ''
@@ -1710,12 +1718,34 @@ def cashflow_drilldown(
     page_count = max(1, math.ceil(total_rows / limit))
     current_page = min(page, page_count)
     start_index = (current_page - 1) * limit
+    page_rows = filtered_rows[start_index:start_index + limit]
+    filter_seconds = perf_counter() - filter_started
+    logger.info(
+        "cashflows_drilldown_performance client_id=%s period_start=%s period_end=%s group_by=%s "
+        "filter_count=%s build_seconds=%.3f filter_seconds=%.3f total_seconds=%.3f "
+        "source_rows=%s total_rows=%s returned_rows=%s requested_page=%s page=%s page_count=%s limit=%s",
+        client_id,
+        result['period_start'],
+        result['period_end'],
+        result['group_by'],
+        sum(bool(value) for value in (search_text, category_text, treasury_text, period_text)),
+        build_seconds,
+        filter_seconds,
+        perf_counter() - request_started,
+        int((result.get('source') or {}).get('quality', {}).get('source_row_count') or 0),
+        total_rows,
+        len(page_rows),
+        page,
+        current_page,
+        page_count,
+        limit,
+    ),
     return {
         'client_id': client_id,
         'period_start': result['period_start'],
         'period_end': result['period_end'],
         'group_by': result['group_by'],
-        'rows': filtered_rows[start_index:start_index + limit],
+        'rows': page_rows,
         'total_rows': total_rows,
         'page': current_page,
         'limit': limit,
