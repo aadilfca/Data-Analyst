@@ -1,4 +1,14 @@
 # Changelog Archive
+## Account Control Centre processing UI - Phase 1 - 2026-10-02
+
+**Scope:** Make Account Control Centre startup and lazy-loaded tabs visibly show when processing is underway.
+
+**Implementation:** Added a shared page busy controller with accessible status text, spinner-based grid states, tab busy attributes, duplicate-tab protection, and guaranteed cleanup on success or error. Save-action feedback remains in Phase 2/3 scope.
+
+**Verification:** Account Control Centre backend/UI regression coverage passed 27 tests; delayed browser checks confirmed startup and Financial Statement loading indicators appear and clear. JavaScript syntax, Python compilation, and git diff --check passed.
+
+Files: static/account_control_center.html, static/account_control_center.js, static/style.css, tests/test_account_control_center_ui.py.
+
 ## Cash Flow category-aware account search - 2026-10-02
 
 **Scope:** Extend Cash Flow Setup's Search accounts field to find rows by Cash Flow category key or label, including unassigned rows.

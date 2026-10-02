@@ -117,11 +117,31 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
         route.fulfill(status=200, content_type="application/json", body="{}")
 
     page = browser.new_page()
+    page.add_init_script("""(() => {
+        window.__accOriginalFetch = window.fetch;
+        window.__accReleaseMapping = null;
+        window.fetch = (input, init) => {
+            if (String(input).includes('/api/account-control-center/mapping?')) {
+                return new Promise(resolve => {
+                    window.__accReleaseMapping = () => window.__accOriginalFetch(input, init).then(resolve);
+                });
+            }
+            return window.__accOriginalFetch(input, init);
+        };
+    })();""")
     page.route("**/api/**", handle_api)
-    page.goto("{}/static/account_control_center.html".format(static_server), wait_until="load")
+    page.goto("{}/static/account_control_center.html".format(static_server), wait_until="domcontentloaded")
+    page.wait_for_selector("#accPageBusy:not([hidden])")
+    page.wait_for_function("window.__accReleaseMapping !== null")
+    assert page.locator("#accPageBusy").get_attribute("aria-busy") == "true"
+    assert page.locator("#accGridState.loading").is_visible()
+    page.evaluate("window.__accReleaseMapping()")
     assert page.locator(".acc2-header").count() == 0
     assert page.locator("#accStatus").is_hidden()
     page.wait_for_selector("#accAccountRows .acc2-workstream")
+    page.wait_for_selector("#accPageBusy", state="hidden")
+    assert page.locator("#accTabFinancial").is_enabled()
+    page.evaluate("window.fetch = window.__accOriginalFetch")
     assert page.locator("#accSourceInfo").text_content() == "Source: January Trial Balance.xlsx - 2026-01-31"
     assert page.locator("#accTreasuryGuidance").is_hidden()
     page.locator("#accTreasuryGuidanceToggle").click()
@@ -144,8 +164,29 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     assert any(call[0] == "POST" and call[2]["parent_account_code"] == "20-15-50" for call in calls)
     assert page.locator("select[data-acc-code='20-15-50']").input_value() == "local_vendor"
 
+    page.evaluate("""() => {
+        window.__accOriginalFetch = window.fetch;
+        window.__accReleaseFinancial = null;
+        window.fetch = (input, init) => {
+            const url = String(input);
+            if (url.includes('/api/account-control-center/categories') && url.includes('category_type=financial_statement')) {
+                return new Promise(resolve => {
+                    window.__accReleaseFinancial = () => window.__accOriginalFetch(input, init).then(resolve);
+                });
+            }
+            return window.__accOriginalFetch(input, init);
+        };
+    }""")
     page.locator("#accTabFinancial").click()
+    page.wait_for_selector("#accPageBusy:not([hidden])")
+    page.wait_for_selector("#accFinancialGridState.loading")
+    assert page.locator("#accTabFinancial").is_disabled()
+    page.wait_for_function("window.__accReleaseFinancial !== null")
+    page.evaluate("window.__accReleaseFinancial()")
     page.wait_for_selector("#accFinancialRows .acc2-financial-category")
+    page.wait_for_selector("#accPageBusy", state="hidden")
+    assert page.locator("#accTabFinancial").is_enabled()
+    page.evaluate("window.fetch = window.__accOriginalFetch")
     assert page.locator("#accFinancialCategoryList .acc2-category-item").count() == 2
     assert page.get_by_role("button", name="Rename").count() == 2
     page.locator("select.acc2-financial-category[data-acc-code='20-15-50-0001']").select_option("10")

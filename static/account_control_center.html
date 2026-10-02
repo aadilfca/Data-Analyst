@@ -10,6 +10,7 @@
     <nav class="navbar"><div class="nav-container"><div id="navLeft"></div><div class="nav-client" id="clientControl"></div><div class="nav-user"></div></div></nav>
     <main class="main-container acc2-page">
         <div id="accStatus" class="acc2-status" role="status" aria-live="polite"></div>
+        <div id="accPageBusy" class="acc2-page-busy" role="status" aria-live="polite" aria-busy="false" hidden><span class="ui-spinner ui-spinner-sm" aria-hidden="true"></span><span id="accPageBusyMessage">Loading Account Control Centre...</span></div>
         <div id="accAdminWarning" class="acc2-status error" hidden>Only an administrator can manage Account Control Centre assignments.</div>
         <nav class="acc2-tabs" role="tablist" aria-label="Account Control Centre sections">
             <button type="button" class="acc2-tab active" id="accTabVerification" data-acc-tab="verification" role="tab" aria-selected="true">Verification accounts</button>

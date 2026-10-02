@@ -14,6 +14,9 @@ let accFinancialLoaded = false;
 let accNotesLoaded = false;
 let accCashflowLoaded = false;
 let accIsAdmin = false;
+let accBusyOperations = new Map();
+let accBusySequence = 0;
+let accTabLoading = { cashflow: false, financial: false, notes: false };
 
 const ACC_WORKSTREAMS = [
     { value: 'cash', label: 'Cash vouchers' },
@@ -38,6 +41,42 @@ function accShowStatus(message, type) {
     status.hidden = false;
 }
 function accClearStatus() { accElement('accStatus').hidden = true; }
+function accRenderBusyState() {
+    const busy = accElement('accPageBusy');
+    if (!busy) return;
+    const messages = Array.from(accBusyOperations.values());
+    busy.hidden = !messages.length;
+    busy.setAttribute('aria-busy', messages.length ? 'true' : 'false');
+    if (messages.length) accElement('accPageBusyMessage').textContent = messages[0];
+}
+function accBeginBusy(message) {
+    const token = ++accBusySequence;
+    accBusyOperations.set(token, message);
+    accRenderBusyState();
+    return function () {
+        accBusyOperations.delete(token);
+        accRenderBusyState();
+    };
+}
+async function accWithBusy(message, operation) {
+    const endBusy = accBeginBusy(message);
+    try { return await operation(); } finally { endBusy(); }
+}
+function accSetState(stateId, wrapId, message, isError, isLoading) {
+    const state = accElement(stateId);
+    state.className = 'acc2-grid-state' + (isError ? ' error' : '') + (isLoading ? ' loading' : '');
+    state.setAttribute('aria-busy', isLoading ? 'true' : 'false');
+    if (isLoading) state.innerHTML = '<span class="ui-spinner ui-spinner-sm" aria-hidden="true"></span><span>' + accEscape(message) + '</span>';
+    else state.textContent = message;
+    state.hidden = false;
+    accElement(wrapId).hidden = true;
+}
+function accSetStateReady(stateId) {
+    const state = accElement(stateId);
+    state.className = 'acc2-grid-state';
+    state.setAttribute('aria-busy', 'false');
+    state.hidden = true;
+}
 async function accApi(url, options) {
     const response = await fetch(url, options || {});
     const payload = await response.json().catch(function () { return {}; });
@@ -271,20 +310,8 @@ function accCollectCashflowComboboxCategories() {
     });
     return roles;
 }
-function accSetGridState(message, isError) {
-    const state = accElement('accGridState');
-    state.textContent = message;
-    state.className = 'acc2-grid-state' + (isError ? ' error' : '');
-    state.hidden = false;
-    accElement('accGridWrap').hidden = true;
-}
-function accSetFinancialGridState(message, isError) {
-    const state = accElement('accFinancialGridState');
-    state.textContent = message;
-    state.className = 'acc2-grid-state' + (isError ? ' error' : '');
-    state.hidden = false;
-    accElement('accFinancialGridWrap').hidden = true;
-}
+function accSetGridState(message, isError, isLoading) { accSetState('accGridState', 'accGridWrap', message, isError, isLoading); }
+function accSetFinancialGridState(message, isError, isLoading) { accSetState('accFinancialGridState', 'accFinancialGridWrap', message, isError, isLoading); }
 function accRenderRows() {
     const filter = String(accElement('accAccountFilter').value || '').trim().toLowerCase();
     const visible = accAccounts.filter(function (account) {
@@ -310,16 +337,10 @@ function accRenderRows() {
                 '</tr>';
         }).join('');
     }
-    accElement('accGridState').hidden = true;
+    accSetStateReady('accGridState');
     accElement('accGridWrap').hidden = false;
 }
-function accSetCashflowGridState(message, isError) {
-    const state = accElement('accCashflowGridState');
-    state.textContent = message;
-    state.className = 'acc2-grid-state' + (isError ? ' error' : '');
-    state.hidden = false;
-    accElement('accCashflowGridWrap').hidden = true;
-}
+function accSetCashflowGridState(message, isError, isLoading) { accSetState('accCashflowGridState', 'accCashflowGridWrap', message, isError, isLoading); }
 function accEffectiveCashflowCategory(account) {
     const direct = account.category_id;
     if (account.is_leaf || direct != null) return direct == null ? '' : String(direct);
@@ -419,7 +440,7 @@ function accRenderCashflowRows() {
         }
         rows.innerHTML = rendered.join('');
     }
-    accElement('accCashflowGridState').hidden = true;
+    accSetStateReady('accCashflowGridState');
     accElement('accCashflowGridWrap').hidden = false;
 }
 function accRenderFinancialRows() {
@@ -446,16 +467,10 @@ function accRenderFinancialRows() {
                 '</tr>';
         }).join('');
     }
-    accElement('accFinancialGridState').hidden = true;
+    accSetStateReady('accFinancialGridState');
     accElement('accFinancialGridWrap').hidden = false;
 }
-function accSetNotesGridState(message, isError) {
-    const state = accElement('accNotesGridState');
-    state.textContent = message;
-    state.className = 'acc2-grid-state' + (isError ? ' error' : '');
-    state.hidden = false;
-    accElement('accNotesGridWrap').hidden = true;
-}
+function accSetNotesGridState(message, isError, isLoading) { accSetState('accNotesGridState', 'accNotesGridWrap', message, isError, isLoading); }
 function accRenderNotesRows() {
     const filter = String(accElement('accNotesFilter').value || '').trim().toLowerCase();
     const visible = accAccounts.filter(function (account) {
@@ -480,7 +495,7 @@ function accRenderNotesRows() {
                 '</tr>';
         }).join('');
     }
-    accElement('accNotesGridState').hidden = true;
+    accSetStateReady('accNotesGridState');
     accElement('accNotesGridWrap').hidden = false;
 }
 function accRenderSource() {
@@ -1034,6 +1049,23 @@ function accSetCashflowConfigTab(tabName) {
     document.querySelectorAll('[data-acc-cashflow-config-panel]').forEach(function (panel) { panel.hidden = panel.dataset.accCashflowConfigPanel !== tabName; });
 }
 function accSetCashflowModal(id, open) { const modal = accElement(id); if (modal) modal.hidden = !open; }
+function accSetTabLoading(tabName, isLoading) {
+    const tab = document.querySelector('[data-acc-tab="' + CSS.escape(tabName) + '"]');
+    if (!tab) return;
+    tab.disabled = isLoading;
+    tab.setAttribute('aria-busy', isLoading ? 'true' : 'false');
+}
+function accLoadLazyTab(tabName, message, loader, setError) {
+    if (accTabLoading[tabName]) return;
+    accTabLoading[tabName] = true;
+    accSetTabLoading(tabName, true);
+    accWithBusy(message, loader).catch(function (error) {
+        setError(error.message, true);
+    }).finally(function () {
+        accTabLoading[tabName] = false;
+        accSetTabLoading(tabName, false);
+    });
+}
 function accSetTab(tabName) {
     document.querySelectorAll('[data-acc-tab]').forEach(function (tab) {
         const active = tab.dataset.accTab === tabName;
@@ -1045,9 +1077,18 @@ function accSetTab(tabName) {
     accElement('accFinancialPanel').hidden = tabName !== 'financial';
     accElement('accNotesPanel').hidden = tabName !== 'notes';
     accElement('accCashflowCategoryFab').hidden = tabName !== 'cashflow';
-    if (tabName === 'cashflow' && !accCashflowLoaded) accLoadCashflow().catch(function (error) { accSetCashflowGridState(error.message, true); });
-    if (tabName === 'financial' && !accFinancialLoaded) accLoadFinancialCategories().catch(function (error) { accSetFinancialGridState(error.message, true); });
-    if (tabName === 'notes' && !accNotesLoaded) accLoadNoteCategories().catch(function (error) { accSetNotesGridState(error.message, true); });
+    if (tabName === 'cashflow' && !accCashflowLoaded) {
+        accSetCashflowGridState('Loading Cash Flow Setup...', false, true);
+        accLoadLazyTab('cashflow', 'Loading Cash Flow Setup...', accLoadCashflow, accSetCashflowGridState);
+    }
+    if (tabName === 'financial' && !accFinancialLoaded) {
+        accSetFinancialGridState('Loading Financial Statement categories...', false, true);
+        accLoadLazyTab('financial', 'Loading Financial Statement categories...', accLoadFinancialCategories, accSetFinancialGridState);
+    }
+    if (tabName === 'notes' && !accNotesLoaded) {
+        accSetNotesGridState('Loading note categories...', false, true);
+        accLoadLazyTab('notes', 'Loading note categories...', accLoadNoteCategories, accSetNotesGridState);
+    }
 }
 function accSetTreasuryGuidance(isOpen) {
     const toggle = accElement('accTreasuryGuidanceToggle');
@@ -1107,12 +1148,15 @@ function accBindEvents() {
     accElement('accNotesCategoryList').addEventListener('click', function (event) { accHandleNoteCategoryAction(event); });
 }
 async function initAccountControlCentre() {
-    if (window.clientContextReady) await window.clientContextReady;
-    accBindEvents();
-    accClientId = window.getSelectedClientId ? window.getSelectedClientId() : null;
-    if (!accClientId) { accSetGridState('Select a client before opening Account Control Centre.', true); return; }
-    accIsAdmin = await window.isAdminUser();
-    if (!accIsAdmin) accElement('accAdminWarning').hidden = false;
-    try { await accLoadMapping(); } catch (error) { accSetGridState(error.message, true); }
+    await accWithBusy('Loading Account Control Centre...', async function () {
+        if (window.clientContextReady) await window.clientContextReady;
+        accBindEvents();
+        accClientId = window.getSelectedClientId ? window.getSelectedClientId() : null;
+        if (!accClientId) { accSetGridState('Select a client before opening Account Control Centre.', true); return; }
+        accIsAdmin = await window.isAdminUser();
+        if (!accIsAdmin) accElement('accAdminWarning').hidden = false;
+        accSetGridState('Loading Trial Balance...', false, true);
+        try { await accLoadMapping(); } catch (error) { accSetGridState(error.message, true); }
+    });
 }
 document.addEventListener('DOMContentLoaded', initAccountControlCentre);
