@@ -1167,8 +1167,12 @@ def test_cashflow_export_preserves_visible_periods_and_totals():
     summary = workbook["Cashflows Summary"]
     assert summary.cell(4, 1).value == "Receipts — percentages calculated within this section"
     assert [summary.cell(5, column).value for column in range(1, 7)] == ["Category", "Q1 2026", "Q2 2026", "Total", "% of section", "Local total"]
-    assert [summary.cell(6, column).value for column in range(1, 7)] == ["Customers", 125, 50, 175, "100.00%", "175.00 Rs"]
+    assert [summary.cell(6, column).value for column in range(1, 7)] == ["Customers", 125, 50, 175, "100.00%", "175 Rs"]
+    assert summary.cell(6, 2).number_format == '#,##0;[Red](#,##0);-'
+    assert all(summary.cell(4, column).fill.fgColor.rgb.endswith("E2F0D9") for column in range(1, 7))
     assert [summary.cell(7, column).value for column in range(1, 5)] == ["Total Receipts", 125, 50, 175]
+    assert all(summary.cell(7, column).font.bold for column in range(1, 7))
+    assert all(summary.cell(7, column).fill.fgColor.rgb.endswith("D9EAF7") for column in range(1, 7))
     assert summary.cell(10, 1).value == "Payments — percentages calculated within this section"
     assert [summary.cell(12, column).value for column in range(1, 5)] == ["Vendors", 80, 20, 100]
     transfers = workbook["Internal Transfers"]
@@ -1181,6 +1185,7 @@ def test_cashflow_export_preserves_visible_periods_and_totals():
     assert transfers.cell(5, 4).value == "Cash Book (CB) · Cash"
     assert transfers.cell(5, 5).value == 20
     assert transfers.cell(5, 6).value == 0
+    assert transfers.cell(5, 6).number_format == '#,##0;[Red](#,##0);-'
     assert transfers.cell(5, 7).value == "Confirmed"
     assert transfers.cell(5, 8).value == "Bank to cash transfer"
     assert transfers.cell(5, 3).alignment.horizontal == "left"
@@ -1291,6 +1296,12 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "downloadCashflowReport('drilldown')" in javascript
     assert "summary_filter" in javascript
     assert "hide_zero_rows" in javascript
+    assert "let hideCashflowZeroRows = true;" in javascript
+    assert "if (amount === 0) return '-';" in javascript
+    assert "minimumFractionDigits: 0" in javascript
+    assert "cashflows-summary-section-row" in javascript
+    assert "cashflows-summary-total-row" in javascript
+    assert ".cashflows-summary-total-row th" in stylesheet
 
 
 def test_financial_statement_summary_aggregates_central_categories_and_flags_unmapped():

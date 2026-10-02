@@ -7106,3 +7106,11 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Implementation:** Added regression coverage for explicit Other deductions, missing customer categories, and multiple receiving accounts. Fixed empty transfer-leg result normalization so a customer voucher with multiple receiving treasury accounts is reviewed safely instead of raising a schema error. The main Cashflows summary and speed-sensitive fetch path remain unchanged.
 
 **Verification:** Approved relevant matrix passed 84 tests; Python compilation and `git diff --check` passed. No packages were installed and no source data was changed.
+
+## Cashflows summary presentation and display formatting - Phase 6A - 2026-10-02
+
+**Scope:** Make the Cashflows summary easier to review while preserving canonical calculations, cached reads, lazy detail loading, and export data flow.
+
+**Implementation:** Zero rows are hidden by default; the toggle reveals them. Browser and XLSX monetary displays now use whole numbers with an Excel-style dash for zero. Receipts/Payments use muted-green bands, and both complete total rows use consistent navy bold styling.
+
+**Verification:** JavaScript syntax, Python compilation, git diff check, and the full reconciliation report/XLSX regression files passed: 39 tests. No packages or source data were changed.

@@ -30,7 +30,7 @@ MUTED = "5B6573"
 WHITE = "FFFFFF"
 GRID = "D9E2F3"
 
-MONEY_FORMAT = '#,##0.00;[Red](#,##0.00);-'
+MONEY_FORMAT = '#,##0;[Red](#,##0);-'
 DATE_FORMAT = "dd-mmm-yy"
 
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
@@ -265,15 +265,17 @@ def _cashflow_section_records(
 
 def _local_amount_label(value: float | None) -> str:
     amount = _number(value) or 0.0
+    if amount == 0:
+        return "-"
     absolute = abs(amount)
     if absolute >= 10000000:
-        label = f"{absolute / 10000000:.2f} crore"
+        label = f"{absolute / 10000000:.0f} crore"
     elif absolute >= 100000:
-        label = f"{absolute / 100000:.2f} lakh"
+        label = f"{absolute / 100000:.0f} lakh"
     elif absolute >= 1000:
-        label = f"{absolute / 1000:.2f} thousand"
+        label = f"{absolute / 1000:.0f} thousand"
     else:
-        label = f"{absolute:.2f} Rs"
+        label = f"{absolute:.0f} Rs"
     return f"({label})" if amount < 0 else label
 
 
@@ -298,7 +300,7 @@ def _write_cashflow_summary_sheet(
     for section in ("Receipts", "Payments"):
         records = _cashflow_section_records(preview, period_keys, section)
         ws.cell(row, 1, f"{section} — percentages calculated within this section")
-        _style_section_band(ws, row, len(headers))
+        _style_cashflow_section_band(ws, row, len(headers))
         row += 1
         _write_table(ws, row, headers, header=True)
         row += 1
@@ -818,6 +820,13 @@ def _month_frame(frame: Any, months: list[str]) -> pd.DataFrame:
     result.columns = [str(column) for column in result.columns]
     return result.reindex(columns=months, fill_value=0.0).fillna(0.0)
 
+
+def _style_cashflow_section_band(ws, row: int, width: int) -> None:
+    for column in range(1, width + 1):
+        cell = ws.cell(row, column)
+        cell.fill = PatternFill("solid", fgColor=PALE_GREEN)
+        cell.font = Font(name="Arial", size=10, bold=True, color="416B4C")
+        cell.border = Border(bottom=Side(style="thin", color="B8D8BE"))
 
 def _frame_has_rows(frame: Any) -> bool:
     return isinstance(frame, pd.DataFrame) and not frame.empty

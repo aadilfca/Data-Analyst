@@ -78,6 +78,7 @@ def test_bank_export_keeps_nonzero_categories_and_professional_structure():
     sheet = workbook["Bank Monthly Summary"]
     assert sheet["A6"].value == "Customers"
     assert sheet["B6"].value == 100
+    assert sheet["B6"].number_format == '#,##0;[Red](#,##0);-'
     labels = {sheet.cell(row, 1).value: row for row in range(1, sheet.max_row + 1)}
     assert any(str(value).startswith("Total BANK INFLOWS") for value in labels)
     assert labels["Operating Expense"] > 0

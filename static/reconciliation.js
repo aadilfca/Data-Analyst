@@ -17,7 +17,7 @@
     let cashflowToastTimer = null;
     let cashflowProcessingControls = [];
     let cashflowSummaryFilter = '';
-    let hideCashflowZeroRows = false;
+    let hideCashflowZeroRows = true;
     let lastClassifiedTransactionsResult = null;
     let cashflowChildPreviews = {};
     let cashflowChildRequest = null;
@@ -227,18 +227,20 @@
     }
     function formatInternationalAmount(value) {
         const amount = Number(value || 0);
-        return amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        if (amount === 0) return '-';
+        return amount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 });
     }
 
     function formatLocalAmount(value) {
         const amount = Number(value || 0);
+        if (amount === 0) return '-';
         const absolute = Math.abs(amount);
         let divisor = 1;
         let unit = 'Rs';
         if (absolute >= 10000000) { divisor = 10000000; unit = 'crore'; }
         else if (absolute >= 100000) { divisor = 100000; unit = 'lakh'; }
         else if (absolute >= 1000) { divisor = 1000; unit = 'thousand'; }
-        const label = (absolute / divisor).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ' + unit;
+        const label = (absolute / divisor).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + ' ' + unit;
         return amount < 0 ? '(' + label + ')' : label;
     }
     function formatPercentage(value) {
@@ -610,7 +612,7 @@
             const rows = sectionRows[section];
             if (!rows.length) return;
             const basis = rows.reduce(function (sum, row) { return sum + row.total; }, 0);
-            html += '<tr><th colspan="' + columns.length + '">' + escapeHtml(section) + '</th></tr>';
+            html += '<tr class="cashflows-summary-section-row cashflows-summary-section-' + section.toLowerCase() + '"><th colspan="' + columns.length + '">' + escapeHtml(section) + '</th></tr>';
             rows.forEach(function (row) {
                 const cells = [escapeHtml(row.category)];
                 row.values.forEach(function (value) { cells.push(escapeHtml(formatInternationalAmount(value))); });
@@ -620,7 +622,7 @@
                 html += '<tr>' + cells.map(function (cell) { return '<td>' + cell + '</td>'; }).join('') + '</tr>';
             });
             const periodTotals = periodKeys.map(function (_, index) { return rows.reduce(function (sum, row) { return sum + row.values[index]; }, 0); });
-            html += '<tr><th>' + escapeHtml('Total ' + section) + '</th>';
+            html += '<tr class="cashflows-summary-total-row"><th>' + escapeHtml('Total ' + section) + '</th>';
             periodTotals.forEach(function (value) { html += '<td>' + escapeHtml(formatInternationalAmount(value)) + '</td>'; });
             html += '<td>' + escapeHtml(formatInternationalAmount(basis)) + '</td><td>100.00%</td><td>' + escapeHtml(formatLocalAmount(basis)) + '</td></tr>';
         });
@@ -758,11 +760,11 @@
         cashflowSummaryFilter = '';
         element('cashflowsSummaryFilter').value = '';
         lastCashflowsResult = null;
-        hideCashflowZeroRows = false;
+        hideCashflowZeroRows = true;
         lastClassifiedTransactionsResult = null;
         cashflowChildPreviews = {};
         element('cashflowsHideZeroRowsButton').disabled = true;
-        element('cashflowsHideZeroRowsButton').textContent = 'Hide zero rows';
+        element('cashflowsHideZeroRowsButton').textContent = 'Show zero rows';
         showCashflowProcessing();
         const start = element('cashflowsPeriodStart').value;
         const end = element('cashflowsPeriodEnd').value;
