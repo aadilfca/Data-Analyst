@@ -185,6 +185,7 @@ def test_cashflow_setup_uses_categories_and_configuration_popups(browser, static
     categories = [{"id": 1, "client_id": 1, "category_key": "customer_receipts", "label": "Customer receipts", "sort_order": 0, "is_active": True}]
     historical_orphans = [{"account_code": "10-15-0009", "account_name": "Historical cash account", "parent_account_code": "10-15", "transaction_count": 2, "voucher_count": 1, "is_historical_orphan": True, "is_read_only": True, "category_id": None}]
     calls = []
+    mapping_gets = []
 
     def handle_api(route, request):
         url = request.url
@@ -195,6 +196,8 @@ def test_cashflow_setup_uses_categories_and_configuration_popups(browser, static
             route.fulfill(status=200, content_type="application/json", body=json.dumps([]))
             return
         if url.split("?")[0].endswith("/api/account-control-center/mapping"):
+            if request.method == "GET":
+                mapping_gets.append(request.url)
             route.fulfill(status=200, content_type="application/json", body=json.dumps({
                 "client_id": 1,
                 "upload": {"id": 77, "file_name": "January Trial Balance.xlsx", "as_of_date": "2026-01-31"},
@@ -273,9 +276,11 @@ def test_cashflow_setup_uses_categories_and_configuration_popups(browser, static
     page.route("**/api/**", handle_api)
     page.goto("{}/static/account_control_center.html".format(static_server), wait_until="load")
     page.wait_for_selector("#accAccountRows .acc2-workstream")
+    assert len(mapping_gets) == 1
     assert page.locator("#accCashflowPanel").is_hidden()
     page.locator("#accTabCashflow").click()
     page.wait_for_selector("#accCashflowRows .acc2-cashflow-category")
+    assert len(mapping_gets) == 1
     assert page.locator("#accCashflowPanel").is_visible()
     assert page.locator("#accVerificationPanel").is_hidden()
     assert page.locator("#accCashflowRows tr").count() == 4
@@ -313,6 +318,13 @@ def test_cashflow_setup_uses_categories_and_configuration_popups(browser, static
     page.locator("#accCashflowCashSearch").fill("Cash account")
     page.locator("#accCashflowCashOptions input:not(:disabled)").first.check()
     assert page.locator("#accCashflowCashSelected").get_by_text("10-15-0001").count() == 1
+    page.locator("#accCashflowAccountsClose").click()
+    page.locator("#accTabVerification").click()
+    page.locator("#accAccountFilter").fill("Cash account")
+    assert page.locator("#accAccountRows tr").count() == 1
+    assert len(mapping_gets) == 1
+    page.locator("#accTabCashflow").click()
+    page.locator("#accCashflowAccountsButton").click()
     page.locator("[data-acc-cashflow-config-tab='bank']").click()
     page.locator("#accCashflowBankSearch").fill("Bank account")
     page.locator("#accCashflowBankOptions input:not(:disabled)").first.check()

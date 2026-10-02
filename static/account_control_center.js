@@ -2,6 +2,7 @@
 let accClientId = null;
 let accAccounts = [];
 let accLatestUpload = null;
+let accTrialBalanceCache = { clientId: null, accounts: null, upload: null, request: null };
 let accFinancialCategories = [];
 let accNoteCategories = [];
 let accCashflowCategories = [];
@@ -619,10 +620,36 @@ async function accSaveCashflowSettings() {
     accRenderCashflowComboboxCategories();
     accShowStatus('Cash Flow transfer and customer receipt settings saved.', 'success');
 }
-async function accLoadMapping() {
-    const result = await accApi('/api/account-control-center/mapping?client_id=' + encodeURIComponent(accClientId));
-    accAccounts = result.accounts || [];
-    accLatestUpload = result.upload || null;
+function accInvalidateTrialBalanceCache() {
+    if (accTrialBalanceCache.clientId === String(accClientId || '')) {
+        accTrialBalanceCache.accounts = null;
+        accTrialBalanceCache.upload = null;
+    }
+}
+async function accLoadTrialBalance(forceRefresh) {
+    const clientId = String(accClientId || '');
+    if (!forceRefresh && accTrialBalanceCache.clientId === clientId && accTrialBalanceCache.accounts) {
+        accAccounts = accTrialBalanceCache.accounts;
+        accLatestUpload = accTrialBalanceCache.upload;
+        return;
+    }
+    if (accTrialBalanceCache.request && accTrialBalanceCache.clientId === clientId) return accTrialBalanceCache.request;
+    accTrialBalanceCache.clientId = clientId;
+    const request = accApi('/api/account-control-center/mapping?client_id=' + encodeURIComponent(accClientId)).then(function (result) {
+        accTrialBalanceCache.accounts = result.accounts || [];
+        accTrialBalanceCache.upload = result.upload || null;
+        accAccounts = accTrialBalanceCache.accounts;
+        accLatestUpload = accTrialBalanceCache.upload;
+        return result;
+    }).finally(function () {
+        if (accTrialBalanceCache.request === request) accTrialBalanceCache.request = null;
+    });
+    accTrialBalanceCache.request = request;
+    return request;
+}
+async function accLoadMapping(forceRefresh) {
+    if (forceRefresh) accInvalidateTrialBalanceCache();
+    await accLoadTrialBalance(!!forceRefresh);
     accRenderSource();
     accRenderRows();
     if (accCashflowLoaded) accRenderCashflowRows();
@@ -735,9 +762,15 @@ async function accSaveCashflowTemplate() {
     accShowStatus('Cashflows transaction template mapping saved.', 'success');
 }
 async function accLoadCashflow() {
+    await accLoadTrialBalance(false);
     const result = await accApi('/api/account-control-center/cashflow/setup?client_id=' + encodeURIComponent(accClientId));
-    accAccounts = result.accounts || [];
-    accLatestUpload = result.upload || accLatestUpload;
+    const setupAccounts = new Map((result.accounts || []).map(function (account) {
+        return [accNormaliseCode(account.account_code), account];
+    }));
+    accAccounts.forEach(function (account) {
+        const setupAccount = setupAccounts.get(accNormaliseCode(account.account_code));
+        if (setupAccount && Object.prototype.hasOwnProperty.call(setupAccount, 'category_id')) account.category_id = setupAccount.category_id;
+    });
     accCashflowCategories = result.categories || [];
     accCashflowHistoricalOrphans = result.historical_orphans || [];
     accCashflowTreasury = result.treasury_accounts || { cash: [], bank: [] };
@@ -778,7 +811,7 @@ async function accSaveLeaf(account, select) {
 async function accApplyParent(account, select) {
     if (!window.confirm('Apply this verification sub-module to all leaf accounts below ' + account.account_code + '?')) { accRenderRows(); return; }
     await accApi('/api/account-control-center/mapping/apply-to-children', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, parent_account_code: account.account_code, verification_workstream: select.value || null }) });
-    await accLoadMapping();
+    await accLoadMapping(true);
     accShowStatus('Applied the assignment to the child accounts below ' + account.account_code + '.', 'success');
 }
 async function accHandleWorkstreamChange(event) {
@@ -792,7 +825,7 @@ async function accHandleWorkstreamChange(event) {
         else await accSaveLeaf(account, select);
     } catch (error) {
         accShowStatus(error.message, 'error');
-        await accLoadMapping().catch(function () {});
+        await accLoadMapping(true).catch(function () {});
     }
 }
 async function accSaveCashflowCategory(account, select) {
@@ -840,7 +873,7 @@ async function accApplyFinancialParent(account, select) {
     if (!window.confirm('Apply this Financial Statement category to all leaf accounts below ' + account.account_code + '?')) { accRenderFinancialRows(); return; }
     const value = select.value ? Number(select.value) : null;
     await accApi('/api/account-control-center/mapping/apply-to-children', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, parent_account_code: account.account_code, financial_statement_category_id: value }) });
-    await accLoadMapping();
+    await accLoadMapping(true);
     accShowStatus('Applied the Financial Statement category to child accounts below ' + account.account_code + '.', 'success');
 }
 async function accHandleFinancialChange(event) {
@@ -854,7 +887,7 @@ async function accHandleFinancialChange(event) {
         else await accSaveFinancialLeaf(account, select);
     } catch (error) {
         accShowStatus(error.message, 'error');
-        await accLoadMapping().catch(function () {});
+        await accLoadMapping(true).catch(function () {});
     }
 }
 async function accCreateFinancialCategory(event) {
@@ -918,7 +951,7 @@ async function accApplyNoteParent(account, select) {
     if (!window.confirm('Apply this note category to all leaf accounts below ' + account.account_code + '?')) { accRenderNotesRows(); return; }
     const value = select.value ? Number(select.value) : null;
     await accApi('/api/account-control-center/mapping/apply-to-children', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, parent_account_code: account.account_code, note_category_id: value }) });
-    await accLoadMapping();
+    await accLoadMapping(true);
     accShowStatus('Applied the note category to child accounts below ' + account.account_code + '.', 'success');
 }
 async function accHandleNoteChange(event) {
@@ -932,7 +965,7 @@ async function accHandleNoteChange(event) {
         else await accSaveNoteLeaf(account, select);
     } catch (error) {
         accShowStatus(error.message, 'error');
-        await accLoadMapping().catch(function () {});
+        await accLoadMapping(true).catch(function () {});
     }
 }
 async function accCreateNoteCategory(event) {

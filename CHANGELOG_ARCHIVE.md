@@ -1,4 +1,16 @@
 # Changelog Archive
+## Account Control Centre Trial Balance page cache - 2026-10-01
+
+**Scope:** Load the Account Control Centre Trial Balance once per page/client and reuse it across Verification, Cash Flow, Financial Statement, Notes, and account searches.
+
+**Implementation:** Added a page-scoped cache with shared in-flight request deduplication. Cash Flow setup now merges its category values into the cached account objects instead of replacing the common Trial Balance. Explicit refreshes remain after parent assignment changes.
+
+**Verification:** Account Control Centre backend/UI regression coverage passed 27 tests; UI coverage confirms one mapping request while opening Cash Flow and searching from another tab. JavaScript syntax, Python compilation, and git diff --check passed.
+
+**Deferred follow-up:** Evaluate one Account Control Centre bootstrap endpoint to return the shared Trial Balance and all tab-specific metadata in one coordinated response, removing the remaining setup round trip without adding persistent client-side storage.
+
+Files: static/account_control_center.js, tests/test_account_control_center_ui.py.
+
 ## Cash Flow historical/orphan row alignment - 2026-10-01
 
 **Scope:** Make historical/orphan Cash Flow Setup rows behave like current Trial Balance rows while retaining their historical identity.
