@@ -288,6 +288,9 @@ def test_cashflow_setup_uses_categories_and_configuration_popups(browser, static
     assert page.locator("#accCashflowRows .acc2-historical-orphan .acc2-cashflow-category").count() == 1
     assert page.locator("#accCashflowRows .acc2-historical-orphan td").count() == 5
     assert page.locator("#accCashflowRows .acc2-historical-orphan .acc2-type").text_content() == "Historical / orphan"
+    page.locator("#accCashflowFilter").fill("unassigned")
+    assert page.locator("#accCashflowRows tr").count() == 4
+    page.locator("#accCashflowFilter").fill("")
     page.locator("select.acc2-cashflow-category[data-acc-code='10-15-0009']").select_option("1")
     page.wait_for_timeout(150)
     assert any(method == "PUT" and body.get("account_code") == "10-15-0009" and body.get("category_id") == 1 for method, body in calls)
@@ -302,6 +305,11 @@ def test_cashflow_setup_uses_categories_and_configuration_popups(browser, static
     assert page.locator("select.acc2-cashflow-category[data-acc-code='10-15-0001']").input_value() == "1"
     assert page.locator("select.acc2-cashflow-category[data-acc-code='10-15-0002']").input_value() == "1"
     assert page.locator("select.acc2-cashflow-category[data-acc-code='10-15-0009']").input_value() == "1"
+    page.locator("#accCashflowFilter").fill("Customer receipts")
+    assert page.locator("#accCashflowRows tr").count() == 4
+    page.locator("#accCashflowFilter").fill("customer_receipts")
+    assert page.locator("#accCashflowRows tr").count() == 4
+    page.locator("#accCashflowFilter").fill("")
     page.locator("#accCashflowCategoryFab").click()
     page.locator("#accCashflowCategoryKey").fill("supplier_payments")
     page.locator("#accCashflowCategoryLabel").fill("Supplier payments")

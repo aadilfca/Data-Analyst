@@ -1,4 +1,14 @@
 # Changelog Archive
+## Cash Flow category-aware account search - 2026-10-02
+
+**Scope:** Extend Cash Flow Setup's Search accounts field to find rows by Cash Flow category key or label, including unassigned rows.
+
+**Implementation:** The client-side filter now searches account code/name plus assigned category metadata and treats missing category assignments as `Unassigned`. Parent rows include categories represented by their current and historical children.
+
+**Verification:** Account Control Centre backend/UI regression coverage passed 27 tests; JavaScript syntax, Python compilation, and git diff --check passed.
+
+Files: static/account_control_center.js, tests/test_account_control_center_ui.py.
+
 ## Account Control Centre Trial Balance page cache - 2026-10-01
 
 **Scope:** Load the Account Control Centre Trial Balance once per page/client and reuse it across Verification, Cash Flow, Financial Statement, Notes, and account searches.

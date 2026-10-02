@@ -363,13 +363,30 @@ function accCashflowRowMarkup(account, isHistorical) {
         '<td>' + result + '</td>' +
         '</tr>';
 }
+function accCashflowSearchMatches(account, search, isHistorical) {
+    const values = [String(account.account_code || ''), String(account.account_name || '')];
+    const categoryIds = [];
+    const addCategory = function (categoryId) {
+        if (categoryId == null) values.push('unassigned');
+        else categoryIds.push(String(categoryId));
+    };
+    if (isHistorical || account.is_leaf || account.category_id != null) {
+        addCategory(account.category_id);
+    } else {
+        accCashflowLeavesBelow(account.account_code).forEach(function (leaf) { addCategory(leaf.category_id); });
+    }
+    accCashflowCategories.forEach(function (category) {
+        if (categoryIds.indexOf(String(category.id)) !== -1) values.push(category.category_key, category.label);
+    });
+    return values.join(' ').toLowerCase().indexOf(search) !== -1;
+}
 function accRenderCashflowRows() {
     const filter = String(accElement('accCashflowFilter').value || '').trim().toLowerCase();
     const visible = accAccounts.filter(function (account) {
-        return !filter || (String(account.account_code || '') + ' ' + String(account.account_name || '')).toLowerCase().indexOf(filter) !== -1;
+        return !filter || accCashflowSearchMatches(account, filter, false);
     });
     const visibleOrphans = accCashflowHistoricalOrphans.filter(function (orphan) {
-        return !filter || (String(orphan.account_code || '') + ' ' + String(orphan.account_name || '')).toLowerCase().indexOf(filter) !== -1;
+        return !filter || accCashflowSearchMatches(orphan, filter, true);
     });
     accElement('accCashflowCount').textContent = (visible.length + visibleOrphans.length) + ' of ' + (accAccounts.length + accCashflowHistoricalOrphans.length) + ' accounts';
     accElement('accCashflowOrphanNotice').hidden = !accCashflowHistoricalOrphans.length;

@@ -241,3 +241,4 @@ Do this automatically at the end of the session without being asked.
 - 2026-09-30: Cashflows gained administrator-default period settings and XLSX export parity; export timing is server-side report preparation under the existing performance freeze.
 - 2026-10-01: Cash Flow historical/orphan rows now align with current rows and inherit parent category changes; regression coverage added.
 - 2026-10-01: Account Control Centre now reuses one page-scoped Trial Balance across tabs and searches; deferred bootstrap endpoint recorded.
+- 2026-10-02: Cash Flow account search now matches category keys, labels, and unassigned rows; regression coverage added.
