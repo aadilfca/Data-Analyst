@@ -162,6 +162,74 @@ def test_cashflow_summary_supports_all_phase_one_groupings(grouping, period_star
     assert result["periods"][-1]["end"] == period_end
 
 
+
+@pytest.mark.parametrize(
+    ("grouping", "period_start", "period_end"),
+    [
+        ("day", "2026-01-05", "2026-02-22"),
+        ("fortnight", "2026-01-01", "2026-02-28"),
+        ("month", "2026-01-01", "2026-03-31"),
+        ("quarter", "2026-02-10", "2026-04-18"),
+        ("half_year", "2026-02-10", "2026-08-18"),
+        ("year", "2026-02-10", "2027-01-05"),
+    ],
+)
+def test_cashflow_drilldown_reconciles_summary_across_all_groupings(grouping, period_start, period_end):
+    journal, coa = _fixture_data()
+    result = build_cashflow_summary(
+        journal,
+        coa,
+        ["C1"],
+        ["B1", "B2"],
+        period_start,
+        period_end,
+        group_by=grouping,
+        include_drilldown=True,
+    )
+
+    category_totals = result["category_totals"].drop(columns=["Total"])
+    rollup_totals = result["cashflow_ledger_rollups"].groupby(["category", "period_key"])["amount"].sum()
+    for category in category_totals.index:
+        for period_key in category_totals.columns:
+            detail_total = rollup_totals.get((str(category), str(period_key)), 0.0)
+            assert detail_total == pytest.approx(float(category_totals.loc[category, period_key]))
+
+    controls = result["cashflow_drilldown_controls"]
+    assert all(row["status"] == "Matched" for row in controls["category_controls"])
+    split = controls["cash_bank_split"]
+    assert split["detail_total"] == pytest.approx(float(result["cashflow_ledger_rollups"]["amount"].sum()))
+    assert split["status"] == "Matched"
+    assert result["periods"][0]["start"] == period_start
+    assert result["periods"][-1]["end"] == period_end
+
+
+def test_cashflow_summary_clips_boundaries_and_zero_fills_empty_periods_with_drilldown():
+    journal, coa = _fixture_data()
+    result = build_cashflow_summary(
+        journal,
+        coa,
+        ["C1"],
+        ["B1", "B2"],
+        "2026-01-10",
+        "2026-03-10",
+        group_by="month",
+        include_drilldown=True,
+    )
+
+    assert [(period["key"], period["start"], period["end"]) for period in result["periods"]] == [
+        ("2026-01", "2026-01-10", "2026-01-31"),
+        ("2026-02", "2026-02-01", "2026-02-28"),
+        ("2026-03", "2026-03-01", "2026-03-10"),
+    ]
+    assert (result["category_totals"]["2026-03"] == 0).all()
+    march_controls = [
+        row for row in result["cashflow_drilldown_controls"]["category_controls"]
+        if row["period_key"] == "2026-03"
+    ]
+    assert march_controls
+    assert all(row["status"] == "Matched" and row["summary_total"] == 0 and row["detail_total"] == 0 for row in march_controls)
+
+
 def test_cashflow_summary_nets_customer_receipt_and_keeps_deduction_detail():
     journal = pd.DataFrame(
         [
@@ -547,6 +615,30 @@ def test_reconciliation_proof_is_available_when_balances_are_supplied():
     assert result["reconciliation_proof"]["status"].tolist() == ["Matched", "Matched"]
     assert result["reconciliation_proof"]["variance"].abs().max() == 0
     assert len(result["reconciliation_by_account"]) == 4
+
+
+
+def test_reconciliation_proof_accumulates_partial_period_closings():
+    journal, coa = _fixture_data()
+    result = build_group_summary(
+        journal,
+        coa,
+        ["B1", "B2"],
+        "2026-01-10",
+        "2026-02-15",
+        opening_balances={"B1": 1000, "B2": 500},
+        actual_closing_balances={
+            "B1": {"2026-01": 960, "2026-02": 990},
+            "B2": {"2026-01": 500, "2026-02": 480},
+        },
+    )
+
+    proof = result["reconciliation_proof"]
+    assert result["months"] == ["2026-01", "2026-02"]
+    assert proof["derived_closing"].tolist() == [1460.0, 1470.0]
+    assert proof["actual_closing_balance"].tolist() == [1460.0, 1470.0]
+    assert proof["status"].tolist() == ["Matched", "Matched"]
+    assert result["reconciliation_by_account"]["status"].eq("Matched").all()
 
 
 def test_cross_group_check_applies_the_requested_sign():

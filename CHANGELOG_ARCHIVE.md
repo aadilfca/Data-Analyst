@@ -1,4 +1,22 @@
 # Changelog Archive
+## Cashflows reconciliation acceptance matrix - Phase 4 - 2026-10-02
+
+**Scope:** Formalize reconciliation evidence between Cashflows category summaries, ledger roll-ups, Cash/Bank splits, reporting boundaries, empty periods, and opening/closing balances.
+
+**Implementation:** Added a parameterized acceptance matrix for day, fortnight, month, quarter, half-year, and year groupings. Added summary-versus-drill-down totals, category-control status, Cash/Bank split, clipped-boundary, zero-fill, and partial-period cumulative-balance assertions.
+
+**Evidence:** The read-only fixture probe found zero summary/detail differences across all six groupings. Cash-only, Bank-only, and combined selections reconciled; existing mixed Cash/Bank coverage remained matched.
+
+**Verification:** User-confirmed local behavior; the canonical engine, balance-source, and reconciliation-report suites passed 64 tests. Python compilation and git diff --check passed. No production calculation, schema, package, or source-data changes were made.
+
+**Evidence boundary:** The matrix is fixture-backed and validates deterministic accounting rules; a live client acceptance run remains a separate user-data checkpoint.
+
+**Pending phases:**
+
+1. **Phase 5 - Export parity:** verify drill-down and visible summary values against XLSX output for identical filters.
+2. **Phase 6 - Remaining business-detail schedules:** extend the canonical pattern to categories still needing detail, prioritizing vendor payments.
+3. **Phase 7 - Browser regression and release closeout:** add durable control, pagination, loading/abort, cache, and performance checks; complete release documentation.
+
 ## Cashflows performance measurement and freeze validation - Phase 3 - 2026-10-02
 
 **Scope:** Make cold/warm Cashflows performance observable without changing accounting calculations, source selection, cache behavior, or API response contracts.
