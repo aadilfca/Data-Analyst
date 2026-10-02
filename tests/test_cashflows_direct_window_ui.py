@@ -13,6 +13,22 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert "cashflowsTransactionsTable" in html
     assert "cashflowsTransactionsPrevious" in html
     assert "cashflowsTransactionsNext" in html
+    assert "cashflowsLedgerDrilldownButton" in html
+    assert "cashflowsLedgerDrilldownSection" in html
+    assert "cashflowsDrilldownTreasury" in html
+    assert "cashflowsDrilldownCategoryOptions" in html
+    assert "renderCashflowDrilldownCategoryOptions" in script
+    assert "syncCashflowDrilldownPagination" in script
+    assert "cashflowsDrilldownPrevious" in html
+    assert "cashflowsDrilldownNext" in html
+    assert "/api/reconciliation/cashflows/drilldown?" in script
+    assert "cashflowDrilldownController" in script
+    assert "Loading ledger roll-ups" in script
+    assert "Loading Cashflows ledger drill-down" in script
+    assert "event.key === 'Enter'" in script
+    assert "cashflowsProcessingTitle" in script
+    assert "openCashflowDrilldown" in script
+    assert "renderCashflowDrilldown" in script
     assert "/api/data/cashflows-classification-preview?" in script
     assert "toggleClassifiedTransactions" in script
     assert "window.location.href = '/static/databank.html?'" not in script
@@ -118,7 +134,7 @@ def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
     assert "cashflowPreviewPeriods" in reconciliation_script
     assert "syncCashflowZeroRowsButton" in reconciliation_script
     assert "style.css?v=36" in reconciliation_html
-    assert "reconciliation.js?v=11" in reconciliation_html
+    assert "reconciliation.js?v=12" in reconciliation_html
     assert "cashflowsSummaryBasis" not in reconciliation_html
     assert "cashflows-transactions-note" not in reconciliation_html
     assert "renderCashflowSummary" in reconciliation_script

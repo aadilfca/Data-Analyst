@@ -27,6 +27,20 @@ app.add_middleware(
 )
 # Fast-data-handling Phase 1 of 13: compress responses over slow connections (Sialkot)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+
+@app.middleware("http")
+async def revalidate_static_html(request: Request, call_next):
+    """Require browsers to revalidate static HTML while preserving asset caching."""
+    response = await call_next(request)
+    path = request.url.path.lower()
+    if path.startswith("/static/") and path.endswith(".html"):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
+
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Lightweight process health signal used by the tray controller and local launchers. It does not

@@ -231,6 +231,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-10-01: Customer-payment report now presents receiving account, deduction totals, settlement values, and difference with wide-table scrolling.
 - 2026-10-01: Cashflows prepared-detail cache version advanced with safe fallback; the main summary path remains unchanged.
 - 2026-10-01: Customer-payment test coverage expanded and empty transfer-leg handling fixed for multiple receiving accounts.
+- 2026-10-02: Cashflows ledger drill-down shipped with paginated filters, Cash/Bank controls, loading feedback, category suggestions, and static-HTML revalidation.
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
 - Findings from a Code Health Review session go to `KNOWN_ISSUES.md`, not the Status log — the Status log records changes made, that file records issues found

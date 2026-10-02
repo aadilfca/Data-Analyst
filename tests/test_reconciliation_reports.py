@@ -443,6 +443,42 @@ def test_cashflow_drilldown_cache_requires_current_payload_version():
     assert reconciliation._cashflow_cache_can_serve_details(current, {'drilldown'}) is True
 
 
+def test_cashflow_drilldown_route_filters_and_paginates_server_side():
+    result = {
+        'period_start': '2026-01-01',
+        'period_end': '2026-01-31',
+        'group_by': 'month',
+        'preview': {
+            'ledger_rollups': [
+                {'category': 'Customers', 'period_key': '2026-01', 'period_label': 'Jan 2026', 'account_code': 'AR1', 'account_name': 'Main Bank customer', 'treasury_type': 'Bank', 'amount': 100.0, 'line_count': 1},
+                {'category': 'Customers', 'period_key': '2026-01', 'period_label': 'Jan 2026', 'account_code': 'AR2', 'account_name': 'Cash customer', 'treasury_type': 'Cash', 'amount': 50.0, 'line_count': 1},
+                {'category': 'Payments', 'period_key': '2026-01', 'period_label': 'Jan 2026', 'account_code': 'EXP', 'account_name': 'Operating expense', 'treasury_type': 'Bank', 'amount': -75.0, 'line_count': 2},
+            ],
+            'drilldown_controls': {'cash_bank_split': {'status': 'Matched'}},
+        },
+        'source': {'ready': True},
+        'blocking_reasons': [],
+    }
+    with patch.object(reconciliation, '_build_cashflow_result', return_value=result) as builder:
+        response = reconciliation.cashflow_drilldown(
+            7,
+            '2026-01-01',
+            '2026-01-31',
+            group_by='month',
+            search='main',
+            treasury_type='Bank',
+            page=1,
+            limit=1,
+            session=None,
+        )
+
+    assert response['total_rows'] == 1
+    assert response['page_count'] == 1
+    assert response['rows'][0]['account_code'] == 'AR1'
+    assert response['controls']['cash_bank_split']['status'] == 'Matched'
+    assert builder.call_args.kwargs['detail_sections'] == {'drilldown'}
+
+
 def test_cashflows_preview_passes_grouping_and_returns_period_descriptors():
     configuration = {
         "source_template_id": 9,

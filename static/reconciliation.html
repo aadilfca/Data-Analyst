@@ -84,6 +84,7 @@
                 <div class='cashflows-report-actions'>
                     <button type='button' id='cashflowsHideZeroRowsButton' class='cashflows-secondary' disabled>Hide zero rows</button>
                     <button type='button' id='cashflowsExportButton' class='cashflows-secondary cashflows-export-button' hidden>Export XLSX</button>
+                    <button type='button' id='cashflowsLedgerDrilldownButton' class='cashflows-secondary' hidden>Open ledger drill-down</button>
                 </div>
             </form>
             <section class='cashflows-report-section'><div class='cashflows-section-heading'><h3>Cash Flow summary</h3><span id='cashflowsReceiptMode'></span></div><div class='cashflows-summary-tools'><div class='cashflows-search-control'><input id='cashflowsSummaryFilter' type='text' placeholder='Filter category' aria-label='Filter Cashflows categories'><button type='button' id='cashflowsSummaryClear' class='cashflows-search-clear' aria-label='Clear category filter' title='Clear category filter' hidden>×</button></div></div><div class='cashflows-table-wrap'><table id='cashflowsSummaryTable' class='cashflows-table'></table></div></section>
@@ -134,6 +135,35 @@
                 </div>
             </section>
         </section>
+        <section id='cashflowsLedgerDrilldownSection' class='cashflows-report-section' hidden aria-label='Cashflows ledger drill-down'>
+            <div class='cashflows-section-heading'>
+                <div><h3>Cashflows ledger drill-down</h3><span id='cashflowsLedgerDrilldownCount'></span></div>
+                <button type='button' id='cashflowsLedgerDrilldownBack' class='cashflows-secondary'>Back to summary</button>
+            </div>
+            <div id='cashflowsLedgerDrilldownControls' class='cashflows-transfer-reconciliation' hidden aria-live='polite'></div>
+            <div class='cashflows-transactions-toolbar'>
+                <input id='cashflowsDrilldownSearch' type='search' placeholder='Search category, ledger account, or period' aria-label='Search ledger drill-down'>
+                <input id='cashflowsDrilldownCategory' list='cashflowsDrilldownCategoryOptions' type='search' placeholder='Category' aria-label='Filter ledger category' autocomplete='off'>
+                <datalist id='cashflowsDrilldownCategoryOptions'></datalist>
+                <select id='cashflowsDrilldownTreasury' aria-label='Filter treasury type'>
+                    <option value=''>All cash and bank</option>
+                    <option value='Bank'>Bank</option>
+                    <option value='Cash'>Cash</option>
+                    <option value='Bank / Cash'>Mixed or unresolved</option>
+                </select>
+                <select id='cashflowsDrilldownPeriod' aria-label='Filter reporting period'><option value=''>All periods</option></select>
+                <button type='button' id='cashflowsDrilldownApply' class='cashflows-primary'>Apply</button>
+                <button type='button' id='cashflowsDrilldownClear' class='cashflows-secondary'>Clear</button>
+            </div>
+            <div class='cashflows-table-wrap cashflows-transactions-table-wrap'>
+                <table id='cashflowsLedgerDrilldownTable' class='cashflows-table'></table>
+            </div>
+            <div class='cashflows-transactions-pagination'>
+                <button type='button' id='cashflowsDrilldownPrevious' class='cashflows-secondary' disabled>Previous</button>
+                <span id='cashflowsDrilldownPageInfo'>Page 1 of 1</span>
+                <button type='button' id='cashflowsDrilldownNext' class='cashflows-secondary' disabled>Next</button>
+            </div>
+        </section>
         <div id='cashflowsToast' class='cashflows-toast' role='status' aria-live='polite' hidden></div>
         <div id='cashflowsProcessing' class='cashflows-processing' role='dialog' aria-modal='true' aria-labelledby='cashflowsProcessingTitle' hidden>
             <div class='cashflows-processing-panel'>
@@ -153,6 +183,6 @@
         </footer>
     </main>
     <script src='/static/client_context.js?v=18'></script>
-    <script src='/static/reconciliation.js?v=11'></script>
+    <script src='/static/reconciliation.js?v=12'></script>
 </body>
 </html>

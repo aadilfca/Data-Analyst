@@ -34,6 +34,17 @@ class AppSmokeTests(unittest.TestCase):
         response = self.client.get("/static/index.html")
         self.assertEqual(response.status_code, 200)
 
+    def test_static_html_revalidates_without_changing_asset_cache_behavior(self):
+        html_response = self.client.get("/static/reconciliation.html")
+        self.assertEqual(html_response.status_code, 200)
+        self.assertEqual(html_response.headers.get("cache-control"), "no-cache, must-revalidate")
+        self.assertEqual(html_response.headers.get("pragma"), "no-cache")
+        self.assertEqual(html_response.headers.get("expires"), "0")
+
+        javascript_response = self.client.get("/static/reconciliation.js?v=12")
+        self.assertEqual(javascript_response.status_code, 200)
+        self.assertNotEqual(javascript_response.headers.get("cache-control"), "no-cache, must-revalidate")
+
     def test_clients_api_responds_on_fresh_db(self):
         # The clients router is Postgres-backed in production. Keep this smoke test
         # hermetic: the HTTP/router wiring is real, while the external PG read is stubbed.

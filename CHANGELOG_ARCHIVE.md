@@ -1,4 +1,22 @@
 # Changelog Archive
+## Cashflows ledger drill-down and loading resilience - Phase 2 - 2026-10-02
+
+**Scope:** Add a professional ledger-level drill-down beside the Cashflows summary, with server-side pagination, category/search/treasury/period filters, Cash/Bank separation, and visible processing feedback.
+
+**Implementation:** Added `/api/reconciliation/cashflows/drilldown` over the canonical compact Cashflows roll-ups, preserving the summary's grouping, period, and reconciliation controls. Added the drill-down table, result counts, page navigation, category suggestions, Enter-key filtering, and XLSX-ready detail structure. Separated the AbortController from its request Promise so Apply, Clear, pagination, and close actions remain reliable. Added HTML revalidation headers without changing static asset caching.
+
+**Verification:** User-confirmed local browser testing. Focused UI, route, and cache-smoke coverage passed 34 tests; JavaScript syntax, Python compilation, and `git diff --check` passed. No packages, schema, or source data changed.
+
+**Files:** `main.py`, `routers/reconciliation.py`, `static/reconciliation.html`, `static/reconciliation.js`, `tests/test_app_smoke.py`, `tests/test_cashflows_direct_window_ui.py`, `tests/test_reconciliation_reports.py`.
+
+**Pending phases:**
+
+1. **Phase 3 - Performance measurement and freeze validation:** capture cold/warm timings for summary and drill-down, identify the slow server stage from application logs, and optimize only where measurements justify it.
+2. **Phase 4 - Formal reconciliation acceptance matrix:** prove summary totals, drill-down totals, opening/closing balances, period boundaries, empty periods, and Cash/Bank splits across all supported grouping choices.
+3. **Phase 5 - Export parity:** verify the drill-down and visible summary values against XLSX output for identical filters, including totals, labels, dates, and treasury classification.
+4. **Phase 6 - Remaining business-detail schedules:** extend the same canonical, reconciled pattern to categories that still need their own ledger schedules, prioritizing vendor payments and any unimplemented category-specific detail.
+5. **Phase 7 - Browser regression and release closeout:** add durable browser coverage for controls, pagination, category selection, loading/abort races, and cache behavior; then complete user-facing documentation and release checks.
+
 ## Account Control Centre processing UI - Phase 3 - 2026-10-02
 
 **Scope:** Extend processing feedback to Account Control Centre category maintenance, Cash Flow settings, Treasury selections, and transaction-template mapping.

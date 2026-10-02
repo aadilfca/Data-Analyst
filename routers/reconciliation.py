@@ -1661,6 +1661,70 @@ def preview_cashflows(
         group_by=group_by,
     )
 
+@router.get('/api/reconciliation/cashflows/drilldown')
+def cashflow_drilldown(
+    client_id: int = Query(..., ge=1),
+    period_start: str = Query(...),
+    period_end: str = Query(...),
+    group_by: str = Query('month'),
+    search: str = Query('', max_length=200),
+    category: str = Query('', max_length=200),
+    treasury_type: str = Query('', max_length=40),
+    period_key: str = Query('', max_length=80),
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    session=Depends(require_admin),
+):
+    '''Return server-filtered, paginated compact Cashflows ledger roll-ups.'''
+    result = _build_cashflow_result(
+        client_id,
+        period_start,
+        period_end,
+        detail_sections={'drilldown'},
+        group_by=group_by,
+    )
+    preview = result.get('preview') or {}
+    rows = preview.get('ledger_rollups') or []
+    search_text = search.strip().casefold() if isinstance(search, str) else ''
+    category_text = category.strip().casefold() if isinstance(category, str) else ''
+    treasury_text = treasury_type.strip().casefold() if isinstance(treasury_type, str) else ''
+    period_text = period_key.strip().casefold() if isinstance(period_key, str) else ''
+
+    def matches(row: dict[str, Any]) -> bool:
+        fields = (
+            row.get('category'),
+            row.get('account_code'),
+            row.get('account_name'),
+            row.get('period_label'),
+        )
+        searchable = ' '.join(str(value or '') for value in fields).casefold()
+        return (
+            (not search_text or search_text in searchable)
+            and (not category_text or str(row.get('category') or '').casefold() == category_text)
+            and (not treasury_text or str(row.get('treasury_type') or '').casefold() == treasury_text)
+            and (not period_text or str(row.get('period_key') or '').casefold() == period_text)
+        )
+
+    filtered_rows = [row for row in rows if matches(row)]
+    total_rows = len(filtered_rows)
+    page_count = max(1, math.ceil(total_rows / limit))
+    current_page = min(page, page_count)
+    start_index = (current_page - 1) * limit
+    return {
+        'client_id': client_id,
+        'period_start': result['period_start'],
+        'period_end': result['period_end'],
+        'group_by': result['group_by'],
+        'rows': filtered_rows[start_index:start_index + limit],
+        'total_rows': total_rows,
+        'page': current_page,
+        'limit': limit,
+        'page_count': page_count,
+        'controls': preview.get('drilldown_controls') or {},
+        'source': result.get('source') or {},
+        'blocking_reasons': result.get('blocking_reasons') or [],
+    }
+
 @router.get("/api/reconciliation/cashflows/export")
 def export_cashflows_report(
     client_id: int = Query(..., ge=1),

@@ -23,6 +23,11 @@
     let cashflowChildRequest = null;
     let cashflowChildGeneration = 0;
     let activeCashflowWindow = null;
+    let cashflowDrilldownPage = 1;
+    let cashflowDrilldownController = null;
+    let cashflowDrilldownGeneration = 0;
+    let lastCashflowDrilldownResult = null;
+    const cashflowDrilldownLimit = 50;
     const cashflowWindowSections = {
         transfers: 'cashflowsTransfersSection',
         customer_payments: 'cashflowsCustomerPaymentsSection',
@@ -271,7 +276,7 @@
         });
         element('cashflowsProcessingMessage').textContent = message || '';
     }
-    function showCashflowProcessing() {
+    function showCashflowProcessing(title, message) {
         cashflowProcessingControls = Array.from(document.querySelectorAll('button, select, input, textarea')).map(function (control) {
             return { element: control, disabled: control.disabled };
         });
@@ -279,7 +284,8 @@
         element('cashflowsView').setAttribute('aria-busy', 'true');
         document.body.classList.add('cashflows-processing-open');
         element('cashflowsProcessing').hidden = false;
-        setCashflowProcessingStep('prepare', 'Preparing the selected period.');
+        element('cashflowsProcessingTitle').textContent = title || 'Loading Cashflows summary';
+        setCashflowProcessingStep('prepare', message || 'Preparing the selected period.');
     }
     function hideCashflowProcessing() {
         cashflowProcessingControls.forEach(function (item) { item.element.disabled = item.disabled; });
@@ -287,6 +293,7 @@
         element('cashflowsView').removeAttribute('aria-busy');
         document.body.classList.remove('cashflows-processing-open');
         element('cashflowsProcessing').hidden = true;
+        element('cashflowsProcessingTitle').textContent = 'Loading Cashflows summary';
         syncCashflowZeroRowsButton();
     }
     function cashflowPreviewPeriods(preview) {
@@ -450,6 +457,124 @@
             if (activeCashflowWindow === section) element('cashflowsReviewSection').hidden = false;
         }
     }
+    function setCashflowDrilldownMode(open) {
+        const section = element('cashflowsLedgerDrilldownSection');
+        if (!section) return;
+        const summaryTable = element('cashflowsSummaryTable');
+        const summarySection = summaryTable ? summaryTable.closest('.cashflows-report-section') : null;
+        if (summarySection) summarySection.hidden = open;
+        const reportIds = ['cashflowsReportForm', 'cashflowsSummaryTable', 'cashflowsLazyActions', 'cashflowsTransfersSection', 'cashflowsCustomerPaymentsSection', 'cashflowsDeductionsSection', 'cashflowsReviewSection', 'cashflowsTransactionsSection'];
+        reportIds.forEach(function (id) {
+            const target = element(id);
+            if (target) target.hidden = open;
+        });
+        section.hidden = !open;
+        activeCashflowWindow = open ? 'ledger_drilldown' : null;
+        if (!open) setActiveCashflowWindow(null);
+    }
+    function renderCashflowDrilldownControls(result) {
+        const panel = element('cashflowsLedgerDrilldownControls');
+        const split = (result && result.controls && result.controls.cash_bank_split) || {};
+        if (!panel || !result || !Object.keys(split).length) {
+            if (panel) panel.hidden = true;
+            return;
+        }
+        panel.textContent = 'Ledger roll-up control: ' + String(split.status || 'Review required')
+            + ' | Bank: ' + formatInternationalAmount(split.bank_amount)
+            + ' | Cash: ' + formatInternationalAmount(split.cash_amount)
+            + ' | Mixed / unresolved: ' + formatInternationalAmount(split.mixed_or_unresolved_amount)
+            + ' | Detail total: ' + formatInternationalAmount(split.detail_total);
+        panel.hidden = false;
+    }
+    function renderCashflowDrilldownCategoryOptions(values) {
+        const datalist = element('cashflowsDrilldownCategoryOptions');
+        if (!datalist) return;
+        const categories = new Set();
+        (values || []).forEach(function (row) {
+            const category = typeof row === 'string' ? row : (row && row.category);
+            if (category) categories.add(String(category));
+        });
+        datalist.innerHTML = Array.from(categories).sort(function (left, right) {
+            return left.localeCompare(right);
+        }).map(function (category) {
+            return '<option value="' + escapeHtml(category) + '"></option>';
+        }).join('');
+    }
+    function syncCashflowDrilldownPagination(result) {
+        const payload = result || lastCashflowDrilldownResult || {};
+        const page = Number(payload.page) || 1;
+        const pageCount = Number(payload.page_count) || 1;
+        element('cashflowsDrilldownPrevious').disabled = page <= 1;
+        element('cashflowsDrilldownNext').disabled = page >= pageCount;
+    }
+    function renderCashflowDrilldown(result) {
+        const rows = result && Array.isArray(result.rows) ? result.rows : [];
+        renderCashflowDrilldownControls(result);
+        renderTable(element('cashflowsLedgerDrilldownTable'), [
+            { key: 'category', label: 'Category' },
+            { key: 'period_label', label: 'Period' },
+            { key: 'account_name', label: 'Ledger account' },
+            { key: 'account_code', label: 'Code' },
+            { key: 'treasury_type', label: 'Cash / Bank' },
+            { key: 'amount', label: 'Amount', amount: true },
+            { key: 'line_count', label: 'Lines', amount: false },
+        ], rows, 'No ledger roll-ups match the selected filters.');
+        const total = Number(result && result.total_rows) || 0;
+        const page = Number(result && result.page) || 1;
+        const pageCount = Number(result && result.page_count) || 1;
+        element('cashflowsLedgerDrilldownCount').textContent = String(total) + ' ledger roll-up(s)';
+        element('cashflowsDrilldownPageInfo').textContent = 'Page ' + String(page) + ' of ' + String(pageCount);
+        syncCashflowDrilldownPagination(result);
+    }
+    function loadCashflowDrilldown(resetPage) {
+        const start = element('cashflowsPeriodStart').value;
+        const end = element('cashflowsPeriodEnd').value;
+        if (!clientId || !start || !end) return Promise.resolve(null);
+        if (resetPage) cashflowDrilldownPage = 1;
+        if (cashflowDrilldownController) cashflowDrilldownController.abort();
+        const controller = new AbortController();
+        cashflowDrilldownController = controller;
+        const generation = cashflowDrilldownGeneration;
+        const params = new URLSearchParams({
+            client_id: String(clientId),
+            period_start: start,
+            period_end: end,
+            group_by: cashflowSelection.groupBy || 'month',
+            page: String(cashflowDrilldownPage),
+            limit: String(cashflowDrilldownLimit),
+        });
+        const search = element('cashflowsDrilldownSearch').value.trim();
+        const category = element('cashflowsDrilldownCategory').value.trim();
+        const treasuryType = element('cashflowsDrilldownTreasury').value;
+        const periodKey = element('cashflowsDrilldownPeriod').value;
+        if (search) params.set('search', search);
+        if (category) params.set('category', category);
+        if (treasuryType) params.set('treasury_type', treasuryType);
+        if (periodKey) params.set('period_key', periodKey);
+        showCashflowProcessing('Loading Cashflows ledger drill-down', 'Preparing ledger detail.');
+        setCashflowProcessingStep('load', 'Loading ledger roll-ups.');
+        element('cashflowsLedgerDrilldownTable').innerHTML = '<tbody><tr><td class=cashflows-empty colspan=7>Loading ledger roll-ups...</td></tr></tbody>';
+        return api('/api/reconciliation/cashflows/drilldown?' + params.toString(), { signal: controller.signal })
+            .then(function (result) {
+                if (generation !== cashflowDrilldownGeneration) return null;
+                setCashflowProcessingStep('render', 'Rendering ledger drill-down details.');
+                lastCashflowDrilldownResult = result;
+                renderCashflowDrilldown(result);
+                return result;
+            })
+            .catch(function (error) {
+                if (error.name === 'AbortError') return null;
+                showCashflowToast(error.message, true);
+                return null;
+            })
+            .finally(function () {
+                if (cashflowDrilldownController === controller) {
+                    cashflowDrilldownController = null;
+                    hideCashflowProcessing();
+                    syncCashflowDrilldownPagination(lastCashflowDrilldownResult);
+                }
+            });
+    }
     function renderCashflowSummary(preview) {
         const table = element('cashflowsSummaryTable');
         const periods = cashflowPreviewPeriods(preview);
@@ -502,15 +627,51 @@
         table.innerHTML = html + '</tbody>';
 
     }
+    async function openCashflowDrilldown() {
+        const button = element('cashflowsLedgerDrilldownButton');
+        const periodSelect = element('cashflowsDrilldownPeriod');
+        const preview = (lastCashflowsResult || {}).preview || {};
+        const periods = cashflowPreviewPeriods(preview);
+        if (!button || !periodSelect || !periods.length) return;
+        periodSelect.innerHTML = '';
+        const allOption = document.createElement('option');
+        allOption.value = '';
+        allOption.textContent = 'All periods';
+        periodSelect.appendChild(allOption);
+        periods.forEach(function (period) {
+            const option = document.createElement('option');
+            option.value = period.key;
+            option.textContent = period.label || period.key;
+            periodSelect.appendChild(option);
+        });
+        setCashflowDrilldownMode(true);
+        button.disabled = true;
+        await loadCashflowDrilldown(true);
+        button.disabled = false;
+    }
+    function closeCashflowDrilldown() {
+        cashflowDrilldownGeneration += 1;
+        if (cashflowDrilldownController) {
+            cashflowDrilldownController.abort();
+            cashflowDrilldownController = null;
+            hideCashflowProcessing();
+        }
+        lastCashflowDrilldownResult = null;
+        setCashflowDrilldownMode(false);
+    }
     function renderResult(result) {
         lastCashflowsResult = result;
         const preview = result.preview || {};
+        closeCashflowDrilldown();
         renderCashflowSummary(preview);
         renderCategoryOptions((preview.category_totals || []).map(function (row) { return row.category; }), true);
+        renderCashflowDrilldownCategoryOptions(preview.category_totals || []);
         element('cashflowsReceiptMode').textContent = 'Receipt presentation: ' + String(preview.receipt_presentation || 'net').toUpperCase();
         const source = result.source || {};
         const exportButton = element('cashflowsExportButton');
         if (exportButton) exportButton.hidden = !source.ready || !(preview.periods || []).length;
+        const ledgerDrilldownButton = element('cashflowsLedgerDrilldownButton');
+        if (ledgerDrilldownButton) ledgerDrilldownButton.hidden = !source.ready || !(preview.periods || []).length;
 
         resetLazyCashflowSections();
         const lazyActions = element('cashflowsLazyActions');
@@ -866,6 +1027,37 @@
     }
     async function initialise() {
         element('cashflowsExportButton').addEventListener('click', downloadCashflowReport);
+        element('cashflowsLedgerDrilldownButton').addEventListener('click', openCashflowDrilldown);
+        element('cashflowsLedgerDrilldownBack').addEventListener('click', closeCashflowDrilldown);
+        element('cashflowsDrilldownApply').addEventListener('click', function () { loadCashflowDrilldown(true); });
+        element('cashflowsDrilldownClear').addEventListener('click', function () {
+            element('cashflowsDrilldownSearch').value = '';
+            element('cashflowsDrilldownCategory').value = '';
+            element('cashflowsDrilldownTreasury').value = '';
+            element('cashflowsDrilldownPeriod').value = '';
+            loadCashflowDrilldown(true);
+        });
+        [element('cashflowsDrilldownSearch'), element('cashflowsDrilldownCategory')].forEach(function (input) {
+            input.addEventListener('keydown', function (event) {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    loadCashflowDrilldown(true);
+                }
+            });
+        });
+        element('cashflowsDrilldownPrevious').addEventListener('click', function () {
+            if (cashflowDrilldownPage > 1) {
+                cashflowDrilldownPage -= 1;
+                loadCashflowDrilldown(false);
+            }
+        });
+        element('cashflowsDrilldownNext').addEventListener('click', function () {
+            const pageCount = Number((lastCashflowDrilldownResult || {}).page_count) || 1;
+            if (cashflowDrilldownPage < pageCount) {
+                cashflowDrilldownPage += 1;
+                loadCashflowDrilldown(false);
+            }
+        });
         if (window.clientContextReady) await window.clientContextReady;
         clientId = window.getSelectedClientId ? window.getSelectedClientId() : null;
         await loadCashflowDefaultPeriods();
