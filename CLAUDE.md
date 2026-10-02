@@ -244,3 +244,4 @@ Do this automatically at the end of the session without being asked.
 - 2026-10-02: Cash Flow account search now matches category keys, labels, and unassigned rows; regression coverage added.
 - 2026-10-02: Account Control Centre Phase 1 added accessible busy feedback for startup and lazy tab loading; regression coverage added.
 - 2026-10-02: Account Control Centre Phase 2 added inline leaf-save and parent-bulk processing feedback; regression coverage added.
+- 2026-10-02: Account Control Centre Phase 3 added processing feedback for category actions, Cash Flow settings, Treasury saves, and template mapping; regression coverage added.

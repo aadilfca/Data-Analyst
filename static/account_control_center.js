@@ -90,6 +90,26 @@ async function accWithTableBusy(wrapId, message, operation) {
     accSetTableBusy(wrapId, true);
     try { return await accWithBusy(message, operation); } finally { accSetTableBusy(wrapId, false); }
 }
+function accSetButtonBusy(button, isBusy, message) {
+    if (!button || !button.isConnected) return;
+    if (isBusy) {
+        button.dataset.accBusyLabel = button.textContent;
+        button.dataset.accBusyDisabled = button.disabled ? 'true' : 'false';
+        button.disabled = true;
+        button.setAttribute('aria-busy', 'true');
+        button.innerHTML = '<span class="ui-spinner ui-spinner-sm" aria-hidden="true"></span><span>' + accEscape(message || 'Saving...') + '</span>';
+        return;
+    }
+    button.disabled = button.dataset.accBusyDisabled === 'true';
+    button.setAttribute('aria-busy', 'false');
+    button.textContent = button.dataset.accBusyLabel || button.textContent;
+    delete button.dataset.accBusyLabel;
+    delete button.dataset.accBusyDisabled;
+}
+async function accWithButtonBusy(button, message, operation) {
+    accSetButtonBusy(button, true, message);
+    try { return await accWithBusy(message, operation); } finally { accSetButtonBusy(button, false); }
+}
 function accSetState(stateId, wrapId, message, isError, isLoading) {
     const state = accElement(stateId);
     state.className = 'acc2-grid-state' + (isError ? ' error' : '') + (isLoading ? ' loading' : '');
@@ -570,11 +590,14 @@ async function accCreateCashflowCategory(event) {
     event.preventDefault();
     const key = accElement('accCashflowCategoryKey').value.trim();
     const label = accElement('accCashflowCategoryLabel').value.trim();
+    const button = event.submitter || accElement('accCashflowCategoryForm').querySelector('button[type="submit"]');
     try {
-        await accApi('/api/account-control-center/cashflow/categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, category_key: key, label: label, sort_order: accCashflowCategories.length }) });
-        accElement('accCashflowCategoryForm').reset();
-        await accLoadCashflow();
-        accShowStatus('Cash Flow category added.', 'success');
+        await accWithButtonBusy(button, 'Adding category...', async function () {
+            await accApi('/api/account-control-center/cashflow/categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, category_key: key, label: label, sort_order: accCashflowCategories.length }) });
+            accElement('accCashflowCategoryForm').reset();
+            await accLoadCashflow();
+            accShowStatus('Cash Flow category added.', 'success');
+        });
     } catch (error) { accShowStatus(error.message, 'error'); }
 }
 async function accUpdateCashflowCategory(category, patch, message) {
@@ -589,12 +612,22 @@ async function accHandleCashflowCategoryAction(event) {
     if (!category) return;
     try {
         const action = button.dataset.accCashflowCategoryAction;
-        if (action === 'toggle') { await accUpdateCashflowCategory(category, { is_active: button.dataset.accCashflowCategoryActive !== 'true' }, 'Cash Flow category status updated.'); return; }
-        if (action === 'rename') { const label = window.prompt('Display label for ' + category.category_key, category.label); if (label && label.trim() && label.trim() !== category.label) await accUpdateCashflowCategory(category, { label: label.trim() }, 'Cash Flow category renamed.'); return; }
+        if (action === 'toggle') {
+            await accWithButtonBusy(button, 'Updating category...', function () { return accUpdateCashflowCategory(category, { is_active: button.dataset.accCashflowCategoryActive !== 'true' }, 'Cash Flow category status updated.'); });
+            return;
+        }
+        if (action === 'rename') {
+            const label = window.prompt('Display label for ' + category.category_key, category.label);
+            if (label && label.trim() && label.trim() !== category.label) await accWithButtonBusy(button, 'Renaming category...', function () { return accUpdateCashflowCategory(category, { label: label.trim() }, 'Cash Flow category renamed.'); });
+            return;
+        }
         const index = accCashflowCategories.findIndex(function (item) { return item.id === category.id; });
         const target = accCashflowCategories[action === 'up' ? index - 1 : index + 1];
         if (!target) return;
-        await Promise.all([accUpdateCashflowCategory(category, { sort_order: target.sort_order }, 'Cash Flow category order updated.'), accUpdateCashflowCategory(target, { sort_order: category.sort_order }, 'Cash Flow category order updated.')]);
+        await accWithButtonBusy(button, 'Reordering categories...', async function () {
+            await Promise.all([accUpdateCashflowCategory(category, { sort_order: target.sort_order }, 'Cash Flow category order updated.'), accUpdateCashflowCategory(target, { sort_order: category.sort_order }, 'Cash Flow category order updated.')]);
+            await accLoadCashflow();
+        });
     } catch (error) { accShowStatus(error.message, 'error'); }
 }
 function accCashflowAccountMatches(account, search) {
@@ -668,17 +701,21 @@ function accRemoveCashflowTreasurySelection(event) {
     accCashflowTreasury[type] = (accCashflowTreasury[type] || []).filter(function (item) { return accNormaliseCode(item) !== code; });
     accRenderCashflowAccountOptions();
 }
-async function accSaveCashflowTreasury() {
-    await accApi('/api/account-control-center/cashflow/treasury-accounts', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, cash_account_codes: accCashflowTreasury.cash || [], bank_account_codes: accCashflowTreasury.bank || [] }) });
-    accShowStatus('Cash and Bank account selections saved.', 'success');
+async function accSaveCashflowTreasury(button) {
+    await accWithButtonBusy(button, 'Saving Cash & Bank accounts...', async function () {
+        await accApi('/api/account-control-center/cashflow/treasury-accounts', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, cash_account_codes: accCashflowTreasury.cash || [], bank_account_codes: accCashflowTreasury.bank || [] }) });
+        accShowStatus('Cash and Bank account selections saved.', 'success');
+    });
 }
-async function accSaveCashflowSettings() {
-    const roleCategories = accCollectCashflowComboboxCategories();
-    const payload = { client_id: accClientId, match_internal_transfers: accElement('accCashflowMatchTransfers').checked, receipt_presentation: accElement('accCashflowReceiptPresentation').value, customer_receipt_category_ids: roleCategories.customer_receipt, bank_charge_category_ids: roleCategories.bank_charge, withholding_tax_category_ids: roleCategories.withholding_tax, other_deduction_category_ids: roleCategories.other_deduction };
-    const result = await accApi('/api/account-control-center/cashflow/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-    accCashflowSettings = Object.assign({}, accCashflowSettings, { match_internal_transfers: payload.match_internal_transfers, receipt_presentation: payload.receipt_presentation, role_categories: result.role_categories || roleCategories });
-    accRenderCashflowComboboxCategories();
-    accShowStatus('Cash Flow transfer and customer receipt settings saved.', 'success');
+async function accSaveCashflowSettings(button) {
+    await accWithButtonBusy(button, 'Saving Cash Flow settings...', async function () {
+        const roleCategories = accCollectCashflowComboboxCategories();
+        const payload = { client_id: accClientId, match_internal_transfers: accElement('accCashflowMatchTransfers').checked, receipt_presentation: accElement('accCashflowReceiptPresentation').value, customer_receipt_category_ids: roleCategories.customer_receipt, bank_charge_category_ids: roleCategories.bank_charge, withholding_tax_category_ids: roleCategories.withholding_tax, other_deduction_category_ids: roleCategories.other_deduction };
+        const result = await accApi('/api/account-control-center/cashflow/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        accCashflowSettings = Object.assign({}, accCashflowSettings, { match_internal_transfers: payload.match_internal_transfers, receipt_presentation: payload.receipt_presentation, role_categories: result.role_categories || roleCategories });
+        accRenderCashflowComboboxCategories();
+        accShowStatus('Cash Flow transfer and customer receipt settings saved.', 'success');
+    });
 }
 function accInvalidateTrialBalanceCache() {
     if (accTrialBalanceCache.clientId === String(accClientId || '')) {
@@ -793,8 +830,16 @@ async function accLoadCashflowTemplateMapping(templateId) {
         return;
     }
     accSetCashflowTemplateState('Loading template columns...');
-    const mapping = await accApi('/api/reconciliation/cashflows/template-columns?client_id=' + encodeURIComponent(accClientId) + '&template_id=' + encodeURIComponent(templateId));
-    accRenderCashflowTemplateMapping(mapping);
+    const select = accElement('accCashflowTemplateSelect');
+    select.disabled = true;
+    select.setAttribute('aria-busy', 'true');
+    try {
+        const mapping = await accWithBusy('Loading Cash Flow template columns...', function () { return accApi('/api/reconciliation/cashflows/template-columns?client_id=' + encodeURIComponent(accClientId) + '&template_id=' + encodeURIComponent(templateId)); });
+        accRenderCashflowTemplateMapping(mapping);
+    } finally {
+        select.disabled = false;
+        select.setAttribute('aria-busy', 'false');
+    }
 }
 async function accOpenCashflowTemplateModal() {
     accSetCashflowModal('accCashflowTemplateModal', true);
@@ -802,10 +847,12 @@ async function accOpenCashflowTemplateModal() {
     accElement('accCashflowTemplateSelect').innerHTML = '<option value="">Loading templates...</option>';
     accSetCashflowTemplateState('Loading Client Data Bank templates...');
     try {
-        const result = await accApi('/api/reconciliation/cashflows/sources?client_id=' + encodeURIComponent(accClientId));
-        const options = accRenderCashflowTemplateSources(result.sources || []);
-        const selected = accElement('accCashflowTemplateSelect').value;
-        if (selected && options.length) await accLoadCashflowTemplateMapping(selected);
+        await accWithBusy('Loading Cash Flow templates...', async function () {
+            const result = await accApi('/api/reconciliation/cashflows/sources?client_id=' + encodeURIComponent(accClientId));
+            const options = accRenderCashflowTemplateSources(result.sources || []);
+            const selected = accElement('accCashflowTemplateSelect').value;
+            if (selected && options.length) await accLoadCashflowTemplateMapping(selected);
+        });
     } catch (error) {
         accSetCashflowTemplateState(error.message, true);
     }
@@ -813,13 +860,16 @@ async function accOpenCashflowTemplateModal() {
 async function accSaveCashflowTemplate() {
     const templateId = Number(accElement('accCashflowTemplateSelect').value || 0);
     if (!templateId || !accCashflowTemplateMappingIsReady()) return;
-    const mappings = Array.from(accElement('accCashflowTemplateMapping').querySelectorAll('[data-acc-template-role]')).filter(function (select) { return select.value; }).map(function (select) {
-        return { role: select.dataset.accTemplateRole, template_column_id: Number(select.value) };
+    const button = accElement('accCashflowTemplateSave');
+    await accWithButtonBusy(button, 'Saving template mapping...', async function () {
+        const mappings = Array.from(accElement('accCashflowTemplateMapping').querySelectorAll('[data-acc-template-role]')).filter(function (select) { return select.value; }).map(function (select) {
+            return { role: select.dataset.accTemplateRole, template_column_id: Number(select.value) };
+        });
+        const result = await accApi('/api/reconciliation/cashflows/template-columns', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, template_id: templateId, mappings: mappings, set_as_default: true }) });
+        accCashflowSettings.source_template_id = templateId;
+        accRenderCashflowTemplateMapping(result);
+        accShowStatus('Cashflows transaction template mapping saved.', 'success');
     });
-    const result = await accApi('/api/reconciliation/cashflows/template-columns', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, template_id: templateId, mappings: mappings, set_as_default: true }) });
-    accCashflowSettings.source_template_id = templateId;
-    accRenderCashflowTemplateMapping(result);
-    accShowStatus('Cashflows transaction template mapping saved.', 'success');
 }
 async function accLoadCashflow() {
     await accLoadTrialBalance(false);
@@ -996,11 +1046,14 @@ async function accCreateFinancialCategory(event) {
     event.preventDefault();
     const key = accElement('accFinancialCategoryKey').value.trim();
     const label = accElement('accFinancialCategoryLabel').value.trim();
+    const button = event.submitter || accElement('accFinancialCategoryForm').querySelector('button[type="submit"]');
     try {
-        await accApi('/api/account-control-center/categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, category_type: 'financial_statement', category_key: key, label: label, sort_order: accFinancialCategories.length }) });
-        accElement('accFinancialCategoryForm').reset();
-        await accLoadFinancialCategories();
-        accShowStatus('Financial Statement category added.', 'success');
+        await accWithButtonBusy(button, 'Adding category...', async function () {
+            await accApi('/api/account-control-center/categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, category_type: 'financial_statement', category_key: key, label: label, sort_order: accFinancialCategories.length }) });
+            accElement('accFinancialCategoryForm').reset();
+            await accLoadFinancialCategories();
+            accShowStatus('Financial Statement category added.', 'success');
+        });
     } catch (error) { accShowStatus(error.message, 'error'); }
 }
 async function accUpdateFinancialCategory(category, patch, message) {
@@ -1016,13 +1069,13 @@ async function accHandleFinancialCategoryAction(event) {
     const action = button.dataset.accCategoryAction;
     try {
         if (action === 'toggle') {
-            await accUpdateFinancialCategory(category, { is_active: button.dataset.accCategoryActive !== 'true' }, 'Financial Statement category status updated.');
+            await accWithButtonBusy(button, 'Updating category...', function () { return accUpdateFinancialCategory(category, { is_active: button.dataset.accCategoryActive !== 'true' }, 'Financial Statement category status updated.'); });
             return;
         }
         if (action === 'rename') {
             const label = window.prompt('Display label for ' + category.category_key, category.label);
             if (label == null || !label.trim() || label.trim() === category.label) return;
-            await accUpdateFinancialCategory(category, { label: label.trim() }, 'Financial Statement category renamed.');
+            await accWithButtonBusy(button, 'Renaming category...', function () { return accUpdateFinancialCategory(category, { label: label.trim() }, 'Financial Statement category renamed.'); });
             return;
         }
         const index = accFinancialCategories.findIndex(function (item) { return item.id === category.id; });
@@ -1032,12 +1085,14 @@ async function accHandleFinancialCategoryAction(event) {
         const updateCategoryOrder = function (item, sortOrder) {
             return accApi('/api/account-control-center/categories/' + item.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, category_type: 'financial_statement', label: item.label, sort_order: sortOrder, is_active: item.is_active }) });
         };
-        await Promise.all([
-            updateCategoryOrder(category, target.sort_order),
-            updateCategoryOrder(target, category.sort_order),
-        ]);
-        await accLoadFinancialCategories();
-        accShowStatus('Financial Statement category order updated.', 'success');
+        await accWithButtonBusy(button, 'Reordering categories...', async function () {
+            await Promise.all([
+                updateCategoryOrder(category, target.sort_order),
+                updateCategoryOrder(target, category.sort_order),
+            ]);
+            await accLoadFinancialCategories();
+            accShowStatus('Financial Statement category order updated.', 'success');
+        });
     } catch (error) { accShowStatus(error.message, 'error'); }
 }
 async function accSaveNoteLeaf(account, select) {
@@ -1088,11 +1143,14 @@ async function accCreateNoteCategory(event) {
     event.preventDefault();
     const key = accElement('accNotesCategoryKey').value.trim();
     const label = accElement('accNotesCategoryLabel').value.trim();
+    const button = event.submitter || accElement('accNotesCategoryForm').querySelector('button[type="submit"]');
     try {
-        await accApi('/api/account-control-center/categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, category_type: 'note', category_key: key, label: label, sort_order: accNoteCategories.length }) });
-        accElement('accNotesCategoryForm').reset();
-        await accLoadNoteCategories();
-        accShowStatus('Note category added.', 'success');
+        await accWithButtonBusy(button, 'Adding category...', async function () {
+            await accApi('/api/account-control-center/categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, category_type: 'note', category_key: key, label: label, sort_order: accNoteCategories.length }) });
+            accElement('accNotesCategoryForm').reset();
+            await accLoadNoteCategories();
+            accShowStatus('Note category added.', 'success');
+        });
     } catch (error) { accShowStatus(error.message, 'error'); }
 }
 async function accUpdateNoteCategory(category, patch, message) {
@@ -1108,13 +1166,13 @@ async function accHandleNoteCategoryAction(event) {
     const action = button.dataset.accNoteAction;
     try {
         if (action === 'toggle') {
-            await accUpdateNoteCategory(category, { is_active: button.dataset.accNoteActive !== 'true' }, 'Note category status updated.');
+            await accWithButtonBusy(button, 'Updating category...', function () { return accUpdateNoteCategory(category, { is_active: button.dataset.accNoteActive !== 'true' }, 'Note category status updated.'); });
             return;
         }
         if (action === 'rename') {
             const label = window.prompt('Display label for ' + category.category_key, category.label);
             if (label == null || !label.trim() || label.trim() === category.label) return;
-            await accUpdateNoteCategory(category, { label: label.trim() }, 'Note category renamed.');
+            await accWithButtonBusy(button, 'Renaming category...', function () { return accUpdateNoteCategory(category, { label: label.trim() }, 'Note category renamed.'); });
             return;
         }
         const index = accNoteCategories.findIndex(function (item) { return item.id === category.id; });
@@ -1123,9 +1181,11 @@ async function accHandleNoteCategoryAction(event) {
         const updateCategoryOrder = function (item, sortOrder) {
             return accApi('/api/account-control-center/categories/' + item.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, category_type: 'note', label: item.label, sort_order: sortOrder, is_active: item.is_active }) });
         };
-        await Promise.all([updateCategoryOrder(category, target.sort_order), updateCategoryOrder(target, category.sort_order)]);
-        await accLoadNoteCategories();
-        accShowStatus('Note category order updated.', 'success');
+        await accWithButtonBusy(button, 'Reordering categories...', async function () {
+            await Promise.all([updateCategoryOrder(category, target.sort_order), updateCategoryOrder(target, category.sort_order)]);
+            await accLoadNoteCategories();
+            accShowStatus('Note category order updated.', 'success');
+        });
     } catch (error) { accShowStatus(error.message, 'error'); }
 }
 function accSetCashflowConfigTab(tabName) {
@@ -1213,9 +1273,9 @@ function accBindEvents() {
     accElement('accCashflowBankOptions').addEventListener('change', accUpdateCashflowTreasurySelection);
     accElement('accCashflowCashSelected').addEventListener('click', accRemoveCashflowTreasurySelection);
     accElement('accCashflowBankSelected').addEventListener('click', accRemoveCashflowTreasurySelection);
-    accElement('accCashflowAccountsSave').addEventListener('click', function () { accSaveCashflowTreasury().catch(function (error) { accShowStatus(error.message, 'error'); }); });
-    accElement('accCashflowSettingsSave').addEventListener('click', function () { accSaveCashflowSettings().catch(function (error) { accShowStatus(error.message, 'error'); }); });
-    accElement('accCashflowCustomerSettingsSave').addEventListener('click', function () { accSaveCashflowSettings().catch(function (error) { accShowStatus(error.message, 'error'); }); });
+    accElement('accCashflowAccountsSave').addEventListener('click', function (event) { accSaveCashflowTreasury(event.currentTarget).catch(function (error) { accShowStatus(error.message, 'error'); }); });
+    accElement('accCashflowSettingsSave').addEventListener('click', function (event) { accSaveCashflowSettings(event.currentTarget).catch(function (error) { accShowStatus(error.message, 'error'); }); });
+    accElement('accCashflowCustomerSettingsSave').addEventListener('click', function (event) { accSaveCashflowSettings(event.currentTarget).catch(function (error) { accShowStatus(error.message, 'error'); }); });
     accElement('accCashflowTemplateButton').addEventListener('click', function () { accOpenCashflowTemplateModal(); });
     accElement('accCashflowTemplateClose').addEventListener('click', function () { accSetCashflowModal('accCashflowTemplateModal', false); });
     accElement('accCashflowTemplateSelect').addEventListener('change', function (event) { accLoadCashflowTemplateMapping(event.target.value).catch(function (error) { accSetCashflowTemplateState(error.message, true); }); });

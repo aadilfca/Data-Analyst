@@ -327,6 +327,14 @@ def test_cashflow_setup_uses_categories_and_configuration_popups(browser, static
             categories.append({"id": 2, "client_id": 1, "category_key": body["category_key"], "label": body["label"], "sort_order": 1, "is_active": True})
             route.fulfill(status=201, content_type="application/json", body=json.dumps({"saved": True, "category": categories[-1]}))
             return
+        if "/api/account-control-center/cashflow/categories/" in base and request.method == "PUT":
+            body = json.loads(request.post_data or "{}")
+            category_id = int(base.rsplit("/", 1)[-1])
+            category = next(item for item in categories if item["id"] == category_id)
+            category.update({key: body[key] for key in ("label", "sort_order", "is_active") if key in body})
+            calls.append((request.method, body))
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({"saved": True, "category": category}))
+            return
         if base.endswith("/api/account-control-center/cashflow/category-assignment/apply-to-children"):
             body = json.loads(request.post_data or "{}")
             calls.append((request.method, body))
@@ -354,6 +362,30 @@ def test_cashflow_setup_uses_categories_and_configuration_popups(browser, static
         route.fulfill(status=200, content_type="application/json", body="{}")
 
     page = browser.new_page()
+    page.add_init_script("""(() => {
+        window.__accOriginalPhase3Fetch = window.fetch;
+        window.__accPhase3Hold = {};
+        window.__accPhase3Release = {};
+        const phase3Key = (input, init) => {
+            const url = String(input).split('?')[0];
+            const method = String((init && init.method) || 'GET').toUpperCase();
+            if (method === 'POST' && url.endsWith('/api/account-control-center/cashflow/categories')) return 'categoryCreate';
+            if (method === 'PUT' && url.includes('/api/account-control-center/cashflow/categories/')) return 'categoryUpdate';
+            if (method === 'PUT' && url.endsWith('/api/account-control-center/cashflow/treasury-accounts')) return 'treasury';
+            if (method === 'PUT' && url.endsWith('/api/account-control-center/cashflow/settings')) return 'settings';
+            if (method === 'PUT' && url.endsWith('/api/reconciliation/cashflows/template-columns')) return 'template';
+            return null;
+        };
+        window.fetch = (input, init) => {
+            const key = phase3Key(input, init);
+            if (key && window.__accPhase3Hold[key]) {
+                return new Promise((resolve, reject) => {
+                    window.__accPhase3Release[key] = () => window.__accOriginalPhase3Fetch(input, init).then(resolve, reject);
+                });
+            }
+            return window.__accOriginalPhase3Fetch(input, init);
+        };
+    })();""")
     page.route("**/api/**", handle_api)
     page.goto("{}/static/account_control_center.html".format(static_server), wait_until="load")
     page.wait_for_selector("#accAccountRows .acc2-workstream")
@@ -394,9 +426,22 @@ def test_cashflow_setup_uses_categories_and_configuration_popups(browser, static
     page.locator("#accCashflowCategoryFab").click()
     page.locator("#accCashflowCategoryKey").fill("supplier_payments")
     page.locator("#accCashflowCategoryLabel").fill("Supplier payments")
+    page.evaluate("window.__accPhase3Hold.categoryCreate = true")
     page.locator("#accCashflowCategoryForm button[type='submit']").click()
+    page.locator("#accPageBusy").wait_for(state="visible")
+    assert page.locator("#accCashflowCategoryForm button[type='submit']").get_attribute("aria-busy") == "true"
+    assert page.locator("#accCashflowCategoryForm button[type='submit'] .ui-spinner").is_visible()
+    page.evaluate("window.__accPhase3Release.categoryCreate()")
+    page.locator("#accPageBusy").wait_for(state="hidden")
     page.wait_for_timeout(150)
     assert page.locator("#accCashflowCategoryList .acc2-category-item").count() == 2
+    page.evaluate("window.__accPhase3Hold.categoryUpdate = true")
+    page.locator("[data-acc-cashflow-category-id='2'][data-acc-cashflow-category-action='toggle']").click()
+    page.locator("#accPageBusy").wait_for(state="visible")
+    assert page.locator("[data-acc-cashflow-category-id='2'][data-acc-cashflow-category-action='toggle']").get_attribute("aria-busy") == "true"
+    page.evaluate("window.__accPhase3Release.categoryUpdate()")
+    page.locator("#accPageBusy").wait_for(state="hidden")
+    page.wait_for_timeout(150)
     page.locator("#accCashflowCategoryClose").click()
     page.locator("select.acc2-cashflow-category[data-acc-code='10-15-0001']").select_option("1")
     page.wait_for_timeout(150)
@@ -418,17 +463,35 @@ def test_cashflow_setup_uses_categories_and_configuration_popups(browser, static
     page.locator("#accCashflowBankSearch").fill("Bank account")
     page.locator("#accCashflowBankOptions input:not(:disabled)").first.check()
     assert page.locator("#accCashflowBankSelected").get_by_text("10-15-0002").count() == 1
+    page.evaluate("window.__accPhase3Hold.treasury = true")
     page.locator("#accCashflowAccountsSave").click()
+    page.locator("#accPageBusy").wait_for(state="visible")
+    assert page.locator("#accCashflowAccountsSave").get_attribute("aria-busy") == "true"
+    assert page.locator("#accCashflowAccountsSave .ui-spinner").is_visible()
+    page.evaluate("window.__accPhase3Release.treasury()")
+    page.locator("#accPageBusy").wait_for(state="hidden")
     page.wait_for_timeout(150)
     assert any(method == "PUT" and "cash_account_codes" in body and "bank_account_codes" in body for method, body in calls)
     page.locator("[data-acc-cashflow-config-tab='transfers']").click()
     assert page.locator("#accCashflowMatchTransfers").is_visible()
+    page.evaluate("window.__accPhase3Hold.settings = true")
+    page.locator("#accCashflowSettingsSave").click()
+    page.locator("#accPageBusy").wait_for(state="visible")
+    assert page.locator("#accCashflowSettingsSave").get_attribute("aria-busy") == "true"
+    page.evaluate("window.__accPhase3Release.settings()")
+    page.locator("#accPageBusy").wait_for(state="hidden")
+    page.wait_for_timeout(150)
     page.locator("[data-acc-cashflow-config-tab='customer']").click()
     assert page.locator(".acc2-payment-format-card").count() == 2
     assert page.locator("#accCashflowCustomerReceiptCategories").input_value() == "Customer receipts"
     assert page.locator("#accCashflowCustomerReceiptCategoryOptions option[value='Customer receipts']").count() == 1
     page.locator("#accCashflowCustomerReceiptCategories").fill("Customer receipts")
+    page.evaluate("window.__accPhase3Hold.settings = true")
     page.locator("#accCashflowCustomerSettingsSave").click()
+    page.locator("#accPageBusy").wait_for(state="visible")
+    assert page.locator("#accCashflowCustomerSettingsSave").get_attribute("aria-busy") == "true"
+    page.evaluate("window.__accPhase3Release.settings()")
+    page.locator("#accPageBusy").wait_for(state="hidden")
     page.wait_for_timeout(150)
     assert any(method == "PUT" and body.get("customer_receipt_category_ids") == [1] for method, body in calls)
     page.locator("[data-acc-cashflow-config-tab='transfers']").click()
@@ -440,7 +503,13 @@ def test_cashflow_setup_uses_categories_and_configuration_popups(browser, static
     assert page.locator("#accCashflowTemplateMapping .acc2-template-required").count() == 5
     assert page.locator("#accCashflowTemplateMapping .acc2-template-recommended").count() == 2
     assert page.locator("#accCashflowTemplateSave").is_enabled()
+    page.evaluate("window.__accPhase3Hold.template = true")
     page.locator("#accCashflowTemplateSave").click()
+    page.locator("#accPageBusy").wait_for(state="visible")
+    assert page.locator("#accCashflowTemplateSave").get_attribute("aria-busy") == "true"
+    assert page.locator("#accCashflowTemplateSave .ui-spinner").is_visible()
+    page.evaluate("window.__accPhase3Release.template()")
+    page.locator("#accPageBusy").wait_for(state="hidden")
     page.wait_for_timeout(150)
     assert any(method == "PUT" and body.get("template_id") == 1 and len(body.get("mappings", [])) == 5 for method, body in calls)
     page.locator("#accCashflowTemplateClose").click()

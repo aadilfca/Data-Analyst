@@ -1,4 +1,14 @@
 # Changelog Archive
+## Account Control Centre processing UI - Phase 3 - 2026-10-02
+
+**Scope:** Extend processing feedback to Account Control Centre category maintenance, Cash Flow settings, Treasury selections, and transaction-template mapping.
+
+**Implementation:** Added reusable button busy states with spinners and temporary locking for Cash Flow, Financial Statement, and Notes category create/update/reorder actions. Treasury and Cash Flow settings saves now use the shared page busy state; template source/column loading and mapping saves now expose progress and prevent duplicate actions.
+
+**Verification:** Account Control Centre backend/UI regression coverage passed 27 tests; delayed browser checks confirmed category, Treasury, settings, and template busy states appear and clear. JavaScript syntax, Python compilation, and git diff --check passed.
+
+Files: static/account_control_center.js, static/style.css, tests/test_account_control_center_ui.py.
+
 ## Account Control Centre processing UI - Phase 2 - 2026-10-02
 
 **Scope:** Show clear processing feedback while saving account assignments or applying parent assignments to child accounts.
