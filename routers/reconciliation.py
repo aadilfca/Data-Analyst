@@ -21,6 +21,7 @@ from routers.auth import require_admin
 from services.ledger_group_summary import LedgerBalanceError, build_cashflow_summary, build_cross_group_check, build_financial_statement_summary, build_group_summary, normalize_cashflow_grouping
 from services.ledger_report_source import (
     CASHFLOW_CHILD_DETAILS_VERSION,
+    CASHFLOW_DRILLDOWN_DETAILS_VERSION,
     CASHFLOW_COLUMN_ROLE_LABELS,
     CASHFLOW_REQUIRED_COLUMN_ROLES,
     LedgerReportSource,
@@ -358,6 +359,13 @@ def _frame_records(frame: Any, limit: int = 200) -> list[dict[str, Any]]:
     if frame is None or not isinstance(frame, pd.DataFrame) or frame.empty:
         return []
     records = frame.head(limit).to_dict("records")
+    return [{str(key): _json_value(value) for key, value in row.items()} for row in records]
+
+
+def _frame_records_all(frame: Any) -> list[dict[str, Any]]:
+    if frame is None or not isinstance(frame, pd.DataFrame) or frame.empty:
+        return []
+    records = frame.to_dict('records')
     return [{str(key): _json_value(value) for key, value in row.items()} for row in records]
 
 
@@ -1278,6 +1286,9 @@ def _cashflow_preview(
     """Format the summary and only the child detail sections requested by the caller."""
     if summary is None:
         return {
+            'ledger_rollups': [],
+            'drilldown_controls': {},
+            'drilldown_details_prepared': False,
             "months": [],
             "periods": [],
             "group_by": "month",
@@ -1297,6 +1308,9 @@ def _cashflow_preview(
     loaded = {"transfers", "customer_payments", "deductions", "review"} if detail_sections is None else set(detail_sections)
     review = summary.get("categories_needing_review")
     return {
+        'ledger_rollups': _frame_records_all(summary.get('cashflow_ledger_rollups')) if 'drilldown' in loaded else [],
+        'drilldown_controls': summary.get('cashflow_drilldown_controls') if 'drilldown' in loaded else {},
+        'drilldown_details_prepared': bool(summary.get('cashflow_drilldown_prepared')) if 'drilldown' in loaded else False,
         "months": [str(month) for month in summary.get("months", [])],
         "periods": summary.get("periods", []),
         "group_by": summary.get("group_by", "month"),
@@ -1323,6 +1337,15 @@ def _cashflow_cache_can_serve_details(
         return False
     if detail_sections:
         metadata = cached_summary.get("metadata", {})
+        if 'drilldown' in detail_sections:
+            if not (
+                bool(metadata.get('drilldown_details_prepared'))
+                and int(metadata.get('drilldown_details_version', 0) or 0) >= CASHFLOW_DRILLDOWN_DETAILS_VERSION
+            ):
+                return False
+            detail_sections = detail_sections - {'drilldown'}
+        if not detail_sections:
+            return True
         return (
             bool(metadata.get("child_details_prepared"))
             and int(metadata.get("child_details_version", 0) or 0) >= CASHFLOW_CHILD_DETAILS_VERSION
@@ -1433,6 +1456,7 @@ def _build_cashflow_result(
                 receipt_presentation=configuration["receipt_presentation"],
                 cashflow_role_categories=configuration.get("customer_payment_roles"),
                 group_by=grouping,
+                include_drilldown=bool(detail_sections and 'drilldown' in detail_sections),
             )
         except LedgerBalanceError as error:
             summary_status = "failed"
@@ -1610,6 +1634,7 @@ def _parse_cashflow_detail_sections(value: str | None) -> set[str] | None:
     if raw in {"", "summary"}:
         return set()
     allowed = {"transfers", "customer_payments", "deductions", "review"}
+    allowed = allowed | {'drilldown'}
     sections = {item.strip() for item in raw.split(",") if item.strip()}
     if sections - allowed:
         raise HTTPException(400, "Invalid Cashflows detail section requested.")

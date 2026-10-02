@@ -10,7 +10,7 @@ from openpyxl import load_workbook
 
 from routers import reconciliation
 from services.ledger_group_summary import build_cashflow_summary, build_financial_statement_summary
-from services.ledger_report_source import CASHFLOW_CHILD_DETAILS_VERSION
+from services.ledger_report_source import CASHFLOW_CHILD_DETAILS_VERSION, CASHFLOW_DRILLDOWN_DETAILS_VERSION
 from routers import settings as settings_router
 from services.reconciliation_xlsx import export_cashflow_xlsx
 
@@ -374,6 +374,73 @@ def test_preview_report_blocks_download_when_balance_evidence_is_missing():
     assert response["can_download"] is False
     assert response["controls"]["reconciliation"]["status"] == "Blocked"
     assert any("Closing balances are missing" in reason for reason in response["blocking_reasons"])
+
+
+def test_cashflow_drilldown_rollups_reconcile_and_split_treasury_legs():
+    journal = pd.DataFrame(
+        [
+            {'voucher_id': 'R1', 'date': '2026-01-05', 'account_code': 'BANK', 'account_name': 'Main Bank', 'voucher_detail': 'Receipt', 'debit': 100, 'credit': 0},
+            {'voucher_id': 'R1', 'date': '2026-01-05', 'account_code': 'AR', 'account_name': 'Customers', 'voucher_detail': 'Receipt', 'debit': 0, 'credit': 100},
+            {'voucher_id': 'R2', 'date': '2026-01-06', 'account_code': 'CASH', 'account_name': 'Main Cash', 'voucher_detail': 'Payment', 'debit': 0, 'credit': 40},
+            {'voucher_id': 'R2', 'date': '2026-01-06', 'account_code': 'EXP', 'account_name': 'Operating expense', 'voucher_detail': 'Payment', 'debit': 40, 'credit': 0},
+        ]
+    )
+    coa = pd.DataFrame(
+        [
+            {'account_code': 'BANK', 'account_title': 'Main Bank', 'account_type': 'Bank', 'category': ''},
+            {'account_code': 'CASH', 'account_title': 'Main Cash', 'account_type': 'Cash', 'category': ''},
+            {'account_code': 'AR', 'account_title': 'Customers', 'account_type': 'Receivable', 'category': 'Received from Customers'},
+            {'account_code': 'EXP', 'account_title': 'Operating expense', 'account_type': 'Expense', 'category': 'Operating expenses'},
+        ]
+    )
+
+    result = build_cashflow_summary(
+        journal,
+        coa,
+        cash_account_codes=['CASH'],
+        bank_account_codes=['BANK'],
+        period_start='2026-01-01',
+        period_end='2026-01-31',
+        include_drilldown=True,
+    )
+
+    rollups = result['cashflow_ledger_rollups']
+    assert result['cashflow_drilldown_prepared'] is True
+    assert set(rollups['treasury_type']) == {'Bank', 'Cash'}
+    assert rollups.groupby('category')['amount'].sum().to_dict() == {
+        'Operating expenses': -40.0,
+        'Received from Customers': 100.0,
+    }
+    assert all(row['status'] == 'Matched' for row in result['cashflow_drilldown_controls']['category_controls'])
+    split = result['cashflow_drilldown_controls']['cash_bank_split']
+    assert split['bank_amount'] == 100.0
+    assert split['cash_amount'] == -40.0
+    assert split['mixed_or_unresolved_line_count'] == 0
+    assert split['status'] == 'Matched'
+
+
+def test_cashflows_preview_exposes_compact_drilldown_contract():
+    summary = _cashflow_summary()
+    summary['cashflow_ledger_rollups'] = pd.DataFrame(
+        [{'category': 'Customers', 'period_key': '2026-Q1', 'period_label': 'Q1 2026', 'account_code': 'AR', 'account_name': 'Customers', 'treasury_type': 'Bank', 'amount': 125.0, 'line_count': 1}]
+    )
+    summary['cashflow_drilldown_controls'] = {'cash_bank_split': {'status': 'Matched'}}
+    summary['cashflow_drilldown_prepared'] = True
+
+    preview = reconciliation._cashflow_preview(summary, {'drilldown'})
+
+    assert len(preview['ledger_rollups']) == 1
+    assert preview['ledger_rollups'][0]['treasury_type'] == 'Bank'
+    assert preview['drilldown_controls']['cash_bank_split']['status'] == 'Matched'
+    assert preview['detail_sections_loaded'] == ['drilldown']
+
+
+def test_cashflow_drilldown_cache_requires_current_payload_version():
+    legacy = {'metadata': {'drilldown_details_prepared': True, 'drilldown_details_version': 0}, 'summary': _cashflow_summary()}
+    current = {'metadata': {'drilldown_details_prepared': True, 'drilldown_details_version': CASHFLOW_DRILLDOWN_DETAILS_VERSION}, 'summary': _cashflow_summary()}
+
+    assert reconciliation._cashflow_cache_can_serve_details(legacy, {'drilldown'}) is False
+    assert reconciliation._cashflow_cache_can_serve_details(current, {'drilldown'}) is True
 
 
 def test_cashflows_preview_passes_grouping_and_returns_period_descriptors():

@@ -217,6 +217,72 @@ def _join_unique_leg_values(values: Any) -> str:
     return " / ".join(seen)
 
 
+def _empty_cashflow_ledger_rollups() -> pd.DataFrame:
+    return pd.DataFrame(
+        columns=[
+            'category',
+            'period_key',
+            'period_label',
+            'account_code',
+            'account_name',
+            'treasury_type',
+            'amount',
+            'line_count',
+        ]
+    )
+
+
+def _build_cashflow_drilldown_controls(
+    category_totals: pd.DataFrame,
+    rollups: pd.DataFrame,
+    *,
+    tolerance: float,
+) -> dict[str, Any]:
+    category_controls: list[dict[str, Any]] = []
+    rollup_totals = (
+        rollups.groupby(['category', 'period_key'], dropna=False)['amount'].sum()
+        if not rollups.empty
+        else pd.Series(dtype=float)
+    )
+    period_keys = [str(column) for column in category_totals.columns if str(column) != 'Total']
+    for category in category_totals.index:
+        category_name = str(category)
+        for period_key in period_keys:
+            summary_total = float(category_totals.loc[category, period_key] or 0.0)
+            detail_total = float(rollup_totals.get((category_name, period_key), 0.0) or 0.0)
+            difference = detail_total - summary_total
+            category_controls.append(
+                {
+                    'category': category_name,
+                    'period_key': period_key,
+                    'summary_total': summary_total,
+                    'detail_total': detail_total,
+                    'difference': difference,
+                    'status': 'Matched' if abs(difference) <= tolerance else 'Variance',
+                }
+            )
+
+    numeric_amounts = pd.to_numeric(rollups.get('amount', pd.Series(dtype=float)), errors='coerce').fillna(0.0)
+    treasury_labels = rollups.get('treasury_type', pd.Series('Unknown', index=rollups.index)).fillna('Unknown').astype(str)
+    bank_mask = treasury_labels.eq('Bank')
+    cash_mask = treasury_labels.eq('Cash')
+    mixed_mask = ~bank_mask & ~cash_mask
+    split = {
+        'bank_amount': float(numeric_amounts.loc[bank_mask].sum()),
+        'cash_amount': float(numeric_amounts.loc[cash_mask].sum()),
+        'mixed_or_unresolved_amount': float(numeric_amounts.loc[mixed_mask].sum()),
+        'bank_line_count': int(rollups.loc[bank_mask, 'line_count'].sum()) if 'line_count' in rollups else 0,
+        'cash_line_count': int(rollups.loc[cash_mask, 'line_count'].sum()) if 'line_count' in rollups else 0,
+        'mixed_or_unresolved_line_count': int(rollups.loc[mixed_mask, 'line_count'].sum()) if 'line_count' in rollups else 0,
+        'status': 'Matched' if not mixed_mask.any() else 'Review required',
+    }
+    split['detail_total'] = float(numeric_amounts.sum())
+    return {
+        'category_controls': category_controls,
+        'cash_bank_split': split,
+    }
+
+
 def build_cashflow_transfer_reconciliation(
     details: pd.DataFrame | None,
     *,
@@ -961,6 +1027,7 @@ def build_cashflow_summary(
     receipt_presentation: str = "net",
     cashflow_role_categories: Mapping[str, Sequence[Any]] | None = None,
     tolerance: float = DEFAULT_TOLERANCE,
+    include_drilldown: bool = False,
 ) -> dict[str, Any]:
     """Summarise vouchers containing configured Cash or Bank accounts.
 
@@ -1013,6 +1080,7 @@ def build_cashflow_summary(
     working = journal.loc[journal["voucher_id"].isin(selected_vouchers)].copy()
 
     if working.empty:
+        rollups = _empty_cashflow_ledger_rollups()
         balance_checks = pd.DataFrame(columns=["voucher_id", "treasury_net", "counter_net", "variance", "balanced"])
         transfer_details = _empty_internal_transfer_details()
         customer_payment_details = _empty_customer_payment_details()
@@ -1137,6 +1205,71 @@ def build_cashflow_summary(
         else:
             category_frame = category_lines.copy()
 
+        if include_drilldown:
+            voucher_treasury_types = working.loc[working['is_treasury']].groupby('voucher_id')['account_code'].agg(
+                lambda values: _join_unique_leg_values(
+                    [treasury_type.get(_canonical_code(value), 'Unknown') for value in values]
+                )
+            )
+            detail_columns = [
+                'voucher_id',
+                'date',
+                'month',
+                'period_key',
+                'period_label',
+                'account_code',
+                'account_name',
+                'voucher_detail',
+                'category',
+                'amount',
+            ]
+            detail_lines = contra.loc[~net_special, detail_columns].copy()
+            detail_lines['treasury_type'] = detail_lines['voucher_id'].map(voucher_treasury_types).fillna('Unknown')
+            if len(net_vouchers):
+                customer_special = special.loc[special['is_customer']].copy()
+                customer_groups = customer_special.groupby('voucher_id', sort=False)
+                net_detail = net_rows.copy()
+                net_detail['date'] = net_detail['voucher_id'].map(customer_groups['date'].first())
+                net_detail['account_code'] = net_detail['voucher_id'].map(
+                    customer_groups['account_code'].agg(_join_unique_leg_values)
+                )
+                net_detail['account_name'] = net_detail['voucher_id'].map(
+                    customer_groups['account_name'].agg(_join_unique_leg_values)
+                )
+                net_detail['voucher_detail'] = net_detail['voucher_id'].map(
+                    customer_groups['voucher_detail'].agg(_join_unique_leg_values)
+                )
+                net_detail['amount'] = net_detail['voucher_id'].map(net_amounts)
+                net_detail['treasury_type'] = net_detail['voucher_id'].map(voucher_treasury_types).fillna('Unknown')
+                detail_lines = pd.concat([detail_lines, net_detail[detail_columns + ['treasury_type']]], ignore_index=True)
+            detail_lines['detail_line_key'] = (
+                detail_lines['voucher_id'].astype(str)
+                + '|'
+                + detail_lines['account_code'].astype(str)
+                + '|'
+                + detail_lines['category'].astype(str)
+                + '|'
+                + detail_lines.groupby(['voucher_id', 'account_code', 'category'], dropna=False).cumcount().astype(str)
+            )
+            rollups = (
+                detail_lines.groupby(
+                    [
+                        'category',
+                        'period_key',
+                        'period_label',
+                        'account_code',
+                        'account_name',
+                        'treasury_type',
+                    ],
+                    dropna=False,
+                    sort=False,
+                )
+                .agg(amount=('amount', 'sum'), line_count=('detail_line_key', 'nunique'))
+                .reset_index()
+            )
+        else:
+            rollups = _empty_cashflow_ledger_rollups()
+
         deduction_rows = contra.loc[contra["is_deduction"], ["voucher_id", "category", "month", "period_key", "period_label", "amount", "account_code", "account_name", "date"]].copy()
         deduction_rows["presentation"] = "shown_separately"
         if len(net_vouchers):
@@ -1154,6 +1287,23 @@ def build_cashflow_summary(
         pivot = category_frame.pivot_table(index="category", columns="period_key", values="amount", aggfunc="sum", fill_value=0.0)
         category_totals = _reindex_periods(pivot.sort_index(), period_keys, "category")
         category_totals["Total"] = category_totals.sum(axis=1)
+    drilldown_controls = (
+        _build_cashflow_drilldown_controls(category_totals, rollups, tolerance=tolerance)
+        if include_drilldown
+        else {
+            'category_controls': [],
+            'cash_bank_split': {
+                'bank_amount': 0.0,
+                'cash_amount': 0.0,
+                'mixed_or_unresolved_amount': 0.0,
+                'bank_line_count': 0,
+                'cash_line_count': 0,
+                'mixed_or_unresolved_line_count': 0,
+                'detail_total': 0.0,
+                'status': 'Not loaded',
+            },
+        }
+    )
     review = review.reset_index(drop=True)
     deductions = deductions[["category", "month", "period_key", "period_label", "amount", "account_code", "account_name", "date", "presentation"]].reset_index(drop=True)
     transfer_reconciliation = build_cashflow_transfer_reconciliation(transfer_details, tolerance=tolerance)
@@ -1167,6 +1317,9 @@ def build_cashflow_summary(
         for period in periods
     }
     return {
+        'cashflow_ledger_rollups': rollups,
+        'cashflow_drilldown_controls': drilldown_controls,
+        'cashflow_drilldown_prepared': bool(include_drilldown),
         "months": months,
         "periods": periods,
         "group_by": grouping,

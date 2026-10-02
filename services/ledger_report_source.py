@@ -31,6 +31,7 @@ JOURNAL_COLUMNS = (
 CASHFLOW_PREPARED_PERIOD_COLUMNS = ("transaction_month", "transaction_fortnight")
 COA_COLUMNS = ("account_code", "account_title", "account_type", "category")
 CASHFLOW_CHILD_DETAILS_VERSION = 6
+CASHFLOW_DRILLDOWN_DETAILS_VERSION = 1
 
 _JOURNAL_ALIASES: Mapping[str, tuple[str, ...]] = {
     "voucher_id": (
@@ -875,7 +876,14 @@ def _cashflow_summary_payload(summary: Mapping[str, Any]) -> dict[str, Any]:
     transfer_reconciliation = summary.get("transfer_reconciliation")
     if not isinstance(transfer_reconciliation, Mapping):
         transfer_reconciliation = build_cashflow_transfer_reconciliation(transfer_details)
+    drilldown_prepared = bool(summary.get('cashflow_drilldown_prepared'))
+    drilldown_rollups = summary.get('cashflow_ledger_rollups')
+    drilldown_controls = summary.get('cashflow_drilldown_controls') or {}
     return {
+        'drilldown_details_prepared': drilldown_prepared,
+        'drilldown_details_version': CASHFLOW_DRILLDOWN_DETAILS_VERSION if drilldown_prepared else 0,
+        'cashflow_ledger_rollups': _cashflow_detail_records(drilldown_rollups),
+        'cashflow_drilldown_controls': drilldown_controls,
         "months": [str(month) for month in summary.get("months", [])],
         "periods": periods,
         "categories": categories,
@@ -1315,7 +1323,17 @@ def load_cashflow_summary_read_model(
     if not isinstance(payload, Mapping):
         return None
     summary = _cashflow_summary_from_payload(payload, group_by)
+    drilldown_version = int(payload.get('drilldown_details_version', 0) or 0)
+    drilldown_prepared = bool(payload.get('drilldown_details_prepared')) and drilldown_version >= CASHFLOW_DRILLDOWN_DETAILS_VERSION
+    summary['cashflow_ledger_rollups'] = (
+        _cashflow_detail_frame(payload, 'cashflow_ledger_rollups') if drilldown_prepared else pd.DataFrame()
+    )
+    summary['cashflow_drilldown_controls'] = payload.get('cashflow_drilldown_controls') or {}
+    summary['cashflow_drilldown_prepared'] = drilldown_prepared
+    summary['drilldown_details_version'] = drilldown_version
     metadata = {
+        'drilldown_details_prepared': drilldown_prepared,
+        'drilldown_details_version': drilldown_version,
         "client_id": client_id,
         "journal_template_id": journal_template_id,
         "source_template_ids": [journal_template_id],
