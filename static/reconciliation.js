@@ -320,8 +320,43 @@
             });
         });
     }
+    const cashflowDetailSearchInputs = {
+        cashflowsTransfersTable: 'cashflowsTransfersSearch',
+        cashflowsCustomerPaymentsTable: 'cashflowsCustomerPaymentsSearch',
+        cashflowsDeductionsTable: 'cashflowsDeductionsSearch',
+        cashflowsReviewTable: 'cashflowsReviewSearch',
+    };
+    function filterCashflowDetailRows(table, columns, rows) {
+        const searchInputId = cashflowDetailSearchInputs[table.id];
+        const searchInput = searchInputId ? element(searchInputId) : null;
+        const query = searchInput ? searchInput.value.trim().toLowerCase() : '';
+        if (!query) return rows;
+        const terms = query.split(/\s+/).filter(Boolean);
+        return rows.filter(function (row) {
+            return terms.every(function (term) {
+                return columns.some(function (column) {
+                    const value = row[column.key];
+                    const rawValue = value == null ? '' : String(value);
+                    const formattedValue = column.amount ? String(formatInternationalAmount(value)) : '';
+                    return (rawValue + ' ' + formattedValue).toLowerCase().includes(term);
+                });
+            });
+        });
+    }
+    function formatCashflowDetailCount(tableId, totalCount, unit) {
+        const table = element(tableId);
+        const searchInputId = cashflowDetailSearchInputs[tableId];
+        const searchInput = searchInputId ? element(searchInputId) : null;
+        const query = searchInput ? searchInput.value.trim() : '';
+        if (!query) return String(totalCount) + ' ' + unit;
+        const matchCount = table ? Number(table.dataset.cashflowSearchMatchCount || 0) : 0;
+        return String(matchCount) + ' of ' + String(totalCount) + ' ' + unit;
+    }
     function renderTable(table, columns, rows, emptyMessage) {
-        const visibleRows = cashflowRowsWithNonZeroAmounts(columns, rows);
+        const searchedRows = filterCashflowDetailRows(table, columns, rows);
+        const visibleRows = cashflowRowsWithNonZeroAmounts(columns, searchedRows);
+        table.dataset.cashflowSearchMatchCount = String(searchedRows.length);
+        table.dataset.cashflowSearchActive = searchedRows.length !== rows.length ? 'true' : 'false';
         if (!visibleRows.length) {
             table.innerHTML = '<tbody><tr><td class="cashflows-empty" colspan="' + Math.max(columns.length, 1) + '">' + escapeHtml(emptyMessage) + '</td></tr></tbody>';
             return;
@@ -389,6 +424,10 @@
             element(id).disabled = false;
         });
         cashflowChildPreviews = {};
+        ['cashflowsTransfersSearch', 'cashflowsCustomerPaymentsSearch', 'cashflowsDeductionsSearch', 'cashflowsReviewSearch'].forEach(function (id) {
+            const input = element(id);
+            if (input) input.value = '';
+        });
         syncCashflowDrilldownShortcuts();
     }
     function setActiveCashflowWindow(windowKey) {
@@ -438,7 +477,7 @@
             renderTable(element('cashflowsTransfersTable'), [
                 { key: 'date_display', label: 'Date' }, { key: 'voucher_id', label: 'Voucher' }, { key: 'transferor', label: 'Transferor' }, { key: 'transferee', label: 'Transferee' }, { key: 'amount', label: 'Amount', amount: true }, { key: 'variance', label: 'Variance', amount: true }, { key: 'status_display', label: 'Status' }, { key: 'voucher_detail', label: 'Description' },
             ], rows, 'No internal transfers identified.');
-            element('cashflowsTransferCount').textContent = String(preview.internal_transfer_count || rows.length || 0) + ' voucher(s)';
+            element('cashflowsTransferCount').textContent = formatCashflowDetailCount('cashflowsTransfersTable', preview.internal_transfer_count || rows.length || 0, 'voucher(s)');
             if (activeCashflowWindow === section) element('cashflowsTransfersSection').hidden = false;
         } else if (section === 'customer_payments') {
             const rows = (preview.customer_payment_details || []).map(function (row) {
@@ -465,21 +504,21 @@
                 { key: 'status_display', label: 'Status' },
                 { key: 'voucher_detail', label: 'Description' },
             ], rows, 'No customer payments identified.');
-            element('cashflowsCustomerPaymentCount').textContent = String(rows.length) + ' payment(s)';
+            element('cashflowsCustomerPaymentCount').textContent = formatCashflowDetailCount('cashflowsCustomerPaymentsTable', rows.length, 'payment(s)');
             if (activeCashflowWindow === section) element('cashflowsCustomerPaymentsSection').hidden = false;
         } else if (section === 'deductions') {
             const rows = preview.deduction_details || [];
             renderTable(element('cashflowsDeductionsTable'), [
                 { key: 'month', label: 'Month' }, { key: 'category', label: 'Category' }, { key: 'account_name', label: 'Account' }, { key: 'amount', label: 'Amount', amount: true },
             ], rows, 'No customer deductions identified.');
-            element('cashflowsDeductionCount').textContent = String(preview.deduction_count || rows.length || 0) + ' line(s)';
+            element('cashflowsDeductionCount').textContent = formatCashflowDetailCount('cashflowsDeductionsTable', preview.deduction_count || rows.length || 0, 'line(s)');
             if (activeCashflowWindow === section) element('cashflowsDeductionsSection').hidden = false;
         } else if (section === 'review') {
             const rows = preview.categories_needing_review || [];
             renderTable(element('cashflowsReviewTable'), [
                 { key: 'voucher_id', label: 'Voucher' }, { key: 'account_code', label: 'Account code' }, { key: 'account_name', label: 'Account' }, { key: 'fallback_category', label: 'Review category' },
             ], rows, 'No review items.');
-            element('cashflowsReviewCount').textContent = String(preview.category_review_count || rows.length || 0) + ' line(s)';
+            element('cashflowsReviewCount').textContent = formatCashflowDetailCount('cashflowsReviewTable', preview.category_review_count || rows.length || 0, 'line(s)');
             if (activeCashflowWindow === section) element('cashflowsReviewSection').hidden = false;
         }
     }
@@ -1178,6 +1217,33 @@
         element('cashflowsLoadCustomerPaymentsButton').addEventListener('click', function () { loadCashflowChild('customer_payments'); });
         element('cashflowsLoadDeductionsButton').addEventListener('click', function () { loadCashflowChild('deductions'); });
         element('cashflowsLoadReviewButton').addEventListener('click', function () { loadCashflowChild('review'); });
+        const cashflowDetailSearches = [
+            { section: 'transfers', input: 'cashflowsTransfersSearch', clear: 'cashflowsTransfersSearchClear' },
+            { section: 'customer_payments', input: 'cashflowsCustomerPaymentsSearch', clear: 'cashflowsCustomerPaymentsSearchClear' },
+            { section: 'deductions', input: 'cashflowsDeductionsSearch', clear: 'cashflowsDeductionsSearchClear' },
+            { section: 'review', input: 'cashflowsReviewSearch', clear: 'cashflowsReviewSearchClear' },
+        ];
+        cashflowDetailSearches.forEach(function (config) {
+            const input = element(config.input);
+            const clearButton = element(config.clear);
+            if (!input) return;
+            const rerender = function () {
+                const preview = cashflowChildPreviews[config.section];
+                if (preview) renderCashflowChild(config.section, preview);
+            };
+            input.addEventListener('input', rerender);
+            input.addEventListener('keydown', function (event) {
+                if (event.key === 'Escape') {
+                    input.value = '';
+                    rerender();
+                }
+            });
+            if (clearButton) clearButton.addEventListener('click', function () {
+                input.value = '';
+                rerender();
+                input.focus();
+            });
+        });
         const cashflowChildShortcutTargets = {
             transfers: 'cashflowsLoadTransfersButton',
             customer_payments: 'cashflowsLoadCustomerPaymentsButton',

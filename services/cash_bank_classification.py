@@ -507,11 +507,25 @@ def load_cashflow_classification_preview(
             "LOWER(COALESCE(c.voucher_id, '')) LIKE LOWER(%s) "
             "OR LOWER(COALESCE(c.account_code, '')) LIKE LOWER(%s) "
             "OR LOWER(COALESCE(category.label, '')) LIKE LOWER(%s) "
+            "OR LOWER(COALESCE(c.treasury_account_code, '')) LIKE LOWER(%s) "
+            "OR LOWER(COALESCE("
+            "cd.row_data ->> 'Account Name', "
+            "cd.row_data ->> 'Account Title', "
+            "cd.row_data ->> 'Ledger Name', "
+            "cd.row_data ->> 'Particulars', "
+            "''"
+            ")) LIKE LOWER(%s) "
+            "OR LOWER(CASE "
+            "WHEN c.treasury_type = 'cash' THEN 'Cash' "
+            "WHEN c.treasury_type = 'bank' THEN 'Bank' "
+            "WHEN c.classification_status = 'non_treasury' THEN 'Counter-account' "
+            "ELSE 'Needs review' "
+            "END) LIKE LOWER(%s) "
             "OR EXISTS (SELECT 1 FROM jsonb_each_text(cd.row_data) pair "
             "WHERE LOWER(pair.value) LIKE LOWER(%s))"
             ")"
         )
-        params.extend([like, like, like, like])
+        params.extend([like] * 7)
 
     if classification_type == "cash":
         where.append("c.treasury_type = 'cash'")

@@ -63,6 +63,30 @@ def test_cashflows_classification_preview_uses_current_derived_rows_and_formats_
     assert calls[0][1][:4] == (5, 9, date(2026, 1, 1), date(2026, 1, 31))
 
 
+def test_cashflows_classification_preview_searches_all_displayed_classification_values():
+    calls = []
+
+    def query_fn(sql, params):
+        calls.append((sql, params))
+        return [{"total": 0}] if "SELECT COUNT(*)" in sql else []
+
+    result = load_cashflow_classification_preview(
+        5,
+        9,
+        date(2026, 1, 1),
+        date(2026, 1, 31),
+        search="Cash",
+        query_fn=query_fn,
+    )
+
+    assert result["total_rows"] == 0
+    assert len(calls) == 2
+    for sql, params in calls:
+        assert "c.treasury_account_code" in sql
+        assert "cd.row_data ->> 'Account Name'" in sql
+        assert "WHEN c.treasury_type = 'cash' THEN 'Cash'" in sql
+        assert params.count("%Cash%") == 7
+
 def test_cashflows_classification_preview_rejects_unknown_type():
     def query_fn(sql, params):
         raise AssertionError("invalid filters should be rejected before SQL")

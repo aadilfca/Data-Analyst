@@ -7133,7 +7133,20 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 
 **Pending phases:**
 
-1. **Phase 6D - Universal detail search:** add one long search field to each loaded detail report and search every visible column.
-2. **Phase 6E - Vendor payments:** add the reconciled vendor-payment schedule with Bank/Cash separation and summary parity.
-3. **Phase 6F - Remaining business-detail schedules:** extend the same canonical, reconciled pattern to categories still needing dedicated detail reports.
-4. **Phase 7 - Browser regression and release closeout:** verify controls, loading/abort behavior, pagination, cache behavior, performance, exports, and final user documentation.
+1. **Phase 6E - Vendor payments:** add the reconciled vendor-payment schedule with Bank/Cash separation and summary parity.
+2. **Phase 6F - Remaining business-detail schedules:** extend the same canonical, reconciled pattern to categories still needing dedicated detail reports.
+3. **Phase 7 - Browser regression and release closeout:** verify controls, loading/abort behavior, pagination, cache behavior, performance, exports, and final user documentation.
+
+## Cashflows universal detail search - Phase 6D - 2026-10-03
+
+**Scope:** Add a professional all-column search field to each cached Cashflows detail report while preserving fast fetching, zero-row behavior, classified-transaction pagination, and accounting integrity.
+
+**Implementation:** Added live search and Clear/Escape actions to Internal transfers, Customer payments, Customer deductions, and Review required. The shared renderer searches every displayed column, including raw and formatted amount values, and reports filtered-versus-total counts. Classified transactions retains its existing server-side paginated search with clearer all-visible-column wording and responsive long-width styling. Its SQL search now also includes computed Type, treasury account code, and displayed source account name.
+
+**Verification:** JavaScript syntax, git diff check, and the focused backend/frontend suites passed: 37 tests. The existing direct-window UI suite remains blocked by its pre-existing stylesheet cache-version assertion (v=36 while the repository already uses v=37); that unrelated test file was not changed.
+
+**Pending phases:**
+
+1. **Phase 6E - Vendor payments:** add the reconciled vendor-payment schedule with Bank/Cash separation and summary parity.
+2. **Phase 6F - Remaining business-detail schedules:** extend the same canonical, reconciled pattern to categories still needing dedicated detail reports.
+3. **Phase 7 - Browser regression and release closeout:** verify controls, loading/abort behavior, pagination, cache behavior, performance, exports, and final user documentation.

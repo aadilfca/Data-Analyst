@@ -1330,6 +1330,20 @@ def test_reports_view_and_dashboard_entry_are_wired():
     detail_host_index = html.index("id='cashflowsDrilldownDetailHost'")
     assert ledger_table_index < ledger_pagination_index < shortcut_index < detail_host_index
     assert ".cashflows-drilldown-shortcuts" in stylesheet
+    for search_id in (
+        "cashflowsTransfersSearch",
+        "cashflowsCustomerPaymentsSearch",
+        "cashflowsDeductionsSearch",
+        "cashflowsReviewSearch",
+    ):
+        assert search_id in html
+    assert html.count("Search any value in any column") == 4
+    assert "Search any visible column" in html
+    assert "cashflowDetailSearchInputs" in javascript
+    assert "filterCashflowDetailRows" in javascript
+    assert "formatCashflowDetailCount" in javascript
+    assert "cashflows-detail-search-toolbar" in stylesheet
+    assert ".cashflows-detail-search-input" in stylesheet
 
 
 def test_financial_statement_summary_aggregates_central_categories_and_flags_unmapped():
