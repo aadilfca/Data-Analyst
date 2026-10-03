@@ -7232,3 +7232,23 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 
 1. **TV-5 - Export and drill-down parity:** align XLSX and detail workflows with the selected treasury view.
 2. **TV-6 - Final validation:** compare performance against the TV-0 baseline and complete regression/reconciliation testing.
+## Cashflows treasury-view export parity - TV-5 - 2026-10-03
+
+**Scope:** Align XLSX export and ledger drill-down with the selected combined, Bank-only, Cash-only, or split Treasury view while preserving fast cached fetching and accounting integrity.
+
+**Implementation:** Export and drill-down now carry `treasury_view`. Bank/Cash selections use the corresponding projected totals and default ledger filter; split exports include Bank, Cash, Mixed / unresolved, and Total columns per period with reconciliation controls. Existing search, category, period, pagination, zero-row, signed-value, numeric-cell, and combined behavior remain intact. Non-combined filenames identify the selected view; combined naming remains backward compatible.
+
+**Verification:** Focused TV-5 export, drill-down, XLSX, and UI checks passed 4/4. The broader reconciliation/performance/direct-window suite passed 35 tests with two pre-existing stale UI assertions for legacy Reports Hub text and stylesheet cache version. JavaScript/Python compilation and `git diff --check` passed. No new raw-ledger fetch or per-category query was introduced.
+
+**Next phase:** TV-6 - Final performance comparison against TV-0, full regression/reconciliation validation, and release closeout.
+## Data Bank Cashflows classification duplicate-upload correction - DB-1 - 2026-10-03
+
+**Scope:** Correct the Data Bank Cashflows classification view across all periods while preserving the raw Data Bank preview and fast fetching.
+
+**Implementation:** Reused the canonical latest-upload-per-filename rule through a shared SQL CTE in `services/ledger_report_source.py`. The classification count and paged-row queries now apply the same selected-upload set, so repeated uploads no longer duplicate classified rows; no extra metadata query was introduced. Raw Data Bank rows remain unchanged.
+
+**Verification:** Focused preview/source/performance tests passed 23/23; broader classification and cashflow tests passed 19/19. Live read-only PostgreSQL checks for Leather Crop returned two rows for BPV-0726-100 (latest upload IDs 227809/227810), 10,008 July rows, and 45,836 rows across 2026-01-01–2026-08-20. No source data was modified.
+
+**Future reference — Bank-only showed no report:** First verify that the selected-upload rule and treasury-view projection use the same current source set; a source-selection mismatch can make Bank-only appear empty even when Bank classifications exist. The Cashflows fix kept the existing latest-upload-per-filename selector as the shared contract and used the cached Bank projection, preserving the fast fetch path; it was not a network-connectivity issue.
+
+**Next:** User local-server testing, then commit/push only after explicit approval.

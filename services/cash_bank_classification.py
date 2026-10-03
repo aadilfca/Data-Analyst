@@ -15,6 +15,7 @@ from typing import Any, Callable, Mapping
 
 from psycopg2.extras import RealDictCursor, execute_values
 from database import execute_query_pg
+from services.ledger_report_source import latest_template_upload_selection_cte
 
 
 _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
@@ -490,6 +491,8 @@ def load_cashflow_classification_preview(
     if page < 1 or limit < 1 or limit > 200:
         raise ValueError("Invalid classification preview pagination")
 
+    selection_cte = latest_template_upload_selection_cte()
+    selection_params = (client_id, client_id, template_id)
     where = [
         "cd.client_id = %s",
         "cd.template_id = %s",
@@ -554,6 +557,8 @@ def load_cashflow_classification_preview(
         FROM client_data cd
         JOIN cash_bank_transaction_classifications c
           ON c.client_data_id = cd.id
+        JOIN selected_template_uploads selected_upload
+          ON selected_upload.upload_id = cd.upload_id
         LEFT JOIN account_control_cashflow_category_assignments category_assignment
           ON category_assignment.client_id = c.client_id
          AND category_assignment.account_code = c.account_code
@@ -563,13 +568,14 @@ def load_cashflow_classification_preview(
          AND category.is_active = TRUE
     """
     count_rows = query_fn(
-        f"SELECT COUNT(*) AS total {from_sql} WHERE {where_sql}",
-        tuple(params),
+        f"{selection_cte} SELECT COUNT(*) AS total {from_sql} WHERE {where_sql}",
+        tuple([*selection_params, *params]),
     )
     total = int(count_rows[0].get("total") or 0) if count_rows else 0
 
     offset = (page - 1) * limit
     data_sql = f"""
+        {selection_cte}
         SELECT
             cd.id,
             cd.row_data,
@@ -599,7 +605,7 @@ def load_cashflow_classification_preview(
         ORDER BY c.transaction_date DESC NULLS LAST, c.voucher_id, c.account_code, cd.id
         LIMIT %s OFFSET %s
     """
-    rows = query_fn(data_sql, tuple([*params, limit, offset]))
+    rows = query_fn(data_sql, tuple([*selection_params, *params, limit, offset]))
     formatted: list[dict[str, Any]] = []
     for row in rows:
         status = row.get("classification_status") or "unmapped"
@@ -630,7 +636,14 @@ def load_cashflow_classification_preview(
                 "configuration_version": row.get("configuration_version"),
             },
         })
-    return {"total_rows": total, "page": page, "limit": limit, "rows": formatted}
+    return {
+        "total_rows": total,
+        "page": page,
+        "limit": limit,
+        "rows": formatted,
+        "duplicate_upload_suppression": True,
+        "source_upload_selection": "latest upload per filename",
+    }
 
 def _record_classification_counts(summary: BackfillSummary, row: Mapping[str, Any]) -> None:
     status = row["classification_status"]

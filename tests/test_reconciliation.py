@@ -757,3 +757,118 @@ def test_cashflow_split_view_preserves_backend_reconciliation_contract():
     assert "Mixed / unresolved" in javascript
     assert "cashflows-summary-split-table" in styles
     assert "treasury_view_reconciliation" in javascript
+
+def test_cashflow_split_xlsx_preserves_bank_cash_mixed_and_total_cells():
+    preview = {
+        "periods": [{"key": "2026-01", "label": "Jan-26"}],
+        "group_by": "month",
+        "treasury_view": "split",
+        "treasury_view_totals": [{
+            "category": "Operating",
+            "period_key": "2026-01",
+            "bank_amount": 100,
+            "cash_amount": 20,
+            "mixed_amount": 5,
+            "total_amount": 125,
+        }],
+        "treasury_view_reconciliation": {"status": "Matched", "max_abs_variance": 0, "mixed_amount": 5, "mixed_row_count": 1},
+        "receipt_presentation": "net",
+    }
+
+    workbook = build_cashflow_workbook(preview)
+    sheet = workbook["Cashflows Summary"]
+
+    assert sheet["A5"].value == "Category"
+    assert sheet["B5"].value == "Jan-26"
+    assert sheet["B6"].value == "Bank"
+    assert sheet["D6"].value == "Mixed / unresolved"
+    assert sheet["E6"].value == "Total"
+    assert sheet["B7"].value == 100
+    assert sheet["C7"].value == 20
+    assert sheet["D7"].value == 5
+    assert sheet["E7"].value == 125
+    assert sheet["I7"].value == 125
+    assert sheet["E7"].number_format == '#,##0;[Red](#,##0);-'
+
+
+def test_cashflow_drilldown_applies_selected_bank_view_filter_by_default():
+    result = {
+        "period_start": "2026-01-01",
+        "period_end": "2026-01-31",
+        "group_by": "month",
+        "treasury_view": "bank",
+        "preview": {
+            "ledger_rollups": [{
+                "category": "Operating",
+                "period_key": "2026-01",
+                "period_label": "Jan-26",
+                "account_name": "Bank A",
+                "account_code": "B1",
+                "treasury_type": "bank",
+                "amount": 100,
+                "line_count": 1,
+            }],
+            "drilldown_controls": {},
+        },
+        "source": {},
+        "blocking_reasons": [],
+    }
+    with patch.object(reconciliation, "_build_cashflow_result", return_value=result) as build:
+        response = reconciliation.cashflow_drilldown(
+            7,
+            "2026-01-01",
+            "2026-01-31",
+            treasury_view="bank",
+            page=1,
+            limit=50,
+            session={"username": "Admin"},
+        )
+
+    assert build.call_args.kwargs["treasury_view"] == "bank"
+    assert response["treasury_view"] == "bank"
+    assert response["total_rows"] == 1
+
+
+def test_cashflow_export_passes_selected_split_view_to_xlsx_and_filename():
+    preview = {
+        "periods": [{"key": "2026-01", "label": "Jan-26"}],
+        "treasury_view": "split",
+        "treasury_view_totals": [{
+            "category": "Operating",
+            "period_key": "2026-01",
+            "bank_amount": 100,
+            "cash_amount": 20,
+            "mixed_amount": 5,
+            "total_amount": 125,
+        }],
+        "category_totals": [],
+        "ledger_rollups": [],
+        "transfer_details": [],
+        "deduction_details": [],
+        "categories_needing_review": [],
+        "treasury_view_reconciliation": {"status": "Matched", "max_abs_variance": 0, "mixed_amount": 5, "mixed_row_count": 1},
+    }
+    result = {
+        "period_start": "2026-01-01",
+        "period_end": "2026-01-31",
+        "group_by": "month",
+        "treasury_view": "split",
+        "preview": preview,
+        "source": {"ready": True},
+        "blocking_reasons": [],
+    }
+    with patch.object(reconciliation, "_build_cashflow_result", return_value=result) as build, patch.object(
+        reconciliation, "export_cashflow_xlsx", return_value=b"xlsx"
+    ) as export:
+        response = reconciliation.export_cashflows_report(
+            7,
+            "2026-01-01",
+            "2026-01-31",
+            treasury_view="split",
+            session={"username": "Admin"},
+        )
+
+    assert build.call_args.kwargs["treasury_view"] == "split"
+    assert export.call_args.args[0]["treasury_view"] == "split"
+    assert export.call_args.args[0]["treasury_view_totals"][0]["total_amount"] == 125
+    assert "Cashflows_split_month_" in response.headers["content-disposition"]

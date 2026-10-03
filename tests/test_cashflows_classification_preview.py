@@ -58,9 +58,13 @@ def test_cashflows_classification_preview_uses_current_derived_rows_and_formats_
         "configuration_version": 3,
     }
     assert len(calls) == 2
+    assert result["duplicate_upload_suppression"] is True
+    assert result["source_upload_selection"] == "latest upload per filename"
     assert all("c.is_current = TRUE" in sql for sql, _ in calls)
+    assert all("selected_template_uploads" in sql for sql, _ in calls)
     assert "cd.row_data" in calls[1][0]
-    assert calls[0][1][:4] == (5, 9, date(2026, 1, 1), date(2026, 1, 31))
+    assert calls[0][1][:3] == (5, 5, 9)
+    assert calls[0][1][3:7] == (5, 9, date(2026, 1, 1), date(2026, 1, 31))
 
 
 def test_cashflows_classification_preview_searches_all_displayed_classification_values():
@@ -125,3 +129,28 @@ def test_cashflows_classification_preview_filters_unassigned_categories():
     assert len(calls) == 2
     assert all("NULLIF(BTRIM(COALESCE(category.label, '')), '') IS NULL" in sql for sql, _ in calls)
     assert all("__unassigned__" not in params for _, params in calls)
+
+def test_cashflows_classification_preview_uses_latest_upload_per_filename_cte():
+    calls = []
+
+    def query_fn(sql, params):
+        calls.append((sql, params))
+        return [{"total": 0}] if "SELECT COUNT(*)" in sql else []
+
+    result = load_cashflow_classification_preview(
+        5,
+        9,
+        date(2026, 1, 1),
+        date(2026, 8, 20),
+        page=2,
+        limit=50,
+        query_fn=query_fn,
+    )
+
+    assert result["total_rows"] == 0
+    assert len(calls) == 2
+    assert all("ROW_NUMBER() OVER" in sql for sql, _ in calls)
+    assert all("PARTITION BY COALESCE" in sql for sql, _ in calls)
+    assert all("JOIN selected_template_uploads" in sql for sql, _ in calls)
+    assert calls[0][1][:3] == (5, 5, 9)
+    assert calls[1][1][-2:] == (50, 50)

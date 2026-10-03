@@ -135,15 +135,29 @@ def build_cashflow_workbook(
     workbook.calculation.forceFullCalc = True
 
     summary_sheet = workbook.create_sheet("Cashflows Summary")
-    _write_cashflow_summary_sheet(
-        summary_sheet,
-        preview,
-        period_keys,
-        period_labels,
-        period_start=period_start,
-        period_end=period_end,
-        group_by=group_by,
-    )
+    treasury_view = str(preview.get("treasury_view") or "combined")
+    summary_preview = dict(preview)
+    if treasury_view == "split":
+        _write_cashflow_split_summary_sheet(
+            summary_sheet,
+            summary_preview,
+            period_keys,
+            period_labels,
+            period_start=period_start,
+            period_end=period_end,
+            group_by=group_by,
+        )
+    else:
+        summary_preview["category_totals"] = preview.get("treasury_view_totals") or preview.get("category_totals") or []
+        _write_cashflow_summary_sheet(
+            summary_sheet,
+            summary_preview,
+            period_keys,
+            period_labels,
+            period_start=period_start,
+            period_end=period_end,
+            group_by=group_by,
+        )
     _write_cashflow_detail_sheet(
         workbook.create_sheet("Internal Transfers"),
         "Internal Transfers",
@@ -196,6 +210,10 @@ def build_cashflow_workbook(
         ("Period start", period_start or ""),
         ("Period end", period_end or ""),
         ("Grouping", group_by or preview.get("group_by") or "month"),
+        ("Treasury view", preview.get("treasury_view") or "combined"),
+        ("Treasury reconciliation", (preview.get("treasury_view_reconciliation") or {}).get("status") or "Not available"),
+        ("Treasury maximum variance", (preview.get("treasury_view_reconciliation") or {}).get("max_abs_variance") or 0),
+        ("Treasury mixed / unresolved", (preview.get("treasury_view_reconciliation") or {}).get("mixed_amount") or 0),
         ("Receipt presentation", preview.get("receipt_presentation") or "net"),
         ("Summary category filter", export_filters.get("summary_filter") or "All categories"),
         ("Hide zero rows", "Yes" if export_filters.get("hide_zero_rows") else "No"),
@@ -288,6 +306,110 @@ def _local_amount_label(value: float | None) -> str:
         label = f"{absolute:.0f} Rs"
     return f"({label})" if amount < 0 else label
 
+
+
+def _cashflow_split_records(preview: Mapping[str, Any], period_keys: list[str]) -> list[tuple[str, list[dict[str, float]], dict[str, float]]]:
+    grouped: dict[str, dict[str, dict[str, float]]] = {}
+    for record in preview.get("treasury_view_totals") or []:
+        category = str(record.get("category") or "Unlabelled")
+        period_key = str(record.get("period_key") or "")
+        if period_key not in period_keys:
+            continue
+        grouped.setdefault(category, {})[period_key] = {
+            "bank": _number(record.get("bank_amount")) or 0.0,
+            "cash": _number(record.get("cash_amount")) or 0.0,
+            "mixed": _number(record.get("mixed_amount")) or 0.0,
+            "total": _number(record.get("total_amount")) or 0.0,
+        }
+    output: list[tuple[str, list[dict[str, float]], dict[str, float]]] = []
+    for category, period_values in grouped.items():
+        values = [period_values.get(key, {"bank": 0.0, "cash": 0.0, "mixed": 0.0, "total": 0.0}) for key in period_keys]
+        totals = {
+            "bank": sum(value["bank"] for value in values),
+            "cash": sum(value["cash"] for value in values),
+            "mixed": sum(value["mixed"] for value in values),
+            "total_raw": sum(value["total"] for value in values),
+        }
+        totals["total"] = abs(totals["total_raw"])
+        output.append((category, values, totals))
+    return output
+
+
+def _write_cashflow_split_header(ws, row: int, period_labels: list[str]) -> int:
+    sub_headers = ("Bank", "Cash", "Mixed / unresolved", "Total")
+    width = 1 + ((len(period_labels) + 1) * len(sub_headers)) + 2
+    ws.cell(row, 1, "Category")
+    ws.merge_cells(start_row=row, start_column=1, end_row=row + 1, end_column=1)
+    column = 2
+    for label in [*period_labels, "Selected total"]:
+        ws.cell(row, column, _safe_cell(label))
+        ws.merge_cells(start_row=row, start_column=column, end_row=row, end_column=column + 3)
+        for offset, sub_header in enumerate(sub_headers):
+            ws.cell(row + 1, column + offset, sub_header)
+        column += 4
+    for label in ("% of section", "Local total"):
+        ws.cell(row, column, label)
+        ws.merge_cells(start_row=row, start_column=column, end_row=row + 1, end_column=column)
+        column += 1
+    for header_row in (row, row + 1):
+        for header_column in range(1, width + 1):
+            cell = ws.cell(header_row, header_column)
+            cell.fill = PatternFill("solid", fgColor=NAVY if header_row == row else LIGHT_BLUE)
+            cell.font = Font(name="Arial", size=10, bold=True, color=WHITE if header_row == row else NAVY)
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = Border(bottom=Side(style="thin", color=WHITE if header_row == row else NAVY))
+    return width
+
+
+def _write_cashflow_split_summary_sheet(
+    ws,
+    preview: Mapping[str, Any],
+    period_keys: list[str],
+    period_labels: list[str],
+    *,
+    period_start: str | None,
+    period_end: str | None,
+    group_by: str | None,
+) -> None:
+    view_label = "Cash and Bank individually"
+    width = 1 + ((len(period_keys) + 1) * 4) + 2
+    reconciliation = preview.get("treasury_view_reconciliation") or {}
+    _write_title(
+        ws,
+        f"Cashflows Summary - {view_label} ({period_labels[0]} to {period_labels[-1]})",
+        f"Visible Cashflows report for {period_start or 'selected start'} to {period_end or 'selected end'}; grouping: {group_by or preview.get('group_by') or 'month'}. Bank + Cash + Mixed / unresolved = Total. Reconciliation: {reconciliation.get('status') or 'Not available'}.",
+        width,
+    )
+    row = 4
+    for section in ("Receipts", "Payments"):
+        records = [record for record in _cashflow_split_records(preview, period_keys) if (record[2]["total_raw"] < 0) == (section == "Payments")]
+        _style_cashflow_section_band(ws, row, width)
+        ws.cell(row, 1, f"{section} — percentages calculated within this section")
+        row += 1
+        _write_cashflow_split_header(ws, row, period_labels)
+        row += 2
+        if not records:
+            _write_table(ws, row, [f"No {section.casefold()} identified"])
+            row += 2
+            continue
+        basis = sum(record[2]["total"] for record in records)
+        for category, values, totals in records:
+            row_values: list[Any] = [category]
+            for value in values:
+                row_values.extend(_cashflow_display_value(value[field], section) for field in ("bank", "cash", "mixed", "total"))
+            row_values.extend(_cashflow_display_value(totals[field], section) for field in ("bank", "cash", "mixed"))
+            row_values.extend((totals["total"], f"{(totals['total'] / basis * 100) if basis else 0:.2f}%", _local_amount_label(totals["total"])))
+            _write_table(ws, row, row_values)
+            row += 1
+        period_totals = [{field: sum(values[index][field] for _, values, _ in records) for field in ("bank", "cash", "mixed", "total")} for index in range(len(period_keys))]
+        total_values: list[Any] = [f"Total {section}"]
+        for period_total in period_totals:
+            total_values.extend(_cashflow_display_value(period_total[field], section) for field in ("bank", "cash", "mixed", "total"))
+        total_values.extend(_cashflow_display_value(sum(record[2][field] for record in records), section) for field in ("bank", "cash", "mixed"))
+        total_values.extend((basis, "100.00%", _local_amount_label(basis)))
+        _write_table(ws, row, total_values, total=True)
+        row += 3
+    ws.freeze_panes = "B7"
 
 def _write_cashflow_summary_sheet(
     ws,

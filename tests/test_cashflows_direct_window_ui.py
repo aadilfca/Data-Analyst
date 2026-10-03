@@ -145,3 +145,5 @@ def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
     assert "formatPercentage" in reconciliation_script
     assert "/api/reconciliation/cashflows/export?" in reconciliation_script
     assert "downloadCashflowReport" in reconciliation_script
+    assert "treasury_view: cashflowTreasuryView" in reconciliation_script
+    assert "cashflowDefaultTreasuryType" in reconciliation_script

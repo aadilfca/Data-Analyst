@@ -69,7 +69,11 @@
     }
     const cashflowTreasuryViewLabels = { combined: 'Cash and Bank Total', bank: 'Bank only', cash: 'Cash only', split: 'Cash and Bank individually' };
     function cashflowTreasuryViewLabel(value) { return cashflowTreasuryViewLabels[String(value || 'combined')] || cashflowTreasuryViewLabels.combined; }
-    function syncCashflowTreasuryView() {
+    function cashflowDefaultTreasuryType() {
+        if (cashflowTreasuryView === 'bank') return 'Bank';
+        if (cashflowTreasuryView === 'cash') return 'Cash';
+        return '';
+    }    function syncCashflowTreasuryView() {
         const select = element('cashflowsTreasuryViewSelect');
         if (select) select.value = cashflowTreasuryView;
     }
@@ -614,7 +618,7 @@
         const total = Number(result && result.total_rows) || 0;
         const page = Number(result && result.page) || 1;
         const pageCount = Number(result && result.page_count) || 1;
-        element('cashflowsLedgerDrilldownCount').textContent = String(total) + ' ledger roll-up(s)';
+        element('cashflowsLedgerDrilldownCount').textContent = String(total) + ' ledger roll-up(s) · ' + cashflowTreasuryViewLabel(result && result.treasury_view);
         element('cashflowsDrilldownPageInfo').textContent = 'Page ' + String(page) + ' of ' + String(pageCount);
         syncCashflowDrilldownPagination(result);
     }
@@ -632,6 +636,7 @@
             period_start: start,
             period_end: end,
             group_by: cashflowSelection.groupBy || 'month',
+            treasury_view: cashflowTreasuryView,
             page: String(cashflowDrilldownPage),
             limit: String(cashflowDrilldownLimit),
         });
@@ -853,6 +858,8 @@
         const button = element('cashflowsLedgerDrilldownButton');
         const periodSelect = element('cashflowsDrilldownPeriod');
         const preview = (lastCashflowsResult || {}).preview || {};
+        const treasurySelect = element('cashflowsDrilldownTreasury');
+        if (treasurySelect) treasurySelect.value = cashflowDefaultTreasuryType();
         const periods = cashflowPreviewPeriods(preview);
         if (!button || !periodSelect || !periods.length) return;
         periodSelect.innerHTML = '';
@@ -938,6 +945,7 @@
                 period_start: start,
                 period_end: end,
                 group_by: cashflowSelection.groupBy || 'month',
+                treasury_view: cashflowTreasuryView,
             });
             if (isDrilldown) {
                 query.set('search', element('cashflowsDrilldownSearch').value.trim());
@@ -1276,7 +1284,7 @@
         element('cashflowsDrilldownClear').addEventListener('click', function () {
             element('cashflowsDrilldownSearch').value = '';
             element('cashflowsDrilldownCategory').value = '';
-            element('cashflowsDrilldownTreasury').value = '';
+            element('cashflowsDrilldownTreasury').value = cashflowDefaultTreasuryType();
             element('cashflowsDrilldownPeriod').value = '';
             loadCashflowDrilldown(true);
         });

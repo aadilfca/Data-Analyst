@@ -245,6 +245,8 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-10-03: Cashflows TV-2 added combined/Bank/Cash/split API projection with version-gated cache reuse and legacy-safe fallback.
 - 2026-10-03: Cashflows TV-3 added the main treasury-view selector and cached Bank-only/Cash-only summary rendering; export remains TV-5 scope.
 - 2026-10-03: Cashflows TV-4 added responsive period-by-period Bank/Cash/Mixed/Total split presentation with reconciliation status.
+- 2026-10-03: Cashflows TV-5 aligned XLSX export and ledger drill-down with the selected treasury view using the cached projection path.
+- 2026-10-03: Data Bank Cashflows classification now selects latest upload per filename across periods through a shared two-query SQL path; raw previews remain unchanged.
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
 - Findings from a Code Health Review session go to `KNOWN_ISSUES.md`, not the Status log — the Status log records changes made, that file records issues found

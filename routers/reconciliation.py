@@ -1730,6 +1730,33 @@ def _filter_cashflow_ledger_rows(
     return [row for row in rows if matches(row)]
 
 
+
+def _filter_cashflow_treasury_totals(
+    records: list[dict[str, Any]],
+    *,
+    summary_filter: str = "",
+    hide_zero_rows: bool = False,
+) -> list[dict[str, Any]]:
+    filter_text = summary_filter.strip().casefold() if isinstance(summary_filter, str) else ""
+    categories: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        category = str(record.get("category") or "")
+        if filter_text and filter_text not in category.casefold():
+            continue
+        categories.setdefault(category, []).append(record)
+    if not hide_zero_rows:
+        return [record for rows in categories.values() for record in rows]
+    visible: list[dict[str, Any]] = []
+    for rows in categories.values():
+        has_amount = any(
+            abs(float(record.get(field) or 0)) > 0
+            for record in rows
+            for field in ("bank_amount", "cash_amount", "mixed_amount", "total_amount")
+        )
+        if has_amount:
+            visible.extend(rows)
+    return visible
+
 def _filter_cashflow_category_totals(
     records: list[dict[str, Any]],
     period_keys: list[str],
@@ -1762,6 +1789,7 @@ def cashflow_drilldown(
     category: str = Query('', max_length=200),
     treasury_type: str = Query('', max_length=40),
     period_key: str = Query('', max_length=80),
+    treasury_view: str = Query('combined'),
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=200),
     session=Depends(require_admin),
@@ -1775,10 +1803,14 @@ def cashflow_drilldown(
         period_end,
         detail_sections={'drilldown'},
         group_by=group_by,
+        treasury_view=treasury_view,
     )
     build_seconds = perf_counter() - build_started
     filter_started = perf_counter()
     preview = result.get('preview') or {}
+    treasury_view = result.get('treasury_view') or normalize_cashflow_treasury_view(treasury_view)
+    if not treasury_type and treasury_view in {'bank', 'cash'}:
+        treasury_type = treasury_view
     rows = preview.get('ledger_rollups') or []
     search_text = search.strip().casefold() if isinstance(search, str) else ''
     category_text = category.strip().casefold() if isinstance(category, str) else ''
@@ -1823,6 +1855,7 @@ def cashflow_drilldown(
         'period_start': result['period_start'],
         'period_end': result['period_end'],
         'group_by': result['group_by'],
+        'treasury_view': treasury_view,
         'rows': page_rows,
         'total_rows': total_rows,
         'page': current_page,
@@ -1843,6 +1876,7 @@ def export_cashflows_report(
     category: str = Query('', max_length=200),
     treasury_type: str = Query('', max_length=40),
     period_key: str = Query('', max_length=80),
+    treasury_view: str = Query('combined'),
     summary_filter: str = Query('', max_length=200),
     hide_zero_rows: bool = Query(False),
     session=Depends(require_admin),
@@ -1854,6 +1888,7 @@ def export_cashflows_report(
         period_end,
         detail_sections={'transfers', 'customer_payments', 'deductions', 'review', 'drilldown'},
         group_by=group_by,
+        treasury_view=treasury_view,
     )
     if not result["source"]["ready"] or not result["preview"].get("periods"):
         raise HTTPException(
@@ -1869,18 +1904,31 @@ def export_cashflows_report(
     period_key = period_key.strip() if isinstance(period_key, str) else ""
     summary_filter = summary_filter.strip() if isinstance(summary_filter, str) else ""
     export_preview = dict(result["preview"])
+    treasury_view = result.get("treasury_view") or normalize_cashflow_treasury_view(treasury_view)
+    if not treasury_type and treasury_view in {'bank', 'cash'}:
+        treasury_type = treasury_view
     period_keys = [
         str(item.get("key") or "")
         for item in (export_preview.get("periods") or [])
         if isinstance(item, dict) and item.get("key")
     ]
-    visible_categories = _filter_cashflow_category_totals(
-        export_preview.get("category_totals") or [],
-        period_keys,
-        summary_filter=summary_filter,
-        hide_zero_rows=hide_zero_rows,
-    )
-    export_preview["category_totals"] = visible_categories
+    source_totals = export_preview.get("treasury_view_totals") or export_preview.get("category_totals") or []
+    if treasury_view == "split":
+        visible_categories = _filter_cashflow_treasury_totals(
+            source_totals,
+            summary_filter=summary_filter,
+            hide_zero_rows=hide_zero_rows,
+        )
+    else:
+        visible_categories = _filter_cashflow_category_totals(
+            source_totals,
+            period_keys,
+            summary_filter=summary_filter,
+            hide_zero_rows=hide_zero_rows,
+        )
+    export_preview["treasury_view_totals"] = visible_categories
+    if treasury_view != "split":
+        export_preview["category_totals"] = visible_categories
     ledger_rows = export_preview.get("ledger_rollups") or []
     if summary_filter.strip() or hide_zero_rows:
         visible_category_names = {str(record.get("category") or "") for record in visible_categories}
@@ -1902,6 +1950,7 @@ def export_cashflows_report(
         "category": category.strip(),
         "treasury_type": treasury_type.strip(),
         "period_key": period_key.strip(),
+        "treasury_view": treasury_view,
     }
     content = export_cashflow_xlsx(
         export_preview,
@@ -1909,7 +1958,8 @@ def export_cashflows_report(
         period_end=result["period_end"],
         group_by=result["group_by"],
     )
-    filename = f"Cashflows_{result['group_by']}_{result['period_start']}_to_{result['period_end']}.xlsx"
+    view_suffix = "" if treasury_view == "combined" else f"_{treasury_view}"
+    filename = f"Cashflows{view_suffix}_{result['group_by']}_{result['period_start']}_to_{result['period_end']}.xlsx"
     return StreamingResponse(
         BytesIO(content),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

@@ -751,7 +751,39 @@ def _load_cashflow_column_mapping(
     return {str(row["role"]): str(row["column_name"]) for row in rows if row.get("role") and row.get("column_name")}
 
 
-def _latest_template_upload_ids(
+def latest_template_upload_selection_cte() -> str:
+    """Return the canonical latest-upload-per-filename selection CTE."""
+
+    return """
+        WITH latest_template_uploads AS (
+            SELECT
+                f.id AS upload_id,
+                f.file_name,
+                f.upload_date,
+                ROW_NUMBER() OVER (
+                    PARTITION BY COALESCE(NULLIF(BTRIM(f.file_name), ''), f.id::text)
+                    ORDER BY f.upload_date DESC NULLS LAST, f.id DESC
+                ) AS upload_rank
+            FROM uploaded_files f
+            WHERE f.client_id = %s
+              AND EXISTS (
+                  SELECT 1
+                  FROM client_data cd
+                  WHERE cd.upload_id = f.id
+                    AND cd.client_id = %s
+                    AND cd.template_id = %s
+                    AND cd.is_deleted = FALSE
+              )
+        ),
+        selected_template_uploads AS (
+            SELECT upload_id
+            FROM latest_template_uploads
+            WHERE upload_rank = 1
+        )
+    """
+
+
+def select_latest_template_upload_ids(
     client_id: int,
     template_id: int,
     query_fn: Callable[..., list[dict[str, Any]]],
@@ -759,19 +791,11 @@ def _latest_template_upload_ids(
     """Select the newest upload for each filename without reading row_data."""
 
     rows = query_fn(
-        """
-        SELECT f.id AS upload_id, f.file_name, f.upload_date
-        FROM uploaded_files f
-        WHERE f.client_id = %s
-          AND EXISTS (
-              SELECT 1
-              FROM client_data cd
-              WHERE cd.upload_id = f.id
-                AND cd.client_id = %s
-                AND cd.template_id = %s
-                AND cd.is_deleted = FALSE
-          )
-        ORDER BY f.upload_date DESC NULLS LAST, f.id DESC
+        f"""
+        {latest_template_upload_selection_cte()}
+        SELECT upload_id, file_name, upload_date
+        FROM latest_template_uploads
+        ORDER BY upload_date DESC NULLS LAST, upload_id DESC
         """,
         (client_id, client_id, template_id),
     )
@@ -1277,7 +1301,7 @@ def load_cashflow_prepared_summary(
     """Roll a full-range daily snapshot into the requested report periods."""
     if journal_template_id is None:
         return None
-    upload_ids, suppressed_count = _latest_template_upload_ids(client_id, journal_template_id, query_fn)
+    upload_ids, suppressed_count = select_latest_template_upload_ids(client_id, journal_template_id, query_fn)
     if not upload_ids:
         return None
     bounds = _cashflow_snapshot_bounds(client_id, journal_template_id, upload_ids, query_fn)
@@ -1358,7 +1382,7 @@ def prepare_cashflow_summary_snapshot(
     template_id = configuration.get("source_template_id")
     if template_id is None:
         return {"status": "skipped", "reason": "template_not_configured"}
-    upload_ids, _suppressed_count = _latest_template_upload_ids(client_id, int(template_id), query_fn)
+    upload_ids, _suppressed_count = select_latest_template_upload_ids(client_id, int(template_id), query_fn)
     if not upload_ids:
         return {"status": "skipped", "reason": "no_source_uploads"}
     bounds = _cashflow_snapshot_bounds(client_id, int(template_id), upload_ids, query_fn)
@@ -1413,7 +1437,7 @@ def load_cashflow_summary_read_model(
     """Load an exact summary-only snapshot when the source/configuration is unchanged."""
     if journal_template_id is None:
         return None
-    upload_ids, suppressed_count = _latest_template_upload_ids(client_id, journal_template_id, query_fn)
+    upload_ids, suppressed_count = select_latest_template_upload_ids(client_id, journal_template_id, query_fn)
     if not upload_ids:
         return None
     upload_key = _cashflow_upload_ids_key(upload_ids)
@@ -1550,7 +1574,7 @@ def load_cashflow_sql_source(
     if journal_upload_id is not None:
         selected_upload_ids = [int(journal_upload_id)]
     elif journal_template_id is not None:
-        selected_upload_ids, suppressed_upload_count = _latest_template_upload_ids(
+        selected_upload_ids, suppressed_upload_count = select_latest_template_upload_ids(
             client_id, journal_template_id, query_fn
         )
     else:
@@ -1754,7 +1778,7 @@ def load_ledger_report_source(
     selected_upload_ids: list[int] = []
     suppressed_upload_count = 0
     if suppress_duplicate_uploads:
-        selected_upload_ids, suppressed_upload_count = _latest_template_upload_ids(client_id, journal_template_id, query_fn)
+        selected_upload_ids, suppressed_upload_count = select_latest_template_upload_ids(client_id, journal_template_id, query_fn)
         if selected_upload_ids:
             filters.append("cd.upload_id = ANY(%s)")
             params.append(selected_upload_ids)
