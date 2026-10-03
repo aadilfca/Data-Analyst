@@ -259,8 +259,18 @@ def _cashflow_section_records(
             continue
         if section == "Payments" and signed_total >= 0:
             continue
-        records.append((str(record.get("category") or "Unlabelled"), [abs(value) for value in values], abs(signed_total)))
+        records.append((str(record.get("category") or "Unlabelled"), values, abs(signed_total)))
     return records
+
+
+def _cashflow_display_value(value: float, section: str) -> float:
+    """Orient a value for section presentation while retaining numeric cells.
+
+    Receipts keep the canonical sign so payment reversals render in brackets.
+    Payments invert the canonical sign so normal payments are positive and
+    receipt reversals render in brackets through the workbook number format.
+    """
+    return -value if section == "Payments" else value
 
 
 def _local_amount_label(value: float | None) -> str:
@@ -313,14 +323,14 @@ def _write_cashflow_summary_sheet(
             _write_table(
                 ws,
                 row,
-                [category, *values, total, f"{(total / basis * 100) if basis else 0:.2f}%", _local_amount_label(total)],
+                [category, *[_cashflow_display_value(value, section) for value in values], total, f"{(total / basis * 100) if basis else 0:.2f}%", _local_amount_label(total)],
             )
             row += 1
         period_totals = [sum(values[index] for _, values, _ in records) for index in range(len(period_keys))]
         _write_table(
             ws,
             row,
-            [f"Total {section}", *period_totals, basis, "100.00%", _local_amount_label(basis)],
+            [f"Total {section}", *[_cashflow_display_value(value, section) for value in period_totals], basis, "100.00%", _local_amount_label(basis)],
             total=True,
         )
         row += 3

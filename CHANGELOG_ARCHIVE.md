@@ -7150,3 +7150,17 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 1. **Phase 6E - Vendor payments:** add the reconciled vendor-payment schedule with Bank/Cash separation and summary parity.
 2. **Phase 6F - Remaining business-detail schedules:** extend the same canonical, reconciled pattern to categories still needing dedicated detail reports.
 3. **Phase 7 - Browser regression and release closeout:** verify controls, loading/abort behavior, pagination, cache behavior, performance, exports, and final user documentation.
+
+## Cashflows mixed-sign period presentation - 2026-10-03
+
+**Scope:** Preserve the selected reporting grain—daily, fortnightly, monthly, quarterly, or other—while showing opposite-direction category movements with brackets.
+
+**Implementation:** The existing aggregate sign still determines Receipts versus Payments. Browser and XLSX presentation now retain each period's canonical signed value: payment reversals in Receipts and receipt reversals in Payments appear in brackets; zero remains a dash. XLSX cells remain numeric. No summary query, cache, database, reconciliation, or fast-fetching path changed.
+
+**Verification:** The ALI (related party) source row was confirmed as -3,000,000 in Mar-26, +3,000,000 in Apr-26, -2,500,000 in May-26, and +2,500,000 in Jun-26, with zero aggregate. Aadil confirmed the browser behavior across the selected period workflow. Mixed-sign period and XLSX tests passed (7); JavaScript syntax and git diff checks passed. The broader reconciliation file had 23 passing tests and one unrelated stale UI assertion.
+
+**Pending phases:**
+
+1. **Phase 6E - Vendor payments:** add the reconciled vendor-payment schedule with Bank/Cash separation and summary parity.
+2. **Phase 6F - Remaining business-detail schedules:** extend the same canonical, reconciled pattern to categories still needing dedicated detail reports.
+3. **Phase 7 - Browser regression and release closeout:** verify controls, loading/abort behavior, pagination, cache behavior, performance, exports, and final user documentation.

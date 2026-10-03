@@ -239,6 +239,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-10-02: Cashflows Phase 6B moved ledger drill-down beside Load summary while retaining right-aligned zero-row and XLSX actions.
 - 2026-10-02: Cashflows Phase 6C added drill-down shortcuts and placed their existing detail reports below the ledger table.
 - 2026-10-03: Cashflows Phase 6D added all-column search to cached detail reports and classified transactions without changing fast-fetching or accounting paths.
+- 2026-10-03: Cashflows now preserves signed values across every selected period grain, with section-aware bracket display in browser and XLSX; fetch path unchanged.
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
 - Findings from a Code Health Review session go to `KNOWN_ISSUES.md`, not the Status log — the Status log records changes made, that file records issues found

@@ -12,6 +12,7 @@ from fastapi import HTTPException
 
 import database
 from routers import account_control_center, reconciliation
+from services.reconciliation_xlsx import _cashflow_section_records, build_cashflow_workbook
 
 
 def _account_rows():
@@ -451,6 +452,32 @@ def test_cashflow_summary_matches_same_type_internal_transfers():
     summary = reconciliation.build_cashflow_summary(journal, pd.DataFrame(columns=["account_code", "category"]), [], ["B1", "B2"], "2026-01-01", "2026-01-31", match_internal_transfers=True)
     assert bool(summary["transfer_details"].iloc[0]["matched"]) is True
     assert summary["category_totals"].empty
+
+
+def test_cashflow_mixed_signs_are_preserved_for_any_selected_period_grain():
+    preview = {
+        "periods": [
+            {"key": "day-1", "label": "Day 1"},
+            {"key": "fortnight-1", "label": "Fortnight 1"},
+            {"key": "quarter-1", "label": "Quarter 1"},
+        ],
+        "category_totals": [
+            {"category": "ALI (related party)", "day-1": 0, "fortnight-1": -3000000, "quarter-1": 3000000, "Total": 0},
+            {"category": "Mixed payment", "day-1": -100, "fortnight-1": 50, "quarter-1": -50, "Total": -100},
+        ],
+    }
+
+    receipts = _cashflow_section_records(preview, ["day-1", "fortnight-1", "quarter-1"], "Receipts")
+    payments = _cashflow_section_records(preview, ["day-1", "fortnight-1", "quarter-1"], "Payments")
+    assert receipts == [("ALI (related party)", [0.0, -3000000.0, 3000000.0], 0.0)]
+    assert payments == [("Mixed payment", [-100.0, 50.0, -50.0], 100.0)]
+
+    workbook = build_cashflow_workbook(preview)
+    sheet = workbook["Cashflows Summary"]
+    assert sheet["C6"].value == -3000000
+    assert sheet["C6"].number_format == '#,##0;[Red](#,##0);-'
+    assert sheet["C12"].value == -50
+    assert sheet["C12"].number_format == '#,##0;[Red](#,##0);-'
 
 
 def test_cashflow_preview_endpoint_returns_configuration_and_preview():

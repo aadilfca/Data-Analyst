@@ -230,6 +230,13 @@
         if (amount === 0) return '-';
         return amount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 });
     }
+    function formatCashflowSectionAmount(value, section) {
+        const amount = Number(value || 0);
+        if (amount === 0) return '-';
+        const label = Math.abs(amount).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+        const oppositeMovement = section === 'Receipts' ? amount < 0 : amount > 0;
+        return oppositeMovement ? '(' + label + ')' : label;
+    }
 
     function formatLocalAmount(value) {
         const amount = Number(value || 0);
@@ -673,7 +680,7 @@
                 : periodKeys.reduce(function (sum, key) { return sum + (Number(row[key]) || 0); }, 0);
             sectionRows[total < 0 ? 'Payments' : 'Receipts'].push({
                 category: row.category || 'Unlabelled',
-                values: periodKeys.map(function (key) { return Math.abs(Number(row[key]) || 0); }),
+                values: periodKeys.map(function (key) { return Number(row[key]) || 0; }),
                 total: Math.abs(total)
             });
         });
@@ -690,7 +697,7 @@
             html += '<tr class="cashflows-summary-section-row cashflows-summary-section-' + section.toLowerCase() + '"><th colspan="' + columns.length + '">' + escapeHtml(section) + '</th></tr>';
             rows.forEach(function (row) {
                 const cells = [escapeHtml(row.category)];
-                row.values.forEach(function (value) { cells.push(escapeHtml(formatInternationalAmount(value))); });
+                row.values.forEach(function (value) { cells.push(escapeHtml(formatCashflowSectionAmount(value, section))); });
                 cells.push(escapeHtml(formatInternationalAmount(row.total)));
                 cells.push(escapeHtml(formatPercentage(basis ? row.total / basis : 0)));
                 cells.push(escapeHtml(formatLocalAmount(row.total)));
@@ -698,7 +705,7 @@
             });
             const periodTotals = periodKeys.map(function (_, index) { return rows.reduce(function (sum, row) { return sum + row.values[index]; }, 0); });
             html += '<tr class="cashflows-summary-total-row"><th>' + escapeHtml('Total ' + section) + '</th>';
-            periodTotals.forEach(function (value) { html += '<td>' + escapeHtml(formatInternationalAmount(value)) + '</td>'; });
+            periodTotals.forEach(function (value) { html += '<td>' + escapeHtml(formatCashflowSectionAmount(value, section)) + '</td>'; });
             html += '<td>' + escapeHtml(formatInternationalAmount(basis)) + '</td><td>100.00%</td><td>' + escapeHtml(formatLocalAmount(basis)) + '</td></tr>';
         });
         table.innerHTML = html + '</tbody>';
