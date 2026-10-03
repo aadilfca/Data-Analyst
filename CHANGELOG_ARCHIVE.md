@@ -7207,3 +7207,16 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 2. **TV-4 - Split presentation:** add the responsive Bank/Cash/Total period layout and reconciliation checks.
 3. **TV-5 - Export and drill-down parity:** align XLSX and detail workflows with the selected treasury view.
 4. **TV-6 - Final validation:** compare performance against the TV-0 baseline and complete regression/reconciliation testing.
+## Cashflows treasury-view main selector - TV-3 - 2026-10-03
+
+**Scope:** Add the main Cash and Bank Total, Bank-only, and Cash-only selector while preserving existing period selection, combined behavior, controls, and fast fetching.
+
+**Implementation:** Added the Treasury view dropdown between Group by and period controls. The selected view is sent as `treasury_view` to the existing preview endpoint, and the summary renderer uses the backend-projected totals without client-side accounting arithmetic. Existing loading, zero-row hiding, signed presentation, drill-down positioning, and detail shortcuts remain intact. XLSX export remains unchanged for TV-5 parity work.
+
+**Verification:** Focused TV-3 selector, API, treasury, and performance tests passed 7/7. The broader reconciliation/performance/direct-window set passed 31 tests with two pre-existing stale UI assertions: Reports Hub legacy text and stylesheet cache version. JavaScript syntax, Python compilation, and `git diff --check` passed.
+
+**Next phases:**
+
+1. **TV-4 - Split presentation:** add responsive period-by-period Bank, Cash, and Total columns with reconciliation checks.
+2. **TV-5 - Export and drill-down parity:** align XLSX and detail workflows with the selected treasury view.
+3. **TV-6 - Final validation:** compare performance against the TV-0 baseline and complete regression/reconciliation testing.

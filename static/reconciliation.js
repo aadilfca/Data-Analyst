@@ -9,6 +9,7 @@
     let classifiedTransactionsRequest = null;
     const CASHFLOW_REQUEST_TIMEOUT_MS = 120000;
     let cashflowSelection = { start: '', end: '', groupBy: 'month' };
+    let cashflowTreasuryView = 'combined';
     let cashflowGroupingPreference = 'suggested';
     let stagedCashflowSelection = null;
     let activeCashflowPicker = null;
@@ -64,6 +65,13 @@
         element('cashflowsPeriodEnd').value = cashflowSelection.end;
         element('cashflowsPeriodButton').textContent = periodButtonLabel(cashflowSelection);
         element('cashflowsGroupingSelect').value = cashflowGroupingPreference;
+        syncCashflowTreasuryView();
+    }
+    const cashflowTreasuryViewLabels = { combined: 'Cash and Bank Total', bank: 'Bank only', cash: 'Cash only' };
+    function cashflowTreasuryViewLabel(value) { return cashflowTreasuryViewLabels[String(value || 'combined')] || cashflowTreasuryViewLabels.combined; }
+    function syncCashflowTreasuryView() {
+        const select = element('cashflowsTreasuryViewSelect');
+        if (select) select.value = cashflowTreasuryView;
     }
     function monthsInclusive(startValue, endValue) {
         const start = fromIso(startValue); const end = fromIso(endValue);
@@ -659,11 +667,15 @@
                 }
             });
     }
+    function cashflowSummaryRows(preview) {
+        if (!preview) return [];
+        return Array.isArray(preview.treasury_view_totals) ? preview.treasury_view_totals : (preview.category_totals || []);
+    }
     function renderCashflowSummary(preview) {
         const table = element('cashflowsSummaryTable');
         const periods = cashflowPreviewPeriods(preview);
         const periodKeys = periods.map(function (period) { return period.key; });
-        const rawRows = preview.category_totals || [];
+        const rawRows = cashflowSummaryRows(preview);
         const filter = cashflowSummaryFilter.trim().toLowerCase();
         const filteredRows = rawRows.filter(function (row) {
             return !filter || String(row.category || '').toLowerCase().indexOf(filter) >= 0;
@@ -747,10 +759,13 @@
         lastCashflowsResult = result;
         const preview = result.preview || {};
         closeCashflowDrilldown();
+        cashflowTreasuryView = String(preview.treasury_view || cashflowTreasuryView || 'combined');
+        syncCashflowTreasuryView();
         renderCashflowSummary(preview);
-        renderCategoryOptions((preview.category_totals || []).map(function (row) { return row.category; }), true);
-        renderCashflowDrilldownCategoryOptions(preview.category_totals || []);
-        element('cashflowsReceiptMode').textContent = 'Receipt presentation: ' + String(preview.receipt_presentation || 'net').toUpperCase();
+        const summaryRows = cashflowSummaryRows(preview);
+        renderCategoryOptions(summaryRows.map(function (row) { return row.category; }), true);
+        renderCashflowDrilldownCategoryOptions(summaryRows);
+        element('cashflowsReceiptMode').textContent = cashflowTreasuryViewLabel(cashflowTreasuryView) + ' · Receipt presentation: ' + String(preview.receipt_presentation || 'net').toUpperCase();
         const source = result.source || {};
         const exportButton = element('cashflowsExportButton');
         if (exportButton) exportButton.hidden = !source.ready || !(preview.periods || []).length;
@@ -855,7 +870,7 @@
         const timeout = window.setTimeout(function () { controller.abort(); }, CASHFLOW_REQUEST_TIMEOUT_MS);
         try {
             setCashflowProcessingStep('load', 'Loading Cashflows data for the selected period.');
-            const query = new URLSearchParams({ client_id: clientId, period_start: start, period_end: end, group_by: cashflowSelection.groupBy, details: 'summary' });
+            const query = new URLSearchParams({ client_id: clientId, period_start: start, period_end: end, group_by: cashflowSelection.groupBy, treasury_view: cashflowTreasuryView, details: 'summary' });
             const result = await api('/api/reconciliation/cashflows/preview?' + query.toString(), { signal: controller.signal });
             setCashflowProcessingStep('render', 'Rendering the grouped Cashflows summary.');
             renderResult(result);
@@ -1195,6 +1210,9 @@
             if (stagedCashflowSelection) stagedCashflowSelection.groupBy = groupBy;
             else cashflowSelection.groupBy = groupBy;
             syncCashflowSelection();
+        });
+        element('cashflowsTreasuryViewSelect').addEventListener('change', function (event) {
+            cashflowTreasuryView = event.target.value || 'combined';
         });
         document.addEventListener('click', function (event) {
             const popover = element('cashflowsPeriodPopover');

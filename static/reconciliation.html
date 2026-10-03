@@ -54,6 +54,7 @@
         <section id='cashflowsView' class='cashflows-report' aria-label='Cashflows report' hidden>
             <form id='cashflowsReportForm' class='cashflows-filter-bar'>
                 <label class='cashflows-grouping-control' for='cashflowsGroupingSelect'>Group by<select id='cashflowsGroupingSelect' aria-label='Cashflows report grouping'><option value='suggested'>Suggested</option><option value='day'>Daily</option><option value='fortnight'>Fortnightly</option><option value='month'>Monthly</option><option value='quarter'>Quarterly</option><option value='half_year'>Half-yearly</option><option value='year'>Annually</option></select></label>
+                <label class='cashflows-treasury-control' for='cashflowsTreasuryViewSelect'>Treasury view<select id='cashflowsTreasuryViewSelect' aria-label='Cashflows treasury view'><option value='combined'>Cash and Bank Total</option><option value='bank'>Bank only</option><option value='cash'>Cash only</option></select></label>
                 <div class='cashflows-period-control'>
                     <button type='button' id='cashflowsPeriodButton' class='cashflows-period-button' aria-haspopup='dialog' aria-expanded='false'>Select period</button>
                     <div id='cashflowsPeriodPopover' class='cashflows-period-popover' role='dialog' aria-label='Cashflows reporting period' hidden>
@@ -195,6 +196,6 @@
         </footer>
     </main>
     <script src='/static/client_context.js?v=18'></script>
-    <script src='/static/reconciliation.js?v=14'></script>
+    <script src='/static/reconciliation.js?v=15'></script>
 </body>
 </html>

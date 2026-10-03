@@ -719,3 +719,29 @@ def test_cashflow_detail_sections_parser_and_summary_filter():
     assert preview["category_review_count"] == 1
     assert preview["deduction_count"] == 1
     assert preview["detail_sections_loaded"] == []
+
+def test_cashflow_treasury_view_selector_is_wired_to_preview():
+    html = Path(__file__).resolve().parents[1].joinpath("static", "reconciliation.html").read_text(encoding="utf-8")
+    javascript = Path(__file__).resolve().parents[1].joinpath("static", "reconciliation.js").read_text(encoding="utf-8")
+
+    assert "id='cashflowsTreasuryViewSelect'" in html
+    assert "value='combined'" in html
+    assert "value='bank'" in html
+    assert "value='cash'" in html
+    assert "treasury_view: cashflowTreasuryView" in javascript
+    assert "cashflowSummaryRows(preview)" in javascript
+    assert "cashflowTreasuryViewLabel(cashflowTreasuryView)" in javascript
+
+
+def test_cashflow_preview_endpoint_passes_selected_treasury_view():
+    with patch.object(reconciliation, "_build_cashflow_result", return_value={"ok": True}) as build:
+        response = reconciliation.preview_cashflows(
+            7,
+            "2026-01-01",
+            "2026-01-31",
+            treasury_view="bank",
+            session={"username": "Admin"},
+        )
+
+    assert response == {"ok": True}
+    assert build.call_args.kwargs["treasury_view"] == "bank"
