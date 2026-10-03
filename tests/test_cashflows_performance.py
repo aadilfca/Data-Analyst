@@ -1,6 +1,6 @@
 """Phase 6 coverage for SQL-first Cashflows source preparation."""
 
-from services.ledger_report_source import load_cashflow_sql_source
+from services.ledger_report_source import _cashflow_daily_rollup, load_cashflow_sql_source
 
 
 def test_cashflow_sql_source_filters_dates_joins_vouchers_and_aggregates_lines():
@@ -113,3 +113,30 @@ def test_cashflow_sql_source_preserves_each_transaction_date_for_bucketing():
     )
 
     assert source.journal["date"].dt.strftime("%Y-%m-%d").tolist() == ["2026-01-05", "2026-02-05"]
+def test_cashflow_daily_rollup_preserves_treasury_totals_for_larger_periods():
+    payload = {
+        "periods": [
+            {"key": "2026-01-05", "start": "2026-01-05", "end": "2026-01-05", "label": "05 Jan"},
+            {"key": "2026-02-05", "start": "2026-02-05", "end": "2026-02-05", "label": "05 Feb"},
+        ],
+        "categories": [
+            {"category": "Operating", "values": {"2026-01-05": 100, "2026-02-05": 25}},
+        ],
+        "treasury_category_totals": [
+            {"category": "Operating", "period_key": "2026-01-05", "bank_amount": 60, "cash_amount": 40, "mixed_amount": 0, "total_amount": 100},
+            {"category": "Operating", "period_key": "2026-02-05", "bank_amount": 25, "cash_amount": 0, "mixed_amount": 0, "total_amount": 25},
+        ],
+        "treasury_totals_version": 1,
+        "period_metrics": {
+            "2026-01-05": {"source_line_count": 1, "selected_voucher_count": 1, "internal_transfer_count": 0, "category_review_count": 0},
+            "2026-02-05": {"source_line_count": 1, "selected_voucher_count": 1, "internal_transfer_count": 0, "category_review_count": 0},
+        },
+    }
+
+    summary = _cashflow_daily_rollup(payload, "2026-01-01", "2026-02-28", "month")
+    split = summary["treasury_category_totals"].set_index(["category", "period_key"])
+
+    assert split.loc[("Operating", "2026-01"), "bank_amount"] == 60
+    assert split.loc[("Operating", "2026-01"), "cash_amount"] == 40
+    assert split.loc[("Operating", "2026-02"), "total_amount"] == 25
+    assert summary["treasury_reconciliation"]["status"] == "Matched"

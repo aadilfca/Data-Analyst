@@ -24,7 +24,10 @@ from services.ledger_report_source import (
     CASHFLOW_DRILLDOWN_DETAILS_VERSION,
     CASHFLOW_COLUMN_ROLE_LABELS,
     CASHFLOW_REQUIRED_COLUMN_ROLES,
+    CASHFLOW_TREASURY_TOTALS_VERSION,
     LedgerReportSource,
+    normalize_cashflow_treasury_view,
+    project_cashflow_treasury_view,
     load_cashflow_summary_read_model,
     load_cashflow_prepared_summary,
     load_ledger_report_source,
@@ -1282,8 +1285,10 @@ def _cashflow_source_selection_response(client_id: int, sources: list[dict[str, 
 def _cashflow_preview(
     summary: dict[str, Any] | None,
     detail_sections: set[str] | None = None,
+    treasury_view: str = "combined",
 ) -> dict[str, Any]:
     """Format the summary and only the child detail sections requested by the caller."""
+    treasury_view = normalize_cashflow_treasury_view(treasury_view)
     if summary is None:
         return {
             'ledger_rollups': [],
@@ -1293,6 +1298,12 @@ def _cashflow_preview(
             "periods": [],
             "group_by": "month",
             "category_totals": [],
+            "treasury_category_totals": [],
+            "treasury_reconciliation": {},
+            "treasury_view": treasury_view,
+            "treasury_view_ready": treasury_view == "combined",
+            "treasury_view_totals": [],
+            "treasury_view_reconciliation": {},
             "transfer_details": [],
             "transfer_reconciliation": None,
             "customer_payment_details": [],
@@ -1307,6 +1318,12 @@ def _cashflow_preview(
         }
     loaded = {"transfers", "customer_payments", "deductions", "review"} if detail_sections is None else set(detail_sections)
     review = summary.get("categories_needing_review")
+    treasury_projection = project_cashflow_treasury_view(summary, treasury_view)
+    treasury_view_totals = (
+        _category_total_records(treasury_projection["totals"])
+        if treasury_projection["totals_shape"] == "category"
+        else _frame_records_all(treasury_projection["totals"])
+    )
     return {
         'ledger_rollups': _frame_records_all(summary.get('cashflow_ledger_rollups')) if 'drilldown' in loaded else [],
         'drilldown_controls': summary.get('cashflow_drilldown_controls') if 'drilldown' in loaded else {},
@@ -1315,6 +1332,12 @@ def _cashflow_preview(
         "periods": summary.get("periods", []),
         "group_by": summary.get("group_by", "month"),
         "category_totals": _category_total_records(summary.get("category_totals")),
+        "treasury_category_totals": _frame_records_all(summary.get("treasury_category_totals")),
+        "treasury_reconciliation": summary.get("treasury_reconciliation") or {},
+        "treasury_view": treasury_projection["view"],
+        "treasury_view_ready": bool(treasury_projection["ready"]),
+        "treasury_view_totals": treasury_view_totals,
+        "treasury_view_reconciliation": treasury_projection["reconciliation"],
         "transfer_details": _frame_records(summary.get("transfer_details")) if "transfers" in loaded else [],
         "transfer_reconciliation": summary.get("transfer_reconciliation") if "transfers" in loaded else None,
         "customer_payment_details": _frame_records(summary.get("customer_payment_details")) if "customer_payments" in loaded else [],
@@ -1332,8 +1355,12 @@ def _cashflow_preview(
 def _cashflow_cache_can_serve_details(
     cached_summary: dict[str, Any] | None,
     detail_sections: set[str] | None,
+    treasury_view: str = "combined",
 ) -> bool:
     if cached_summary is None:
+        return False
+    metadata = cached_summary.get("metadata", {})
+    if treasury_view != "combined" and int(metadata.get("treasury_totals_version", 0) or 0) < CASHFLOW_TREASURY_TOTALS_VERSION:
         return False
     if detail_sections:
         metadata = cached_summary.get("metadata", {})
@@ -1359,6 +1386,7 @@ def _build_cashflow_result(
     period_end: Any,
     detail_sections: set[str] | None = None,
     group_by: str = "month",
+    treasury_view: str = "combined",
 ) -> dict[str, Any]:
     request_started = perf_counter()
     validation_started = perf_counter()
@@ -1367,6 +1395,7 @@ def _build_cashflow_result(
     start, end = _parse_report_period(period_start, period_end)
     try:
         grouping = normalize_cashflow_grouping(group_by)
+        treasury_view = normalize_cashflow_treasury_view(treasury_view)
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
     configuration_started = perf_counter()
@@ -1389,7 +1418,7 @@ def _build_cashflow_result(
                 receipt_presentation=configuration["receipt_presentation"],
                 query_fn=execute_query_pg,
             )
-            if not _cashflow_cache_can_serve_details(cached_summary, detail_sections):
+            if not _cashflow_cache_can_serve_details(cached_summary, detail_sections, treasury_view):
                 cached_summary = None
         except Exception as error:
             logger.warning("cashflows_summary_read_model_lookup_failed client_id=%s error=%s", client_id, error)
@@ -1404,7 +1433,7 @@ def _build_cashflow_result(
                 receipt_presentation=configuration["receipt_presentation"],
                 query_fn=execute_query_pg,
             )
-            if not _cashflow_cache_can_serve_details(cached_summary, detail_sections):
+            if not _cashflow_cache_can_serve_details(cached_summary, detail_sections, treasury_view):
                 cached_summary = None
         except Exception as error:
             logger.warning("cashflows_prepared_snapshot_lookup_failed client_id=%s error=%s", client_id, error)
@@ -1506,7 +1535,7 @@ def _build_cashflow_result(
         "rejected_rows_sample": source_metadata.get("rejected_rows_sample") or [],
     }
     preview_started = perf_counter()
-    preview = _cashflow_preview(summary, detail_sections)
+    preview = _cashflow_preview(summary, detail_sections, treasury_view)
     format_seconds = perf_counter() - preview_started
     total_seconds = perf_counter() - request_started
     logger.info(
@@ -1536,6 +1565,7 @@ def _build_cashflow_result(
         "period_start": start.date().isoformat(),
         "period_end": end.date().isoformat(),
         "group_by": grouping,
+        "treasury_view": treasury_view,
         "configuration": {
             "cash_account_count": len(configuration["cash_account_codes"]),
             "bank_account_count": len(configuration["bank_account_codes"]),
@@ -1650,12 +1680,15 @@ def preview_cashflows(
     period_start: str = Query(...),
     period_end: str = Query(...),
     group_by: str = Query("month"),
+    treasury_view: str = Query("combined"),
     details: Optional[str] = Query(None, description="summary or comma-separated child sections"),
     session=Depends(require_admin),
 ):
     """Return Cashflows using the Transaction Report template configured in Account Control Centre."""
     if not isinstance(group_by, str):
         group_by = getattr(group_by, "default", "month")
+    if not isinstance(treasury_view, str):
+        treasury_view = getattr(treasury_view, "default", "combined")
     detail_value = details if isinstance(details, str) else None
     return _build_cashflow_result(
         client_id,
@@ -1663,6 +1696,7 @@ def preview_cashflows(
         period_end,
         detail_sections=_parse_cashflow_detail_sections(detail_value),
         group_by=group_by,
+        treasury_view=treasury_view,
     )
 
 def _filter_cashflow_ledger_rows(

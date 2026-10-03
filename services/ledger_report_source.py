@@ -32,6 +32,8 @@ CASHFLOW_PREPARED_PERIOD_COLUMNS = ("transaction_month", "transaction_fortnight"
 COA_COLUMNS = ("account_code", "account_title", "account_type", "category")
 CASHFLOW_CHILD_DETAILS_VERSION = 6
 CASHFLOW_DRILLDOWN_DETAILS_VERSION = 1
+CASHFLOW_TREASURY_TOTALS_VERSION = 1
+CASHFLOW_TREASURY_VIEWS = ("combined", "bank", "cash", "split")
 
 _JOURNAL_ALIASES: Mapping[str, tuple[str, ...]] = {
     "voucher_id": (
@@ -811,6 +813,85 @@ def _cashflow_json_scalar(value: Any) -> Any:
     return str(value)
 
 
+def normalize_cashflow_treasury_view(value: Any) -> str:
+    view = str(value or "combined").strip().casefold()
+    if view not in CASHFLOW_TREASURY_VIEWS:
+        allowed = ", ".join(CASHFLOW_TREASURY_VIEWS)
+        raise ValueError(f"treasury_view must be one of: {allowed}")
+    return view
+
+
+def project_cashflow_treasury_view(summary: Mapping[str, Any], treasury_view: str = "combined") -> dict[str, Any]:
+    """Project one treasury view from the already-built canonical summary."""
+    view = normalize_cashflow_treasury_view(treasury_view)
+    combined = summary.get("category_totals")
+    if view == "combined":
+        return {
+            "view": view,
+            "totals": combined if isinstance(combined, pd.DataFrame) else pd.DataFrame(),
+            "totals_shape": "category",
+            "ready": True,
+            "reconciliation": summary.get("treasury_reconciliation") or {},
+        }
+
+    treasury = summary.get("treasury_category_totals")
+    treasury = treasury.copy() if isinstance(treasury, pd.DataFrame) else pd.DataFrame()
+    version = int(summary.get("treasury_totals_version", 0) or 0)
+    if version < CASHFLOW_TREASURY_TOTALS_VERSION:
+        return {
+            "view": view,
+            "totals": pd.DataFrame(),
+            "totals_shape": "split" if view == "split" else "category",
+            "ready": False,
+            "reconciliation": summary.get("treasury_reconciliation") or {},
+        }
+
+    if view == "split":
+        return {
+            "view": view,
+            "totals": treasury,
+            "totals_shape": "split",
+            "ready": True,
+            "reconciliation": summary.get("treasury_reconciliation") or {},
+        }
+
+    period_keys = [
+        str(period.get("key"))
+        for period in summary.get("periods", [])
+        if period.get("key") is not None
+    ]
+    if not period_keys and isinstance(combined, pd.DataFrame):
+        period_keys = [str(column) for column in combined.columns if str(column) != "Total"]
+    amount_column = "bank_amount" if view == "bank" else "cash_amount"
+    category_names = []
+    if isinstance(combined, pd.DataFrame) and not combined.empty:
+        category_names.extend(str(category) for category in combined.index)
+    if not treasury.empty and "category" in treasury.columns:
+        category_names.extend(str(category) for category in treasury["category"].dropna().tolist())
+    category_names = list(dict.fromkeys(category_names))
+    rows: list[dict[str, Any]] = []
+    for category in category_names:
+        row = {"category": category}
+        category_rows = treasury.loc[treasury.get("category", pd.Series(dtype=str)).astype(str).eq(category)] if not treasury.empty else pd.DataFrame()
+        for period_key in period_keys:
+            period_rows = category_rows.loc[category_rows.get("period_key", pd.Series(dtype=str)).astype(str).eq(period_key)] if not category_rows.empty else pd.DataFrame()
+            row[period_key] = float(period_rows[amount_column].sum()) if amount_column in period_rows else 0.0
+        row["Total"] = sum(float(row[period_key]) for period_key in period_keys)
+        rows.append(row)
+    if rows:
+        totals = pd.DataFrame(rows).set_index("category")
+        totals.index.name = "category"
+    else:
+        totals = pd.DataFrame(columns=[*period_keys, "Total"], dtype=float)
+        totals.index.name = "category"
+    return {
+        "view": view,
+        "totals": totals,
+        "totals_shape": "category",
+        "ready": True,
+        "reconciliation": summary.get("treasury_reconciliation") or {},
+    }
+
 def _cashflow_detail_records(frame: Any) -> list[dict[str, Any]]:
     if not isinstance(frame, pd.DataFrame) or frame.empty:
         return []
@@ -887,6 +968,9 @@ def _cashflow_summary_payload(summary: Mapping[str, Any]) -> dict[str, Any]:
         "months": [str(month) for month in summary.get("months", [])],
         "periods": periods,
         "categories": categories,
+        "treasury_category_totals": _cashflow_detail_records(summary.get("treasury_category_totals")),
+        "treasury_reconciliation": dict(summary.get("treasury_reconciliation") or {}),
+        "treasury_totals_version": CASHFLOW_TREASURY_TOTALS_VERSION if "treasury_category_totals" in summary else 0,
         "source_line_count": int(summary.get("source_line_count", 0) or 0),
         "selected_voucher_count": int(summary.get("selected_voucher_count", 0) or 0),
         "internal_transfer_count": int(summary.get("internal_transfer_count", 0) or 0),
@@ -922,6 +1006,8 @@ def _cashflow_summary_from_payload(payload: Mapping[str, Any], group_by: str) ->
     else:
         category_totals = pd.DataFrame(columns=[*period_keys, "Total"], dtype=float)
         category_totals.index.name = "category"
+    treasury_category_totals = _cashflow_detail_frame(payload, "treasury_category_totals")
+    treasury_totals_version = int(payload.get("treasury_totals_version", 0) or 0)
     child_details_version = int(payload.get("child_details_version", 0) or 0)
     child_details_prepared = bool(payload.get("child_details_prepared")) and child_details_version >= CASHFLOW_CHILD_DETAILS_VERSION
     transfer_details = _cashflow_detail_frame(payload, "transfer_details") if child_details_prepared else pd.DataFrame()
@@ -931,6 +1017,9 @@ def _cashflow_summary_from_payload(payload: Mapping[str, Any], group_by: str) ->
         "periods": periods,
         "group_by": group_by,
         "category_totals": category_totals,
+        "treasury_category_totals": treasury_category_totals,
+        "treasury_reconciliation": dict(payload.get("treasury_reconciliation") or {}),
+        "treasury_totals_version": treasury_totals_version,
         "transfer_details": transfer_details,
         "transfer_reconciliation": (
             payload.get("transfer_reconciliation") or build_cashflow_transfer_reconciliation(transfer_details)
@@ -1065,7 +1154,7 @@ def _cashflow_daily_rollup(
     period_end: Any,
     group_by: str,
 ) -> dict[str, Any]:
-    from services.ledger_group_summary import _cashflow_periods, build_cashflow_transfer_reconciliation, normalize_cashflow_grouping
+    from services.ledger_group_summary import DEFAULT_TOLERANCE, _cashflow_periods, _cashflow_treasury_reconciliation, build_cashflow_transfer_reconciliation, normalize_cashflow_grouping
 
     grouping = normalize_cashflow_grouping(group_by)
     periods = _cashflow_periods(period_start, period_end, grouping)
@@ -1104,6 +1193,34 @@ def _cashflow_daily_rollup(
     else:
         category_totals = pd.DataFrame(columns=[period["key"] for period in periods] + ["Total"], dtype=float)
         category_totals.index.name = "category"
+    source_treasury_totals = _cashflow_detail_frame(payload, "treasury_category_totals")
+    category_names = [
+        str(category.get("category") or "")
+        for category in payload.get("categories", [])
+        if isinstance(category, Mapping)
+    ]
+    treasury_rows: list[dict[str, Any]] = []
+    for category in category_names:
+        for period in periods:
+            selected = source_treasury_totals.loc[
+                (source_treasury_totals.get("category", pd.Series(dtype=str)).astype(str) == category)
+                & source_treasury_totals.get("period_key", pd.Series(dtype=str)).astype(str).isin(target_days[period["key"]])
+            ] if not source_treasury_totals.empty else pd.DataFrame()
+            treasury_rows.append({
+                "category": category,
+                "period_key": period["key"],
+                "bank_amount": float(selected["bank_amount"].sum()) if "bank_amount" in selected else 0.0,
+                "cash_amount": float(selected["cash_amount"].sum()) if "cash_amount" in selected else 0.0,
+                "mixed_amount": float(selected["mixed_amount"].sum()) if "mixed_amount" in selected else 0.0,
+                "total_amount": float(selected["total_amount"].sum()) if "total_amount" in selected else 0.0,
+            })
+    treasury_category_totals = pd.DataFrame(treasury_rows, columns=["category", "period_key", "bank_amount", "cash_amount", "mixed_amount", "total_amount"])
+    treasury_reconciliation = _cashflow_treasury_reconciliation(
+        category_totals,
+        treasury_category_totals,
+        [str(period["key"]) for period in periods],
+        tolerance=DEFAULT_TOLERANCE,
+    )
     totals = {
         metric: sum(values[metric] for values in period_metrics.values())
         for metric in ("source_line_count", "selected_voucher_count", "internal_transfer_count", "category_review_count")
@@ -1127,6 +1244,9 @@ def _cashflow_daily_rollup(
         "periods": periods,
         "group_by": grouping,
         "category_totals": category_totals,
+        "treasury_category_totals": treasury_category_totals,
+        "treasury_reconciliation": treasury_reconciliation,
+        "treasury_totals_version": int(payload.get("treasury_totals_version", 0) or 0),
         "transfer_details": transfer_details,
         "transfer_reconciliation": transfer_reconciliation,
         "customer_payment_details": customer_payment_details,
@@ -1205,6 +1325,7 @@ def load_cashflow_prepared_summary(
         "sql_aggregated": True,
         "raw_json_parsing": False,
         "summary_read_model": "prepared_snapshot",
+        "treasury_totals_version": int(summary.get("treasury_totals_version", 0) or 0),
         "child_details_prepared": bool(summary.get("child_details_prepared")),
         "child_details_version": int(summary.get("child_details_version", 0) or 0),
         "classification_configuration_version": rows[0].get("configuration_version"),
@@ -1352,6 +1473,7 @@ def load_cashflow_summary_read_model(
         "sql_aggregated": True,
         "raw_json_parsing": False,
         "summary_read_model": "hit",
+        "treasury_totals_version": int(payload.get("treasury_totals_version", 0) or 0),
         "child_details_prepared": bool(payload.get("child_details_prepared")),
         "child_details_version": int(payload.get("child_details_version", 0) or 0),
         "classification_configuration_version": rows[0].get("configuration_version"),

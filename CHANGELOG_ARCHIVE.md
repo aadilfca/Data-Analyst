@@ -7164,3 +7164,46 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 1. **Phase 6E - Vendor payments:** add the reconciled vendor-payment schedule with Bank/Cash separation and summary parity.
 2. **Phase 6F - Remaining business-detail schedules:** extend the same canonical, reconciled pattern to categories still needing dedicated detail reports.
 3. **Phase 7 - Browser regression and release closeout:** verify controls, loading/abort behavior, pagination, cache behavior, performance, exports, and final user documentation.
+
+## Cashflows treasury-view structural plan - TV-0 - 2026-10-03
+
+**Scope:** Establish the performance and response-contract baseline before adding Bank-only, Cash-only, Cash + Bank total, and Cash + Bank split views.
+
+**Baseline:** The existing SQL-first path uses prepared snapshots and summary read models. Warm Cashflows requests are approximately 1.4-2.1 seconds; cold requests remain variable because of remote database and network latency. These figures are the comparison baseline for the completed plan.
+
+**Design contract:** Preserve the existing combined category_totals response and accounting presentation. Add treasury-aware aggregates as one shared cached/read-model result, then project the selected view without raw-ledger reloads, per-category queries, or cache-mode multiplication. The fourth view is recommended as period-by-period Bank, Cash, and Total columns, with Bank + Cash = Total.
+
+**Verification:** Read-only source, cache, UI, and route review completed. The local Cashflows page returned HTTP 200; the focused performance/UI baseline had 3 passing tests and 1 unrelated stale stylesheet-version assertion. No application code, source data, packages, or cache behavior changed.
+
+**Next phases:**
+
+1. **TV-1 - Treasury-aware aggregate foundation:** add the additive Bank/Cash/Total summary contract while preserving the current combined output.
+2. **TV-2 - API projection and cache parity:** extend prepared snapshots/read models and verify all four views reuse the fast path.
+3. **TV-3 - Main selector and simple views:** add the treasury dropdown and Bank-only/Cash-only/combined views.
+4. **TV-4 - Split presentation:** add the responsive Bank/Cash/Total period layout and reconciliation checks.
+5. **TV-5 - Export and drill-down parity:** align XLSX and detail workflows with the selected treasury view.
+6. **TV-6 - Final validation:** compare performance against this TV-0 baseline and complete regression/reconciliation testing.
+
+## Cashflows treasury-view aggregate foundation - TV-1 - 2026-10-03
+
+**Scope:** Add Bank/Cash-aware summary data while preserving the existing combined Cash + Bank output and fast SQL-first/read-model path.
+
+**Implementation:** The canonical summary now emits normalized treasury_category_totals with Bank, Cash, Mixed/Unresolved, and Total amounts by category and selected period. Prepared snapshots, exact read models, daily rollups, and the Cashflows preview carry the additive contract with legacy-payload compatibility. Mixed treasury legs use documented absolute-movement weighting; zero-weight or ambiguous cases remain Mixed rather than being silently assigned.
+
+**Verification:** Aadil confirmed the existing Cashflows summary works locally. Focused treasury allocation, payload round-trip, prepared-rollup, and SQL-first tests passed 4; the broader reconciliation/performance set passed 26 with one unrelated stale Reports Hub assertion. Python compilation and git diff check passed. No SQL query, raw-ledger reload, UI, or source data changed.
+
+**Next phase:** TV-2 - API projection and cache parity.
+## Cashflows treasury-view API projection - TV-2 - 2026-10-03
+
+**Scope:** Expose combined, Bank-only, Cash-only, and period-by-period split projections while preserving the existing fast aggregate path and legacy combined behavior.
+
+**Implementation:** Added a normalized `treasury_view` API contract. Bank and Cash views are projected from the cached treasury-aware aggregate; split returns Bank, Cash, Mixed, and Total rows. Non-combined views require treasury version 1, so legacy cache payloads safely rebuild while combined requests remain compatible. No extra raw-ledger fetch, per-category query, cache-key multiplication, UI, XLSX, or database-schema change was introduced.
+
+**Verification:** Focused TV-2 tests passed 6/6, including projection, legacy-cache gating, endpoint defaults, payload round-trip, and performance rollup coverage. The broader reconciliation/performance set passed 28 tests with one pre-existing unrelated Reports Hub assertion for stale text. Python compilation and `git diff --check` passed.
+
+**Next phases:**
+
+1. **TV-3 - Main selector and simple views:** add the treasury dropdown and Bank-only/Cash-only/combined views.
+2. **TV-4 - Split presentation:** add the responsive Bank/Cash/Total period layout and reconciliation checks.
+3. **TV-5 - Export and drill-down parity:** align XLSX and detail workflows with the selected treasury view.
+4. **TV-6 - Final validation:** compare performance against the TV-0 baseline and complete regression/reconciliation testing.

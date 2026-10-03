@@ -454,6 +454,57 @@ def test_cashflow_summary_matches_same_type_internal_transfers():
     assert summary["category_totals"].empty
 
 
+def test_cashflow_summary_treasury_totals_reconcile_to_combined_category_total():
+    journal = pd.DataFrame([
+        {"voucher_id": "V1", "date": "2026-01-05", "account_code": "B1", "account_name": "Bank", "debit": 100, "credit": 0},
+        {"voucher_id": "V1", "date": "2026-01-05", "account_code": "EXP", "account_name": "Operating", "debit": 0, "credit": 100},
+        {"voucher_id": "V2", "date": "2026-01-10", "account_code": "C1", "account_name": "Cash", "debit": 0, "credit": 40},
+        {"voucher_id": "V2", "date": "2026-01-10", "account_code": "EXP", "account_name": "Operating", "debit": 40, "credit": 0},
+        {"voucher_id": "V3", "date": "2026-01-20", "account_code": "B1", "account_name": "Bank", "debit": 60, "credit": 0},
+        {"voucher_id": "V3", "date": "2026-01-20", "account_code": "C1", "account_name": "Cash", "debit": 40, "credit": 0},
+        {"voucher_id": "V3", "date": "2026-01-20", "account_code": "EXP", "account_name": "Operating", "debit": 0, "credit": 100},
+    ])
+    coa = pd.DataFrame([
+        {"account_code": "EXP", "account_title": "Operating", "category": "Operating"},
+    ])
+
+    summary = reconciliation.build_cashflow_summary(
+        journal,
+        coa,
+        ["C1"],
+        ["B1"],
+        "2026-01-01",
+        "2026-01-31",
+    )
+
+    from services.ledger_report_source import _cashflow_summary_from_payload, _cashflow_summary_payload
+
+    payload = _cashflow_summary_payload(summary)
+    assert payload["treasury_totals_version"] == 1
+    restored = _cashflow_summary_from_payload(payload, "month")
+    split = restored["treasury_category_totals"].set_index(["category", "period_key"]).loc[("Operating", "2026-01")]
+    legacy = _cashflow_summary_from_payload({"periods": payload["periods"], "categories": payload["categories"]}, "month")
+    assert legacy["treasury_totals_version"] == 0
+    assert legacy["treasury_category_totals"].empty
+    assert summary["category_totals"].loc["Operating", "2026-01"] == 160
+    assert split["bank_amount"] == 160
+    assert split["cash_amount"] == 0
+    assert split["mixed_amount"] == 0
+    assert split["total_amount"] == 160
+    assert summary["treasury_reconciliation"]["status"] == "Matched"
+    assert summary["treasury_reconciliation"]["max_abs_variance"] == 0
+
+    bank_preview = reconciliation._cashflow_preview(summary, set(), "bank")
+    cash_preview = reconciliation._cashflow_preview(summary, set(), "cash")
+    split_preview = reconciliation._cashflow_preview(summary, set(), "split")
+    assert bank_preview["treasury_view"] == "bank"
+    assert bank_preview["treasury_view_ready"] is True
+    assert bank_preview["treasury_view_totals"][0]["2026-01"] == 160
+    assert cash_preview["treasury_view_totals"][0]["2026-01"] == 0
+    assert split_preview["treasury_view_totals"][0]["total_amount"] == 160
+    assert split_preview["treasury_view_reconciliation"]["status"] == "Matched"
+
+
 def test_cashflow_mixed_signs_are_preserved_for_any_selected_period_grain():
     preview = {
         "periods": [
@@ -478,6 +529,17 @@ def test_cashflow_mixed_signs_are_preserved_for_any_selected_period_grain():
     assert sheet["C6"].number_format == '#,##0;[Red](#,##0);-'
     assert sheet["C12"].value == -50
     assert sheet["C12"].number_format == '#,##0;[Red](#,##0);-'
+
+
+def test_cashflow_treasury_view_cache_requires_versioned_payload_for_noncombined_views():
+    legacy = {"metadata": {"treasury_totals_version": 0}}
+    current = {"metadata": {"treasury_totals_version": 1}}
+
+    assert reconciliation._cashflow_cache_can_serve_details(legacy, set(), "combined") is True
+    assert reconciliation._cashflow_cache_can_serve_details(legacy, set(), "bank") is False
+    assert reconciliation._cashflow_cache_can_serve_details(current, set(), "bank") is True
+    with pytest.raises(ValueError):
+        reconciliation.normalize_cashflow_treasury_view("unknown")
 
 
 def test_cashflow_preview_endpoint_returns_configuration_and_preview():

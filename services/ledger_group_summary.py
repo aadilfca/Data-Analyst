@@ -17,6 +17,8 @@ import pandas as pd
 
 DEFAULT_TOLERANCE = 0.005
 CASHFLOW_GROUPINGS = ("day", "fortnight", "month", "quarter", "half_year", "year")
+CASHFLOW_TREASURY_TOTAL_COLUMNS = ("category", "period_key", "bank_amount", "cash_amount", "mixed_amount", "total_amount")
+CASHFLOW_TREASURY_TOTALS_VERSION = 1
 
 
 class LedgerBalanceError(ValueError):
@@ -231,6 +233,103 @@ def _empty_cashflow_ledger_rollups() -> pd.DataFrame:
         ]
     )
 
+
+def _empty_cashflow_treasury_totals() -> pd.DataFrame:
+    return pd.DataFrame(columns=list(CASHFLOW_TREASURY_TOTAL_COLUMNS))
+
+
+def _build_cashflow_treasury_totals(
+    category_frame: pd.DataFrame,
+    working: pd.DataFrame,
+    treasury_type: Mapping[str, str],
+    *,
+    tolerance: float,
+) -> pd.DataFrame:
+    """Allocate category movements to configured treasury types once per voucher."""
+    if category_frame.empty or "voucher_id" not in category_frame.columns:
+        return _empty_cashflow_treasury_totals()
+
+    treasury = working.loc[working["is_treasury"], ["voucher_id", "account_code", "debit", "credit"]].copy()
+    if treasury.empty:
+        return _empty_cashflow_treasury_totals()
+
+    treasury["treasury_type"] = treasury["account_code"].map(treasury_type).fillna("Mixed")
+    treasury["treasury_movement"] = treasury["debit"] - treasury["credit"]
+    movement_rows = (
+        treasury.groupby(["voucher_id", "treasury_type"], dropna=False, sort=False)["treasury_movement"]
+        .sum()
+        .to_dict()
+    )
+    profiles: dict[Any, list[tuple[str, float]]] = defaultdict(list)
+    for (voucher_id, label), movement in movement_rows.items():
+        profiles[voucher_id].append((str(label), abs(float(movement or 0.0))))
+
+    allocated: defaultdict[tuple[str, str], dict[str, float]] = defaultdict(
+        lambda: {
+            "bank_amount": 0.0,
+            "cash_amount": 0.0,
+            "mixed_amount": 0.0,
+            "total_amount": 0.0,
+        }
+    )
+    for record in category_frame.to_dict("records"):
+        category = str(record.get("category") or "")
+        period_key = str(record.get("period_key") or "")
+        voucher_id = record.get("voucher_id")
+        amount = float(record.get("amount") or 0.0)
+        weights = {"Bank": 0.0, "Cash": 0.0, "Mixed": 0.0}
+        for label, weight in profiles.get(voucher_id, []):
+            if label in weights:
+                weights[label] += weight
+            else:
+                weights["Mixed"] += weight
+        denominator = sum(weights.values())
+        if denominator <= tolerance:
+            weights = {"Bank": 0.0, "Cash": 0.0, "Mixed": 1.0}
+            denominator = 1.0
+        bucket = allocated[(category, period_key)]
+        bucket["bank_amount"] += amount * weights["Bank"] / denominator
+        bucket["cash_amount"] += amount * weights["Cash"] / denominator
+        bucket["mixed_amount"] += amount * weights["Mixed"] / denominator
+        bucket["total_amount"] += amount
+
+    rows = [
+        {"category": category, "period_key": period_key, **values}
+        for (category, period_key), values in allocated.items()
+    ]
+    return pd.DataFrame(rows, columns=list(CASHFLOW_TREASURY_TOTAL_COLUMNS))
+
+
+def _cashflow_treasury_reconciliation(
+    category_totals: pd.DataFrame,
+    treasury_totals: pd.DataFrame,
+    period_keys: Sequence[str],
+    *,
+    tolerance: float,
+) -> dict[str, Any]:
+    expected: dict[tuple[str, str], float] = {}
+    if isinstance(category_totals, pd.DataFrame) and not category_totals.empty:
+        for category in category_totals.index:
+            for period_key in period_keys:
+                expected[(str(category), str(period_key))] = float(category_totals.loc[category, period_key] or 0.0)
+
+    actual: defaultdict[tuple[str, str], float] = defaultdict(float)
+    if isinstance(treasury_totals, pd.DataFrame) and not treasury_totals.empty:
+        for record in treasury_totals.to_dict("records"):
+            actual[(str(record.get("category") or ""), str(record.get("period_key") or ""))] += float(record.get("total_amount") or 0.0)
+
+    variances = [abs(actual.get(key, 0.0) - value) for key, value in expected.items()]
+    variances.extend(abs(value) for key, value in actual.items() if key not in expected)
+    mixed_amount = float(treasury_totals["mixed_amount"].sum()) if isinstance(treasury_totals, pd.DataFrame) and not treasury_totals.empty else 0.0
+    mixed_row_count = int((treasury_totals["mixed_amount"].abs() > tolerance).sum()) if isinstance(treasury_totals, pd.DataFrame) and not treasury_totals.empty else 0
+    max_abs_variance = max(variances, default=0.0)
+    return {
+        "status": "Matched" if max_abs_variance <= tolerance else "Variance",
+        "max_abs_variance": float(max_abs_variance),
+        "mixed_amount": mixed_amount,
+        "mixed_row_count": mixed_row_count,
+        "allocation_policy": "single treasury type; mixed legs weighted by absolute signed movement; zero-weight cases remain Mixed",
+    }
 
 def _build_cashflow_drilldown_controls(
     category_totals: pd.DataFrame,
@@ -1084,7 +1183,7 @@ def build_cashflow_summary(
         balance_checks = pd.DataFrame(columns=["voucher_id", "treasury_net", "counter_net", "variance", "balanced"])
         transfer_details = _empty_internal_transfer_details()
         customer_payment_details = _empty_customer_payment_details()
-        category_frame = pd.DataFrame(columns=["category", "month", "period_key", "amount"])
+        category_frame = pd.DataFrame(columns=["voucher_id", "category", "month", "period_key", "period_label", "amount"])
         review = pd.DataFrame(columns=["voucher_id", "date", "month", "period_key", "period_label", "account_code", "account_name", "voucher_detail", "debit", "credit", "fallback_category"])
         deductions = pd.DataFrame(columns=["category", "month", "period_key", "period_label", "amount", "account_code", "account_name", "date", "presentation"])
     else:
@@ -1195,13 +1294,13 @@ def build_cashflow_summary(
         has_deduction = contra.groupby("voucher_id", sort=False)["is_deduction"].any().reindex(voucher_order, fill_value=False).to_numpy()
         net_vouchers = voucher_order[has_customer & has_deduction] if presentation == "net" else pd.Index([], dtype=object)
         net_special = contra["voucher_id"].isin(net_vouchers) & (contra["is_customer"] | contra["is_deduction"])
-        category_lines = contra.loc[~net_special, ["category", "month", "period_key", "period_label", "amount"]]
+        category_lines = contra.loc[~net_special, ["voucher_id", "category", "month", "period_key", "period_label", "amount"]]
         if len(net_vouchers):
             special = contra.loc[net_special]
             net_rows = special.loc[special["is_customer"]].drop_duplicates("voucher_id", keep="first")[["voucher_id", "category", "month", "period_key", "period_label"]].copy()
             net_amounts = special.groupby("voucher_id", sort=False)["amount"].sum()
             net_rows["amount"] = net_rows["voucher_id"].map(net_amounts)
-            category_frame = pd.concat([category_lines, net_rows[["category", "month", "period_key", "period_label", "amount"]]], ignore_index=True)
+            category_frame = pd.concat([category_lines, net_rows[["voucher_id", "category", "month", "period_key", "period_label", "amount"]]], ignore_index=True)
         else:
             category_frame = category_lines.copy()
 
@@ -1287,6 +1386,18 @@ def build_cashflow_summary(
         pivot = category_frame.pivot_table(index="category", columns="period_key", values="amount", aggfunc="sum", fill_value=0.0)
         category_totals = _reindex_periods(pivot.sort_index(), period_keys, "category")
         category_totals["Total"] = category_totals.sum(axis=1)
+    treasury_category_totals = _build_cashflow_treasury_totals(
+        category_frame,
+        working,
+        treasury_type,
+        tolerance=tolerance,
+    )
+    treasury_reconciliation = _cashflow_treasury_reconciliation(
+        category_totals,
+        treasury_category_totals,
+        period_keys,
+        tolerance=tolerance,
+    )
     drilldown_controls = (
         _build_cashflow_drilldown_controls(category_totals, rollups, tolerance=tolerance)
         if include_drilldown
@@ -1324,6 +1435,9 @@ def build_cashflow_summary(
         "periods": periods,
         "group_by": grouping,
         "category_totals": category_totals,
+        "treasury_category_totals": treasury_category_totals,
+        "treasury_reconciliation": treasury_reconciliation,
+        "treasury_totals_version": CASHFLOW_TREASURY_TOTALS_VERSION,
         "transfer_details": transfer_details,
         "transfer_reconciliation": transfer_reconciliation,
         "customer_payment_details": customer_payment_details,
