@@ -7220,3 +7220,15 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 1. **TV-4 - Split presentation:** add responsive period-by-period Bank, Cash, and Total columns with reconciliation checks.
 2. **TV-5 - Export and drill-down parity:** align XLSX and detail workflows with the selected treasury view.
 3. **TV-6 - Final validation:** compare performance against the TV-0 baseline and complete regression/reconciliation testing.
+## Cashflows treasury-view split presentation - TV-4 - 2026-10-03
+
+**Scope:** Add Cash and Bank individual presentation for each selected period while preserving accounting signs, zero-row rules, reconciliation, and the fast single-request path.
+
+**Implementation:** Added the Cash and Bank individually selector option and a responsive multi-level summary table with Bank, Cash, Mixed / unresolved, and Total columns per period plus selected-period totals. The display uses the backend split projection and shows its reconciliation status, maximum variance, and mixed-row count. The category column remains sticky within the horizontally scrollable table; XLSX export remains TV-5 scope.
+
+**Verification:** Focused TV-4 syntax, split-view contract, treasury reconciliation, selector, and direct-window checks passed 5/5. The broader reconciliation/performance/direct-window set passed 32 tests with two pre-existing stale UI assertions for legacy Reports Hub text and stylesheet cache version. JavaScript/Python compilation and `git diff --check` passed.
+
+**Next phases:**
+
+1. **TV-5 - Export and drill-down parity:** align XLSX and detail workflows with the selected treasury view.
+2. **TV-6 - Final validation:** compare performance against the TV-0 baseline and complete regression/reconciliation testing.

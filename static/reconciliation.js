@@ -67,7 +67,7 @@
         element('cashflowsGroupingSelect').value = cashflowGroupingPreference;
         syncCashflowTreasuryView();
     }
-    const cashflowTreasuryViewLabels = { combined: 'Cash and Bank Total', bank: 'Bank only', cash: 'Cash only' };
+    const cashflowTreasuryViewLabels = { combined: 'Cash and Bank Total', bank: 'Bank only', cash: 'Cash only', split: 'Cash and Bank individually' };
     function cashflowTreasuryViewLabel(value) { return cashflowTreasuryViewLabels[String(value || 'combined')] || cashflowTreasuryViewLabels.combined; }
     function syncCashflowTreasuryView() {
         const select = element('cashflowsTreasuryViewSelect');
@@ -671,8 +671,135 @@
         if (!preview) return [];
         return Array.isArray(preview.treasury_view_totals) ? preview.treasury_view_totals : (preview.category_totals || []);
     }
+    function cashflowSplitRows(preview) {
+        const periods = cashflowPreviewPeriods(preview);
+        const periodKeys = periods.map(function (period) { return String(period.key); });
+        const grouped = {};
+        cashflowSummaryRows(preview).forEach(function (row) {
+            const category = String(row.category || 'Unlabelled');
+            if (!grouped[category]) grouped[category] = { category: category, periods: {}, bankTotal: 0, cashTotal: 0, mixedTotal: 0, totalRaw: 0 };
+            const periodKey = String(row.period_key || '');
+            if (!periodKey) return;
+            if (!grouped[category].periods[periodKey]) grouped[category].periods[periodKey] = { bank: 0, cash: 0, mixed: 0, total: 0 };
+            const values = grouped[category].periods[periodKey];
+            values.bank += Number(row.bank_amount) || 0;
+            values.cash += Number(row.cash_amount) || 0;
+            values.mixed += Number(row.mixed_amount) || 0;
+            values.total += Number(row.total_amount) || 0;
+        });
+        return Object.keys(grouped).map(function (category) {
+            const row = grouped[category];
+            periodKeys.forEach(function (periodKey) {
+                if (!row.periods[periodKey]) row.periods[periodKey] = { bank: 0, cash: 0, mixed: 0, total: 0 };
+                row.bankTotal += row.periods[periodKey].bank;
+                row.cashTotal += row.periods[periodKey].cash;
+                row.mixedTotal += row.periods[periodKey].mixed;
+                row.totalRaw += row.periods[periodKey].total;
+            });
+            return row;
+        });
+    }
+    function renderCashflowTreasuryReconciliation(preview) {
+        const panel = element('cashflowsTreasuryReconciliation');
+        if (!panel) return;
+        const view = String((preview || {}).treasury_view || cashflowTreasuryView || 'combined');
+        const reconciliation = (preview || {}).treasury_view_reconciliation || {};
+        if (view !== 'split' || !Object.keys(reconciliation).length) {
+            panel.hidden = true;
+            panel.textContent = '';
+            return;
+        }
+        const status = String(reconciliation.status || 'Review required');
+        panel.innerHTML = '<div class="cashflows-transfer-reconciliation-heading"><strong>Split reconciliation</strong><span class="cashflows-transfer-status ' + (status === 'Matched' ? 'is-matched' : 'is-review') + '">' + escapeHtml(status) + '</span></div>'
+            + '<div class="cashflows-transfer-metrics">'
+            + '<div class="cashflows-transfer-metric"><span>Maximum variance</span><strong>' + escapeHtml(formatInternationalAmount(reconciliation.max_abs_variance)) + '</strong></div>'
+            + '<div class="cashflows-transfer-metric"><span>Mixed / unresolved</span><strong>' + escapeHtml(formatInternationalAmount(reconciliation.mixed_amount)) + '</strong></div>'
+            + '<div class="cashflows-transfer-metric"><span>Mixed rows</span><strong>' + escapeHtml(String(reconciliation.mixed_row_count || 0)) + '</strong></div>'
+            + '</div>';
+        panel.hidden = false;
+    }
+    function renderCashflowSplitSummary(preview, table) {
+        const periods = cashflowPreviewPeriods(preview);
+        const periodKeys = periods.map(function (period) { return String(period.key); });
+        const filter = cashflowSummaryFilter.trim().toLowerCase();
+        const filteredRows = cashflowSplitRows(preview).filter(function (row) {
+            return !filter || row.category.toLowerCase().indexOf(filter) >= 0;
+        });
+        const summaryRows = hideCashflowZeroRows ? filteredRows.filter(function (row) {
+            return periodKeys.some(function (periodKey) {
+                const values = row.periods[periodKey] || {};
+                return ['bank', 'cash', 'mixed', 'total'].some(function (field) { return Math.abs(Number(values[field]) || 0) > 0; });
+            });
+        }) : filteredRows;
+        const sectionRows = { Receipts: [], Payments: [] };
+        summaryRows.forEach(function (row) {
+            const total = Number(row.totalRaw) || 0;
+            sectionRows[total < 0 ? 'Payments' : 'Receipts'].push({
+                category: row.category,
+                periods: row.periods,
+                bankTotal: row.bankTotal,
+                cashTotal: row.cashTotal,
+                mixedTotal: row.mixedTotal,
+                totalRaw: total,
+                total: Math.abs(total),
+            });
+        });
+        const subColumns = ['Bank', 'Cash', 'Mixed / unresolved', 'Total'];
+        const columnCount = 1 + ((periods.length + 1) * subColumns.length) + 2;
+        if (!summaryRows.length) {
+            table.innerHTML = '<tbody><tr><td class="cashflows-empty" colspan="' + columnCount + '">No Cash Flow activity was found for this period.</td></tr></tbody>';
+            return;
+        }
+        let html = '<thead><tr class="cashflows-split-header-top"><th rowspan="2">Category</th>';
+        periods.forEach(function (period) { html += '<th colspan="4">' + escapeHtml(period.label) + '</th>'; });
+        html += '<th colspan="4">Selected total</th><th rowspan="2">% of section</th><th rowspan="2">Local total</th></tr><tr class="cashflows-split-header-sub">';
+        periods.concat([{ label: 'Selected total' }]).forEach(function () {
+            subColumns.forEach(function (label) { html += '<th class="cashflows-table-number">' + escapeHtml(label) + '</th>'; });
+        });
+        html += '</tr></thead><tbody>';
+        ['Receipts', 'Payments'].forEach(function (section) {
+            const rows = sectionRows[section];
+            if (!rows.length) return;
+            const basis = rows.reduce(function (sum, row) { return sum + row.total; }, 0);
+            html += '<tr class="cashflows-summary-section-row cashflows-summary-section-' + section.toLowerCase() + '"><th colspan="' + columnCount + '">' + escapeHtml(section) + '</th></tr>';
+            rows.forEach(function (row) {
+                let cells = ['<td class="cashflows-table-text">' + escapeHtml(row.category) + '</td>'];
+                periodKeys.forEach(function (periodKey) {
+                    const values = row.periods[periodKey] || { bank: 0, cash: 0, mixed: 0, total: 0 };
+                    ['bank', 'cash', 'mixed', 'total'].forEach(function (field) {
+                        cells.push('<td class="cashflows-table-number">' + escapeHtml(formatCashflowSectionAmount(values[field], section)) + '</td>');
+                    });
+                });
+                [row.bankTotal, row.cashTotal, row.mixedTotal, row.totalRaw].forEach(function (value) {
+                    cells.push('<td class="cashflows-table-number">' + escapeHtml(formatCashflowSectionAmount(value, section)) + '</td>');
+                });
+                cells.push('<td class="cashflows-table-number">' + escapeHtml(formatPercentage(basis ? row.total / basis : 0)) + '</td>');
+                cells.push('<td class="cashflows-table-number">' + escapeHtml(formatLocalAmount(row.total)) + '</td>');
+                html += '<tr>' + cells.join('') + '</tr>';
+            });
+            const totalFields = { bank: 0, cash: 0, mixed: 0, total: 0 };
+            html += '<tr class="cashflows-summary-total-row"><th>Total ' + escapeHtml(section) + '</th>';
+            periodKeys.forEach(function (periodKey) {
+                const values = { bank: 0, cash: 0, mixed: 0, total: 0 };
+                rows.forEach(function (row) {
+                    const rowValues = row.periods[periodKey] || {};
+                    ['bank', 'cash', 'mixed', 'total'].forEach(function (field) { values[field] += Number(rowValues[field]) || 0; totalFields[field] += Number(rowValues[field]) || 0; });
+                });
+                ['bank', 'cash', 'mixed', 'total'].forEach(function (field) { html += '<td class="cashflows-table-number">' + escapeHtml(formatCashflowSectionAmount(values[field], section)) + '</td>'; });
+            });
+            ['bank', 'cash', 'mixed', 'total'].forEach(function (field) { html += '<td class="cashflows-table-number">' + escapeHtml(field === 'total' ? formatInternationalAmount(basis) : formatCashflowSectionAmount(totalFields[field], section)) + '</td>'; });
+            html += '<td class="cashflows-table-number">100.00%</td><td class="cashflows-table-number">' + escapeHtml(formatLocalAmount(basis)) + '</td></tr>';
+        });
+        table.innerHTML = html + '</tbody>';
+    }
     function renderCashflowSummary(preview) {
         const table = element('cashflowsSummaryTable');
+        const isSplit = String((preview || {}).treasury_view || cashflowTreasuryView || 'combined') === 'split';
+        table.classList.toggle('cashflows-summary-split-table', isSplit);
+        if (isSplit) {
+            renderCashflowSplitSummary(preview, table);
+            return;
+        }
         const periods = cashflowPreviewPeriods(preview);
         const periodKeys = periods.map(function (period) { return period.key; });
         const rawRows = cashflowSummaryRows(preview);
@@ -721,7 +848,6 @@
             html += '<td>' + escapeHtml(formatInternationalAmount(basis)) + '</td><td>100.00%</td><td>' + escapeHtml(formatLocalAmount(basis)) + '</td></tr>';
         });
         table.innerHTML = html + '</tbody>';
-
     }
     async function openCashflowDrilldown() {
         const button = element('cashflowsLedgerDrilldownButton');
@@ -766,6 +892,7 @@
         renderCategoryOptions(summaryRows.map(function (row) { return row.category; }), true);
         renderCashflowDrilldownCategoryOptions(summaryRows);
         element('cashflowsReceiptMode').textContent = cashflowTreasuryViewLabel(cashflowTreasuryView) + ' · Receipt presentation: ' + String(preview.receipt_presentation || 'net').toUpperCase();
+        renderCashflowTreasuryReconciliation(preview);
         const source = result.source || {};
         const exportButton = element('cashflowsExportButton');
         if (exportButton) exportButton.hidden = !source.ready || !(preview.periods || []).length;

@@ -14,6 +14,8 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert "cashflowsTransactionsPrevious" in html
     assert "cashflowsTransactionsNext" in html
     assert "cashflowsLedgerDrilldownButton" in html
+    assert "cashflowsTreasuryViewSelect" in html
+    assert "cashflowsTreasuryReconciliation" in html
     assert "cashflowsLedgerDrilldownSection" in html
     assert "cashflowsDrilldownTreasury" in html
     assert "cashflowsDrilldownCategoryOptions" in html

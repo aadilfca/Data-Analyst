@@ -728,6 +728,7 @@ def test_cashflow_treasury_view_selector_is_wired_to_preview():
     assert "value='combined'" in html
     assert "value='bank'" in html
     assert "value='cash'" in html
+    assert "value='split'" in html
     assert "treasury_view: cashflowTreasuryView" in javascript
     assert "cashflowSummaryRows(preview)" in javascript
     assert "cashflowTreasuryViewLabel(cashflowTreasuryView)" in javascript
@@ -745,3 +746,14 @@ def test_cashflow_preview_endpoint_passes_selected_treasury_view():
 
     assert response == {"ok": True}
     assert build.call_args.kwargs["treasury_view"] == "bank"
+
+def test_cashflow_split_view_preserves_backend_reconciliation_contract():
+    html = Path(__file__).resolve().parents[1].joinpath("static", "reconciliation.html").read_text(encoding="utf-8")
+    javascript = Path(__file__).resolve().parents[1].joinpath("static", "reconciliation.js").read_text(encoding="utf-8")
+    styles = Path(__file__).resolve().parents[1].joinpath("static", "style.css").read_text(encoding="utf-8")
+
+    assert "cashflowsTreasuryReconciliation" in html
+    assert "renderCashflowSplitSummary" in javascript
+    assert "Mixed / unresolved" in javascript
+    assert "cashflows-summary-split-table" in styles
+    assert "treasury_view_reconciliation" in javascript
