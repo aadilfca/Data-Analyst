@@ -7122,3 +7122,18 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Implementation:** Open ledger drill-down now sits immediately beside Load summary. Hide zero rows and Export XLSX remain grouped at the far right, with responsive wrapping preserved.
 
 **Verification:** DOM-order regression coverage and existing report wiring checks passed. No API, cache, summary, ledger, or accounting logic changed.
+
+## Cashflows drill-down shortcut actions - Phase 6C - 2026-10-02
+
+**Scope:** Mirror the existing Cashflows lazy-detail actions inside the ledger drill-down without creating a second data-fetch or accounting implementation.
+
+**Implementation:** Added shortcuts for internal transfers, customer payments, customer deductions, review-required items, and classified transactions. Shortcuts delegate to the existing handlers, mirror their state, and keep the synchronization helper at top-level scope for every call site. The drill-down now presents its ledger table and pagination first, shortcuts below them, and the existing detail-results container below the shortcuts while open.
+
+**Verification:** JavaScript syntax, git diff check, focused tests, and the full reconciliation-report module passed: 33 tests. No API, cache, ledger, accounting, or fast-fetching path changed.
+
+**Pending phases:**
+
+1. **Phase 6D - Universal detail search:** add one long search field to each loaded detail report and search every visible column.
+2. **Phase 6E - Vendor payments:** add the reconciled vendor-payment schedule with Bank/Cash separation and summary parity.
+3. **Phase 6F - Remaining business-detail schedules:** extend the same canonical, reconciled pattern to categories still needing dedicated detail reports.
+4. **Phase 7 - Browser regression and release closeout:** verify controls, loading/abort behavior, pagination, cache behavior, performance, exports, and final user documentation.

@@ -1309,6 +1309,27 @@ def test_reports_view_and_dashboard_entry_are_wired():
     export_index = html.index("id='cashflowsExportButton'")
     assert load_summary_index < drilldown_index < actions_index
     assert actions_index < hide_zero_index < export_index
+    assert "cashflowsDrilldownShortcuts" in html
+    assert "cashflowsDrilldownLoadTransfersButton" in html
+    assert "cashflowsDrilldownLoadCustomerPaymentsButton" in html
+    assert "cashflowsDrilldownLoadDeductionsButton" in html
+    assert "cashflowsDrilldownLoadReviewButton" in html
+    assert "cashflowsDrilldownViewTransactionsButton" in html
+    assert "data-cashflow-child-shortcut" in html
+    assert "cashflowChildShortcutTargets" in javascript
+    assert "syncCashflowDrilldownShortcuts" in javascript
+    assert javascript.index("function syncCashflowDrilldownShortcuts") < javascript.index("function resetLazyCashflowSections")
+    assert "cashflowsDetailResults" in html
+    assert "cashflowsMainDetailAnchor" in html
+    assert "cashflowsDrilldownDetailHost" in html
+    assert "function moveCashflowDetailResults" in javascript
+    assert "moveCashflowDetailResults(open)" in javascript
+    ledger_table_index = html.index("id='cashflowsLedgerDrilldownTable'")
+    ledger_pagination_index = html.index("id='cashflowsDrilldownPrevious'")
+    shortcut_index = html.index("id='cashflowsDrilldownShortcuts'")
+    detail_host_index = html.index("id='cashflowsDrilldownDetailHost'")
+    assert ledger_table_index < ledger_pagination_index < shortcut_index < detail_host_index
+    assert ".cashflows-drilldown-shortcuts" in stylesheet
 
 
 def test_financial_statement_summary_aggregates_central_categories_and_flags_unmapped():

@@ -358,6 +358,29 @@
             return '<option value="' + escapeHtml(category) + '"></option>';
         }).join('');
     }
+    function syncCashflowDrilldownShortcuts() {
+        const childMappings = {
+            transfers: ['cashflowsLoadTransfersButton', 'cashflowsDrilldownLoadTransfersButton'],
+            customer_payments: ['cashflowsLoadCustomerPaymentsButton', 'cashflowsDrilldownLoadCustomerPaymentsButton'],
+            deductions: ['cashflowsLoadDeductionsButton', 'cashflowsDrilldownLoadDeductionsButton'],
+            review: ['cashflowsLoadReviewButton', 'cashflowsDrilldownLoadReviewButton'],
+        };
+        Object.keys(childMappings).forEach(function (name) {
+            const source = element(childMappings[name][0]);
+            const shortcut = element(childMappings[name][1]);
+            if (!source || !shortcut) return;
+            shortcut.disabled = source.disabled;
+            shortcut.hidden = source.hidden;
+            shortcut.textContent = source.textContent;
+        });
+        const source = element('cashflowsViewTransactionsButton');
+        const shortcut = element('cashflowsDrilldownViewTransactionsButton');
+        if (source && shortcut) {
+            shortcut.disabled = source.disabled;
+            shortcut.hidden = source.hidden;
+            shortcut.textContent = source.textContent;
+        }
+    }
     function resetLazyCashflowSections() {
         cashflowChildGeneration += 1;
         cashflowChildRequest = null;
@@ -366,6 +389,7 @@
             element(id).disabled = false;
         });
         cashflowChildPreviews = {};
+        syncCashflowDrilldownShortcuts();
     }
     function setActiveCashflowWindow(windowKey) {
         activeCashflowWindow = windowKey;
@@ -462,6 +486,7 @@
     function setCashflowDrilldownMode(open) {
         const section = element('cashflowsLedgerDrilldownSection');
         if (!section) return;
+        moveCashflowDetailResults(open);
         const summaryTable = element('cashflowsSummaryTable');
         const summarySection = summaryTable ? summaryTable.closest('.cashflows-report-section') : null;
         if (summarySection) summarySection.hidden = open;
@@ -473,6 +498,17 @@
         section.hidden = !open;
         activeCashflowWindow = open ? 'ledger_drilldown' : null;
         if (!open) setActiveCashflowWindow(null);
+    }
+    function moveCashflowDetailResults(open) {
+        const detailResults = element('cashflowsDetailResults');
+        const anchor = element('cashflowsMainDetailAnchor');
+        const drilldownHost = element('cashflowsDrilldownDetailHost');
+        if (!detailResults || !anchor || !drilldownHost) return;
+        if (open) {
+            drilldownHost.appendChild(detailResults);
+        } else if (anchor.parentNode) {
+            anchor.parentNode.insertBefore(detailResults, anchor.nextSibling);
+        }
     }
     function renderCashflowDrilldownControls(result) {
         const panel = element('cashflowsLedgerDrilldownControls');
@@ -691,6 +727,7 @@
             transactionsSection.hidden = true;
             viewTransactionsButton.textContent = 'View classified transactions';
         }
+        syncCashflowDrilldownShortcuts();
     }
     function showCashflowResultNotice(result) {
         const preview = result.preview || {};
@@ -925,11 +962,13 @@
             setActiveCashflowWindow('transactions');
             section.hidden = false;
             button.textContent = 'Hide classified transactions';
+            syncCashflowDrilldownShortcuts();
             await loadClassifiedTransactions(true);
         } else {
             setActiveCashflowWindow(null);
             button.textContent = 'View classified transactions';
         }
+        syncCashflowDrilldownShortcuts();
     }
     function loadCashflowChildren() {
         if (cashflowChildRequest) return cashflowChildRequest;
@@ -947,6 +986,7 @@
                 button.textContent = 'Loading…';
             }
         });
+        syncCashflowDrilldownShortcuts();
         const params = new URLSearchParams({
             client_id: String(clientId),
             period_start: start,
@@ -966,6 +1006,7 @@
                         button.textContent = labels[name] + ' (loaded)';
                     }
                 });
+                syncCashflowDrilldownShortcuts();
                 return preview;
             })
             .catch(function (error) {
@@ -978,6 +1019,7 @@
                         }
                     });
                     showCashflowToast(error.message, true);
+                    syncCashflowDrilldownShortcuts();
                 }
                 return null;
             })
@@ -1136,6 +1178,24 @@
         element('cashflowsLoadCustomerPaymentsButton').addEventListener('click', function () { loadCashflowChild('customer_payments'); });
         element('cashflowsLoadDeductionsButton').addEventListener('click', function () { loadCashflowChild('deductions'); });
         element('cashflowsLoadReviewButton').addEventListener('click', function () { loadCashflowChild('review'); });
+        const cashflowChildShortcutTargets = {
+            transfers: 'cashflowsLoadTransfersButton',
+            customer_payments: 'cashflowsLoadCustomerPaymentsButton',
+            deductions: 'cashflowsLoadDeductionsButton',
+            review: 'cashflowsLoadReviewButton',
+        };
+        document.querySelectorAll('[data-cashflow-child-shortcut]').forEach(function (shortcut) {
+            shortcut.addEventListener('click', function () {
+                const source = element(cashflowChildShortcutTargets[shortcut.dataset.cashflowChildShortcut]);
+                if (source && !source.disabled) source.click();
+            });
+        });
+        document.querySelectorAll('[data-cashflow-transactions-shortcut]').forEach(function (shortcut) {
+            shortcut.addEventListener('click', function () {
+                const source = element('cashflowsViewTransactionsButton');
+                if (source && !source.disabled) source.click();
+            });
+        });
         element('cashflowsTransactionsApply').addEventListener('click', function () { loadClassifiedTransactions(true); });
         element('cashflowsTransactionsClear').addEventListener('click', function () {
             element('cashflowsTransactionsSearch').value = '';
