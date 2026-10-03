@@ -29,6 +29,10 @@
     let cashflowDrilldownGeneration = 0;
     let lastCashflowDrilldownResult = null;
     const cashflowDrilldownLimit = 50;
+    let cashflowInlineLedgerCache = new Map();
+    let cashflowInlineLedgerControllers = new Map();
+    let cashflowInlineLedgerGeneration = 0;
+    const cashflowInlineLedgerLimit = 200;
     const cashflowWindowSections = {
         transfers: 'cashflowsTransfersSection',
         customer_payments: 'cashflowsCustomerPaymentsSection',
@@ -622,6 +626,157 @@
         element('cashflowsDrilldownPageInfo').textContent = 'Page ' + String(page) + ' of ' + String(pageCount);
         syncCashflowDrilldownPagination(result);
     }
+    function cashflowInlineLedgerKey(section, category) {
+        return [cashflowSelection.start, cashflowSelection.end, cashflowSelection.groupBy || 'month', cashflowTreasuryView, section, category].join('|');
+    }
+    function resetCashflowInlineLedgerState() {
+        cashflowInlineLedgerGeneration += 1;
+        cashflowInlineLedgerControllers.forEach(function (controller) { controller.abort(); });
+        cashflowInlineLedgerControllers = new Map();
+        cashflowInlineLedgerCache = new Map();
+    }
+    function cashflowInlineLedgerTreasuryBucket(value) {
+        const type = String(value || '').toLowerCase();
+        if (type.includes('bank') && type.includes('cash')) return 'mixed';
+        if (type.includes('bank')) return 'bank';
+        if (type.includes('cash')) return 'cash';
+        return 'mixed';
+    }
+    function cashflowInlineLedgerRows(rows, periods, isSplit) {
+        const periodKeys = periods.map(function (period) { return String(period.key); });
+        const grouped = new Map();
+        (rows || []).forEach(function (row) {
+            const accountCode = String(row.account_code || '').trim();
+            const accountName = String(row.account_name || '').trim();
+            const treasuryType = String(row.treasury_type || '').trim();
+            const key = [accountCode, accountName, treasuryType].join('|');
+            if (!grouped.has(key)) grouped.set(key, { accountCode: accountCode, accountName: accountName, treasuryType: treasuryType, values: {}, splitPeriods: {}, total: 0 });
+            const item = grouped.get(key);
+            const periodKey = String(row.period_key || '');
+            const amount = Number(row.amount) || 0;
+            if (!periodKeys.includes(periodKey)) return;
+            item.total += amount;
+            if (isSplit) {
+                if (!item.splitPeriods[periodKey]) item.splitPeriods[periodKey] = { bank: 0, cash: 0, mixed: 0, total: 0 };
+                const bucket = cashflowInlineLedgerTreasuryBucket(treasuryType);
+                item.splitPeriods[periodKey][bucket] += amount;
+                item.splitPeriods[periodKey].total += amount;
+            } else item.values[periodKey] = (item.values[periodKey] || 0) + amount;
+        });
+        return Array.from(grouped.values()).sort(function (left, right) {
+            const leftLabel = (left.accountName || left.accountCode || '').toLowerCase();
+            const rightLabel = (right.accountName || right.accountCode || '').toLowerCase();
+            return leftLabel.localeCompare(rightLabel) || left.accountCode.localeCompare(right.accountCode);
+        });
+    }
+    function cashflowInlineLedgerLabel(item) {
+        const account = [item.accountName, item.accountCode].filter(Boolean).join(' / ') || 'Unlabelled ledger';
+        return item.treasuryType ? account + ' / ' + item.treasuryType : account;
+    }
+    function cashflowInlineLedgerHostMarkup(category, section, colspan) {
+        return '<tr class=cashflows-inline-ledger-host-row><td colspan=' + String(colspan) + '><div class=cashflows-inline-ledger-host>Loading ledgers...</div></td></tr>';
+    }
+    function renderCashflowInlineLedgerHost(host, payload, section, periods, isSplit) {
+        const rows = cashflowInlineLedgerRows(payload.rows || [], periods, isSplit);
+        const periodKeys = periods.map(function (period) { return String(period.key); });
+        if (!rows.length) {
+            host.querySelector('.cashflows-inline-ledger-host').innerHTML = '<span class=cashflows-inline-ledger-empty>No ledgers found for this category.</span>';
+            return;
+        }
+        const columns = ['Ledger'].concat(periods.map(function (period) { return period.label; })).concat(['Total', '% of section', 'Local total']);
+        let html = '<table class=cashflows-inline-ledger-table><thead><tr>' + columns.map(function (label, index) {
+            return '<th class=' + (index ? 'cashflows-table-number' : 'cashflows-table-text') + '>' + escapeHtml(label) + '</th>';
+        }).join('') + '</tr></thead><tbody>';
+        rows.forEach(function (row) {
+            const cells = ['<td class=cashflows-table-text><span class=cashflows-inline-ledger-indent>-&gt;</span>' + escapeHtml(cashflowInlineLedgerLabel(row)) + '</td>'];
+            periodKeys.forEach(function (periodKey) {
+                const value = isSplit ? ((row.splitPeriods[periodKey] || {}).total || 0) : (row.values[periodKey] || 0);
+                cells.push('<td class=cashflows-table-number>' + escapeHtml(formatCashflowSectionAmount(value, section)) + '</td>');
+            });
+            cells.push('<td class=cashflows-table-number>' + escapeHtml(formatCashflowSectionAmount(row.total, section)) + '</td>');
+            cells.push('<td class=cashflows-table-number>-</td>');
+            cells.push('<td class=cashflows-table-number>' + escapeHtml(formatLocalAmount(Math.abs(row.total))) + '</td>');
+            html += '<tr class=cashflows-inline-ledger-row>' + cells.join('') + '</tr>';
+        });
+        html += '</tbody></table>';
+        const totalRows = Number(payload.total_rows) || rows.length;
+        const truncationNote = totalRows > rows.length
+            ? '<div class=cashflows-inline-ledger-note>Showing ' + String(rows.length) + ' of ' + String(totalRows) + ' ledger roll-ups. Use the full ledger drill-down for the remaining rows.</div>'
+            : '';
+        host.querySelector('.cashflows-inline-ledger-host').innerHTML = html + truncationNote;
+    }
+    function cashflowInlineCategoryButton(category, section) {
+        return '<button type=button class=cashflows-inline-expand data-cashflow-inline-category=' + encodeURIComponent(category) + ' data-cashflow-inline-section=' + section + ' aria-expanded=false><span class=cashflows-inline-expand-icon aria-hidden=true>></span><span>' + escapeHtml(category) + '</span></button>';
+    }
+    function cashflowInlineCategoryCell(category, section) {
+        return cashflowInlineCategoryButton(category, section);
+    }
+    function loadCashflowInlineLedgers(button, host, category, section, periods, isSplit) {
+        const key = cashflowInlineLedgerKey(section, category);
+        const cached = cashflowInlineLedgerCache.get(key);
+        if (cached) {
+            renderCashflowInlineLedgerHost(host, cached, section, periods, isSplit);
+            button.disabled = false;
+            return Promise.resolve(cached);
+        }
+        const controller = new AbortController();
+        const generation = cashflowInlineLedgerGeneration;
+        cashflowInlineLedgerControllers.set(key, controller);
+        const params = new URLSearchParams({
+            client_id: String(clientId),
+            period_start: cashflowSelection.start,
+            period_end: cashflowSelection.end,
+            group_by: cashflowSelection.groupBy || 'month',
+            treasury_view: cashflowTreasuryView,
+            category: category,
+            page: '1',
+            limit: String(cashflowInlineLedgerLimit),
+        });
+        return api('/api/reconciliation/cashflows/drilldown?' + params.toString(), { signal: controller.signal })
+            .then(function (payload) {
+                if (generation !== cashflowInlineLedgerGeneration) return null;
+                cashflowInlineLedgerCache.set(key, payload);
+                renderCashflowInlineLedgerHost(host, payload, section, periods, isSplit);
+                return payload;
+            })
+            .catch(function (error) {
+                if (error.name === 'AbortError') return null;
+                if (generation === cashflowInlineLedgerGeneration && host.isConnected) {
+                    host.querySelector('.cashflows-inline-ledger-host').innerHTML = '<span class=cashflows-inline-ledger-error>Unable to load ledgers: ' + escapeHtml(error.message) + '</span>';
+                }
+                return null;
+            })
+            .finally(function () {
+                if (cashflowInlineLedgerControllers.get(key) === controller) cashflowInlineLedgerControllers.delete(key);
+                if (button.isConnected) button.disabled = false;
+            });
+    }
+    function toggleCashflowInlineCategory(button) {
+        const category = decodeURIComponent(button.dataset.cashflowInlineCategory || '');
+        const section = button.dataset.cashflowInlineSection || 'Receipts';
+        const row = button.closest('tr');
+        const table = element('cashflowsSummaryTable');
+        if (!row || !table || !category) return;
+        const existingHost = row.nextElementSibling && row.nextElementSibling.classList.contains('cashflows-inline-ledger-host-row') ? row.nextElementSibling : null;
+        if (existingHost) {
+            existingHost.remove();
+            button.setAttribute('aria-expanded', 'false');
+            button.querySelector('.cashflows-inline-expand-icon').textContent = '>';
+            return;
+        }
+        const preview = (lastCashflowsResult || {}).preview || {};
+        const periods = cashflowPreviewPeriods(preview);
+        const isSplit = String(preview.treasury_view || cashflowTreasuryView || 'combined') === 'split';
+        const colspan = isSplit ? 1 + ((periods.length + 1) * 4) + 2 : periods.length + 4;
+        const template = document.createElement('tbody');
+        template.innerHTML = cashflowInlineLedgerHostMarkup(category, section, colspan);
+        const host = template.firstElementChild;
+        row.parentNode.insertBefore(host, row.nextSibling);
+        button.setAttribute('aria-expanded', 'true');
+        button.querySelector('.cashflows-inline-expand-icon').textContent = 'v';
+        button.disabled = true;
+        loadCashflowInlineLedgers(button, host, category, section, periods, isSplit);
+    }
     function loadCashflowDrilldown(resetPage) {
         const start = element('cashflowsPeriodStart').value;
         const end = element('cashflowsPeriodEnd').value;
@@ -769,6 +924,7 @@
             html += '<tr class="cashflows-summary-section-row cashflows-summary-section-' + section.toLowerCase() + '"><th colspan="' + columnCount + '">' + escapeHtml(section) + '</th></tr>';
             rows.forEach(function (row) {
                 let cells = ['<td class="cashflows-table-text">' + escapeHtml(row.category) + '</td>'];
+                cells[0] = '<td class=cashflows-table-text>' + cashflowInlineCategoryCell(row.category, section) + '</td>';
                 periodKeys.forEach(function (periodKey) {
                     const values = row.periods[periodKey] || { bank: 0, cash: 0, mixed: 0, total: 0 };
                     ['bank', 'cash', 'mixed', 'total'].forEach(function (field) {
@@ -841,6 +997,7 @@
             html += '<tr class="cashflows-summary-section-row cashflows-summary-section-' + section.toLowerCase() + '"><th colspan="' + columns.length + '">' + escapeHtml(section) + '</th></tr>';
             rows.forEach(function (row) {
                 const cells = [escapeHtml(row.category)];
+                cells[0] = cashflowInlineCategoryCell(row.category, section);
                 row.values.forEach(function (value) { cells.push(escapeHtml(formatCashflowSectionAmount(value, section))); });
                 cells.push(escapeHtml(formatInternationalAmount(row.total)));
                 cells.push(escapeHtml(formatPercentage(basis ? row.total / basis : 0)));
@@ -891,6 +1048,7 @@
     function renderResult(result) {
         lastCashflowsResult = result;
         const preview = result.preview || {};
+        resetCashflowInlineLedgerState();
         closeCashflowDrilldown();
         cashflowTreasuryView = String(preview.treasury_view || cashflowTreasuryView || 'combined');
         syncCashflowTreasuryView();
@@ -988,6 +1146,7 @@
 
     async function generateCashflows(event) {
         if (event) event.preventDefault();
+        resetCashflowInlineLedgerState();
         const exportButton = element('cashflowsExportButton');
         if (exportButton) exportButton.hidden = true;
         cashflowSummaryFilter = '';
@@ -1370,6 +1529,10 @@
             element('cashflowsSummaryFilter').value = '';
             element('cashflowsSummaryClear').hidden = true;
             if (lastCashflowsResult) renderCashflowSummary(lastCashflowsResult.preview || {});
+        });
+        element('cashflowsSummaryTable').addEventListener('click', function (event) {
+            const button = event.target.closest('[data-cashflow-inline-category]');
+            if (button) toggleCashflowInlineCategory(button);
         });
         element('cashflowsViewTransactionsButton').addEventListener('click', toggleClassifiedTransactions);
         element('cashflowsHideZeroRowsButton').addEventListener('click', toggleCashflowZeroRows);

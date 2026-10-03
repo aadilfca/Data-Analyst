@@ -1,4 +1,16 @@
 # Changelog Archive
+## Cashflows inline category-to-ledger expansion - Phase 2 continuation - 2026-10-03
+
+**Scope:** Bring category-to-ledger expansion into the existing Cashflows summary while preserving summary values, cached fetching, formatting, and the separate drill-down compatibility path.
+
+**Implementation:** Added delegated category expand/collapse controls in `static/reconciliation.js`. Category expansion reuses the paginated drill-down endpoint with a client cache, request cancellation, stale-response protection, and loading/empty/error states. Ledger rows retain section-aware signs, local formatting, and a dash percentage. Added scoped styles and static contract coverage. Fixed cached re-expansion so the button is re-enabled and can collapse on the second interaction.
+
+**Verification:** User-confirmed local browser testing. JavaScript syntax passed; focused UI checks passed 2/2; broader Cashflows, aggregation, and UI checks passed 33 tests; XLSX regressions passed 6/6; `git diff --check` passed. Existing stale stylesheet-version assertion remains outside this change.
+
+**Files:** `static/reconciliation.js`, `static/style.css`, `tests/test_cashflows_direct_window_ui.py`.
+
+**Next:** Phase 3 - inline ledger-to-transaction drill-down, with ledger-specific transaction retrieval and controlled pagination.
+
 ## Cashflows XLSX drill-down parity - Phase 5 - 2026-10-02
 
 **Scope:** Make XLSX output reconcile with the visible Cashflows summary and filtered ledger drill-down, including period, category, search, Cash/Bank, and zero-row selections.

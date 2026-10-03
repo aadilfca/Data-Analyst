@@ -10322,6 +10322,20 @@ body.cashflows-processing-open { overflow: hidden; }
 .cashflows-summary-section-row th { background: #e8f3e8; color: #416b4c; border-top: 1px solid #c3dec8; border-bottom: 1px solid #b8d8be; text-align: left; }
 .cashflows-summary-total-row th, .cashflows-summary-total-row td { background: #e8eef7; color: #0b2e59; font-weight: 800; border-top: 1px solid #1f4e78; border-bottom: 1px solid #c8d5e6; }
 .cashflows-summary-total-row:hover th, .cashflows-summary-total-row:hover td { background: #e8eef7; color: #0b2e59; }
+.cashflows-inline-expand { display: inline-flex; align-items: center; gap: 7px; border: 0; padding: 0; background: transparent; color: #24536e; font: inherit; text-align: left; cursor: pointer; }
+.cashflows-inline-expand:hover, .cashflows-inline-expand:focus { color: #1769aa; text-decoration: underline; outline: none; }
+.cashflows-inline-expand:disabled { cursor: wait; opacity: .7; }
+.cashflows-inline-expand-icon { display: inline-grid; place-items: center; width: 16px; height: 16px; border: 1px solid #b8c9d6; border-radius: 4px; background: #f8fbfd; color: #1769aa; font-size: 11px; font-weight: 800; line-height: 1; }
+.cashflows-inline-ledger-host-row > td { padding: 0 !important; background: #f8fbfd; }
+.cashflows-inline-ledger-host { padding: 10px 14px 12px 34px; border-top: 1px solid #dbe4ea; border-bottom: 1px solid #dbe4ea; }
+.cashflows-inline-ledger-loading, .cashflows-inline-ledger-empty, .cashflows-inline-ledger-error, .cashflows-inline-ledger-note { color: #64748b; font-size: 11px; }
+.cashflows-inline-ledger-error { color: #9b2c2c; }
+.cashflows-inline-ledger-note { margin-top: 8px; font-style: italic; }
+.cashflows-inline-ledger-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.cashflows-inline-ledger-table th, .cashflows-inline-ledger-table td { padding: 6px 8px; border-bottom: 1px solid #e6edf2; white-space: nowrap; }
+.cashflows-inline-ledger-table th { background: #eef5f8; color: #526675; font-size: 10px; text-transform: uppercase; }
+.cashflows-inline-ledger-table .cashflows-inline-ledger-row td { background: #f8fbfd; color: #334e60; }
+.cashflows-inline-ledger-indent { display: inline-block; width: 20px; color: #94a3b8; font-weight: 800; }
 .cashflows-summary-split-table { min-width: 1120px; }
 .cashflows-summary-split-table thead tr:first-child th { background: #e6eef7; color: #0b2e59; text-align: center; }
 .cashflows-summary-split-table thead tr:nth-child(2) th { background: #f4f8fa; text-align: right; }

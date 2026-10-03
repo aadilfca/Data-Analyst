@@ -108,7 +108,25 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert ".cashflows-processing" in styles
     assert ".cashflows-processing-panel" in styles
 
+def test_cashflows_summary_contains_inline_category_ledger_contract():
+    inline_html = (ROOT / 'static' / 'reconciliation.html').read_text(encoding='utf-8')
+    inline_script = (ROOT / 'static' / 'reconciliation.js').read_text(encoding='utf-8')
+    inline_styles = (ROOT / 'static' / 'style.css').read_text(encoding='utf-8')
+    assert 'cashflowsSummaryTable' in inline_html
+    assert 'cashflows-inline-expand' in inline_script
+    assert 'cashflowInlineLedgerCache' in inline_script
+    assert 'cashflowInlineLedgerLimit' in inline_script
+    assert 'data-cashflow-inline-category' in inline_script
+    assert 'cashflows-inline-ledger-host' in inline_script
+    assert 'category: category' in inline_script
+    assert 'button.disabled = false' in inline_script
+    assert 'cashflows-inline-ledger-row' in inline_script
+    assert 'cashflows-inline-ledger-host' in inline_styles
+    assert 'cashflows-inline-ledger-loading' in inline_styles
+    assert 'cashflows-inline-ledger-error' in inline_styles
+
 def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
+
     settings_html = (ROOT / "static" / "settings.html").read_text(encoding="utf-8")
     settings_script = (ROOT / "static" / "settings.js").read_text(encoding="utf-8")
     reconciliation_html = (ROOT / "static" / "reconciliation.html").read_text(encoding="utf-8")
