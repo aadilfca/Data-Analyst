@@ -7320,3 +7320,11 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Implementation:** Added a non-split summary selector that right-aligns period, total, percentage, and local-total cells with tabular numerals; category labels and split summaries remain unchanged. Added a static regression assertion.
 
 **Verification:** Focused direct-window tests passed 2/2; JavaScript syntax and `git diff --check` passed. No backend or source data changed.
+
+## Cashflows inline ledger baseline alignment - 2026-10-04
+
+**Scope:** Finalize the category expansion presentation so inline ledger rows align exactly with the main Cashflows summary while preserving category expansion and transaction drill-down behavior.
+
+**Implementation:** Replaced the nested ledger table with rows in the shared summary grid, removed the duplicate ledger header and roll-up note, removed the visible ledger arrow/plus control, and made ledger labels wrap naturally. Category labels now remain clickable expand/collapse controls without a decorative offset. Reconciliation stylesheet cache-busting advanced from `v=38` to `v=39`.
+
+**Verification:** Focused direct-window tests passed 2/2; JavaScript syntax and `git diff --check` passed. No backend or Cashflows calculation changed.

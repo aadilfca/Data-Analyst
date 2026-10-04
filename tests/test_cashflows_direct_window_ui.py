@@ -165,8 +165,20 @@ def test_cashflows_summary_contains_inline_category_ledger_contract():
     assert 'button.disabled = false' in inline_script
     assert 'cashflows-inline-ledger-row' in inline_script
     assert 'cashflows-inline-ledger-host' in inline_styles
-    assert 'cashflows-inline-ledger-loading' in inline_styles
     assert 'cashflows-inline-ledger-error' in inline_styles
+    assert 'cashflowInlineLedgerRowMarkup' in inline_script
+    assert 'data-cashflow-inline-ledger-group' in inline_script
+    assert 'cashflows-inline-ledger-link' in inline_script
+    assert 'cashflows-inline-ledger-link' in inline_styles
+    assert 'cashflows-inline-expand-icon' not in inline_script
+    assert 'cashflows-inline-expand-icon' not in inline_styles
+    assert 'style.css?v=39' in inline_html
+    assert 'cashflows-inline-ledger-row td:first-child' in inline_styles
+    assert 'cashflows-inline-ledger-row td:not(:first-child)' in inline_styles
+    assert 'cashflows-inline-ledger-table' not in inline_script
+    assert 'cashflows-inline-ledger-table' not in inline_styles
+    assert 'cashflows-inline-ledger-note' not in inline_script
+    assert 'cashflows-inline-ledger-indent' not in inline_script
     assert 'cashflows-inline-transaction-table' in inline_styles
     assert 'cashflows-inline-transaction-drawer' in inline_styles
     assert 'cashflows-inline-transaction-dialog' in inline_styles
