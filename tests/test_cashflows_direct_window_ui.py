@@ -135,6 +135,9 @@ def test_cashflows_summary_contains_inline_category_ledger_contract():
     assert 'Transaction Date' in inline_script
     assert 'Voucher ID' in inline_script
     assert 'Period selection pending - click Apply.' in inline_script
+    assert 'Showing the selected transaction columns.' not in inline_script
+    assert "cashflowsInlineTransactionStatus" in inline_script
+    assert 'hidden = true' in inline_script
     assert 'cashflowsInlineTransactionContext' not in inline_script
     assert 'Cashflows transaction detail' not in inline_script
     assert 'Ledger transactions' not in inline_script
@@ -148,8 +151,13 @@ def test_cashflows_summary_contains_inline_category_ledger_contract():
     assert 'cashflows-inline-transaction-drawer' in inline_styles
     assert 'cashflows-inline-transaction-dialog' in inline_styles
     assert 'cashflows-inline-transaction-table-wrap' in inline_styles
+    assert '.cashflows-inline-transaction-table-wrap { position: relative; isolation: isolate; flex: 1 1 auto; overflow: auto; padding: 0 22px 16px; }' in inline_styles
+    assert '.cashflows-inline-transaction-table thead' in inline_styles
     assert 'cashflows-inline-transaction-context' in inline_styles
     assert 'cashflows-inline-transaction-table thead' in inline_styles
+    assert '.cashflows-inline-transaction-table { width: 100%; min-width: 0;' in inline_styles
+    assert '.cashflows-inline-transaction-table th:nth-child(2)' in inline_styles
+    assert 'white-space: normal; overflow-wrap: anywhere; word-break: break-word;' in inline_styles
 
 def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
 

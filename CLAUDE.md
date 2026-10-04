@@ -250,6 +250,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-10-03: Cashflows added inline category-to-ledger expansion with cached loading and fixed cached re-expansion collapse; frontend regression coverage updated.
 - 2026-10-03: Cashflows drawer now uses compact context, six transaction columns, Apply-only filters, voucher-level Cash/Bank matching, and summary-aligned fallback category filtering.
 - 2026-10-04: Cashflows ledger drill-down now requires every voucher to hit an assigned Cash/Bank account; valid Cash/Bank JVs remain eligible while non-treasury JVs are excluded.
+- 2026-10-04: Cashflows transaction drawer now fits six columns within the modal, wraps only Voucher Detail, keeps the sticky header clear, and hides redundant success status space.
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
 - Findings from a Code Health Review session go to `KNOWN_ISSUES.md`, not the Status log — the Status log records changes made, that file records issues found

@@ -7285,3 +7285,12 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Verification:** Focused Cashflows classification tests passed 9/9; Python compilation passed; the isolated July HTY Younas check returned 2 Combined rows, 1 Cash row, and 1 Bank row with the non-treasury JV excluded. Aadil confirmed the local-server behavior. No source data was modified.
 
 **Next:** Commit and push after explicit approval.
+## Cashflows transaction drawer fit and status cleanup - 2026-10-04
+
+**Scope:** Keep the six-column ledger transaction drawer within the existing modal while preserving readable transaction details and clean scrolling.
+
+**Implementation:** Removed the forced table minimum width, wrapped only Voucher Detail with natural row-height expansion, removed the scroll wrapper’s top padding so rows cannot enter the sticky-header area, and hid the redundant successful-load status line while retaining loading, pending-filter, empty, and error feedback.
+
+**Verification:** Focused drawer UI tests passed 2/2; JavaScript syntax and `git diff --check` passed. Aadil confirmed the local visual behavior. No backend or source data changed.
+
+**Next:** Commit and push after explicit approval.

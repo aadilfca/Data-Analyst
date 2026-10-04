@@ -828,11 +828,13 @@
         });
         drawer.querySelector('#cashflowsInlineTransactionPeriod').addEventListener('change', function () {
             cashflowInlineTransactionPage = 1;
+            drawer.querySelector('#cashflowsInlineTransactionStatus').hidden = false;
             drawer.querySelector('#cashflowsInlineTransactionStatus').textContent = 'Period selection pending - click Apply.';
         });
         drawer.querySelector('#cashflowsInlineTransactionMode').addEventListener('change', function () {
             cashflowInlineTransactionPage = 1;
             syncCashflowTransactionModeLabel();
+            drawer.querySelector('#cashflowsInlineTransactionStatus').hidden = false;
             drawer.querySelector('#cashflowsInlineTransactionStatus').textContent = 'View selection pending - click Apply.';
         });
         drawer.querySelector('#cashflowsInlineTransactionSearch').addEventListener('keydown', function (event) {
@@ -891,7 +893,10 @@
             const control = drawer.querySelector(selector);
             if (control) control.disabled = isBusy;
         });
-        if (isBusy) drawer.querySelector('#cashflowsInlineTransactionStatus').textContent = 'Loading transactions...';
+        if (isBusy) {
+            drawer.querySelector('#cashflowsInlineTransactionStatus').hidden = false;
+            drawer.querySelector('#cashflowsInlineTransactionStatus').textContent = 'Loading transactions...';
+        }
     }
     function cashflowDrawerRawValue(row, aliases) {
         const raw = row.row_data || {};
@@ -924,7 +929,8 @@
                 + '<td class=cashflows-empty colspan=' + String(Math.max(columns.length, 1)) + cashflowInlineHtmlClose
                 + 'No transactions found for the selected filters.</td' + cashflowInlineHtmlClose
                 + '</tr' + cashflowInlineHtmlClose + '</tbody' + cashflowInlineHtmlClose;
-            drawer.querySelector('#cashflowsInlineTransactionStatus').textContent = 'No transactions found for the selected filters.';
+            drawer.querySelector('#cashflowsInlineTransactionStatus').textContent = '';
+            drawer.querySelector('#cashflowsInlineTransactionStatus').hidden = true;
             return;
         }
         const headerCells = columns.map(function (label) {
@@ -949,7 +955,8 @@
         table.innerHTML = '<thead' + cashflowInlineHtmlClose + '<tr' + cashflowInlineHtmlClose
             + headerCells + '</tr' + cashflowInlineHtmlClose + '</thead' + cashflowInlineHtmlClose
             + '<tbody' + cashflowInlineHtmlClose + bodyRows + '</tbody' + cashflowInlineHtmlClose;
-        drawer.querySelector('#cashflowsInlineTransactionStatus').textContent = 'Showing the selected transaction columns.';
+        drawer.querySelector('#cashflowsInlineTransactionStatus').textContent = '';
+        drawer.querySelector('#cashflowsInlineTransactionStatus').hidden = true;
     }
     function loadCashflowTransactionDrawer(resetRequest) {
         const drawer = ensureCashflowTransactionDrawer();
@@ -970,6 +977,7 @@
         const configuration = (lastCashflowsResult || {}).configuration || {};
         const templateId = configuration.source_template_id;
         if (!templateId) {
+            drawer.querySelector('#cashflowsInlineTransactionStatus').hidden = false;
             drawer.querySelector('#cashflowsInlineTransactionStatus').textContent = 'Transaction source is not configured.';
             return Promise.resolve(null);
         }
@@ -999,6 +1007,7 @@
             .catch(function (error) {
                 if (error.name === 'AbortError') return null;
                 if (requestSerial === cashflowInlineTransactionRequestSerial && !drawer.hidden) {
+                    drawer.querySelector('#cashflowsInlineTransactionStatus').hidden = false;
                     drawer.querySelector('#cashflowsInlineTransactionStatus').textContent = 'Unable to load transactions: ' + error.message;
                     drawer.querySelector('#cashflowsInlineTransactionTable').innerHTML = '';
                 }
