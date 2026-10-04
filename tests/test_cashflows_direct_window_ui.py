@@ -17,16 +17,25 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert "cashflowsTreasuryViewSelect" in html
     assert "cashflowsTreasuryReconciliation" in html
     assert "cashflowsLedgerDrilldownSection" in html
+    assert "cashflowsDrilldownContext" in html
+    assert "cashflowsSummaryControlsPanel" in html
+    assert "cashflows-drilldown-heading" in html
+    assert "cashflowsLedgerDrilldownCount" not in html
+    assert "cashflowsLedgerDrilldownControls" not in html
     assert "cashflowsDrilldownTreasury" in html
     assert "cashflowsDrilldownCategoryOptions" in html
     assert "renderCashflowDrilldownCategoryOptions" in script
+    assert "renderCashflowDrilldownContext" in script
+    assert "cashflowsSummaryControlsPanel" in script
+    assert "renderCashflowDrilldownControls" not in script
+    assert "Ledger roll-up control:" not in script
     assert "syncCashflowDrilldownPagination" in script
     assert "cashflowsDrilldownPrevious" in html
     assert "cashflowsDrilldownNext" in html
     assert "/api/reconciliation/cashflows/drilldown?" in script
     assert "cashflowDrilldownController" in script
-    assert "Loading ledger roll-ups" in script
-    assert "Loading Cashflows ledger drill-down" in script
+    assert "Loading ledger details" in script
+    assert "Loading Cashflows ledger details" in script
     assert "event.key === 'Enter'" in script
     assert "cashflowsProcessingTitle" in script
     assert "openCashflowDrilldown" in script
@@ -35,6 +44,7 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert "toggleClassifiedTransactions" in script
     assert "window.location.href = '/static/databank.html?'" not in script
     assert ".cashflows-transactions-section" in styles
+    assert ".cashflows-drilldown-context" in styles
     assert "cashflowsLazyActions" in html
     assert "details: 'summary'" in script
     assert "loadCashflowChild" in script
@@ -186,7 +196,7 @@ def test_cashflows_summary_contains_inline_category_ledger_contract():
     assert 'cashflows-inline-ledger-link' in inline_styles
     assert 'cashflows-inline-expand-icon' not in inline_script
     assert 'cashflows-inline-expand-icon' not in inline_styles
-    assert 'style.css?v=46' in inline_html
+    assert 'style.css?v=48' in inline_html
     assert 'cashflows-inline-ledger-row td:first-child' in inline_styles
     assert 'cashflows-inline-ledger-row td:not(:first-child)' in inline_styles
     assert 'cashflows-inline-ledger-table' not in inline_script
@@ -243,7 +253,7 @@ def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
     assert "setCashflowSummaryFilterVisibility(false);" in reconciliation_script
     assert "cashflowPreviewPeriods" in reconciliation_script
     assert "syncCashflowZeroRowsButton" in reconciliation_script
-    assert "style.css?v=46" in reconciliation_html
+    assert "style.css?v=48" in reconciliation_html
     assert "reconciliation.js?v=21" in reconciliation_html
     assert "cashflowsSummaryBasis" not in reconciliation_html
     assert "cashflows-transactions-note" not in reconciliation_html

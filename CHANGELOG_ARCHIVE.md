@@ -7357,3 +7357,12 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Implementation:** Added a scoped fixed opaque gutter at 70px with 2.5px height and z-index 99, while retaining the summary header at 72.5px. Advanced the stylesheet cache-buster to v46 and added a direct-window regression assertion.
 
 **Verification:** Aadil confirmed the local scrolling behavior after cache refresh. Focused direct-window tests passed 3/3; JavaScript syntax and git diff --check passed. No backend or Cashflows calculation changed.
+
+
+## Cashflows ledger drill-down detail workspace - 2026-10-04
+
+**Scope:** Make ledger drill-down a focused detail workspace instead of a duplicate Cashflows summary screen.
+
+**Implementation:** Added inherited Period/View/Grouping context, removed the roll-up count and audit-control line, retained detail filters/export/pagination/back navigation, and hid the entire summary-control panel during drill-down. Cache-busting advanced to v48; direct-window assertions cover the removed UI.
+
+**Verification:** Aadil confirmed the local drill-down behavior. Focused direct-window tests passed 3/3; JavaScript syntax and `git diff --check` passed. No backend or Cashflows calculation changed.

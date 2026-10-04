@@ -556,7 +556,9 @@
     }
     function setCashflowDrilldownMode(open) {
         const section = element('cashflowsLedgerDrilldownSection');
+        const summaryControlsPanel = element('cashflowsSummaryControlsPanel');
         if (!section) return;
+        if (summaryControlsPanel) summaryControlsPanel.hidden = open;
         moveCashflowDetailResults(open);
         const summaryTable = element('cashflowsSummaryTable');
         const summarySection = summaryTable ? summaryTable.closest('.cashflows-report-section') : null;
@@ -581,19 +583,14 @@
             anchor.parentNode.insertBefore(detailResults, anchor.nextSibling);
         }
     }
-    function renderCashflowDrilldownControls(result) {
-        const panel = element('cashflowsLedgerDrilldownControls');
-        const split = (result && result.controls && result.controls.cash_bank_split) || {};
-        if (!panel || !result || !Object.keys(split).length) {
-            if (panel) panel.hidden = true;
-            return;
-        }
-        panel.textContent = 'Ledger roll-up control: ' + String(split.status || 'Review required')
-            + ' | Bank: ' + formatInternationalAmount(split.bank_amount)
-            + ' | Cash: ' + formatInternationalAmount(split.cash_amount)
-            + ' | Mixed / unresolved: ' + formatInternationalAmount(split.mixed_or_unresolved_amount)
-            + ' | Detail total: ' + formatInternationalAmount(split.detail_total);
-        panel.hidden = false;
+    function renderCashflowDrilldownContext(result) {
+        const context = element('cashflowsDrilldownContext');
+        if (!context) return;
+        const groupingLabels = { day: 'Daily', fortnight: 'Fortnightly', month: 'Monthly', quarter: 'Quarterly', half_year: 'Half-yearly', year: 'Annually' };
+        const grouping = groupingLabels[String(cashflowSelection.groupBy || '')] || String(cashflowSelection.groupBy || '');
+        context.textContent = 'Period: ' + formatRange(cashflowSelection.start, cashflowSelection.end)
+            + ' | View: ' + cashflowTreasuryViewLabel(result && result.treasury_view || cashflowTreasuryView)
+            + ' | Grouping: ' + grouping;
     }
     function renderCashflowDrilldownCategoryOptions(values) {
         const datalist = element('cashflowsDrilldownCategoryOptions');
@@ -618,7 +615,7 @@
     }
     function renderCashflowDrilldown(result) {
         const rows = result && Array.isArray(result.rows) ? result.rows : [];
-        renderCashflowDrilldownControls(result);
+        renderCashflowDrilldownContext(result);
         renderTable(element('cashflowsLedgerDrilldownTable'), [
             { key: 'category', label: 'Category' },
             { key: 'period_label', label: 'Period' },
@@ -627,11 +624,9 @@
             { key: 'treasury_type', label: 'Cash / Bank' },
             { key: 'amount', label: 'Amount', amount: true },
             { key: 'line_count', label: 'Lines', amount: false },
-        ], rows, 'No ledger roll-ups match the selected filters.');
-        const total = Number(result && result.total_rows) || 0;
+        ], rows, 'No ledger detail matches the selected filters.');
         const page = Number(result && result.page) || 1;
         const pageCount = Number(result && result.page_count) || 1;
-        element('cashflowsLedgerDrilldownCount').textContent = String(total) + ' ledger roll-up(s) · ' + cashflowTreasuryViewLabel(result && result.treasury_view);
         element('cashflowsDrilldownPageInfo').textContent = 'Page ' + String(page) + ' of ' + String(pageCount);
         syncCashflowDrilldownPagination(result);
     }
@@ -1190,9 +1185,9 @@
         if (category) params.set('category', category);
         if (treasuryType) params.set('treasury_type', treasuryType);
         if (periodKey) params.set('period_key', periodKey);
-        showCashflowProcessing('Loading Cashflows ledger drill-down', 'Preparing ledger detail.');
-        setCashflowProcessingStep('load', 'Loading ledger roll-ups.');
-        element('cashflowsLedgerDrilldownTable').innerHTML = '<tbody><tr><td class=cashflows-empty colspan=7>Loading ledger roll-ups...</td></tr></tbody>';
+        showCashflowProcessing('Loading Cashflows ledger details', 'Preparing ledger details.');
+        setCashflowProcessingStep('load', 'Loading ledger details.');
+        element('cashflowsLedgerDrilldownTable').innerHTML = '<tbody><tr><td class=cashflows-empty colspan=7>Loading ledger details...</td></tr></tbody>';
         return api('/api/reconciliation/cashflows/drilldown?' + params.toString(), { signal: controller.signal })
             .then(function (result) {
                 if (generation !== cashflowDrilldownGeneration) return null;

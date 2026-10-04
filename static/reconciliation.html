@@ -4,7 +4,7 @@
     <meta charset='UTF-8'>
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
     <title>Reports | Internal Audit App</title>
-    <link rel='stylesheet' href='/static/style.css?v=46'>
+    <link rel='stylesheet' href='/static/style.css?v=48'>
 </head>
 <body class='reconciliation-page' data-nav-module='Reports' data-nav-parent='index.html'>
     <nav class='navbar'>
@@ -52,7 +52,7 @@
             </section>
         </section>
         <section id='cashflowsView' class='cashflows-report' aria-label='Cashflows report' hidden>
-    <div class='cashflows-report-header'>
+    <div id='cashflowsSummaryControlsPanel' class='cashflows-report-header'>
         <form id='cashflowsReportForm' class='cashflows-filter-bar'>
             <div class='cashflows-report-scope' role='group' aria-label='Cashflows report scope'>
                 <label class='cashflows-grouping-control' for='cashflowsGroupingSelect'>Group by<select id='cashflowsGroupingSelect' aria-label='Cashflows report grouping'><option value='suggested'>Suggested</option><option value='day'>Daily</option><option value='fortnight'>Fortnightly</option><option value='month'>Monthly</option><option value='quarter'>Quarterly</option><option value='half_year'>Half-yearly</option><option value='year'>Annually</option></select></label>
@@ -145,12 +145,14 @@
             </div>
         </section>
         <section id='cashflowsLedgerDrilldownSection' class='cashflows-report-section' hidden aria-label='Cashflows ledger drill-down'>
-            <div class='cashflows-section-heading'>
-                <div><h3>Cashflows ledger drill-down</h3><span id='cashflowsLedgerDrilldownCount'></span></div>
+            <div class='cashflows-section-heading cashflows-drilldown-heading'>
+                <div>
+                    <h3>Cashflows ledger drill-down</h3>
+                    <div id='cashflowsDrilldownContext' class='cashflows-drilldown-context' aria-live='polite'></div>
+                </div>
                 <button type='button' id='cashflowsLedgerDrilldownBack' class='cashflows-secondary'>Back to summary</button>
             </div>
-            <div id='cashflowsLedgerDrilldownControls' class='cashflows-transfer-reconciliation' hidden aria-live='polite'></div>
-            <div class='cashflows-transactions-toolbar'>
+            <div class='cashflows-transactions-toolbar cashflows-drilldown-toolbar'>
                 <input id='cashflowsDrilldownSearch' type='search' placeholder='Search category, ledger account, or period' aria-label='Search ledger drill-down'>
                 <input id='cashflowsDrilldownCategory' list='cashflowsDrilldownCategoryOptions' type='search' placeholder='Category' aria-label='Filter ledger category' autocomplete='off'>
                 <datalist id='cashflowsDrilldownCategoryOptions'></datalist>
