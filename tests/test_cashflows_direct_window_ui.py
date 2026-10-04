@@ -130,8 +130,11 @@ def test_cashflows_summary_contains_inline_category_ledger_contract():
     assert 'cashflowsInlineTransactionAccount' in inline_script
     assert 'treasury_view: filters.mode' in inline_script
     assert 'Voucher Detail' in inline_script
-    assert 'Debit Amount' in inline_script
-    assert 'Credit Amount' in inline_script
+    assert "const columns = ['S.No', 'Voucher Detail', 'Receipts (Cr)', 'Payments (Dr)', 'Transaction Date', 'Voucher ID'];" in inline_script
+    assert 'Debit Amount' not in inline_script
+    assert 'Credit Amount' not in inline_script
+    assert 'cashflowDrawerAmount(classification.credit)' in inline_script
+    assert 'cashflowDrawerAmount(classification.debit)' in inline_script
     assert 'Transaction Date' in inline_script
     assert 'Voucher ID' in inline_script
     assert 'Period selection pending - click Apply.' in inline_script

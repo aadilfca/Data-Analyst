@@ -7294,3 +7294,12 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Verification:** Focused drawer UI tests passed 2/2; JavaScript syntax and `git diff --check` passed. Aadil confirmed the local visual behavior. No backend or source data changed.
 
 **Next:** Commit and push after explicit approval.
+## Cashflows executive receipt/payment labels - 2026-10-04
+
+**Scope:** Make ledger transaction columns easier for non-accounting executives to interpret without changing accounting values or Cashflows calculations.
+
+**Implementation:** The drawer now presents `Receipts (Cr)` before `Payments (Dr)`. These are presentation labels for the existing credit and debit values; transaction classification, signs, filters, and backend contracts remain unchanged.
+
+**Verification:** Focused drawer UI tests passed 2/2; JavaScript syntax and `git diff --check` passed. Aadil confirmed the local visual behavior. No backend or source data changed.
+
+**Next:** Commit and push after explicit approval.

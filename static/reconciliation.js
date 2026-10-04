@@ -915,7 +915,7 @@
         const drawer = ensureCashflowTransactionDrawer();
         const table = drawer.querySelector('#cashflowsInlineTransactionTable');
         const rows = payload.rows || [];
-        const columns = ['S.No', 'Voucher Detail', 'Debit Amount', 'Credit Amount', 'Transaction Date', 'Voucher ID'];
+        const columns = ['S.No', 'Voucher Detail', 'Receipts (Cr)', 'Payments (Dr)', 'Transaction Date', 'Voucher ID'];
         const page = Number(payload.page) || 1;
         const totalRows = Number(payload.total_rows) || 0;
         const pageLimit = Number(payload.limit) || cashflowInlineTransactionLimit;
@@ -940,8 +940,8 @@
             const classification = row.classification || {};
             const values = [
                 cashflowDrawerRawValue(row, ['Voucher Detail', 'Detail', 'Description', 'Narration', 'Remarks']),
-                cashflowDrawerAmount(classification.debit),
                 cashflowDrawerAmount(classification.credit),
+                cashflowDrawerAmount(classification.debit),
                 classification.transaction_date || cashflowDrawerRawValue(row, ['Transaction Date', 'Date', 'Posting Date']),
                 classification.voucher_id || cashflowDrawerRawValue(row, ['Voucher ID', 'Voucher', 'Transaction ID', 'Reference No'])
             ];
