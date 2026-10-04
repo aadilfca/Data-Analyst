@@ -1704,11 +1704,13 @@ def _filter_cashflow_ledger_rows(
     *,
     search: str = "",
     category: str = "",
+    account_head: str = "",
     treasury_type: str = "",
     period_key: str = "",
 ) -> list[dict[str, Any]]:
     search_text = search.strip().casefold() if isinstance(search, str) else ""
     category_text = category.strip().casefold() if isinstance(category, str) else ""
+    account_head_text = account_head.strip().casefold() if isinstance(account_head, str) else ""
     treasury_text = treasury_type.strip().casefold() if isinstance(treasury_type, str) else ""
     period_text = period_key.strip().casefold() if isinstance(period_key, str) else ""
 
@@ -1720,9 +1722,16 @@ def _filter_cashflow_ledger_rows(
             row.get("period_label"),
         )
         searchable = " ".join(str(value or "") for value in fields).casefold()
+        account_head_label = _cashflow_ledger_account_head_label(row).casefold()
+        account_head_values = {
+            str(row.get("account_name") or "").casefold(),
+            str(row.get("account_code") or "").casefold(),
+            account_head_label,
+        }
         return (
             (not search_text or search_text in searchable)
             and (not category_text or str(row.get("category") or "").casefold() == category_text)
+            and (not account_head_text or account_head_text in account_head_values)
             and (not treasury_text or str(row.get("treasury_type") or "").casefold() == treasury_text)
             and (not period_text or str(row.get("period_key") or "").casefold() == period_text)
         )
@@ -1779,6 +1788,31 @@ def _filter_cashflow_category_totals(
     return filtered
 
 
+def _cashflow_ledger_account_head_label(row: dict[str, Any]) -> str:
+    account_name = str(row.get("account_name") or "").strip()
+    account_code = str(row.get("account_code") or "").strip()
+    if account_name and account_code:
+        return f"{account_name} / {account_code}"
+    return account_name or account_code
+
+
+def _cashflow_ledger_account_head_options(
+    rows: list[dict[str, Any]],
+    *,
+    treasury_type: str = "",
+    period_key: str = "",
+) -> list[dict[str, str]]:
+    scoped_rows = _filter_cashflow_ledger_rows(rows, treasury_type=treasury_type, period_key=period_key)
+    options: dict[tuple[str, str], dict[str, str]] = {}
+    for row in scoped_rows:
+        category = str(row.get("category") or "").strip()
+        value = _cashflow_ledger_account_head_label(row)
+        if not category or not value:
+            continue
+        options[(category.casefold(), value.casefold())] = {"category": category, "value": value}
+    return sorted(options.values(), key=lambda option: (option["category"].casefold(), option["value"].casefold()))
+
+
 @router.get('/api/reconciliation/cashflows/drilldown')
 def cashflow_drilldown(
     client_id: int = Query(..., ge=1),
@@ -1787,6 +1821,7 @@ def cashflow_drilldown(
     group_by: str = Query('month'),
     search: str = Query('', max_length=200),
     category: str = Query('', max_length=200),
+    account_head: str = Query('', max_length=300),
     treasury_type: str = Query('', max_length=40),
     period_key: str = Query('', max_length=80),
     treasury_view: str = Query('combined'),
@@ -1814,13 +1849,16 @@ def cashflow_drilldown(
     rows = preview.get('ledger_rollups') or []
     search_text = search.strip().casefold() if isinstance(search, str) else ''
     category_text = category.strip().casefold() if isinstance(category, str) else ''
+    account_head_text = account_head.strip().casefold() if isinstance(account_head, str) else ''
     treasury_text = treasury_type.strip().casefold() if isinstance(treasury_type, str) else ''
     period_text = period_key.strip().casefold() if isinstance(period_key, str) else ''
 
+    account_head_options = _cashflow_ledger_account_head_options(rows, treasury_type=treasury_type, period_key=period_key)
     filtered_rows = _filter_cashflow_ledger_rows(
         rows,
         search=search,
         category=category,
+        account_head=account_head,
         treasury_type=treasury_type,
         period_key=period_key,
     )
@@ -1838,7 +1876,7 @@ def cashflow_drilldown(
         result['period_start'],
         result['period_end'],
         result['group_by'],
-        sum(bool(value) for value in (search_text, category_text, treasury_text, period_text)),
+        sum(bool(value) for value in (search_text, category_text, account_head_text, treasury_text, period_text)),
         build_seconds,
         filter_seconds,
         perf_counter() - request_started,
@@ -1857,6 +1895,7 @@ def cashflow_drilldown(
         'group_by': result['group_by'],
         'treasury_view': treasury_view,
         'rows': page_rows,
+        'account_head_options': account_head_options,
         'total_rows': total_rows,
         'page': current_page,
         'limit': limit,
@@ -1874,6 +1913,7 @@ def export_cashflows_report(
     group_by: str = Query("month"),
     search: str = Query('', max_length=200),
     category: str = Query('', max_length=200),
+    account_head: str = Query('', max_length=300),
     treasury_type: str = Query('', max_length=40),
     period_key: str = Query('', max_length=80),
     treasury_view: str = Query('combined'),
@@ -1900,6 +1940,7 @@ def export_cashflows_report(
         )
     search = search.strip() if isinstance(search, str) else ""
     category = category.strip() if isinstance(category, str) else ""
+    account_head = account_head.strip() if isinstance(account_head, str) else ""
     treasury_type = treasury_type.strip() if isinstance(treasury_type, str) else ""
     period_key = period_key.strip() if isinstance(period_key, str) else ""
     summary_filter = summary_filter.strip() if isinstance(summary_filter, str) else ""
@@ -1940,6 +1981,7 @@ def export_cashflows_report(
         ledger_rows,
         search=search,
         category=category,
+        account_head=account_head,
         treasury_type=treasury_type,
         period_key=period_key,
     )
@@ -1948,6 +1990,7 @@ def export_cashflows_report(
         "hide_zero_rows": bool(hide_zero_rows),
         "search": search.strip(),
         "category": category.strip(),
+        "account_head": account_head.strip(),
         "treasury_type": treasury_type.strip(),
         "period_key": period_key.strip(),
         "treasury_view": treasury_view,

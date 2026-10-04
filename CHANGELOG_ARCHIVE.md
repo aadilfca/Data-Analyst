@@ -7375,3 +7375,13 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Implementation:** Removed the generic transaction-table wrapper from the ledger table, removed its internal overflow boundary, reused the 72.5px sticky header and 2.5px opaque navbar gutter, and advanced the stylesheet cache-buster to v51. Added regression assertions for the wrapper contract.
 
 **Verification:** Aadil confirmed the local visual behavior. Focused direct-window tests passed 3/3; JavaScript syntax and `git diff --check` passed. No backend, accounting, or source data changed.
+
+## Cashflows ledger account-head filter and single-row toolbar - 2026-10-04
+
+**Scope:** Add account-head filtering to the Cashflows ledger drill-down and keep the filter/action controls in one professional horizontal row.
+
+**Implementation:** Added server-side account-head filtering and scoped account-head options, replaced the unreliable datalist with a native dropdown, and preserved Apply/Clear/export parity. The toolbar now uses an explicit grid ordered Search, Category, Account head, Cash/Bank, Period, Apply, Clear, Export. The drill-down override follows the shared flex-toolbar rule, preventing cascade regressions; stylesheet cache-busting advanced to v56.
+
+**Verification:** Aadil confirmed the final local layout. Focused Cashflows performance, report, and direct-window tests passed 40/40; JavaScript syntax and `git diff --check` passed. No database schema or source data changed.
+
+**Next:** Continue with the next approved Cashflows phase.

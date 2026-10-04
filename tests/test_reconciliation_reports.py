@@ -465,6 +465,7 @@ def test_cashflow_drilldown_route_filters_and_paginates_server_side():
             '2026-01-01',
             '2026-01-31',
             group_by='month',
+            treasury_view='combined',
             search='main',
             treasury_type='Bank',
             page=1,
@@ -478,6 +479,47 @@ def test_cashflow_drilldown_route_filters_and_paginates_server_side():
     assert response['controls']['cash_bank_split']['status'] == 'Matched'
     assert builder.call_args.kwargs['detail_sections'] == {'drilldown'}
 
+
+def test_cashflow_drilldown_filters_account_head_and_returns_scoped_options():
+    result = {
+        'period_start': '2026-01-01',
+        'period_end': '2026-01-31',
+        'group_by': 'month',
+        'preview': {
+            'ledger_rollups': [
+                {'category': 'Customers', 'period_key': '2026-01', 'period_label': 'Jan 2026', 'account_code': 'AR1', 'account_name': 'Main Bank customer', 'treasury_type': 'Bank', 'amount': 100.0, 'line_count': 1},
+                {'category': 'Customers', 'period_key': '2026-01', 'period_label': 'Jan 2026', 'account_code': 'AR2', 'account_name': 'Cash customer', 'treasury_type': 'Cash', 'amount': 50.0, 'line_count': 1},
+                {'category': 'Payments', 'period_key': '2026-01', 'period_label': 'Jan 2026', 'account_code': 'EXP', 'account_name': 'Operating expense', 'treasury_type': 'Bank', 'amount': -75.0, 'line_count': 2},
+            ],
+        },
+        'source': {'ready': True},
+        'blocking_reasons': [],
+    }
+    with patch.object(reconciliation, '_build_cashflow_result', return_value=result):
+        response = reconciliation.cashflow_drilldown(
+            7,
+            '2026-01-01',
+            '2026-01-31',
+            group_by='month',
+            treasury_view='combined',
+            category='Customers',
+            search='',
+            account_head='Cash customer / AR2',
+            treasury_type='',
+            period_key='',
+            page=1,
+            limit=1,
+            session=None,
+        )
+
+    assert response['total_rows'] == 1
+    assert response['page_count'] == 1
+    assert response['rows'][0]['account_code'] == 'AR2'
+    assert {option['value'] for option in response['account_head_options']} == {
+        'Main Bank customer / AR1',
+        'Cash customer / AR2',
+        'Operating expense / EXP',
+    }
 
 def test_cashflows_preview_passes_grouping_and_returns_period_descriptors():
     configuration = {
@@ -1009,6 +1051,7 @@ def test_cashflow_drilldown_logs_endpoint_timing(caplog):
             "2026-02-10",
             "2026-04-18",
             group_by="quarter",
+            treasury_view="combined",
             search="customer",
             page=1,
             limit=1,
@@ -1236,8 +1279,10 @@ def test_cashflow_export_uses_canonical_drilldown_and_active_filters():
             "2026-01-01",
             "2026-01-31",
             group_by="month",
+            treasury_view="combined",
             search="Main",
             category="Customers",
+            account_head="Main customer",
             treasury_type="Bank",
             period_key="2026-01",
             summary_filter="customer",
@@ -1252,6 +1297,7 @@ def test_cashflow_export_uses_canonical_drilldown_and_active_filters():
     assert len(export_preview["ledger_rollups"]) == 1
     assert export_preview["ledger_rollups"][0]["account_code"] == "AR"
     assert export_preview["export_filters"]["hide_zero_rows"] is True
+    assert export_preview["export_filters"]["account_head"] == "Main customer"
 
 def test_reports_view_and_dashboard_entry_are_wired():
     root = Path(__file__).resolve().parents[1]
@@ -1307,8 +1353,8 @@ def test_reports_view_and_dashboard_entry_are_wired():
     actions_index = html.index("class='cashflows-report-actions'")
     hide_zero_index = html.index("id='cashflowsHideZeroRowsButton'")
     export_index = html.index("id='cashflowsExportButton'")
-    assert load_summary_index < drilldown_index < actions_index
-    assert actions_index < hide_zero_index < export_index
+    assert load_summary_index < actions_index < drilldown_index < hide_zero_index < export_index
+
     assert "cashflowsDrilldownShortcuts" in html
     assert "cashflowsDrilldownLoadTransfersButton" in html
     assert "cashflowsDrilldownLoadCustomerPaymentsButton" in html

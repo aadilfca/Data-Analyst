@@ -10269,7 +10269,8 @@ body.cashflows-processing-open { overflow: hidden; }
 .cashflows-period-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid #e6edf2; }
 .cashflows-primary { border: 0; border-radius: 7px; padding: 9px 14px; background: #1769aa; color: #fff; font-weight: 700; cursor: pointer; }
 .cashflows-report-section { min-width: 0; padding: 16px; border-radius: 12px; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
-.cashflows-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }.cashflows-section-heading h3 { margin: 0; color: #334e60; }.cashflows-section-heading span { color: #64748b; font-size: 11px; font-weight: 700; }.cashflows-drilldown-heading { align-items: flex-start; margin-bottom: 14px; }.cashflows-drilldown-context { margin-top: 5px; color: #64748b; font-size: 12px; font-weight: 600; }.cashflows-drilldown-toolbar { margin-bottom: 14px; }
+.cashflows-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }.cashflows-section-heading h3 { margin: 0; color: #334e60; }.cashflows-section-heading span { color: #64748b; font-size: 11px; font-weight: 700; }.cashflows-drilldown-heading { align-items: flex-start; margin-bottom: 14px; }/* Keep the drill-down filters in one logical row; narrow screens may scroll horizontally. */
+.cashflows-drilldown-context { margin-top: 5px; color: #64748b; font-size: 12px; font-weight: 600; }
 .cashflows-transfer-reconciliation { margin: 0 0 12px; padding: 11px 12px; border: 1px solid #dbe4ea; border-radius: 9px; background: #f8fbfd; }.cashflows-transfer-reconciliation[hidden] { display: none; }.cashflows-transfer-reconciliation-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 9px; color: #334e60; font-size: 12px; }.cashflows-transfer-status { padding: 4px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }.cashflows-transfer-status.is-matched { background: #e7f6ed; color: #167143; }.cashflows-transfer-status.is-review { background: #fff2df; color: #9a5a00; }.cashflows-transfer-metrics { display: grid; grid-template-columns: repeat(7, minmax(100px, 1fr)); gap: 8px; }.cashflows-transfer-metric { display: grid; gap: 3px; min-width: 0; padding: 7px 8px; border-left: 2px solid #dbe4ea; }.cashflows-transfer-metric span { color: #64748b; font-size: 10px; font-weight: 700; text-transform: uppercase; }.cashflows-transfer-metric strong { overflow: hidden; color: #334e60; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .cashflows-detail-results { display: grid; gap: 18px; }.cashflows-layout-anchor { display: none; }.cashflows-drilldown-detail-host { display: grid; gap: 18px; margin-top: 12px; }
 .cashflows-detail-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }.cashflows-detail-grid > .cashflows-report-section { width: 100%; box-sizing: border-box; }
@@ -10300,6 +10301,12 @@ body.cashflows-processing-open { overflow: hidden; }
 .cashflows-transactions-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; padding: 10px 12px; border: 1px solid #dbe4ea; border-radius: 10px; background: #f8fbfd; }
 .cashflows-transactions-toolbar input, .cashflows-transactions-toolbar select { min-width: 145px; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 7px; background: #fff; font: inherit; font-size: 12px; }
 .cashflows-transactions-toolbar input:first-child { flex: 1 1 520px; min-width: 280px; }
+body .cashflows-drilldown-toolbar > input:first-child { flex: initial; min-width: 0; }
+/* This override intentionally follows the shared flex toolbar rules. */
+body .cashflows-drilldown-toolbar { display: grid; grid-template-columns: minmax(220px, 1.4fr) minmax(100px, .55fr) minmax(140px, .9fr) minmax(145px, .9fr) minmax(110px, .65fr) auto auto auto; align-items: end; gap: 6px; overflow-x: auto; }
+body .cashflows-drilldown-toolbar > input[list], body .cashflows-drilldown-toolbar > select { min-width: 0; width: 100%; box-sizing: border-box; }
+body .cashflows-drilldown-toolbar > select#cashflowsDrilldownTreasury, body .cashflows-drilldown-toolbar > select#cashflowsDrilldownPeriod { min-width: 0; }
+body .cashflows-drilldown-toolbar button { min-width: 0; white-space: nowrap; padding-left: 10px; padding-right: 10px; }
 .cashflows-secondary { border: 1px solid #b8c9d6; border-radius: 7px; padding: 8px 12px; background: #fff; color: #334e60; font-weight: 700; cursor: pointer; }
 .cashflows-secondary:hover:not(:disabled) { background: #eef5f8; }
 .cashflows-secondary:disabled { cursor: not-allowed; opacity: .55; }
@@ -10322,9 +10329,11 @@ body.cashflows-processing-open { overflow: hidden; }
     .cashflows-report-actions { justify-content: flex-start; margin-left: 0; }
     .cashflows-transfer-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .cashflows-transactions-toolbar input, .cashflows-transactions-toolbar select { flex: 1 1 100%; min-width: 0; }
+
     .cashflows-detail-search-input { flex: 1 1 100%; min-width: 0; }
     .cashflows-transactions-pagination { justify-content: space-between; }
 }
+
 .cashflows-summary-section-row th { background: #e8f3e8; color: #416b4c; border-top: 1px solid #c3dec8; border-bottom: 1px solid #b8d8be; text-align: left; }
 .cashflows-summary-total-row th, .cashflows-summary-total-row td { background: #e8eef7; color: #0b2e59; font-weight: 800; border-top: 1px solid #1f4e78; border-bottom: 1px solid #c8d5e6; }
 .cashflows-summary-total-row:hover th, .cashflows-summary-total-row:hover td { background: #e8eef7; color: #0b2e59; }

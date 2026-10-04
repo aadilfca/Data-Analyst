@@ -606,6 +606,26 @@
             return '<option value="' + escapeHtml(category) + '"></option>';
         }).join('');
     }
+    function renderCashflowDrilldownAccountOptions(values) {
+        const select = element('cashflowsDrilldownAccountHead');
+        const categoryInput = element('cashflowsDrilldownCategory');
+        if (!select) return;
+        const category = categoryInput ? categoryInput.value.trim().toLowerCase() : '';
+        const accounts = new Map();
+        (values || []).forEach(function (option) {
+            const value = typeof option === 'string' ? option : (option && option.value);
+            const optionCategory = typeof option === 'string' ? '' : String(option && option.category || '').trim().toLowerCase();
+            if (value && (!category || !optionCategory || optionCategory === category)) accounts.set(String(value).toLowerCase(), String(value));
+        });
+        const selected = select.value;
+        const options = Array.from(accounts.values()).sort(function (left, right) {
+            return left.localeCompare(right);
+        });
+        select.innerHTML = '<option value="">All account heads</option>' + options.map(function (account) {
+            return '<option value="' + escapeHtml(account) + '">' + escapeHtml(account) + '</option>';
+        }).join('');
+        if (selected && accounts.has(selected.toLowerCase())) select.value = selected;
+    }
     function syncCashflowDrilldownPagination(result) {
         const payload = result || lastCashflowDrilldownResult || {};
         const page = Number(payload.page) || 1;
@@ -616,6 +636,7 @@
     function renderCashflowDrilldown(result) {
         const rows = result && Array.isArray(result.rows) ? result.rows : [];
         renderCashflowDrilldownContext(result);
+        renderCashflowDrilldownAccountOptions(result && result.account_head_options);
         renderTable(element('cashflowsLedgerDrilldownTable'), [
             { key: 'category', label: 'Category' },
             { key: 'period_label', label: 'Period' },
@@ -1179,10 +1200,12 @@
         });
         const search = element('cashflowsDrilldownSearch').value.trim();
         const category = element('cashflowsDrilldownCategory').value.trim();
+        const accountHead = element('cashflowsDrilldownAccountHead').value.trim();
         const treasuryType = element('cashflowsDrilldownTreasury').value;
         const periodKey = element('cashflowsDrilldownPeriod').value;
         if (search) params.set('search', search);
         if (category) params.set('category', category);
+        if (accountHead) params.set('account_head', accountHead);
         if (treasuryType) params.set('treasury_type', treasuryType);
         if (periodKey) params.set('period_key', periodKey);
         showCashflowProcessing('Loading Cashflows ledger details', 'Preparing ledger details.');
@@ -1515,6 +1538,7 @@
             if (isDrilldown) {
                 query.set('search', element('cashflowsDrilldownSearch').value.trim());
                 query.set('category', element('cashflowsDrilldownCategory').value.trim());
+                query.set('account_head', element('cashflowsDrilldownAccountHead').value.trim());
                 query.set('treasury_type', element('cashflowsDrilldownTreasury').value);
                 query.set('period_key', element('cashflowsDrilldownPeriod').value);
             } else {
@@ -1855,10 +1879,13 @@
         element('cashflowsDrilldownClear').addEventListener('click', function () {
             element('cashflowsDrilldownSearch').value = '';
             element('cashflowsDrilldownCategory').value = '';
+            element('cashflowsDrilldownAccountHead').value = '';
+            renderCashflowDrilldownAccountOptions((lastCashflowDrilldownResult || {}).account_head_options);
             element('cashflowsDrilldownTreasury').value = cashflowDefaultTreasuryType();
             element('cashflowsDrilldownPeriod').value = '';
             loadCashflowDrilldown(true);
         });
+        element('cashflowsDrilldownCategory').addEventListener('input', function () { renderCashflowDrilldownAccountOptions((lastCashflowDrilldownResult || {}).account_head_options); });
         [element('cashflowsDrilldownSearch'), element('cashflowsDrilldownCategory')].forEach(function (input) {
             input.addEventListener('keydown', function (event) {
                 if (event.key === 'Enter') {

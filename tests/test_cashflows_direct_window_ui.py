@@ -26,7 +26,14 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert "cashflowsLedgerDrilldownControls" not in html
     assert "cashflowsDrilldownTreasury" in html
     assert "cashflowsDrilldownCategoryOptions" in html
+    assert "cashflowsDrilldownAccountHead" in html
+    assert "<select id='cashflowsDrilldownAccountHead'" in html
+    assert "cashflowsDrilldownAccountHeadOptions" not in html
+    assert html.index("cashflowsDrilldownCategory") < html.index("cashflowsDrilldownAccountHead") < html.index("cashflowsDrilldownTreasury")
     assert "renderCashflowDrilldownCategoryOptions" in script
+    assert "renderCashflowDrilldownAccountOptions" in script
+    assert "account_head_options" in script
+    assert "account_head" in script
     assert "renderCashflowDrilldownContext" in script
     assert "cashflowsSummaryControlsPanel" in script
     assert "renderCashflowDrilldownControls" not in script
@@ -47,6 +54,12 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert "window.location.href = '/static/databank.html?'" not in script
     assert ".cashflows-transactions-section" in styles
     assert ".cashflows-drilldown-context" in styles
+    assert "body .cashflows-drilldown-toolbar { display: grid;" in styles
+    assert styles.index(".cashflows-transactions-toolbar { display: flex;") < styles.index("body .cashflows-drilldown-toolbar { display: grid;")
+    assert "grid-template-columns: minmax(220px, 1.4fr)" in styles
+    assert "overflow-x: auto" in styles
+    assert ".cashflows-drilldown-toolbar { display: flex; flex-wrap: wrap; }" not in styles
+    assert "body .cashflows-drilldown-toolbar > input[list], body .cashflows-drilldown-toolbar > select" in styles
     assert ".cashflows-ledger-drilldown-table-wrap" in styles
     assert "#cashflowsLedgerDrilldownTable thead th" in styles
     assert "overflow: visible; max-height: none" in styles
@@ -202,7 +215,7 @@ def test_cashflows_summary_contains_inline_category_ledger_contract():
     assert 'cashflows-inline-ledger-link' in inline_styles
     assert 'cashflows-inline-expand-icon' not in inline_script
     assert 'cashflows-inline-expand-icon' not in inline_styles
-    assert 'style.css?v=51' in inline_html
+    assert 'style.css?v=56' in inline_html
     assert 'cashflows-inline-ledger-row td:first-child' in inline_styles
     assert 'cashflows-inline-ledger-row td:not(:first-child)' in inline_styles
     assert 'cashflows-inline-ledger-table' not in inline_script
@@ -259,7 +272,7 @@ def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
     assert "setCashflowSummaryFilterVisibility(false);" in reconciliation_script
     assert "cashflowPreviewPeriods" in reconciliation_script
     assert "syncCashflowZeroRowsButton" in reconciliation_script
-    assert "style.css?v=51" in reconciliation_html
+    assert "style.css?v=56" in reconciliation_html
     assert "reconciliation.js?v=21" in reconciliation_html
     assert "cashflowsSummaryBasis" not in reconciliation_html
     assert "cashflows-transactions-note" not in reconciliation_html

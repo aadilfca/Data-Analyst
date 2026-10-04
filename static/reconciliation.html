@@ -4,7 +4,7 @@
     <meta charset='UTF-8'>
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
     <title>Reports | Internal Audit App</title>
-    <link rel='stylesheet' href='/static/style.css?v=51'>
+    <link rel='stylesheet' href='/static/style.css?v=56'>
 </head>
 <body class='reconciliation-page' data-nav-module='Reports' data-nav-parent='index.html'>
     <nav class='navbar'>
@@ -153,9 +153,12 @@
                 <button type='button' id='cashflowsLedgerDrilldownBack' class='cashflows-secondary'>Back to summary</button>
             </div>
             <div class='cashflows-transactions-toolbar cashflows-drilldown-toolbar'>
-                <input id='cashflowsDrilldownSearch' type='search' placeholder='Search category, ledger account, or period' aria-label='Search ledger drill-down'>
+                <input id='cashflowsDrilldownSearch' type='search' placeholder='Search all ledger data' aria-label='Search ledger drill-down'>
                 <input id='cashflowsDrilldownCategory' list='cashflowsDrilldownCategoryOptions' type='search' placeholder='Category' aria-label='Filter ledger category' autocomplete='off'>
                 <datalist id='cashflowsDrilldownCategoryOptions'></datalist>
+                <select id='cashflowsDrilldownAccountHead' aria-label='Filter ledger account head'>
+                    <option value=''>All account heads</option>
+                </select>
                 <select id='cashflowsDrilldownTreasury' aria-label='Filter treasury type'>
                     <option value=''>All cash and bank</option>
                     <option value='Bank'>Bank</option>
