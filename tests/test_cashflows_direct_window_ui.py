@@ -135,9 +135,26 @@ def test_cashflows_summary_contains_inline_category_ledger_contract():
     assert 'Credit Amount' not in inline_script
     assert 'cashflowDrawerAmount(classification.credit)' in inline_script
     assert 'cashflowDrawerAmount(classification.debit)' in inline_script
+    assert 'let totalReceipts = 0;' in inline_script
+    assert 'let totalPayments = 0;' in inline_script
+    assert 'cashflows-inline-transaction-total-row' in inline_script
+    assert 'cashflows-inline-transaction-total-label' in inline_script
+    assert 'cashflows-inline-transaction-total-empty' in inline_script
+    assert '<th colspan=2 scope=row' not in inline_script
+    assert 'cashflows-inline-transaction-total-label' in inline_styles
+    assert '<tfoot' in inline_script
+    assert 'cashflows-inline-transaction-table tfoot th' in inline_styles
+    assert 'cashflows-inline-transaction-total-amount' in inline_styles
+    assert 'white-space: nowrap; font-variant-numeric: tabular-nums;' in inline_styles
     assert 'Transaction Date' in inline_script
     assert 'Voucher ID' in inline_script
-    assert 'Period selection pending - click Apply.' in inline_script
+    assert 'Period selection pending - click Apply.' not in inline_script
+    assert 'View selection pending - click Apply.' not in inline_script
+    assert 'Loading transactions...' not in inline_script
+    assert 'cashflows-inline-transaction-loading' in inline_script
+    assert 'aria-busy' in inline_script
+    assert 'cashflows-inline-transaction-table th:nth-child(3)' in inline_styles
+    assert 'cashflows-inline-transaction-dialog.cashflows-inline-transaction-loading' in inline_styles
     assert 'Showing the selected transaction columns.' not in inline_script
     assert "cashflowsInlineTransactionStatus" in inline_script
     assert 'hidden = true' in inline_script

@@ -252,6 +252,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-10-04: Cashflows ledger drill-down now requires every voucher to hit an assigned Cash/Bank account; valid Cash/Bank JVs remain eligible while non-treasury JVs are excluded.
 - 2026-10-04: Cashflows transaction drawer now fits six columns within the modal, wraps only Voucher Detail, keeps the sticky header clear, and hides redundant success status space.
 - 2026-10-04: Cashflows transaction drawer now presents executive-friendly Receipts (Cr) before Payments (Dr) without changing underlying debit/credit values.
+- 2026-10-04: Cashflows transaction amounts and totals now align right with tabular numerals; visible pending/loading alerts were replaced by an accessible busy cursor state.
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
 - Findings from a Code Health Review session go to `KNOWN_ISSUES.md`, not the Status log — the Status log records changes made, that file records issues found

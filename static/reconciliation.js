@@ -798,7 +798,7 @@
             + '<button type=button class=cashflows-inline-transaction-clear' + cashflowInlineHtmlClose + 'Clear</button' + cashflowInlineHtmlClose
             + '</div' + cashflowInlineHtmlClose
             + '<div id=cashflowsInlineTransactionStatus class=cashflows-inline-transaction-status aria-live=polite'
-            + cashflowInlineHtmlClose + 'Loading transactions...</div' + cashflowInlineHtmlClose
+            + cashflowInlineHtmlClose + '</div' + cashflowInlineHtmlClose
             + '<div class=cashflows-inline-transaction-table-wrap' + cashflowInlineHtmlClose
             + '<table id=cashflowsInlineTransactionTable class=cashflows-inline-transaction-table' + cashflowInlineHtmlClose
             + '</table' + cashflowInlineHtmlClose + '</div' + cashflowInlineHtmlClose
@@ -828,14 +828,11 @@
         });
         drawer.querySelector('#cashflowsInlineTransactionPeriod').addEventListener('change', function () {
             cashflowInlineTransactionPage = 1;
-            drawer.querySelector('#cashflowsInlineTransactionStatus').hidden = false;
-            drawer.querySelector('#cashflowsInlineTransactionStatus').textContent = 'Period selection pending - click Apply.';
+
         });
         drawer.querySelector('#cashflowsInlineTransactionMode').addEventListener('change', function () {
             cashflowInlineTransactionPage = 1;
             syncCashflowTransactionModeLabel();
-            drawer.querySelector('#cashflowsInlineTransactionStatus').hidden = false;
-            drawer.querySelector('#cashflowsInlineTransactionStatus').textContent = 'View selection pending - click Apply.';
         });
         drawer.querySelector('#cashflowsInlineTransactionSearch').addEventListener('keydown', function (event) {
             if (event.key === 'Enter') {
@@ -893,10 +890,13 @@
             const control = drawer.querySelector(selector);
             if (control) control.disabled = isBusy;
         });
-        if (isBusy) {
-            drawer.querySelector('#cashflowsInlineTransactionStatus').hidden = false;
-            drawer.querySelector('#cashflowsInlineTransactionStatus').textContent = 'Loading transactions...';
+        const dialog = drawer.querySelector('.cashflows-inline-transaction-dialog');
+        if (dialog) {
+            dialog.classList.toggle('cashflows-inline-transaction-loading', isBusy);
+            dialog.setAttribute('aria-busy', isBusy ? 'true' : 'false');
         }
+        drawer.querySelector('#cashflowsInlineTransactionStatus').textContent = '';
+        drawer.querySelector('#cashflowsInlineTransactionStatus').hidden = true;
     }
     function cashflowDrawerRawValue(row, aliases) {
         const raw = row.row_data || {};
@@ -936,8 +936,14 @@
         const headerCells = columns.map(function (label) {
             return '<th' + cashflowInlineHtmlClose + escapeHtml(label) + '</th' + cashflowInlineHtmlClose;
         }).join('');
+        let totalReceipts = 0;
+        let totalPayments = 0;
         const bodyRows = rows.map(function (row, index) {
             const classification = row.classification || {};
+            const creditAmount = Number(classification.credit);
+            const debitAmount = Number(classification.debit);
+            if (Number.isFinite(creditAmount)) totalReceipts += creditAmount;
+            if (Number.isFinite(debitAmount)) totalPayments += debitAmount;
             const values = [
                 cashflowDrawerRawValue(row, ['Voucher Detail', 'Detail', 'Description', 'Narration', 'Remarks']),
                 cashflowDrawerAmount(classification.credit),
@@ -952,9 +958,27 @@
             }));
             return '<tr' + cashflowInlineHtmlClose + cells.join('') + '</tr' + cashflowInlineHtmlClose;
         }).join('');
+        const totalRow = '<tfoot' + cashflowInlineHtmlClose
+            + '<tr class=cashflows-inline-transaction-total-row' + cashflowInlineHtmlClose
+            + '<td class=cashflows-inline-transaction-total-empty' + cashflowInlineHtmlClose + '</td' + cashflowInlineHtmlClose
+            + '<th scope=row class=cashflows-inline-transaction-total-label' + cashflowInlineHtmlClose + 'Total</th' + cashflowInlineHtmlClose
+            + '<td class=cashflows-inline-transaction-total-amount' + cashflowInlineHtmlClose + escapeHtml(cashflowDrawerAmount(totalReceipts)) + '</td' + cashflowInlineHtmlClose
+            + '<td class=cashflows-inline-transaction-total-amount' + cashflowInlineHtmlClose + escapeHtml(cashflowDrawerAmount(totalPayments)) + '</td' + cashflowInlineHtmlClose
+            + '<td class=cashflows-inline-transaction-total-empty' + cashflowInlineHtmlClose + '</td' + cashflowInlineHtmlClose
+            + '<td class=cashflows-inline-transaction-total-empty' + cashflowInlineHtmlClose + '</td' + cashflowInlineHtmlClose
+            + '</tr' + cashflowInlineHtmlClose + '</tfoot' + cashflowInlineHtmlClose;
         table.innerHTML = '<thead' + cashflowInlineHtmlClose + '<tr' + cashflowInlineHtmlClose
             + headerCells + '</tr' + cashflowInlineHtmlClose + '</thead' + cashflowInlineHtmlClose
-            + '<tbody' + cashflowInlineHtmlClose + bodyRows + '</tbody' + cashflowInlineHtmlClose;
+            + '<tbody' + cashflowInlineHtmlClose + bodyRows + '</tbody' + cashflowInlineHtmlClose
+            + totalRow;
+        drawer.querySelector('#cashflowsInlineTransactionStatus').textContent = '';
+        drawer.querySelector('#cashflowsInlineTransactionStatus').hidden = true;
+    }
+    function cashflowTransactionTableMessage(drawer, message) {
+        const table = drawer.querySelector('#cashflowsInlineTransactionTable');
+        table.innerHTML = '<tbody' + cashflowInlineHtmlClose + '<tr' + cashflowInlineHtmlClose
+            + '<td class=cashflows-empty colspan=6' + cashflowInlineHtmlClose + escapeHtml(message)
+            + '</td' + cashflowInlineHtmlClose + '</tr' + cashflowInlineHtmlClose + '</tbody' + cashflowInlineHtmlClose;
         drawer.querySelector('#cashflowsInlineTransactionStatus').textContent = '';
         drawer.querySelector('#cashflowsInlineTransactionStatus').hidden = true;
     }
@@ -977,8 +1001,7 @@
         const configuration = (lastCashflowsResult || {}).configuration || {};
         const templateId = configuration.source_template_id;
         if (!templateId) {
-            drawer.querySelector('#cashflowsInlineTransactionStatus').hidden = false;
-            drawer.querySelector('#cashflowsInlineTransactionStatus').textContent = 'Transaction source is not configured.';
+            cashflowTransactionTableMessage(drawer, 'Transaction source is not configured.');
             return Promise.resolve(null);
         }
         const controller = new AbortController();
@@ -1007,9 +1030,7 @@
             .catch(function (error) {
                 if (error.name === 'AbortError') return null;
                 if (requestSerial === cashflowInlineTransactionRequestSerial && !drawer.hidden) {
-                    drawer.querySelector('#cashflowsInlineTransactionStatus').hidden = false;
-                    drawer.querySelector('#cashflowsInlineTransactionStatus').textContent = 'Unable to load transactions: ' + error.message;
-                    drawer.querySelector('#cashflowsInlineTransactionTable').innerHTML = '';
+                    cashflowTransactionTableMessage(drawer, 'Unable to load transactions: ' + error.message);
                 }
                 return null;
             })
@@ -1045,6 +1066,7 @@
         if (cashflowInlineTransactionActiveController) cashflowInlineTransactionActiveController.abort();
         cashflowInlineTransactionActiveController = null;
         if (cashflowInlineTransactionDrawer) cashflowInlineTransactionDrawer.hidden = true;
+        setCashflowTransactionDrawerBusy(false);
         document.body.classList.remove('cashflows-inline-transaction-open');
         const focus = cashflowInlineTransactionFocus;
         cashflowInlineTransactionContext = null;

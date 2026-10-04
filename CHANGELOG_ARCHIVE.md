@@ -7303,3 +7303,12 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Verification:** Focused drawer UI tests passed 2/2; JavaScript syntax and `git diff --check` passed. Aadil confirmed the local visual behavior. No backend or source data changed.
 
 **Next:** Commit and push after explicit approval.
+## Cashflows drawer alignment and busy-state polish - 2026-10-04
+
+**Scope:** Finalize executive-facing transaction presentation and remove distracting transient alerts from the ledger drawer.
+
+**Implementation:** Receipts and Payments headers, body values, and totals now share right alignment with tabular numerals. The total footer uses six explicit cells matching the table grid. View and loading pending messages were removed from the visible layout; request activity now uses an accessible `aria-busy` state and progress cursor, while empty and error feedback stays inside the table.
+
+**Verification:** Focused drawer UI tests passed 2/2; JavaScript syntax and `git diff --check` passed. Aadil confirmed the local visual behavior. No backend or source data changed.
+
+**Next:** Commit and push after explicit approval.
