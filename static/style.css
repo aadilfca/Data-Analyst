@@ -10322,6 +10322,9 @@ body.cashflows-processing-open { overflow: hidden; }
 .cashflows-summary-section-row th { background: #e8f3e8; color: #416b4c; border-top: 1px solid #c3dec8; border-bottom: 1px solid #b8d8be; text-align: left; }
 .cashflows-summary-total-row th, .cashflows-summary-total-row td { background: #e8eef7; color: #0b2e59; font-weight: 800; border-top: 1px solid #1f4e78; border-bottom: 1px solid #c8d5e6; }
 .cashflows-summary-total-row:hover th, .cashflows-summary-total-row:hover td { background: #e8eef7; color: #0b2e59; }
+#cashflowsSummaryTable:not(.cashflows-summary-split-table) thead th:not(:first-child),
+#cashflowsSummaryTable:not(.cashflows-summary-split-table) tbody tr:not(.cashflows-summary-section-row) td:not(:first-child),
+#cashflowsSummaryTable:not(.cashflows-summary-split-table) tbody tr.cashflows-summary-total-row td { text-align: right; font-variant-numeric: tabular-nums; }
 .cashflows-inline-expand { display: inline-flex; align-items: center; gap: 7px; border: 0; padding: 0; background: transparent; color: #24536e; font: inherit; text-align: left; cursor: pointer; }
 .cashflows-inline-expand:hover, .cashflows-inline-expand:focus { color: #1769aa; text-decoration: underline; outline: none; }
 .cashflows-inline-expand:disabled { cursor: wait; opacity: .7; }

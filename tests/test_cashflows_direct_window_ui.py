@@ -178,6 +178,9 @@ def test_cashflows_summary_contains_inline_category_ledger_contract():
     assert '.cashflows-inline-transaction-table { width: 100%; min-width: 0;' in inline_styles
     assert '.cashflows-inline-transaction-table th:nth-child(2)' in inline_styles
     assert 'white-space: normal; overflow-wrap: anywhere; word-break: break-word;' in inline_styles
+    assert '#cashflowsSummaryTable:not(.cashflows-summary-split-table) thead th:not(:first-child)' in inline_styles
+    assert '#cashflowsSummaryTable:not(.cashflows-summary-split-table) tbody tr:not(.cashflows-summary-section-row) td:not(:first-child)' in inline_styles
+    assert 'font-variant-numeric: tabular-nums;' in inline_styles
 
 def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
 

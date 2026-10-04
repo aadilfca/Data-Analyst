@@ -7312,3 +7312,11 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Verification:** Focused drawer UI tests passed 2/2; JavaScript syntax and `git diff --check` passed. Aadil confirmed the local visual behavior. No backend or source data changed.
 
 **Next:** Commit and push after explicit approval.
+
+## Cashflows main summary amount alignment - 2026-10-04
+
+**Scope:** Align the main Cashflows summary’s numeric columns for executive readability without changing calculations or split/drawer behavior.
+
+**Implementation:** Added a non-split summary selector that right-aligns period, total, percentage, and local-total cells with tabular numerals; category labels and split summaries remain unchanged. Added a static regression assertion.
+
+**Verification:** Focused direct-window tests passed 2/2; JavaScript syntax and `git diff --check` passed. No backend or source data changed.
