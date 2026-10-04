@@ -258,6 +258,8 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-10-04: Cashflows inline ledger rows now share the main summary grid; category and ledger labels align at one left baseline.
 - 2026-10-04: Cashflows summary header/search updated in reconciliation HTML, JS, CSS, with direct-window regression coverage.
 - 2026-10-04: Cashflows global header label and navbar-to-panel spacing refined in reconciliation HTML, JS, CSS, with regression coverage.
+- 2026-10-04: Cashflows summary headers now stick below the global navbar through a dedicated non-scrolling wrapper and regression coverage.
+
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
 - Findings from a Code Health Review session go to `KNOWN_ISSUES.md`, not the Status log — the Status log records changes made, that file records issues found

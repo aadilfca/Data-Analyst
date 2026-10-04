@@ -10328,6 +10328,9 @@ body.cashflows-processing-open { overflow: hidden; }
 .cashflows-summary-section-row th { background: #e8f3e8; color: #416b4c; border-top: 1px solid #c3dec8; border-bottom: 1px solid #b8d8be; text-align: left; }
 .cashflows-summary-total-row th, .cashflows-summary-total-row td { background: #e8eef7; color: #0b2e59; font-weight: 800; border-top: 1px solid #1f4e78; border-bottom: 1px solid #c8d5e6; }
 .cashflows-summary-total-row:hover th, .cashflows-summary-total-row:hover td { background: #e8eef7; color: #0b2e59; }
+/* Keep the main summary header below the 70px global navbar while the report rows scroll. */
+.cashflows-summary-table-wrap { overflow: visible; }
+#cashflowsSummaryTable:not(.cashflows-summary-split-table) thead th { position: sticky; top: 72.5px; z-index: 8; background: #f4f8fa; box-shadow: 0 1px 0 #c9d7df; }
 #cashflowsSummaryTable:not(.cashflows-summary-split-table) thead th:not(:first-child),
 #cashflowsSummaryTable:not(.cashflows-summary-split-table) tbody tr:not(.cashflows-summary-section-row) td:not(:first-child),
 #cashflowsSummaryTable:not(.cashflows-summary-split-table) tbody tr.cashflows-summary-total-row td { text-align: right; font-variant-numeric: tabular-nums; }

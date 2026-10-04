@@ -7342,4 +7342,10 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 
 **Implementation:** Cashflows now renders `AREA: Cashflows summary` through the existing navigation module setter, while the Reports hub remains `AREA: Reports`. The redundant local title/receipt line was removed. Cashflows-only shell top padding is 8.5px; internal panel-to-summary spacing remains 10px. Cache-busters and direct-window assertions were updated.
 
-**Verification:** Aadil confirmed the final local layout. Focused direct-window tests passed 3/3; JavaScript syntax and `git diff --check` passed. No backend or Cashflows calculation changed.
+**Verification:** Aadil confirmed the final local layout. Focused direct-window tests passed 3/3; JavaScript syntax and `git diff --check` passed. No backend or Cashflows calculation changed.## Cashflows sticky summary header - 2026-10-04
+
+**Scope:** Keep the main Cashflows summary header visible while report rows scroll, exactly 2.5px below the global navbar.
+
+**Implementation:** Added a dedicated summary-table wrapper without a vertical scroll boundary and applied sticky positioning directly to non-split summary header cells at 72.5px. Updated the CSS cache-buster and direct-window assertions; other Cashflows tables remain unchanged.
+
+**Verification:** Aadil confirmed the local scrolling behavior. Focused direct-window tests passed 3/3; JavaScript syntax and `git diff --check` passed. No backend or Cashflows calculation changed.
