@@ -480,6 +480,7 @@ def load_cashflow_classification_preview(
     classification_type: str | None = None,
     account_code: str | None = None,
     category: str | None = None,
+    treasury_view: str | None = None,
     query_fn: Callable[..., list[dict[str, Any]]] = execute_query_pg,
 ) -> dict[str, Any]:
     """Return one read-only, paginated Client Data/classification view.
@@ -541,9 +542,42 @@ def load_cashflow_classification_preview(
     elif classification_type not in (None, ""):
         raise ValueError("Invalid classification type")
 
+    treasury_filter = str(treasury_view or 'combined').strip().casefold()
+    if treasury_filter not in {'combined', 'cash', 'bank'}:
+        raise ValueError('Invalid treasury view')
+    treasury_types = {'cash', 'bank'} if treasury_filter == 'combined' else {treasury_filter}
+    treasury_placeholders = ', '.join(['%s'] * len(treasury_types))
+    if treasury_filter in {'combined', 'cash', 'bank'}:
+        where.append(
+            'EXISTS ('
+            ' SELECT 1'
+            ' FROM cash_bank_transaction_classifications treasury'
+            ' JOIN selected_template_uploads treasury_upload'
+            ' ON treasury_upload.upload_id = treasury.upload_id'
+            ' WHERE treasury.client_id = c.client_id'
+            ' AND treasury.template_id = c.template_id'
+            ' AND treasury.voucher_id = c.voucher_id'
+            ' AND treasury.is_current = TRUE'
+            ' AND treasury.treasury_type IN (' + treasury_placeholders + ')'
+            ')'
+        )
+        params.extend(sorted(treasury_types))
+
     if account_code:
         where.append("LOWER(c.account_code) = LOWER(%s)")
         params.append(account_code.strip())
+    if category and category.strip().casefold() != '__unassigned__':
+        where.append(
+            'LOWER(COALESCE(NULLIF(BTRIM(category.label), \'\'), '
+            'NULLIF(BTRIM(COALESCE('
+            'cd.row_data ->> \'Account Name\', '
+            'cd.row_data ->> \'Account Title\', '
+            'cd.row_data ->> \'Ledger Name\', '
+            'cd.row_data ->> \'Particulars\', '
+            '\'\')), \'\'))) LIKE LOWER(%s)'
+        )
+        params.append(f'%{category.strip()}%')
+        category = None
     if category:
         category_filter = category.strip().casefold()
         if category_filter == "__unassigned__":

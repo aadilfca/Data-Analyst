@@ -154,3 +154,97 @@ def test_cashflows_classification_preview_uses_latest_upload_per_filename_cte():
     assert all("JOIN selected_template_uploads" in sql for sql, _ in calls)
     assert calls[0][1][:3] == (5, 5, 9)
     assert calls[1][1][-2:] == (50, 50)
+
+def test_cashflows_classification_preview_filters_vouchers_by_treasury_view():
+    calls = []
+
+    def query_fn(sql, params):
+        calls.append((sql, params))
+        return [{'total': 0}] if 'SELECT COUNT(*)' in sql else []
+
+    result = load_cashflow_classification_preview(
+        5,
+        9,
+        date(2026, 1, 1),
+        date(2026, 1, 31),
+        classification_type='counter',
+        treasury_view='cash',
+        query_fn=query_fn,
+    )
+
+    assert result['total_rows'] == 0
+    assert len(calls) == 2
+    assert all('FROM cash_bank_transaction_classifications treasury' in sql for sql, _ in calls)
+    assert all('JOIN selected_template_uploads treasury_upload' in sql for sql, _ in calls)
+    assert all('treasury.treasury_type IN (%s)' in sql for sql, _ in calls)
+    assert all('treasury.upload_id = c.upload_id' not in sql for sql, _ in calls)
+    assert all('cash' in params for _, params in calls)
+
+def test_cashflows_classification_preview_rejects_unknown_treasury_view():
+    def query_fn(sql, params):
+        raise AssertionError('invalid filters should be rejected before SQL')
+
+    try:
+        load_cashflow_classification_preview(
+            5,
+            9,
+            date(2026, 1, 1),
+            date(2026, 1, 31),
+            treasury_view='wire',
+            query_fn=query_fn,
+        )
+    except ValueError as exc:
+        assert 'Invalid treasury view' in str(exc)
+    else:
+        raise AssertionError('invalid treasury view was accepted')
+
+def test_cashflows_classification_preview_matches_summary_fallback_category():
+    calls = []
+
+    def query_fn(sql, params):
+        calls.append((sql, params))
+        return [{'total': 0}] if 'SELECT COUNT(*)' in sql else []
+
+    result = load_cashflow_classification_preview(
+        5,
+        1,
+        date(2026, 7, 1),
+        date(2026, 7, 31),
+        classification_type='counter',
+        account_code='20-15-50-15-0061',
+        category='HTY YOUNAS GROUP',
+        treasury_view='cash',
+        query_fn=query_fn,
+    )
+
+    assert result['total_rows'] == 0
+    assert len(calls) == 2
+    assert all('NULLIF(BTRIM(category.label)' in sql for sql, _ in calls)
+    assert all('Account Name' in sql for sql, _ in calls)
+    assert all('%HTY YOUNAS GROUP%' in params for _, params in calls)
+
+def test_cashflows_classification_preview_requires_cash_or_bank_leg_for_combined_view():
+    calls = []
+
+    def query_fn(sql, params):
+        calls.append((sql, params))
+        return [{'total': 0}] if 'SELECT COUNT(*)' in sql else []
+
+    result = load_cashflow_classification_preview(
+        5,
+        1,
+        date(2026, 7, 1),
+        date(2026, 7, 31),
+        classification_type='counter',
+        account_code='20-15-50-15-0061',
+        category='HTY YOUNAS GROUP',
+        treasury_view='combined',
+        query_fn=query_fn,
+    )
+
+    assert result['total_rows'] == 0
+    assert len(calls) == 2
+    assert all('treasury.treasury_type IN (%s, %s)' in sql for sql, _ in calls)
+    assert all('JOIN selected_template_uploads treasury_upload' in sql for sql, _ in calls)
+    assert all('treasury.upload_id = c.upload_id' not in sql for sql, _ in calls)
+    assert all('cash' in params and 'bank' in params for _, params in calls)

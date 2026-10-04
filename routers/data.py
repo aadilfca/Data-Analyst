@@ -506,6 +506,7 @@ def get_cashflows_classification_preview(
     classification_type: Optional[str] = Query(None, description="cash, bank, counter, or review"),
     account_code: Optional[str] = Query(None, description="Exact account-code filter"),
     category: Optional[str] = Query(None, description="Assigned-category filter"),
+    treasury_view: Optional[str] = Query(None, description='combined, cash, or bank voucher mode'),
     perf: bool = Query(False, include_in_schema=False),
 ):
     """Return a paginated, read-only view of raw Client Data plus Cashflows classification."""
@@ -549,6 +550,7 @@ def get_cashflows_classification_preview(
         classification_type=classification_type,
         account_code=account_code,
         category=category,
+        treasury_view=treasury_view,
     )
     result.update({
         "template_id": template_id,

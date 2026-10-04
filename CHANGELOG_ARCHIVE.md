@@ -1,4 +1,16 @@
 # Changelog Archive
+## Cashflows inline ledger-to-transaction expansion - Phase 3 - 2026-10-03
+
+**Scope:** Refine the inline Cashflows ledger drawer into a compact, searchable transaction view while preserving category-to-ledger behavior and the source-backed classified transaction contract.
+
+**Implementation:** Ledger rows open a large in-app drawer with a dim compact header for Assigned Category and Account Code / Account Name. The table is exactly S.No, Voucher Detail, Debit Amount, Credit Amount, Transaction Date, and Voucher ID; Account and Type remain out of the table. Period and Cash/Bank/Both selections apply only through Apply, with server-side voucher-mode filtering, pagination, caching, abort and stale-response protection, and opaque sticky headers preventing row overlap. Cash/Bank matching now follows the voucher across selected uploads, and modal category filtering follows the summary fallback account name so counter-account debit and credit lines are retained.
+
+**Verification:** JavaScript syntax and Python compilation passed; focused checks passed 10/10 after the cross-upload and fallback-category regression assertions; the exact Leather Crop July 2026 request returned 1 Cash row, 1 Bank row, and 3 combined rows on an isolated server; `git diff --check` passed.
+
+**Evidence boundary:** User local-server testing remains required for category-to-ledger-to-drawer behavior, compact header readability, row/header separation, Apply-only period and mode behavior, search, pagination, and close/reopen focus behavior.
+
+**Next:** User local-server testing, then commit/push after explicit confirmation.
+
 ## Cashflows inline category-to-ledger expansion - Phase 2 continuation - 2026-10-03
 
 **Scope:** Bring category-to-ledger expansion into the existing Cashflows summary while preserving summary values, cached fetching, formatting, and the separate drill-down compatibility path.
@@ -7264,3 +7276,12 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Future reference — Bank-only showed no report:** First verify that the selected-upload rule and treasury-view projection use the same current source set; a source-selection mismatch can make Bank-only appear empty even when Bank classifications exist. The Cashflows fix kept the existing latest-upload-per-filename selector as the shared contract and used the cached Bank projection, preserving the fast fetch path; it was not a network-connectivity issue.
 
 **Next:** User local-server testing, then commit/push only after explicit approval.
+## Cashflows ledger treasury-leg enforcement - 2026-10-04
+
+**Scope:** Enforce the Cashflows rule that a ledger voucher must hit an assigned Cash or Bank account, regardless of whether it is a Cash/Bank voucher or a JV.
+
+**Implementation:** Cash, Bank, and Combined drill-down views now require a current voucher-level Cash/Bank classification from the selected template uploads. Counter-account lines remain available for qualifying vouchers; non-treasury JVs such as JV-0726-445 are excluded, while JVs that actually hit an assigned Cash/Bank account remain eligible.
+
+**Verification:** Focused Cashflows classification tests passed 9/9; Python compilation passed; the isolated July HTY Younas check returned 2 Combined rows, 1 Cash row, and 1 Bank row with the non-treasury JV excluded. Aadil confirmed the local-server behavior. No source data was modified.
+
+**Next:** Commit and push after explicit approval.

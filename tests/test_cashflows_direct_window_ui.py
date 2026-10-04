@@ -116,14 +116,40 @@ def test_cashflows_summary_contains_inline_category_ledger_contract():
     assert 'cashflows-inline-expand' in inline_script
     assert 'cashflowInlineLedgerCache' in inline_script
     assert 'cashflowInlineLedgerLimit' in inline_script
+    assert 'cashflowInlineTransactionCache' in inline_script
+    assert 'cashflowInlineTransactionLimit' in inline_script
     assert 'data-cashflow-inline-category' in inline_script
-    assert 'cashflows-inline-ledger-host' in inline_script
+    assert 'data-cashflow-inline-ledger' in inline_script
+    assert '/api/data/cashflows-classification-preview?' in inline_script
+    assert 'classification_type:' in inline_script
+    assert 'openCashflowTransactionDrawer' in inline_script
+    assert 'cashflowsInlineTransactionSearch' in inline_script
+    assert 'cashflowsInlineTransactionPeriod' in inline_script
+    assert 'cashflowsInlineTransactionMode' in inline_script
+    assert 'cashflowsInlineTransactionCategory' in inline_script
+    assert 'cashflowsInlineTransactionAccount' in inline_script
+    assert 'treasury_view: filters.mode' in inline_script
+    assert 'Voucher Detail' in inline_script
+    assert 'Debit Amount' in inline_script
+    assert 'Credit Amount' in inline_script
+    assert 'Transaction Date' in inline_script
+    assert 'Voucher ID' in inline_script
+    assert 'Period selection pending - click Apply.' in inline_script
+    assert 'cashflowsInlineTransactionContext' not in inline_script
+    assert 'Cashflows transaction detail' not in inline_script
+    assert 'Ledger transactions' not in inline_script
     assert 'category: category' in inline_script
     assert 'button.disabled = false' in inline_script
     assert 'cashflows-inline-ledger-row' in inline_script
     assert 'cashflows-inline-ledger-host' in inline_styles
     assert 'cashflows-inline-ledger-loading' in inline_styles
     assert 'cashflows-inline-ledger-error' in inline_styles
+    assert 'cashflows-inline-transaction-table' in inline_styles
+    assert 'cashflows-inline-transaction-drawer' in inline_styles
+    assert 'cashflows-inline-transaction-dialog' in inline_styles
+    assert 'cashflows-inline-transaction-table-wrap' in inline_styles
+    assert 'cashflows-inline-transaction-context' in inline_styles
+    assert 'cashflows-inline-transaction-table thead' in inline_styles
 
 def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
 
