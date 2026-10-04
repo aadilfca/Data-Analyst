@@ -7349,3 +7349,11 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Implementation:** Added a dedicated summary-table wrapper without a vertical scroll boundary and applied sticky positioning directly to non-split summary header cells at 72.5px. Updated the CSS cache-buster and direct-window assertions; other Cashflows tables remain unchanged.
 
 **Verification:** Aadil confirmed the local scrolling behavior. Focused direct-window tests passed 3/3; JavaScript syntax and `git diff --check` passed. No backend or Cashflows calculation changed.
+
+## Cashflows sticky-header gutter correction - 2026-10-04
+
+**Scope:** Prevent scrolling Cashflows rows from appearing in the 2.5px gap between the global navbar and frozen summary header.
+
+**Implementation:** Added a scoped fixed opaque gutter at 70px with 2.5px height and z-index 99, while retaining the summary header at 72.5px. Advanced the stylesheet cache-buster to v46 and added a direct-window regression assertion.
+
+**Verification:** Aadil confirmed the local scrolling behavior after cache refresh. Focused direct-window tests passed 3/3; JavaScript syntax and git diff --check passed. No backend or Cashflows calculation changed.

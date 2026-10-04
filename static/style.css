@@ -10331,6 +10331,7 @@ body.cashflows-processing-open { overflow: hidden; }
 /* Keep the main summary header below the 70px global navbar while the report rows scroll. */
 .cashflows-summary-table-wrap { overflow: visible; }
 #cashflowsSummaryTable:not(.cashflows-summary-split-table) thead th { position: sticky; top: 72.5px; z-index: 8; background: #f4f8fa; box-shadow: 0 1px 0 #c9d7df; }
+.cashflows-summary-table-wrap::before { position: fixed; top: 70px; right: 0; left: 0; z-index: 99; height: 2.5px; background: #f4f7fb; content: ''; pointer-events: none; }
 #cashflowsSummaryTable:not(.cashflows-summary-split-table) thead th:not(:first-child),
 #cashflowsSummaryTable:not(.cashflows-summary-split-table) tbody tr:not(.cashflows-summary-section-row) td:not(:first-child),
 #cashflowsSummaryTable:not(.cashflows-summary-split-table) tbody tr.cashflows-summary-total-row td { text-align: right; font-variant-numeric: tabular-nums; }

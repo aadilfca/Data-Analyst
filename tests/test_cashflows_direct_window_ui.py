@@ -186,7 +186,7 @@ def test_cashflows_summary_contains_inline_category_ledger_contract():
     assert 'cashflows-inline-ledger-link' in inline_styles
     assert 'cashflows-inline-expand-icon' not in inline_script
     assert 'cashflows-inline-expand-icon' not in inline_styles
-    assert 'style.css?v=45' in inline_html
+    assert 'style.css?v=46' in inline_html
     assert 'cashflows-inline-ledger-row td:first-child' in inline_styles
     assert 'cashflows-inline-ledger-row td:not(:first-child)' in inline_styles
     assert 'cashflows-inline-ledger-table' not in inline_script
@@ -207,6 +207,7 @@ def test_cashflows_summary_contains_inline_category_ledger_contract():
     assert '#cashflowsSummaryTable:not(.cashflows-summary-split-table) thead th:not(:first-child)' in inline_styles
     assert '.cashflows-summary-table-wrap { overflow: visible; }' in inline_styles
     assert '#cashflowsSummaryTable:not(.cashflows-summary-split-table) thead th { position: sticky; top: 72.5px; z-index: 8; background: #f4f8fa; box-shadow: 0 1px 0 #c9d7df; }' in inline_styles
+    assert '.cashflows-summary-table-wrap::before' in inline_styles
     assert '#cashflowsSummaryTable:not(.cashflows-summary-split-table) tbody tr:not(.cashflows-summary-section-row) td:not(:first-child)' in inline_styles
     assert 'font-variant-numeric: tabular-nums;' in inline_styles
 
@@ -242,7 +243,7 @@ def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
     assert "setCashflowSummaryFilterVisibility(false);" in reconciliation_script
     assert "cashflowPreviewPeriods" in reconciliation_script
     assert "syncCashflowZeroRowsButton" in reconciliation_script
-    assert "style.css?v=45" in reconciliation_html
+    assert "style.css?v=46" in reconciliation_html
     assert "reconciliation.js?v=21" in reconciliation_html
     assert "cashflowsSummaryBasis" not in reconciliation_html
     assert "cashflows-transactions-note" not in reconciliation_html
