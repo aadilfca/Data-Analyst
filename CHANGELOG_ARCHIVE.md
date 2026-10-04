@@ -7366,3 +7366,12 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Implementation:** Added inherited Period/View/Grouping context, removed the roll-up count and audit-control line, retained detail filters/export/pagination/back navigation, and hid the entire summary-control panel during drill-down. Cache-busting advanced to v48; direct-window assertions cover the removed UI.
 
 **Verification:** Aadil confirmed the local drill-down behavior. Focused direct-window tests passed 3/3; JavaScript syntax and `git diff --check` passed. No backend or Cashflows calculation changed.
+
+
+## Cashflows ledger sticky-header boundary - 2026-10-04
+
+**Scope:** Make the Cashflows ledger drill-down follow the proven main-summary sticky-header behavior without nested scrolling.
+
+**Implementation:** Removed the generic transaction-table wrapper from the ledger table, removed its internal overflow boundary, reused the 72.5px sticky header and 2.5px opaque navbar gutter, and advanced the stylesheet cache-buster to v51. Added regression assertions for the wrapper contract.
+
+**Verification:** Aadil confirmed the local visual behavior. Focused direct-window tests passed 3/3; JavaScript syntax and `git diff --check` passed. No backend, accounting, or source data changed.
