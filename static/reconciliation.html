@@ -52,10 +52,14 @@
             </section>
         </section>
         <section id='cashflowsView' class='cashflows-report' aria-label='Cashflows report' hidden>
-            <form id='cashflowsReportForm' class='cashflows-filter-bar'>
+    <div class='cashflows-report-header'>
+        <div class='cashflows-section-heading cashflows-report-heading'><h3>Cash Flow summary</h3><span id='cashflowsReceiptMode'></span></div>
+        <form id='cashflowsReportForm' class='cashflows-filter-bar'>
+            <div class='cashflows-report-scope' role='group' aria-label='Cashflows report scope'>
                 <label class='cashflows-grouping-control' for='cashflowsGroupingSelect'>Group by<select id='cashflowsGroupingSelect' aria-label='Cashflows report grouping'><option value='suggested'>Suggested</option><option value='day'>Daily</option><option value='fortnight'>Fortnightly</option><option value='month'>Monthly</option><option value='quarter'>Quarterly</option><option value='half_year'>Half-yearly</option><option value='year'>Annually</option></select></label>
                 <label class='cashflows-treasury-control' for='cashflowsTreasuryViewSelect'>Treasury view<select id='cashflowsTreasuryViewSelect' aria-label='Cashflows treasury view'><option value='combined'>Cash and Bank Total</option><option value='bank'>Bank only</option><option value='cash'>Cash only</option><option value='split'>Cash and Bank individually</option></select></label>
                 <div class='cashflows-period-control'>
+                    <span class='cashflows-control-label'>Period</span>
                     <button type='button' id='cashflowsPeriodButton' class='cashflows-period-button' aria-haspopup='dialog' aria-expanded='false'>Select period</button>
                     <div id='cashflowsPeriodPopover' class='cashflows-period-popover' role='dialog' aria-label='Cashflows reporting period' hidden>
                         <div class='cashflows-period-group'><span class='cashflows-period-label'>Quick period</span><div class='cashflows-period-chips'>
@@ -82,13 +86,15 @@
                 <input id='cashflowsPeriodStart' type='date' required hidden>
                 <input id='cashflowsPeriodEnd' type='date' required hidden>
                 <button type='submit' class='cashflows-primary'>Load summary</button>
+            </div>
+            <div class='cashflows-report-actions'>
                 <button type='button' id='cashflowsLedgerDrilldownButton' class='cashflows-secondary' hidden>Open ledger drill-down</button>
-                <div class='cashflows-report-actions'>
-                    <button type='button' id='cashflowsHideZeroRowsButton' class='cashflows-secondary' disabled>Hide zero rows</button>
-                    <button type='button' id='cashflowsExportButton' class='cashflows-secondary cashflows-export-button' hidden>Export XLSX</button>
-                </div>
-            </form>
-            <section class='cashflows-report-section'><div class='cashflows-section-heading'><h3>Cash Flow summary</h3><span id='cashflowsReceiptMode'></span></div><div class='cashflows-summary-tools'><div class='cashflows-search-control'><input id='cashflowsSummaryFilter' type='text' placeholder='Filter category' aria-label='Filter Cashflows categories'><button type='button' id='cashflowsSummaryClear' class='cashflows-search-clear' aria-label='Clear category filter' title='Clear category filter' hidden>×</button></div></div><div id='cashflowsTreasuryReconciliation' class='cashflows-transfer-reconciliation' hidden aria-live='polite'></div><div class='cashflows-table-wrap'><table id='cashflowsSummaryTable' class='cashflows-table'></table></div></section>
+                <button type='button' id='cashflowsHideZeroRowsButton' class='cashflows-secondary' disabled>Hide zero rows</button>
+                <button type='button' id='cashflowsExportButton' class='cashflows-secondary cashflows-export-button' hidden>Export XLSX</button>
+            </div>
+        </form>
+    </div>
+    <section class='cashflows-report-section'><div class='cashflows-summary-tools'><div class='cashflows-search-control'><input id='cashflowsSummaryFilter' type='text' placeholder='Filter category' aria-label='Filter Cashflows categories'><button type='button' id='cashflowsSummaryClear' class='cashflows-search-clear' aria-label='Clear category filter' title='Clear category filter' hidden>×</button></div></div><div id='cashflowsTreasuryReconciliation' class='cashflows-transfer-reconciliation' hidden aria-live='polite'></div><div class='cashflows-table-wrap'><table id='cashflowsSummaryTable' class='cashflows-table'></table></div></section>
             <div id='cashflowsLazyActions' class='cashflows-lazy-actions'>
                 <div class='cashflows-detail-actions'>
                     <button type='button' id='cashflowsLoadTransfersButton' class='cashflows-secondary'>Load internal transfers</button>
@@ -196,6 +202,6 @@
         </footer>
     </main>
     <script src='/static/client_context.js?v=18'></script>
-    <script src='/static/reconciliation.js?v=17'></script>
+    <script src='/static/reconciliation.js?v=19'></script>
 </body>
 </html>

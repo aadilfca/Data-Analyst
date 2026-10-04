@@ -10236,13 +10236,17 @@ body {
 .cashflows-processing-steps li.is-complete { color: #2e7d32; }
 .cashflows-processing-steps li.is-complete::before { content: '✓'; color: #2e7d32; font-weight: 800; }
 body.cashflows-processing-open { overflow: hidden; }
-.cashflows-filter-bar { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 14px 16px; border: 1px solid #dbe4ea; border-radius: 12px; background: #f8fbfd; }
-.cashflows-filter-bar label { display: grid; gap: 5px; color: #526675; font-size: 12px; font-weight: 700; }
-.cashflows-filter-bar input { min-width: 145px; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 7px; font: inherit; }.cashflows-filter-bar select { min-width: 260px; max-width: 420px; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 7px; background: #fff; font: inherit; }
+.cashflows-report-header { display: grid; gap: 10px; padding: 14px 16px 12px; border: 1px solid #dbe4ea; border-radius: 12px; background: #f8fbfd; }
+.cashflows-report-heading { margin-bottom: 0; }
+.cashflows-filter-bar { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 10px 0 0; border: 0; border-top: 1px solid #dbe4ea; border-radius: 0; background: transparent; }
+.cashflows-report-scope { display: flex; flex: 1 1 auto; flex-wrap: wrap; align-items: end; gap: 10px; min-width: 0; }
+.cashflows-filter-bar label, .cashflows-control-label { display: grid; gap: 5px; color: #526675; font-size: 12px; font-weight: 700; }
+.cashflows-filter-bar input { min-width: 145px; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 7px; font: inherit; }.cashflows-filter-bar select { min-width: 0; max-width: none; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 7px; background: #fff; font: inherit; }
 
-.cashflows-grouping-control { min-width: 170px; }.cashflows-grouping-control select { min-width: 170px; max-width: 210px; }
-.cashflows-period-control { position: relative; }
-.cashflows-period-button { min-width: 210px; border: 1px solid #b8c9d6; border-radius: 7px; padding: 9px 12px; background: #fff; color: #334e60; font-weight: 700; text-align: left; cursor: pointer; }
+.cashflows-grouping-control { width: 170px; }.cashflows-grouping-control select { width: 170px; }
+.cashflows-treasury-control { width: 235px; }.cashflows-treasury-control select { width: 235px; }
+.cashflows-period-control { position: relative; width: 210px; }
+.cashflows-period-button { width: 210px; min-width: 210px; border: 1px solid #b8c9d6; border-radius: 7px; padding: 9px 12px; background: #fff; color: #334e60; font-weight: 700; text-align: left; cursor: pointer; }
 .cashflows-period-button::after { content: '▾'; float: right; color: #64748b; }
 .cashflows-period-popover { position: absolute; top: calc(100% + 8px); left: 0; z-index: 20; width: min(520px, calc(100vw - 32px)); padding: 14px; border: 1px solid #cbd5e1; border-radius: 10px; background: #fff; box-shadow: 0 14px 32px rgba(15, 23, 42, .18); }
 .cashflows-period-group { display: grid; gap: 7px; margin-bottom: 13px; }
@@ -10287,7 +10291,6 @@ body.cashflows-processing-open { overflow: hidden; }
 .cashflows-detail-actions { display: flex; flex: 1 1 auto; flex-wrap: wrap; gap: 8px; }
 .cashflows-detail-actions .cashflows-secondary { min-width: 190px; }
 .cashflows-report-actions { display: flex; flex: 0 1 auto; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-left: auto; }
-.cashflows-filter-bar > #cashflowsLedgerDrilldownButton { flex: 0 0 auto; }
 .cashflows-report-actions .cashflows-secondary { min-width: 0; }
 .cashflows-drilldown-shortcuts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0; }
 .cashflows-drilldown-shortcuts .cashflows-secondary { min-width: 190px; }
@@ -10311,6 +10314,9 @@ body.cashflows-processing-open { overflow: hidden; }
 .cashflows-transactions-section .cashflows-table td:first-child { text-align: center; }
 .cashflows-transactions-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 10px; color: #64748b; font-size: 12px; }
 @media (max-width: 760px) {
+    .cashflows-report-scope { flex-basis: 100%; }
+    .cashflows-report-scope > label, .cashflows-report-scope > .cashflows-period-control, .cashflows-report-scope > .cashflows-primary { flex: 1 1 180px; width: auto; }
+    .cashflows-report-scope select, .cashflows-report-scope .cashflows-period-button { width: 100%; min-width: 0; }
     .cashflows-lazy-actions { align-items: stretch; }
     .cashflows-detail-actions, .cashflows-report-actions { width: 100%; }
     .cashflows-report-actions { justify-content: flex-start; margin-left: 0; }

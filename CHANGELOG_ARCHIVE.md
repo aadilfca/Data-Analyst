@@ -7328,3 +7328,11 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Implementation:** Replaced the nested ledger table with rows in the shared summary grid, removed the duplicate ledger header and roll-up note, removed the visible ledger arrow/plus control, and made ledger labels wrap naturally. Category labels now remain clickable expand/collapse controls without a decorative offset. Reconciliation stylesheet cache-busting advanced from `v=38` to `v=39`.
 
 **Verification:** Focused direct-window tests passed 2/2; JavaScript syntax and `git diff --check` passed. No backend or Cashflows calculation changed.
+
+## Cashflows compact summary header and conditional category search - 2026-10-04
+
+**Scope:** Compact the main Cashflows report header and show category search only when the loaded report contains activity.
+
+**Implementation:** Reordered the report title, grouping, Treasury view, period, load, and action controls into a compact responsive header with need-based control widths. The category search now stays hidden before loading, during refresh, and for empty or zero-activity previews; it remains available for loaded activity and normal no-match filtering. Cache-busting and direct-window assertions were updated.
+
+**Verification:** Aadil confirmed the local empty-period behavior. Focused direct-window tests passed 3/3; JavaScript syntax and `git diff --check` passed. No backend or Cashflows calculation changed.

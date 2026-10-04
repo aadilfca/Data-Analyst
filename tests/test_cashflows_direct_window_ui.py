@@ -60,13 +60,19 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert "cashflowsPeriodPopover" in html
     assert "cashflowsPeriodPicker" in html
     assert "cashflowsGroupingSelect" in html
+    assert "cashflows-report-scope" in html
+    assert "cashflows-report-heading" in html
+    assert html.index("Cash Flow summary") < html.index("cashflowsReportForm")
+    assert html.index("cashflowsGroupingSelect") < html.index("cashflowsTreasuryViewSelect") < html.index("cashflowsPeriodButton") < html.index("Load summary")
+    assert ".cashflows-treasury-control { width: 235px; }" in styles
+    assert ".cashflows-period-control { position: relative; width: 210px; }" in styles
     assert "Group by" in html
     assert "cashflowsCustomGrouping" not in html
     assert "cashflowsBackButton" not in html
     assert "cashflowsSourceStatus" not in html
     assert "cashflowsControls" not in html
     assert "cashflowsSourceQuality" not in html
-    assert "cashflows-report-header" not in html
+    assert "cashflows-report-header" in html
     assert "cashflowsMessage" not in html
     assert "cashflowsToast" in html
     assert "cashflowsProcessing" in html
@@ -100,7 +106,7 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert "group_by: cashflowSelection.groupBy" in script
     assert ".cashflows-grouping-control" in styles
     assert ".cashflows-template-note" not in styles
-    assert ".cashflows-report-header" not in styles
+    assert ".cashflows-report-header" in styles
     assert ".cashflows-control-grid" not in styles
     assert ".cashflows-source-quality" not in styles
     assert ".cashflows-message" not in styles
@@ -220,10 +226,14 @@ def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
     assert "type='text'" in reconciliation_html
     assert "id='cashflowsSummaryFilter' type='search'" not in reconciliation_html
     assert "cashflowsSummaryClear" in reconciliation_script
+    assert "function setCashflowSummaryFilterVisibility" in reconciliation_script
+    assert "setCashflowSummaryFilterVisibility(rawRows.length > 0 && (!hideCashflowZeroRows || hasActivityRows));" in reconciliation_script
+    assert "setCashflowSummaryFilterVisibility(allRows.length > 0 && (!hideCashflowZeroRows || hasActivityRows));" in reconciliation_script
+    assert "setCashflowSummaryFilterVisibility(false);" in reconciliation_script
     assert "cashflowPreviewPeriods" in reconciliation_script
     assert "syncCashflowZeroRowsButton" in reconciliation_script
-    assert "style.css?v=36" in reconciliation_html
-    assert "reconciliation.js?v=12" in reconciliation_html
+    assert "style.css?v=39" in reconciliation_html
+    assert "reconciliation.js?v=19" in reconciliation_html
     assert "cashflowsSummaryBasis" not in reconciliation_html
     assert "cashflows-transactions-note" not in reconciliation_html
     assert "renderCashflowSummary" in reconciliation_script

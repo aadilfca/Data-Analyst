@@ -1265,11 +1265,31 @@
             + '</div>';
         panel.hidden = false;
     }
+    function setCashflowSummaryFilterVisibility(visible) {
+        const input = element('cashflowsSummaryFilter');
+        const control = input ? input.closest('.cashflows-search-control') : null;
+        if (!control) return;
+        control.hidden = !visible;
+        if (!visible) {
+            cashflowSummaryFilter = '';
+            input.value = '';
+            const clearButton = element('cashflowsSummaryClear');
+            if (clearButton) clearButton.hidden = true;
+        }
+    }
     function renderCashflowSplitSummary(preview, table) {
         const periods = cashflowPreviewPeriods(preview);
         const periodKeys = periods.map(function (period) { return String(period.key); });
+        const allRows = cashflowSplitRows(preview);
+        const hasActivityRows = allRows.some(function (row) {
+            return periodKeys.some(function (periodKey) {
+                const values = row.periods[periodKey] || {};
+                return ['bank', 'cash', 'mixed', 'total'].some(function (field) { return Math.abs(Number(values[field]) || 0) > 0; });
+            });
+        });
+        setCashflowSummaryFilterVisibility(allRows.length > 0 && (!hideCashflowZeroRows || hasActivityRows));
         const filter = cashflowSummaryFilter.trim().toLowerCase();
-        const filteredRows = cashflowSplitRows(preview).filter(function (row) {
+        const filteredRows = allRows.filter(function (row) {
             return !filter || row.category.toLowerCase().indexOf(filter) >= 0;
         });
         const summaryRows = hideCashflowZeroRows ? filteredRows.filter(function (row) {
@@ -1351,6 +1371,12 @@
         const periods = cashflowPreviewPeriods(preview);
         const periodKeys = periods.map(function (period) { return period.key; });
         const rawRows = cashflowSummaryRows(preview);
+        const hasActivityRows = rawRows.some(function (row) {
+            const values = periodKeys.map(function (key) { return Number(row[key]) || 0; });
+            const total = Number(row.Total);
+            return values.some(function (value) { return Math.abs(value) > 0; }) || (Number.isFinite(total) && Math.abs(total) > 0);
+        });
+        setCashflowSummaryFilterVisibility(rawRows.length > 0 && (!hideCashflowZeroRows || hasActivityRows));
         const filter = cashflowSummaryFilter.trim().toLowerCase();
         const filteredRows = rawRows.filter(function (row) {
             return !filter || String(row.category || '').toLowerCase().indexOf(filter) >= 0;
@@ -1534,6 +1560,7 @@
     async function generateCashflows(event) {
         if (event) event.preventDefault();
         resetCashflowInlineLedgerState();
+        setCashflowSummaryFilterVisibility(false);
         const exportButton = element('cashflowsExportButton');
         if (exportButton) exportButton.hidden = true;
         cashflowSummaryFilter = '';
@@ -1822,6 +1849,7 @@
         }
     }
     async function initialise() {
+        setCashflowSummaryFilterVisibility(false);
         element('cashflowsExportButton').addEventListener('click', function () { downloadCashflowReport('summary'); });
         element('cashflowsDrilldownExportButton').addEventListener('click', function () { downloadCashflowReport('drilldown'); });
         element('cashflowsLedgerDrilldownButton').addEventListener('click', openCashflowDrilldown);

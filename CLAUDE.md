@@ -256,6 +256,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-10-04: Cashflows transaction amounts and totals now align right with tabular numerals; visible pending/loading alerts were replaced by an accessible busy cursor state.
 - 2026-10-04: Cashflows main-summary numeric columns now use right alignment and tabular numerals; category labels remain left-aligned.
 - 2026-10-04: Cashflows inline ledger rows now share the main summary grid; category and ledger labels align at one left baseline.
+- 2026-10-04: Cashflows summary header/search updated in reconciliation HTML, JS, CSS, with direct-window regression coverage.
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
 - Findings from a Code Health Review session go to `KNOWN_ISSUES.md`, not the Status log — the Status log records changes made, that file records issues found
