@@ -1469,7 +1469,6 @@
         const summaryRows = cashflowSummaryRows(preview);
         renderCategoryOptions(summaryRows.map(function (row) { return row.category; }), true);
         renderCashflowDrilldownCategoryOptions(summaryRows);
-        element('cashflowsReceiptMode').textContent = cashflowTreasuryViewLabel(cashflowTreasuryView) + ' · Receipt presentation: ' + String(preview.receipt_presentation || 'net').toUpperCase();
         renderCashflowTreasuryReconciliation(preview);
         const source = result.source || {};
         const exportButton = element('cashflowsExportButton');
@@ -1811,6 +1810,9 @@
     function setReportView(isReport) {
         element('reportsView').hidden = isReport;
         element('cashflowsView').hidden = !isReport;
+        const shell = document.querySelector('.reconciliation-shell');
+        if (shell) shell.classList.toggle('cashflows-view-active', isReport);
+        if (typeof window.setNavModule === 'function') window.setNavModule(isReport ? 'Cashflows summary' : 'Reports');
         if (typeof window.setUpOverride === 'function') window.setUpOverride(isReport ? showReportsHub : null);
     }
     function setSelection(card) {

@@ -7336,3 +7336,10 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Implementation:** Reordered the report title, grouping, Treasury view, period, load, and action controls into a compact responsive header with need-based control widths. The category search now stays hidden before loading, during refresh, and for empty or zero-activity previews; it remains available for loaded activity and normal no-match filtering. Cache-busting and direct-window assertions were updated.
 
 **Verification:** Aadil confirmed the local empty-period behavior. Focused direct-window tests passed 3/3; JavaScript syntax and `git diff --check` passed. No backend or Cashflows calculation changed.
+## Cashflows global header label and navbar spacing refinement - 2026-10-04
+
+**Scope:** Move Cashflows naming to the shared global header and reduce only the space between that header and the Cashflows control panel.
+
+**Implementation:** Cashflows now renders `AREA: Cashflows summary` through the existing navigation module setter, while the Reports hub remains `AREA: Reports`. The redundant local title/receipt line was removed. Cashflows-only shell top padding is 8.5px; internal panel-to-summary spacing remains 10px. Cache-busters and direct-window assertions were updated.
+
+**Verification:** Aadil confirmed the final local layout. Focused direct-window tests passed 3/3; JavaScript syntax and `git diff --check` passed. No backend or Cashflows calculation changed.

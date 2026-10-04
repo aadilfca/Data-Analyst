@@ -61,8 +61,9 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert "cashflowsPeriodPicker" in html
     assert "cashflowsGroupingSelect" in html
     assert "cashflows-report-scope" in html
-    assert "cashflows-report-heading" in html
-    assert html.index("Cash Flow summary") < html.index("cashflowsReportForm")
+    assert "cashflows-report-heading" not in html
+    assert "Cash Flow summary" not in html
+    assert "cashflowsReceiptMode" not in html
     assert html.index("cashflowsGroupingSelect") < html.index("cashflowsTreasuryViewSelect") < html.index("cashflowsPeriodButton") < html.index("Load summary")
     assert ".cashflows-treasury-control { width: 235px; }" in styles
     assert ".cashflows-period-control { position: relative; width: 210px; }" in styles
@@ -97,6 +98,9 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert "renderControls" not in script
     assert "renderSourceQuality" not in script
     assert "setUpOverride" in script
+    assert "setNavModule(isReport ? 'Cashflows summary' : 'Reports')" in script
+    assert "cashflows-view-active" in script
+    assert "cashflowsReceiptMode" not in script
     assert "setMessage" not in script
     assert "showCashflowToast" in script
     assert "showCashflowProcessing" in script
@@ -107,6 +111,9 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert ".cashflows-grouping-control" in styles
     assert ".cashflows-template-note" not in styles
     assert ".cashflows-report-header" in styles
+    assert ".cashflows-report { display: grid; gap: 10px; }" in styles
+    assert ".reconciliation-shell.cashflows-view-active { padding-top: 8.5px; }" in styles
+    assert ".cashflows-report-heading" not in styles
     assert ".cashflows-control-grid" not in styles
     assert ".cashflows-source-quality" not in styles
     assert ".cashflows-message" not in styles
@@ -178,7 +185,7 @@ def test_cashflows_summary_contains_inline_category_ledger_contract():
     assert 'cashflows-inline-ledger-link' in inline_styles
     assert 'cashflows-inline-expand-icon' not in inline_script
     assert 'cashflows-inline-expand-icon' not in inline_styles
-    assert 'style.css?v=39' in inline_html
+    assert 'style.css?v=43' in inline_html
     assert 'cashflows-inline-ledger-row td:first-child' in inline_styles
     assert 'cashflows-inline-ledger-row td:not(:first-child)' in inline_styles
     assert 'cashflows-inline-ledger-table' not in inline_script
@@ -232,8 +239,8 @@ def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
     assert "setCashflowSummaryFilterVisibility(false);" in reconciliation_script
     assert "cashflowPreviewPeriods" in reconciliation_script
     assert "syncCashflowZeroRowsButton" in reconciliation_script
-    assert "style.css?v=39" in reconciliation_html
-    assert "reconciliation.js?v=19" in reconciliation_html
+    assert "style.css?v=43" in reconciliation_html
+    assert "reconciliation.js?v=21" in reconciliation_html
     assert "cashflowsSummaryBasis" not in reconciliation_html
     assert "cashflows-transactions-note" not in reconciliation_html
     assert "renderCashflowSummary" in reconciliation_script
