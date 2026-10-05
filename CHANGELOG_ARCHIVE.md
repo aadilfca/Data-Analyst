@@ -1,5 +1,13 @@
 # Changelog Archive
 
+## Cashflows server read-model revision guard - 2026-10-05
+
+**Scope:** Ensure exact summary snapshots and the reusable daily snapshot can only serve the current Cashflows report revision.
+
+**Implementation:** Preview now passes the current revision into both read-model loaders; their SQL lookups filter by report_revision. A missing current-revision row safely falls through to the existing source rebuild path. No schema or accounting-calculation changes were made.
+
+**Verification:** Python compilation, diff validation, and 39 focused Cashflows tests passed. Local browser confirmation is pending.
+
 ## Cashflows compatible parent-period aggregation - 2026-10-05
 
 **Scope:** Extend safe browser cache reuse from month-only children to compatible daily, fortnightly, monthly, quarterly, half-yearly, and annual summaries.

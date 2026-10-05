@@ -1334,6 +1334,7 @@ def load_cashflow_prepared_summary(
     period_end: Any,
     group_by: str,
     receipt_presentation: str,
+    report_revision: int | None = None,
     query_fn: Callable[..., list[dict[str, Any]]] = execute_query_pg,
 ) -> dict[str, Any] | None:
     """Roll a full-range daily snapshot into the requested report periods."""
@@ -1346,8 +1347,19 @@ def load_cashflow_prepared_summary(
     if bounds is None:
         return None
     source_start, source_end = bounds
-    rows = query_fn(
-        """
+    query_params: list[Any] = [
+        client_id,
+        journal_template_id,
+        _cashflow_upload_ids_key(upload_ids),
+        source_start,
+        source_end,
+        receipt_presentation,
+    ]
+    revision_filter = ""
+    if report_revision is not None:
+        revision_filter = "          AND report_revision = %s\n"
+        query_params.append(int(report_revision))
+    query = """
         SELECT summary_payload, configuration_version, report_revision, created_at
         FROM cash_bank_summary_read_models
         WHERE client_id = %s
@@ -1359,9 +1371,12 @@ def load_cashflow_prepared_summary(
           AND receipt_presentation = %s
         ORDER BY created_at DESC
         LIMIT 1
-        """,
-        (client_id, journal_template_id, _cashflow_upload_ids_key(upload_ids), source_start, source_end, receipt_presentation),
+        """
+    query = query.replace(
+        "          AND receipt_presentation = %s\n",
+        "          AND receipt_presentation = %s\n" + revision_filter,
     )
+    rows = query_fn(query, tuple(query_params))
     if not rows:
         return None
     payload = _cashflow_json_value(rows[0].get("summary_payload"))
@@ -1481,6 +1496,7 @@ def load_cashflow_summary_read_model(
     period_end: Any,
     group_by: str,
     receipt_presentation: str,
+    report_revision: int | None = None,
     query_fn: Callable[..., list[dict[str, Any]]] = execute_query_pg,
 ) -> dict[str, Any] | None:
     """Load an exact summary-only snapshot when the source/configuration is unchanged."""
@@ -1490,8 +1506,20 @@ def load_cashflow_summary_read_model(
     if not upload_ids:
         return None
     upload_key = _cashflow_upload_ids_key(upload_ids)
-    rows = query_fn(
-        """
+    query_params: list[Any] = [
+        client_id,
+        journal_template_id,
+        upload_key,
+        period_start,
+        period_end,
+        group_by,
+        receipt_presentation,
+    ]
+    revision_filter = ""
+    if report_revision is not None:
+        revision_filter = "          AND report_revision = %s\n"
+        query_params.append(int(report_revision))
+    query = """
         SELECT summary_payload, configuration_version, report_revision, created_at
         FROM cash_bank_summary_read_models
         WHERE client_id = %s
@@ -1503,9 +1531,12 @@ def load_cashflow_summary_read_model(
           AND receipt_presentation = %s
         ORDER BY created_at DESC
         LIMIT 1
-        """,
-        (client_id, journal_template_id, upload_key, period_start, period_end, group_by, receipt_presentation),
+        """
+    query = query.replace(
+        "          AND receipt_presentation = %s\n",
+        "          AND receipt_presentation = %s\n" + revision_filter,
     )
+    rows = query_fn(query, tuple(query_params))
     if not rows:
         return None
     payload = rows[0].get("summary_payload") or {}

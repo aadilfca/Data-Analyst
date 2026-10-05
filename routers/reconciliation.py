@@ -1434,6 +1434,7 @@ def _build_cashflow_result(
                 period_end=end,
                 group_by=grouping,
                 receipt_presentation=configuration["receipt_presentation"],
+                report_revision=report_revision,
                 query_fn=execute_query_pg,
             )
             if not _cashflow_cache_can_serve_details(cached_summary, detail_sections, treasury_view):
@@ -1449,6 +1450,7 @@ def _build_cashflow_result(
                 period_end=end,
                 group_by=grouping,
                 receipt_presentation=configuration["receipt_presentation"],
+                report_revision=report_revision,
                 query_fn=execute_query_pg,
             )
             if not _cashflow_cache_can_serve_details(cached_summary, detail_sections, treasury_view):

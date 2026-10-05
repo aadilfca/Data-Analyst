@@ -289,6 +289,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-10-05: Cashflows split view now hides zero-only Mixed / unresolved columns and removes redundant reconciliation UI while preserving backend and XLSX fields.
 - 2026-10-05: Cashflows summary cache keys now include the active report revision; Treasury-view contexts remain separate and hard refresh bypasses cache.
 - 2026-10-05: Cashflows compatible parent-period cache reuse now supports daily, fortnightly, monthly, quarterly, half-yearly, and annual child summaries only when parent periods fully cover each child period.
+- 2026-10-05: Cashflows server read-model lookups now require the current report revision; stale exact or daily snapshots fall through to source rebuilding.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

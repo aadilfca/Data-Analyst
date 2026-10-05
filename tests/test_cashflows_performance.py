@@ -1,6 +1,11 @@
 """Phase 6 coverage for SQL-first Cashflows source preparation."""
 
-from services.ledger_report_source import _cashflow_daily_rollup, load_cashflow_sql_source
+from services.ledger_report_source import (
+    _cashflow_daily_rollup,
+    load_cashflow_prepared_summary,
+    load_cashflow_sql_source,
+    load_cashflow_summary_read_model,
+)
 
 
 def test_cashflow_sql_source_filters_dates_joins_vouchers_and_aggregates_lines():
@@ -205,6 +210,44 @@ def test_cashflow_sql_source_preserves_each_transaction_date_for_bucketing():
     )
 
     assert source.journal["date"].dt.strftime("%Y-%m-%d").tolist() == ["2026-01-05", "2026-02-05"]
+def test_cashflow_read_models_require_current_report_revision_when_requested():
+    calls = []
+
+    def query(sql, params=None):
+        if "FROM uploaded_files" in sql:
+            return [{"upload_id": 12, "file_name": "period.xlsx", "upload_date": "2026-02-01"}]
+        if "MIN(c.transaction_date)" in sql:
+            return [{"period_start": "2026-01-01", "period_end": "2026-02-28"}]
+        if "FROM cash_bank_summary_read_models" in sql:
+            calls.append((sql, params))
+            assert "AND report_revision = %s" in sql
+            assert params[-1] == 12
+            return []
+        raise AssertionError(f"Unexpected read-model query: {sql}")
+
+    assert load_cashflow_prepared_summary(
+        7,
+        journal_template_id=9,
+        period_start="2026-01-01",
+        period_end="2026-01-31",
+        group_by="month",
+        receipt_presentation="net",
+        report_revision=12,
+        query_fn=query,
+    ) is None
+    assert load_cashflow_summary_read_model(
+        7,
+        journal_template_id=9,
+        period_start="2026-01-01",
+        period_end="2026-01-31",
+        group_by="month",
+        receipt_presentation="net",
+        report_revision=12,
+        query_fn=query,
+    ) is None
+    assert len(calls) == 2
+
+
 def test_cashflow_daily_rollup_preserves_treasury_totals_for_larger_periods():
     payload = {
         "periods": [
