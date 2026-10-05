@@ -1,4 +1,12 @@
 # Changelog Archive
+## Cashflows split-view hover override fix - 2026-10-05
+
+**Scope:** Correct row highlighting when Cash and Bank individually renders the summary as frozen and horizontally scrolling panes.
+
+**Implementation:** Removed obsolete split-table first-column positioning/background rules that overrode synchronized hover state. Made every non-section period cell explicitly right-aligned, advanced `reconciliation.js` to `v=23`, and extended the direct-window regression to check frozen, first-period, and last-period cells.
+
+**Verification:** User confirmed the local UI. Focused Cashflows UI tests passed 4/4; JavaScript syntax and `git diff --check` passed. No backend, database, accounting, or source-data changes.
+
 ## Cashflows split-pane alignment and synchronized ledger hover - 2026-10-05
 
 **Scope:** Finalize full-year summary and expanded-ledger presentation after the frozen/scrolling pane redesign.

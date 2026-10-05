@@ -309,7 +309,7 @@ def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
     assert "cashflowPreviewPeriods" in reconciliation_script
     assert "syncCashflowZeroRowsButton" in reconciliation_script
     assert "style.css?v=64" in reconciliation_html
-    assert "reconciliation.js?v=22" in reconciliation_html
+    assert "reconciliation.js?v=23" in reconciliation_html
     assert "cashflowsSummaryBasis" not in reconciliation_html
     assert "cashflows-transactions-note" not in reconciliation_html
     assert "renderCashflowSummary" in reconciliation_script
@@ -339,9 +339,9 @@ def test_cashflows_summary_panes_contain_full_year_horizontal_overflow():
         "<thead><tr>" + headers + "</tr></thead></table></div></div>"
         "<div class='cashflows-summary-body-layout'>"
         "<div class='cashflows-summary-frozen-pane'><table class='cashflows-table cashflows-summary-pane-table cashflows-summary-frozen-table'>" + frozen_cols +
-        "<tbody><tr><td>Received from customers</td></tr></tbody></table></div>"
+        "<tbody><tr data-cashflow-summary-row-id='category-1'><td>Received from customers</td></tr></tbody></table></div>"
         "<div class='cashflows-summary-scroll-pane'><table class='cashflows-table cashflows-summary-pane-table cashflows-summary-scroll-table'>" + period_cols +
-        "<tbody><tr>" + cells + "</tr></tbody></table></div></div>"
+        "<tbody><tr data-cashflow-summary-row-id='category-1'>" + cells + "</tr></tbody></table></div></div>"
         "</div></div></div>"
     )
     with playwright.sync_playwright() as instance:
@@ -358,6 +358,10 @@ def test_cashflows_summary_panes_contain_full_year_horizontal_overflow():
                 const header = host.querySelector('.cashflows-summary-frozen-header-table thead th');
                 const scrollHeader = host.querySelector('.cashflows-summary-scroll-header-table thead th');
                 const scrollHeaderTable = host.querySelector('.cashflows-summary-scroll-header-table');
+                const frozenRow = host.querySelector('.cashflows-summary-frozen-pane tbody tr');
+                const scrollRow = host.querySelector('.cashflows-summary-scroll-pane tbody tr');
+                frozenRow.classList.add('cashflows-summary-row-hover');
+                scrollRow.classList.add('cashflows-summary-row-hover');
                 const paneRect = pane.getBoundingClientRect();
                 const frozenRect = frozen.getBoundingClientRect();
                 return {
@@ -370,7 +374,10 @@ def test_cashflows_summary_panes_contain_full_year_horizontal_overflow():
                     headerPosition: getComputedStyle(stickyHeader).position,
                     headerTop: header.getBoundingClientRect().top,
                     scrollHeaderTop: scrollHeader.getBoundingClientRect().top,
-                    scrollHeaderWidth: scrollHeaderTable.getBoundingClientRect().width
+                    scrollHeaderWidth: scrollHeaderTable.getBoundingClientRect().width,
+                    frozenRowBackground: getComputedStyle(frozenRow.cells[0]).backgroundColor,
+                    firstPeriodBackground: getComputedStyle(scrollRow.cells[0]).backgroundColor,
+                    lastPeriodBackground: getComputedStyle(scrollRow.cells[scrollRow.cells.length - 1]).backgroundColor
                 };
             }"""
         )
@@ -383,3 +390,6 @@ def test_cashflows_summary_panes_contain_full_year_horizontal_overflow():
     assert metrics["paneRight"] <= 1201
     assert metrics["headerPosition"] == "sticky"
     assert abs(metrics["headerTop"] - metrics["scrollHeaderTop"]) <= 1
+    assert metrics["frozenRowBackground"] == "rgb(248, 251, 253)"
+    assert metrics["firstPeriodBackground"] == "rgb(248, 251, 253)"
+    assert metrics["lastPeriodBackground"] == "rgb(248, 251, 253)"

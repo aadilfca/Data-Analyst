@@ -10373,9 +10373,8 @@ body .cashflows-drilldown-toolbar button { min-width: 0; white-space: nowrap; pa
 .cashflows-summary-pane-table th,
 .cashflows-summary-pane-table td { box-sizing: border-box; }
 .cashflows-summary-pane-table tbody tr:hover td { background: #f8fbfd; }
-.cashflows-summary-scroll-pane .cashflows-summary-pane-table th:not(:first-child),
-.cashflows-summary-scroll-pane .cashflows-summary-pane-table td:not(:first-child),
-.cashflows-summary-scroll-pane .cashflows-summary-total-row td { text-align: right; font-variant-numeric: tabular-nums; }
+.cashflows-summary-scroll-pane .cashflows-summary-pane-table tbody tr:not(.cashflows-summary-section-row) th,
+.cashflows-summary-scroll-pane .cashflows-summary-pane-table tbody tr:not(.cashflows-summary-section-row) td { text-align: right; font-variant-numeric: tabular-nums; }
 .cashflows-summary-frozen-pane .cashflows-summary-pane-table th,
 .cashflows-summary-frozen-pane .cashflows-summary-pane-table td { text-align: left; white-space: normal; overflow-wrap: anywhere; }
 .cashflows-summary-table-wrap::before { position: fixed; top: 70px; right: 0; left: 0; z-index: 99; height: 2.5px; background: #f4f7fb; content: ''; pointer-events: none; }
@@ -10440,12 +10439,4 @@ body.cashflows-inline-transaction-open { overflow: hidden; }
     .cashflows-inline-transaction-footer { align-items: stretch; flex-direction: column; }
     .cashflows-inline-transaction-pagination { justify-content: flex-end; }
 }
-.cashflows-summary-split-table { min-width: 1120px; }
-.cashflows-summary-split-table thead tr:first-child th { background: #e6eef7; color: #0b2e59; text-align: center; }
-.cashflows-summary-split-table thead tr:nth-child(2) th { background: #f4f8fa; text-align: right; }
-.cashflows-summary-split-table thead th:first-child,
-.cashflows-summary-split-table tbody tr:not(.cashflows-summary-section-row):not(.cashflows-summary-total-row) td:first-child { position: sticky; left: 0; z-index: 2; background: #fff; text-align: left; }
-.cashflows-summary-split-table tbody tr:hover td:first-child { background: #f8fbfd; }
-.cashflows-summary-split-table .cashflows-summary-total-row th:first-child { position: sticky; left: 0; z-index: 2; }
-.cashflows-summary-scroll-pane .cashflows-summary-pane-table tbody tr:not(.cashflows-summary-section-row):not(.cashflows-summary-total-row) td:first-child { position: static; left: auto; z-index: auto; box-shadow: none; text-align: right; }
 .cashflows-summary-pane-table tbody tr:not(.cashflows-summary-total-row).cashflows-summary-row-hover td { background: #f8fbfd; }
