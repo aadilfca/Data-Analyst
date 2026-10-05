@@ -745,6 +745,12 @@ def test_cashflow_summary_cache_is_revision_safe_and_bounded():
     assert "Number(revision || cashflowReportRevision || 0)" in javascript
     assert "function findCashflowParentSummary(start, end, groupBy, treasuryView)" in javascript
     assert "function deriveCashflowSummaryFromParent(parent, start, end, groupBy, treasuryView)" in javascript
+    assert "const cashflowGroupingRank = { day: 0, fortnight: 1, month: 2, quarter: 3, half_year: 4, year: 5 }" in javascript
+    assert "function cashflowCanonicalPeriods(startValue, endValue, groupBy)" in javascript
+    assert "function cashflowParentPeriodGroups(parentPeriods, childPeriods)" in javascript
+    assert "function cashflowAggregateCategoryRows(rows, parentGroups, childPeriods)" in javascript
+    assert "function cashflowAggregateTreasuryRows(rows, parentGroups, childPeriods)" in javascript
+    assert "cashflowGroupingCanAggregate(parent.group_by, groupBy)" in javascript
     assert "Parent-period cache" in javascript
     assert '"period_metrics": summary.get("period_metrics") or {}' in reconciliation_source
     assert "cashflowSummaryCache.clear()" in javascript

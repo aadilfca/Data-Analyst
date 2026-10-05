@@ -309,7 +309,7 @@ def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
     assert "cashflowPreviewPeriods" in reconciliation_script
     assert "syncCashflowZeroRowsButton" in reconciliation_script
     assert "style.css?v=64" in reconciliation_html
-    assert "reconciliation.js?v=27" in reconciliation_html
+    assert "reconciliation.js?v=28" in reconciliation_html
     assert "cashflowsSummaryBasis" not in reconciliation_html
     assert "cashflows-transactions-note" not in reconciliation_html
     assert "renderCashflowSummary" in reconciliation_script

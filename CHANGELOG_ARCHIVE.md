@@ -1,5 +1,13 @@
 # Changelog Archive
 
+## Cashflows compatible parent-period aggregation - 2026-10-05
+
+**Scope:** Extend safe browser cache reuse from month-only children to compatible daily, fortnightly, monthly, quarterly, half-yearly, and annual summaries.
+
+**Implementation:** Added canonical period mapping, finer-to-coarser grain checks, gap/boundary validation, category aggregation, Treasury split aggregation, and period-metric aggregation. Unsafe or coarse-to-fine requests still use the server.
+
+**Verification:** JavaScript syntax, diff validation, and focused Cashflows tests passed; local browser confirmation is pending.
+
 ## Cashflows summary cache context hardening - 2026-10-05
 
 **Scope:** Make browser summary reuse explicitly revision-scoped while preserving separate Bank, Cash, Combined, and Split contexts.

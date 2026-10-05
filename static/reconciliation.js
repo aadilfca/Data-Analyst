@@ -649,60 +649,173 @@
     function cashflowSummaryContextKey(start, end, groupBy, treasuryView, revision) {
         return [clientId, start, end, groupBy || 'month', treasuryView || 'combined', Number(revision || cashflowReportRevision || 0)].join('|');
     }
-    function cashflowPeriodSelection(preview, start, end) {
-        const childStart = fromIso(start);
-        const childEnd = fromIso(end);
-        const periods = cashflowPreviewPeriods(preview);
-        if (!childStart || !childEnd || !periods.length || periods.some(function (period) {
-            return !fromIso(period.start) || !fromIso(period.end);
-        })) return null;
-        const selected = periods.filter(function (period) {
-            const periodStart = fromIso(period.start);
-            const periodEnd = fromIso(period.end);
-            return periodStart >= childStart && periodEnd <= childEnd;
-        });
-        if (!selected.length) return null;
-        const firstStart = fromIso(selected[0].start);
-        const lastEnd = fromIso(selected[selected.length - 1].end);
-        if (firstStart.getTime() !== childStart.getTime() || lastEnd.getTime() !== childEnd.getTime()) return null;
-        return selected;
+    const cashflowGroupingRank = { day: 0, fortnight: 1, month: 2, quarter: 3, half_year: 4, year: 5 };
+    function cashflowGroupingCanAggregate(parentGroup, childGroup) {
+        const parentRank = cashflowGroupingRank[String(parentGroup || '')];
+        const childRank = cashflowGroupingRank[String(childGroup || '')];
+        return Number.isFinite(parentRank) && Number.isFinite(childRank) && parentRank <= childRank;
     }
-    function cashflowParentMetricTotals(preview, periods) {
+    function cashflowShortMonthYear(date) {
+        return formatMonth(date) + '-' + String(date.getFullYear()).slice(-2);
+    }
+    function cashflowCanonicalPeriods(startValue, endValue, groupBy) {
+        const start = fromIso(startValue); const end = fromIso(endValue);
+        const grouping = String(groupBy || 'month');
+        if (!start || !end || start > end) return [];
+        const periods = [];
+        function add(candidateStart, candidateEnd, label, key) {
+            const clippedStart = candidateStart < start ? start : candidateStart;
+            const clippedEnd = candidateEnd > end ? end : candidateEnd;
+            if (clippedStart <= clippedEnd) periods.push({ key: key, start: toIso(clippedStart), end: toIso(clippedEnd), label: label });
+        }
+        if (grouping === 'day') {
+            for (let cursor = start; cursor <= end; cursor = localDate(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 1)) {
+                add(cursor, cursor, cursor.getDate() + '-' + formatMonth(cursor) + '-' + String(cursor.getFullYear()).slice(-2), toIso(cursor));
+            }
+        } else if (grouping === 'fortnight') {
+            for (let cursor = monthStart(start); cursor <= monthStart(end); cursor = monthStart(localDate(cursor.getFullYear(), cursor.getMonth() + 1, 1))) {
+                const monthEndDate = monthEnd(cursor);
+                [1, 2].forEach(function (sequence) {
+                    const bucketStart = sequence === 1 ? cursor : localDate(cursor.getFullYear(), cursor.getMonth(), 15);
+                    const bucketEnd = sequence === 1 ? localDate(cursor.getFullYear(), cursor.getMonth(), 14) : monthEndDate;
+                    add(bucketStart, bucketEnd, 'F' + sequence + ' ' + cashflowShortMonthYear(bucketStart), cursor.getFullYear() + '-' + String(cursor.getMonth() + 1).padStart(2, '0') + '-' + sequence);
+                });
+            }
+        } else if (grouping === 'month') {
+            for (let cursor = monthStart(start); cursor <= monthStart(end); cursor = monthStart(localDate(cursor.getFullYear(), cursor.getMonth() + 1, 1))) {
+                add(cursor, monthEnd(cursor), formatMonth(cursor) + '-' + String(cursor.getFullYear()).slice(-2), cursor.getFullYear() + '-' + String(cursor.getMonth() + 1).padStart(2, '0'));
+            }
+        } else if (grouping === 'quarter') {
+            const firstQuarterMonth = Math.floor(start.getMonth() / 3) * 3;
+            for (let cursor = localDate(start.getFullYear(), firstQuarterMonth, 1); cursor <= end; cursor = localDate(cursor.getFullYear(), cursor.getMonth() + 3, 1)) {
+                const quarter = Math.floor(cursor.getMonth() / 3) + 1;
+                add(cursor, localDate(cursor.getFullYear(), cursor.getMonth() + 3, 0), 'Q' + quarter + ' ' + cursor.getFullYear(), cursor.getFullYear() + '-Q' + quarter);
+            }
+        } else if (grouping === 'half_year') {
+            for (let year = start.getFullYear(); year <= end.getFullYear(); year += 1) {
+                [1, 2].forEach(function (half) {
+                    const month = half === 1 ? 0 : 6;
+                    const bucketStart = localDate(year, month, 1);
+                    add(bucketStart, localDate(year, month + 6, 0), 'H' + half + ' ' + year, year + '-H' + half);
+                });
+            }
+        } else if (grouping === 'year') {
+            for (let year = start.getFullYear(); year <= end.getFullYear(); year += 1) {
+                add(localDate(year, 0, 1), localDate(year, 11, 31), String(year), String(year));
+            }
+        }
+        return periods;
+    }
+    function cashflowMonthKeys(startValue, endValue) {
+        return cashflowCanonicalPeriods(startValue, endValue, 'month').map(function (period) { return period.key; });
+    }
+    function cashflowParentPeriodGroups(parentPeriods, childPeriods) {
+        const groups = {};
+        for (const child of childPeriods) {
+            const childStart = fromIso(child.start); const childEnd = fromIso(child.end);
+            const selected = parentPeriods.filter(function (parent) {
+                const parentStart = fromIso(parent.start); const parentEnd = fromIso(parent.end);
+                return parentStart && parentEnd && parentStart >= childStart && parentEnd <= childEnd;
+            });
+            if (!selected.length) return null;
+            let cursor = fromIso(selected[0].start);
+            const expectedEnd = childEnd;
+            for (const parent of selected) {
+                const parentStart = fromIso(parent.start); const parentEnd = fromIso(parent.end);
+                if (!parentStart || !parentEnd || !cursor || parentStart.getTime() !== cursor.getTime()) return null;
+                cursor = localDate(parentEnd.getFullYear(), parentEnd.getMonth(), parentEnd.getDate() + 1);
+            }
+            if (!cursor || cursor.getTime() !== localDate(expectedEnd.getFullYear(), expectedEnd.getMonth(), expectedEnd.getDate() + 1).getTime()) return null;
+            groups[child.key] = selected;
+        }
+        return groups;
+    }
+    function cashflowAggregateCategoryRows(rows, parentGroups, childPeriods) {
+        return (rows || []).map(function (row) {
+            const derivedRow = { category: row.category || '' };
+            childPeriods.forEach(function (child) {
+                derivedRow[child.key] = (parentGroups[child.key] || []).reduce(function (sum, parent) {
+                    return sum + (Number(row[parent.key]) || 0);
+                }, 0);
+            });
+            derivedRow.Total = childPeriods.reduce(function (sum, child) { return sum + (Number(derivedRow[child.key]) || 0); }, 0);
+            return derivedRow;
+        });
+    }
+    function cashflowAggregateTreasuryRows(rows, parentGroups, childPeriods) {
+        const categories = new Set((rows || []).map(function (row) { return String(row.category || ''); }));
+        const byKey = new Map();
+        (rows || []).forEach(function (row) {
+            const key = String(row.category || '') + '|' + String(row.period_key || '');
+            const values = byKey.get(key) || { bank_amount: 0, cash_amount: 0, mixed_amount: 0, total_amount: 0 };
+            Object.keys(values).forEach(function (field) { values[field] += Number(row[field]) || 0; });
+            byKey.set(key, values);
+        });
+        const result = [];
+        categories.forEach(function (category) {
+            childPeriods.forEach(function (child) {
+                const values = { bank_amount: 0, cash_amount: 0, mixed_amount: 0, total_amount: 0 };
+                (parentGroups[child.key] || []).forEach(function (parent) {
+                    const row = byKey.get(category + '|' + String(parent.key));
+                    if (!row) return;
+                    Object.keys(values).forEach(function (field) { values[field] += Number(row[field]) || 0; });
+                });
+                result.push(Object.assign({ category: category, period_key: child.key }, values));
+            });
+        });
+        return result;
+    }
+    function cashflowPeriodSelection(preview, start, end, parentGroup, childGroup) {
+        if (!cashflowGroupingCanAggregate(parentGroup, childGroup)) return null;
+        const childPeriods = cashflowCanonicalPeriods(start, end, childGroup);
+        const parentPeriods = cashflowPreviewPeriods(preview);
+        const parentGroups = cashflowParentPeriodGroups(parentPeriods, childPeriods);
+        return parentGroups ? { periods: childPeriods, groups: parentGroups } : null;
+    }
+    function cashflowParentMetricTotals(preview, periods, parentGroups) {
         const source = preview && preview.period_metrics;
         const metrics = ['source_line_count', 'selected_voucher_count', 'internal_transfer_count', 'category_review_count', 'deduction_count'];
         if (!source || typeof source !== 'object') return null;
         const totals = {};
         metrics.forEach(function (metric) { totals[metric] = 0; });
+        const byPeriod = {};
         for (const period of periods) {
-            const values = source[String(period.key)];
-            if (!values || typeof values !== 'object') return null;
-            for (const metric of metrics) {
-                if (!Object.prototype.hasOwnProperty.call(values, metric)) return null;
-                const value = Number(values[metric]);
-                if (!Number.isFinite(value)) return null;
-                totals[metric] += value;
+            const periodTotals = {};
+            metrics.forEach(function (metric) { periodTotals[metric] = 0; });
+            for (const parent of parentGroups[period.key] || []) {
+                const values = source[String(parent.key)];
+                if (!values || typeof values !== 'object') return null;
+                for (const metric of metrics) {
+                    if (!Object.prototype.hasOwnProperty.call(values, metric)) return null;
+                    const value = Number(values[metric]);
+                    if (!Number.isFinite(value)) return null;
+                    periodTotals[metric] += value;
+                    totals[metric] += value;
+                }
             }
+            byPeriod[period.key] = periodTotals;
         }
-        return totals;
+        return { totals: totals, byPeriod: byPeriod };
     }
     function deriveCashflowSummaryFromParent(parent, start, end, groupBy, treasuryView) {
-        if (!parent || groupBy !== 'month') return null;
-        if (String(parent.group_by || '') !== 'month' || String(parent.treasury_view || '') !== String(treasuryView || 'combined')) return null;
+        if (!parent || String(parent.treasury_view || '') !== String(treasuryView || 'combined')) return null;
         const parentPreview = parent.preview || {};
-        const periods = cashflowPeriodSelection(parentPreview, start, end);
-        const metrics = cashflowParentMetricTotals(parentPreview, periods || []);
-        if (!periods || !metrics) return null;
-        const periodKeys = periods.map(function (period) { return String(period.key); });
+        const selection = cashflowPeriodSelection(parentPreview, start, end, parent.group_by, groupBy);
+        if (!selection) return null;
+        const periods = selection.periods;
+        const parentGroups = selection.groups;
+        const metrics = cashflowParentMetricTotals(parentPreview, periods, parentGroups);
+        if (!metrics) return null;
         const derivedPreview = Object.assign({}, parentPreview);
         derivedPreview.periods = periods.map(function (period) { return Object.assign({}, period); });
-        derivedPreview.months = periodKeys.slice();
+        derivedPreview.months = cashflowMonthKeys(start, end);
         derivedPreview.period_metrics = {};
-        periods.forEach(function (period) { derivedPreview.period_metrics[String(period.key)] = Object.assign({}, parentPreview.period_metrics[String(period.key)]); });
-        derivedPreview.source_line_count = metrics.source_line_count;
-        derivedPreview.selected_voucher_count = metrics.selected_voucher_count;
-        derivedPreview.internal_transfer_count = metrics.internal_transfer_count;
-        derivedPreview.category_review_count = metrics.category_review_count;
-        derivedPreview.deduction_count = metrics.deduction_count;
+        periods.forEach(function (period) { derivedPreview.period_metrics[String(period.key)] = Object.assign({}, metrics.byPeriod[String(period.key)]); });
+        derivedPreview.source_line_count = metrics.totals.source_line_count;
+        derivedPreview.selected_voucher_count = metrics.totals.selected_voucher_count;
+        derivedPreview.internal_transfer_count = metrics.totals.internal_transfer_count;
+        derivedPreview.category_review_count = metrics.totals.category_review_count;
+        derivedPreview.deduction_count = metrics.totals.deduction_count;
         derivedPreview.detail_sections_loaded = [];
         derivedPreview.transfer_details = [];
         derivedPreview.customer_payment_details = [];
@@ -711,24 +824,14 @@
         derivedPreview.child_details_prepared = false;
         derivedPreview.child_details_version = 0;
         const treasuryRows = Array.isArray(parentPreview.treasury_category_totals)
-            ? parentPreview.treasury_category_totals.filter(function (row) { return periodKeys.indexOf(String(row.period_key || '')) >= 0; })
+            ? cashflowAggregateTreasuryRows(parentPreview.treasury_category_totals, parentGroups, periods)
             : [];
         derivedPreview.treasury_category_totals = treasuryRows;
         const visibleRows = cashflowSummaryRows(parentPreview);
         if (String(treasuryView || 'combined') === 'split') {
-            derivedPreview.treasury_view_totals = visibleRows.filter(function (row) { return periodKeys.indexOf(String(row.period_key || '')) >= 0; });
+            derivedPreview.treasury_view_totals = cashflowAggregateTreasuryRows(visibleRows, parentGroups, periods);
         } else {
-            const rows = visibleRows.map(function (row) {
-                const derivedRow = { category: row.category || '' };
-                let total = 0;
-                periodKeys.forEach(function (key) {
-                    const value = Number(row[key]) || 0;
-                    derivedRow[key] = value;
-                    total += value;
-                });
-                derivedRow.Total = total;
-                return derivedRow;
-            });
+            const rows = cashflowAggregateCategoryRows(visibleRows, parentGroups, periods);
             derivedPreview.category_totals = rows;
             derivedPreview.treasury_view_totals = rows;
         }
@@ -744,7 +847,6 @@
         return derived;
     }
     function findCashflowParentSummary(start, end, groupBy, treasuryView) {
-        if (groupBy !== 'month') return null;
         const entries = Array.from(cashflowSummaryCache.values()).reverse();
         for (const entry of entries) {
             if (!entry || entry.revision !== cashflowReportRevision) continue;
@@ -754,6 +856,7 @@
             const childStart = fromIso(start);
             const childEnd = fromIso(end);
             if (!parentStart || !parentEnd || !childStart || !childEnd || parentStart > childStart || parentEnd < childEnd) continue;
+            if (!cashflowGroupingCanAggregate(parent.group_by, groupBy)) continue;
             const derived = deriveCashflowSummaryFromParent(parent, start, end, groupBy, treasuryView);
             if (derived) return derived;
         }
