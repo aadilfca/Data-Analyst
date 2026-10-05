@@ -272,6 +272,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-10-04: Cashflows ledger drill-down added server-backed account-head filtering and a cascade-safe single-row toolbar in reconciliation HTML, JS, CSS, and tests.
 - 2026-10-05: Cashflows ledger drill-down now reuses the initial roll-up baseline for local filters, pagination, and Clear.
 - 2026-10-05: Cashflows freshness now adds revision checks, explicit source refresh/version status, upload-scoped joins, and revision-aware browser caches.
+- 2026-10-05: Cashflows transaction drawer now clears stale rows between ledger openings; reconciliation.js and direct-window regression coverage updated.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

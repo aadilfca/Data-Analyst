@@ -214,6 +214,9 @@ def test_cashflows_summary_contains_inline_category_ledger_contract():
     assert 'cashflows-inline-transaction-dialog.cashflows-inline-transaction-loading' in inline_styles
     assert 'Showing the selected transaction columns.' not in inline_script
     assert "cashflowsInlineTransactionStatus" in inline_script
+    assert "function clearCashflowTransactionDrawerContent(drawer)" in inline_script
+    assert "clearCashflowTransactionDrawerContent(drawer);" in inline_script
+    assert "clearCashflowTransactionDrawerContent(cashflowInlineTransactionDrawer);" in inline_script
     assert 'hidden = true' in inline_script
     assert 'cashflowsInlineTransactionContext' not in inline_script
     assert 'Cashflows transaction detail' not in inline_script

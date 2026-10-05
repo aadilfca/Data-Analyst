@@ -1,4 +1,12 @@
 # Changelog Archive
+## Cashflows transaction drawer stale-content fix - 2026-10-05
+
+**Scope:** Prevent the previous ledger's rows from flashing while another account ledger loads.
+
+**Implementation:** Reset the existing transaction drawer on close and before each new ledger opens, clearing rows, totals, pagination, and status state while preserving cached results and stale-request protection. Added direct-window regression assertions.
+
+**Verification:** User-confirmed local browser testing. Focused UI checks passed 3/3; Python and JavaScript syntax plus git diff --check passed. No backend, database, accounting, or cache-fetch changes.
+
 ## Cashflows inline ledger-to-transaction expansion - Phase 3 - 2026-10-03
 
 **Scope:** Refine the inline Cashflows ledger drawer into a compact, searchable transaction view while preserving category-to-ledger behavior and the source-backed classified transaction contract.

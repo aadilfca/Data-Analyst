@@ -1209,6 +1209,22 @@
                 if (requestSerial === cashflowInlineTransactionRequestSerial && !drawer.hidden) setCashflowTransactionDrawerBusy(false);
             });
     }
+    function clearCashflowTransactionDrawerContent(drawer) {
+        const table = drawer.querySelector('#cashflowsInlineTransactionTable');
+        if (table) table.innerHTML = '';
+        drawer.dataset.totalRows = '0';
+        const pageInfo = drawer.querySelector('#cashflowsInlineTransactionPageInfo');
+        if (pageInfo) pageInfo.textContent = '';
+        ['.cashflows-inline-transaction-previous', '.cashflows-inline-transaction-next'].forEach(function (selector) {
+            const button = drawer.querySelector(selector);
+            if (button) button.disabled = true;
+        });
+        const status = drawer.querySelector('#cashflowsInlineTransactionStatus');
+        if (status) {
+            status.textContent = '';
+            status.hidden = true;
+        }
+    }
     function openCashflowTransactionDrawer(button) {
         const drawer = ensureCashflowTransactionDrawer();
         const category = decodeURIComponent(button.dataset.cashflowInlineCategory || '');
@@ -1226,6 +1242,7 @@
         syncCashflowTransactionModeLabel();
         drawer.querySelector('#cashflowsInlineTransactionSearch').value = '';
         configureCashflowTransactionPeriods();
+        clearCashflowTransactionDrawerContent(drawer);
         drawer.hidden = false;
         document.body.classList.add('cashflows-inline-transaction-open');
         drawer.querySelector('#cashflowsInlineTransactionSearch').focus();
@@ -1236,6 +1253,7 @@
         if (cashflowInlineTransactionActiveController) cashflowInlineTransactionActiveController.abort();
         cashflowInlineTransactionActiveController = null;
         if (cashflowInlineTransactionDrawer) cashflowInlineTransactionDrawer.hidden = true;
+        if (cashflowInlineTransactionDrawer) clearCashflowTransactionDrawerContent(cashflowInlineTransactionDrawer);
         setCashflowTransactionDrawerBusy(false);
         document.body.classList.remove('cashflows-inline-transaction-open');
         const focus = cashflowInlineTransactionFocus;
