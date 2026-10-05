@@ -65,12 +65,104 @@ def test_cashflow_sql_source_filters_dates_joins_vouchers_and_aggregates_lines()
     assert "c.transaction_date >= %s" in source_sql
     assert "c.transaction_date <= %s" in source_sql
     assert "selected_vouchers" in source_sql
-    assert "GROUP BY l.voucher_id, l.date, l.account_code" in source_sql
+    assert "GROUP BY l.upload_id, l.voucher_id, l.date, l.account_code" in source_sql
     assert "c.transaction_date AS date" in source_sql
     assert "FROM client_data cd" in source_sql
-    assert source_params == (7, 9, [12], "2026-01-01", "2026-01-31")
+    assert source_params == (7, [12], "2026-01-01", "2026-01-31")
 
 
+def test_cashflow_sql_source_scopes_duplicate_vouchers_to_their_upload():
+    calls = []
+
+    def query(sql, params=None):
+        calls.append((sql, params))
+        if "FROM uploaded_files" in sql:
+            return [
+                {"upload_id": 12, "file_name": "january.xlsx", "upload_date": "2026-02-01"},
+                {"upload_id": 11, "file_name": "february.xlsx", "upload_date": "2026-02-01"},
+            ]
+        assert params == (7, [11, 12], "2026-01-01", "2026-02-28")
+        assert "SELECT DISTINCT upload_id, voucher_id" in sql
+        assert "v.upload_id = l.upload_id" in sql
+        assert "v.voucher_id = l.voucher_id" in sql
+        return [
+            {
+                "voucher_id": "V1",
+                "date": "2026-01-05",
+                "account_code": "B1",
+                "account_name": "Bank January",
+                "voucher_detail": "January receipt",
+                "debit": 100,
+                "credit": 0,
+                "treasury_type": "bank",
+                "category": "",
+                "source_line_count": 1,
+                "classification_status": "cash",
+            },
+            {
+                "voucher_id": "V1",
+                "date": "2026-02-05",
+                "account_code": "EXP",
+                "account_name": "Expense February",
+                "voucher_detail": "February payment",
+                "debit": 0,
+                "credit": 100,
+                "treasury_type": None,
+                "category": "Repairs",
+                "source_line_count": 1,
+                "classification_status": "cash",
+            },
+        ]
+
+    source = load_cashflow_sql_source(
+        7,
+        journal_template_id=9,
+        period_start="2026-01-01",
+        period_end="2026-02-28",
+        query_fn=query,
+    )
+
+    assert source is not None
+    assert source.journal["voucher_id"].tolist() == ["V1", "V1"]
+    assert source.journal["date"].dt.strftime("%Y-%m-%d").tolist() == ["2026-01-05", "2026-02-05"]
+    assert source.metadata["source_upload_ids"] == [11, 12]
+    assert len(calls) == 2
+
+
+def test_cashflow_sql_source_explicit_upload_uses_upload_identity_filter():
+    calls = []
+
+    def query(sql, params=None):
+        calls.append((sql, params))
+        assert "FROM uploaded_files" not in sql
+        assert "c.upload_id = ANY(%s)" in sql
+        assert "c.template_id = %s" not in sql
+        assert params == (7, [12], "2026-01-01", "2026-01-31")
+        return [{
+            "voucher_id": "V1",
+            "date": "2026-01-05",
+            "account_code": "B1",
+            "account_name": "Bank",
+            "voucher_detail": "Receipt",
+            "debit": 100,
+            "credit": 0,
+            "treasury_type": "bank",
+            "category": "",
+            "source_line_count": 1,
+            "classification_status": "cash",
+        }]
+
+    source = load_cashflow_sql_source(
+        7,
+        journal_upload_id=12,
+        period_start="2026-01-01",
+        period_end="2026-01-31",
+        query_fn=query,
+    )
+
+    assert source is not None
+    assert source.metadata["source_upload_ids"] == [12]
+    assert len(calls) == 1
 def test_cashflow_sql_source_preserves_each_transaction_date_for_bucketing():
     def query(sql, params=None):
         if "FROM uploaded_files" in sql:

@@ -1613,7 +1613,7 @@ def load_cashflow_sql_source(
     """Load Cashflows from the SQL-aggregated derived classification layer.
 
     The query filters dates and current classification rows in SQL, joins the
-    counter-account lines by voucher ID, and aggregates repeated source lines
+    counter-account lines by upload and voucher ID, and aggregates repeated source lines
     before Python receives them. ``None`` means the additive layer is not
     populated yet, allowing the controlled legacy fallback during rollout.
     """
@@ -1639,6 +1639,7 @@ def load_cashflow_sql_source(
         WITH classified_lines AS (
             SELECT
                 c.client_data_id,
+                c.upload_id,
                 c.voucher_id,
                 c.transaction_date AS date,
                 c.account_code,
@@ -1676,7 +1677,6 @@ def load_cashflow_sql_source(
              AND category.client_id = c.client_id
              AND category.is_active = TRUE
             WHERE c.client_id = %s
-              AND c.template_id = %s
               AND c.upload_id = ANY(%s)
               AND c.is_current = TRUE
               AND c.transaction_date >= %s
@@ -1685,7 +1685,7 @@ def load_cashflow_sql_source(
               AND c.account_code IS NOT NULL
               AND (c.debit <> 0 OR c.credit <> 0)
         ), selected_vouchers AS (
-            SELECT DISTINCT voucher_id
+            SELECT DISTINCT upload_id, voucher_id
             FROM classified_lines
             WHERE treasury_type IN ('cash', 'bank')
         )
@@ -1704,13 +1704,15 @@ def load_cashflow_sql_source(
             COUNT(*) AS source_line_count,
             MAX(l.classification_status) AS classification_status
         FROM classified_lines l
-        JOIN selected_vouchers v ON v.voucher_id = l.voucher_id
-        GROUP BY l.voucher_id, l.date, l.account_code
+        JOIN selected_vouchers v
+          ON v.upload_id = l.upload_id
+         AND v.voucher_id = l.voucher_id
+        GROUP BY l.upload_id, l.voucher_id, l.date, l.account_code
         ORDER BY l.date, l.voucher_id, l.account_code
     """
     rows = query_fn(
         query,
-        (client_id, journal_template_id, selected_upload_ids, period_start, period_end),
+        (client_id, selected_upload_ids, period_start, period_end),
     )
     if not rows or not all("classification_status" in row for row in rows):
         return None
