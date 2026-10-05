@@ -734,6 +734,24 @@ def test_cashflow_treasury_view_selector_is_wired_to_preview():
     assert "cashflowTreasuryViewLabel(" in javascript
 
 
+def test_cashflow_summary_cache_is_revision_safe_and_bounded():
+    javascript = Path(__file__).resolve().parents[1].joinpath("static", "reconciliation.js").read_text(encoding="utf-8")
+    reconciliation_source = Path(__file__).resolve().parents[1].joinpath("routers", "reconciliation.py").read_text(encoding="utf-8")
+
+    assert "const cashflowSummaryCacheLimit = 5" in javascript
+    assert "function rememberCashflowSummary(result)" in javascript
+    assert "function takeCashflowSummary(start, end, groupBy, treasuryView)" in javascript
+    assert "function cashflowSummaryContextKey(start, end, groupBy, treasuryView, revision)" in javascript
+    assert "Number(revision || cashflowReportRevision || 0)" in javascript
+    assert "function findCashflowParentSummary(start, end, groupBy, treasuryView)" in javascript
+    assert "function deriveCashflowSummaryFromParent(parent, start, end, groupBy, treasuryView)" in javascript
+    assert "Parent-period cache" in javascript
+    assert '"period_metrics": summary.get("period_metrics") or {}' in reconciliation_source
+    assert "cashflowSummaryCache.clear()" in javascript
+    assert "ensureCashflowRevisionFresh(true, true)" in javascript
+    assert "if (forceRefresh) query.set('refresh', 'true');" in javascript
+
+
 def test_cashflow_preview_endpoint_passes_selected_treasury_view():
     with patch.object(reconciliation, "_build_cashflow_result", return_value={"ok": True}) as build:
         response = reconciliation.preview_cashflows(

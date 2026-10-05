@@ -1,4 +1,13 @@
 # Changelog Archive
+
+## Cashflows summary cache context hardening - 2026-10-05
+
+**Scope:** Make browser summary reuse explicitly revision-scoped while preserving separate Bank, Cash, Combined, and Split contexts.
+
+**Implementation:** Added the active Cashflows report revision to the bounded browser cache key. Existing lightweight revision validation, stale-cache clearing, five-entry LRU behavior, and hard source refresh remain unchanged.
+
+**Verification:** Pending local browser confirmation; automated syntax, regression, and diff checks are required before release.
+
 ## Cashflows split-view hover override fix - 2026-10-05
 
 **Scope:** Correct row highlighting when Cash and Bank individually renders the summary as frozen and horizontally scrolling panes.

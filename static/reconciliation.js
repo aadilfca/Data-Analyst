@@ -32,6 +32,8 @@
     let cashflowRevisionCheckPromise = null;
     let cashflowRevisionCheckedAt = 0;
     const CASHFLOW_REVISION_CHECK_TTL_MS = 15000;
+    const cashflowSummaryCacheLimit = 5;
+    const cashflowSummaryCache = new Map();
     const cashflowDrilldownBaseCache = new Map();
     const cashflowDrilldownLimit = 50;
     let cashflowInlineLedgerCache = new Map();
@@ -644,6 +646,140 @@
     function cashflowDrilldownContextKey(start, end) {
         return [clientId, start, end, cashflowSelection.groupBy || 'month', cashflowTreasuryView || 'combined', cashflowReportRevision].join('|');
     }
+    function cashflowSummaryContextKey(start, end, groupBy, treasuryView, revision) {
+        return [clientId, start, end, groupBy || 'month', treasuryView || 'combined', Number(revision || cashflowReportRevision || 0)].join('|');
+    }
+    function cashflowPeriodSelection(preview, start, end) {
+        const childStart = fromIso(start);
+        const childEnd = fromIso(end);
+        const periods = cashflowPreviewPeriods(preview);
+        if (!childStart || !childEnd || !periods.length || periods.some(function (period) {
+            return !fromIso(period.start) || !fromIso(period.end);
+        })) return null;
+        const selected = periods.filter(function (period) {
+            const periodStart = fromIso(period.start);
+            const periodEnd = fromIso(period.end);
+            return periodStart >= childStart && periodEnd <= childEnd;
+        });
+        if (!selected.length) return null;
+        const firstStart = fromIso(selected[0].start);
+        const lastEnd = fromIso(selected[selected.length - 1].end);
+        if (firstStart.getTime() !== childStart.getTime() || lastEnd.getTime() !== childEnd.getTime()) return null;
+        return selected;
+    }
+    function cashflowParentMetricTotals(preview, periods) {
+        const source = preview && preview.period_metrics;
+        const metrics = ['source_line_count', 'selected_voucher_count', 'internal_transfer_count', 'category_review_count', 'deduction_count'];
+        if (!source || typeof source !== 'object') return null;
+        const totals = {};
+        metrics.forEach(function (metric) { totals[metric] = 0; });
+        for (const period of periods) {
+            const values = source[String(period.key)];
+            if (!values || typeof values !== 'object') return null;
+            for (const metric of metrics) {
+                if (!Object.prototype.hasOwnProperty.call(values, metric)) return null;
+                const value = Number(values[metric]);
+                if (!Number.isFinite(value)) return null;
+                totals[metric] += value;
+            }
+        }
+        return totals;
+    }
+    function deriveCashflowSummaryFromParent(parent, start, end, groupBy, treasuryView) {
+        if (!parent || groupBy !== 'month') return null;
+        if (String(parent.group_by || '') !== 'month' || String(parent.treasury_view || '') !== String(treasuryView || 'combined')) return null;
+        const parentPreview = parent.preview || {};
+        const periods = cashflowPeriodSelection(parentPreview, start, end);
+        const metrics = cashflowParentMetricTotals(parentPreview, periods || []);
+        if (!periods || !metrics) return null;
+        const periodKeys = periods.map(function (period) { return String(period.key); });
+        const derivedPreview = Object.assign({}, parentPreview);
+        derivedPreview.periods = periods.map(function (period) { return Object.assign({}, period); });
+        derivedPreview.months = periodKeys.slice();
+        derivedPreview.period_metrics = {};
+        periods.forEach(function (period) { derivedPreview.period_metrics[String(period.key)] = Object.assign({}, parentPreview.period_metrics[String(period.key)]); });
+        derivedPreview.source_line_count = metrics.source_line_count;
+        derivedPreview.selected_voucher_count = metrics.selected_voucher_count;
+        derivedPreview.internal_transfer_count = metrics.internal_transfer_count;
+        derivedPreview.category_review_count = metrics.category_review_count;
+        derivedPreview.deduction_count = metrics.deduction_count;
+        derivedPreview.detail_sections_loaded = [];
+        derivedPreview.transfer_details = [];
+        derivedPreview.customer_payment_details = [];
+        derivedPreview.deduction_details = [];
+        derivedPreview.categories_needing_review = [];
+        derivedPreview.child_details_prepared = false;
+        derivedPreview.child_details_version = 0;
+        const treasuryRows = Array.isArray(parentPreview.treasury_category_totals)
+            ? parentPreview.treasury_category_totals.filter(function (row) { return periodKeys.indexOf(String(row.period_key || '')) >= 0; })
+            : [];
+        derivedPreview.treasury_category_totals = treasuryRows;
+        const visibleRows = cashflowSummaryRows(parentPreview);
+        if (String(treasuryView || 'combined') === 'split') {
+            derivedPreview.treasury_view_totals = visibleRows.filter(function (row) { return periodKeys.indexOf(String(row.period_key || '')) >= 0; });
+        } else {
+            const rows = visibleRows.map(function (row) {
+                const derivedRow = { category: row.category || '' };
+                let total = 0;
+                periodKeys.forEach(function (key) {
+                    const value = Number(row[key]) || 0;
+                    derivedRow[key] = value;
+                    total += value;
+                });
+                derivedRow.Total = total;
+                return derivedRow;
+            });
+            derivedPreview.category_totals = rows;
+            derivedPreview.treasury_view_totals = rows;
+        }
+        const derived = Object.assign({}, parent, {
+            period_start: start,
+            period_end: end,
+            group_by: groupBy,
+            treasury_view: treasuryView,
+            preview: derivedPreview,
+            blocking_reasons: [],
+            freshness: Object.assign({}, parent.freshness || {}, { mode: 'browser_parent_cache', authoritative: false })
+        });
+        return derived;
+    }
+    function findCashflowParentSummary(start, end, groupBy, treasuryView) {
+        if (groupBy !== 'month') return null;
+        const entries = Array.from(cashflowSummaryCache.values()).reverse();
+        for (const entry of entries) {
+            if (!entry || entry.revision !== cashflowReportRevision) continue;
+            const parent = entry.result;
+            const parentStart = fromIso(parent && parent.period_start);
+            const parentEnd = fromIso(parent && parent.period_end);
+            const childStart = fromIso(start);
+            const childEnd = fromIso(end);
+            if (!parentStart || !parentEnd || !childStart || !childEnd || parentStart > childStart || parentEnd < childEnd) continue;
+            const derived = deriveCashflowSummaryFromParent(parent, start, end, groupBy, treasuryView);
+            if (derived) return derived;
+        }
+        return null;
+    }
+    function rememberCashflowSummary(result) {
+        if (!result || !cashflowReportRevision || !result.period_start || !result.period_end) return;
+        const key = cashflowSummaryContextKey(result.period_start, result.period_end, result.group_by, result.treasury_view, cashflowReportRevision);
+        cashflowSummaryCache.delete(key);
+        cashflowSummaryCache.set(key, { result: result, revision: cashflowReportRevision });
+        while (cashflowSummaryCache.size > cashflowSummaryCacheLimit) {
+            cashflowSummaryCache.delete(cashflowSummaryCache.keys().next().value);
+        }
+    }
+    function takeCashflowSummary(start, end, groupBy, treasuryView) {
+        const key = cashflowSummaryContextKey(start, end, groupBy, treasuryView, cashflowReportRevision);
+        const entry = cashflowSummaryCache.get(key);
+        if (!entry) return null;
+        if (entry.revision !== cashflowReportRevision) {
+            cashflowSummaryCache.delete(key);
+            return null;
+        }
+        cashflowSummaryCache.delete(key);
+        cashflowSummaryCache.set(key, entry);
+        return entry.result;
+    }
     function cashflowReportRevisionFromResult(result) {
         const source = result && result.source || {};
         const metadata = source.metadata || {};
@@ -658,6 +794,7 @@
         if (!incoming) return true;
         if (cashflowReportRevision && incoming < cashflowReportRevision) return false;
         if (cashflowReportRevision && incoming !== cashflowReportRevision) {
+            cashflowSummaryCache.clear();
             cashflowDrilldownBaseCache.clear();
             resetCashflowInlineLedgerState();
             cashflowChildPreviews = {};
@@ -666,7 +803,7 @@
         cashflowRevisionCheckedAt = Date.now();
         return true;
     }
-    function ensureCashflowRevisionFresh(force) {
+    function ensureCashflowRevisionFresh(force, failClosed) {
         if (!clientId) return Promise.resolve(true);
         const now = Date.now();
         if (!force && cashflowRevisionCheckedAt && now - cashflowRevisionCheckedAt < CASHFLOW_REVISION_CHECK_TTL_MS) return Promise.resolve(true);
@@ -675,6 +812,7 @@
             .then(function (result) {
                 const incoming = Number(result && result.cashflow_report_revision || 0);
                 if (incoming && cashflowReportRevision && incoming !== cashflowReportRevision) {
+                    cashflowSummaryCache.clear();
                     cashflowDrilldownBaseCache.clear();
                     resetCashflowInlineLedgerState();
                     cashflowChildPreviews = {};
@@ -685,7 +823,7 @@
                 cashflowRevisionCheckedAt = Date.now();
                 return true;
             })
-            .catch(function () { return true; })
+            .catch(function () { return !failClosed; })
             .finally(function () { cashflowRevisionCheckPromise = null; });
         return cashflowRevisionCheckPromise;
     }
@@ -696,7 +834,9 @@
         const revision = Number(freshness.report_revision || cashflowReportRevision || 0);
         const generatedAt = freshness.generated_at ? new Date(freshness.generated_at) : null;
         const generatedLabel = generatedAt && !Number.isNaN(generatedAt.getTime()) ? generatedAt.toLocaleString() : "just now";
-        const modeLabel = freshness.authoritative ? "Authoritative source refresh" : "Prepared snapshot";
+        const modeLabel = freshness.mode === 'browser_parent_cache'
+            ? "Parent-period cache"
+            : (freshness.authoritative ? "Authoritative source refresh" : "Prepared snapshot");
         status.textContent = modeLabel + (revision ? " · Version " + String(revision) : "") + " · Generated " + generatedLabel;
     }
     function cashflowDrilldownFilterState() {
@@ -1881,6 +2021,7 @@
     }
     function renderResult(result) {
         if (!syncCashflowReportRevision(result)) return;
+        rememberCashflowSummary(result);
         lastCashflowsResult = result;
         renderCashflowFreshness(result);
         cashflowDrilldownBaseCache.clear();
@@ -1999,9 +2140,27 @@
         showCashflowProcessing();
         const start = element('cashflowsPeriodStart').value;
         const end = element('cashflowsPeriodEnd').value;
+        const cachedSummary = !forceRefresh
+            ? (takeCashflowSummary(start, end, cashflowSelection.groupBy, cashflowTreasuryView)
+                || findCashflowParentSummary(start, end, cashflowSelection.groupBy, cashflowTreasuryView))
+            : null;
         const controller = new AbortController();
         const timeout = window.setTimeout(function () { controller.abort(); }, CASHFLOW_REQUEST_TIMEOUT_MS);
         try {
+            if (cachedSummary) {
+                setCashflowProcessingStep('load', 'Checking the cached Cashflows summary.');
+                const isFresh = await ensureCashflowRevisionFresh(true, true);
+                const freshSummary = isFresh
+                    ? (takeCashflowSummary(start, end, cashflowSelection.groupBy, cashflowTreasuryView)
+                        || findCashflowParentSummary(start, end, cashflowSelection.groupBy, cashflowTreasuryView))
+                    : null;
+                if (freshSummary) {
+                    setCashflowProcessingStep('render', 'Rendering the cached Cashflows summary.');
+                    renderResult(freshSummary);
+                    showCashflowResultNotice(freshSummary);
+                    return;
+                }
+            }
             setCashflowProcessingStep('load', 'Loading Cashflows data for the selected period.');
             const query = new URLSearchParams({ client_id: clientId, period_start: start, period_end: end, group_by: cashflowSelection.groupBy, treasury_view: cashflowTreasuryView, details: 'summary' });
             if (forceRefresh) query.set('refresh', 'true');

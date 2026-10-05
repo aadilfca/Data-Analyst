@@ -85,7 +85,7 @@ One line per file group: what it is now. Full build history for every entry live
 - **Cashflows sticky-header convention:** Use a non-scrolling page wrapper, shared 72.5px sticky top, opaque 2.5px navbar gutter, fixed frozen/scrolling panes with one shared column contract, stable-ID-synchronized row states, and no nested vertical scrolling or legacy pane-local overrides.
 - **Cashflows drill-down toolbar convention:** Keep Search, Category, Account head, Cash/Bank, Period, Apply, Clear, and Export in one horizontal grid row; place its override after shared flex-toolbar rules.
 - **Cashflows drill-down performance convention:** Cache the initial unfiltered roll-up baseline by report context; apply repeat filters, pagination, and Clear locally, invalidating when the summary context reloads.
-- **Cashflows data-freshness convention:** Use canonical SQL/read-model results; scope voucher joins by upload; advance client revisions after committed changes; key browser caches by revision, perform a lightweight revision check before reuse, reject stale responses, and offer explicit source refresh.
+- **Cashflows data-freshness convention:** Use canonical SQL/read-model results; revision-scope bounded browser caches, validate before reuse, reject stale responses, and offer explicit source refresh.
 - **Cashflows split-view convention:** Hide zero-only Mixed / unresolved columns and redundant reconciliation UI, but preserve mixed calculations, backend fields, and XLSX export data.
 
 ### Data & Performance Engineering Standard
@@ -287,6 +287,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-10-05: Cashflows summary now enforces shared column geometry and synchronized pane hover states for expanded ledgers; reconciliation UI/tests updated.
 - 2026-10-05: Cashflows split-view hover now covers frozen and first-period cells through stable paired-row state; legacy first-column overrides removed and regression coverage added.
 - 2026-10-05: Cashflows split view now hides zero-only Mixed / unresolved columns and removes redundant reconciliation UI while preserving backend and XLSX fields.
+- 2026-10-05: Cashflows summary cache keys now include the active report revision; Treasury-view contexts remain separate and hard refresh bypasses cache.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

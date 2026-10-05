@@ -1205,7 +1205,7 @@ def _cashflow_daily_rollup(
     period_metrics: dict[str, dict[str, int]] = {}
     source_metrics = payload.get("period_metrics") or {}
     for period in periods:
-        totals = {"source_line_count": 0, "selected_voucher_count": 0, "internal_transfer_count": 0, "category_review_count": 0}
+        totals = {"source_line_count": 0, "selected_voucher_count": 0, "internal_transfer_count": 0, "category_review_count": 0, "deduction_count": 0}
         for day_key in target_days[period["key"]]:
             values = source_metrics.get(day_key) or {}
             for metric in totals:
@@ -1246,8 +1246,8 @@ def _cashflow_daily_rollup(
         tolerance=DEFAULT_TOLERANCE,
     )
     totals = {
-        metric: sum(values[metric] for values in period_metrics.values())
-        for metric in ("source_line_count", "selected_voucher_count", "internal_transfer_count", "category_review_count")
+        metric: sum(values.get(metric, 0) for values in period_metrics.values())
+        for metric in ("source_line_count", "selected_voucher_count", "internal_transfer_count", "category_review_count", "deduction_count")
     }
     child_details_version = int(payload.get("child_details_version", 0) or 0)
     child_details_prepared = bool(payload.get("child_details_prepared")) and child_details_version >= CASHFLOW_CHILD_DETAILS_VERSION

@@ -1424,6 +1424,7 @@ def build_cashflow_summary(
             "selected_voucher_count": int(working.loc[working["period_key"] == period["key"], "voucher_id"].nunique()) if not working.empty else 0,
             "internal_transfer_count": int((transfer_details["period_key"] == period["key"]).sum()) if not transfer_details.empty else 0,
             "category_review_count": int((review["period_key"] == period["key"]).sum()) if not review.empty else 0,
+            "deduction_count": int((deductions["period_key"] == period["key"]).sum()) if not deductions.empty else 0,
         }
         for period in periods
     }

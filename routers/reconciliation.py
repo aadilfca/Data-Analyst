@@ -1327,6 +1327,7 @@ def _cashflow_preview(
             "internal_transfer_count": 0,
             "category_review_count": 0,
             "deduction_count": 0,
+            "period_metrics": {},
             "receipt_presentation": "net",
             "detail_sections_loaded": [],
         }
@@ -1361,6 +1362,7 @@ def _cashflow_preview(
         "internal_transfer_count": int(summary.get("internal_transfer_count", 0)),
         "category_review_count": int(summary.get("category_review_count", len(review))) if review is not None else int(summary.get("category_review_count", 0)),
         "deduction_count": int(len(summary.get("deduction_details"))) if summary.get("deduction_details") is not None else 0,
+        "period_metrics": summary.get("period_metrics") or {},
         "receipt_presentation": summary.get("receipt_presentation") or "net",
         "detail_sections_loaded": sorted(loaded),
     }
