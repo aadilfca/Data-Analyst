@@ -456,7 +456,7 @@ def test_cashflow_drilldown_route_filters_and_paginates_server_side():
             ],
             'drilldown_controls': {'cash_bank_split': {'status': 'Matched'}},
         },
-        'source': {'ready': True},
+        'source': {'ready': True, 'metadata': {'cashflow_report_revision': 7}},
         'blocking_reasons': [],
     }
     with patch.object(reconciliation, '_build_cashflow_result', return_value=result) as builder:
@@ -477,6 +477,7 @@ def test_cashflow_drilldown_route_filters_and_paginates_server_side():
     assert response['page_count'] == 1
     assert response['rows'][0]['account_code'] == 'AR1'
     assert response['controls']['cash_bank_split']['status'] == 'Matched'
+    assert response['source']['metadata']['cashflow_report_revision'] == 7
     assert builder.call_args.kwargs['detail_sections'] == {'drilldown'}
 
 
@@ -921,6 +922,7 @@ def test_cashflows_preview_uses_prepared_snapshot_when_exact_cache_misses():
         "bank_account_codes": ["B1"],
         "match_internal_transfers": False,
         "receipt_presentation": "net",
+        "cashflow_report_revision": 7,
     }
     cached = {
         "metadata": {
@@ -950,6 +952,7 @@ def test_cashflows_preview_uses_prepared_snapshot_when_exact_cache_misses():
 
     loader.assert_not_called()
     assert response["preview"]["category_totals"][0]["2026-Q1"] == 125.0
+    assert response["cashflow_report_revision"] == 7
 
 def test_preparation_builds_one_daily_snapshot_after_committed_source_changes():
     from services import ledger_report_source

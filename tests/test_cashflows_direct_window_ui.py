@@ -35,6 +35,15 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert "account_head_options" in script
     assert "account_head" in script
     assert "cashflowDrilldownBaseCache" in script
+    assert "cashflowReportRevision" in script
+    assert "cashflowReportRevisionFromResult" in script
+    assert "metadata.cashflow_report_revision" in script
+    assert "syncCashflowReportRevision" in script
+    assert "resetCashflowDrilldownFilters" in script
+    assert "cashflowsDrilldownAccountHead" in script
+    assert "cashflowReportRevision].join" in script
+    assert "resetCashflowDrilldownFilters();" in script
+    assert "revision: cashflowReportRevision" in script
     assert "cashflowDrilldownLocalResult" in script
     assert "cacheCashflowDrilldownBaseline" in script
     assert "base_rows" in script
@@ -165,6 +174,7 @@ def test_cashflows_summary_contains_inline_category_ledger_contract():
     assert 'cashflowInlineLedgerLimit' in inline_script
     assert 'cashflowInlineTransactionCache' in inline_script
     assert 'cashflowInlineTransactionLimit' in inline_script
+    assert 'cashflowDrawerTransactionKey' in inline_script
     assert 'data-cashflow-inline-category' in inline_script
     assert 'data-cashflow-inline-ledger' in inline_script
     assert '/api/data/cashflows-classification-preview?' in inline_script

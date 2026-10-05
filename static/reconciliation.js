@@ -28,6 +28,7 @@
     let cashflowDrilldownController = null;
     let cashflowDrilldownGeneration = 0;
     let lastCashflowDrilldownResult = null;
+    let cashflowReportRevision = 0;
     const cashflowDrilldownBaseCache = new Map();
     const cashflowDrilldownLimit = 50;
     let cashflowInlineLedgerCache = new Map();
@@ -87,7 +88,17 @@
         if (cashflowTreasuryView === 'bank') return 'Bank';
         if (cashflowTreasuryView === 'cash') return 'Cash';
         return '';
-    }    function syncCashflowTreasuryView() {
+    }
+    function resetCashflowDrilldownFilters() {
+        element('cashflowsDrilldownSearch').value = '';
+        element('cashflowsDrilldownCategory').value = '';
+        element('cashflowsDrilldownAccountHead').value = '';
+        element('cashflowsDrilldownTreasury').value = cashflowDefaultTreasuryType();
+        element('cashflowsDrilldownPeriod').value = '';
+        renderCashflowDrilldownCategoryOptions([]);
+        renderCashflowDrilldownAccountOptions([]);
+    }
+    function syncCashflowTreasuryView() {
         const select = element('cashflowsTreasuryViewSelect');
         if (select) select.value = cashflowTreasuryView;
     }
@@ -628,7 +639,28 @@
         if (selected && accounts.has(selected.toLowerCase())) select.value = selected;
     }
     function cashflowDrilldownContextKey(start, end) {
-        return [clientId, start, end, cashflowSelection.groupBy || 'month', cashflowTreasuryView || 'combined'].join('|');
+        return [clientId, start, end, cashflowSelection.groupBy || 'month', cashflowTreasuryView || 'combined', cashflowReportRevision].join('|');
+    }
+    function cashflowReportRevisionFromResult(result) {
+        const source = result && result.source || {};
+        const metadata = source.metadata || {};
+        const raw = result && result.cashflow_report_revision != null
+            ? result.cashflow_report_revision
+            : (source.cashflow_report_revision != null ? source.cashflow_report_revision : metadata.cashflow_report_revision);
+        const revision = Number(raw);
+        return Number.isFinite(revision) && revision > 0 ? revision : 0;
+    }
+    function syncCashflowReportRevision(result) {
+        const incoming = cashflowReportRevisionFromResult(result);
+        if (!incoming) return true;
+        if (cashflowReportRevision && incoming < cashflowReportRevision) return false;
+        if (cashflowReportRevision && incoming !== cashflowReportRevision) {
+            cashflowDrilldownBaseCache.clear();
+            resetCashflowInlineLedgerState();
+            cashflowChildPreviews = {};
+        }
+        cashflowReportRevision = incoming;
+        return true;
     }
     function cashflowDrilldownFilterState() {
         const selectedTreasury = element('cashflowsDrilldownTreasury').value;
@@ -683,13 +715,16 @@
     }
     function cacheCashflowDrilldownBaseline(result) {
         if (!result || !Array.isArray(result.base_rows)) return;
+        if (!syncCashflowReportRevision(result)) return;
         const baseResult = Object.assign({}, result);
         delete baseResult.base_rows;
         cashflowDrilldownBaseCache.set(cashflowDrilldownContextKey(result.period_start, result.period_end), {
             rows: result.base_rows,
             result: baseResult,
+            revision: cashflowReportRevision,
         });
-    }    function syncCashflowDrilldownPagination(result) {
+    }
+    function syncCashflowDrilldownPagination(result) {
         const payload = result || lastCashflowDrilldownResult || {};
         const page = Number(payload.page) || 1;
         const pageCount = Number(payload.page_count) || 1;
@@ -715,7 +750,7 @@
         syncCashflowDrilldownPagination(result);
     }
     function cashflowInlineLedgerKey(section, category) {
-        return [cashflowSelection.start, cashflowSelection.end, cashflowSelection.groupBy || 'month', cashflowTreasuryView, section, category].join('|');
+        return [cashflowSelection.start, cashflowSelection.end, cashflowSelection.groupBy || 'month', cashflowTreasuryView, section, category, cashflowReportRevision].join('|');
     }
     function resetCashflowInlineLedgerState() {
         cashflowInlineLedgerGeneration += 1;
@@ -845,6 +880,7 @@
     }
     function cashflowDrawerTransactionKey(context, page, filters) {
         return [
+            cashflowReportRevision,
             filters.start,
             filters.end,
             filters.search,
@@ -1200,7 +1236,8 @@
         return api('/api/reconciliation/cashflows/drilldown?' + params.toString(), { signal: controller.signal })
             .then(function (payload) {
                 if (generation !== cashflowInlineLedgerGeneration) return null;
-                cashflowInlineLedgerCache.set(key, payload);
+                if (!syncCashflowReportRevision(payload)) return null;
+                cashflowInlineLedgerCache.set(cashflowInlineLedgerKey(section, category), payload);
                 renderCashflowInlineLedgerHost(host, payload, category, section, periods, isSplit);
                 return payload;
             })
@@ -1286,6 +1323,7 @@
         return api('/api/reconciliation/cashflows/drilldown?' + params.toString(), { signal: controller.signal })
             .then(function (result) {
                 if (generation !== cashflowDrilldownGeneration) return null;
+                if (!syncCashflowReportRevision(result)) return null;
                 setCashflowProcessingStep('render', 'Rendering ledger drill-down details.');
                 cacheCashflowDrilldownBaseline(result);
                 lastCashflowDrilldownResult = result;
@@ -1550,6 +1588,7 @@
         setCashflowDrilldownMode(false);
     }
     function renderResult(result) {
+        if (!syncCashflowReportRevision(result)) return;
         lastCashflowsResult = result;
         cashflowDrilldownBaseCache.clear();
         const preview = result.preview || {};
@@ -1652,6 +1691,7 @@
     async function generateCashflows(event) {
         if (event) event.preventDefault();
         resetCashflowInlineLedgerState();
+        resetCashflowDrilldownFilters();
         setCashflowSummaryFilterVisibility(false);
         const exportButton = element('cashflowsExportButton');
         if (exportButton) exportButton.hidden = true;
