@@ -8991,7 +8991,16 @@ body {
     margin: 0 auto;
     padding: 34px 0 28px;
 }
-.reconciliation-shell.cashflows-view-active { padding-top: 8.5px; }
+.reconciliation-page > .navbar {
+    position: fixed;
+    top: 0;
+    right: 0;
+    left: 0;
+    width: auto;
+    box-sizing: border-box;
+}
+.reconciliation-page > .reconciliation-shell { padding-top: 104px; }
+.reconciliation-page > .reconciliation-shell.cashflows-view-active { padding-top: 78.5px; }
 .reconciliation-hero {
     display: flex;
     align-items: center;
@@ -10337,13 +10346,42 @@ body .cashflows-drilldown-toolbar button { min-width: 0; white-space: nowrap; pa
 .cashflows-summary-section-row th { background: #e8f3e8; color: #416b4c; border-top: 1px solid #c3dec8; border-bottom: 1px solid #b8d8be; text-align: left; }
 .cashflows-summary-total-row th, .cashflows-summary-total-row td { background: #e8eef7; color: #0b2e59; font-weight: 800; border-top: 1px solid #1f4e78; border-bottom: 1px solid #c8d5e6; }
 .cashflows-summary-total-row:hover th, .cashflows-summary-total-row:hover td { background: #e8eef7; color: #0b2e59; }
-/* Keep the main summary header below the 70px global navbar while the report rows scroll. */
+/* Keep the summary title row fixed without making the page's wide table a document-level scroll surface. */
 .cashflows-summary-table-wrap { overflow: visible; }
-#cashflowsSummaryTable:not(.cashflows-summary-split-table) thead th { position: sticky; top: 72.5px; z-index: 8; background: #f4f8fa; box-shadow: 0 1px 0 #c9d7df; }
-.cashflows-summary-table-wrap::before { position: fixed; top: 70px; right: 0; left: 0; z-index: 99; height: 2.5px; background: #f4f7fb; content: ''; pointer-events: none; }.cashflows-ledger-drilldown-table-wrap { position: relative; }.cashflows-ledger-drilldown-table-wrap { overflow: visible; max-height: none; }.cashflows-ledger-drilldown-table-wrap::before { position: fixed; top: 70px; right: 0; left: 0; z-index: 99; height: 2.5px; background: #f4f7fb; content: ''; pointer-events: none; }#cashflowsLedgerDrilldownTable thead th { position: sticky; top: 72.5px; z-index: 8; background: #f4f8fa; box-shadow: 0 1px 0 #c9d7df; }
-#cashflowsSummaryTable:not(.cashflows-summary-split-table) thead th:not(:first-child),
-#cashflowsSummaryTable:not(.cashflows-summary-split-table) tbody tr:not(.cashflows-summary-section-row) td:not(:first-child),
-#cashflowsSummaryTable:not(.cashflows-summary-split-table) tbody tr.cashflows-summary-total-row td { text-align: right; font-variant-numeric: tabular-nums; }
+.cashflows-summary-table-host { min-width: 0; }
+.cashflows-summary-pane-layout { width: 100%; }
+.cashflows-summary-sticky-header,
+.cashflows-summary-body-layout { display: grid; grid-template-columns: minmax(280px, 360px) minmax(0, 1fr); align-items: start; width: 100%; }
+.cashflows-summary-sticky-header { position: sticky; top: 72.5px; z-index: 8; background: #f4f8fa; box-shadow: 0 1px 0 #c9d7df; }
+.cashflows-summary-frozen-header-pane,
+.cashflows-summary-scroll-header-viewport { min-width: 0; overflow: hidden; background: #f4f8fa; }
+.cashflows-summary-header-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.cashflows-summary-header-table th,
+.cashflows-summary-header-table td { box-sizing: border-box; padding: 9px 10px; border-bottom: 1px solid #c9d7df; background: #f4f8fa; color: #526675; font-size: 11px; font-weight: 700; text-transform: uppercase; white-space: nowrap; }
+.cashflows-summary-frozen-header-table th { text-align: left; }
+.cashflows-summary-frozen-header-table,
+.cashflows-summary-frozen-table { width: 360px; min-width: 360px; table-layout: fixed; }
+.cashflows-summary-scroll-header-table { width: max-content; min-width: 100%; table-layout: fixed; transform: translate3d(0, 0, 0); }
+.cashflows-summary-scroll-header-table th,
+.cashflows-summary-scroll-header-table td { min-width: 0; text-align: right; }
+.cashflows-summary-frozen-pane { min-width: 0; background: #fff; }
+.cashflows-summary-scroll-pane { min-width: 0; overflow-x: auto; overflow-y: clip; }
+.cashflows-summary-pane-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.cashflows-summary-scroll-table { width: max-content; min-width: 100%; table-layout: fixed; }
+.cashflows-summary-scroll-table th,
+.cashflows-summary-scroll-table td { min-width: 0; }
+.cashflows-summary-pane-table th,
+.cashflows-summary-pane-table td { box-sizing: border-box; }
+.cashflows-summary-pane-table tbody tr:hover td { background: #f8fbfd; }
+.cashflows-summary-scroll-pane .cashflows-summary-pane-table th:not(:first-child),
+.cashflows-summary-scroll-pane .cashflows-summary-pane-table td:not(:first-child),
+.cashflows-summary-scroll-pane .cashflows-summary-total-row td { text-align: right; font-variant-numeric: tabular-nums; }
+.cashflows-summary-frozen-pane .cashflows-summary-pane-table th,
+.cashflows-summary-frozen-pane .cashflows-summary-pane-table td { text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.cashflows-summary-table-wrap::before { position: fixed; top: 70px; right: 0; left: 0; z-index: 99; height: 2.5px; background: #f4f7fb; content: ''; pointer-events: none; }
+.cashflows-ledger-drilldown-table-wrap { position: relative; overflow: visible; max-height: none; }
+.cashflows-ledger-drilldown-table-wrap::before { position: fixed; top: 70px; right: 0; left: 0; z-index: 99; height: 2.5px; background: #f4f7fb; content: ''; pointer-events: none; }
+#cashflowsLedgerDrilldownTable thead th { position: sticky; top: 72.5px; z-index: 8; background: #f4f8fa; box-shadow: 0 1px 0 #c9d7df; }
 .cashflows-inline-expand { display: inline-flex; align-items: center; gap: 0; border: 0; padding: 0; background: transparent; color: #24536e; font: inherit; text-align: left; cursor: pointer; }
 .cashflows-inline-expand:hover, .cashflows-inline-expand:focus { color: #1769aa; text-decoration: underline; outline: none; }
 .cashflows-inline-expand:disabled { cursor: wait; opacity: .7; }
@@ -10409,3 +10447,5 @@ body.cashflows-inline-transaction-open { overflow: hidden; }
 .cashflows-summary-split-table tbody tr:not(.cashflows-summary-section-row):not(.cashflows-summary-total-row) td:first-child { position: sticky; left: 0; z-index: 2; background: #fff; text-align: left; }
 .cashflows-summary-split-table tbody tr:hover td:first-child { background: #f8fbfd; }
 .cashflows-summary-split-table .cashflows-summary-total-row th:first-child { position: sticky; left: 0; z-index: 2; }
+.cashflows-summary-scroll-pane .cashflows-summary-pane-table tbody tr:not(.cashflows-summary-section-row):not(.cashflows-summary-total-row) td:first-child { position: static; left: auto; z-index: auto; box-shadow: none; text-align: right; }
+.cashflows-summary-pane-table tbody tr:not(.cashflows-summary-total-row).cashflows-summary-row-hover td { background: #f8fbfd; }

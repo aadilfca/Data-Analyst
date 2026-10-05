@@ -1,4 +1,12 @@
 # Changelog Archive
+## Cashflows split-pane alignment and synchronized ledger hover - 2026-10-05
+
+**Scope:** Finalize full-year summary and expanded-ledger presentation after the frozen/scrolling pane redesign.
+
+**Implementation:** Added one fixed column contract for header/body/ledger rows, synchronized paired-row hover backgrounds, removed the Jan-26 background override, and advanced the stylesheet cache to `v=64`.
+
+**Verification:** User confirmed the local UI. Focused Cashflows UI tests passed 4/4; JavaScript syntax and `git diff --check` passed. No backend or source data changed.
+
 ## Cashflows data and performance standard registered - 2026-10-05
 
 **Decision:** Centralized the Sialkot-specific data-fetching, caching, freshness, slow-network, reconciliation, and testing rules in CLAUDE.md.

@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -154,7 +156,9 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert ".cashflows-template-note" not in styles
     assert ".cashflows-report-header" in styles
     assert ".cashflows-report { display: grid; gap: 10px; }" in styles
-    assert ".reconciliation-shell.cashflows-view-active { padding-top: 8.5px; }" in styles
+    assert ".reconciliation-page > .navbar {" in styles
+    assert ".reconciliation-page > .reconciliation-shell { padding-top: 104px; }" in styles
+    assert ".reconciliation-page > .reconciliation-shell.cashflows-view-active { padding-top: 78.5px; }" in styles
     assert ".cashflows-report-heading" not in styles
     assert ".cashflows-control-grid" not in styles
     assert ".cashflows-source-quality" not in styles
@@ -232,7 +236,22 @@ def test_cashflows_summary_contains_inline_category_ledger_contract():
     assert 'cashflows-inline-ledger-link' in inline_styles
     assert 'cashflows-inline-expand-icon' not in inline_script
     assert 'cashflows-inline-expand-icon' not in inline_styles
-    assert 'style.css?v=57' in inline_html
+    assert 'style.css?v=64' in inline_html
+    assert 'cashflows-summary-table-host' in inline_html
+    assert 'renderCashflowSummaryPaneLayout' in inline_script
+    assert 'syncCashflowSummaryPaneRows' in inline_script
+    assert 'syncCashflowSummaryHeaderScroll' in inline_script
+    assert 'syncCashflowSummaryRowHover' in inline_script
+    assert 'applyCashflowSummaryColumnContract' in inline_script
+    assert 'cashflowSummaryLogicalColumnCount' in inline_script
+    assert 'cashflows-summary-pane-layout' in inline_styles
+    assert 'cashflows-summary-sticky-header' in inline_styles
+    assert 'cashflows-summary-scroll-header-viewport' in inline_styles
+    assert 'cashflows-summary-row-hover' in inline_styles
+    assert 'background: inherit;' not in inline_styles[inline_styles.find('.cashflows-summary-scroll-pane .cashflows-summary-pane-table tbody tr'):inline_styles.find('.cashflows-summary-scroll-pane .cashflows-summary-pane-table tbody tr') + 260]
+    assert 'cashflows-summary-frozen-header-table' in inline_styles
+    assert 'table-layout: fixed;' in inline_styles
+    assert 'cashflows-summary-scroll-pane' in inline_styles
     assert 'cashflows-inline-ledger-row td:first-child' in inline_styles
     assert 'cashflows-inline-ledger-row td:not(:first-child)' in inline_styles
     assert 'cashflows-inline-ledger-table' not in inline_script
@@ -250,11 +269,11 @@ def test_cashflows_summary_contains_inline_category_ledger_contract():
     assert '.cashflows-inline-transaction-table { width: 100%; min-width: 0;' in inline_styles
     assert '.cashflows-inline-transaction-table th:nth-child(2)' in inline_styles
     assert 'white-space: normal; overflow-wrap: anywhere; word-break: break-word;' in inline_styles
-    assert '#cashflowsSummaryTable:not(.cashflows-summary-split-table) thead th:not(:first-child)' in inline_styles
     assert '.cashflows-summary-table-wrap { overflow: visible; }' in inline_styles
-    assert '#cashflowsSummaryTable:not(.cashflows-summary-split-table) thead th { position: sticky; top: 72.5px; z-index: 8; background: #f4f8fa; box-shadow: 0 1px 0 #c9d7df; }' in inline_styles
+    assert '.cashflows-summary-frozen-pane' in inline_styles
+    assert '.cashflows-summary-scroll-pane' in inline_styles
+    assert 'overflow-y: clip' in inline_styles
     assert '.cashflows-summary-table-wrap::before' in inline_styles
-    assert '#cashflowsSummaryTable:not(.cashflows-summary-split-table) tbody tr:not(.cashflows-summary-section-row) td:not(:first-child)' in inline_styles
     assert 'font-variant-numeric: tabular-nums;' in inline_styles
 
 def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
@@ -289,7 +308,7 @@ def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
     assert "setCashflowSummaryFilterVisibility(false);" in reconciliation_script
     assert "cashflowPreviewPeriods" in reconciliation_script
     assert "syncCashflowZeroRowsButton" in reconciliation_script
-    assert "style.css?v=57" in reconciliation_html
+    assert "style.css?v=64" in reconciliation_html
     assert "reconciliation.js?v=22" in reconciliation_html
     assert "cashflowsSummaryBasis" not in reconciliation_html
     assert "cashflows-transactions-note" not in reconciliation_html
@@ -301,3 +320,66 @@ def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
     assert "downloadCashflowReport" in reconciliation_script
     assert "treasury_view: cashflowTreasuryView" in reconciliation_script
     assert "cashflowDefaultTreasuryType" in reconciliation_script
+
+
+def test_cashflows_summary_panes_contain_full_year_horizontal_overflow():
+    playwright = pytest.importorskip("playwright.sync_api")
+    css = (ROOT / "static" / "style.css").read_text(encoding="utf-8")
+    headers = "".join("<th>Period-%s</th>" % index for index in range(15))
+    cells = "".join("<td>%s</td>" % ("3,000,000" if index == 3 else "-") for index in range(15))
+    frozen_cols = "<colgroup><col style='width:360px'></colgroup>"
+    period_cols = "<colgroup>" + "".join("<col style='width:112px'>" for _ in range(15)) + "</colgroup>"
+    markup = (
+        "<div class='cashflows-summary-table-wrap'><div id='cashflowsSummaryTable' class='cashflows-summary-table-host'>"
+        "<div class='cashflows-summary-pane-layout'>"
+        "<div class='cashflows-summary-sticky-header'>"
+        "<div class='cashflows-summary-frozen-header-pane'><table class='cashflows-summary-header-table cashflows-summary-frozen-header-table'>" + frozen_cols +
+        "<thead><tr><th>Category</th></tr></thead></table></div>"
+        "<div class='cashflows-summary-scroll-header-viewport'><table class='cashflows-summary-header-table cashflows-summary-scroll-header-table'>" + period_cols +
+        "<thead><tr>" + headers + "</tr></thead></table></div></div>"
+        "<div class='cashflows-summary-body-layout'>"
+        "<div class='cashflows-summary-frozen-pane'><table class='cashflows-table cashflows-summary-pane-table cashflows-summary-frozen-table'>" + frozen_cols +
+        "<tbody><tr><td>Received from customers</td></tr></tbody></table></div>"
+        "<div class='cashflows-summary-scroll-pane'><table class='cashflows-table cashflows-summary-pane-table cashflows-summary-scroll-table'>" + period_cols +
+        "<tbody><tr>" + cells + "</tr></tbody></table></div></div>"
+        "</div></div></div>"
+    )
+    with playwright.sync_playwright() as instance:
+        browser = instance.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width": 1200, "height": 700})
+        page.set_content("<style>" + css + "</style>" + markup)
+        pane = page.locator(".cashflows-summary-scroll-pane")
+        pane.evaluate("element => { element.scrollLeft = 220; }")
+        metrics = page.locator("#cashflowsSummaryTable").evaluate(
+            """host => {
+                const pane = host.querySelector('.cashflows-summary-scroll-pane');
+                const frozen = host.querySelector('.cashflows-summary-frozen-pane');
+                const stickyHeader = host.querySelector('.cashflows-summary-sticky-header');
+                const header = host.querySelector('.cashflows-summary-frozen-header-table thead th');
+                const scrollHeader = host.querySelector('.cashflows-summary-scroll-header-table thead th');
+                const scrollHeaderTable = host.querySelector('.cashflows-summary-scroll-header-table');
+                const paneRect = pane.getBoundingClientRect();
+                const frozenRect = frozen.getBoundingClientRect();
+                return {
+                    documentScrollWidth: document.documentElement.scrollWidth,
+                    paneScrollWidth: pane.scrollWidth,
+                    paneClientWidth: pane.clientWidth,
+                    frozenLeft: frozenRect.left,
+                    paneLeft: paneRect.left,
+                    paneRight: paneRect.right,
+                    headerPosition: getComputedStyle(stickyHeader).position,
+                    headerTop: header.getBoundingClientRect().top,
+                    scrollHeaderTop: scrollHeader.getBoundingClientRect().top,
+                    scrollHeaderWidth: scrollHeaderTable.getBoundingClientRect().width
+                };
+            }"""
+        )
+        browser.close()
+    assert metrics["documentScrollWidth"] <= 1200
+    assert metrics["paneScrollWidth"] > metrics["paneClientWidth"]
+    assert metrics["scrollHeaderWidth"] > metrics["paneClientWidth"]
+    assert abs(metrics["frozenLeft"]) <= 1
+    assert abs(metrics["paneLeft"] - 360) <= 1
+    assert metrics["paneRight"] <= 1201
+    assert metrics["headerPosition"] == "sticky"
+    assert abs(metrics["headerTop"] - metrics["scrollHeaderTop"]) <= 1

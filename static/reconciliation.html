@@ -4,7 +4,7 @@
     <meta charset='UTF-8'>
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
     <title>Reports | Internal Audit App</title>
-    <link rel='stylesheet' href='/static/style.css?v=57'>
+    <link rel='stylesheet' href='/static/style.css?v=64'>
 </head>
 <body class='reconciliation-page' data-nav-module='Reports' data-nav-parent='index.html'>
     <nav class='navbar'>
@@ -94,7 +94,7 @@
         </form>
         <div class='cashflows-freshness-bar' aria-live='polite'><span id='cashflowsFreshnessStatus'>Data version not loaded</span><button type='button' id='cashflowsRefreshButton' class='cashflows-secondary'>Refresh from source</button></div>
     </div>
-    <section class='cashflows-report-section'><div class='cashflows-summary-tools'><div class='cashflows-search-control'><input id='cashflowsSummaryFilter' type='text' placeholder='Filter category' aria-label='Filter Cashflows categories'><button type='button' id='cashflowsSummaryClear' class='cashflows-search-clear' aria-label='Clear category filter' title='Clear category filter' hidden>×</button></div></div><div id='cashflowsTreasuryReconciliation' class='cashflows-transfer-reconciliation' hidden aria-live='polite'></div><div class='cashflows-table-wrap cashflows-summary-table-wrap'><table id='cashflowsSummaryTable' class='cashflows-table'></table></div></section>
+    <section class='cashflows-report-section'><div class='cashflows-summary-tools'><div class='cashflows-search-control'><input id='cashflowsSummaryFilter' type='text' placeholder='Filter category' aria-label='Filter Cashflows categories'><button type='button' id='cashflowsSummaryClear' class='cashflows-search-clear' aria-label='Clear category filter' title='Clear category filter' hidden>×</button></div></div><div id='cashflowsTreasuryReconciliation' class='cashflows-transfer-reconciliation' hidden aria-live='polite'></div><div class='cashflows-table-wrap cashflows-summary-table-wrap'><div id='cashflowsSummaryTable' class='cashflows-summary-table-host'></div></div></section>
             <div id='cashflowsLazyActions' class='cashflows-lazy-actions'>
                 <div class='cashflows-detail-actions'>
                     <button type='button' id='cashflowsLoadTransfersButton' class='cashflows-secondary'>Load internal transfers</button>
