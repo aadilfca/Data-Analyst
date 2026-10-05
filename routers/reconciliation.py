@@ -1563,11 +1563,15 @@ def _build_cashflow_result(
     preview = _cashflow_preview(summary, detail_sections, treasury_view)
     format_seconds = perf_counter() - preview_started
     total_seconds = perf_counter() - request_started
+    cache_hit = cached_summary is not None
+    read_model = str((cached_summary.get("metadata") or {}).get("summary_read_model") or "none") if cached_summary else "none"
+    authoritative = bool(force_refresh or cache_mode in {"forced_source_rebuild", "source_rebuild", "completed"})
     logger.info(
         "cashflows_performance client_id=%s period_start=%s period_end=%s group_by=%s details=%s "
         "validation_seconds=%.3f configuration_seconds=%.3f source_seconds=%.3f "
         "summary_seconds=%.3f format_seconds=%.3f total_seconds=%.3f "
-        "source_rows=%s valid_rows=%s selected_vouchers=%s summary_status=%s cache_mode=%s",
+        "source_rows=%s valid_rows=%s selected_vouchers=%s summary_status=%s cache_mode=%s "
+        "cache_hit=%s read_model=%s report_revision=%s authoritative=%s",
         client_id,
         start.date().isoformat(),
         end.date().isoformat(),
@@ -1584,6 +1588,10 @@ def _build_cashflow_result(
         int(summary.get("selected_voucher_count", 0)) if summary else 0,
         summary_status,
         cache_mode,
+        cache_hit,
+        read_model,
+        report_revision,
+        authoritative,
     )
     return {
         "client_id": client_id,
@@ -1596,7 +1604,7 @@ def _build_cashflow_result(
             "mode": cache_mode,
             "report_revision": report_revision,
             "generated_at": freshness_generated_at,
-            "authoritative": bool(force_refresh or cache_mode in {"forced_source_rebuild", "source_rebuild", "completed"}),
+            "authoritative": authoritative,
         },
         "configuration": {
             "cash_account_count": len(configuration["cash_account_codes"]),
@@ -1917,10 +1925,14 @@ def cashflow_drilldown(
     start_index = (current_page - 1) * limit
     page_rows = filtered_rows[start_index:start_index + limit]
     filter_seconds = perf_counter() - filter_started
+    freshness = result.get("freshness") or {}
+    cache_mode = str(freshness.get("mode") or "unknown")
+    cache_hit = cache_mode in {"hit", "prepared_snapshot", "cache_hit"}
     logger.info(
         "cashflows_drilldown_performance client_id=%s period_start=%s period_end=%s group_by=%s "
         "filter_count=%s build_seconds=%.3f filter_seconds=%.3f total_seconds=%.3f "
-        "source_rows=%s total_rows=%s returned_rows=%s requested_page=%s page=%s page_count=%s limit=%s",
+        "source_rows=%s total_rows=%s returned_rows=%s requested_page=%s page=%s page_count=%s limit=%s "
+        "cache_mode=%s cache_hit=%s report_revision=%s",
         client_id,
         result['period_start'],
         result['period_end'],
@@ -1936,6 +1948,9 @@ def cashflow_drilldown(
         current_page,
         page_count,
         limit,
+        cache_mode,
+        cache_hit,
+        int(freshness.get("report_revision") or result.get("cashflow_report_revision") or 1),
     ),
     return {
         'client_id': client_id,

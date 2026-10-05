@@ -1059,6 +1059,10 @@ def test_cashflows_preview_logs_performance_stages(caplog):
     assert "total_seconds=" in message
     assert "source_rows=4" in message
     assert "cache_mode=source_rebuild" in message
+    assert "cache_hit=False" in message
+    assert "read_model=none" in message
+    assert "report_revision=1" in message
+    assert "authoritative=True" in message
     assert response["preview"]["group_by"] == "quarter"
 
 
@@ -1114,6 +1118,9 @@ def test_cashflow_drilldown_logs_endpoint_timing(caplog):
     assert "filter_count=1" in message
     assert "total_rows=1" in message
     assert "returned_rows=1" in message
+    assert "cache_mode=source_rebuild" in message
+    assert "cache_hit=False" in message
+    assert "report_revision=1" in message
     assert response["page_count"] == 1
 
 def test_cashflows_preview_accepts_combined_child_sections(caplog):

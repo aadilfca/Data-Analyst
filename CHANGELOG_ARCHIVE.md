@@ -1,5 +1,15 @@
 # Changelog Archive
 
+## Cashflows maintenance observability and schema parity - 2026-10-05
+
+**Scope:** Make Cashflows performance evidence clearer and protect the SQLite/PostgreSQL schema contract without changing the fast-fetch or accounting paths.
+
+**Implementation:** Existing preview and drill-down timing logs now include cache hit/miss, read-model path, report revision, authority, and elapsed stages. Regression coverage now checks the Cashflows read-model/revision tables and required indexes in both database definitions. No production index or retention deletion was added without measured evidence and an approved policy.
+
+**Verification:** Python compilation, diff validation, and 77 focused Cashflows tests passed. Aadil confirmed the local report behavior. No accounting calculation, source data, or cache strategy changed.
+
+**Deferred:** Historical read-model cleanup remains pending a storage-based retention policy; production EXPLAIN capture and SQLite foreign-key parity remain environment-specific maintenance work.
+
 ## Cashflows server read-model revision guard - 2026-10-05
 
 **Scope:** Ensure exact summary snapshots and the reusable daily snapshot can only serve the current Cashflows report revision.

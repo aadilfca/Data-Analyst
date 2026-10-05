@@ -1,11 +1,57 @@
 """Phase 6 coverage for SQL-first Cashflows source preparation."""
 
+import inspect
+
+import database
 from services.ledger_report_source import (
     _cashflow_daily_rollup,
     load_cashflow_prepared_summary,
     load_cashflow_sql_source,
     load_cashflow_summary_read_model,
 )
+
+
+def test_cashflow_sqlite_and_postgres_schema_contracts_stay_aligned():
+    sqlite_schema = inspect.getsource(database.init_db)
+    postgres_schema = inspect.getsource(database.init_db_postgres)
+    required_tables = {
+        "cash_bank_summary_read_models": (
+            "client_id",
+            "template_id",
+            "source_upload_ids_key",
+            "configuration_version",
+            "report_revision",
+            "period_start",
+            "period_end",
+            "group_by",
+            "receipt_presentation",
+            "summary_payload",
+        ),
+        "cashflow_report_revisions": (
+            "client_id",
+            "revision",
+            "changed_at",
+            "changed_by",
+            "change_reason",
+        ),
+    }
+    required_indexes = (
+        "idx_cash_bank_summary_read_models_client",
+        "idx_cash_bank_classifications_client_date",
+        "idx_cash_bank_classifications_client_voucher",
+        "idx_cash_bank_classifications_client_account_date",
+        "idx_cash_bank_classifications_source_version",
+        "idx_cash_bank_classifications_client_period",
+    )
+
+    for table, columns in required_tables.items():
+        for schema in (sqlite_schema, postgres_schema):
+            assert f"CREATE TABLE IF NOT EXISTS {table}" in schema
+            for column in columns:
+                assert column in schema
+    for index_name in required_indexes:
+        assert index_name in sqlite_schema
+        assert index_name in postgres_schema
 
 
 def test_cashflow_sql_source_filters_dates_joins_vouchers_and_aggregates_lines():
