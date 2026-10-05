@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 def _refresh_cashflow_snapshot(client_id: int, reason: str) -> None:
     try:
-        invalidate_cashflow_summary_read_models(client_id)
+        invalidate_cashflow_summary_read_models(client_id, reason=reason, write_fn=execute_write_pg)
         prepare_cashflow_summary_snapshot(client_id)
     except Exception as error:
         logger.warning("cashflows_snapshot_preparation_failed client_id=%s reason=%s error=%s", client_id, reason, error)

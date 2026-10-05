@@ -30,6 +30,7 @@ from services.ledger_report_source import (
     project_cashflow_treasury_view,
     load_cashflow_summary_read_model,
     load_cashflow_prepared_summary,
+    invalidate_cashflow_summary_read_models,
     load_ledger_report_source,
     store_cashflow_summary_read_model,
 )
@@ -1063,7 +1064,12 @@ def _cashflow_configuration(client_id: int) -> dict[str, Any]:
                  AND c.client_id = r.client_id
                  AND c.is_active = TRUE
                 WHERE r.client_id = (SELECT role_client_id FROM request)
-            ), '[]'::json) AS customer_payment_roles
+            ), '[]'::json) AS customer_payment_roles,
+            COALESCE((
+                SELECT revision
+                FROM cashflow_report_revisions
+                WHERE client_id = (SELECT settings_client_id FROM request)
+            ), 1) AS cashflow_report_revision
         """,
         (client_id, client_id, client_id),
     )
@@ -1089,6 +1095,7 @@ def _cashflow_configuration(client_id: int) -> dict[str, Any]:
         "bank_account_codes": [normalize_account_code(row["account_code"]) for row in treasury if row["treasury_type"] == "bank"],
         "match_internal_transfers": bool(settings.get("match_internal_transfers")),
         "receipt_presentation": settings.get("receipt_presentation") or "net",
+        "cashflow_report_revision": max(int(row.get("cashflow_report_revision") or 1), 1),
         "customer_payment_roles": customer_payment_roles,
     }
 
@@ -1220,6 +1227,12 @@ def save_cashflow_template_columns(
                      updated_at = CURRENT_TIMESTAMP""",
                 (payload.client_id, payload.template_id, actor),
             )
+    invalidate_cashflow_summary_read_models(
+        payload.client_id,
+        reason="template_mapping_updated",
+        changed_by=actor,
+        write_fn=execute_write_pg,
+    )
     log_audit("Admin", "Update", "Cashflows", f"Saved template mapping for client {payload.client_id}, template {payload.template_id}")
     return _cashflow_template_mapping_view(payload.client_id, payload.template_id)
 
@@ -1402,6 +1415,7 @@ def _build_cashflow_result(
     configuration = _cashflow_configuration(client_id)
     configuration_seconds = perf_counter() - configuration_started
     configured_template_id = configuration.get("source_template_id")
+    report_revision = max(int(configuration.get("cashflow_report_revision") or 1), 1)
     diagnostics: list[dict[str, Any]] = []
     source_started = perf_counter()
     cache_mode = "not_requested"
@@ -1506,6 +1520,7 @@ def _build_cashflow_result(
                 journal_template_id=configured_template_id,
                 source_upload_ids=source_metadata_for_cache.get("selected_template_upload_ids") or source_metadata_for_cache.get("source_upload_ids") or [],
                 configuration_version=source_metadata_for_cache.get("classification_configuration_version"),
+                report_revision=report_revision,
                 period_start=start,
                 period_end=end,
                 group_by=grouping,
@@ -1526,6 +1541,7 @@ def _build_cashflow_result(
     if review_count:
         blocking_reasons.append(controls["categories"]["message"])
     source_metadata = dict(source.metadata)
+    source_metadata["cashflow_report_revision"] = report_revision
     source_quality = {
         "source_row_count": int(source_metadata.get("source_row_count") or 0),
         "valid_row_count": int(source_metadata.get("valid_row_count") or len(source.journal)),
@@ -1566,6 +1582,7 @@ def _build_cashflow_result(
         "period_end": end.date().isoformat(),
         "group_by": grouping,
         "treasury_view": treasury_view,
+        "cashflow_report_revision": report_revision,
         "configuration": {
             "cash_account_count": len(configuration["cash_account_codes"]),
             "bank_account_count": len(configuration["bank_account_codes"]),
@@ -2062,6 +2079,12 @@ def save_cashflow_source(
                  updated_at = CURRENT_TIMESTAMP""",
             (payload.client_id, payload.upload_id, payload.template_id, actor),
         )
+    invalidate_cashflow_summary_read_models(
+        payload.client_id,
+        reason="source_selection_updated",
+        changed_by=actor,
+        write_fn=execute_write_pg,
+    )
     log_audit("Admin", "Update", "Cashflows", f"Selected source for client {payload.client_id}")
     return _cashflow_configuration(payload.client_id)
 

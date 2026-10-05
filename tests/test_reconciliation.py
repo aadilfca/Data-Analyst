@@ -657,7 +657,7 @@ def test_cashflow_source_selection_requires_one_source_and_persists_upload():
         )
 
     assert response["source_upload_id"] == 290
-    assert write.call_args.args[0].find("source_upload_id") >= 0
+    assert any("source_upload_id" in call.args[0] for call in write.call_args_list)
     with patch.object(reconciliation, "_require_active_client"):
         with pytest.raises(HTTPException) as error:
             reconciliation.save_cashflow_source(

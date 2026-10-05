@@ -11,7 +11,7 @@ from database import (
 )
 from psycopg2.extras import Json
 from services.cash_bank_classification import load_treasury_mapping_postgres, upsert_classification_rows_postgres
-from services.ledger_report_source import prepare_cashflow_summary_snapshot
+from services.ledger_report_source import invalidate_cashflow_summary_read_models, prepare_cashflow_summary_snapshot
 from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime, time
@@ -1929,6 +1929,12 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
                     for row_id, row_data in zip(first_upload_ids, first_upload_row_data_list)
                 ]
                 execute_batch_pg(conn, DATA_AUDIT_LOG_INSERT_SQL, first_upload_audit_params)
+    invalidate_cashflow_summary_read_models(
+        request.client_id,
+        reason="source_imported",
+        changed_by="Analyst",
+        write_fn=execute_write_pg,
+    )
     IMPORT_PROGRESS[request.file_id]["status"] = "preparing"
     if background_tasks is None:
         # Direct callers and isolated tests retain the old synchronous contract.

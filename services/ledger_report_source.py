@@ -1288,6 +1288,44 @@ def _cashflow_daily_rollup(
     }
 
 
+def get_cashflow_report_revision(
+    client_id: int,
+    *,
+    query_fn: Callable[..., list[dict[str, Any]]] = execute_query_pg,
+) -> int:
+    """Return the durable application revision for one client's Cashflows data."""
+    rows = query_fn(
+        "SELECT revision FROM cashflow_report_revisions WHERE client_id = %s",
+        (client_id,),
+    )
+    if not rows:
+        return 1
+    return max(int(rows[0].get("revision") or 1), 1)
+
+
+def advance_cashflow_report_revision(
+    client_id: int,
+    *,
+    reason: str,
+    changed_by: str | None = None,
+    write_fn: Callable[..., Any] = execute_write_pg,
+) -> int:
+    """Advance the durable Cashflows revision after a committed application change."""
+    revision = write_fn(
+        """
+        INSERT INTO cashflow_report_revisions (client_id, revision, changed_at, changed_by, change_reason)
+        VALUES (%s, 2, CURRENT_TIMESTAMP, %s, %s)
+        ON CONFLICT (client_id) DO UPDATE SET
+            revision = cashflow_report_revisions.revision + 1,
+            changed_at = CURRENT_TIMESTAMP,
+            changed_by = EXCLUDED.changed_by,
+            change_reason = EXCLUDED.change_reason
+        RETURNING revision
+        """,
+        (client_id, changed_by, reason),
+    )
+    return max(int(revision or 1), 1)
+
 def load_cashflow_prepared_summary(
     client_id: int,
     *,
@@ -1310,7 +1348,7 @@ def load_cashflow_prepared_summary(
     source_start, source_end = bounds
     rows = query_fn(
         """
-        SELECT summary_payload, configuration_version, created_at
+        SELECT summary_payload, configuration_version, report_revision, created_at
         FROM cash_bank_summary_read_models
         WHERE client_id = %s
           AND template_id = %s
@@ -1353,6 +1391,7 @@ def load_cashflow_prepared_summary(
         "child_details_prepared": bool(summary.get("child_details_prepared")),
         "child_details_version": int(summary.get("child_details_version", 0) or 0),
         "classification_configuration_version": rows[0].get("configuration_version"),
+        "cashflow_report_revision": max(int(rows[0].get("report_revision") or 1), 1),
         "summary_read_model_created_at": rows[0].get("created_at"),
     }
     return {"summary": summary, "metadata": metadata}
@@ -1361,12 +1400,20 @@ def load_cashflow_prepared_summary(
 def invalidate_cashflow_summary_read_models(
     client_id: int,
     *,
+    reason: str = "cashflow_configuration_changed",
+    changed_by: str | None = None,
     write_fn: Callable[..., Any] = execute_write_pg,
-) -> None:
-    """Invalidate all prepared and exact Cashflows summaries for one client."""
+) -> int:
+    """Invalidate read models and advance the client revision after a committed change."""
     write_fn(
         "DELETE FROM cash_bank_summary_read_models WHERE client_id = %s",
         (client_id,),
+    )
+    return advance_cashflow_report_revision(
+        client_id,
+        reason=reason,
+        changed_by=changed_by,
+        write_fn=write_fn,
     )
 
 def prepare_cashflow_summary_snapshot(
@@ -1389,6 +1436,7 @@ def prepare_cashflow_summary_snapshot(
     if bounds is None:
         return {"status": "skipped", "reason": "no_classified_dates"}
     source_start, source_end = bounds
+    report_revision = get_cashflow_report_revision(client_id, query_fn=query_fn)
     source = load_cashflow_sql_source(
         client_id,
         journal_template_id=int(template_id),
@@ -1416,6 +1464,7 @@ def prepare_cashflow_summary_snapshot(
         journal_template_id=int(template_id),
         source_upload_ids=source.metadata.get("selected_template_upload_ids") or upload_ids,
         configuration_version=source.metadata.get("classification_configuration_version") or 1,
+        report_revision=report_revision,
         period_start=source_start,
         period_end=source_end,
         group_by="day",
@@ -1443,7 +1492,7 @@ def load_cashflow_summary_read_model(
     upload_key = _cashflow_upload_ids_key(upload_ids)
     rows = query_fn(
         """
-        SELECT summary_payload, configuration_version, created_at
+        SELECT summary_payload, configuration_version, report_revision, created_at
         FROM cash_bank_summary_read_models
         WHERE client_id = %s
           AND template_id = %s
@@ -1501,6 +1550,7 @@ def load_cashflow_summary_read_model(
         "child_details_prepared": bool(payload.get("child_details_prepared")),
         "child_details_version": int(payload.get("child_details_version", 0) or 0),
         "classification_configuration_version": rows[0].get("configuration_version"),
+        "cashflow_report_revision": max(int(rows[0].get("report_revision") or 1), 1),
         "summary_read_model_created_at": rows[0].get("created_at"),
     }
     return {"summary": summary, "metadata": metadata}
@@ -1516,6 +1566,7 @@ def store_cashflow_summary_read_model(
     period_end: Any,
     group_by: str,
     summary: Mapping[str, Any],
+    report_revision: int | None = None,
     write_fn: Callable[..., Any] = execute_write_pg,
 ) -> None:
     """Persist one completed summary-only snapshot for safe repeat loads."""
@@ -1525,12 +1576,13 @@ def store_cashflow_summary_read_model(
     write_fn(
         """
         INSERT INTO cash_bank_summary_read_models (
-            client_id, template_id, source_upload_ids_key, configuration_version,
+            client_id, template_id, source_upload_ids_key, configuration_version, report_revision,
             period_start, period_end, group_by, receipt_presentation, summary_payload
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
         ON CONFLICT (client_id, template_id, source_upload_ids_key, period_start, period_end, group_by, receipt_presentation)
         DO UPDATE SET
             configuration_version = EXCLUDED.configuration_version,
+            report_revision = EXCLUDED.report_revision,
             summary_payload = EXCLUDED.summary_payload,
             created_at = CURRENT_TIMESTAMP
         """,
@@ -1539,6 +1591,7 @@ def store_cashflow_summary_read_model(
             journal_template_id,
             _cashflow_upload_ids_key(source_upload_ids),
             int(configuration_version or 1),
+            int(report_revision or 1),
             period_start,
             period_end,
             group_by,

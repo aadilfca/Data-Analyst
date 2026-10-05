@@ -795,6 +795,7 @@ def test_cashflow_summary_read_model_round_trip_preserves_period_totals():
         journal_template_id=9,
         source_upload_ids=[21],
         configuration_version=4,
+        report_revision=7,
         period_start="2026-02-10",
         period_end="2026-04-18",
         group_by="quarter",
@@ -810,6 +811,7 @@ def test_cashflow_summary_read_model_round_trip_preserves_period_totals():
         return [{
             "summary_payload": payload,
             "configuration_version": 4,
+            "report_revision": 7,
             "created_at": "2026-09-29T00:00:00+00:00",
         }]
 
@@ -825,6 +827,7 @@ def test_cashflow_summary_read_model_round_trip_preserves_period_totals():
 
     assert cached["summary"]["category_totals"].loc["Customers", "2026-Q1"] == 125.0
     assert cached["metadata"]["summary_read_model"] == "hit"
+    assert cached["metadata"]["cashflow_report_revision"] == 7
     assert cached["metadata"]["child_details_prepared"] is True
     assert cached["metadata"]["child_details_version"] == CASHFLOW_CHILD_DETAILS_VERSION
     assert cached["summary"]["transfer_details"].loc[0, "amount"] == 20.0
@@ -969,6 +972,8 @@ def test_preparation_builds_one_daily_snapshot_after_committed_source_changes():
             return [{"upload_id": 21, "file_name": "period.xlsx", "upload_date": "2026-04-01"}]
         if "MIN(c.transaction_date)" in sql:
             return [{"period_start": "2026-01-01", "period_end": "2026-06-30"}]
+        if "FROM cashflow_report_revisions" in sql:
+            return [{"revision": 6}]
         raise AssertionError(f"Unexpected preparation read: {sql}")
 
     with (
@@ -982,6 +987,7 @@ def test_preparation_builds_one_daily_snapshot_after_committed_source_changes():
     builder.assert_called_once()
     assert store.call_args.kwargs["group_by"] == "day"
     assert store.call_args.kwargs["source_upload_ids"] == [21]
+    assert store.call_args.kwargs["report_revision"] == 6
 
 def test_cashflow_configuration_uses_one_query_and_preserves_sections():
     calls = []

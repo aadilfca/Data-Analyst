@@ -542,6 +542,7 @@ def init_db():
                 template_id INTEGER NOT NULL,
                 source_upload_ids_key TEXT NOT NULL,
                 configuration_version INTEGER NOT NULL DEFAULT 1,
+                report_revision BIGINT NOT NULL DEFAULT 1,
                 period_start TEXT NOT NULL,
                 period_end TEXT NOT NULL,
                 group_by TEXT NOT NULL,
@@ -552,6 +553,22 @@ def init_db():
             )
         ''')
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cash_bank_summary_read_models_client ON cash_bank_summary_read_models (client_id, template_id, group_by)")
+        try:
+            columns = [row[1] for row in conn.execute("PRAGMA table_info(cash_bank_summary_read_models)").fetchall()]
+            if "report_revision" not in columns:
+                conn.execute("ALTER TABLE cash_bank_summary_read_models ADD COLUMN report_revision INTEGER NOT NULL DEFAULT 1")
+        except Exception as error:
+            print("[cashflows] Could not add report_revision to summary read models:", error)
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS cashflow_report_revisions (
+                client_id INTEGER PRIMARY KEY,
+                revision INTEGER NOT NULL DEFAULT 1,
+                changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                changed_by TEXT,
+                change_reason TEXT,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+            )
+        ''')
 
         conn.execute('''
             CREATE TABLE IF NOT EXISTS error_codes (
@@ -4202,6 +4219,7 @@ def _ensure_postgres_cash_bank_transaction_classifications(conn):
                 template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
                 source_upload_ids_key TEXT NOT NULL,
                 configuration_version INTEGER NOT NULL DEFAULT 1,
+                report_revision BIGINT NOT NULL DEFAULT 1,
                 period_start DATE NOT NULL,
                 period_end DATE NOT NULL,
                 group_by TEXT NOT NULL,
@@ -4211,7 +4229,17 @@ def _ensure_postgres_cash_bank_transaction_classifications(conn):
                 UNIQUE(client_id, template_id, source_upload_ids_key, period_start, period_end, group_by, receipt_presentation)
             )
         ''')
+        cur.execute("ALTER TABLE cash_bank_summary_read_models ADD COLUMN IF NOT EXISTS report_revision BIGINT NOT NULL DEFAULT 1")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cash_bank_summary_read_models_client ON cash_bank_summary_read_models (client_id, template_id, group_by)")
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS cashflow_report_revisions (
+                client_id INTEGER PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE,
+                revision BIGINT NOT NULL DEFAULT 1,
+                changed_at TIMESTAMPTZ DEFAULT now(),
+                changed_by TEXT,
+                change_reason TEXT
+            )
+        ''')
     except Exception:
         conn.rollback()
         raise
@@ -4473,6 +4501,7 @@ def init_db_postgres(conn):
             template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
             source_upload_ids_key TEXT NOT NULL,
             configuration_version INTEGER NOT NULL DEFAULT 1,
+            report_revision BIGINT NOT NULL DEFAULT 1,
             period_start DATE NOT NULL,
             period_end DATE NOT NULL,
             group_by TEXT NOT NULL,
@@ -4482,7 +4511,17 @@ def init_db_postgres(conn):
             UNIQUE(client_id, template_id, source_upload_ids_key, period_start, period_end, group_by, receipt_presentation)
         )
     ''', "cash_bank_summary_read_models")
+    run("ALTER TABLE cash_bank_summary_read_models ADD COLUMN IF NOT EXISTS report_revision BIGINT NOT NULL DEFAULT 1")
     run("CREATE INDEX IF NOT EXISTS idx_cash_bank_summary_read_models_client ON cash_bank_summary_read_models (client_id, template_id, group_by)")
+    run('''
+        CREATE TABLE IF NOT EXISTS cashflow_report_revisions (
+            client_id INTEGER PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE,
+            revision BIGINT NOT NULL DEFAULT 1,
+            changed_at TIMESTAMPTZ DEFAULT now(),
+            changed_by TEXT,
+            change_reason TEXT
+        )
+    ''', "cashflow_report_revisions")
     # ---------- 10. error_codes ----------
     run('''
         CREATE TABLE IF NOT EXISTS error_codes (
