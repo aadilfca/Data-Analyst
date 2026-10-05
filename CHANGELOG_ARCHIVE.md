@@ -1,4 +1,12 @@
 # Changelog Archive
+## Cashflows data and performance standard registered - 2026-10-05
+
+**Decision:** Centralized the Sialkot-specific data-fetching, caching, freshness, slow-network, reconciliation, and testing rules in CLAUDE.md.
+
+**Core principle:** Prepare categories, Cash/Bank classification, and derived periods during controlled upload processing; reuse validated read models for fast executive reporting while preserving canonical-source fallback and auditability. Every future proven technique must be added to the standard.
+
+**Scope:** Applies to future data and report development; no production behavior changed.
+
 ## Cashflows transaction drawer stale-content fix - 2026-10-05
 
 **Scope:** Prevent the previous ledger's rows from flashing while another account ledger loads.
