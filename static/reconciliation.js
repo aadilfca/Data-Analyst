@@ -1477,25 +1477,6 @@
             return row;
         });
     }
-    function renderCashflowTreasuryReconciliation(preview) {
-        const panel = element('cashflowsTreasuryReconciliation');
-        if (!panel) return;
-        const view = String((preview || {}).treasury_view || cashflowTreasuryView || 'combined');
-        const reconciliation = (preview || {}).treasury_view_reconciliation || {};
-        if (view !== 'split' || !Object.keys(reconciliation).length) {
-            panel.hidden = true;
-            panel.textContent = '';
-            return;
-        }
-        const status = String(reconciliation.status || 'Review required');
-        panel.innerHTML = '<div class="cashflows-transfer-reconciliation-heading"><strong>Split reconciliation</strong><span class="cashflows-transfer-status ' + (status === 'Matched' ? 'is-matched' : 'is-review') + '">' + escapeHtml(status) + '</span></div>'
-            + '<div class="cashflows-transfer-metrics">'
-            + '<div class="cashflows-transfer-metric"><span>Maximum variance</span><strong>' + escapeHtml(formatInternationalAmount(reconciliation.max_abs_variance)) + '</strong></div>'
-            + '<div class="cashflows-transfer-metric"><span>Mixed / unresolved</span><strong>' + escapeHtml(formatInternationalAmount(reconciliation.mixed_amount)) + '</strong></div>'
-            + '<div class="cashflows-transfer-metric"><span>Mixed rows</span><strong>' + escapeHtml(String(reconciliation.mixed_row_count || 0)) + '</strong></div>'
-            + '</div>';
-        panel.hidden = false;
-    }
     function setCashflowSummaryFilterVisibility(visible) {
         const input = element('cashflowsSummaryFilter');
         const control = input ? input.closest('.cashflows-search-control') : null;
@@ -1713,6 +1694,12 @@
         const periods = cashflowPreviewPeriods(preview);
         const periodKeys = periods.map(function (period) { return String(period.key); });
         const allRows = cashflowSplitRows(preview);
+        const showMixedColumn = allRows.some(function (row) {
+            return Math.abs(Number(row.mixedTotal) || 0) > 0.005 || periodKeys.some(function (periodKey) {
+                const values = row.periods[periodKey] || {};
+                return Math.abs(Number(values.mixed) || 0) > 0.005;
+            });
+        });
         const hasActivityRows = allRows.some(function (row) {
             return periodKeys.some(function (periodKey) {
                 const values = row.periods[periodKey] || {};
@@ -1743,15 +1730,16 @@
                 total: Math.abs(total),
             });
         });
-        const subColumns = ['Bank', 'Cash', 'Mixed / unresolved', 'Total'];
+        const visibleFields = showMixedColumn ? ['bank', 'cash', 'mixed', 'total'] : ['bank', 'cash', 'total'];
+        const subColumns = showMixedColumn ? ['Bank', 'Cash', 'Mixed / unresolved', 'Total'] : ['Bank', 'Cash', 'Total'];
         const columnCount = 1 + ((periods.length + 1) * subColumns.length) + 2;
         if (!summaryRows.length) {
             renderCashflowSummaryPaneLayout(table, '<tbody><tr><td class="cashflows-empty" colspan="' + columnCount + '">No Cash Flow activity was found for this period.</td></tr></tbody>', true);
             return;
         }
         let html = '<thead><tr class="cashflows-split-header-top"><th rowspan="2">Category</th>';
-        periods.forEach(function (period) { html += '<th colspan="4">' + escapeHtml(period.label) + '</th>'; });
-        html += '<th colspan="4">Selected total</th><th rowspan="2">% of section</th><th rowspan="2">Local total</th></tr><tr class="cashflows-split-header-sub">';
+        periods.forEach(function (period) { html += '<th colspan="' + subColumns.length + '">' + escapeHtml(period.label) + '</th>'; });
+        html += '<th colspan="' + subColumns.length + '">Selected total</th><th rowspan="2">% of section</th><th rowspan="2">Local total</th></tr><tr class="cashflows-split-header-sub">';
         periods.concat([{ label: 'Selected total' }]).forEach(function () {
             subColumns.forEach(function (label) { html += '<th class="cashflows-table-number">' + escapeHtml(label) + '</th>'; });
         });
@@ -1766,12 +1754,13 @@
                 cells[0] = '<td class=cashflows-table-text>' + cashflowInlineCategoryCell(row.category, section) + '</td>';
                 periodKeys.forEach(function (periodKey) {
                     const values = row.periods[periodKey] || { bank: 0, cash: 0, mixed: 0, total: 0 };
-                    ['bank', 'cash', 'mixed', 'total'].forEach(function (field) {
+                    visibleFields.forEach(function (field) {
                         cells.push('<td class="cashflows-table-number">' + escapeHtml(formatCashflowSectionAmount(values[field], section)) + '</td>');
                     });
                 });
-                [row.bankTotal, row.cashTotal, row.mixedTotal, row.totalRaw].forEach(function (value) {
-                    cells.push('<td class="cashflows-table-number">' + escapeHtml(formatCashflowSectionAmount(value, section)) + '</td>');
+                const totalValues = { bank: row.bankTotal, cash: row.cashTotal, mixed: row.mixedTotal, total: row.totalRaw };
+                visibleFields.forEach(function (field) {
+                    cells.push('<td class="cashflows-table-number">' + escapeHtml(formatCashflowSectionAmount(totalValues[field], section)) + '</td>');
                 });
                 cells.push('<td class="cashflows-table-number">' + escapeHtml(formatPercentage(basis ? row.total / basis : 0)) + '</td>');
                 cells.push('<td class="cashflows-table-number">' + escapeHtml(formatLocalAmount(row.total)) + '</td>');
@@ -1785,9 +1774,9 @@
                     const rowValues = row.periods[periodKey] || {};
                     ['bank', 'cash', 'mixed', 'total'].forEach(function (field) { values[field] += Number(rowValues[field]) || 0; totalFields[field] += Number(rowValues[field]) || 0; });
                 });
-                ['bank', 'cash', 'mixed', 'total'].forEach(function (field) { html += '<td class="cashflows-table-number">' + escapeHtml(formatCashflowSectionAmount(values[field], section)) + '</td>'; });
+                visibleFields.forEach(function (field) { html += '<td class="cashflows-table-number">' + escapeHtml(field === 'total' ? formatInternationalAmount(values[field]) : formatCashflowSectionAmount(values[field], section)) + '</td>'; });
             });
-            ['bank', 'cash', 'mixed', 'total'].forEach(function (field) { html += '<td class="cashflows-table-number">' + escapeHtml(field === 'total' ? formatInternationalAmount(basis) : formatCashflowSectionAmount(totalFields[field], section)) + '</td>'; });
+            visibleFields.forEach(function (field) { html += '<td class="cashflows-table-number">' + escapeHtml(field === 'total' ? formatInternationalAmount(basis) : formatCashflowSectionAmount(totalFields[field], section)) + '</td>'; });
             html += '<td class="cashflows-table-number">100.00%</td><td class="cashflows-table-number">' + escapeHtml(formatLocalAmount(basis)) + '</td></tr>';
         });
         renderCashflowSummaryPaneLayout(table, html + '</tbody>', true);
@@ -1904,7 +1893,6 @@
         const summaryRows = cashflowSummaryRows(preview);
         renderCategoryOptions(summaryRows.map(function (row) { return row.category; }), true);
         renderCashflowDrilldownCategoryOptions(summaryRows);
-        renderCashflowTreasuryReconciliation(preview);
         const source = result.source || {};
         const exportButton = element('cashflowsExportButton');
         if (exportButton) exportButton.hidden = !source.ready || !(preview.periods || []).length;

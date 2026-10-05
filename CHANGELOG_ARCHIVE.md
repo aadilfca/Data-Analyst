@@ -7449,3 +7449,11 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Verification:** Cashflows-focused tests passed 45/45 after adding freshness coverage; Python/JavaScript syntax and `git diff --check` passed. Full suite result: 479 passed, 19 pre-existing/unrelated failures, and 1 temporary-directory permission error. Aadil tested the report successfully; Playwright also verified normal snapshot loading, `refresh=true`, authoritative refresh labeling, 43 rendered rows, and no UI errors.
 
 **Outcome:** Aadil confirmed the report works. Commit/push is authorized and completed after this verification.
+
+## Cashflows split-view zero-mixed presentation - 2026-10-05
+
+**Scope:** Simplify Cash and Bank individually presentation without changing treasury calculations, backend contracts, or workbook output.
+
+**Implementation:** Removed the redundant on-screen Split reconciliation metrics block. The summary renderer now detects meaningful Mixed / unresolved values across every period and the selected total; it hides the Mixed subcolumn only when all values are effectively zero, otherwise keeps it across the complete rectangular table. Cache-busting advanced to `reconciliation.js?v=24`, and stale static assertions were aligned with the current shared UI.
+
+**Verification:** JavaScript syntax, `git diff --check`, and the focused reconciliation/direct-window suite passed 36/36. No backend, database, accounting, or XLSX calculation changed.

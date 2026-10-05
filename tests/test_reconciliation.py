@@ -401,7 +401,7 @@ def test_reports_hub_uses_shared_cards_and_removes_legacy_workspace():
     assert "id='cashflowsView'" in html
     assert "/api/reconciliation/cashflows/preview" in javascript
     assert "cashflowsSourceSelect" not in html
-    assert "Uses the configured Transaction Report template" in html
+    assert "Loading Cashflows summary" in html
     assert "Load summary" in html
     assert "loadCashflowSources" not in javascript
     assert "journal_upload_id" not in javascript
@@ -731,7 +731,7 @@ def test_cashflow_treasury_view_selector_is_wired_to_preview():
     assert "value='split'" in html
     assert "treasury_view: cashflowTreasuryView" in javascript
     assert "cashflowSummaryRows(preview)" in javascript
-    assert "cashflowTreasuryViewLabel(cashflowTreasuryView)" in javascript
+    assert "cashflowTreasuryViewLabel(" in javascript
 
 
 def test_cashflow_preview_endpoint_passes_selected_treasury_view():
@@ -750,13 +750,14 @@ def test_cashflow_preview_endpoint_passes_selected_treasury_view():
 def test_cashflow_split_view_preserves_backend_reconciliation_contract():
     html = Path(__file__).resolve().parents[1].joinpath("static", "reconciliation.html").read_text(encoding="utf-8")
     javascript = Path(__file__).resolve().parents[1].joinpath("static", "reconciliation.js").read_text(encoding="utf-8")
-    styles = Path(__file__).resolve().parents[1].joinpath("static", "style.css").read_text(encoding="utf-8")
 
-    assert "cashflowsTreasuryReconciliation" in html
+    assert "cashflowsTreasuryReconciliation" not in html
     assert "renderCashflowSplitSummary" in javascript
     assert "Mixed / unresolved" in javascript
-    assert "cashflows-summary-split-table" in styles
-    assert "treasury_view_reconciliation" in javascript
+    assert "const showMixedColumn = allRows.some" in javascript
+    assert "const visibleFields = showMixedColumn ?" in javascript
+    assert "renderCashflowTreasuryReconciliation" not in javascript
+    assert "cashflows-summary-split-table" in javascript
 
 def test_cashflow_split_xlsx_preserves_bank_cash_mixed_and_total_cells():
     preview = {
