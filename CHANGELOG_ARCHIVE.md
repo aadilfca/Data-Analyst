@@ -7395,3 +7395,25 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Verification:** Aadil confirmed the speed improvement. Focused performance, reconciliation, and direct-window tests passed 41/41; JavaScript/Python syntax and `git diff --check` passed. No database schema or source data changed.
 
 **Next:** Continue with the next approved Cashflows phase.
+
+## Cashflows fast-fetch and data-freshness contract - 2026-10-05
+
+**Scope:** Preserve fast Cashflows reads without allowing prepared summaries, SQL joins, or browser caches to cross data revisions.
+
+**Implementation:** Phase 1 added durable per-client report revisions and invalidation after committed source/configuration changes. Phase 2 scoped voucher/counter-account joins by upload identity plus voucher ID. Phase 3 made drill-down baseline, inline-ledger, and transaction caches revision-aware, rejected older responses, and reset drill-down filters after a new summary load. Existing local filtering and prepared/read-model fast paths remain intact.
+
+**Golden rules:** Keep one canonical accounting result; do not reload raw transactions per filter or ledger; never join voucher IDs without upload identity; never reuse cached results across clients, report contexts, or revisions; invalidate only after committed changes; treat browser caches as performance aids, not authoritative data.
+
+**Verification:** Commits `158fa43`, `3c02f6e`, and `c8006e9`; focused Cashflows tests passed 43/43, JavaScript syntax and diff checks passed, and Aadil confirmed the local behavior. No source data changed.
+
+## Cashflows freshness review completion - 2026-10-05
+
+**Scope:** Complete the remaining review phases without changing Cashflows accounting rules or removing the fast-fetch path.
+
+**Implementation:** Added a lightweight durable-revision endpoint and a 15-second browser revision check before reusing a drill-down baseline. Added an explicit `Refresh from source` action with `refresh=true`, returned freshness mode/version/generated-at metadata, and added compact UI status. Local filtering, pagination, Clear, prepared snapshots, and read-model reuse remain intact.
+
+**Maintenance review:** Existing performance logs cover preview/drill-down stages and source/row counts. Existing invalidation deletes client read models after committed source/configuration changes. No new index was justified without a production `EXPLAIN` baseline. No read-model retention deletion was introduced without an approved retention policy. Production Cashflows uses PostgreSQL; SQLite schema/FK behavior remains a test/development parity limitation.
+
+**Verification:** Cashflows-focused tests passed 45/45 after adding freshness coverage; Python/JavaScript syntax and `git diff --check` passed. Full suite result: 479 passed, 19 pre-existing/unrelated failures, and 1 temporary-directory permission error. Aadil tested the report successfully; Playwright also verified normal snapshot loading, `refresh=true`, authoritative refresh labeling, 43 rendered rows, and no UI errors.
+
+**Outcome:** Aadil confirmed the report works. Commit/push is authorized and completed after this verification.

@@ -1497,3 +1497,48 @@ def test_reports_hub_exposes_requested_report_cards():
     assert "id='previewFinancialStatementsButton'" not in html
     assert "id='financialStatementPreviewPanel'" not in html
     assert "/api/reconciliation/financial-statements/preview?" not in javascript
+
+def test_cashflows_preview_force_refresh_bypasses_cached_snapshots_and_reports_freshness():
+    configuration = {
+        "source_template_id": 9,
+        "cash_account_codes": [],
+        "bank_account_codes": ["B1"],
+        "match_internal_transfers": False,
+        "receipt_presentation": "net",
+        "cashflow_report_revision": 7,
+    }
+    with (
+        patch.object(reconciliation, "_require_active_client"),
+        patch.object(reconciliation, "_cashflow_configuration", return_value=configuration),
+        patch.object(reconciliation, "load_cashflow_summary_read_model") as read_model,
+        patch.object(reconciliation, "load_cashflow_prepared_summary") as prepared,
+        patch.object(reconciliation, "load_ledger_report_source", return_value=_source()) as loader,
+        patch.object(reconciliation, "build_cashflow_summary", return_value=_cashflow_summary()),
+        patch.object(reconciliation, "store_cashflow_summary_read_model"),
+    ):
+        response = reconciliation.preview_cashflows(
+            7,
+            "2026-02-10",
+            "2026-04-18",
+            group_by="quarter",
+            details="summary",
+            refresh_from_source=True,
+            session=None,
+        )
+
+    read_model.assert_not_called()
+    prepared.assert_not_called()
+    loader.assert_called_once()
+    assert response["freshness"]["mode"] == "forced_source_rebuild"
+    assert response["freshness"]["authoritative"] is True
+    assert response["freshness"]["report_revision"] == 7
+
+
+def test_cashflow_revision_endpoint_returns_lightweight_durable_revision():
+    with (
+        patch.object(reconciliation, "_require_active_client"),
+        patch.object(reconciliation, "get_cashflow_report_revision", return_value=12),
+    ):
+        response = reconciliation.cashflow_revision(7, session=None)
+
+    assert response == {"client_id": 7, "cashflow_report_revision": 12}

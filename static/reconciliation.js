@@ -29,6 +29,9 @@
     let cashflowDrilldownGeneration = 0;
     let lastCashflowDrilldownResult = null;
     let cashflowReportRevision = 0;
+    let cashflowRevisionCheckPromise = null;
+    let cashflowRevisionCheckedAt = 0;
+    const CASHFLOW_REVISION_CHECK_TTL_MS = 15000;
     const cashflowDrilldownBaseCache = new Map();
     const cashflowDrilldownLimit = 50;
     let cashflowInlineLedgerCache = new Map();
@@ -660,7 +663,41 @@
             cashflowChildPreviews = {};
         }
         cashflowReportRevision = incoming;
+        cashflowRevisionCheckedAt = Date.now();
         return true;
+    }
+    function ensureCashflowRevisionFresh(force) {
+        if (!clientId) return Promise.resolve(true);
+        const now = Date.now();
+        if (!force && cashflowRevisionCheckedAt && now - cashflowRevisionCheckedAt < CASHFLOW_REVISION_CHECK_TTL_MS) return Promise.resolve(true);
+        if (cashflowRevisionCheckPromise) return cashflowRevisionCheckPromise;
+        cashflowRevisionCheckPromise = api("/api/reconciliation/cashflows/revision?client_id=" + encodeURIComponent(clientId))
+            .then(function (result) {
+                const incoming = Number(result && result.cashflow_report_revision || 0);
+                if (incoming && cashflowReportRevision && incoming !== cashflowReportRevision) {
+                    cashflowDrilldownBaseCache.clear();
+                    resetCashflowInlineLedgerState();
+                    cashflowChildPreviews = {};
+                    cashflowReportRevision = incoming;
+                    return false;
+                }
+                if (incoming) cashflowReportRevision = incoming;
+                cashflowRevisionCheckedAt = Date.now();
+                return true;
+            })
+            .catch(function () { return true; })
+            .finally(function () { cashflowRevisionCheckPromise = null; });
+        return cashflowRevisionCheckPromise;
+    }
+    function renderCashflowFreshness(result) {
+        const status = element("cashflowsFreshnessStatus");
+        if (!status) return;
+        const freshness = result && result.freshness || {};
+        const revision = Number(freshness.report_revision || cashflowReportRevision || 0);
+        const generatedAt = freshness.generated_at ? new Date(freshness.generated_at) : null;
+        const generatedLabel = generatedAt && !Number.isNaN(generatedAt.getTime()) ? generatedAt.toLocaleString() : "just now";
+        const modeLabel = freshness.authoritative ? "Authoritative source refresh" : "Prepared snapshot";
+        status.textContent = modeLabel + (revision ? " · Version " + String(revision) : "") + " · Generated " + generatedLabel;
     }
     function cashflowDrilldownFilterState() {
         const selectedTreasury = element('cashflowsDrilldownTreasury').value;
@@ -1288,11 +1325,15 @@
         const filters = cashflowDrilldownFilterState();
         const baseline = cashflowDrilldownBaseCache.get(cashflowDrilldownContextKey(start, end));
         if (baseline) {
-            const localResult = cashflowDrilldownLocalResult(baseline, filters, cashflowDrilldownPage);
-            cashflowDrilldownPage = localResult.page;
-            lastCashflowDrilldownResult = localResult;
-            renderCashflowDrilldown(localResult);
-            return Promise.resolve(localResult);
+            return ensureCashflowRevisionFresh(false).then(function (isFresh) {
+                const currentBaseline = cashflowDrilldownBaseCache.get(cashflowDrilldownContextKey(start, end));
+                if (!isFresh || !currentBaseline) return loadCashflowDrilldown(resetPage);
+                const localResult = cashflowDrilldownLocalResult(currentBaseline, filters, cashflowDrilldownPage);
+                cashflowDrilldownPage = localResult.page;
+                lastCashflowDrilldownResult = localResult;
+                renderCashflowDrilldown(localResult);
+                return localResult;
+            });
         }
         if (cashflowDrilldownController) cashflowDrilldownController.abort();
         const controller = new AbortController();
@@ -1590,6 +1631,7 @@
     function renderResult(result) {
         if (!syncCashflowReportRevision(result)) return;
         lastCashflowsResult = result;
+        renderCashflowFreshness(result);
         cashflowDrilldownBaseCache.clear();
         const preview = result.preview || {};
         resetCashflowInlineLedgerState();
@@ -1688,8 +1730,9 @@
         }
     }
 
-    async function generateCashflows(event) {
+    async function generateCashflows(event, options) {
         if (event) event.preventDefault();
+        const forceRefresh = !!(options && options.forceRefresh);
         resetCashflowInlineLedgerState();
         resetCashflowDrilldownFilters();
         setCashflowSummaryFilterVisibility(false);
@@ -1711,6 +1754,7 @@
         try {
             setCashflowProcessingStep('load', 'Loading Cashflows data for the selected period.');
             const query = new URLSearchParams({ client_id: clientId, period_start: start, period_end: end, group_by: cashflowSelection.groupBy, treasury_view: cashflowTreasuryView, details: 'summary' });
+            if (forceRefresh) query.set('refresh', 'true');
             const result = await api('/api/reconciliation/cashflows/preview?' + query.toString(), { signal: controller.signal });
             setCashflowProcessingStep('render', 'Rendering the grouped Cashflows summary.');
             renderResult(result);
@@ -2094,6 +2138,7 @@
         });
         element('cashflowsViewTransactionsButton').addEventListener('click', toggleClassifiedTransactions);
         element('cashflowsHideZeroRowsButton').addEventListener('click', toggleCashflowZeroRows);
+        element('cashflowsRefreshButton').addEventListener('click', function () { generateCashflows(null, { forceRefresh: true }); });
         element('cashflowsLoadTransfersButton').addEventListener('click', function () { loadCashflowChild('transfers'); });
         element('cashflowsLoadCustomerPaymentsButton').addEventListener('click', function () { loadCashflowChild('customer_payments'); });
         element('cashflowsLoadDeductionsButton').addEventListener('click', function () { loadCashflowChild('deductions'); });

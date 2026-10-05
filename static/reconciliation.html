@@ -4,7 +4,7 @@
     <meta charset='UTF-8'>
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
     <title>Reports | Internal Audit App</title>
-    <link rel='stylesheet' href='/static/style.css?v=56'>
+    <link rel='stylesheet' href='/static/style.css?v=57'>
 </head>
 <body class='reconciliation-page' data-nav-module='Reports' data-nav-parent='index.html'>
     <nav class='navbar'>
@@ -92,6 +92,7 @@
                 <button type='button' id='cashflowsExportButton' class='cashflows-secondary cashflows-export-button' hidden>Export XLSX</button>
             </div>
         </form>
+        <div class='cashflows-freshness-bar' aria-live='polite'><span id='cashflowsFreshnessStatus'>Data version not loaded</span><button type='button' id='cashflowsRefreshButton' class='cashflows-secondary'>Refresh from source</button></div>
     </div>
     <section class='cashflows-report-section'><div class='cashflows-summary-tools'><div class='cashflows-search-control'><input id='cashflowsSummaryFilter' type='text' placeholder='Filter category' aria-label='Filter Cashflows categories'><button type='button' id='cashflowsSummaryClear' class='cashflows-search-clear' aria-label='Clear category filter' title='Clear category filter' hidden>×</button></div></div><div id='cashflowsTreasuryReconciliation' class='cashflows-transfer-reconciliation' hidden aria-live='polite'></div><div class='cashflows-table-wrap cashflows-summary-table-wrap'><table id='cashflowsSummaryTable' class='cashflows-table'></table></div></section>
             <div id='cashflowsLazyActions' class='cashflows-lazy-actions'>
@@ -206,6 +207,6 @@
         </footer>
     </main>
     <script src='/static/client_context.js?v=18'></script>
-    <script src='/static/reconciliation.js?v=21'></script>
+    <script src='/static/reconciliation.js?v=22'></script>
 </body>
 </html>

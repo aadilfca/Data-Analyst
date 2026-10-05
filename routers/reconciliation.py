@@ -30,6 +30,7 @@ from services.ledger_report_source import (
     project_cashflow_treasury_view,
     load_cashflow_summary_read_model,
     load_cashflow_prepared_summary,
+    get_cashflow_report_revision,
     invalidate_cashflow_summary_read_models,
     load_ledger_report_source,
     store_cashflow_summary_read_model,
@@ -1400,6 +1401,7 @@ def _build_cashflow_result(
     detail_sections: set[str] | None = None,
     group_by: str = "month",
     treasury_view: str = "combined",
+    force_refresh: bool = False,
 ) -> dict[str, Any]:
     request_started = perf_counter()
     validation_started = perf_counter()
@@ -1420,7 +1422,7 @@ def _build_cashflow_result(
     source_started = perf_counter()
     cache_mode = "not_requested"
     cached_summary = None
-    if detail_sections is not None and configured_template_id is not None:
+    if detail_sections is not None and configured_template_id is not None and not force_refresh:
         cache_mode = "source_rebuild"
         try:
             cached_summary = load_cashflow_summary_read_model(
@@ -1436,7 +1438,7 @@ def _build_cashflow_result(
                 cached_summary = None
         except Exception as error:
             logger.warning("cashflows_summary_read_model_lookup_failed client_id=%s error=%s", client_id, error)
-    if cached_summary is None and detail_sections is not None and configured_template_id is not None:
+    if cached_summary is None and detail_sections is not None and configured_template_id is not None and not force_refresh:
         try:
             cached_summary = load_cashflow_prepared_summary(
                 client_id,
@@ -1461,6 +1463,8 @@ def _build_cashflow_result(
             (),
         )
     else:
+        if force_refresh:
+            cache_mode = "forced_source_rebuild"
         try:
             source = load_ledger_report_source(
                 client_id,
@@ -1542,6 +1546,7 @@ def _build_cashflow_result(
         blocking_reasons.append(controls["categories"]["message"])
     source_metadata = dict(source.metadata)
     source_metadata["cashflow_report_revision"] = report_revision
+    freshness_generated_at = source_metadata.get("summary_read_model_created_at") or datetime.now().astimezone().isoformat()
     source_quality = {
         "source_row_count": int(source_metadata.get("source_row_count") or 0),
         "valid_row_count": int(source_metadata.get("valid_row_count") or len(source.journal)),
@@ -1583,6 +1588,12 @@ def _build_cashflow_result(
         "group_by": grouping,
         "treasury_view": treasury_view,
         "cashflow_report_revision": report_revision,
+        "freshness": {
+            "mode": cache_mode,
+            "report_revision": report_revision,
+            "generated_at": freshness_generated_at,
+            "authoritative": bool(force_refresh or cache_mode in {"forced_source_rebuild", "source_rebuild", "completed"}),
+        },
         "configuration": {
             "cash_account_count": len(configuration["cash_account_codes"]),
             "bank_account_count": len(configuration["bank_account_codes"]),
@@ -1691,6 +1702,16 @@ def _parse_cashflow_detail_sections(value: str | None) -> set[str] | None:
         raise HTTPException(400, "Invalid Cashflows detail section requested.")
     return sections
 
+@router.get("/api/reconciliation/cashflows/revision")
+def cashflow_revision(
+    client_id: int = Query(..., ge=1),
+    session=Depends(require_admin),
+):
+    """Return the lightweight durable revision used to validate browser caches."""
+    _require_active_client(client_id)
+    return {"client_id": client_id, "cashflow_report_revision": get_cashflow_report_revision(client_id)}
+
+
 @router.get("/api/reconciliation/cashflows/preview")
 def preview_cashflows(
     client_id: int = Query(..., ge=1),
@@ -1699,6 +1720,7 @@ def preview_cashflows(
     group_by: str = Query("month"),
     treasury_view: str = Query("combined"),
     details: Optional[str] = Query(None, description="summary or comma-separated child sections"),
+    refresh_from_source: bool = Query(False, alias="refresh"),
     session=Depends(require_admin),
 ):
     """Return Cashflows using the Transaction Report template configured in Account Control Centre."""
@@ -1707,6 +1729,8 @@ def preview_cashflows(
     if not isinstance(treasury_view, str):
         treasury_view = getattr(treasury_view, "default", "combined")
     detail_value = details if isinstance(details, str) else None
+    if not isinstance(refresh_from_source, bool):
+        refresh_from_source = bool(getattr(refresh_from_source, "default", False))
     return _build_cashflow_result(
         client_id,
         period_start,
@@ -1714,6 +1738,7 @@ def preview_cashflows(
         detail_sections=_parse_cashflow_detail_sections(detail_value),
         group_by=group_by,
         treasury_view=treasury_view,
+        force_refresh=refresh_from_source,
     )
 
 def _filter_cashflow_ledger_rows(

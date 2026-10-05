@@ -229,7 +229,7 @@ def test_cashflows_summary_contains_inline_category_ledger_contract():
     assert 'cashflows-inline-ledger-link' in inline_styles
     assert 'cashflows-inline-expand-icon' not in inline_script
     assert 'cashflows-inline-expand-icon' not in inline_styles
-    assert 'style.css?v=56' in inline_html
+    assert 'style.css?v=57' in inline_html
     assert 'cashflows-inline-ledger-row td:first-child' in inline_styles
     assert 'cashflows-inline-ledger-row td:not(:first-child)' in inline_styles
     assert 'cashflows-inline-ledger-table' not in inline_script
@@ -286,8 +286,8 @@ def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
     assert "setCashflowSummaryFilterVisibility(false);" in reconciliation_script
     assert "cashflowPreviewPeriods" in reconciliation_script
     assert "syncCashflowZeroRowsButton" in reconciliation_script
-    assert "style.css?v=56" in reconciliation_html
-    assert "reconciliation.js?v=21" in reconciliation_html
+    assert "style.css?v=57" in reconciliation_html
+    assert "reconciliation.js?v=22" in reconciliation_html
     assert "cashflowsSummaryBasis" not in reconciliation_html
     assert "cashflows-transactions-note" not in reconciliation_html
     assert "renderCashflowSummary" in reconciliation_script

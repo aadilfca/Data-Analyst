@@ -10237,7 +10237,7 @@ body {
 .cashflows-processing-steps li.is-complete { color: #2e7d32; }
 .cashflows-processing-steps li.is-complete::before { content: '✓'; color: #2e7d32; font-weight: 800; }
 body.cashflows-processing-open { overflow: hidden; }
-.cashflows-report-header { display: grid; gap: 0; padding: 12px 16px; border: 1px solid #dbe4ea; border-radius: 12px; background: #f8fbfd; }.cashflows-report-header[hidden] { display: none; }
+.cashflows-report-header { display: grid; gap: 0; padding: 12px 16px; border: 1px solid #dbe4ea; border-radius: 12px; background: #f8fbfd; } .cashflows-freshness-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 9px; padding-top: 8px; border-top: 1px solid #e2e8f0; color: #64748b; font-size: 11px; } .cashflows-freshness-bar .cashflows-secondary { padding: 6px 10px; font-size: 11px; }.cashflows-report-header[hidden] { display: none; }
 .cashflows-filter-bar { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 0; border: 0; border-top: 0; border-radius: 0; background: transparent; }
 .cashflows-report-scope { display: flex; flex: 1 1 auto; flex-wrap: wrap; align-items: end; gap: 10px; min-width: 0; }
 .cashflows-filter-bar label, .cashflows-control-label { display: grid; gap: 5px; color: #526675; font-size: 12px; font-weight: 700; }

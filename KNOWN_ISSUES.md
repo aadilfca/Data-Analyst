@@ -103,3 +103,6 @@ Every finding from a review session is recorded here — never fixed silently, n
 ---
 
 *Entries are appended, never rewritten. When a finding is fixed, leave its row in place and note the fix in `CLAUDE.md`'s Status log — this file is a record of what was found, not a live task list.*
+
+| 2026-10-05 | Cashflows read models | Client/source/configuration changes invalidate current read models, but no historical retention period or deletion policy is approved for old report contexts. Define policy from storage measurements before adding cleanup. | Defer |
+| 2026-10-05 | Cashflows database maintenance | Performance logs exist, but no production EXPLAIN baseline or automated SQLite/PostgreSQL schema-parity check was available in this review; avoid speculative indexes and treat SQLite FK behavior as test-only. | Defer |
