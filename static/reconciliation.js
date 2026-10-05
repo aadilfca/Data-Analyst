@@ -28,6 +28,7 @@
     let cashflowDrilldownController = null;
     let cashflowDrilldownGeneration = 0;
     let lastCashflowDrilldownResult = null;
+    const cashflowDrilldownBaseCache = new Map();
     const cashflowDrilldownLimit = 50;
     let cashflowInlineLedgerCache = new Map();
     let cashflowInlineLedgerControllers = new Map();
@@ -626,7 +627,69 @@
         }).join('');
         if (selected && accounts.has(selected.toLowerCase())) select.value = selected;
     }
-    function syncCashflowDrilldownPagination(result) {
+    function cashflowDrilldownContextKey(start, end) {
+        return [clientId, start, end, cashflowSelection.groupBy || 'month', cashflowTreasuryView || 'combined'].join('|');
+    }
+    function cashflowDrilldownFilterState() {
+        const selectedTreasury = element('cashflowsDrilldownTreasury').value;
+        const effectiveTreasury = selectedTreasury || (cashflowTreasuryView === 'bank' ? 'Bank' : (cashflowTreasuryView === 'cash' ? 'Cash' : ''));
+        return {
+            search: element('cashflowsDrilldownSearch').value.trim().toLowerCase(),
+            category: element('cashflowsDrilldownCategory').value.trim().toLowerCase(),
+            accountHead: element('cashflowsDrilldownAccountHead').value.trim().toLowerCase(),
+            treasuryType: effectiveTreasury.toLowerCase(),
+            periodKey: element('cashflowsDrilldownPeriod').value.trim().toLowerCase(),
+        };
+    }
+    function cashflowDrilldownRowMatches(row, filters) {
+        const searchable = [row.category, row.account_code, row.account_name, row.period_label].map(function (value) {
+            return String(value || '');
+        }).join(' ').toLowerCase();
+        const accountName = String(row.account_name || '').toLowerCase();
+        const accountCode = String(row.account_code || '').toLowerCase();
+        const accountLabel = [row.account_name, row.account_code].filter(Boolean).join(' / ').toLowerCase();
+        return (!filters.search || searchable.indexOf(filters.search) >= 0)
+            && (!filters.category || String(row.category || '').toLowerCase() === filters.category)
+            && (!filters.accountHead || filters.accountHead === accountName || filters.accountHead === accountCode || filters.accountHead === accountLabel)
+            && (!filters.treasuryType || String(row.treasury_type || '').toLowerCase() === filters.treasuryType)
+            && (!filters.periodKey || String(row.period_key || '').toLowerCase() === filters.periodKey);
+    }
+    function cashflowDrilldownOptionsFromRows(rows, filters) {
+        const options = new Map();
+        (rows || []).forEach(function (row) {
+            if (filters.treasuryType && String(row.treasury_type || '').toLowerCase() !== filters.treasuryType) return;
+            if (filters.periodKey && String(row.period_key || '').toLowerCase() !== filters.periodKey) return;
+            const category = String(row.category || '').trim();
+            const value = [row.account_name, row.account_code].filter(Boolean).join(' / ').trim();
+            if (category && value) options.set((category + '|' + value).toLowerCase(), { category: category, value: value });
+        });
+        return Array.from(options.values()).sort(function (left, right) {
+            return (left.category + '|' + left.value).localeCompare(right.category + '|' + right.value);
+        });
+    }
+    function cashflowDrilldownLocalResult(base, filters, page) {
+        const filteredRows = (base.rows || []).filter(function (row) { return cashflowDrilldownRowMatches(row, filters); });
+        const pageCount = Math.max(1, Math.ceil(filteredRows.length / cashflowDrilldownLimit));
+        const currentPage = Math.min(page, pageCount);
+        const startIndex = (currentPage - 1) * cashflowDrilldownLimit;
+        return Object.assign({}, base.result, {
+            rows: filteredRows.slice(startIndex, startIndex + cashflowDrilldownLimit),
+            account_head_options: cashflowDrilldownOptionsFromRows(base.rows, filters),
+            total_rows: filteredRows.length,
+            page: currentPage,
+            limit: cashflowDrilldownLimit,
+            page_count: pageCount,
+        });
+    }
+    function cacheCashflowDrilldownBaseline(result) {
+        if (!result || !Array.isArray(result.base_rows)) return;
+        const baseResult = Object.assign({}, result);
+        delete baseResult.base_rows;
+        cashflowDrilldownBaseCache.set(cashflowDrilldownContextKey(result.period_start, result.period_end), {
+            rows: result.base_rows,
+            result: baseResult,
+        });
+    }    function syncCashflowDrilldownPagination(result) {
         const payload = result || lastCashflowDrilldownResult || {};
         const page = Number(payload.page) || 1;
         const pageCount = Number(payload.page_count) || 1;
@@ -1185,6 +1248,15 @@
         const end = element('cashflowsPeriodEnd').value;
         if (!clientId || !start || !end) return Promise.resolve(null);
         if (resetPage) cashflowDrilldownPage = 1;
+        const filters = cashflowDrilldownFilterState();
+        const baseline = cashflowDrilldownBaseCache.get(cashflowDrilldownContextKey(start, end));
+        if (baseline) {
+            const localResult = cashflowDrilldownLocalResult(baseline, filters, cashflowDrilldownPage);
+            cashflowDrilldownPage = localResult.page;
+            lastCashflowDrilldownResult = localResult;
+            renderCashflowDrilldown(localResult);
+            return Promise.resolve(localResult);
+        }
         if (cashflowDrilldownController) cashflowDrilldownController.abort();
         const controller = new AbortController();
         cashflowDrilldownController = controller;
@@ -1215,6 +1287,7 @@
             .then(function (result) {
                 if (generation !== cashflowDrilldownGeneration) return null;
                 setCashflowProcessingStep('render', 'Rendering ledger drill-down details.');
+                cacheCashflowDrilldownBaseline(result);
                 lastCashflowDrilldownResult = result;
                 renderCashflowDrilldown(result);
                 return result;
@@ -1478,6 +1551,7 @@
     }
     function renderResult(result) {
         lastCashflowsResult = result;
+        cashflowDrilldownBaseCache.clear();
         const preview = result.preview || {};
         resetCashflowInlineLedgerState();
         closeCashflowDrilldown();

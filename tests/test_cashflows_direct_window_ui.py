@@ -34,6 +34,10 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert "renderCashflowDrilldownAccountOptions" in script
     assert "account_head_options" in script
     assert "account_head" in script
+    assert "cashflowDrilldownBaseCache" in script
+    assert "cashflowDrilldownLocalResult" in script
+    assert "cacheCashflowDrilldownBaseline" in script
+    assert "base_rows" in script
     assert "renderCashflowDrilldownContext" in script
     assert "cashflowsSummaryControlsPanel" in script
     assert "renderCashflowDrilldownControls" not in script

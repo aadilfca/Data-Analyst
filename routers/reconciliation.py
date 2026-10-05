@@ -1844,6 +1844,7 @@ def cashflow_drilldown(
     filter_started = perf_counter()
     preview = result.get('preview') or {}
     treasury_view = result.get('treasury_view') or normalize_cashflow_treasury_view(treasury_view)
+    requested_treasury_type = treasury_type
     if not treasury_type and treasury_view in {'bank', 'cash'}:
         treasury_type = treasury_view
     rows = preview.get('ledger_rollups') or []
@@ -1852,6 +1853,8 @@ def cashflow_drilldown(
     account_head_text = account_head.strip().casefold() if isinstance(account_head, str) else ''
     treasury_text = treasury_type.strip().casefold() if isinstance(treasury_type, str) else ''
     period_text = period_key.strip().casefold() if isinstance(period_key, str) else ''
+    requested_treasury_text = requested_treasury_type.strip().casefold() if isinstance(requested_treasury_type, str) else ''
+    base_request = not any((search_text, category_text, account_head_text, requested_treasury_text, period_text))
 
     account_head_options = _cashflow_ledger_account_head_options(rows, treasury_type=treasury_type, period_key=period_key)
     filtered_rows = _filter_cashflow_ledger_rows(
@@ -1895,6 +1898,7 @@ def cashflow_drilldown(
         'group_by': result['group_by'],
         'treasury_view': treasury_view,
         'rows': page_rows,
+        'base_rows': rows if base_request else None,
         'account_head_options': account_head_options,
         'total_rows': total_rows,
         'page': current_page,

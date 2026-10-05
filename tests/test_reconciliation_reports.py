@@ -480,6 +480,40 @@ def test_cashflow_drilldown_route_filters_and_paginates_server_side():
     assert builder.call_args.kwargs['detail_sections'] == {'drilldown'}
 
 
+def test_cashflow_drilldown_returns_baseline_rows_for_unfiltered_request():
+    result = {
+        'period_start': '2026-01-01',
+        'period_end': '2026-01-31',
+        'group_by': 'month',
+        'preview': {
+            'ledger_rollups': [
+                {'category': 'Customers', 'period_key': '2026-01', 'period_label': 'Jan 2026', 'account_code': 'AR1', 'account_name': 'Main customer', 'treasury_type': 'Bank', 'amount': 100.0, 'line_count': 1},
+            ],
+        },
+        'source': {'ready': True},
+        'blocking_reasons': [],
+    }
+    with patch.object(reconciliation, '_build_cashflow_result', return_value=result):
+        response = reconciliation.cashflow_drilldown(
+            7,
+            '2026-01-01',
+            '2026-01-31',
+            group_by='month',
+            treasury_view='combined',
+            search='',
+            category='',
+            account_head='',
+            treasury_type='',
+            period_key='',
+            page=1,
+            limit=50,
+            session=None,
+        )
+
+    assert response['base_rows'] == result['preview']['ledger_rollups']
+    assert response['rows'] == result['preview']['ledger_rollups']
+
+
 def test_cashflow_drilldown_filters_account_head_and_returns_scoped_options():
     result = {
         'period_start': '2026-01-01',
@@ -515,6 +549,7 @@ def test_cashflow_drilldown_filters_account_head_and_returns_scoped_options():
     assert response['total_rows'] == 1
     assert response['page_count'] == 1
     assert response['rows'][0]['account_code'] == 'AR2'
+    assert response['base_rows'] is None
     assert {option['value'] for option in response['account_head_options']} == {
         'Main Bank customer / AR1',
         'Cash customer / AR2',

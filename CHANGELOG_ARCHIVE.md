@@ -7385,3 +7385,13 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Verification:** Aadil confirmed the final local layout. Focused Cashflows performance, report, and direct-window tests passed 40/40; JavaScript syntax and `git diff --check` passed. No database schema or source data changed.
 
 **Next:** Continue with the next approved Cashflows phase.
+
+## Cashflows ledger drill-down baseline reuse - 2026-10-05
+
+**Scope:** Make repeated ledger drill-down filtering, pagination, and Clear fast after the initial report load without changing Cashflows calculations.
+
+**Implementation:** The unfiltered drill-down response now carries the canonical roll-up baseline once. The browser caches it by client, period range, grouping, and Treasury view, then applies search, category, account-head, Cash/Bank, period, pagination, and Clear locally. The API remains the fallback when no matching baseline exists; summary reloads invalidate the cache.
+
+**Verification:** Aadil confirmed the speed improvement. Focused performance, reconciliation, and direct-window tests passed 41/41; JavaScript/Python syntax and `git diff --check` passed. No database schema or source data changed.
+
+**Next:** Continue with the next approved Cashflows phase.
