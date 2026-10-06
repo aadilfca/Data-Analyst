@@ -556,6 +556,32 @@ def init_db():
             )
         ''')
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cash_bank_summary_read_models_client ON cash_bank_summary_read_models (client_id, template_id, group_by)")
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS cashflow_ledger_rollup_read_models (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                template_id INTEGER NOT NULL,
+                source_upload_ids_key TEXT NOT NULL,
+                configuration_version INTEGER NOT NULL DEFAULT 1,
+                report_revision INTEGER NOT NULL DEFAULT 1,
+                source_group_by TEXT NOT NULL DEFAULT 'day',
+                period_start TEXT NOT NULL,
+                period_end TEXT NOT NULL,
+                period_key TEXT NOT NULL,
+                period_label TEXT NOT NULL,
+                category TEXT NOT NULL,
+                account_code TEXT NOT NULL,
+                account_name TEXT NOT NULL,
+                treasury_type TEXT NOT NULL,
+                amount REAL NOT NULL DEFAULT 0,
+                line_count INTEGER NOT NULL DEFAULT 0,
+                category_total REAL NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(client_id, template_id, source_upload_ids_key, report_revision, source_group_by, period_key, category, account_code, treasury_type)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cashflow_ledger_rollup_read_models_lookup ON cashflow_ledger_rollup_read_models (client_id, template_id, report_revision, source_upload_ids_key, category, period_start)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cashflow_ledger_rollup_read_models_account ON cashflow_ledger_rollup_read_models (client_id, template_id, report_revision, category, account_code, period_key)")
         try:
             columns = [row[1] for row in conn.execute("PRAGMA table_info(cash_bank_summary_read_models)").fetchall()]
             if "report_revision" not in columns:
@@ -4236,6 +4262,32 @@ def _ensure_postgres_cash_bank_transaction_classifications(conn):
         ''')
         cur.execute("ALTER TABLE cash_bank_summary_read_models ADD COLUMN IF NOT EXISTS report_revision BIGINT NOT NULL DEFAULT 1")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cash_bank_summary_read_models_client ON cash_bank_summary_read_models (client_id, template_id, group_by)")
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS cashflow_ledger_rollup_read_models (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+                source_upload_ids_key TEXT NOT NULL,
+                configuration_version INTEGER NOT NULL DEFAULT 1,
+                report_revision BIGINT NOT NULL DEFAULT 1,
+                source_group_by TEXT NOT NULL DEFAULT 'day',
+                period_start DATE NOT NULL,
+                period_end DATE NOT NULL,
+                period_key TEXT NOT NULL,
+                period_label TEXT NOT NULL,
+                category TEXT NOT NULL,
+                account_code TEXT NOT NULL,
+                account_name TEXT NOT NULL,
+                treasury_type TEXT NOT NULL,
+                amount NUMERIC NOT NULL DEFAULT 0,
+                line_count BIGINT NOT NULL DEFAULT 0,
+                category_total NUMERIC NOT NULL DEFAULT 0,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(client_id, template_id, source_upload_ids_key, report_revision, source_group_by, period_key, category, account_code, treasury_type)
+            )
+        ''')
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cashflow_ledger_rollup_read_models_lookup ON cashflow_ledger_rollup_read_models (client_id, template_id, report_revision, source_upload_ids_key, category, period_start)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cashflow_ledger_rollup_read_models_account ON cashflow_ledger_rollup_read_models (client_id, template_id, report_revision, category, account_code, period_key)")
         cur.execute('''
             CREATE TABLE IF NOT EXISTS cashflow_report_revisions (
                 client_id INTEGER PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE,

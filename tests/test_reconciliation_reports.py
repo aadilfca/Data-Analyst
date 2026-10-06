@@ -1069,6 +1069,56 @@ def test_cashflows_preview_logs_performance_stages(caplog):
 
 
 
+
+def test_cashflow_drilldown_uses_targeted_projection_for_category(caplog):
+    targeted = {
+        "rows": [
+            {
+                "category": "Customers",
+                "period_key": "2026-01",
+                "period_label": "Jan-26",
+                "account_code": "AR1",
+                "account_name": "Main Bank customer",
+                "treasury_type": "Bank",
+                "amount": 125.0,
+                "line_count": 2,
+            }
+        ],
+        "controls": {"cash_bank_split": {"status": "Matched"}},
+        "metadata": {
+            "targeted_drilldown_projection": True,
+            "cashflow_report_revision": 4,
+            "source_row_count": 2,
+        },
+    }
+    configuration = {"source_template_id": 9, "cashflow_report_revision": 4}
+    with (
+        caplog.at_level(logging.INFO, logger="routers.reconciliation"),
+        patch.object(reconciliation, "_cashflow_configuration", return_value=configuration),
+        patch.object(reconciliation, "load_cashflow_prepared_drilldown", return_value=targeted) as targeted_loader,
+        patch.object(reconciliation, "_build_cashflow_result") as full_report,
+    ):
+        response = reconciliation.cashflow_drilldown(
+            7,
+            "2026-01-01",
+            "2026-01-31",
+            group_by="month",
+            category="Customers",
+            treasury_view="combined",
+            page=1,
+            limit=50,
+            session=None,
+        )
+
+    full_report.assert_not_called()
+    targeted_loader.assert_called_once()
+    assert response["rows"][0]["account_code"] == "AR1"
+    assert response["source"]["metadata"]["targeted_drilldown_projection"] is True
+    record = next(record for record in caplog.records if record.getMessage().startswith("cashflows_drilldown_performance "))
+    assert "projection_mode=targeted_projection" in record.getMessage()
+    assert "cache_mode=targeted_drilldown_projection" in record.getMessage()
+
+
 def test_cashflow_drilldown_logs_endpoint_timing(caplog):
     configuration = {
         "source_template_id": 9,

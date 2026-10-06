@@ -32,6 +32,7 @@ CASHFLOW_PREPARED_PERIOD_COLUMNS = ("transaction_month", "transaction_fortnight"
 COA_COLUMNS = ("account_code", "account_title", "account_type", "category")
 CASHFLOW_CHILD_DETAILS_VERSION = 6
 CASHFLOW_DRILLDOWN_DETAILS_VERSION = 2
+CASHFLOW_DRILLDOWN_PROJECTION_VERSION = 1
 CASHFLOW_TREASURY_TOTALS_VERSION = 1
 CASHFLOW_TREASURY_VIEWS = ("combined", "bank", "cash", "split")
 
@@ -1657,6 +1658,7 @@ def prepare_cashflow_summary_snapshot(
         group_by="day",
         summary=summary,
         write_fn=write_fn,
+        write_drilldown_projection=True,
     )
     return {"status": "prepared", "period_start": str(source_start), "period_end": str(source_end), "upload_count": len(upload_ids)}
 
@@ -1766,6 +1768,142 @@ def load_cashflow_summary_read_model(
     return {"summary": summary, "metadata": metadata}
 
 
+
+def _cashflow_projection_number(value: Any) -> float:
+    try:
+        if value is None or pd.isna(value):
+            return 0.0
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _cashflow_drilldown_projection_records(
+    summary: Mapping[str, Any],
+    *,
+    source_group_by: str,
+) -> list[dict[str, Any]]:
+    """Convert validated prepared daily rollups into indexed projection rows."""
+    if not bool(summary.get("cashflow_drilldown_prepared")):
+        return []
+    rollups = summary.get("cashflow_ledger_rollups")
+    if not isinstance(rollups, pd.DataFrame) or rollups.empty:
+        return []
+    periods = {
+        str(period.get("key")): period
+        for period in summary.get("periods", [])
+        if isinstance(period, Mapping) and period.get("key") is not None
+    }
+    category_totals = summary.get("category_totals")
+    records: list[dict[str, Any]] = []
+    for row in _cashflow_detail_records(rollups):
+        period_key = str(row.get("period_key") or "")
+        period = periods.get(period_key)
+        category = str(row.get("category") or "")
+        if period is None or not category:
+            continue
+        category_total = 0.0
+        if isinstance(category_totals, pd.DataFrame) and category in category_totals.index:
+            category_total = _cashflow_projection_number(category_totals.loc[category].get(period_key, 0.0))
+        records.append({
+            "source_group_by": str(source_group_by),
+            "period_start": str(period.get("start") or ""),
+            "period_end": str(period.get("end") or ""),
+            "period_key": period_key,
+            "period_label": str(period.get("label") or period_key),
+            "category": category,
+            "account_code": str(row.get("account_code") or ""),
+            "account_name": str(row.get("account_name") or ""),
+            "treasury_type": str(row.get("treasury_type") or "Unknown"),
+            "amount": _cashflow_projection_number(row.get("amount")),
+            "line_count": int(round(_cashflow_projection_number(row.get("line_count")))),
+            "category_total": category_total,
+        })
+    # The source rollup can contain more than one row for the same account
+    # code/treasury bucket on a day (for example, duplicate source lines with
+    # different display names). Collapse those rows before the bulk upsert so
+    # PostgreSQL never receives the same ON CONFLICT key twice in one command.
+    deduplicated: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
+    for record in records:
+        key = (
+            record["source_group_by"],
+            record["period_key"],
+            record["category"],
+            record["account_code"],
+            record["treasury_type"],
+        )
+        existing = deduplicated.get(key)
+        if existing is None:
+            deduplicated[key] = record
+            continue
+        existing["amount"] += record["amount"]
+        existing["line_count"] += record["line_count"]
+        if not existing["account_name"] and record["account_name"]:
+            existing["account_name"] = record["account_name"]
+    return list(deduplicated.values())
+
+
+def _store_cashflow_drilldown_projection(
+    client_id: int,
+    *,
+    journal_template_id: int,
+    source_upload_ids: Sequence[int],
+    configuration_version: int | None,
+    report_revision: int,
+    summary: Mapping[str, Any],
+    write_fn: Callable[..., Any],
+) -> int:
+    records = _cashflow_drilldown_projection_records(summary, source_group_by="day")
+    if not records or not source_upload_ids:
+        return 0
+    upload_key = _cashflow_upload_ids_key(source_upload_ids)
+    columns = [
+        "client_id", "template_id", "source_upload_ids_key", "configuration_version", "report_revision",
+        "source_group_by", "period_start", "period_end", "period_key", "period_label", "category",
+        "account_code", "account_name", "treasury_type", "amount", "line_count", "category_total",
+    ]
+    update_columns = [
+        "configuration_version", "period_end", "period_label", "account_name", "amount",
+        "line_count", "category_total", "created_at",
+    ]
+    conflict_columns = [
+        "client_id", "template_id", "source_upload_ids_key", "report_revision", "source_group_by",
+        "period_key", "category", "account_code", "treasury_type",
+    ]
+    for offset in range(0, len(records), 250):
+        chunk = records[offset:offset + 250]
+        placeholders = ", ".join("(" + ", ".join(["%s"] * len(columns)) + ")" for _ in chunk)
+        params: list[Any] = []
+        for record in chunk:
+            params.extend([
+                client_id,
+                journal_template_id,
+                upload_key,
+                int(configuration_version or 1),
+                int(report_revision or 1),
+                record["source_group_by"],
+                record["period_start"],
+                record["period_end"],
+                record["period_key"],
+                record["period_label"],
+                record["category"],
+                record["account_code"],
+                record["account_name"],
+                record["treasury_type"],
+                record["amount"],
+                record["line_count"],
+                record["category_total"],
+            ])
+        query = f"""
+            INSERT INTO cashflow_ledger_rollup_read_models ({', '.join(columns)})
+            VALUES {placeholders}
+            ON CONFLICT ({', '.join(conflict_columns)})
+            DO UPDATE SET {', '.join(f"{column} = EXCLUDED.{column}" for column in update_columns)}
+        """
+        write_fn(query, tuple(params))
+    return len(records)
+
+
 def store_cashflow_summary_read_model(
     client_id: int,
     *,
@@ -1778,6 +1916,7 @@ def store_cashflow_summary_read_model(
     summary: Mapping[str, Any],
     report_revision: int | None = None,
     write_fn: Callable[..., Any] = execute_write_pg,
+    write_drilldown_projection: bool = False,
 ) -> None:
     """Persist one completed summary-only snapshot for safe repeat loads."""
     if journal_template_id is None or not source_upload_ids:
@@ -1809,6 +1948,149 @@ def store_cashflow_summary_read_model(
             json.dumps(payload),
         ),
     )
+    if write_drilldown_projection:
+        _store_cashflow_drilldown_projection(
+            client_id,
+            journal_template_id=int(journal_template_id),
+            source_upload_ids=source_upload_ids,
+            configuration_version=configuration_version,
+            report_revision=int(report_revision or 1),
+            summary=summary,
+            write_fn=write_fn,
+        )
+
+
+def load_cashflow_prepared_drilldown(
+    client_id: int,
+    *,
+    journal_template_id: int | None,
+    period_start: Any,
+    period_end: Any,
+    group_by: str,
+    category: str,
+    report_revision: int | None = None,
+    query_fn: Callable[..., list[dict[str, Any]]] = execute_query_pg,
+) -> dict[str, Any] | None:
+    """Load one category from the upload-time indexed drilldown projection."""
+    from services.ledger_group_summary import _cashflow_periods, normalize_cashflow_grouping
+
+    category_text = str(category or "").strip()
+    if journal_template_id is None or not category_text:
+        return None
+    upload_ids, suppressed_count = select_latest_template_upload_ids(client_id, journal_template_id, query_fn)
+    if not upload_ids:
+        return None
+    revision = max(int(report_revision or get_cashflow_report_revision(client_id, query_fn=query_fn) or 1), 1)
+    query = """
+        SELECT period_start, period_key, period_label, category, account_code, account_name,
+               treasury_type, amount, line_count, category_total
+        FROM cashflow_ledger_rollup_read_models
+        WHERE client_id = %s
+          AND template_id = %s
+          AND source_upload_ids_key = %s
+          AND report_revision = %s
+          AND source_group_by = %s
+          AND period_start >= %s
+          AND period_start <= %s
+          AND category = %s
+        ORDER BY period_start, category, account_code, treasury_type
+    """
+    rows = query_fn(
+        query,
+        (
+            client_id,
+            journal_template_id,
+            _cashflow_upload_ids_key(upload_ids),
+            revision,
+            "day",
+            period_start,
+            period_end,
+            category_text,
+        ),
+    )
+    if not rows:
+        return None
+    frame = pd.DataFrame(rows)
+    required = {
+        "period_start", "period_key", "period_label", "category", "account_code",
+        "account_name", "treasury_type", "amount", "line_count", "category_total",
+    }
+    if not required.issubset(frame.columns):
+        return None
+    frame["period_start"] = pd.to_datetime(frame["period_start"], errors="coerce").dt.normalize()
+    frame["amount"] = pd.to_numeric(frame["amount"], errors="coerce")
+    frame["line_count"] = pd.to_numeric(frame["line_count"], errors="coerce").fillna(0)
+    frame["category_total"] = pd.to_numeric(frame["category_total"], errors="coerce")
+    frame = frame.loc[frame["period_start"].notna() & frame["amount"].notna() & frame["category_total"].notna()].copy()
+    if frame.empty:
+        return None
+    grouping = normalize_cashflow_grouping(group_by)
+    periods = _cashflow_periods(period_start, period_end, grouping)
+    target_keys: list[str | None] = []
+    target_labels: list[str | None] = []
+    for value in frame["period_start"]:
+        match = next((period for period in periods if pd.Timestamp(period["start"]) <= value <= pd.Timestamp(period["end"])), None)
+        target_keys.append(str(match["key"]) if match else None)
+        target_labels.append(str(match["label"]) if match else None)
+    frame["target_period_key"] = target_keys
+    frame["target_period_label"] = target_labels
+    frame = frame.loc[frame["target_period_key"].notna()].copy()
+    if frame.empty:
+        return None
+    expected = (
+        frame[["category", "period_start", "category_total", "target_period_key"]]
+        .drop_duplicates()
+        .groupby(["category", "target_period_key"], dropna=False)["category_total"]
+        .sum()
+    )
+    grouped = (
+        frame.assign(
+            category=frame["category"].fillna("").astype(str),
+            account_code=frame["account_code"].fillna("").astype(str),
+            account_name=frame["account_name"].fillna("").astype(str),
+            treasury_type=frame["treasury_type"].fillna("Unknown").astype(str),
+        )
+        .groupby(
+            ["category", "target_period_key", "target_period_label", "account_code", "account_name", "treasury_type"],
+            dropna=False,
+            sort=False,
+        )
+        .agg(amount=("amount", "sum"), line_count=("line_count", "sum"))
+        .reset_index()
+        .rename(columns={"target_period_key": "period_key", "target_period_label": "period_label"})
+    )
+    actual = grouped.groupby(["category", "period_key"], dropna=False)["amount"].sum()
+    for key, expected_total in expected.items():
+        actual_total = float(actual.get(key, 0.0) or 0.0)
+        if abs(actual_total - float(expected_total or 0.0)) > 0.01:
+            return None
+    grouped["line_count"] = grouped["line_count"].round().astype(int)
+    output_columns = [
+        "category", "period_key", "period_label", "account_code", "account_name", "treasury_type", "amount", "line_count",
+    ]
+    detail_rows = _cashflow_detail_records(grouped[output_columns])
+    detail_total = sum(_cashflow_projection_number(row.get("amount")) for row in detail_rows)
+    return {
+        "rows": detail_rows,
+        "controls": {
+            "category_controls": [{"category": category_text, "status": "Matched"}],
+            "cash_bank_split": {"status": "Matched", "detail_total": detail_total},
+        },
+        "metadata": {
+            "targeted_drilldown_projection": True,
+            "drilldown_projection_version": CASHFLOW_DRILLDOWN_PROJECTION_VERSION,
+            "summary_read_model": "targeted_drilldown_projection",
+            "sql_aggregated": True,
+            "raw_json_parsing": False,
+            "client_id": client_id,
+            "journal_template_id": journal_template_id,
+            "source_upload_ids": upload_ids,
+            "duplicate_uploads_suppressed": suppressed_count,
+            "cashflow_report_revision": revision,
+            "source_row_count": int(frame["line_count"].sum()),
+        },
+    }
+
 
 def load_cashflow_sql_source(
     client_id: int,

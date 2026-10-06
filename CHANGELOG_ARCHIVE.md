@@ -1,5 +1,13 @@
 # Changelog Archive
 
+## Cashflows targeted drilldown projection - Phase 5 - 2026-10-06
+
+- Added an upload-time indexed account-code rollup projection for category expansion; targeted loads filter by client, upload set, revision, category, and period before Python aggregation.
+- Desi approach: spend time during upload/backfill to prepare indexed daily totals by unique Account Code, then category expansion reads only the selected category and re-buckets those ready rows for the requested period; the validated full-source path remains the safety fallback.
+- Existing prepared JSON and canonical-source paths remain safe fallbacks; category totals are checked before targeted rows are served.
+- Duplicate projection conflict keys are aggregated before bulk upsert; existing Client 5 data was backfilled without changing raw transactions.
+- Verification: focused projection/reconciliation tests passed 49/49; broader Cashflows/source/reconciliation suite passed 125/125; no frontend changes.
+
 ## Cashflows lazy drilldown hydration - Phase 4 - 2026-10-06
 
 - Summary-only prepared loads now skip account-ledger DataFrame materialization; drilldown requests retain validated prepared rollups and integrity behavior.

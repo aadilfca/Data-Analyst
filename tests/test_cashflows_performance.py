@@ -2,22 +2,27 @@
 
 import inspect
 
+import pandas as pd
+
 import database
 from services.ledger_report_source import (
     CASHFLOW_DRILLDOWN_DETAILS_VERSION,
+    CASHFLOW_DRILLDOWN_PROJECTION_VERSION,
     _cashflow_daily_rollup,
     _cashflow_drilldown_integrity,
     _cashflow_summary_from_payload,
     _cashflow_summary_payload,
+    load_cashflow_prepared_drilldown,
     load_cashflow_prepared_summary,
     load_cashflow_sql_source,
     load_cashflow_summary_read_model,
+    store_cashflow_summary_read_model,
 )
 
 
 def test_cashflow_sqlite_and_postgres_schema_contracts_stay_aligned():
     sqlite_schema = inspect.getsource(database.init_db)
-    postgres_schema = inspect.getsource(database.init_db_postgres)
+    postgres_schema = inspect.getsource(database.init_db_postgres) + inspect.getsource(database._ensure_postgres_cash_bank_transaction_classifications)
     required_tables = {
         "cash_bank_summary_read_models": (
             "client_id",
@@ -31,6 +36,25 @@ def test_cashflow_sqlite_and_postgres_schema_contracts_stay_aligned():
             "receipt_presentation",
             "summary_payload",
         ),
+        "cashflow_ledger_rollup_read_models": (
+            "client_id",
+            "template_id",
+            "source_upload_ids_key",
+            "configuration_version",
+            "report_revision",
+            "source_group_by",
+            "period_start",
+            "period_end",
+            "period_key",
+            "period_label",
+            "category",
+            "account_code",
+            "account_name",
+            "treasury_type",
+            "amount",
+            "line_count",
+            "category_total",
+        ),
         "cashflow_report_revisions": (
             "client_id",
             "revision",
@@ -41,6 +65,8 @@ def test_cashflow_sqlite_and_postgres_schema_contracts_stay_aligned():
     }
     required_indexes = (
         "idx_cash_bank_summary_read_models_client",
+        "idx_cashflow_ledger_rollup_read_models_lookup",
+        "idx_cashflow_ledger_rollup_read_models_account",
         "idx_cash_bank_classifications_client_date",
         "idx_cash_bank_classifications_client_voucher",
         "idx_cash_bank_classifications_client_account_date",
@@ -297,6 +323,122 @@ def test_cashflow_read_models_require_current_report_revision_when_requested():
         query_fn=query,
     ) is None
     assert len(calls) == 2
+
+
+
+
+def test_cashflow_snapshot_persists_targeted_projection_rows_when_requested():
+    writes = []
+    summary = {
+        "periods": [{"key": "2026-01-05", "start": "2026-01-05", "end": "2026-01-05", "label": "05 Jan"}],
+        "months": ["2026-01"],
+        "category_totals": pd.DataFrame({"2026-01-05": [100.0]}, index=["Operating"]),
+        "cashflow_ledger_rollups": pd.DataFrame([
+            {"category": "Operating", "period_key": "2026-01-05", "period_label": "05 Jan", "account_code": "EXP", "account_name": "Utilities", "treasury_type": "Bank", "amount": 100.0, "line_count": 2},
+        ]),
+        "cashflow_drilldown_prepared": True,
+        "cashflow_drilldown_controls": {"cash_bank_split": {"status": "Matched"}},
+    }
+
+    def write(sql, params=None):
+        writes.append((sql, params))
+
+    store_cashflow_summary_read_model(
+        7,
+        journal_template_id=9,
+        source_upload_ids=[21],
+        configuration_version=3,
+        report_revision=4,
+        period_start="2026-01-05",
+        period_end="2026-01-05",
+        group_by="day",
+        summary=summary,
+        write_fn=write,
+        write_drilldown_projection=True,
+    )
+
+    assert len(writes) == 2
+    assert "cash_bank_summary_read_models" in writes[0][0]
+    assert "cashflow_ledger_rollup_read_models" in writes[1][0]
+    assert len(writes[1][1]) == 17
+
+
+def test_cashflow_snapshot_deduplicates_projection_conflict_keys_before_bulk_upsert():
+    writes = []
+    summary = {
+        "periods": [{"key": "2026-01-05", "start": "2026-01-05", "end": "2026-01-05", "label": "05 Jan"}],
+        "months": ["2026-01"],
+        "category_totals": pd.DataFrame({"2026-01-05": [150.0]}, index=["Operating"]),
+        "cashflow_ledger_rollups": pd.DataFrame([
+            {"category": "Operating", "period_key": "2026-01-05", "period_label": "05 Jan", "account_code": "EXP", "account_name": "Utilities", "treasury_type": "Bank", "amount": 100.0, "line_count": 2},
+            {"category": "Operating", "period_key": "2026-01-05", "period_label": "05 Jan", "account_code": "EXP", "account_name": "Utilities (duplicate source line)", "treasury_type": "Bank", "amount": 50.0, "line_count": 1},
+        ]),
+        "cashflow_drilldown_prepared": True,
+    }
+
+    def write(sql, params=None):
+        writes.append((sql, params))
+
+    store_cashflow_summary_read_model(
+        7,
+        journal_template_id=9,
+        source_upload_ids=[21],
+        configuration_version=3,
+        report_revision=4,
+        period_start="2026-01-05",
+        period_end="2026-01-05",
+        group_by="day",
+        summary=summary,
+        write_fn=write,
+        write_drilldown_projection=True,
+    )
+
+    assert len(writes) == 2
+    projection_params = writes[1][1]
+    assert len(projection_params) == 17
+    assert projection_params[14] == 150.0
+    assert projection_params[15] == 3
+
+
+def test_cashflow_prepared_drilldown_loader_targets_one_category_and_reaggregates_periods():
+    calls = []
+
+    def query(sql, params=None):
+        if "FROM uploaded_files" in sql:
+            return [{"upload_id": 21, "file_name": "period.xlsx", "upload_date": "2026-03-01"}]
+        if "FROM cashflow_ledger_rollup_read_models" in sql:
+            calls.append((sql, params))
+            return [
+                {"period_start": "2026-01-05", "period_key": "2026-01-05", "period_label": "05 Jan", "category": "Operating", "account_code": "EXP1", "account_name": "Utilities", "treasury_type": "Bank", "amount": 60, "line_count": 2, "category_total": 100},
+                {"period_start": "2026-01-05", "period_key": "2026-01-05", "period_label": "05 Jan", "category": "Operating", "account_code": "EXP2", "account_name": "Rent", "treasury_type": "Cash", "amount": 40, "line_count": 1, "category_total": 100},
+                {"period_start": "2026-01-06", "period_key": "2026-01-06", "period_label": "06 Jan", "category": "Operating", "account_code": "EXP1", "account_name": "Utilities", "treasury_type": "Bank", "amount": 30, "line_count": 1, "category_total": 50},
+                {"period_start": "2026-01-06", "period_key": "2026-01-06", "period_label": "06 Jan", "category": "Operating", "account_code": "EXP2", "account_name": "Rent", "treasury_type": "Cash", "amount": 20, "line_count": 1, "category_total": 50},
+                {"period_start": "2026-02-05", "period_key": "2026-02-05", "period_label": "05 Feb", "category": "Operating", "account_code": "EXP1", "account_name": "Utilities", "treasury_type": "Bank", "amount": 25, "line_count": 1, "category_total": 25},
+            ]
+        raise AssertionError(f"Unexpected query: {sql}")
+
+    result = load_cashflow_prepared_drilldown(
+        7,
+        journal_template_id=9,
+        period_start="2026-01-01",
+        period_end="2026-02-28",
+        group_by="month",
+        category="Operating",
+        report_revision=4,
+        query_fn=query,
+    )
+
+    assert result is not None
+    assert result["metadata"]["targeted_drilldown_projection"] is True
+    assert result["metadata"]["drilldown_projection_version"] == CASHFLOW_DRILLDOWN_PROJECTION_VERSION
+    totals = {}
+    for row in result["rows"]:
+        totals[row["period_key"]] = totals.get(row["period_key"], 0) + row["amount"]
+    assert totals == {"2026-01": 150.0, "2026-02": 25.0}
+    assert result["controls"]["category_controls"][0]["status"] == "Matched"
+    assert len(calls) == 1
+    assert "category = %s" in calls[0][0]
+    assert calls[0][1][-1] == "Operating"
 
 
 def test_cashflow_daily_rollup_prepares_ledger_details_for_target_periods():

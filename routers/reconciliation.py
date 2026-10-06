@@ -30,6 +30,7 @@ from services.ledger_report_source import (
     project_cashflow_treasury_view,
     load_cashflow_summary_read_model,
     load_cashflow_prepared_summary,
+    load_cashflow_prepared_drilldown,
     get_cashflow_report_revision,
     invalidate_cashflow_summary_read_models,
     load_ledger_report_source,
@@ -1889,14 +1890,57 @@ def cashflow_drilldown(
     '''Return server-filtered, paginated compact Cashflows ledger roll-ups.'''
     request_started = perf_counter()
     build_started = perf_counter()
-    result = _build_cashflow_result(
-        client_id,
-        period_start,
-        period_end,
-        detail_sections={'drilldown'},
-        group_by=group_by,
-        treasury_view=treasury_view,
-    )
+    targeted_projection = None
+    projection_mode = "full_report"
+    if isinstance(category, str) and category.strip():
+        try:
+            configuration = _cashflow_configuration(client_id)
+            targeted_projection = load_cashflow_prepared_drilldown(
+                client_id,
+                journal_template_id=configuration.get("source_template_id"),
+                period_start=period_start,
+                period_end=period_end,
+                group_by=group_by,
+                category=category,
+                report_revision=configuration.get("cashflow_report_revision"),
+                query_fn=execute_query_pg,
+            )
+        except Exception as error:
+            logger.warning("cashflows_targeted_drilldown_lookup_failed client_id=%s error=%s", client_id, error)
+    if targeted_projection is not None:
+        projection_mode = "targeted_projection"
+        targeted_metadata = targeted_projection.get("metadata") or {}
+        result = {
+            "period_start": str(period_start),
+            "period_end": str(period_end),
+            "group_by": normalize_cashflow_grouping(group_by),
+            "treasury_view": normalize_cashflow_treasury_view(treasury_view),
+            "cashflow_report_revision": int(targeted_metadata.get("cashflow_report_revision") or 1),
+            "freshness": {
+                "mode": "targeted_drilldown_projection",
+                "report_revision": int(targeted_metadata.get("cashflow_report_revision") or 1),
+                "authoritative": False,
+            },
+            "preview": {
+                "ledger_rollups": targeted_projection.get("rows") or [],
+                "drilldown_controls": targeted_projection.get("controls") or {},
+            },
+            "source": {
+                "ready": True,
+                "metadata": targeted_metadata,
+                "quality": {"source_row_count": int(targeted_metadata.get("source_row_count") or 0)},
+            },
+            "blocking_reasons": [],
+        }
+    else:
+        result = _build_cashflow_result(
+            client_id,
+            period_start,
+            period_end,
+            detail_sections={'drilldown'},
+            group_by=group_by,
+            treasury_view=treasury_view,
+        )
     build_seconds = perf_counter() - build_started
     filter_started = perf_counter()
     preview = result.get('preview') or {}
@@ -1935,7 +1979,7 @@ def cashflow_drilldown(
         "cashflows_drilldown_performance client_id=%s period_start=%s period_end=%s group_by=%s "
         "filter_count=%s build_seconds=%.3f filter_seconds=%.3f total_seconds=%.3f "
         "source_rows=%s total_rows=%s returned_rows=%s requested_page=%s page=%s page_count=%s limit=%s "
-        "cache_mode=%s cache_hit=%s report_revision=%s",
+        "cache_mode=%s cache_hit=%s projection_mode=%s report_revision=%s",
         client_id,
         result['period_start'],
         result['period_end'],
@@ -1953,6 +1997,7 @@ def cashflow_drilldown(
         limit,
         cache_mode,
         cache_hit,
+        projection_mode,
         int(freshness.get("report_revision") or result.get("cashflow_report_revision") or 1),
     ),
     return {
