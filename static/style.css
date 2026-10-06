@@ -10370,22 +10370,6 @@ body .cashflows-drilldown-toolbar button { min-width: 0; white-space: nowrap; pa
 .cashflows-summary-table-wrap { overflow: visible; }
 .cashflows-summary-table-host { min-width: 0; }
 .cashflows-summary-pane-layout { width: 100%; }
-.cashflows-summary-unified-layout { width: 100%; }
-.cashflows-summary-unified-viewport { width: 100%; overflow-x: auto; overflow-y: visible; }
-.cashflows-summary-unified-table { width: max-content; min-width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px; }
-.cashflows-summary-unified-table thead th { position: sticky; top: 72.5px; z-index: 8; box-sizing: border-box; padding: 9px 10px; border-bottom: 1px solid #c9d7df; background: #f4f8fa; color: #526675; font-size: 11px; font-weight: 700; text-align: right; text-transform: uppercase; white-space: nowrap; }
-.cashflows-summary-unified-table tbody tr:not(.cashflows-summary-section-row) th,
-.cashflows-summary-unified-table tbody tr:not(.cashflows-summary-section-row) td { text-align: right; font-variant-numeric: tabular-nums; }
-.cashflows-summary-unified-table tbody tr:not(.cashflows-summary-section-row) > :first-child { position: sticky; z-index: 4; box-sizing: border-box; text-align: left; white-space: normal; overflow-wrap: anywhere; background: #fff; }
-.cashflows-summary-unified-table thead tr:first-child > :first-child { position: sticky; z-index: 10; background: #f4f8fa; }
-.cashflows-summary-unified-table thead tr:first-child > :first-child { left: 0; text-align: left; }
-.cashflows-summary-unified-table tbody tr:not(.cashflows-summary-section-row) > :first-child { left: 0; }
-.cashflows-summary-unified-table tbody tr:hover td { background: #f8fbfd; }
-.cashflows-summary-unified-table tbody tr:hover > :first-child { background: #f8fbfd; }
-.cashflows-summary-unified-table tbody .cashflows-summary-total-row > :first-child { background: #e8eef7 !important; color: #0b2e59; }
-.cashflows-summary-unified-table tbody .cashflows-inline-ledger-row > :first-child { background: #f8fbfd !important; }
-.cashflows-summary-unified-table .cashflows-inline-ledger-host-row > td,
-.cashflows-summary-unified-table .cashflows-empty { position: static !important; }
 .cashflows-summary-sticky-header,
 .cashflows-summary-body-layout { display: grid; grid-template-columns: var(--cashflows-summary-frozen-width, 390px) minmax(0, 1fr); align-items: start; width: 100%; }
 .cashflows-summary-sticky-header { position: sticky; top: 72.5px; z-index: 8; background: #f4f8fa; box-shadow: 0 1px 0 #c9d7df; }

@@ -303,6 +303,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-10-06: Cashflows summary now shows ledger Cash/Bank labels inline, with no separate Type column or hover seam.
 - 2026-10-06: Cashflows ledger labels now stay on one line and the expanded Category cell keeps the light row shade.
 - 2026-10-06: Cashflows expanded ledgers now show only the account name plus Cash or Bank, excluding slash-delimited transaction details.
+- 2026-10-06: Cashflows summary now uses a dedicated sticky header below the global navbar with one frozen Category pane.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

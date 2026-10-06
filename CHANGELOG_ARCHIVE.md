@@ -1,4 +1,8 @@
 # Changelog Archive
+## Cashflows conditional sticky summary header - 2026-10-06
+
+- Restored the proven dedicated sticky summary header below the global navbar, with a one-column frozen Category pane and horizontally scrolling values pane.
+
 
 ## Cashflows customer ledger display names - 2026-10-06
 

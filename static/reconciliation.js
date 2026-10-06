@@ -1628,8 +1628,27 @@
         const preview = (lastCashflowsResult || {}).preview || {};
         const periods = cashflowPreviewPeriods(preview);
         const isSplit = String(preview.treasury_view || cashflowTreasuryView || 'combined') === 'split';
-        const frozenColumnCount = 1;
-        const colspan = isSplit ? frozenColumnCount + ((periods.length + 1) * 4) + 2 : periods.length + 4;
+        const colspan = isSplit ? 1 + ((periods.length + 1) * 4) + 2 : periods.length + 4;
+        const paneLayout = table.querySelector('.cashflows-summary-pane-layout');
+        if (paneLayout) {
+            const rowId = row.dataset.cashflowSummaryRowId;
+            const rightRow = Array.from(paneLayout.querySelectorAll('.cashflows-summary-scroll-table tbody tr[data-cashflow-summary-row-id]')).find(function (candidate) {
+                return candidate.dataset.cashflowSummaryRowId === rowId;
+            });
+            if (!rightRow) return;
+            const leftTemplate = document.createElement('tbody');
+            leftTemplate.innerHTML = cashflowInlineLedgerHostMarkup(category, section, 1);
+            const rightTemplate = document.createElement('tbody');
+            rightTemplate.innerHTML = cashflowInlineLedgerHostMarkup(category, section, Math.max(colspan - 1, 1));
+            const leftHost = leftTemplate.firstElementChild;
+            const rightHost = rightTemplate.firstElementChild;
+            row.parentNode.insertBefore(leftHost, row.nextSibling);
+            rightRow.parentNode.insertBefore(rightHost, rightRow.nextSibling);
+            button.setAttribute('aria-expanded', 'true');
+            button.disabled = true;
+            loadCashflowInlineLedgers(button, { left: leftHost, right: rightHost }, category, section, periods, isSplit);
+            return;
+        }
         const template = document.createElement('tbody');
         template.innerHTML = cashflowInlineLedgerHostMarkup(category, section, colspan, true);
         const host = template.firstElementChild;
@@ -1755,7 +1774,7 @@
         leftRow.dataset.cashflowSummaryRowId = rowId;
         rightRow.dataset.cashflowSummaryRowId = rowId;
         const cells = Array.from(sourceRow.children);
-        const frozenColumnCount = 2;
+        const frozenColumnCount = 1;
         if (sourceRow.classList.contains('cashflows-summary-section-row')) {
             const leftCell = cells[0] ? cells[0].cloneNode(true) : document.createElement('th');
             const rightCell = cells[0] ? cells[0].cloneNode(true) : document.createElement('th');
@@ -1874,10 +1893,10 @@
     }
     function renderCashflowSummaryPaneLayout(container, markup, isSplit) {
         const sourceTable = document.createElement('table');
-        sourceTable.className = 'cashflows-table cashflows-summary-unified-table';
+        sourceTable.className = 'cashflows-table';
         sourceTable.innerHTML = markup;
         const sourceRow = sourceTable.querySelector('thead tr') || sourceTable.querySelector('tbody tr');
-        const logicalCount = Math.max(cashflowSummaryLogicalColumnCount(sourceRow), 1);
+        const logicalCount = Math.max(cashflowSummaryLogicalColumnCount(sourceRow), 2);
         const categoryWidth = cashflowSummaryCategoryWidth(sourceTable);
         const rightCount = Math.max(logicalCount - 1, 1);
         const rightWidths = Array.from({ length: rightCount }, function (_, index) {
@@ -1885,29 +1904,89 @@
             if (index >= rightCount - 3) return index === rightCount - 3 ? 128 : index === rightCount - 2 ? 100 : 120;
             return 112;
         });
-        const widths = [categoryWidth].concat(rightWidths);
-        const colgroup = document.createElement('colgroup');
-        widths.forEach(function (width) {
-            const col = document.createElement('col');
-            col.style.width = width + 'px';
-            colgroup.appendChild(col);
-        });
-        sourceTable.insertBefore(colgroup, sourceTable.firstChild);
-        const tableWidth = widths.reduce(function (sum, width) { return sum + width; }, 0);
-        sourceTable.style.width = 'max(100%, ' + tableWidth + 'px)';
-        sourceTable.style.minWidth = '100%';
+        const addColGroup = function (table, widths) {
+            const colgroup = document.createElement('colgroup');
+            widths.forEach(function (width) {
+                const col = document.createElement('col');
+                col.style.width = width + 'px';
+                colgroup.appendChild(col);
+            });
+            table.insertBefore(colgroup, table.firstChild);
+            const totalWidth = widths.reduce(function (sum, width) { return sum + width; }, 0);
+            table.style.width = totalWidth + 'px';
+            table.style.minWidth = totalWidth + 'px';
+        };
         const layout = document.createElement('div');
-        layout.className = 'cashflows-summary-unified-layout';
-        layout.dataset.cashflowSummaryCategoryWidth = String(categoryWidth);
-        layout.dataset.cashflowSummaryTableWidth = String(tableWidth);
-        const viewport = document.createElement('div');
-        viewport.className = 'cashflows-summary-unified-viewport';
-        viewport.appendChild(sourceTable);
-        layout.appendChild(viewport);
+        layout.className = 'cashflows-summary-pane-layout';
+        layout.style.setProperty('--cashflows-summary-frozen-width', categoryWidth + 'px');
+        const stickyHeader = document.createElement('div');
+        stickyHeader.className = 'cashflows-summary-sticky-header';
+        const frozenHeaderPane = document.createElement('div');
+        frozenHeaderPane.className = 'cashflows-summary-frozen-header-pane';
+        const scrollHeaderViewport = document.createElement('div');
+        scrollHeaderViewport.className = 'cashflows-summary-scroll-header-viewport';
+        const frozenHeaderTable = document.createElement('table');
+        frozenHeaderTable.className = 'cashflows-summary-header-table cashflows-summary-frozen-header-table';
+        const scrollHeaderTable = document.createElement('table');
+        scrollHeaderTable.className = 'cashflows-summary-header-table cashflows-summary-scroll-header-table';
+        const frozenPane = document.createElement('div');
+        frozenPane.className = 'cashflows-summary-frozen-pane';
+        const scrollPane = document.createElement('div');
+        scrollPane.className = 'cashflows-summary-scroll-pane';
+        const bodyLayout = document.createElement('div');
+        bodyLayout.className = 'cashflows-summary-body-layout';
+        const frozenTable = document.createElement('table');
+        frozenTable.className = 'cashflows-table cashflows-summary-pane-table cashflows-summary-frozen-table';
+        const scrollTable = document.createElement('table');
+        scrollTable.className = 'cashflows-table cashflows-summary-pane-table cashflows-summary-scroll-table';
+        const sourceHead = sourceTable.querySelector('thead');
+        if (sourceHead) {
+            const frozenHead = document.createElement('thead');
+            const scrollHead = document.createElement('thead');
+            Array.from(sourceHead.children).forEach(function (sourceRow, index) {
+                const parts = cashflowSummaryPaneRowParts(sourceRow, 'header-' + index, sourceRow.classList.contains('cashflows-split-header-sub'));
+                frozenHead.appendChild(parts.left);
+                scrollHead.appendChild(parts.right);
+            });
+            frozenHeaderTable.appendChild(frozenHead);
+            scrollHeaderTable.appendChild(scrollHead);
+        }
+        ['tbody', 'tfoot'].forEach(function (tagName) {
+            const sourceSection = sourceTable.querySelector(tagName);
+            if (!sourceSection) return;
+            const frozenSection = document.createElement(tagName);
+            const scrollSection = document.createElement(tagName);
+            Array.from(sourceSection.children).forEach(function (sourceRow, index) {
+                const parts = cashflowSummaryPaneRowParts(sourceRow, tagName + '-' + index, false);
+                frozenSection.appendChild(parts.left);
+                scrollSection.appendChild(parts.right);
+            });
+            frozenTable.appendChild(frozenSection);
+            scrollTable.appendChild(scrollSection);
+        });
+        addColGroup(frozenHeaderTable, [categoryWidth]);
+        addColGroup(frozenTable, [categoryWidth]);
+        addColGroup(scrollHeaderTable, rightWidths);
+        addColGroup(scrollTable, rightWidths);
+        frozenHeaderPane.appendChild(frozenHeaderTable);
+        scrollHeaderViewport.appendChild(scrollHeaderTable);
+        stickyHeader.appendChild(frozenHeaderPane);
+        stickyHeader.appendChild(scrollHeaderViewport);
+        frozenPane.appendChild(frozenTable);
+        scrollPane.appendChild(scrollTable);
+        bodyLayout.appendChild(frozenPane);
+        bodyLayout.appendChild(scrollPane);
+        layout.appendChild(stickyHeader);
+        layout.appendChild(bodyLayout);
         container.className = 'cashflows-summary-table-host';
         container.classList.toggle('cashflows-summary-split-table', !!isSplit);
         container.innerHTML = '';
         container.appendChild(layout);
+        requestAnimationFrame(function () {
+            syncCashflowSummaryPaneRows(container);
+            syncCashflowSummaryHeaderScroll(container);
+            syncCashflowSummaryRowHover(container);
+        });
     }
     function renderCashflowSplitSummary(preview, table) {
         const periods = cashflowPreviewPeriods(preview);

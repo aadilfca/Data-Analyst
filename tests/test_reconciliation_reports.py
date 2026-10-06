@@ -1414,10 +1414,15 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "cashflows-inline-ledger-type" in javascript
     assert "const accountName = rawName.split" in javascript
     assert ".cashflows-inline-ledger-link { display: inline;" in stylesheet
-    assert "background: #f8fbfd !important" in stylesheet
+    assert ".cashflows-summary-pane-table tbody tr:hover td { background: #f8fbfd; }" in stylesheet
     assert "const columns = ['Category'].concat(periods.map" in javascript
     assert "const frozenColumnCount = 1" in javascript
-    assert "cashflows-summary-unified-table" in javascript
+    assert "cashflows-summary-sticky-header" in javascript
+    assert "cashflowSummaryPaneRowParts" in javascript
+    assert "cashflows-summary-sticky-header { position: sticky; top: 72.5px;" in stylesheet
+    assert ".cashflows-summary-scroll-pane { min-width: 0; overflow-x: auto; overflow-y: clip; }" in stylesheet
+    assert "style.css?v=69" in html
+
     assert "color: #7E350E" in stylesheet
     assert "cashflowInlineLedgerHostMarkup(category, section, colspan, true)" in javascript
     assert ".cashflows-summary-total-row th" in stylesheet
@@ -1425,11 +1430,8 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "#7E350E" in stylesheet
     assert "--cashflows-summary-frozen-width" in stylesheet
     assert "overflow-wrap: anywhere" in stylesheet
-    assert "cashflows-summary-unified-viewport" in stylesheet
-    assert "max(100%, " in javascript
-    assert "style.minWidth = '100%'" in javascript
     assert "position: static !important" in stylesheet
-    assert "background: #e8eef7 !important" in stylesheet
+    assert ".cashflows-summary-total-row th, .cashflows-summary-total-row td { background: #e8eef7;" in stylesheet
     load_summary_index = html.index("<button type='submit' class='cashflows-primary'>Load summary</button>")
     drilldown_index = html.index("id='cashflowsLedgerDrilldownButton'")
     actions_index = html.index("class='cashflows-report-actions'")
