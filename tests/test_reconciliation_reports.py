@@ -1418,6 +1418,12 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "const columns = ['Category'].concat(periods.map" in javascript
     assert "const frozenColumnCount = 1" in javascript
     assert "cashflows-summary-sticky-header" in javascript
+    assert "syncCashflowSummaryUniversalScrollbar" in javascript
+    assert "cashflows-summary-universal-scrollbar-thumb" in javascript
+    assert "role', 'scrollbar'" in javascript
+    assert "event.key === 'Home'" in javascript
+    assert ".cashflows-summary-scroll-pane::-webkit-scrollbar { display: none; }" in stylesheet
+    assert ".cashflows-summary-universal-scrollbar-thumb { position: absolute;" in stylesheet
     assert "cashflowSummaryPaneRowParts" in javascript
     assert "cashflows-summary-sticky-header { position: sticky; top: 72.5px;" in stylesheet
     assert ".cashflows-summary-scroll-pane { min-width: 0; overflow-x: auto; overflow-y: clip; }" in stylesheet

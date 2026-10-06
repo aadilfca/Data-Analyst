@@ -218,6 +218,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-10-06: Cashflows wide reports now expose a compact accessible draggable scrollbar while visible.
 
 Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; performance findings also reference the investigation documents.
 - 2026-07-09/20: Upload, Verification, Audit Rules, quick navigation, and shared date-import groundwork shipped.

@@ -1,4 +1,8 @@
 # Changelog Archive
+
+## Cashflows universal horizontal scrollbar - 2026-10-06
+
+- Added a compact visible draggable global scrollbar while hiding the duplicate local pane scrollbar; two-way synchronization and sticky panes remain unchanged.
 ## Cashflows conditional sticky summary header - 2026-10-06
 
 - Restored the proven dedicated sticky summary header below the global navbar, with a one-column frozen Category pane and horizontally scrolling values pane.

@@ -1844,6 +1844,119 @@
         }
         headerTable.style.transform = 'translate3d(' + (-pane.scrollLeft) + 'px, 0, 0)';
     }
+    function syncCashflowSummaryUniversalScrollbar(host) {
+        const wrapper = host && host.closest('.cashflows-summary-table-wrap');
+        const initialPane = host && host.querySelector('.cashflows-summary-scroll-pane');
+        if (!wrapper || !initialPane) return;
+        let scrollbar = wrapper.querySelector('.cashflows-summary-universal-scrollbar');
+        if (!scrollbar) {
+            scrollbar = document.createElement('div');
+            scrollbar.className = 'cashflows-summary-universal-scrollbar';
+            scrollbar.setAttribute('role', 'scrollbar');
+            scrollbar.setAttribute('tabindex', '0');
+            scrollbar.setAttribute('aria-orientation', 'horizontal');
+            scrollbar.setAttribute('aria-label', 'Cashflows horizontal scroll');
+            scrollbar.setAttribute('aria-hidden', 'true');
+            const track = document.createElement('div');
+            track.className = 'cashflows-summary-universal-scrollbar-track';
+            const thumb = document.createElement('div');
+            thumb.className = 'cashflows-summary-universal-scrollbar-thumb';
+            track.appendChild(thumb);
+            scrollbar.appendChild(track);
+            wrapper.appendChild(scrollbar);
+        }
+        const track = scrollbar.querySelector('.cashflows-summary-universal-scrollbar-track');
+        const thumb = scrollbar.querySelector('.cashflows-summary-universal-scrollbar-thumb');
+        const reportSection = wrapper.closest('.cashflows-report-section') || wrapper;
+        const update = function () {
+            const currentPane = wrapper.querySelector('.cashflows-summary-scroll-pane');
+            if (!currentPane || !track || !thumb) {
+                scrollbar.hidden = true;
+                scrollbar.setAttribute('aria-hidden', 'true');
+                return;
+            }
+            const reportRect = reportSection.getBoundingClientRect();
+            const wrapperRect = wrapper.getBoundingClientRect();
+            const visible = reportRect.bottom > 72.5 && reportRect.top < window.innerHeight;
+            const overflowing = currentPane.scrollWidth > currentPane.clientWidth + 1;
+            const active = visible && overflowing;
+            scrollbar.hidden = !active;
+            scrollbar.setAttribute('aria-hidden', active ? 'false' : 'true');
+            if (!active) return;
+            const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+            scrollbar.style.left = Math.max(12, Math.round(wrapperRect.left)) + 'px';
+            scrollbar.style.right = Math.max(12, Math.round(viewportWidth - wrapperRect.right)) + 'px';
+            const trackWidth = track.clientWidth;
+            const maxScroll = Math.max(0, currentPane.scrollWidth - currentPane.clientWidth);
+            const thumbWidth = Math.min(trackWidth, Math.max(48, Math.round(trackWidth * currentPane.clientWidth / currentPane.scrollWidth)));
+            const travel = Math.max(0, trackWidth - thumbWidth);
+            const progress = maxScroll ? currentPane.scrollLeft / maxScroll : 0;
+            thumb.style.width = thumbWidth + 'px';
+            thumb.style.transform = 'translateX(' + Math.round(travel * progress) + 'px)';
+            scrollbar.setAttribute('aria-valuemin', '0');
+            scrollbar.setAttribute('aria-valuemax', String(maxScroll));
+            scrollbar.setAttribute('aria-valuenow', String(Math.round(currentPane.scrollLeft)));
+        };
+        const scrollToTrackPoint = function (clientX) {
+            const currentPane = wrapper.querySelector('.cashflows-summary-scroll-pane');
+            if (!currentPane || !track || !thumb) return;
+            const trackRect = track.getBoundingClientRect();
+            const travel = Math.max(0, track.clientWidth - thumb.getBoundingClientRect().width);
+            const maxScroll = Math.max(0, currentPane.scrollWidth - currentPane.clientWidth);
+            if (!travel || !maxScroll) return;
+            const offset = clientX - trackRect.left - thumb.getBoundingClientRect().width / 2;
+            currentPane.scrollLeft = Math.max(0, Math.min(maxScroll, offset / travel * maxScroll));
+        };
+        if (scrollbar.dataset.cashflowUniversalBound !== 'true') {
+            let dragState = null;
+            thumb.addEventListener('pointerdown', function (event) {
+                const currentPane = wrapper.querySelector('.cashflows-summary-scroll-pane');
+                if (!currentPane) return;
+                dragState = { pointerId: event.pointerId, startX: event.clientX, startScroll: currentPane.scrollLeft };
+                thumb.classList.add('is-dragging');
+                thumb.setPointerCapture(event.pointerId);
+                event.preventDefault();
+            });
+            thumb.addEventListener('pointermove', function (event) {
+                if (!dragState || dragState.pointerId !== event.pointerId) return;
+                const currentPane = wrapper.querySelector('.cashflows-summary-scroll-pane');
+                if (!currentPane) return;
+                const travel = Math.max(0, track.clientWidth - thumb.getBoundingClientRect().width);
+                const maxScroll = Math.max(0, currentPane.scrollWidth - currentPane.clientWidth);
+                if (travel && maxScroll) currentPane.scrollLeft = Math.max(0, Math.min(maxScroll, dragState.startScroll + (event.clientX - dragState.startX) * maxScroll / travel));
+            });
+            const endDrag = function (event) {
+                if (!dragState || dragState.pointerId !== event.pointerId) return;
+                dragState = null;
+                thumb.classList.remove('is-dragging');
+            };
+            thumb.addEventListener('pointerup', endDrag);
+            thumb.addEventListener('pointercancel', endDrag);
+            track.addEventListener('pointerdown', function (event) { if (event.target !== thumb) scrollToTrackPoint(event.clientX); });
+            scrollbar.addEventListener('keydown', function (event) {
+                const currentPane = wrapper.querySelector('.cashflows-summary-scroll-pane');
+                if (!currentPane) return;
+                const step = Math.max(48, Math.round(currentPane.clientWidth * .15));
+                let next = null;
+                if (event.key === 'Home') next = 0;
+                else if (event.key === 'End') next = currentPane.scrollWidth - currentPane.clientWidth;
+                else if (event.key === 'ArrowLeft' || event.key === 'PageUp') next = currentPane.scrollLeft - (event.key === 'PageUp' ? currentPane.clientWidth : step);
+                else if (event.key === 'ArrowRight' || event.key === 'PageDown') next = currentPane.scrollLeft + (event.key === 'PageDown' ? currentPane.clientWidth : step);
+                if (next === null) return;
+                event.preventDefault();
+                currentPane.scrollLeft = Math.max(0, Math.min(currentPane.scrollWidth - currentPane.clientWidth, next));
+            });
+            window.addEventListener('resize', update, { passive: true });
+            window.addEventListener('scroll', update, { passive: true });
+            scrollbar.dataset.cashflowUniversalBound = 'true';
+        }
+        const currentPane = wrapper.querySelector('.cashflows-summary-scroll-pane');
+        if (currentPane && currentPane.dataset.cashflowUniversalBound !== 'true') {
+            currentPane.addEventListener('scroll', update, { passive: true });
+            currentPane.dataset.cashflowUniversalBound = 'true';
+        }
+        update();
+    }
     function syncCashflowSummaryRowHover(host) {
         const layout = host && host.querySelector('.cashflows-summary-pane-layout');
         const bodyLayout = layout && layout.querySelector('.cashflows-summary-body-layout');
@@ -1985,6 +2098,7 @@
         requestAnimationFrame(function () {
             syncCashflowSummaryPaneRows(container);
             syncCashflowSummaryHeaderScroll(container);
+            syncCashflowSummaryUniversalScrollbar(container);
             syncCashflowSummaryRowHover(container);
         });
     }
