@@ -1,5 +1,23 @@
 # Changelog Archive
 
+## Cashflows customer ledger display names - 2026-10-06
+
+- Normalized every expanded ledger label to the account-name segment before slash-delimited transaction details, then retained the visible Cash/Bank suffix.
+
+## Cashflows inline ledger label and shading correction - 2026-10-06
+
+- Kept the Cash/Bank suffix on the same line as the account name and restored the light ledger-row shade in the sticky Category cell.
+
+## Cashflows summary ledger type labels - 2026-10-06
+
+- Removed the separate Type column from the browser Cashflows summary so Category and all ledger values share one continuous hover row.
+- Expanded ledger names now show - Cash or - Bank in maroon while retaining account-code hover details; category and total rows remain unchanged.
+
+## Cashflows summary short-period width fill - 2026-10-06
+
+- Changed the unified summary table to fill the available report width when the selected periods fit, while retaining horizontal scrolling for wider period selections.
+- Reused the same sizing behavior when the Type column is toggled so collapsed and expanded views stay aligned.
+
 ## Cashflows Phase 7 data and performance standard - 2026-10-06
 
 **Decision:** Consolidated the permanent Cashflows rules for the Sialkot slow-network environment: upload-time category/Cash-Bank/period preparation, immutable raw sources, revision-scoped read models, bounded context-specific browser caches, safe parent-period reuse, soft reuse versus hard refresh, and explicit validation of freshness, totals, exports, and cold/warm performance.
@@ -7515,3 +7533,43 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Implementation:** Moved `Refresh from source` behind the green split control beside `Load summary`; moved snapshot freshness into dismissible, auto-expiring stacked notices; kept Group by, Treasury view, Period, Load summary, ledger, zero-row, and XLSX actions on one desktop row. Restored visible overflow for the Period and Refresh popovers, corrected their clipping/scroll-container regression, and finalized the controls as adjacent but visually separate rectangles with sharp left edges on the green menu button. Updated CSS cache-busting and direct-window regression assertions.
 
 **Verification:** Aadil confirmed the final local Chrome appearance and behavior. Focused direct-window tests passed 4/4; JavaScript syntax and `git diff --check` passed; Playwright verified both popovers open without clipping or scrollbars. No backend, accounting, database, or source data changed.
+
+## Cashflows summary formatting parity - 2026-10-06
+
+**Scope:** Apply the requested emphasis to Cashflows summary categories, totals, percentages, and local totals in the browser and XLSX export.
+
+**Implementation:** Added category-only bolding, blue Total and percentage values, brown Local total values, and matching formatting for combined and split summary sheets without changing accounting values or workbook structure.
+
+**Verification:** Focused reconciliation report tests passed 37/37; Python/JavaScript syntax checks and git diff --check passed.
+
+## Cashflows summary Category and Type layout - 2026-10-06
+
+**Scope:** Improve the Cashflows summary layout for collapsed categories and expanded account ledgers without changing accounting values or export structure.
+
+**Implementation:** Added a frozen Type column after Category, populated Cash or Bank for expanded ledger rows, calculated the frozen width from visible category labels, wrapped ledger names, and moved account codes to hover and accessible labels.
+
+**Verification:** Focused reconciliation report tests passed 37/37; JavaScript syntax and git diff --check passed. No backend or XLSX export change was required for this phase.
+
+## Cashflows collapsed Type and expansion loading polish - 2026-10-06
+
+**Scope:** Remove non-ledger Type placeholders and correct the expanded-category loading layout in the existing one-page Cashflows summary.
+
+**Implementation:** Type remains hidden and width-collapsed until a category expands; category and total rows use blank Type cells; expanded ledgers show Cash or Bank. Loading rows now span both frozen columns, show one label in the frozen pane, and keep matching height and borders in the scrolling pane.
+
+**Verification:** Focused reconciliation report tests passed 37/37; JavaScript syntax and git diff --check passed. No backend, accounting, or XLSX export change was required.
+
+## Cashflows unified summary container - 2026-10-06
+
+**Scope:** Remove the visible loading seam between the Category/Type area and amount columns during account-ledger expansion.
+
+**Implementation:** Replaced the split frozen/scrolling summary render path with one horizontally scrollable table. Category and Type remain sticky within that same table, while loading rows are normal full-width table rows; the Type column still appears only during expansion.
+
+**Verification:** Focused reconciliation report tests passed 37/37; JavaScript syntax and git diff --check passed. No backend, accounting, or XLSX export change was required.
+
+## Cashflows unified-table width and shading correction - 2026-10-06
+
+**Scope:** Correct period-column overlap and restore Total Receipts/Payments shading after the unified summary-table change.
+
+**Implementation:** Hidden Type cells now remain in the table layout with zero width instead of being removed, preserving explicit period-column positions. Sticky total-row cells now use the same blue background as the amount cells.
+
+**Verification:** Focused reconciliation report tests passed 37/37; JavaScript syntax and git diff --check passed. No backend, accounting, or XLSX export change was required.

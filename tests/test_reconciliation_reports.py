@@ -1263,9 +1263,18 @@ def test_cashflow_export_preserves_visible_periods_and_totals():
     assert [summary.cell(5, column).value for column in range(1, 7)] == ["Category", "Q1 2026", "Q2 2026", "Total", "% of section", "Local total"]
     assert [summary.cell(6, column).value for column in range(1, 7)] == ["Customers", 125, 50, 175, "100.00%", "175 Rs"]
     assert summary.cell(6, 2).number_format == '#,##0;[Red](#,##0);-'
+    assert summary.cell(6, 1).font.bold
+    assert summary.cell(6, 4).font.bold
+    assert summary.cell(6, 4).font.color.rgb.endswith("0070C0")
+    assert summary.cell(6, 5).font.color.rgb.endswith("0070C0")
+    assert summary.cell(6, 6).font.bold
+    assert summary.cell(6, 6).font.color.rgb.endswith("7E350E")
     assert all(summary.cell(4, column).fill.fgColor.rgb.endswith("E2F0D9") for column in range(1, 7))
     assert [summary.cell(7, column).value for column in range(1, 5)] == ["Total Receipts", 125, 50, 175]
     assert all(summary.cell(7, column).font.bold for column in range(1, 7))
+    assert summary.cell(7, 4).font.color.rgb.endswith("0070C0")
+    assert summary.cell(7, 5).font.color.rgb.endswith("0070C0")
+    assert summary.cell(7, 6).font.color.rgb.endswith("7E350E")
     assert all(summary.cell(7, column).fill.fgColor.rgb.endswith("D9EAF7") for column in range(1, 7))
     assert summary.cell(10, 1).value == "Payments — percentages calculated within this section"
     assert [summary.cell(12, column).value for column in range(1, 5)] == ["Vendors", 80, 20, 100]
@@ -1398,7 +1407,29 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "minimumFractionDigits: 0" in javascript
     assert "cashflows-summary-section-row" in javascript
     assert "cashflows-summary-total-row" in javascript
+    assert "cashflows-summary-category-value" in javascript
+    assert "cashflows-summary-total-value" in javascript
+    assert "cashflows-summary-local-total-value" in javascript
+    assert "Account code: " in javascript
+    assert "cashflows-inline-ledger-type" in javascript
+    assert "const accountName = rawName.split" in javascript
+    assert ".cashflows-inline-ledger-link { display: inline;" in stylesheet
+    assert "background: #f8fbfd !important" in stylesheet
+    assert "const columns = ['Category'].concat(periods.map" in javascript
+    assert "const frozenColumnCount = 1" in javascript
+    assert "cashflows-summary-unified-table" in javascript
+    assert "color: #7E350E" in stylesheet
+    assert "cashflowInlineLedgerHostMarkup(category, section, colspan, true)" in javascript
     assert ".cashflows-summary-total-row th" in stylesheet
+    assert "#0070C0" in stylesheet
+    assert "#7E350E" in stylesheet
+    assert "--cashflows-summary-frozen-width" in stylesheet
+    assert "overflow-wrap: anywhere" in stylesheet
+    assert "cashflows-summary-unified-viewport" in stylesheet
+    assert "max(100%, " in javascript
+    assert "style.minWidth = '100%'" in javascript
+    assert "position: static !important" in stylesheet
+    assert "background: #e8eef7 !important" in stylesheet
     load_summary_index = html.index("<button type='submit' class='cashflows-primary'>Load summary</button>")
     drilldown_index = html.index("id='cashflowsLedgerDrilldownButton'")
     actions_index = html.index("class='cashflows-report-actions'")

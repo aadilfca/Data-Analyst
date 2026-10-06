@@ -29,6 +29,8 @@ TEXT = "1F2937"
 MUTED = "5B6573"
 WHITE = "FFFFFF"
 GRID = "D9E2F3"
+EXCEL_BLUE = "0070C0"
+EXCEL_BROWN = "7E350E"
 
 MONEY_FORMAT = '#,##0;[Red](#,##0);-'
 DATE_FORMAT = "dd-mmm-yy"
@@ -400,6 +402,7 @@ def _write_cashflow_split_summary_sheet(
             row_values.extend(_cashflow_display_value(totals[field], section) for field in ("bank", "cash", "mixed"))
             row_values.extend((totals["total"], f"{(totals['total'] / basis * 100) if basis else 0:.2f}%", _local_amount_label(totals["total"])))
             _write_table(ws, row, row_values)
+            _style_cashflow_summary_values(ws, row, total_columns=[2 + (index * 4) + 3 for index in range(len(period_keys) + 1)], percentage_column=width - 1, local_total_column=width)
             row += 1
         period_totals = [{field: sum(values[index][field] for _, values, _ in records) for field in ("bank", "cash", "mixed", "total")} for index in range(len(period_keys))]
         total_values: list[Any] = [f"Total {section}"]
@@ -408,6 +411,7 @@ def _write_cashflow_split_summary_sheet(
         total_values.extend(_cashflow_display_value(sum(record[2][field] for record in records), section) for field in ("bank", "cash", "mixed"))
         total_values.extend((basis, "100.00%", _local_amount_label(basis)))
         _write_table(ws, row, total_values, total=True)
+        _style_cashflow_summary_values(ws, row, total_columns=[2 + (index * 4) + 3 for index in range(len(period_keys) + 1)], percentage_column=width - 1, local_total_column=width)
         row += 3
     ws.freeze_panes = "B7"
 
@@ -447,6 +451,7 @@ def _write_cashflow_summary_sheet(
                 row,
                 [category, *[_cashflow_display_value(value, section) for value in values], total, f"{(total / basis * 100) if basis else 0:.2f}%", _local_amount_label(total)],
             )
+            _style_cashflow_summary_values(ws, row, total_columns=[len(period_keys) + 2], percentage_column=len(period_keys) + 3, local_total_column=len(period_keys) + 4)
             row += 1
         period_totals = [sum(values[index] for _, values, _ in records) for index in range(len(period_keys))]
         _write_table(
@@ -455,6 +460,7 @@ def _write_cashflow_summary_sheet(
             [f"Total {section}", *[_cashflow_display_value(value, section) for value in period_totals], basis, "100.00%", _local_amount_label(basis)],
             total=True,
         )
+        _style_cashflow_summary_values(ws, row, total_columns=[len(period_keys) + 2], percentage_column=len(period_keys) + 3, local_total_column=len(period_keys) + 4)
         row += 3
     ws.freeze_panes = "B6"
 
@@ -902,6 +908,23 @@ def _write_table(ws, row: int, values: list[Any], *, header: bool = False, total
             cell.number_format = MONEY_FORMAT
         if isinstance(cell.value, (pd.Timestamp,)):
             cell.number_format = DATE_FORMAT
+
+
+def _style_cashflow_summary_values(ws, row: int, *, total_columns: list[int], percentage_column: int, local_total_column: int) -> None:
+    _set_summary_font(ws.cell(row, 1), bold=True)
+    for column in total_columns:
+        _set_summary_font(ws.cell(row, column), color=EXCEL_BLUE, bold=True)
+    _set_summary_font(ws.cell(row, percentage_column), color=EXCEL_BLUE)
+    _set_summary_font(ws.cell(row, local_total_column), color=EXCEL_BROWN, bold=True)
+
+
+def _set_summary_font(cell, *, color: str | None = None, bold: bool | None = None) -> None:
+    font = copy(cell.font)
+    if color is not None:
+        font.color = color
+    if bold is not None:
+        font.bold = bold
+    cell.font = font
 
 
 def _style_section_band(ws, row: int, width: int) -> None:

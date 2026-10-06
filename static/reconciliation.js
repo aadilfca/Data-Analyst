@@ -1109,24 +1109,35 @@
         });
     }
     function cashflowInlineLedgerLabel(item) {
-        const account = [item.accountName, item.accountCode].filter(Boolean).join(' / ') || 'Unlabelled ledger';
-        return item.treasuryType ? account + ' / ' + item.treasuryType : account;
+        const rawName = String(item.accountName || '').trim();
+        const accountName = rawName.split(/\s+\/\s+/)[0].trim();
+        return accountName || item.accountCode || 'Unlabelled ledger';
     }
     function cashflowInlineLedgerGroupValue(section, category) {
         return encodeURIComponent(cashflowInlineLedgerKey(section, category));
     }
     function cashflowInlineLedgerButton(row, category, section) {
-        return '<button type=button class=cashflows-inline-ledger-link data-cashflow-inline-ledger=true data-cashflow-inline-category=' + encodeURIComponent(category) + ' data-cashflow-inline-section=' + encodeURIComponent(section) + ' data-cashflow-inline-account=' + encodeURIComponent(row.accountCode || '') + ' data-cashflow-inline-account-name=' + encodeURIComponent(row.accountName || '') + ' data-cashflow-inline-treasury=' + encodeURIComponent(row.treasuryType || '') + '>' + escapeHtml(cashflowInlineLedgerLabel(row)) + '</button>';
+        const label = cashflowInlineLedgerLabel(row);
+        const accountCode = String(row.accountCode || '').trim();
+        const hoverText = accountCode ? 'Account code: ' + accountCode : '';
+        const accessibleLabel = accountCode ? label + ' (Account code: ' + accountCode + ')' : label;
+        return '<button type=button class=cashflows-inline-ledger-link' + (hoverText ? ' title="' + escapeHtml(hoverText) + '"' : '') + ' aria-label="' + escapeHtml(accessibleLabel) + '" data-cashflow-inline-ledger=true data-cashflow-inline-category=' + encodeURIComponent(category) + ' data-cashflow-inline-section=' + encodeURIComponent(section) + ' data-cashflow-inline-account=' + encodeURIComponent(row.accountCode || '') + ' data-cashflow-inline-account-name=' + encodeURIComponent(row.accountName || '') + ' data-cashflow-inline-treasury=' + encodeURIComponent(row.treasuryType || '') + '>' + escapeHtml(label) + '</button>';
     }
-    function cashflowInlineLedgerHostMarkup(category, section, colspan) {
+    function cashflowInlineLedgerHostMarkup(category, section, colspan, showLoadingLabel) {
         const group = cashflowInlineLedgerGroupValue(section, category);
-        return '<tr class=cashflows-inline-ledger-host-row data-cashflow-inline-ledger-group="' + escapeHtml(group) + '"><td colspan="' + String(colspan) + '"><div class=cashflows-inline-ledger-host>Loading ledgers...</div></td></tr>';
+        const loadingLabel = showLoadingLabel === false ? '' : 'Loading ledgers...';
+        const hidden = showLoadingLabel === false ? ' aria-hidden=true' : '';
+        return '<tr class=cashflows-inline-ledger-host-row data-cashflow-inline-ledger-group="' + escapeHtml(group) + '"><td colspan="' + String(colspan) + '"><div class=cashflows-inline-ledger-host' + hidden + '>' + loadingLabel + '</div></td></tr>';
     }
     function cashflowInlineLedgerRowMarkup(row, category, section, periodKeys, isSplit, group, index, rowCount) {
         const classes = ['cashflows-inline-ledger-row'];
         if (index === 0) classes.push('cashflows-inline-ledger-first');
         if (index === rowCount - 1) classes.push('cashflows-inline-ledger-last');
-        const cells = ['<td class=cashflows-table-text>' + cashflowInlineLedgerButton(row, category, section) + '</td>'];
+        const ledgerType = String(row.treasuryType || '').trim();
+        const ledgerTypeMarkup = ledgerType ? '<span class="cashflows-inline-ledger-type"> - ' + escapeHtml(ledgerType) + '</span>' : '';
+        const cells = [
+            '<td class="cashflows-table-text">' + cashflowInlineLedgerButton(row, category, section) + ledgerTypeMarkup + '</td>'
+        ];
         const splitTotals = { bank: 0, cash: 0, mixed: 0, total: 0 };
         if (isSplit) {
             periodKeys.forEach(function (periodKey) {
@@ -1617,29 +1628,10 @@
         const preview = (lastCashflowsResult || {}).preview || {};
         const periods = cashflowPreviewPeriods(preview);
         const isSplit = String(preview.treasury_view || cashflowTreasuryView || 'combined') === 'split';
-        const colspan = isSplit ? 1 + ((periods.length + 1) * 4) + 2 : periods.length + 4;
-        const paneLayout = table.querySelector('.cashflows-summary-pane-layout');
-        if (paneLayout) {
-            const rowId = row.dataset.cashflowSummaryRowId;
-            const rightRow = Array.from(paneLayout.querySelectorAll('.cashflows-summary-scroll-table tbody tr[data-cashflow-summary-row-id]')).find(function (candidate) {
-                return candidate.dataset.cashflowSummaryRowId === rowId;
-            });
-            if (!rightRow) return;
-            const leftTemplate = document.createElement('tbody');
-            leftTemplate.innerHTML = cashflowInlineLedgerHostMarkup(category, section, 1);
-            const rightTemplate = document.createElement('tbody');
-            rightTemplate.innerHTML = cashflowInlineLedgerHostMarkup(category, section, Math.max(colspan - 1, 1));
-            const leftHost = leftTemplate.firstElementChild;
-            const rightHost = rightTemplate.firstElementChild;
-            row.parentNode.insertBefore(leftHost, row.nextSibling);
-            rightRow.parentNode.insertBefore(rightHost, rightRow.nextSibling);
-            button.setAttribute('aria-expanded', 'true');
-            button.disabled = true;
-            loadCashflowInlineLedgers(button, { left: leftHost, right: rightHost }, category, section, periods, isSplit);
-            return;
-        }
+        const frozenColumnCount = 1;
+        const colspan = isSplit ? frozenColumnCount + ((periods.length + 1) * 4) + 2 : periods.length + 4;
         const template = document.createElement('tbody');
-        template.innerHTML = cashflowInlineLedgerHostMarkup(category, section, colspan);
+        template.innerHTML = cashflowInlineLedgerHostMarkup(category, section, colspan, true);
         const host = template.firstElementChild;
         row.parentNode.insertBefore(host, row.nextSibling);
         button.setAttribute('aria-expanded', 'true');
@@ -1763,23 +1755,37 @@
         leftRow.dataset.cashflowSummaryRowId = rowId;
         rightRow.dataset.cashflowSummaryRowId = rowId;
         const cells = Array.from(sourceRow.children);
+        const frozenColumnCount = 2;
         if (sourceRow.classList.contains('cashflows-summary-section-row')) {
             const leftCell = cells[0] ? cells[0].cloneNode(true) : document.createElement('th');
             const rightCell = cells[0] ? cells[0].cloneNode(true) : document.createElement('th');
             const sourceColspan = Number(leftCell.getAttribute('colspan')) || cells.length || 1;
-            leftCell.setAttribute('colspan', '1');
-            rightCell.setAttribute('colspan', String(Math.max(sourceColspan - 1, 1)));
+            leftCell.setAttribute('colspan', String(Math.min(frozenColumnCount, sourceColspan)));
+            rightCell.setAttribute('colspan', String(Math.max(sourceColspan - frozenColumnCount, 1)));
             rightCell.textContent = '';
             leftRow.appendChild(leftCell);
             rightRow.appendChild(rightCell);
         } else if (isHeaderContinuation) {
-            const placeholder = document.createElement('th');
-            placeholder.setAttribute('aria-hidden', 'true');
-            leftRow.appendChild(placeholder);
+            for (let index = 0; index < frozenColumnCount; index += 1) {
+                const placeholder = document.createElement('th');
+                placeholder.setAttribute('aria-hidden', 'true');
+                leftRow.appendChild(placeholder);
+            }
             cells.forEach(function (cell) { rightRow.appendChild(cell.cloneNode(true)); });
         } else {
-            if (cells[0]) leftRow.appendChild(cells[0].cloneNode(true));
-            cells.slice(1).forEach(function (cell) { rightRow.appendChild(cell.cloneNode(true)); });
+            if (cells.length === 1 && (Number(cells[0].getAttribute('colspan')) || 1) > 1) {
+                const leftCell = cells[0].cloneNode(true);
+                const rightCell = cells[0].cloneNode(true);
+                const sourceColspan = Number(cells[0].getAttribute('colspan')) || 1;
+                leftCell.setAttribute('colspan', String(Math.min(frozenColumnCount, sourceColspan)));
+                rightCell.setAttribute('colspan', String(Math.max(sourceColspan - frozenColumnCount, 1)));
+                rightCell.textContent = '';
+                leftRow.appendChild(leftCell);
+                rightRow.appendChild(rightCell);
+            } else {
+                cells.slice(0, frozenColumnCount).forEach(function (cell) { leftRow.appendChild(cell.cloneNode(true)); });
+                cells.slice(frozenColumnCount).forEach(function (cell) { rightRow.appendChild(cell.cloneNode(true)); });
+            }
         }
         if (!rightRow.children.length) {
             const filler = document.createElement(sourceRow.parentElement && sourceRow.parentElement.tagName === 'THEAD' ? 'th' : 'td');
@@ -1856,107 +1862,52 @@
             return count + (Number(cell.getAttribute('colspan')) || 1);
         }, 0);
     }
-    function applyCashflowSummaryColumnContract(sourceTable, tables, isSplit) {
+    function cashflowSummaryCategoryWidth(sourceTable) {
+        const labels = Array.from(sourceTable.querySelectorAll('tbody tr')).filter(function (row) {
+            return !row.classList.contains('cashflows-summary-section-row')
+                && !row.classList.contains('cashflows-summary-total-row')
+                && row.children.length > 0
+                && !((Number(row.children[0].getAttribute('colspan')) || 1) > 1);
+        }).map(function (row) { return row.children[0].textContent.trim(); });
+        const longestLabel = labels.reduce(function (longest, label) { return Math.max(longest, label.length); }, 0);
+        return Math.min(520, Math.max(300, Math.round(longestLabel * 7.2 + 30)));
+    }
+    function renderCashflowSummaryPaneLayout(container, markup, isSplit) {
+        const sourceTable = document.createElement('table');
+        sourceTable.className = 'cashflows-table cashflows-summary-unified-table';
+        sourceTable.innerHTML = markup;
         const sourceRow = sourceTable.querySelector('thead tr') || sourceTable.querySelector('tbody tr');
-        const logicalCount = Math.max(cashflowSummaryLogicalColumnCount(sourceRow), 2);
-        const frozenWidth = 360;
+        const logicalCount = Math.max(cashflowSummaryLogicalColumnCount(sourceRow), 1);
+        const categoryWidth = cashflowSummaryCategoryWidth(sourceTable);
         const rightCount = Math.max(logicalCount - 1, 1);
         const rightWidths = Array.from({ length: rightCount }, function (_, index) {
             if (isSplit) return index >= rightCount - 2 ? (index === rightCount - 2 ? 100 : 120) : 96;
             if (index >= rightCount - 3) return index === rightCount - 3 ? 128 : index === rightCount - 2 ? 100 : 120;
             return 112;
         });
-        const addColGroup = function (table, widths) {
-            const colgroup = document.createElement('colgroup');
-            widths.forEach(function (width) {
-                const col = document.createElement('col');
-                col.style.width = width + 'px';
-                colgroup.appendChild(col);
-            });
-            table.insertBefore(colgroup, table.firstChild);
-            table.style.width = widths.reduce(function (sum, width) { return sum + width; }, 0) + 'px';
-        };
-        addColGroup(tables.frozenHeader, [frozenWidth]);
-        addColGroup(tables.frozenBody, [frozenWidth]);
-        addColGroup(tables.scrollHeader, rightWidths);
-        addColGroup(tables.scrollBody, rightWidths);
-    }
-    function renderCashflowSummaryPaneLayout(container, markup, isSplit) {
-        const sourceTable = document.createElement('table');
-        sourceTable.className = 'cashflows-table';
-        sourceTable.innerHTML = markup;
-        const layout = document.createElement('div');
-        layout.className = 'cashflows-summary-pane-layout';
-        const stickyHeader = document.createElement('div');
-        stickyHeader.className = 'cashflows-summary-sticky-header';
-        const frozenHeaderPane = document.createElement('div');
-        frozenHeaderPane.className = 'cashflows-summary-frozen-header-pane';
-        const scrollHeaderViewport = document.createElement('div');
-        scrollHeaderViewport.className = 'cashflows-summary-scroll-header-viewport';
-        const frozenHeaderTable = document.createElement('table');
-        frozenHeaderTable.className = 'cashflows-summary-header-table cashflows-summary-frozen-header-table';
-        const scrollHeaderTable = document.createElement('table');
-        scrollHeaderTable.className = 'cashflows-summary-header-table cashflows-summary-scroll-header-table';
-        const frozenPane = document.createElement('div');
-        frozenPane.className = 'cashflows-summary-frozen-pane';
-        const scrollPane = document.createElement('div');
-        scrollPane.className = 'cashflows-summary-scroll-pane';
-        const bodyLayout = document.createElement('div');
-        bodyLayout.className = 'cashflows-summary-body-layout';
-        const frozenTable = document.createElement('table');
-        frozenTable.className = 'cashflows-table cashflows-summary-pane-table cashflows-summary-frozen-table';
-        const scrollTable = document.createElement('table');
-        scrollTable.className = 'cashflows-table cashflows-summary-pane-table cashflows-summary-scroll-table';
-        const sourceHead = sourceTable.querySelector('thead');
-        if (sourceHead) {
-            const frozenHead = document.createElement('thead');
-            const scrollHead = document.createElement('thead');
-            Array.from(sourceHead.children).forEach(function (sourceRow, index) {
-                const parts = cashflowSummaryPaneRowParts(sourceRow, 'header-' + index, sourceRow.classList.contains('cashflows-split-header-sub'));
-                frozenHead.appendChild(parts.left);
-                scrollHead.appendChild(parts.right);
-            });
-            frozenHeaderTable.appendChild(frozenHead);
-            scrollHeaderTable.appendChild(scrollHead);
-        }
-        ['tbody', 'tfoot'].forEach(function (tagName) {
-            const sourceSection = sourceTable.querySelector(tagName);
-            if (!sourceSection) return;
-            const frozenSection = document.createElement(tagName);
-            const scrollSection = document.createElement(tagName);
-            Array.from(sourceSection.children).forEach(function (sourceRow, index) {
-                const parts = cashflowSummaryPaneRowParts(sourceRow, tagName + '-' + index, tagName === 'thead' && sourceRow.classList.contains('cashflows-split-header-sub'));
-                frozenSection.appendChild(parts.left);
-                scrollSection.appendChild(parts.right);
-            });
-            frozenTable.appendChild(frozenSection);
-            scrollTable.appendChild(scrollSection);
+        const widths = [categoryWidth].concat(rightWidths);
+        const colgroup = document.createElement('colgroup');
+        widths.forEach(function (width) {
+            const col = document.createElement('col');
+            col.style.width = width + 'px';
+            colgroup.appendChild(col);
         });
-        applyCashflowSummaryColumnContract(sourceTable, {
-            frozenHeader: frozenHeaderTable,
-            frozenBody: frozenTable,
-            scrollHeader: scrollHeaderTable,
-            scrollBody: scrollTable
-        }, isSplit);
-        frozenHeaderPane.appendChild(frozenHeaderTable);
-        scrollHeaderViewport.appendChild(scrollHeaderTable);
-        stickyHeader.appendChild(frozenHeaderPane);
-        stickyHeader.appendChild(scrollHeaderViewport);
-        frozenPane.appendChild(frozenTable);
-        scrollPane.appendChild(scrollTable);
-        bodyLayout.appendChild(frozenPane);
-        bodyLayout.appendChild(scrollPane);
-        layout.appendChild(stickyHeader);
-        layout.appendChild(bodyLayout);
+        sourceTable.insertBefore(colgroup, sourceTable.firstChild);
+        const tableWidth = widths.reduce(function (sum, width) { return sum + width; }, 0);
+        sourceTable.style.width = 'max(100%, ' + tableWidth + 'px)';
+        sourceTable.style.minWidth = '100%';
+        const layout = document.createElement('div');
+        layout.className = 'cashflows-summary-unified-layout';
+        layout.dataset.cashflowSummaryCategoryWidth = String(categoryWidth);
+        layout.dataset.cashflowSummaryTableWidth = String(tableWidth);
+        const viewport = document.createElement('div');
+        viewport.className = 'cashflows-summary-unified-viewport';
+        viewport.appendChild(sourceTable);
+        layout.appendChild(viewport);
         container.className = 'cashflows-summary-table-host';
         container.classList.toggle('cashflows-summary-split-table', !!isSplit);
         container.innerHTML = '';
         container.appendChild(layout);
-        requestAnimationFrame(function () {
-            syncCashflowSummaryPaneRows(container);
-            syncCashflowSummaryHeaderScroll(container);
-            syncCashflowSummaryRowHover(container);
-        });
     }
     function renderCashflowSplitSummary(preview, table) {
         const periods = cashflowPreviewPeriods(preview);
@@ -2018,20 +1969,22 @@
             const basis = rows.reduce(function (sum, row) { return sum + row.total; }, 0);
             html += '<tr class="cashflows-summary-section-row cashflows-summary-section-' + section.toLowerCase() + '"><th colspan="' + columnCount + '">' + escapeHtml(section) + '</th></tr>';
             rows.forEach(function (row) {
-                let cells = ['<td class="cashflows-table-text">' + escapeHtml(row.category) + '</td>'];
-                cells[0] = '<td class=cashflows-table-text>' + cashflowInlineCategoryCell(row.category, section) + '</td>';
+                let cells = ['<td class="cashflows-table-text cashflows-summary-category-value">' + escapeHtml(row.category) + '</td>'];
+                cells[0] = '<td class="cashflows-table-text cashflows-summary-category-value">' + cashflowInlineCategoryCell(row.category, section) + '</td>';
                 periodKeys.forEach(function (periodKey) {
                     const values = row.periods[periodKey] || { bank: 0, cash: 0, mixed: 0, total: 0 };
                     visibleFields.forEach(function (field) {
-                        cells.push('<td class="cashflows-table-number">' + escapeHtml(formatCashflowSectionAmount(values[field], section)) + '</td>');
+                        const className = 'cashflows-table-number' + (field === 'total' ? ' cashflows-summary-total-value' : '');
+                        cells.push('<td class="' + className + '">' + escapeHtml(formatCashflowSectionAmount(values[field], section)) + '</td>');
                     });
                 });
                 const totalValues = { bank: row.bankTotal, cash: row.cashTotal, mixed: row.mixedTotal, total: row.totalRaw };
                 visibleFields.forEach(function (field) {
-                    cells.push('<td class="cashflows-table-number">' + escapeHtml(formatCashflowSectionAmount(totalValues[field], section)) + '</td>');
+                    const className = 'cashflows-table-number' + (field === 'total' ? ' cashflows-summary-total-value' : '');
+                    cells.push('<td class="' + className + '">' + escapeHtml(formatCashflowSectionAmount(totalValues[field], section)) + '</td>');
                 });
-                cells.push('<td class="cashflows-table-number">' + escapeHtml(formatPercentage(basis ? row.total / basis : 0)) + '</td>');
-                cells.push('<td class="cashflows-table-number">' + escapeHtml(formatLocalAmount(row.total)) + '</td>');
+                cells.push('<td class="cashflows-table-number cashflows-summary-percentage-value">' + escapeHtml(formatPercentage(basis ? row.total / basis : 0)) + '</td>');
+                cells.push('<td class="cashflows-table-number cashflows-summary-local-total-value">' + escapeHtml(formatLocalAmount(row.total)) + '</td>');
                 html += '<tr>' + cells.join('') + '</tr>';
             });
             const totalFields = { bank: 0, cash: 0, mixed: 0, total: 0 };
@@ -2042,10 +1995,16 @@
                     const rowValues = row.periods[periodKey] || {};
                     ['bank', 'cash', 'mixed', 'total'].forEach(function (field) { values[field] += Number(rowValues[field]) || 0; totalFields[field] += Number(rowValues[field]) || 0; });
                 });
-                visibleFields.forEach(function (field) { html += '<td class="cashflows-table-number">' + escapeHtml(field === 'total' ? formatInternationalAmount(values[field]) : formatCashflowSectionAmount(values[field], section)) + '</td>'; });
+                visibleFields.forEach(function (field) {
+                    const className = 'cashflows-table-number' + (field === 'total' ? ' cashflows-summary-total-value' : '');
+                    html += '<td class="' + className + '">' + escapeHtml(field === 'total' ? formatInternationalAmount(values[field]) : formatCashflowSectionAmount(values[field], section)) + '</td>';
+                });
             });
-            visibleFields.forEach(function (field) { html += '<td class="cashflows-table-number">' + escapeHtml(field === 'total' ? formatInternationalAmount(basis) : formatCashflowSectionAmount(totalFields[field], section)) + '</td>'; });
-            html += '<td class="cashflows-table-number">100.00%</td><td class="cashflows-table-number">' + escapeHtml(formatLocalAmount(basis)) + '</td></tr>';
+            visibleFields.forEach(function (field) {
+                const className = 'cashflows-table-number' + (field === 'total' ? ' cashflows-summary-total-value' : '');
+                html += '<td class="' + className + '">' + escapeHtml(field === 'total' ? formatInternationalAmount(basis) : formatCashflowSectionAmount(totalFields[field], section)) + '</td>';
+            });
+            html += '<td class="cashflows-table-number cashflows-summary-percentage-value">100.00%</td><td class="cashflows-table-number cashflows-summary-local-total-value">' + escapeHtml(formatLocalAmount(basis)) + '</td></tr>';
         });
         renderCashflowSummaryPaneLayout(table, html + '</tbody>', true);
     }
@@ -2091,25 +2050,33 @@
             renderCashflowSummaryPaneLayout(table, '<tbody><tr><td class="cashflows-empty" colspan="' + Math.max(columns.length, 1) + '">No Cash Flow activity was found for this period.</td></tr></tbody>', false);
             return;
         }
-        let html = '<thead><tr>' + columns.map(function (label) { return '<th>' + escapeHtml(label) + '</th>'; }).join('') + '</tr></thead><tbody>';
+        let html = '<thead><tr>' + columns.map(function (label) {
+            return '<th>' + escapeHtml(label) + '</th>';
+        }).join('') + '</tr></thead><tbody>';
         ['Receipts', 'Payments'].forEach(function (section) {
             const rows = sectionRows[section];
             if (!rows.length) return;
             const basis = rows.reduce(function (sum, row) { return sum + row.total; }, 0);
             html += '<tr class="cashflows-summary-section-row cashflows-summary-section-' + section.toLowerCase() + '"><th colspan="' + columns.length + '">' + escapeHtml(section) + '</th></tr>';
             rows.forEach(function (row) {
-                const cells = [escapeHtml(row.category)];
-                cells[0] = cashflowInlineCategoryCell(row.category, section);
+                const cells = [cashflowInlineCategoryCell(row.category, section)];
                 row.values.forEach(function (value) { cells.push(escapeHtml(formatCashflowSectionAmount(value, section))); });
                 cells.push(escapeHtml(formatInternationalAmount(row.total)));
                 cells.push(escapeHtml(formatPercentage(basis ? row.total / basis : 0)));
                 cells.push(escapeHtml(formatLocalAmount(row.total)));
-                html += '<tr>' + cells.map(function (cell) { return '<td>' + cell + '</td>'; }).join('') + '</tr>';
+                html += '<tr>' + cells.map(function (cell, index) {
+                    let className = '';
+                    if (index === 0) className = 'cashflows-summary-category-value';
+                    else if (index === periods.length + 1) className = 'cashflows-summary-total-value';
+                    else if (index === periods.length + 2) className = 'cashflows-summary-percentage-value';
+                    else if (index === periods.length + 3) className = 'cashflows-summary-local-total-value';
+                    return '<td' + (className ? ' class="' + className + '"' : '') + '>' + cell + '</td>';
+                }).join('') + '</tr>';
             });
             const periodTotals = periodKeys.map(function (_, index) { return rows.reduce(function (sum, row) { return sum + row.values[index]; }, 0); });
             html += '<tr class="cashflows-summary-total-row"><th>' + escapeHtml('Total ' + section) + '</th>';
             periodTotals.forEach(function (value) { html += '<td>' + escapeHtml(formatCashflowSectionAmount(value, section)) + '</td>'; });
-            html += '<td>' + escapeHtml(formatInternationalAmount(basis)) + '</td><td>100.00%</td><td>' + escapeHtml(formatLocalAmount(basis)) + '</td></tr>';
+            html += '<td class="cashflows-summary-total-value">' + escapeHtml(formatInternationalAmount(basis)) + '</td><td class="cashflows-summary-percentage-value">100.00%</td><td class="cashflows-summary-local-total-value">' + escapeHtml(formatLocalAmount(basis)) + '</td></tr>';
         });
         renderCashflowSummaryPaneLayout(table, html + '</tbody>', false);
     }

@@ -294,6 +294,16 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-10-06: Cashflows Phase 6 focused acceptance passed 139/139; full-suite failures are outside Cashflows, and authenticated live-browser acceptance remains pending.
 - 2026-10-06: Cashflows report controls now use a split refresh action, stacked freshness notices, and a stable single-row responsive toolbar.
 
+- 2026-10-06: Cashflows summary categories, totals, percentages, and local totals now use the requested browser and XLSX emphasis; focused formatting tests passed.
+- 2026-10-06: Cashflows summary now freezes Category and Type, wraps expanded ledgers, and exposes account codes on hover.
+- 2026-10-06: Cashflows Type stays hidden for collapsed categories; expansion loading now spans the full frozen pane cleanly.
+- 2026-10-06: Cashflows summary now uses one aligned table container with sticky Category and Type columns during expansion loading.
+- 2026-10-06: Cashflows period columns now retain their widths when Type is hidden; sticky total-row shading is restored.
+- 2026-10-06: Cashflows summary now fills available width for short period selections while preserving horizontal scrolling for wider reports.
+- 2026-10-06: Cashflows summary now shows ledger Cash/Bank labels inline, with no separate Type column or hover seam.
+- 2026-10-06: Cashflows ledger labels now stay on one line and the expanded Category cell keeps the light row shade.
+- 2026-10-06: Cashflows expanded ledgers now show only the account name plus Cash or Bank, excluding slash-delimited transaction details.
+
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
 - Findings from a Code Health Review session go to `KNOWN_ISSUES.md`, not the Status log — the Status log records changes made, that file records issues found
