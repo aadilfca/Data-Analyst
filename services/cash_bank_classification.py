@@ -976,6 +976,7 @@ def backfill_account_names_sqlite(
     summary = AccountNameBackfillSummary("sqlite", dry_run, client_ids)
 
     for current_client_id in client_ids:
+        client_updated_rows = 0
         source_cursor = conn.execute(
             """
             SELECT c.client_data_id, cd.row_data
@@ -1016,6 +1017,27 @@ def backfill_account_names_sqlite(
                 )
                 conn.commit()
                 summary.updated_rows += len(updates)
+                client_updated_rows += len(updates)
+
+        if not dry_run and client_updated_rows:
+            conn.execute(
+                "DELETE FROM cash_bank_summary_read_models WHERE client_id = ?",
+                (current_client_id,),
+            )
+            conn.execute(
+                """
+                INSERT INTO cashflow_report_revisions
+                    (client_id, revision, changed_at, changed_by, change_reason)
+                VALUES (?, 2, CURRENT_TIMESTAMP, NULL, ?)
+                ON CONFLICT(client_id) DO UPDATE SET
+                    revision = cashflow_report_revisions.revision + 1,
+                    changed_at = CURRENT_TIMESTAMP,
+                    changed_by = excluded.changed_by,
+                    change_reason = excluded.change_reason
+                """,
+                (current_client_id, "cashflow_account_labels_backfilled"),
+            )
+            conn.commit()
 
     return summary
 
@@ -1043,6 +1065,7 @@ def backfill_account_names_postgres(
 
     try:
         for current_client_id in client_ids:
+            client_updated_rows = 0
             with (
                 conn.cursor(cursor_factory=RealDictCursor) as source_cursor,
                 conn.cursor(cursor_factory=RealDictCursor) as update_cursor,
@@ -1083,6 +1106,27 @@ def backfill_account_names_postgres(
                         )
                         conn.commit()
                         summary.updated_rows += len(updates)
+                        client_updated_rows += len(updates)
+
+                if not dry_run and client_updated_rows:
+                    update_cursor.execute(
+                        "DELETE FROM cash_bank_summary_read_models WHERE client_id = %s",
+                        (current_client_id,),
+                    )
+                    update_cursor.execute(
+                        """
+                        INSERT INTO cashflow_report_revisions
+                            (client_id, revision, changed_at, changed_by, change_reason)
+                        VALUES (%s, 2, CURRENT_TIMESTAMP, NULL, %s)
+                        ON CONFLICT (client_id) DO UPDATE SET
+                            revision = cashflow_report_revisions.revision + 1,
+                            changed_at = CURRENT_TIMESTAMP,
+                            changed_by = EXCLUDED.changed_by,
+                            change_reason = EXCLUDED.change_reason
+                        """,
+                        (current_client_id, "cashflow_account_labels_backfilled"),
+                    )
+                    conn.commit()
     except Exception:
         conn.rollback()
         raise

@@ -218,7 +218,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
-- 2026-10-06: Added safe source-identity backfill for missing derived Cashflows account labels.
+- 2026-10-06: Added source-identity Cashflows label backfill with prepared-snapshot invalidation.
 - 2026-10-06: New Cashflows classification rows now carry a derived account label with backward-compatible SQL fallback.
 - 2026-10-06: Cashflows wide reports now expose a compact accessible draggable scrollbar while visible.
 

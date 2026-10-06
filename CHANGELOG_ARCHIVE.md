@@ -2,7 +2,7 @@
 
 ## Cashflows account-label backfill - 2026-10-06
 
-- Added a dry-run-capable account-name-only backfill that updates blank derived labels by Client Data row identity without changing raw rows or accounting values.
+- Added a dry-run-capable account-name-only backfill that updates blank derived labels by Client Data row identity, invalidates prepared snapshots, and leaves raw rows and accounting values unchanged.
 
 ## Cashflows derived account labels - 2026-10-06
 

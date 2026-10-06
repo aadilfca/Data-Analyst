@@ -246,6 +246,15 @@ class CashBankTransactionBackfillTests(unittest.TestCase):
             "UPDATE cash_bank_transaction_classifications SET account_name = ? WHERE client_data_id = 2",
             ("Preserved bank label",),
         )
+        self.connection.execute(
+            """
+            INSERT INTO cash_bank_summary_read_models
+                (client_id, template_id, source_upload_ids_key, period_start, period_end,
+                 group_by, receipt_presentation, summary_payload)
+            VALUES (?, 1, '1', '2024-01-01', '2024-01-31', 'day', 'net', '{}')
+            """,
+            (self.client_id,),
+        )
         self.connection.commit()
         before = self.connection.execute(
             "SELECT id, row_data FROM client_data ORDER BY id"
@@ -266,6 +275,13 @@ class CashBankTransactionBackfillTests(unittest.TestCase):
                 "SELECT account_name FROM cash_bank_transaction_classifications WHERE client_data_id = 1"
             ).fetchone()[0]
         )
+        self.assertEqual(
+            self.connection.execute(
+                "SELECT COUNT(*) FROM cash_bank_summary_read_models WHERE client_id = ?",
+                (self.client_id,),
+            ).fetchone()[0],
+            1,
+        )
 
         updated = backfill_account_names_sqlite(
             self.connection,
@@ -284,6 +300,20 @@ class CashBankTransactionBackfillTests(unittest.TestCase):
                 "SELECT account_name FROM cash_bank_transaction_classifications WHERE client_data_id = 2"
             ).fetchone()[0],
             "Preserved bank label",
+        )
+        self.assertEqual(
+            self.connection.execute(
+                "SELECT COUNT(*) FROM cash_bank_summary_read_models WHERE client_id = ?",
+                (self.client_id,),
+            ).fetchone()[0],
+            0,
+        )
+        self.assertEqual(
+            self.connection.execute(
+                "SELECT revision FROM cashflow_report_revisions WHERE client_id = ?",
+                (self.client_id,),
+            ).fetchone()[0],
+            2,
         )
         after = self.connection.execute(
             "SELECT id, row_data FROM client_data ORDER BY id"
