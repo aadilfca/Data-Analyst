@@ -1,5 +1,13 @@
 # Changelog Archive
 
+## Cashflows Phase 7 data and performance standard - 2026-10-06
+
+**Decision:** Consolidated the permanent Cashflows rules for the Sialkot slow-network environment: upload-time category/Cash-Bank/period preparation, immutable raw sources, revision-scoped read models, bounded context-specific browser caches, safe parent-period reuse, soft reuse versus hard refresh, and explicit validation of freshness, totals, exports, and cold/warm performance.
+
+**Verification:** The Phase 6 focused acceptance suite passed 139/139, and the supplied browser trace showed successful HTTP 200 preview/revision requests with repeat-load timing evidence. This phase changed documentation only; no production code, schema, accounting rule, or cache behavior changed.
+
+**Standing rule:** Every future proven data-management, fetching, caching, performance, or integrity technique must be added to the standard and followed in later development.
+
 ## Cashflows Phase 6 verification - 2026-10-06
 
 **Scope:** Verify Cashflows calculations, period grains, Treasury views, revision/cache behavior, drill-down filters, exports, duplicate-voucher safety, and static UI contracts.
