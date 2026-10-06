@@ -1422,6 +1422,7 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "cashflows-summary-sticky-header { position: sticky; top: 72.5px;" in stylesheet
     assert ".cashflows-summary-scroll-pane { min-width: 0; overflow-x: auto; overflow-y: clip; }" in stylesheet
     assert "style.css?v=69" in html
+    assert "table.style.width = fillAvailable ? 'max(100%, ' + totalWidth + 'px)' : totalWidth + 'px';" in javascript
 
     assert "color: #7E350E" in stylesheet
     assert "cashflowInlineLedgerHostMarkup(category, section, colspan, true)" in javascript

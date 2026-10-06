@@ -1904,7 +1904,7 @@
             if (index >= rightCount - 3) return index === rightCount - 3 ? 128 : index === rightCount - 2 ? 100 : 120;
             return 112;
         });
-        const addColGroup = function (table, widths) {
+        const addColGroup = function (table, widths, fillAvailable) {
             const colgroup = document.createElement('colgroup');
             widths.forEach(function (width) {
                 const col = document.createElement('col');
@@ -1913,8 +1913,8 @@
             });
             table.insertBefore(colgroup, table.firstChild);
             const totalWidth = widths.reduce(function (sum, width) { return sum + width; }, 0);
-            table.style.width = totalWidth + 'px';
-            table.style.minWidth = totalWidth + 'px';
+            table.style.width = fillAvailable ? 'max(100%, ' + totalWidth + 'px)' : totalWidth + 'px';
+            table.style.minWidth = fillAvailable ? '100%' : totalWidth + 'px';
         };
         const layout = document.createElement('div');
         layout.className = 'cashflows-summary-pane-layout';
@@ -1966,8 +1966,8 @@
         });
         addColGroup(frozenHeaderTable, [categoryWidth]);
         addColGroup(frozenTable, [categoryWidth]);
-        addColGroup(scrollHeaderTable, rightWidths);
-        addColGroup(scrollTable, rightWidths);
+        addColGroup(scrollHeaderTable, rightWidths, true);
+        addColGroup(scrollTable, rightWidths, true);
         frozenHeaderPane.appendChild(frozenHeaderTable);
         scrollHeaderViewport.appendChild(scrollHeaderTable);
         stickyHeader.appendChild(frozenHeaderPane);

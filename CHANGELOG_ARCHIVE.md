@@ -3,6 +3,10 @@
 
 - Restored the proven dedicated sticky summary header below the global navbar, with a one-column frozen Category pane and horizontally scrolling values pane.
 
+## Cashflows short-period width fill - 2026-10-06
+
+- Made the scrolling header and body panes fill the available width for short period selections while retaining the calculated minimum width for longer reports.
+
 
 ## Cashflows customer ledger display names - 2026-10-06
 
