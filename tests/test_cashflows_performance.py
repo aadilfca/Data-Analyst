@@ -4,7 +4,11 @@ import inspect
 
 import database
 from services.ledger_report_source import (
+    CASHFLOW_DRILLDOWN_DETAILS_VERSION,
     _cashflow_daily_rollup,
+    _cashflow_drilldown_integrity,
+    _cashflow_summary_from_payload,
+    _cashflow_summary_payload,
     load_cashflow_prepared_summary,
     load_cashflow_sql_source,
     load_cashflow_summary_read_model,
@@ -293,6 +297,43 @@ def test_cashflow_read_models_require_current_report_revision_when_requested():
         query_fn=query,
     ) is None
     assert len(calls) == 2
+
+
+def test_cashflow_daily_rollup_prepares_ledger_details_for_target_periods():
+    payload = {
+        "periods": [
+            {"key": "2026-01-05", "start": "2026-01-05", "end": "2026-01-05", "label": "05 Jan"},
+            {"key": "2026-01-06", "start": "2026-01-06", "end": "2026-01-06", "label": "06 Jan"},
+            {"key": "2026-02-05", "start": "2026-02-05", "end": "2026-02-05", "label": "05 Feb"},
+        ],
+        "categories": [
+            {"category": "Operating", "values": {"2026-01-05": 60, "2026-01-06": 40, "2026-02-05": 25}},
+        ],
+        "cashflow_ledger_rollups": [
+            {"category": "Operating", "period_key": "2026-01-05", "period_label": "05 Jan", "account_code": "EXP", "account_name": "Operating", "treasury_type": "Bank", "amount": 60, "line_count": 1},
+            {"category": "Operating", "period_key": "2026-01-06", "period_label": "06 Jan", "account_code": "EXP", "account_name": "Operating", "treasury_type": "Bank", "amount": 40, "line_count": 2},
+            {"category": "Operating", "period_key": "2026-02-05", "period_label": "05 Feb", "account_code": "EXP", "account_name": "Operating", "treasury_type": "Cash", "amount": 25, "line_count": 1},
+        ],
+        "drilldown_details_prepared": True,
+        "drilldown_details_version": CASHFLOW_DRILLDOWN_DETAILS_VERSION,
+    }
+
+    summary = _cashflow_daily_rollup(payload, "2026-01-01", "2026-02-28", "month")
+    rollups = summary["cashflow_ledger_rollups"].set_index(["category", "period_key", "account_code"])
+
+    assert summary["cashflow_drilldown_prepared"] is True
+    assert rollups.loc[("Operating", "2026-01", "EXP"), "amount"] == 100
+    assert rollups.loc[("Operating", "2026-01", "EXP"), "line_count"] == 3
+    assert rollups.loc[("Operating", "2026-02", "EXP"), "amount"] == 25
+    assert all(row["status"] == "Matched" for row in summary["cashflow_drilldown_controls"]["category_controls"])
+    valid, reason = _cashflow_drilldown_integrity(summary)
+    assert valid is True and reason is None
+
+    payload_round_trip = _cashflow_summary_payload(summary)
+    assert payload_round_trip["drilldown_details_version"] == CASHFLOW_DRILLDOWN_DETAILS_VERSION
+    restored = _cashflow_summary_from_payload(payload_round_trip, "month")
+    assert restored["cashflow_drilldown_prepared"] is True
+    assert len(restored["cashflow_ledger_rollups"]) == 2
 
 
 def test_cashflow_daily_rollup_preserves_treasury_totals_for_larger_periods():

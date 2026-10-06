@@ -31,7 +31,7 @@ JOURNAL_COLUMNS = (
 CASHFLOW_PREPARED_PERIOD_COLUMNS = ("transaction_month", "transaction_fortnight")
 COA_COLUMNS = ("account_code", "account_title", "account_type", "category")
 CASHFLOW_CHILD_DETAILS_VERSION = 6
-CASHFLOW_DRILLDOWN_DETAILS_VERSION = 1
+CASHFLOW_DRILLDOWN_DETAILS_VERSION = 2
 CASHFLOW_TREASURY_TOTALS_VERSION = 1
 CASHFLOW_TREASURY_VIEWS = ("combined", "bank", "cash", "split")
 
@@ -957,6 +957,121 @@ def _cashflow_rollup_detail_frame(
     return pd.concat(period_frames, ignore_index=True)
 
 
+def _cashflow_rollup_ledger_details(
+    payload: Mapping[str, Any],
+    periods: Sequence[Mapping[str, Any]],
+) -> pd.DataFrame:
+    """Re-bucket daily prepared ledger rollups into the requested periods."""
+    columns = [
+        "category",
+        "period_key",
+        "period_label",
+        "account_code",
+        "account_name",
+        "treasury_type",
+        "amount",
+        "line_count",
+    ]
+    frame = _cashflow_detail_frame(payload, "cashflow_ledger_rollups")
+    required = set(columns) - {"period_key", "period_label"}
+    if frame.empty or not required.issubset(frame.columns) or "period_key" not in frame.columns:
+        return pd.DataFrame(columns=columns)
+
+    source_periods = {
+        str(period.get("key")): pd.Timestamp(period["start"]).normalize()
+        for period in payload.get("periods", [])
+        if period.get("key") is not None and period.get("start") is not None
+    }
+    target_lookup: dict[str, tuple[str, str]] = {}
+    for target in periods:
+        start = pd.Timestamp(target["start"]).normalize()
+        end = pd.Timestamp(target["end"]).normalize()
+        for source_key, source_day in source_periods.items():
+            if start <= source_day <= end:
+                target_lookup[source_key] = (str(target["key"]), str(target["label"]))
+    if not target_lookup:
+        return pd.DataFrame(columns=columns)
+
+    working = frame.copy()
+    target_periods = working["period_key"].astype(str).map(target_lookup)
+    selected = working.loc[target_periods.notna()].copy()
+    if selected.empty:
+        return pd.DataFrame(columns=columns)
+    selected[["target_period_key", "target_period_label"]] = pd.DataFrame(
+        target_periods.loc[selected.index].tolist(), index=selected.index
+    )
+    selected["amount"] = pd.to_numeric(selected.get("amount"), errors="coerce")
+    selected["line_count"] = pd.to_numeric(selected.get("line_count"), errors="coerce").fillna(0)
+    selected = selected.loc[selected["amount"].notna()].copy()
+    if selected.empty:
+        return pd.DataFrame(columns=columns)
+    selected["category"] = selected["category"].fillna("").astype(str)
+    selected["account_code"] = selected["account_code"].fillna("").astype(str)
+    selected["account_name"] = selected["account_name"].fillna("").astype(str)
+    selected["treasury_type"] = selected["treasury_type"].fillna("Unknown").astype(str)
+    grouped = (
+        selected.groupby(
+            [
+                "category",
+                "target_period_key",
+                "target_period_label",
+                "account_code",
+                "account_name",
+                "treasury_type",
+            ],
+            dropna=False,
+            sort=False,
+        )
+        .agg(amount=("amount", "sum"), line_count=("line_count", "sum"))
+        .reset_index()
+        .rename(columns={"target_period_key": "period_key", "target_period_label": "period_label"})
+    )
+    grouped["line_count"] = grouped["line_count"].round().astype(int)
+    return grouped[columns]
+
+
+def _cashflow_drilldown_integrity(summary: Mapping[str, Any]) -> tuple[bool, str | None]:
+    """Validate prepared account detail before allowing it into the snapshot."""
+    if not bool(summary.get("cashflow_drilldown_prepared")):
+        return True, None
+    rollups = summary.get("cashflow_ledger_rollups")
+    required = {
+        "category",
+        "period_key",
+        "period_label",
+        "account_code",
+        "account_name",
+        "treasury_type",
+        "amount",
+        "line_count",
+    }
+    if not isinstance(rollups, pd.DataFrame) or not required.issubset(rollups.columns):
+        return False, "drilldown_rollup_schema_invalid"
+    key_columns = [
+        "category",
+        "period_key",
+        "period_label",
+        "account_code",
+        "account_name",
+        "treasury_type",
+    ]
+    if rollups.duplicated(key_columns, keep=False).any():
+        return False, "drilldown_rollup_duplicates"
+    if rollups["amount"].isna().any() or rollups["line_count"].isna().any():
+        return False, "drilldown_rollup_numeric_values_invalid"
+    controls = summary.get("cashflow_drilldown_controls") or {}
+    category_controls = controls.get("category_controls") if isinstance(controls, Mapping) else None
+    if not isinstance(category_controls, list) or any(
+        not isinstance(row, Mapping) or str(row.get("status") or "") != "Matched"
+        for row in category_controls
+    ):
+        return False, "drilldown_integrity_variance"
+    split = controls.get("cash_bank_split") if isinstance(controls, Mapping) else None
+    if isinstance(split, Mapping) and str(split.get("status") or "") != "Matched":
+        return False, "drilldown_treasury_split_requires_review"
+    return True, None
+
+
 def _cashflow_summary_payload(summary: Mapping[str, Any]) -> dict[str, Any]:
     from services.ledger_group_summary import build_cashflow_transfer_reconciliation
 
@@ -1036,11 +1151,17 @@ def _cashflow_summary_from_payload(payload: Mapping[str, Any], group_by: str) ->
     child_details_prepared = bool(payload.get("child_details_prepared")) and child_details_version >= CASHFLOW_CHILD_DETAILS_VERSION
     transfer_details = _cashflow_detail_frame(payload, "transfer_details") if child_details_prepared else pd.DataFrame()
     customer_payment_details = _cashflow_detail_frame(payload, "customer_payment_details") if child_details_prepared else pd.DataFrame()
+    drilldown_version = int(payload.get("drilldown_details_version", 0) or 0)
+    drilldown_prepared = bool(payload.get("drilldown_details_prepared")) and drilldown_version >= CASHFLOW_DRILLDOWN_DETAILS_VERSION
     return {
         "months": [str(month) for month in payload.get("months", [])],
         "periods": periods,
         "group_by": group_by,
         "category_totals": category_totals,
+        "cashflow_ledger_rollups": _cashflow_detail_frame(payload, "cashflow_ledger_rollups") if drilldown_prepared else pd.DataFrame(),
+        "cashflow_drilldown_controls": payload.get("cashflow_drilldown_controls") or {},
+        "cashflow_drilldown_prepared": drilldown_prepared,
+        "drilldown_details_version": drilldown_version,
         "treasury_category_totals": treasury_category_totals,
         "treasury_reconciliation": dict(payload.get("treasury_reconciliation") or {}),
         "treasury_totals_version": treasury_totals_version,
@@ -1178,7 +1299,14 @@ def _cashflow_daily_rollup(
     period_end: Any,
     group_by: str,
 ) -> dict[str, Any]:
-    from services.ledger_group_summary import DEFAULT_TOLERANCE, _cashflow_periods, _cashflow_treasury_reconciliation, build_cashflow_transfer_reconciliation, normalize_cashflow_grouping
+    from services.ledger_group_summary import (
+        DEFAULT_TOLERANCE,
+        _build_cashflow_drilldown_controls,
+        _cashflow_periods,
+        _cashflow_treasury_reconciliation,
+        build_cashflow_transfer_reconciliation,
+        normalize_cashflow_grouping,
+    )
 
     grouping = normalize_cashflow_grouping(group_by)
     periods = _cashflow_periods(period_start, period_end, grouping)
@@ -1259,6 +1387,18 @@ def _cashflow_daily_rollup(
     if child_details_prepared:
         totals["internal_transfer_count"] = len(transfer_details)
         totals["category_review_count"] = len(review)
+    drilldown_version = int(payload.get("drilldown_details_version", 0) or 0)
+    drilldown_prepared = bool(payload.get("drilldown_details_prepared")) and drilldown_version >= CASHFLOW_DRILLDOWN_DETAILS_VERSION
+    ledger_rollups = (
+        _cashflow_rollup_ledger_details(payload, periods)
+        if drilldown_prepared
+        else pd.DataFrame()
+    )
+    drilldown_controls = (
+        _build_cashflow_drilldown_controls(category_totals, ledger_rollups, tolerance=DEFAULT_TOLERANCE)
+        if drilldown_prepared
+        else {}
+    )
     months = [
         str(period)
         for period in pd.period_range(pd.Timestamp(period_start).to_period("M"), pd.Timestamp(period_end).to_period("M"), freq="M")
@@ -1285,6 +1425,10 @@ def _cashflow_daily_rollup(
         "receipt_presentation": payload.get("receipt_presentation") or "net",
         "child_details_prepared": child_details_prepared,
         "child_details_version": child_details_version,
+        "cashflow_ledger_rollups": ledger_rollups,
+        "cashflow_drilldown_controls": drilldown_controls,
+        "cashflow_drilldown_prepared": drilldown_prepared,
+        "drilldown_details_version": drilldown_version,
     }
 
 
@@ -1405,6 +1549,8 @@ def load_cashflow_prepared_summary(
         "treasury_totals_version": int(summary.get("treasury_totals_version", 0) or 0),
         "child_details_prepared": bool(summary.get("child_details_prepared")),
         "child_details_version": int(summary.get("child_details_version", 0) or 0),
+        "drilldown_details_prepared": bool(summary.get("cashflow_drilldown_prepared")),
+        "drilldown_details_version": int(summary.get("drilldown_details_version", 0) or 0),
         "classification_configuration_version": rows[0].get("configuration_version"),
         "cashflow_report_revision": max(int(rows[0].get("report_revision") or 1), 1),
         "summary_read_model_created_at": rows[0].get("created_at"),
@@ -1473,7 +1619,11 @@ def prepare_cashflow_summary_snapshot(
         receipt_presentation=configuration["receipt_presentation"],
         cashflow_role_categories=configuration["customer_payment_roles"],
         group_by="day",
+        include_drilldown=True,
     )
+    valid, reason = _cashflow_drilldown_integrity(summary)
+    if not valid:
+        return {"status": "skipped", "reason": reason}
     store_cashflow_summary_read_model(
         client_id,
         journal_template_id=int(template_id),
@@ -1580,6 +1730,8 @@ def load_cashflow_summary_read_model(
         "treasury_totals_version": int(payload.get("treasury_totals_version", 0) or 0),
         "child_details_prepared": bool(payload.get("child_details_prepared")),
         "child_details_version": int(payload.get("child_details_version", 0) or 0),
+        "drilldown_details_prepared": drilldown_prepared,
+        "drilldown_details_version": drilldown_version,
         "classification_configuration_version": rows[0].get("configuration_version"),
         "cashflow_report_revision": max(int(rows[0].get("report_revision") or 1), 1),
         "summary_read_model_created_at": rows[0].get("created_at"),

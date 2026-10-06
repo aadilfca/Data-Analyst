@@ -44,7 +44,7 @@ One line per file group: what it is now. Full build history for every entry live
 - static/search_index.js → deleted; feature registry merged into `NAV_MANIFEST` in `client_context.js` — do not recreate. See CHANGELOG_ARCHIVE.md.
 - static/loading_ui.js → shared `window.LoadingUI` primitives, including token-based target-aware global progress-cursor ownership. See CHANGELOG_ARCHIVE.md.
 - static/api_utils.js → shared `apiFetch()` (GET debounce/retry) and `apiFetchMutate()` (non-retried writes, optional Loading UI); warning-only direct-`/api/` fetch guard; partial rollout. See CHANGELOG_ARCHIVE.md.
-- services/ledger_group_summary.py + ledger_report_source.py → pure summary engine and stored Client Data/report-category adapter. See CHANGELOG_ARCHIVE.md.
+- services/ledger_group_summary.py + ledger_report_source.py -> pure summary engine, SQL-first stored-data adapter, and validated upload-time Cashflows ledger rollups. See CHANGELOG_ARCHIVE.md.
 - services/cash_bank_classification.py + scripts/backfill_cash_bank_transaction_classifications.py -> versioned derived Cash/Bank lines, Cash Flow category resolution, upload/backfill application, and audited reclassification without raw-row mutation. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_xlsx.py → static Bank/Cash workbook exporter for summaries, schedules, reviews, cross-checks, and reconciliation proofs. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_balance_source.py → validates stored opening/month-end balances and converts them to reconciliation-engine inputs. See CHANGELOG_ARCHIVE.md.
@@ -221,6 +221,7 @@ One line per file group: what it is now. Full build history for every entry live
 - 2026-10-06: Added source-identity Cashflows label backfill with prepared-snapshot invalidation.
 - 2026-10-06: New Cashflows classification rows now carry a derived account label with backward-compatible SQL fallback.
 - 2026-10-06: Cashflows wide reports now expose a compact accessible draggable scrollbar while visible.
+- 2026-10-06: Cashflows Phase 3 now prepares validated account rollups at upload-time and reuses them across reporting periods with safe fallback.
 
 Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; performance findings also reference the investigation documents.
 - 2026-07-09/20: Upload, Verification, Audit Rules, quick navigation, and shared date-import groundwork shipped.

@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Cashflows upload-time prepared ledger drilldown - Phase 3 - 2026-10-06
+
+- Daily Cashflows snapshots now prepare account-code ledger rollups with Cash/Bank type, amount, and line count; prepared loaders re-bucket them safely for requested periods.
+- Snapshot storage is gated by duplicate-key, numeric, category-total, and Cash/Bank split controls; invalid detail falls back to the canonical source build.
+- Verification: focused Cashflows/source/reconciliation suite passed 121 tests; no schema or browser changes were introduced.
+
 ## Cashflows account-label backfill - 2026-10-06
 
 - Added a dry-run-capable account-name-only backfill that updates blank derived labels by Client Data row identity, invalidates prepared snapshots, and leaves raw rows and accounting values unchanged.
