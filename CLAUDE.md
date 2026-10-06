@@ -222,6 +222,7 @@ One line per file group: what it is now. Full build history for every entry live
 - 2026-10-06: New Cashflows classification rows now carry a derived account label with backward-compatible SQL fallback.
 - 2026-10-06: Cashflows wide reports now expose a compact accessible draggable scrollbar while visible.
 - 2026-10-06: Cashflows Phase 3 now prepares validated account rollups at upload-time and reuses them across reporting periods with safe fallback.
+- 2026-10-06: Cashflows summary loads now skip unused ledger hydration; supplied trace confirms successful lazy drilldown requests.
 
 Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; performance findings also reference the investigation documents.
 - 2026-07-09/20: Upload, Verification, Audit Rules, quick navigation, and shared date-import groundwork shipped.

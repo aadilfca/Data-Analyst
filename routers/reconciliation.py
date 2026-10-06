@@ -1421,6 +1421,7 @@ def _build_cashflow_result(
     configured_template_id = configuration.get("source_template_id")
     report_revision = max(int(configuration.get("cashflow_report_revision") or 1), 1)
     diagnostics: list[dict[str, Any]] = []
+    include_drilldown = bool(detail_sections and "drilldown" in detail_sections)
     source_started = perf_counter()
     cache_mode = "not_requested"
     cached_summary = None
@@ -1436,6 +1437,7 @@ def _build_cashflow_result(
                 receipt_presentation=configuration["receipt_presentation"],
                 report_revision=report_revision,
                 query_fn=execute_query_pg,
+                include_drilldown=include_drilldown,
             )
             if not _cashflow_cache_can_serve_details(cached_summary, detail_sections, treasury_view):
                 cached_summary = None
@@ -1452,6 +1454,7 @@ def _build_cashflow_result(
                 receipt_presentation=configuration["receipt_presentation"],
                 report_revision=report_revision,
                 query_fn=execute_query_pg,
+                include_drilldown=include_drilldown,
             )
             if not _cashflow_cache_can_serve_details(cached_summary, detail_sections, treasury_view):
                 cached_summary = None

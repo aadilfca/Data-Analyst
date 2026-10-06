@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Cashflows lazy drilldown hydration - Phase 4 - 2026-10-06
+
+- Summary-only prepared loads now skip account-ledger DataFrame materialization; drilldown requests retain validated prepared rollups and integrity behavior.
+- Verification: focused performance/reconciliation tests passed 45/45; broader Cashflows/source/reconciliation suite passed 121/121; no schema or frontend changes.
+- Supplied WebInspector trace: five successful lazy drilldown requests averaged 2.99 seconds; no summary-preview request was captured, so summary latency reduction is not directly measurable from this trace.
+
 ## Cashflows upload-time prepared ledger drilldown - Phase 3 - 2026-10-06
 
 - Daily Cashflows snapshots now prepare account-code ledger rollups with Cash/Bank type, amount, and line count; prepared loaders re-bucket them safely for requested periods.

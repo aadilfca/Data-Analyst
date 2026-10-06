@@ -1126,7 +1126,12 @@ def _cashflow_summary_payload(summary: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _cashflow_summary_from_payload(payload: Mapping[str, Any], group_by: str) -> dict[str, Any]:
+def _cashflow_summary_from_payload(
+    payload: Mapping[str, Any],
+    group_by: str,
+    *,
+    include_drilldown: bool = True,
+) -> dict[str, Any]:
     from services.ledger_group_summary import build_cashflow_transfer_reconciliation
 
     periods = [dict(period) for period in payload.get("periods", [])]
@@ -1152,7 +1157,11 @@ def _cashflow_summary_from_payload(payload: Mapping[str, Any], group_by: str) ->
     transfer_details = _cashflow_detail_frame(payload, "transfer_details") if child_details_prepared else pd.DataFrame()
     customer_payment_details = _cashflow_detail_frame(payload, "customer_payment_details") if child_details_prepared else pd.DataFrame()
     drilldown_version = int(payload.get("drilldown_details_version", 0) or 0)
-    drilldown_prepared = bool(payload.get("drilldown_details_prepared")) and drilldown_version >= CASHFLOW_DRILLDOWN_DETAILS_VERSION
+    drilldown_prepared = (
+        include_drilldown
+        and bool(payload.get("drilldown_details_prepared"))
+        and drilldown_version >= CASHFLOW_DRILLDOWN_DETAILS_VERSION
+    )
     return {
         "months": [str(month) for month in payload.get("months", [])],
         "periods": periods,
@@ -1298,6 +1307,8 @@ def _cashflow_daily_rollup(
     period_start: Any,
     period_end: Any,
     group_by: str,
+    *,
+    include_drilldown: bool = True,
 ) -> dict[str, Any]:
     from services.ledger_group_summary import (
         DEFAULT_TOLERANCE,
@@ -1388,7 +1399,11 @@ def _cashflow_daily_rollup(
         totals["internal_transfer_count"] = len(transfer_details)
         totals["category_review_count"] = len(review)
     drilldown_version = int(payload.get("drilldown_details_version", 0) or 0)
-    drilldown_prepared = bool(payload.get("drilldown_details_prepared")) and drilldown_version >= CASHFLOW_DRILLDOWN_DETAILS_VERSION
+    drilldown_prepared = (
+        include_drilldown
+        and bool(payload.get("drilldown_details_prepared"))
+        and drilldown_version >= CASHFLOW_DRILLDOWN_DETAILS_VERSION
+    )
     ledger_rollups = (
         _cashflow_rollup_ledger_details(payload, periods)
         if drilldown_prepared
@@ -1480,6 +1495,7 @@ def load_cashflow_prepared_summary(
     receipt_presentation: str,
     report_revision: int | None = None,
     query_fn: Callable[..., list[dict[str, Any]]] = execute_query_pg,
+    include_drilldown: bool = False,
 ) -> dict[str, Any] | None:
     """Roll a full-range daily snapshot into the requested report periods."""
     if journal_template_id is None:
@@ -1526,7 +1542,13 @@ def load_cashflow_prepared_summary(
     payload = _cashflow_json_value(rows[0].get("summary_payload"))
     if not isinstance(payload, Mapping):
         return None
-    summary = _cashflow_daily_rollup(payload, period_start, period_end, group_by)
+    summary = _cashflow_daily_rollup(
+        payload,
+        period_start,
+        period_end,
+        group_by,
+        include_drilldown=include_drilldown,
+    )
     metadata = {
         "client_id": client_id,
         "journal_template_id": journal_template_id,
@@ -1648,6 +1670,7 @@ def load_cashflow_summary_read_model(
     receipt_presentation: str,
     report_revision: int | None = None,
     query_fn: Callable[..., list[dict[str, Any]]] = execute_query_pg,
+    include_drilldown: bool = False,
 ) -> dict[str, Any] | None:
     """Load an exact summary-only snapshot when the source/configuration is unchanged."""
     if journal_template_id is None:
@@ -1697,11 +1720,15 @@ def load_cashflow_summary_read_model(
             return None
     if not isinstance(payload, Mapping):
         return None
-    summary = _cashflow_summary_from_payload(payload, group_by)
+    summary = _cashflow_summary_from_payload(payload, group_by, include_drilldown=include_drilldown)
     drilldown_version = int(payload.get('drilldown_details_version', 0) or 0)
-    drilldown_prepared = bool(payload.get('drilldown_details_prepared')) and drilldown_version >= CASHFLOW_DRILLDOWN_DETAILS_VERSION
+    drilldown_prepared = (
+        include_drilldown
+        and bool(payload.get('drilldown_details_prepared'))
+        and drilldown_version >= CASHFLOW_DRILLDOWN_DETAILS_VERSION
+    )
     summary['cashflow_ledger_rollups'] = (
-        _cashflow_detail_frame(payload, 'cashflow_ledger_rollups') if drilldown_prepared else pd.DataFrame()
+        _cashflow_detail_frame(payload, 'cashflow_ledger_rollups') if include_drilldown and drilldown_prepared else pd.DataFrame()
     )
     summary['cashflow_drilldown_controls'] = payload.get('cashflow_drilldown_controls') or {}
     summary['cashflow_drilldown_prepared'] = drilldown_prepared

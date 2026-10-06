@@ -937,8 +937,8 @@ def test_cashflows_preview_uses_prepared_snapshot_when_exact_cache_misses():
     with (
         patch.object(reconciliation, "_require_active_client"),
         patch.object(reconciliation, "_cashflow_configuration", return_value=configuration),
-        patch.object(reconciliation, "load_cashflow_summary_read_model", return_value=None),
-        patch.object(reconciliation, "load_cashflow_prepared_summary", return_value=cached),
+        patch.object(reconciliation, "load_cashflow_summary_read_model", return_value=None) as exact_read_model,
+        patch.object(reconciliation, "load_cashflow_prepared_summary", return_value=cached) as prepared_snapshot,
         patch.object(reconciliation, "load_ledger_report_source") as loader,
     ):
         response = reconciliation.preview_cashflows(
@@ -951,6 +951,8 @@ def test_cashflows_preview_uses_prepared_snapshot_when_exact_cache_misses():
         )
 
     loader.assert_not_called()
+    assert exact_read_model.call_args.kwargs["include_drilldown"] is False
+    assert prepared_snapshot.call_args.kwargs["include_drilldown"] is False
     assert response["preview"]["category_totals"][0]["2026-Q1"] == 125.0
     assert response["cashflow_report_revision"] == 7
 
@@ -1088,8 +1090,8 @@ def test_cashflow_drilldown_logs_endpoint_timing(caplog):
         caplog.at_level(logging.INFO, logger="routers.reconciliation"),
         patch.object(reconciliation, "_require_active_client"),
         patch.object(reconciliation, "_cashflow_configuration", return_value=configuration),
-        patch.object(reconciliation, "load_cashflow_summary_read_model", return_value=None),
-        patch.object(reconciliation, "load_cashflow_prepared_summary", return_value=None),
+        patch.object(reconciliation, "load_cashflow_summary_read_model", return_value=None) as exact_read_model,
+        patch.object(reconciliation, "load_cashflow_prepared_summary", return_value=None) as prepared_snapshot,
         patch.object(reconciliation, "load_ledger_report_source", return_value=_source()),
         patch.object(reconciliation, "build_cashflow_summary", return_value=summary),
         patch.object(reconciliation, "store_cashflow_summary_read_model"),
@@ -1121,6 +1123,8 @@ def test_cashflow_drilldown_logs_endpoint_timing(caplog):
     assert "cache_mode=source_rebuild" in message
     assert "cache_hit=False" in message
     assert "report_revision=1" in message
+    assert exact_read_model.call_args.kwargs["include_drilldown"] is True
+    assert prepared_snapshot.call_args.kwargs["include_drilldown"] is True
     assert response["page_count"] == 1
 
 def test_cashflows_preview_accepts_combined_child_sections(caplog):

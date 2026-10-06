@@ -319,7 +319,17 @@ def test_cashflow_daily_rollup_prepares_ledger_details_for_target_periods():
     }
 
     summary = _cashflow_daily_rollup(payload, "2026-01-01", "2026-02-28", "month")
+    summary_only = _cashflow_daily_rollup(
+        payload,
+        "2026-01-01",
+        "2026-02-28",
+        "month",
+        include_drilldown=False,
+    )
     rollups = summary["cashflow_ledger_rollups"].set_index(["category", "period_key", "account_code"])
+
+    assert summary_only["cashflow_drilldown_prepared"] is False
+    assert summary_only["cashflow_ledger_rollups"].empty
 
     assert summary["cashflow_drilldown_prepared"] is True
     assert rollups.loc[("Operating", "2026-01", "EXP"), "amount"] == 100
@@ -332,8 +342,15 @@ def test_cashflow_daily_rollup_prepares_ledger_details_for_target_periods():
     payload_round_trip = _cashflow_summary_payload(summary)
     assert payload_round_trip["drilldown_details_version"] == CASHFLOW_DRILLDOWN_DETAILS_VERSION
     restored = _cashflow_summary_from_payload(payload_round_trip, "month")
+    restored_summary_only = _cashflow_summary_from_payload(
+        payload_round_trip,
+        "month",
+        include_drilldown=False,
+    )
     assert restored["cashflow_drilldown_prepared"] is True
     assert len(restored["cashflow_ledger_rollups"]) == 2
+    assert restored_summary_only["cashflow_drilldown_prepared"] is False
+    assert restored_summary_only["cashflow_ledger_rollups"].empty
 
 
 def test_cashflow_daily_rollup_preserves_treasury_totals_for_larger_periods():
