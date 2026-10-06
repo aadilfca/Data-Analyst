@@ -1,5 +1,13 @@
 # Changelog Archive
 
+## Cashflows Phase 6 verification - 2026-10-06
+
+**Scope:** Verify Cashflows calculations, period grains, Treasury views, revision/cache behavior, drill-down filters, exports, duplicate-voucher safety, and static UI contracts.
+
+**Verification:** The focused Cashflows acceptance suite passed 139/139 using an isolated pytest temporary directory. It covered cold/warm paths, backend changes and revision invalidation, daily through annual periods, Cash/Bank views, category/account/period filters, Clear, drill-down, XLSX parity, source normalization, and duplicate voucher IDs across uploads. The complete repository suite passed 488 tests; 17 failures were outside Cashflows in Verification, Audit Rules, Postgres bootstrap, Storage Cleanup, and Procedure Modal areas.
+
+**Pending:** Authenticated live-browser acceptance remains pending because the local Playwright context could not submit credentials without fresh authorization. No production code or accounting rule was changed in this verification phase.
+
 ## Cashflows maintenance observability and schema parity - 2026-10-05
 
 **Scope:** Make Cashflows performance evidence clearer and protect the SQLite/PostgreSQL schema contract without changing the fast-fetch or accounting paths.
