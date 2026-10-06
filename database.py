@@ -503,6 +503,7 @@ def init_db():
                 upload_id INTEGER NOT NULL,
                 voucher_id TEXT,
                 account_code TEXT,
+                account_name TEXT,
                 transaction_date TEXT,
                 transaction_month TEXT,
                 transaction_fortnight TEXT,
@@ -528,6 +529,8 @@ def init_db():
                 conn.execute("ALTER TABLE cash_bank_transaction_classifications ADD COLUMN transaction_month TEXT")
             if 'transaction_fortnight' not in columns:
                 conn.execute("ALTER TABLE cash_bank_transaction_classifications ADD COLUMN transaction_fortnight TEXT")
+            if 'account_name' not in columns:
+                conn.execute("ALTER TABLE cash_bank_transaction_classifications ADD COLUMN account_name TEXT")
         except Exception as error:
             print("⚠️ Could not add Cashflows period columns:", error)
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_date ON cash_bank_transaction_classifications (client_id, transaction_date, is_current)")
@@ -4190,6 +4193,7 @@ def _ensure_postgres_cash_bank_transaction_classifications(conn):
                 upload_id INTEGER NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
                 voucher_id TEXT,
                 account_code TEXT,
+                account_name TEXT,
                 transaction_date DATE,
                 transaction_month TEXT,
                 transaction_fortnight TEXT,
@@ -4207,6 +4211,7 @@ def _ensure_postgres_cash_bank_transaction_classifications(conn):
         ''')
         cur.execute("ALTER TABLE cash_bank_transaction_classifications ADD COLUMN IF NOT EXISTS transaction_month TEXT")
         cur.execute("ALTER TABLE cash_bank_transaction_classifications ADD COLUMN IF NOT EXISTS transaction_fortnight TEXT")
+        cur.execute("ALTER TABLE cash_bank_transaction_classifications ADD COLUMN IF NOT EXISTS account_name TEXT")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_date ON cash_bank_transaction_classifications (client_id, transaction_date, is_current)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_voucher ON cash_bank_transaction_classifications (client_id, voucher_id, is_current)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_account_date ON cash_bank_transaction_classifications (client_id, account_code, transaction_date, is_current)")
@@ -4474,6 +4479,7 @@ def init_db_postgres(conn):
             upload_id INTEGER NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
             voucher_id TEXT,
             account_code TEXT,
+            account_name TEXT,
             transaction_date DATE,
             debit NUMERIC NOT NULL DEFAULT 0,
             credit NUMERIC NOT NULL DEFAULT 0,
@@ -4489,6 +4495,7 @@ def init_db_postgres(conn):
     ''', "cash_bank_transaction_classifications")
     run("ALTER TABLE cash_bank_transaction_classifications ADD COLUMN IF NOT EXISTS transaction_month TEXT")
     run("ALTER TABLE cash_bank_transaction_classifications ADD COLUMN IF NOT EXISTS transaction_fortnight TEXT")
+    run("ALTER TABLE cash_bank_transaction_classifications ADD COLUMN IF NOT EXISTS account_name TEXT")
     run("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_date ON cash_bank_transaction_classifications (client_id, transaction_date, is_current)")
     run("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_voucher ON cash_bank_transaction_classifications (client_id, voucher_id, is_current)")
     run("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_account_date ON cash_bank_transaction_classifications (client_id, account_code, transaction_date, is_current)")

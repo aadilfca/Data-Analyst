@@ -118,6 +118,7 @@ def test_cashflow_sql_source_filters_dates_joins_vouchers_and_aggregates_lines()
     assert "selected_vouchers" in source_sql
     assert "GROUP BY l.upload_id, l.voucher_id, l.date, l.account_code" in source_sql
     assert "c.transaction_date AS date" in source_sql
+    assert "c.account_name" in source_sql
     assert "FROM client_data cd" in source_sql
     assert source_params == (7, [12], "2026-01-01", "2026-01-31")
 

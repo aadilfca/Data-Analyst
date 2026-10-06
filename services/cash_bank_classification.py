@@ -27,6 +27,9 @@ _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
         "account detail", "account code", "account_code", "account no",
         "account number", "code", "ledger code", "account head", "ledger detail",
     ),
+    "account_name": (
+        "account name", "account title", "ledger name", "particulars",
+    ),
     "transaction_date": (
         "date", "transaction date", "voucher date", "posting date",
     ),
@@ -173,6 +176,8 @@ def build_classification_row(
     """Build one derived row without modifying the source row."""
     row_data = _decode_row_data(source_row.get("row_data"))
     account_code = _canonical_code(_field_value(row_data, "account_code"))
+    # Keep the display label in the derived layer so report reads avoid repeated JSONB extraction.
+    account_name = _text(_field_value(row_data, "account_name"))
     voucher_id = _text(_field_value(row_data, "voucher_id"))
     transaction_date = _parse_date(_field_value(row_data, "transaction_date"))
     if transaction_date is None:
@@ -200,6 +205,7 @@ def build_classification_row(
         "upload_id": int(source_row["upload_id"]),
         "voucher_id": voucher_id or None,
         "account_code": account_code or None,
+        "account_name": account_name or None,
         "transaction_date": transaction_date,
         "transaction_month": transaction_month,
         "transaction_fortnight": transaction_fortnight,
@@ -399,6 +405,7 @@ def upsert_classification_rows_postgres(
             row["upload_id"],
             row["voucher_id"],
             row["account_code"],
+            row["account_name"],
             row["transaction_date"],
             row["transaction_month"],
             row["transaction_fortnight"],
@@ -418,7 +425,7 @@ def upsert_classification_rows_postgres(
             """
             INSERT INTO cash_bank_transaction_classifications (
                 client_data_id, client_id, template_id, upload_id,
-                voucher_id, account_code, transaction_date, transaction_month, transaction_fortnight, debit, credit,
+                voucher_id, account_code, account_name, transaction_date, transaction_month, transaction_fortnight, debit, credit,
                 treasury_type, treasury_account_code, configuration_version,
                 classification_status, is_current
             ) VALUES %s
@@ -429,6 +436,7 @@ def upsert_classification_rows_postgres(
                 upload_id = EXCLUDED.upload_id,
                 voucher_id = EXCLUDED.voucher_id,
                 account_code = EXCLUDED.account_code,
+                account_name = EXCLUDED.account_name,
                 transaction_date = EXCLUDED.transaction_date,
                 transaction_month = EXCLUDED.transaction_month,
                 transaction_fortnight = EXCLUDED.transaction_fortnight,
@@ -466,6 +474,29 @@ class BackfillSummary:
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass
+class AccountNameBackfillSummary:
+    backend: str
+    dry_run: bool
+    client_ids: list[int]
+    candidate_rows: int = 0
+    would_update_rows: int = 0
+    updated_rows: int = 0
+    missing_source_names: int = 0
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def _source_account_name(source_row: Mapping[str, Any]) -> str:
+    try:
+        payload = source_row.get("row_data")
+    except AttributeError:
+        payload = source_row["row_data"]
+    row_data = _decode_row_data(payload)
+    return _text(_field_value(row_data, "account_name"))
 
 
 def load_cashflow_classification_preview(
@@ -717,10 +748,10 @@ def backfill_sqlite(
     insert_sql = """
         INSERT OR IGNORE INTO cash_bank_transaction_classifications (
             client_data_id, client_id, template_id, upload_id,
-            voucher_id, account_code, transaction_date, transaction_month, transaction_fortnight, debit, credit,
+            voucher_id, account_code, account_name, transaction_date, transaction_month, transaction_fortnight, debit, credit,
             treasury_type, treasury_account_code, configuration_version,
             classification_status, is_current
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
 
     for current_client_id in client_ids:
@@ -782,6 +813,7 @@ def backfill_sqlite(
                                 row["upload_id"],
                                 row["voucher_id"],
                                 row["account_code"],
+                                row["account_name"],
                                 row["transaction_date"],
                                 row["transaction_month"],
                                 row["transaction_fortnight"],
@@ -831,7 +863,7 @@ def backfill_postgres(
     insert_sql = """
         INSERT INTO cash_bank_transaction_classifications (
             client_data_id, client_id, template_id, upload_id,
-            voucher_id, account_code, transaction_date, transaction_month, transaction_fortnight, debit, credit,
+            voucher_id, account_code, account_name, transaction_date, transaction_month, transaction_fortnight, debit, credit,
             treasury_type, treasury_account_code, configuration_version,
             classification_status, is_current
         ) VALUES %s
@@ -905,6 +937,7 @@ def backfill_postgres(
                                     row["upload_id"],
                                     row["voucher_id"],
                                     row["account_code"],
+                                    row["account_name"],
                                     row["transaction_date"],
                                     row["transaction_month"],
                                     row["transaction_fortnight"],
@@ -922,6 +955,134 @@ def backfill_postgres(
                         )
                         conn.commit()
                         summary.inserted_rows += len(insert_rows)
+    except Exception:
+        conn.rollback()
+        raise
+
+    return summary
+
+
+def backfill_account_names_sqlite(
+    conn: Any,
+    *,
+    client_id: int | None = None,
+    batch_size: int = 500,
+    dry_run: bool = False,
+) -> AccountNameBackfillSummary:
+    """Fill missing derived account labels without reclassifying transaction rows."""
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    client_ids = _client_ids_sqlite(conn, client_id)
+    summary = AccountNameBackfillSummary("sqlite", dry_run, client_ids)
+
+    for current_client_id in client_ids:
+        source_cursor = conn.execute(
+            """
+            SELECT c.client_data_id, cd.row_data
+            FROM cash_bank_transaction_classifications c
+            JOIN client_data cd ON cd.id = c.client_data_id
+            WHERE c.client_id = ?
+              AND c.is_current = 1
+              AND cd.is_deleted = 0
+              AND NULLIF(TRIM(c.account_name), '') IS NULL
+            ORDER BY c.client_data_id
+            """,
+            (current_client_id,),
+        )
+        while True:
+            source_rows = source_cursor.fetchmany(batch_size)
+            if not source_rows:
+                break
+            updates = []
+            for source_row in source_rows:
+                summary.candidate_rows += 1
+                account_name = _source_account_name(source_row)
+                if not account_name:
+                    summary.missing_source_names += 1
+                    continue
+                summary.would_update_rows += 1
+                updates.append((account_name, int(source_row["client_data_id"])))
+
+            if not dry_run and updates:
+                conn.executemany(
+                    """
+                    UPDATE cash_bank_transaction_classifications
+                    SET account_name = ?
+                    WHERE client_data_id = ?
+                      AND is_current = 1
+                      AND NULLIF(TRIM(account_name), '') IS NULL
+                    """,
+                    updates,
+                )
+                conn.commit()
+                summary.updated_rows += len(updates)
+
+    return summary
+
+
+def backfill_account_names_postgres(
+    conn: Any,
+    *,
+    client_id: int | None = None,
+    batch_size: int = 500,
+    dry_run: bool = False,
+) -> AccountNameBackfillSummary:
+    """Fill missing derived account labels without reclassifying transaction rows."""
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    client_ids = _client_ids_postgres(conn, client_id)
+    summary = AccountNameBackfillSummary("postgres", dry_run, client_ids)
+    update_sql = """
+        UPDATE cash_bank_transaction_classifications AS c
+        SET account_name = updates.account_name
+        FROM (VALUES %s) AS updates(client_data_id, account_name)
+        WHERE c.client_data_id = updates.client_data_id
+          AND c.is_current = TRUE
+          AND NULLIF(BTRIM(c.account_name), '') IS NULL
+    """
+
+    try:
+        for current_client_id in client_ids:
+            with (
+                conn.cursor(cursor_factory=RealDictCursor) as source_cursor,
+                conn.cursor(cursor_factory=RealDictCursor) as update_cursor,
+            ):
+                source_cursor.execute(
+                    """
+                    SELECT c.client_data_id, cd.row_data
+                    FROM cash_bank_transaction_classifications c
+                    JOIN client_data cd ON cd.id = c.client_data_id
+                    WHERE c.client_id = %s
+                      AND c.is_current = TRUE
+                      AND cd.is_deleted = FALSE
+                      AND NULLIF(BTRIM(c.account_name), '') IS NULL
+                    ORDER BY c.client_data_id
+                    """,
+                    (current_client_id,),
+                )
+                while True:
+                    source_rows = source_cursor.fetchmany(batch_size)
+                    if not source_rows:
+                        break
+                    updates = []
+                    for source_row in source_rows:
+                        summary.candidate_rows += 1
+                        account_name = _source_account_name(source_row)
+                        if not account_name:
+                            summary.missing_source_names += 1
+                            continue
+                        summary.would_update_rows += 1
+                        updates.append((int(source_row["client_data_id"]), account_name))
+
+                    if not dry_run and updates:
+                        execute_values(
+                            update_cursor,
+                            update_sql,
+                            updates,
+                            page_size=batch_size,
+                        )
+                        conn.commit()
+                        summary.updated_rows += len(updates)
     except Exception:
         conn.rollback()
         raise

@@ -1674,15 +1674,17 @@ def load_cashflow_sql_source(
                 c.voucher_id,
                 c.transaction_date AS date,
                 c.account_code,
-                c.transaction_month,
-                c.transaction_fortnight,
+                -- New derived rows carry the label; the JSONB fallback keeps older rows compatible.
                 COALESCE(
-                    cd.row_data ->> 'Account Name',
-                    cd.row_data ->> 'Account Title',
-                    cd.row_data ->> 'Ledger Name',
-                    cd.row_data ->> 'Particulars',
+                    NULLIF(BTRIM(c.account_name), ''),
+                    NULLIF(BTRIM(cd.row_data ->> 'Account Name'), ''),
+                    NULLIF(BTRIM(cd.row_data ->> 'Account Title'), ''),
+                    NULLIF(BTRIM(cd.row_data ->> 'Ledger Name'), ''),
+                    NULLIF(BTRIM(cd.row_data ->> 'Particulars'), ''),
                     ''
                 ) AS account_name,
+                c.transaction_month,
+                c.transaction_fortnight,
                 COALESCE(
                     cd.row_data ->> 'Voucher Detail',
                     cd.row_data ->> 'Detail',

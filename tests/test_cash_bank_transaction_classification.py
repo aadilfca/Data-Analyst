@@ -69,6 +69,7 @@ class CashBankTransactionClassificationSchemaTests(unittest.TestCase):
                     "client_data_id",
                     "voucher_id",
                     "account_code",
+                    "account_name",
                     "transaction_date",
                     "debit",
                     "credit",

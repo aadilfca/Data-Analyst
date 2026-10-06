@@ -6,6 +6,8 @@ import unittest
 
 import database
 from services.cash_bank_classification import (
+    backfill_account_names_postgres,
+    backfill_account_names_sqlite,
     backfill_postgres,
     backfill_sqlite,
     build_classification_row,
@@ -32,6 +34,9 @@ class _PostgresBackfillCursor:
         elif "SELECT id, client_id, template_id, upload_id" in statement:
             self.mode = "source"
             self.source_index = 0
+        elif "SELECT c.client_data_id" in statement:
+            self.mode = "account_names"
+            self.source_index = 0
         elif "SELECT client_data_id" in statement:
             self.mode = "existing"
             self.rows = []
@@ -42,6 +47,13 @@ class _PostgresBackfillCursor:
         return self.rows
 
     def fetchmany(self, size):
+        if self.mode == "account_names":
+            batch = self.source_rows[self.source_index:self.source_index + size]
+            self.source_index += len(batch)
+            return [
+                {"client_data_id": row["id"], "row_data": row["row_data"]}
+                for row in batch
+            ]
         if self.mode != "source":
             return []
         batch = self.source_rows[self.source_index:self.source_index + size]
@@ -123,6 +135,7 @@ class CashBankTransactionBackfillTests(unittest.TestCase):
         source_rows = [
             {
                 "Voucher ID": "V-001",
+                "Account Name": "Cash account",
                 "Account Detail": "1000",
                 "Date": "2024-01-02",
                 "Debit Amount": "100.50",
@@ -130,6 +143,7 @@ class CashBankTransactionBackfillTests(unittest.TestCase):
             },
             {
                 "Voucher ID": "V-001",
+                "Account Name": "Bank account",
                 "Account Detail": "2000",
                 "Date": "2024-01-02",
                 "Debit Amount": "0",
@@ -137,6 +151,7 @@ class CashBankTransactionBackfillTests(unittest.TestCase):
             },
             {
                 "Voucher ID": "V-002",
+                "Account Name": "Expense account",
                 "Account Detail": "3000",
                 "Date": "2024-01-03",
                 "Debit Amount": "25",
@@ -190,7 +205,7 @@ class CashBankTransactionBackfillTests(unittest.TestCase):
 
         rows = self.connection.execute(
             """
-            SELECT voucher_id, account_code, transaction_month, transaction_fortnight,
+            SELECT voucher_id, account_code, account_name, transaction_month, transaction_fortnight,
                    treasury_type, classification_status, debit, credit, configuration_version
             FROM cash_bank_transaction_classifications
             ORDER BY client_data_id
@@ -200,6 +215,7 @@ class CashBankTransactionBackfillTests(unittest.TestCase):
         self.assertEqual(dict(rows[0]), {
             "voucher_id": "V-001",
             "account_code": "1000",
+            "account_name": "Cash account",
             "transaction_month": "2024-01",
             "transaction_fortnight": "2024-01-F1",
             "treasury_type": "cash",
@@ -212,6 +228,63 @@ class CashBankTransactionBackfillTests(unittest.TestCase):
         self.assertEqual(rows[2]["classification_status"], "non_treasury")
         self.assertEqual(rows[3]["classification_status"], "unmapped")
 
+        after = self.connection.execute(
+            "SELECT id, row_data FROM client_data ORDER BY id"
+        ).fetchall()
+        self.assertEqual([tuple(row) for row in before], [tuple(row) for row in after])
+
+    def test_account_name_backfill_updates_only_blank_labels(self):
+        backfill_sqlite(
+            self.connection,
+            client_id=self.client_id,
+            configuration_version=1,
+        )
+        self.connection.execute(
+            "UPDATE cash_bank_transaction_classifications SET account_name = NULL WHERE client_data_id = 1"
+        )
+        self.connection.execute(
+            "UPDATE cash_bank_transaction_classifications SET account_name = ? WHERE client_data_id = 2",
+            ("Preserved bank label",),
+        )
+        self.connection.commit()
+        before = self.connection.execute(
+            "SELECT id, row_data FROM client_data ORDER BY id"
+        ).fetchall()
+
+        dry_run = backfill_account_names_sqlite(
+            self.connection,
+            client_id=self.client_id,
+            batch_size=2,
+            dry_run=True,
+        )
+        self.assertEqual(dry_run.candidate_rows, 2)
+        self.assertEqual(dry_run.would_update_rows, 1)
+        self.assertEqual(dry_run.updated_rows, 0)
+        self.assertEqual(dry_run.missing_source_names, 1)
+        self.assertIsNone(
+            self.connection.execute(
+                "SELECT account_name FROM cash_bank_transaction_classifications WHERE client_data_id = 1"
+            ).fetchone()[0]
+        )
+
+        updated = backfill_account_names_sqlite(
+            self.connection,
+            client_id=self.client_id,
+            batch_size=2,
+        )
+        self.assertEqual(updated.updated_rows, 1)
+        self.assertEqual(
+            self.connection.execute(
+                "SELECT account_name FROM cash_bank_transaction_classifications WHERE client_data_id = 1"
+            ).fetchone()[0],
+            "Cash account",
+        )
+        self.assertEqual(
+            self.connection.execute(
+                "SELECT account_name FROM cash_bank_transaction_classifications WHERE client_data_id = 2"
+            ).fetchone()[0],
+            "Preserved bank label",
+        )
         after = self.connection.execute(
             "SELECT id, row_data FROM client_data ORDER BY id"
         ).fetchall()
@@ -276,6 +349,33 @@ class CashBankTransactionBackfillTests(unittest.TestCase):
             ).fetchone()[0],
             0,
         )
+
+    def test_postgres_account_name_backfill_dry_run_uses_source_identity(self):
+        source_rows = [
+            {
+                "id": index,
+                "row_data": {
+                    "Account Name": "Account " + str(index),
+                },
+            }
+            for index in (1, 2, 3)
+        ]
+        source_rows.append({"id": 4, "row_data": {}})
+        connection = _PostgresBackfillConnection(source_rows)
+
+        summary = backfill_account_names_postgres(
+            connection,
+            client_id=7,
+            batch_size=2,
+            dry_run=True,
+        )
+
+        self.assertEqual(summary.candidate_rows, 4)
+        self.assertEqual(summary.would_update_rows, 3)
+        self.assertEqual(summary.updated_rows, 0)
+        self.assertEqual(summary.missing_source_names, 1)
+        self.assertEqual(connection.commit_count, 0)
+        self.assertEqual(connection.rollback_count, 0)
 
     def test_postgres_backfill_keeps_source_cursor_across_batches(self):
         source_rows = [

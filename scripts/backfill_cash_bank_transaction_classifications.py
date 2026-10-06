@@ -4,6 +4,7 @@ Examples:
     python scripts/backfill_cash_bank_transaction_classifications.py --dry-run
     python scripts/backfill_cash_bank_transaction_classifications.py --client-id 7
     python scripts/backfill_cash_bank_transaction_classifications.py --backend postgres --dry-run
+    python scripts/backfill_cash_bank_transaction_classifications.py --account-name-only --dry-run
 """
 
 from __future__ import annotations
@@ -21,7 +22,12 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import database
-from services.cash_bank_classification import backfill_postgres, backfill_sqlite
+from services.cash_bank_classification import (
+    backfill_account_names_postgres,
+    backfill_account_names_sqlite,
+    backfill_postgres,
+    backfill_sqlite,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -32,6 +38,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--configuration-version", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=500)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--account-name-only",
+        action="store_true",
+        help="Fill blank derived account labels without reclassifying transaction rows.",
+    )
     parser.add_argument(
         "--backend",
         choices=("sqlite", "postgres"),
@@ -53,25 +64,41 @@ def main() -> int:
             raise SystemExit("--backend postgres requires DATABASE_URL")
         conn = database.get_raw_conn_pg()
         try:
-            summary = backfill_postgres(
-                conn,
-                client_id=args.client_id,
-                configuration_version=args.configuration_version,
-                batch_size=args.batch_size,
-                dry_run=args.dry_run,
-            )
+            if args.account_name_only:
+                summary = backfill_account_names_postgres(
+                    conn,
+                    client_id=args.client_id,
+                    batch_size=args.batch_size,
+                    dry_run=args.dry_run,
+                )
+            else:
+                summary = backfill_postgres(
+                    conn,
+                    client_id=args.client_id,
+                    configuration_version=args.configuration_version,
+                    batch_size=args.batch_size,
+                    dry_run=args.dry_run,
+                )
         finally:
             database.release_raw_conn_pg(conn)
     else:
         conn = database.get_raw_conn()
         try:
-            summary = backfill_sqlite(
-                conn,
-                client_id=args.client_id,
-                configuration_version=args.configuration_version,
-                batch_size=args.batch_size,
-                dry_run=args.dry_run,
-            )
+            if args.account_name_only:
+                summary = backfill_account_names_sqlite(
+                    conn,
+                    client_id=args.client_id,
+                    batch_size=args.batch_size,
+                    dry_run=args.dry_run,
+                )
+            else:
+                summary = backfill_sqlite(
+                    conn,
+                    client_id=args.client_id,
+                    configuration_version=args.configuration_version,
+                    batch_size=args.batch_size,
+                    dry_run=args.dry_run,
+                )
         finally:
             conn.close()
 

@@ -114,6 +114,7 @@ class UploadClassificationTests(unittest.TestCase):
             "row_data": {
                 "Voucher ID": "V-7",
                 "Account Detail": "1000",
+                "Account Name": "Cash in hand",
                 "Date": "2024-01-02",
                 "Debit Amount": "25.50",
                 "Credit Amount": "0",
@@ -135,6 +136,7 @@ class UploadClassificationTests(unittest.TestCase):
         sql = execute_values.call_args.args[1]
         self.assertIn("ON CONFLICT (client_data_id, configuration_version)", sql)
         self.assertEqual(derived[0]["classification_status"], "cash")
+        self.assertEqual(derived[0]["account_name"], "Cash in hand")
         self.assertEqual(source_row["row_data"], original_payload)
         self.assertEqual(connection.commit_count, 0)
 
