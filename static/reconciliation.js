@@ -16,6 +16,7 @@
     let cashflowSelectedPeriods = [];
     let cashflowPickerView = null;
     let cashflowToastTimer = null;
+    let cashflowFreshnessAlertTimer = null;
     let cashflowProcessingControls = [];
     let cashflowSummaryFilter = '';
     let hideCashflowZeroRows = true;
@@ -932,7 +933,8 @@
     }
     function renderCashflowFreshness(result) {
         const status = element("cashflowsFreshnessStatus");
-        if (!status) return;
+        const alert = element("cashflowsFreshnessAlert");
+        if (!status || !alert) return;
         const freshness = result && result.freshness || {};
         const revision = Number(freshness.report_revision || cashflowReportRevision || 0);
         const generatedAt = freshness.generated_at ? new Date(freshness.generated_at) : null;
@@ -941,6 +943,29 @@
             ? "Parent-period cache"
             : (freshness.authoritative ? "Authoritative source refresh" : "Prepared snapshot");
         status.textContent = modeLabel + (revision ? " · Version " + String(revision) : "") + " · Generated " + generatedLabel;
+        alert.hidden = false;
+        window.clearTimeout(cashflowFreshnessAlertTimer);
+        cashflowFreshnessAlertTimer = window.setTimeout(function () {
+            alert.hidden = true;
+        }, 5000);
+    }
+    function dismissCashflowFreshnessAlert() {
+        const alert = element("cashflowsFreshnessAlert");
+        if (!alert) return;
+        window.clearTimeout(cashflowFreshnessAlertTimer);
+        cashflowFreshnessAlertTimer = null;
+        alert.hidden = true;
+    }
+    function setCashflowRefreshMenuOpen(open) {
+        const button = element('cashflowsRefreshMenuButton');
+        const menu = element('cashflowsRefreshMenu');
+        if (!button || !menu) return;
+        const isOpen = Boolean(open);
+        menu.hidden = !isOpen;
+        button.setAttribute('aria-expanded', String(isOpen));
+    }
+    function closeCashflowRefreshMenu() {
+        setCashflowRefreshMenuOpen(false);
     }
     function cashflowDrilldownFilterState() {
         const selectedTreasury = element('cashflowsDrilldownTreasury').value;
@@ -2620,11 +2645,23 @@
         document.addEventListener('click', function (event) {
             const popover = element('cashflowsPeriodPopover');
             const periodControl = popover.closest('.cashflows-period-control');
+            const refreshMenu = document.querySelector('.cashflows-refresh-menu');
             const eventPath = typeof event.composedPath === 'function' ? event.composedPath() : [];
             const insidePeriodControl = eventPath.length
                 ? eventPath.indexOf(periodControl) >= 0
                 : !!event.target.closest('.cashflows-period-control');
             if (!insidePeriodControl && !popover.hidden) closeCashflowPopover();
+            const insideRefreshMenu = !!refreshMenu && refreshMenu.contains(event.target);
+            if (!insideRefreshMenu) closeCashflowRefreshMenu();
+        });
+        document.addEventListener('keydown', function (event) {
+            if (event.key !== 'Escape') return;
+            const menu = element('cashflowsRefreshMenu');
+            const button = element('cashflowsRefreshMenuButton');
+            if (menu && !menu.hidden) {
+                closeCashflowRefreshMenu();
+                if (button) button.focus();
+            }
         });
 
         element('cashflowsReportForm').addEventListener('submit', generateCashflows);
@@ -2650,7 +2687,16 @@
         });
         element('cashflowsViewTransactionsButton').addEventListener('click', toggleClassifiedTransactions);
         element('cashflowsHideZeroRowsButton').addEventListener('click', toggleCashflowZeroRows);
-        element('cashflowsRefreshButton').addEventListener('click', function () { generateCashflows(null, { forceRefresh: true }); });
+        element('cashflowsRefreshMenuButton').addEventListener('click', function (event) {
+            event.stopPropagation();
+            const button = element('cashflowsRefreshMenuButton');
+            setCashflowRefreshMenuOpen(button.getAttribute('aria-expanded') !== 'true');
+        });
+        element('cashflowsRefreshButton').addEventListener('click', function () {
+            closeCashflowRefreshMenu();
+            generateCashflows(null, { forceRefresh: true });
+        });
+        element('cashflowsFreshnessAlertClose').addEventListener('click', dismissCashflowFreshnessAlert);
         element('cashflowsLoadTransfersButton').addEventListener('click', function () { loadCashflowChild('transfers'); });
         element('cashflowsLoadCustomerPaymentsButton').addEventListener('click', function () { loadCashflowChild('customer_payments'); });
         element('cashflowsLoadDeductionsButton').addEventListener('click', function () { loadCashflowChild('deductions'); });

@@ -7508,3 +7508,10 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Implementation:** Removed the redundant on-screen Split reconciliation metrics block. The summary renderer now detects meaningful Mixed / unresolved values across every period and the selected total; it hides the Mixed subcolumn only when all values are effectively zero, otherwise keeps it across the complete rectangular table. Cache-busting advanced to `reconciliation.js?v=24`, and stale static assertions were aligned with the current shared UI.
 
 **Verification:** JavaScript syntax, `git diff --check`, and the focused reconciliation/direct-window suite passed 36/36. No backend, database, accounting, or XLSX calculation changed.
+## Cashflows report toolbar and freshness-notice polish - 2026-10-06
+
+**Scope:** Refine the Cashflows report controls after local acceptance of the freshness and source-refresh workflow.
+
+**Implementation:** Moved `Refresh from source` behind the green split control beside `Load summary`; moved snapshot freshness into dismissible, auto-expiring stacked notices; kept Group by, Treasury view, Period, Load summary, ledger, zero-row, and XLSX actions on one desktop row. Restored visible overflow for the Period and Refresh popovers, corrected their clipping/scroll-container regression, and finalized the controls as adjacent but visually separate rectangles with sharp left edges on the green menu button. Updated CSS cache-busting and direct-window regression assertions.
+
+**Verification:** Aadil confirmed the final local Chrome appearance and behavior. Focused direct-window tests passed 4/4; JavaScript syntax and `git diff --check` passed; Playwright verified both popovers open without clipping or scrollbars. No backend, accounting, database, or source data changed.

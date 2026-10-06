@@ -109,8 +109,8 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert "Cash Flow summary" not in html
     assert "cashflowsReceiptMode" not in html
     assert html.index("cashflowsGroupingSelect") < html.index("cashflowsTreasuryViewSelect") < html.index("cashflowsPeriodButton") < html.index("Load summary")
-    assert ".cashflows-treasury-control { width: 235px; }" in styles
-    assert ".cashflows-period-control { position: relative; width: 210px; }" in styles
+    assert ".cashflows-treasury-control { width: 190px; }" in styles
+    assert ".cashflows-period-control { position: relative; width: 180px; }" in styles
     assert "Group by" in html
     assert "cashflowsCustomGrouping" not in html
     assert "cashflowsBackButton" not in html
@@ -236,7 +236,7 @@ def test_cashflows_summary_contains_inline_category_ledger_contract():
     assert 'cashflows-inline-ledger-link' in inline_styles
     assert 'cashflows-inline-expand-icon' not in inline_script
     assert 'cashflows-inline-expand-icon' not in inline_styles
-    assert 'style.css?v=64' in inline_html
+    assert 'style.css?v=68' in inline_html
     assert 'cashflows-summary-table-host' in inline_html
     assert 'renderCashflowSummaryPaneLayout' in inline_script
     assert 'syncCashflowSummaryPaneRows' in inline_script
@@ -282,6 +282,7 @@ def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
     settings_script = (ROOT / "static" / "settings.js").read_text(encoding="utf-8")
     reconciliation_html = (ROOT / "static" / "reconciliation.html").read_text(encoding="utf-8")
     reconciliation_script = (ROOT / "static" / "reconciliation.js").read_text(encoding="utf-8")
+    reconciliation_styles = (ROOT / "static" / "style.css").read_text(encoding="utf-8")
 
     assert "cashflowDefaultsContainer" in settings_html
     assert "Reports -&gt; Defaults" in settings_script
@@ -296,6 +297,12 @@ def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
     assert "groupBy: 'month'" in reconciliation_script
     assert "cashflowsExportButton" in reconciliation_html
     assert "cashflows-report-actions" in reconciliation_html
+    assert "cashflows-load-actions" in reconciliation_html
+    assert "cashflows-notification-stack" in reconciliation_html
+    assert "cashflowsRefreshMenuButton" in reconciliation_html
+    assert "cashflowsRefreshMenu" in reconciliation_html
+    assert "cashflowsFreshnessAlert" in reconciliation_html
+    assert "cashflowsFreshnessAlertClose" in reconciliation_html
     assert "cashflowsHideZeroRowsButton" in reconciliation_html
     assert "cashflowsSummaryFilter" in reconciliation_html
     assert "cashflowsSummaryClear" in reconciliation_html
@@ -308,8 +315,8 @@ def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
     assert "setCashflowSummaryFilterVisibility(false);" in reconciliation_script
     assert "cashflowPreviewPeriods" in reconciliation_script
     assert "syncCashflowZeroRowsButton" in reconciliation_script
-    assert "style.css?v=64" in reconciliation_html
-    assert "reconciliation.js?v=28" in reconciliation_html
+    assert "style.css?v=68" in reconciliation_html
+    assert "reconciliation.js?v=30" in reconciliation_html
     assert "cashflowsSummaryBasis" not in reconciliation_html
     assert "cashflows-transactions-note" not in reconciliation_html
     assert "renderCashflowSummary" in reconciliation_script
@@ -320,6 +327,21 @@ def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
     assert "downloadCashflowReport" in reconciliation_script
     assert "treasury_view: cashflowTreasuryView" in reconciliation_script
     assert "cashflowDefaultTreasuryType" in reconciliation_script
+    assert "setCashflowRefreshMenuOpen" in reconciliation_script
+    assert "event.stopPropagation();" in reconciliation_script
+    assert "refreshMenu.contains(event.target)" in reconciliation_script
+    assert "generateCashflows(null, { forceRefresh: true })" in reconciliation_script
+    assert "window.setTimeout" in reconciliation_script
+    assert "5000" in reconciliation_script
+    assert "cashflows-freshness-alert" in reconciliation_styles
+    assert "overflow: visible; border-radius: 7px" in reconciliation_styles
+    assert "background: #2f855a" in reconciliation_styles
+    assert "cashflows-load-actions > .cashflows-primary { border-radius: 7px;" in reconciliation_styles
+    assert "border: 0; border-radius: 0 7px 7px 0; background: #2f855a" in reconciliation_styles
+    assert "min-width: 0; overflow: visible" in reconciliation_styles
+    assert "overflow-x: auto" not in reconciliation_styles.split(".cashflows-report-scope", 1)[1].split(".cashflows-filter-bar label", 1)[0]
+    assert "flex-wrap: nowrap" in reconciliation_styles
+    assert "cashflows-notification-stack" in reconciliation_styles
 
 
 def test_cashflows_summary_panes_contain_full_year_horizontal_overflow():

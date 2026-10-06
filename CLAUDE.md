@@ -292,6 +292,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-10-05: Cashflows server read-model lookups now require the current report revision; stale exact or daily snapshots fall through to source rebuilding.
 - 2026-10-05: Cashflows maintenance now records cache/read-model/revision diagnostics and tests SQLite/PostgreSQL schema parity; retention and production EXPLAIN remain deferred.
 - 2026-10-06: Cashflows Phase 6 focused acceptance passed 139/139; full-suite failures are outside Cashflows, and authenticated live-browser acceptance remains pending.
+- 2026-10-06: Cashflows report controls now use a split refresh action, stacked freshness notices, and a stable single-row responsive toolbar.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

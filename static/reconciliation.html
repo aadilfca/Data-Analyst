@@ -4,7 +4,7 @@
     <meta charset='UTF-8'>
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
     <title>Reports | Internal Audit App</title>
-    <link rel='stylesheet' href='/static/style.css?v=64'>
+    <link rel='stylesheet' href='/static/style.css?v=68'>
 </head>
 <body class='reconciliation-page' data-nav-module='Reports' data-nav-parent='index.html'>
     <nav class='navbar'>
@@ -52,6 +52,10 @@
             </section>
         </section>
         <section id='cashflowsView' class='cashflows-report' aria-label='Cashflows report' hidden>
+        <div class='cashflows-notification-stack'>
+            <div id='cashflowsFreshnessAlert' class='cashflows-freshness-alert' role='status' aria-live='polite' hidden><span id='cashflowsFreshnessStatus'></span><button type='button' id='cashflowsFreshnessAlertClose' class='cashflows-freshness-alert-close' aria-label='Dismiss snapshot status'>&times;</button></div>
+            <div id='cashflowsToast' class='cashflows-toast' role='status' aria-live='polite' hidden></div>
+        </div>
     <div id='cashflowsSummaryControlsPanel' class='cashflows-report-header'>
         <form id='cashflowsReportForm' class='cashflows-filter-bar'>
             <div class='cashflows-report-scope' role='group' aria-label='Cashflows report scope'>
@@ -84,7 +88,15 @@
                 </div>
                 <input id='cashflowsPeriodStart' type='date' required hidden>
                 <input id='cashflowsPeriodEnd' type='date' required hidden>
-                <button type='submit' class='cashflows-primary'>Load summary</button>
+                <div class='cashflows-load-actions'>
+                    <button type='submit' class='cashflows-primary'>Load summary</button>
+                    <div class='cashflows-refresh-menu'>
+                        <button type='button' id='cashflowsRefreshMenuButton' class='cashflows-primary cashflows-split-toggle' aria-haspopup='menu' aria-expanded='false' aria-controls='cashflowsRefreshMenu' aria-label='More load options'>&#9662;</button>
+                        <div id='cashflowsRefreshMenu' class='cashflows-refresh-menu-popover' role='menu' hidden>
+                            <button type='button' id='cashflowsRefreshButton' class='cashflows-refresh-menu-item' role='menuitem'>Refresh from source</button>
+                        </div>
+                    </div>
+                </div>
             </div>
             <div class='cashflows-report-actions'>
                 <button type='button' id='cashflowsLedgerDrilldownButton' class='cashflows-secondary' hidden>Open ledger drill-down</button>
@@ -92,7 +104,6 @@
                 <button type='button' id='cashflowsExportButton' class='cashflows-secondary cashflows-export-button' hidden>Export XLSX</button>
             </div>
         </form>
-        <div class='cashflows-freshness-bar' aria-live='polite'><span id='cashflowsFreshnessStatus'>Data version not loaded</span><button type='button' id='cashflowsRefreshButton' class='cashflows-secondary'>Refresh from source</button></div>
     </div>
     <section class='cashflows-report-section'><div class='cashflows-summary-tools'><div class='cashflows-search-control'><input id='cashflowsSummaryFilter' type='text' placeholder='Filter category' aria-label='Filter Cashflows categories'><button type='button' id='cashflowsSummaryClear' class='cashflows-search-clear' aria-label='Clear category filter' title='Clear category filter' hidden>×</button></div></div><div class='cashflows-table-wrap cashflows-summary-table-wrap'><div id='cashflowsSummaryTable' class='cashflows-summary-table-host'></div></div></section>
             <div id='cashflowsLazyActions' class='cashflows-lazy-actions'>
@@ -188,7 +199,6 @@
             </div>
             <div id='cashflowsDrilldownDetailHost' class='cashflows-drilldown-detail-host'></div>
         </section>
-        <div id='cashflowsToast' class='cashflows-toast' role='status' aria-live='polite' hidden></div>
         <div id='cashflowsProcessing' class='cashflows-processing' role='dialog' aria-modal='true' aria-labelledby='cashflowsProcessingTitle' hidden>
             <div class='cashflows-processing-panel'>
                 <div class='cashflows-processing-spinner' aria-hidden='true'></div>
@@ -207,6 +217,6 @@
         </footer>
     </main>
     <script src='/static/client_context.js?v=18'></script>
-    <script src='/static/reconciliation.js?v=28'></script>
+    <script src='/static/reconciliation.js?v=30'></script>
 </body>
 </html>

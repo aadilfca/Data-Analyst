@@ -10228,7 +10228,9 @@ body {
 @media (max-width: 680px) { .acc2-template-mapping-head { display: none; } .acc2-template-mapping-row { grid-template-columns: 1fr; gap: 8px; } }
 .cashflows-report { display: grid; gap: 10px; }
 .cashflows-report[hidden] { display: none; }
-.cashflows-toast { position: fixed; top: 76px; right: 24px; z-index: 120; width: min(360px, calc(100vw - 32px)); box-sizing: border-box; padding: 12px 15px; border: 1px solid #b8d7c1; border-radius: 9px; background: #f0fbf3; color: #245b31; box-shadow: 0 10px 28px rgba(15, 23, 42, .18); font-size: 12px; font-weight: 700; }
+.cashflows-notification-stack { position: fixed; top: 82px; right: 20px; z-index: 120; display: grid; gap: 8px; width: min(420px, calc(100vw - 32px)); pointer-events: none; }
+.cashflows-notification-stack > * { position: static; width: 100%; box-sizing: border-box; pointer-events: auto; }
+.cashflows-toast { padding: 12px 15px; border: 1px solid #b8d7c1; border-radius: 9px; background: #f0fbf3; color: #245b31; box-shadow: 0 10px 28px rgba(15, 23, 42, .18); font-size: 12px; font-weight: 700; }
 .cashflows-toast[hidden] { display: none; }
 .cashflows-toast.is-error { border-color: #e7a0a0; background: #fff1f1; color: #9b2c2c; }
 .cashflows-processing { position: fixed; inset: 0; z-index: 110; display: grid; place-items: center; padding: 24px; background: rgba(15, 23, 42, .36); backdrop-filter: blur(5px); }
@@ -10246,17 +10248,20 @@ body {
 .cashflows-processing-steps li.is-complete { color: #2e7d32; }
 .cashflows-processing-steps li.is-complete::before { content: '✓'; color: #2e7d32; font-weight: 800; }
 body.cashflows-processing-open { overflow: hidden; }
-.cashflows-report-header { display: grid; gap: 0; padding: 12px 16px; border: 1px solid #dbe4ea; border-radius: 12px; background: #f8fbfd; } .cashflows-freshness-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 9px; padding-top: 8px; border-top: 1px solid #e2e8f0; color: #64748b; font-size: 11px; } .cashflows-freshness-bar .cashflows-secondary { padding: 6px 10px; font-size: 11px; }.cashflows-report-header[hidden] { display: none; }
-.cashflows-filter-bar { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 0; border: 0; border-top: 0; border-radius: 0; background: transparent; }
-.cashflows-report-scope { display: flex; flex: 1 1 auto; flex-wrap: wrap; align-items: end; gap: 10px; min-width: 0; }
+.cashflows-report-header { display: grid; gap: 0; padding: 12px 16px; border: 1px solid #dbe4ea; border-radius: 12px; background: #f8fbfd; } .cashflows-report-header[hidden] { display: none; }
+.cashflows-freshness-alert { position: fixed; top: 82px; right: 20px; z-index: 50; display: flex; align-items: center; gap: 10px; width: min(420px, calc(100vw - 32px)); box-sizing: border-box; padding: 10px 10px 10px 13px; border: 1px solid #bfdbfe; border-radius: 10px; background: #eff6ff; color: #0f4f80; box-shadow: 0 12px 28px rgba(15, 23, 42, .16); font-size: 12px; line-height: 1.4; }.cashflows-freshness-alert[hidden] { display: none; }.cashflows-freshness-alert span { flex: 1 1 auto; min-width: 0; }.cashflows-freshness-alert-close { flex: 0 0 auto; width: 22px; height: 22px; border: 0; border-radius: 5px; background: transparent; color: #526675; font-size: 18px; line-height: 1; cursor: pointer; }.cashflows-freshness-alert-close:hover, .cashflows-freshness-alert-close:focus { background: #dbeafe; outline: none; }
+.cashflows-notification-stack > .cashflows-freshness-alert { position: static; top: auto; right: auto; z-index: auto; width: 100%; }
+.cashflows-filter-bar { display: flex; flex-wrap: nowrap; align-items: end; gap: 8px; padding: 0; border: 0; border-top: 0; border-radius: 0; background: transparent; }
+.cashflows-report-scope { display: flex; flex: 1 1 auto; flex-wrap: nowrap; align-items: end; gap: 8px; min-width: 0; overflow: visible; }
 .cashflows-filter-bar label, .cashflows-control-label { display: grid; gap: 5px; color: #526675; font-size: 12px; font-weight: 700; }
 .cashflows-filter-bar input { min-width: 145px; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 7px; font: inherit; }.cashflows-filter-bar select { min-width: 0; max-width: none; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 7px; background: #fff; font: inherit; }
 
-.cashflows-grouping-control { width: 170px; }.cashflows-grouping-control select { width: 170px; }
-.cashflows-treasury-control { width: 235px; }.cashflows-treasury-control select { width: 235px; }
-.cashflows-period-control { position: relative; width: 210px; }
-.cashflows-period-button { width: 210px; min-width: 210px; border: 1px solid #b8c9d6; border-radius: 7px; padding: 9px 12px; background: #fff; color: #334e60; font-weight: 700; text-align: left; cursor: pointer; }
+.cashflows-grouping-control { width: 140px; }.cashflows-grouping-control select { width: 140px; }
+.cashflows-treasury-control { width: 190px; }.cashflows-treasury-control select { width: 190px; }
+.cashflows-period-control { position: relative; width: 180px; }
+.cashflows-period-button { width: 180px; min-width: 180px; border: 1px solid #b8c9d6; border-radius: 7px; padding: 9px 12px; background: #fff; color: #334e60; font-weight: 700; text-align: left; cursor: pointer; }
 .cashflows-period-button::after { content: '▾'; float: right; color: #64748b; }
+.cashflows-load-actions { display: flex; flex: 0 0 auto; align-items: stretch; gap: 0; overflow: visible; border-radius: 7px; }.cashflows-load-actions > .cashflows-primary { border-radius: 7px; padding: 9px 12px; font-size: 13px; }.cashflows-refresh-menu { position: relative; }.cashflows-split-toggle { min-width: 32px; padding-right: 9px !important; padding-left: 9px !important; border: 0; border-radius: 0 7px 7px 0; background: #2f855a; }.cashflows-split-toggle:hover, .cashflows-split-toggle:focus { background: #276749; outline: none; }.cashflows-refresh-menu-popover { position: absolute; top: calc(100% + 6px); right: 0; z-index: 25; min-width: 190px; padding: 5px; border: 1px solid #cbd5e1; border-radius: 9px; background: #fff; box-shadow: 0 12px 26px rgba(15, 23, 42, .16); }.cashflows-refresh-menu-popover[hidden] { display: none; }.cashflows-refresh-menu-item { display: block; width: 100%; padding: 8px 10px; border: 0; border-radius: 6px; background: transparent; color: #334e60; font: inherit; font-size: 12px; font-weight: 700; text-align: left; cursor: pointer; }.cashflows-refresh-menu-item:hover, .cashflows-refresh-menu-item:focus { background: #eef5f8; outline: none; }
 .cashflows-period-popover { position: absolute; top: calc(100% + 8px); left: 0; z-index: 20; width: min(520px, calc(100vw - 32px)); padding: 14px; border: 1px solid #cbd5e1; border-radius: 10px; background: #fff; box-shadow: 0 14px 32px rgba(15, 23, 42, .18); }
 .cashflows-period-group { display: grid; gap: 7px; margin-bottom: 13px; }
 .cashflows-period-label { color: #526675; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
@@ -10277,6 +10282,8 @@ body.cashflows-processing-open { overflow: hidden; }
 .cashflows-custom-range input { min-width: 0; width: 100%; box-sizing: border-box; padding: 8px 9px; border: 1px solid #cbd5e1; border-radius: 7px; background: #fff; font: inherit; }
 .cashflows-period-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid #e6edf2; }
 .cashflows-primary { border: 0; border-radius: 7px; padding: 9px 14px; background: #1769aa; color: #fff; font-weight: 700; cursor: pointer; }
+.cashflows-load-actions .cashflows-split-toggle { background: #2f855a; }
+.cashflows-load-actions .cashflows-split-toggle:hover, .cashflows-load-actions .cashflows-split-toggle:focus { background: #276749; }
 .cashflows-report-section { min-width: 0; padding: 16px; border-radius: 12px; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
 .cashflows-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }.cashflows-section-heading h3 { margin: 0; color: #334e60; }.cashflows-section-heading span { color: #64748b; font-size: 11px; font-weight: 700; }.cashflows-drilldown-heading { align-items: flex-start; margin-bottom: 14px; }/* Keep the drill-down filters in one logical row; narrow screens may scroll horizontally. */
 .cashflows-drilldown-context { margin-top: 5px; color: #64748b; font-size: 12px; font-weight: 600; }
@@ -10300,8 +10307,8 @@ body.cashflows-processing-open { overflow: hidden; }
 .cashflows-lazy-actions[hidden], .cashflows-report-section[hidden] { display: none; }
 .cashflows-detail-actions { display: flex; flex: 1 1 auto; flex-wrap: wrap; gap: 8px; }
 .cashflows-detail-actions .cashflows-secondary { min-width: 190px; }
-.cashflows-report-actions { display: flex; flex: 0 1 auto; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-left: auto; }
-.cashflows-report-actions .cashflows-secondary { min-width: 0; }
+.cashflows-report-actions { display: flex; flex: 0 0 auto; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: 6px; margin-left: auto; white-space: nowrap; }
+.cashflows-report-actions .cashflows-secondary { min-width: 0; padding: 8px 10px; font-size: 13px; white-space: nowrap; }
 .cashflows-drilldown-shortcuts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0; }
 .cashflows-drilldown-shortcuts .cashflows-secondary { min-width: 190px; }
 /* Direct Cashflows classified-transactions window. */
@@ -10330,8 +10337,11 @@ body .cashflows-drilldown-toolbar button { min-width: 0; white-space: nowrap; pa
 .cashflows-transactions-section .cashflows-table td:first-child { text-align: center; }
 .cashflows-transactions-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 10px; color: #64748b; font-size: 12px; }
 @media (max-width: 760px) {
+    .cashflows-filter-bar { flex-wrap: wrap; }
     .cashflows-report-scope { flex-basis: 100%; }
-    .cashflows-report-scope > label, .cashflows-report-scope > .cashflows-period-control, .cashflows-report-scope > .cashflows-primary { flex: 1 1 180px; width: auto; }
+    .cashflows-report-scope { flex-wrap: wrap; overflow-x: visible; gap: 10px; }
+    .cashflows-report-scope > label, .cashflows-report-scope > .cashflows-period-control, .cashflows-report-scope > .cashflows-load-actions { flex: 1 1 180px; width: auto; }
+    .cashflows-load-actions > .cashflows-primary { flex: 1 1 auto; }
     .cashflows-report-scope select, .cashflows-report-scope .cashflows-period-button { width: 100%; min-width: 0; }
     .cashflows-lazy-actions { align-items: stretch; }
     .cashflows-detail-actions, .cashflows-report-actions { width: 100%; }
@@ -10341,6 +10351,7 @@ body .cashflows-drilldown-toolbar button { min-width: 0; white-space: nowrap; pa
 
     .cashflows-detail-search-input { flex: 1 1 100%; min-width: 0; }
     .cashflows-transactions-pagination { justify-content: space-between; }
+    .cashflows-notification-stack { top: 76px; right: 16px; width: calc(100vw - 32px); }
 }
 
 .cashflows-summary-section-row th { background: #e8f3e8; color: #416b4c; border-top: 1px solid #c3dec8; border-bottom: 1px solid #b8d8be; text-align: left; }
