@@ -478,6 +478,14 @@
             const input = element(id);
             if (input) input.value = '';
         });
+        const customerSearch = element('cashflowsCustomerPaymentsCustomerSearch');
+        if (customerSearch) customerSearch.value = '';
+        const customerWisePanel = element('cashflowsCustomerWisePanel');
+        if (customerWisePanel) customerWisePanel.hidden = true;
+        const customerPaymentsVoucherPanel = element('cashflowsCustomerPaymentsVoucherPanel');
+        if (customerPaymentsVoucherPanel) customerPaymentsVoucherPanel.hidden = false;
+        const customerPaymentsHeading = element('cashflowsCustomerPaymentsHeading');
+        if (customerPaymentsHeading) customerPaymentsHeading.textContent = 'Customer payments';
         syncCashflowDrilldownShortcuts();
     }
     function setActiveCashflowWindow(windowKey) {
@@ -513,6 +521,73 @@
             + '</div>';
         panel.hidden = false;
     }
+    function renderCashflowCustomerWiseOptions(preview) {
+        const datalist = element('cashflowsCustomerPaymentsCustomerOptions');
+        if (!datalist) return;
+        const options = Array.isArray(preview && preview.customer_payment_customer_options)
+            ? preview.customer_payment_customer_options
+            : [];
+        datalist.innerHTML = options.map(function (option) {
+            const name = String(option.account_name || '').trim();
+            const code = String(option.account_code || '').trim();
+            const value = name || code;
+            return value ? '<option value="' + escapeHtml(value) + '" label="' + escapeHtml(code) + '"></option>' : '';
+        }).join('');
+    }
+    function customerWiseRowMatches(row, query) {
+        if (!query) return true;
+        return [row.customer_account_code, row.customer_account_name].some(function (value) {
+            return String(value || '').toLowerCase().includes(query);
+        });
+    }
+    function renderCashflowCustomerWise(preview) {
+        const panel = element('cashflowsCustomerWisePanel');
+        const table = element('cashflowsCustomerWiseTable');
+        const input = element('cashflowsCustomerPaymentsCustomerSearch');
+        if (!panel || !table) return;
+        renderCashflowCustomerWiseOptions(preview);
+        const query = input ? input.value.trim().toLowerCase() : '';
+        const allRows = Array.isArray(preview && preview.customer_payment_customer_totals)
+            ? preview.customer_payment_customer_totals
+            : [];
+        const rows = allRows.filter(function (row) { return customerWiseRowMatches(row, query); });
+        renderTable(table, [
+            { key: 'customer_account_name', label: 'Customer' },
+            { key: 'customer_gross_amount', label: 'Gross receipt', amount: true },
+            { key: 'bank_charges', label: 'Bank charges', amount: true },
+            { key: 'withholding_tax', label: 'WHT', amount: true },
+            { key: 'other_deductions', label: 'Other deductions', amount: true },
+            { key: 'deductions_total', label: 'Total deductions', amount: true },
+            { key: 'technical_bank_offset', label: 'Technical Bank credit', amount: true },
+            { key: 'expected_net_settlement', label: 'Expected settlement', amount: true },
+            { key: 'net_bank_settlement', label: 'Actual settlement', amount: true },
+            { key: 'variance', label: 'Difference', amount: true },
+            { key: 'status', label: 'Status' },
+        ], rows, 'No customer-wise payments match the selected customer.');
+        const reconciliation = preview.customer_payment_reconciliation || {};
+        const status = String(reconciliation.status || 'Review required');
+        const statusElement = element('cashflowsCustomerWiseStatus');
+        if (statusElement) {
+            statusElement.textContent = status;
+            statusElement.className = 'cashflows-transfer-status ' + (status === 'Matched' ? 'is-matched' : 'is-review');
+        }
+        const metric = function (label, value) {
+            return '<div class="cashflows-transfer-metric"><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(value) + '</strong></div>';
+        };
+        const reconciliationPanel = element('cashflowsCustomerWiseReconciliation');
+        if (reconciliationPanel) {
+            reconciliationPanel.innerHTML = metric('Customer-wise total', formatInternationalAmount(reconciliation.statement_eligible_customer_total))
+                + metric('Received from customers', formatInternationalAmount(reconciliation.main_received_from_customers_total))
+                + metric('Difference', formatInternationalAmount(reconciliation.difference));
+        }
+        const voucherPanel = element('cashflowsCustomerPaymentsVoucherPanel');
+        if (voucherPanel) voucherPanel.hidden = true;
+        const heading = element('cashflowsCustomerPaymentsHeading');
+        if (heading) heading.textContent = 'Customer-wise payments';
+        const count = element('cashflowsCustomerPaymentCount');
+        if (count) count.textContent = String(rows.length) + ' customer(s)';
+        panel.hidden = false;
+    }
     function renderCashflowChild(section, preview) {
         if (section === 'transfers') {
             renderCashflowTransferReconciliation(preview);
@@ -530,6 +605,12 @@
             element('cashflowsTransferCount').textContent = formatCashflowDetailCount('cashflowsTransfersTable', preview.internal_transfer_count || rows.length || 0, 'voucher(s)');
             if (activeCashflowWindow === section) element('cashflowsTransfersSection').hidden = false;
         } else if (section === 'customer_payments') {
+            const customerWisePanel = element('cashflowsCustomerWisePanel');
+            const customerPaymentsVoucherPanel = element('cashflowsCustomerPaymentsVoucherPanel');
+            const customerPaymentsHeading = element('cashflowsCustomerPaymentsHeading');
+            const customerWiseActive = !!customerWisePanel && !customerWisePanel.hidden;
+            if (customerPaymentsVoucherPanel) customerPaymentsVoucherPanel.hidden = customerWiseActive;
+            if (customerPaymentsHeading) customerPaymentsHeading.textContent = customerWiseActive ? 'Customer-wise payments' : 'Customer payments';
             const rows = (preview.customer_payment_details || []).map(function (row) {
                 return Object.assign({}, row, {
                     date_display: formatCashflowTransferDate(row.date || row.period_label || row.month),
@@ -554,7 +635,7 @@
                 { key: 'status_display', label: 'Status' },
                 { key: 'voucher_detail', label: 'Description' },
             ], rows, 'No customer payments identified.');
-            element('cashflowsCustomerPaymentCount').textContent = formatCashflowDetailCount('cashflowsCustomerPaymentsTable', rows.length, 'payment(s)');
+            if (!customerWiseActive) element('cashflowsCustomerPaymentCount').textContent = formatCashflowDetailCount('cashflowsCustomerPaymentsTable', rows.length, 'payment(s)');
             if (activeCashflowWindow === section) element('cashflowsCustomerPaymentsSection').hidden = false;
         } else if (section === 'deductions') {
             const rows = preview.deduction_details || [];
@@ -2640,6 +2721,7 @@
             .then(function (result) {
                 if (generation !== cashflowChildGeneration) return null;
                 const preview = result.preview || {};
+                renderCashflowCustomerWiseOptions(preview);
                 Object.keys(buttonIds).forEach(function (name) {
                     cashflowChildPreviews[name] = preview;
                     const button = element(buttonIds[name]);
@@ -2858,7 +2940,7 @@
         });
         element('cashflowsFreshnessAlertClose').addEventListener('click', dismissCashflowFreshnessAlert);
         element('cashflowsLoadTransfersButton').addEventListener('click', function () { loadCashflowChild('transfers'); });
-        element('cashflowsLoadCustomerPaymentsButton').addEventListener('click', function () { loadCashflowChild('customer_payments'); });
+        element('cashflowsLoadCustomerPaymentsButton').addEventListener('click', showCashflowVoucherPayments);
         element('cashflowsLoadDeductionsButton').addEventListener('click', function () { loadCashflowChild('deductions'); });
         element('cashflowsLoadReviewButton').addEventListener('click', function () { loadCashflowChild('review'); });
         const cashflowDetailSearches = [
@@ -2887,6 +2969,48 @@
                 rerender();
                 input.focus();
             });
+        });
+        async function showCashflowVoucherPayments() {
+            const preview = await loadCashflowChild('customer_payments');
+            const customerPreview = cashflowChildPreviews.customer_payments || preview;
+            const customerWisePanel = element('cashflowsCustomerWisePanel');
+            const customerPaymentsVoucherPanel = element('cashflowsCustomerPaymentsVoucherPanel');
+            const customerPaymentsHeading = element('cashflowsCustomerPaymentsHeading');
+            const customerWiseSearch = element('cashflowsCustomerPaymentsCustomerSearch');
+            if (customerWiseSearch) customerWiseSearch.value = '';
+            if (customerWisePanel) customerWisePanel.hidden = true;
+            if (customerPaymentsVoucherPanel) customerPaymentsVoucherPanel.hidden = false;
+            if (customerPaymentsHeading) customerPaymentsHeading.textContent = 'Customer payments';
+            if (customerPreview) renderCashflowChild('customer_payments', customerPreview);
+        }
+        const customerWiseSearch = element('cashflowsCustomerPaymentsCustomerSearch');
+        const customerWiseButton = element('cashflowsCustomerPaymentsCustomerWiseButton');
+        const customerWiseClear = element('cashflowsCustomerPaymentsSearchClear');
+        const renderCustomerWisePreview = function () {
+            const preview = cashflowChildPreviews.customer_payments;
+            if (preview && !element('cashflowsCustomerWisePanel').hidden) renderCashflowCustomerWise(preview);
+        };
+        if (customerWiseSearch) {
+            customerWiseSearch.addEventListener('input', renderCustomerWisePreview);
+            customerWiseSearch.addEventListener('keydown', function (event) {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    if (customerWiseButton) customerWiseButton.click();
+                }
+                if (event.key === 'Escape') {
+                    customerWiseSearch.value = '';
+                    renderCustomerWisePreview();
+                }
+            });
+        }
+        if (customerWiseClear) customerWiseClear.addEventListener('click', function () {
+            if (customerWiseSearch) customerWiseSearch.value = '';
+            renderCustomerWisePreview();
+        });
+        if (customerWiseButton) customerWiseButton.addEventListener('click', async function () {
+            const preview = await loadCashflowChild('customer_payments');
+            const customerPreview = cashflowChildPreviews.customer_payments || preview;
+            if (customerPreview) renderCashflowCustomerWise(customerPreview);
         });
         const cashflowChildShortcutTargets = {
             transfers: 'cashflowsLoadTransfersButton',

@@ -12,6 +12,16 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     styles = (ROOT / "static" / "style.css").read_text(encoding="utf-8")
 
     assert "cashflowsTransactionsSection" in html
+    assert "cashflowsCustomerPaymentsCustomerSearch" in html
+    assert "cashflowsCustomerPaymentsCustomerOptions" in html
+    assert "cashflowsCustomerPaymentsCustomerWiseButton" in html
+    assert "cashflowsCustomerWiseTable" in html
+    assert "cashflowsCustomerPaymentsVoucherPanel" in html
+    assert "cashflowsCustomerPaymentsHeading" in html
+    assert "showCashflowVoucherPayments" in script
+    assert "renderCashflowCustomerWise" in script
+    assert "customer_payment_customer_totals" in script
+    assert "customer_payment_reconciliation" in script
     assert "cashflowsTransactionsTable" in html
     assert "cashflowsTransactionsPrevious" in html
     assert "cashflowsTransactionsNext" in html
