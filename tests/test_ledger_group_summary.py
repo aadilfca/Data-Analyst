@@ -463,6 +463,62 @@ def test_customer_payment_reconciliation_separates_technical_bank_credit_from_de
     assert set(customer_rollups["account_name"]) == {"Customer payment (net bank receipt)"}
 
 
+def test_customer_payment_customer_totals_group_and_reconcile_main_receipts():
+    journal = pd.DataFrame(
+        [
+            ["A-GROSS", "2026-01-05", "BANK", "Export bank", "Customer A gross", 100, 3],
+            ["A-GROSS", "2026-01-05", "CUST-A", "Customer A", "Customer A gross", 0, 100],
+            ["A-GROSS", "2026-01-05", "CHARGE", "Bank charge", "Customer A gross", 1, 0],
+            ["A-GROSS", "2026-01-05", "WHT", "Withholding tax", "Customer A gross", 2, 0],
+            ["A-NET", "2026-01-06", "BANK", "Export bank", "Customer A net", 50, 0],
+            ["A-NET", "2026-01-06", "CUST-A", "Customer A", "Customer A net", 0, 50],
+            ["B-REVIEW", "2026-01-07", "BANK", "Export bank", "Customer B review", 40, 0],
+            ["B-REVIEW", "2026-01-07", "BANK-2", "Export bank two", "Customer B review", 40, 0],
+            ["B-REVIEW", "2026-01-07", "CUST-B", "Customer B", "Customer B review", 0, 80],
+        ],
+        columns=["voucher_id", "date", "account_code", "account_name", "voucher_detail", "debit", "credit"],
+    )
+    coa = pd.DataFrame(
+        [
+            ["BANK", "Export bank", "Bank", ""],
+            ["BANK-2", "Export bank two", "Bank", ""],
+            ["CUST-A", "Customer A", "Receivable", "Received from customers"],
+            ["CUST-B", "Customer B", "Receivable", "Received from customers"],
+            ["CHARGE", "Bank charge", "Expense", "Bank charges"],
+            ["WHT", "Withholding tax", "Tax", "Withholding tax"],
+        ],
+        columns=["account_code", "account_title", "account_type", "category"],
+    )
+
+    result = build_cashflow_summary(
+        journal,
+        coa,
+        cash_account_codes=[],
+        bank_account_codes=["BANK", "BANK-2"],
+        period_start="2026-01-01",
+        period_end="2026-01-31",
+        cashflow_role_categories={
+            "customer_receipt": ["Received from customers"],
+            "bank_charge": ["Bank charges"],
+            "withholding_tax": ["Withholding tax"],
+            "other_deduction": [],
+        },
+    )
+
+    totals = result["customer_payment_customer_totals"].set_index("customer_account_code")
+    assert totals.loc["CUST-A", "voucher_count"] == 2
+    assert totals.loc["CUST-A", "customer_gross_amount"] == 150
+    assert totals.loc["CUST-A", "deductions_total"] == 3
+    assert totals.loc["CUST-A", "statement_eligible_actual_settlement"] == 147
+    assert totals.loc["CUST-A", "status"] == "Matched"
+    assert totals.loc["CUST-B", "statement_eligible_actual_settlement"] == 0
+    assert totals.loc["CUST-B", "status"] == "Review required"
+    assert result["customer_payment_reconciliation"]["main_received_from_customers_total"] == 147
+    assert result["customer_payment_reconciliation"]["statement_eligible_customer_total"] == 147
+    assert result["customer_payment_reconciliation"]["difference"] == 0
+    assert result["customer_payment_reconciliation"]["status"] == "Matched"
+
+
 def test_customer_payment_ordinary_bank_charges_split_from_general_charges():
     journal = pd.DataFrame(
         [

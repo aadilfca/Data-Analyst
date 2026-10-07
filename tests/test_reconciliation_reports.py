@@ -598,6 +598,47 @@ def test_cashflows_preview_passes_grouping_and_returns_period_descriptors():
     assert builder.call_args.kwargs["cashflow_role_categories"] == configuration["customer_payment_roles"]
 
 
+def test_cashflow_preview_exposes_customer_wise_rows_and_selected_customer_filter():
+    summary = _cashflow_summary()
+    summary["customer_payment_customer_totals"] = pd.DataFrame(
+        [
+            {
+                "customer_account_code": "CUST-1",
+                "customer_account_name": "Customer One",
+                "statement_eligible_actual_settlement": 100.0,
+                "status": "Matched",
+            },
+            {
+                "customer_account_code": "CUST-2",
+                "customer_account_name": "Customer Two",
+                "statement_eligible_actual_settlement": 50.0,
+                "status": "Review required",
+            },
+        ]
+    )
+    summary["customer_payment_reconciliation"] = {
+        "statement_eligible_customer_total": 100.0,
+        "main_received_from_customers_total": 100.0,
+        "difference": 0.0,
+        "status": "Matched",
+    }
+
+    response = reconciliation._cashflow_preview(
+        summary,
+        {"customer_payments"},
+        "combined",
+        "CUST-2",
+    )
+
+    assert response["customer_payment_customer_options"] == [
+        {"account_code": "CUST-1", "account_name": "Customer One"},
+        {"account_code": "CUST-2", "account_name": "Customer Two"},
+    ]
+    assert [row["customer_account_code"] for row in response["customer_payment_customer_totals"]] == ["CUST-2"]
+    assert response["customer_payment_reconciliation"]["status"] == "Matched"
+    assert response["customer_payment_selected_account_code"] == "CUST-2"
+
+
 def test_cashflows_preview_uses_summary_read_model_without_loading_detail_source():
     configuration = {
         "source_template_id": 9,
@@ -816,6 +857,8 @@ def test_cashflow_summary_read_model_round_trip_preserves_period_totals():
 
     payload = json.loads(writes[0][1][-1])
     assert payload["summary_payload_version"] == CASHFLOW_SUMMARY_PAYLOAD_VERSION
+    assert "customer_payment_customer_totals" in payload
+    assert "customer_payment_reconciliation" in payload
 
     def query(sql, params):
         if "FROM uploaded_files" in sql:

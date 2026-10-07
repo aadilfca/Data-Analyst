@@ -1302,6 +1302,7 @@ def _cashflow_preview(
     summary: dict[str, Any] | None,
     detail_sections: set[str] | None = None,
     treasury_view: str = "combined",
+    customer_account_code: str = "",
 ) -> dict[str, Any]:
     """Format the summary and only the child detail sections requested by the caller."""
     treasury_view = normalize_cashflow_treasury_view(treasury_view)
@@ -1323,6 +1324,10 @@ def _cashflow_preview(
             "transfer_details": [],
             "transfer_reconciliation": None,
             "customer_payment_details": [],
+            "customer_payment_customer_totals": [],
+            "customer_payment_customer_options": [],
+            "customer_payment_reconciliation": {},
+            "customer_payment_selected_account_code": "",
             "deduction_details": [],
             "categories_needing_review": [],
             "selected_voucher_count": 0,
@@ -1335,6 +1340,21 @@ def _cashflow_preview(
         }
     loaded = {"transfers", "customer_payments", "deductions", "review"} if detail_sections is None else set(detail_sections)
     review = summary.get("categories_needing_review")
+    customer_rows = _frame_records(summary.get("customer_payment_customer_totals")) if "customer_payments" in loaded else []
+    customer_options = []
+    seen_customer_codes: set[str] = set()
+    for row in customer_rows:
+        code = str(row.get("customer_account_code") or "").strip()
+        if code and code not in seen_customer_codes:
+            seen_customer_codes.add(code)
+            customer_options.append({"account_code": code, "account_name": str(row.get("customer_account_name") or "")})
+    selected_customer_code = str(customer_account_code or "").strip()
+    if selected_customer_code:
+        selected_key = selected_customer_code.casefold()
+        customer_rows = [
+            row for row in customer_rows
+            if str(row.get("customer_account_code") or "").strip().casefold() == selected_key
+        ]
     treasury_projection = project_cashflow_treasury_view(summary, treasury_view)
     treasury_view_totals = (
         _category_total_records(treasury_projection["totals"])
@@ -1358,6 +1378,10 @@ def _cashflow_preview(
         "transfer_details": _frame_records(summary.get("transfer_details")) if "transfers" in loaded else [],
         "transfer_reconciliation": summary.get("transfer_reconciliation") if "transfers" in loaded else None,
         "customer_payment_details": _frame_records(summary.get("customer_payment_details")) if "customer_payments" in loaded else [],
+        "customer_payment_customer_totals": customer_rows,
+        "customer_payment_customer_options": customer_options,
+        "customer_payment_reconciliation": dict(summary.get("customer_payment_reconciliation") or {}) if "customer_payments" in loaded else {},
+        "customer_payment_selected_account_code": selected_customer_code,
         "deduction_details": _frame_records(summary.get("deduction_details")) if "deductions" in loaded else [],
         "categories_needing_review": _frame_records(review) if "review" in loaded else [],
         "selected_voucher_count": int(summary.get("selected_voucher_count", 0)),
@@ -1409,6 +1433,7 @@ def _build_cashflow_result(
     group_by: str = "month",
     treasury_view: str = "combined",
     force_refresh: bool = False,
+    customer_account_code: str = "",
 ) -> dict[str, Any]:
     request_started = perf_counter()
     validation_started = perf_counter()
@@ -1568,7 +1593,7 @@ def _build_cashflow_result(
         "rejected_rows_sample": source_metadata.get("rejected_rows_sample") or [],
     }
     preview_started = perf_counter()
-    preview = _cashflow_preview(summary, detail_sections, treasury_view)
+    preview = _cashflow_preview(summary, detail_sections, treasury_view, customer_account_code)
     format_seconds = perf_counter() - preview_started
     total_seconds = perf_counter() - request_started
     cache_hit = cached_summary is not None
@@ -1739,6 +1764,7 @@ def preview_cashflows(
     period_end: str = Query(...),
     group_by: str = Query("month"),
     treasury_view: str = Query("combined"),
+    customer_account_code: str = Query(""),
     details: Optional[str] = Query(None, description="summary or comma-separated child sections"),
     refresh_from_source: bool = Query(False, alias="refresh"),
     session=Depends(require_admin),
@@ -1759,6 +1785,7 @@ def preview_cashflows(
         group_by=group_by,
         treasury_view=treasury_view,
         force_refresh=refresh_from_source,
+        customer_account_code=customer_account_code,
     )
 
 def _filter_cashflow_ledger_rows(

@@ -34,7 +34,7 @@ CASHFLOW_CHILD_DETAILS_VERSION = 6
 CASHFLOW_DRILLDOWN_DETAILS_VERSION = 2
 CASHFLOW_DRILLDOWN_PROJECTION_VERSION = 1
 CASHFLOW_TREASURY_TOTALS_VERSION = 1
-CASHFLOW_SUMMARY_PAYLOAD_VERSION = 1
+CASHFLOW_SUMMARY_PAYLOAD_VERSION = 2
 CASHFLOW_TREASURY_VIEWS = ("combined", "bank", "cash", "split")
 
 _JOURNAL_ALIASES: Mapping[str, tuple[str, ...]] = {
@@ -1075,7 +1075,11 @@ def _cashflow_drilldown_integrity(summary: Mapping[str, Any]) -> tuple[bool, str
 
 
 def _cashflow_summary_payload(summary: Mapping[str, Any]) -> dict[str, Any]:
-    from services.ledger_group_summary import build_cashflow_transfer_reconciliation
+    from services.ledger_group_summary import (
+        _build_cashflow_customer_payment_customer_totals,
+        _build_cashflow_customer_payment_reconciliation,
+        build_cashflow_transfer_reconciliation,
+    )
 
     periods = [dict(period) for period in summary.get("periods", [])]
     period_keys = [str(period["key"]) for period in periods]
@@ -1121,6 +1125,9 @@ def _cashflow_summary_payload(summary: Mapping[str, Any]) -> dict[str, Any]:
         "transfer_details": _cashflow_detail_records(transfer_details),
         "transfer_reconciliation": dict(transfer_reconciliation),
         "customer_payment_details": _cashflow_detail_records(summary.get("customer_payment_details")),
+        "customer_payment_customer_totals": _cashflow_detail_records(summary.get("customer_payment_customer_totals")),
+        "customer_payment_reconciliation": dict(summary.get("customer_payment_reconciliation") or {}),
+        "customer_payment_receipt_categories": [str(value) for value in summary.get("customer_payment_receipt_categories") or []],
         "deduction_details": _cashflow_detail_records(summary.get("deduction_details")),
         "categories_needing_review": _cashflow_detail_records(summary.get("categories_needing_review")),
         "period_metrics": summary.get("period_metrics") or {},
@@ -1135,7 +1142,11 @@ def _cashflow_summary_from_payload(
     *,
     include_drilldown: bool = True,
 ) -> dict[str, Any]:
-    from services.ledger_group_summary import build_cashflow_transfer_reconciliation
+    from services.ledger_group_summary import (
+        _build_cashflow_customer_payment_customer_totals,
+        _build_cashflow_customer_payment_reconciliation,
+        build_cashflow_transfer_reconciliation,
+    )
 
     periods = [dict(period) for period in payload.get("periods", [])]
     period_keys = [str(period["key"]) for period in periods]
@@ -1159,6 +1170,19 @@ def _cashflow_summary_from_payload(
     child_details_prepared = bool(payload.get("child_details_prepared")) and child_details_version >= CASHFLOW_CHILD_DETAILS_VERSION
     transfer_details = _cashflow_detail_frame(payload, "transfer_details") if child_details_prepared else pd.DataFrame()
     customer_payment_details = _cashflow_detail_frame(payload, "customer_payment_details") if child_details_prepared else pd.DataFrame()
+    customer_payment_customer_totals = _cashflow_detail_frame(payload, "customer_payment_customer_totals") if child_details_prepared else pd.DataFrame()
+    if customer_payment_customer_totals.empty and not customer_payment_details.empty:
+        customer_payment_customer_totals = _build_cashflow_customer_payment_customer_totals(customer_payment_details)
+    customer_payment_receipt_categories = [str(value) for value in payload.get("customer_payment_receipt_categories") or []]
+    customer_payment_reconciliation = dict(payload.get("customer_payment_reconciliation") or {})
+    if not customer_payment_reconciliation:
+        customer_payment_reconciliation = _build_cashflow_customer_payment_reconciliation(
+            customer_payment_details,
+            customer_payment_customer_totals,
+            category_totals,
+            customer_payment_receipt_categories,
+            tolerance=0.02,
+        )
     drilldown_version = int(payload.get("drilldown_details_version", 0) or 0)
     drilldown_prepared = (
         include_drilldown
@@ -1182,6 +1206,9 @@ def _cashflow_summary_from_payload(
             payload.get("transfer_reconciliation") or build_cashflow_transfer_reconciliation(transfer_details)
         ) if child_details_prepared else None,
         "customer_payment_details": customer_payment_details,
+        "customer_payment_customer_totals": customer_payment_customer_totals,
+        "customer_payment_reconciliation": customer_payment_reconciliation,
+        "customer_payment_receipt_categories": customer_payment_receipt_categories,
         "deduction_details": _cashflow_detail_frame(payload, "deduction_details") if child_details_prepared else pd.DataFrame(),
         "categories_needing_review": _cashflow_detail_frame(payload, "categories_needing_review") if child_details_prepared else pd.DataFrame(),
         "selected_vouchers": [],
@@ -1316,6 +1343,8 @@ def _cashflow_daily_rollup(
 ) -> dict[str, Any]:
     from services.ledger_group_summary import (
         DEFAULT_TOLERANCE,
+        _build_cashflow_customer_payment_customer_totals,
+        _build_cashflow_customer_payment_reconciliation,
         _build_cashflow_drilldown_controls,
         _cashflow_periods,
         _cashflow_treasury_reconciliation,
@@ -1396,9 +1425,18 @@ def _cashflow_daily_rollup(
     child_details_prepared = bool(payload.get("child_details_prepared")) and child_details_version >= CASHFLOW_CHILD_DETAILS_VERSION
     transfer_details = _cashflow_rollup_detail_frame(payload, "transfer_details", periods) if child_details_prepared else pd.DataFrame()
     customer_payment_details = _cashflow_rollup_detail_frame(payload, "customer_payment_details", periods) if child_details_prepared else pd.DataFrame()
+    customer_payment_customer_totals = _build_cashflow_customer_payment_customer_totals(customer_payment_details)
     deduction_details = _cashflow_rollup_detail_frame(payload, "deduction_details", periods) if child_details_prepared else pd.DataFrame()
     review = _cashflow_rollup_detail_frame(payload, "categories_needing_review", periods) if child_details_prepared else pd.DataFrame()
     transfer_reconciliation = build_cashflow_transfer_reconciliation(transfer_details) if child_details_prepared else None
+    customer_payment_receipt_categories = [str(value) for value in payload.get("customer_payment_receipt_categories") or []]
+    customer_payment_reconciliation = _build_cashflow_customer_payment_reconciliation(
+        customer_payment_details,
+        customer_payment_customer_totals,
+        category_totals,
+        customer_payment_receipt_categories,
+        tolerance=DEFAULT_TOLERANCE,
+    )
     if child_details_prepared:
         totals["internal_transfer_count"] = len(transfer_details)
         totals["category_review_count"] = len(review)
@@ -1434,6 +1472,9 @@ def _cashflow_daily_rollup(
         "transfer_details": transfer_details,
         "transfer_reconciliation": transfer_reconciliation,
         "customer_payment_details": customer_payment_details,
+        "customer_payment_customer_totals": customer_payment_customer_totals,
+        "customer_payment_reconciliation": customer_payment_reconciliation,
+        "customer_payment_receipt_categories": customer_payment_receipt_categories,
         "deduction_details": deduction_details,
         "categories_needing_review": review,
         "selected_vouchers": [],

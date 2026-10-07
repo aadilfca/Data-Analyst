@@ -461,6 +461,160 @@ def _empty_customer_payment_details() -> pd.DataFrame:
     )
 
 
+def _empty_cashflow_customer_payment_customer_totals() -> pd.DataFrame:
+    return pd.DataFrame(
+        columns=[
+            "customer_account_code",
+            "customer_account_name",
+            "bank_account_type",
+            "voucher_count",
+            "matched_voucher_count",
+            "review_voucher_count",
+            "customer_gross_amount",
+            "bank_charges",
+            "withholding_tax",
+            "other_deductions",
+            "deductions_total",
+            "technical_bank_offset",
+            "expected_net_settlement",
+            "net_bank_settlement",
+            "statement_eligible_actual_settlement",
+            "variance",
+            "status",
+        ]
+    )
+
+
+def _build_cashflow_customer_payment_customer_totals(
+    details: pd.DataFrame,
+) -> pd.DataFrame:
+    if details is None or details.empty:
+        return _empty_cashflow_customer_payment_customer_totals()
+    frame = details.copy()
+    for column in ("customer_account_code", "customer_account_name", "bank_account_type", "status"):
+        if column not in frame:
+            frame[column] = ""
+        frame[column] = frame[column].fillna("").astype(str).str.strip()
+    numeric_columns = (
+        "customer_gross_amount",
+        "bank_charges",
+        "withholding_tax",
+        "other_deductions",
+        "deductions_total",
+        "technical_bank_offset",
+        "expected_net_settlement",
+        "net_bank_settlement",
+        "variance",
+    )
+    for column in numeric_columns:
+        if column not in frame:
+            frame[column] = 0.0
+        frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0.0)
+    frame["_matched"] = frame["status"].eq("Matched")
+    frame["_statement_eligible_actual_settlement"] = frame["net_bank_settlement"].where(
+        frame["_matched"],
+        0.0,
+    )
+    totals = (
+        frame.groupby("customer_account_code", sort=False, dropna=False)
+        .agg(
+            customer_account_name=("customer_account_name", _join_unique_leg_values),
+            bank_account_type=("bank_account_type", _join_unique_leg_values),
+            voucher_count=("voucher_id", "nunique"),
+            matched_voucher_count=("_matched", "sum"),
+            customer_gross_amount=("customer_gross_amount", "sum"),
+            bank_charges=("bank_charges", "sum"),
+            withholding_tax=("withholding_tax", "sum"),
+            other_deductions=("other_deductions", "sum"),
+            deductions_total=("deductions_total", "sum"),
+            technical_bank_offset=("technical_bank_offset", "sum"),
+            expected_net_settlement=("expected_net_settlement", "sum"),
+            net_bank_settlement=("net_bank_settlement", "sum"),
+            statement_eligible_actual_settlement=("_statement_eligible_actual_settlement", "sum"),
+            variance=("variance", "sum"),
+            status=(
+                "status",
+                lambda values: "Matched" if values.astype(str).eq("Matched").all() else "Review required",
+            ),
+        )
+        .reset_index()
+    )
+    totals["matched_voucher_count"] = totals["matched_voucher_count"].astype(int)
+    totals["review_voucher_count"] = totals["voucher_count"] - totals["matched_voucher_count"]
+    return totals[
+        [
+            "customer_account_code",
+            "customer_account_name",
+            "bank_account_type",
+            "voucher_count",
+            "matched_voucher_count",
+            "review_voucher_count",
+            "customer_gross_amount",
+            "bank_charges",
+            "withholding_tax",
+            "other_deductions",
+            "deductions_total",
+            "technical_bank_offset",
+            "expected_net_settlement",
+            "net_bank_settlement",
+            "statement_eligible_actual_settlement",
+            "variance",
+            "status",
+        ]
+    ].sort_values(["customer_account_name", "customer_account_code"]).reset_index(drop=True)
+
+
+def _cashflow_customer_receipt_categories(
+    cashflow_role_categories: Mapping[str, Sequence[Any]] | None,
+) -> set[str]:
+    configured = _normalise_customer_payment_roles(cashflow_role_categories)
+    if configured is not None:
+        return set(configured["customer_receipt"])
+    return {
+        "received from customers",
+        "customer receipts",
+        "customer receipt",
+    }
+
+
+def _build_cashflow_customer_payment_reconciliation(
+    details: pd.DataFrame,
+    customer_totals: pd.DataFrame,
+    category_totals: pd.DataFrame,
+    receipt_categories: Sequence[str],
+    *,
+    tolerance: float,
+) -> dict[str, Any]:
+    eligible_total = (
+        float(customer_totals["statement_eligible_actual_settlement"].sum())
+        if not customer_totals.empty
+        else 0.0
+    )
+    category_names = {
+        str(value).strip().casefold()
+        for value in receipt_categories
+        if str(value).strip()
+    }
+    main_total = 0.0
+    if isinstance(category_totals, pd.DataFrame) and not category_totals.empty and category_names:
+        for category in category_totals.index:
+            if str(category).strip().casefold() in category_names:
+                main_total += float(category_totals.loc[category].get("Total", 0.0) or 0.0)
+    difference = eligible_total - main_total
+    matched_count = int(details["status"].eq("Matched").sum()) if details is not None and not details.empty else 0
+    review_count = int(len(details) - matched_count) if details is not None and not details.empty else 0
+    return {
+        "statement_eligible_customer_total": eligible_total,
+        "main_received_from_customers_total": main_total,
+        "difference": difference,
+        "status": "Matched" if abs(difference) <= tolerance else "Review required",
+        "customer_count": int(len(customer_totals)),
+        "matched_voucher_count": matched_count,
+        "review_voucher_count": review_count,
+        "tolerance": float(tolerance),
+    }
+
+
 def _build_cashflow_customer_payment_details(
     working: pd.DataFrame,
     contra: pd.DataFrame,
@@ -1180,6 +1334,8 @@ def build_cashflow_summary(
     treasury_type.update({code: "Bank" for code in bank_codes})
     selected_vouchers = journal.loc[journal["account_code"].isin(treasury_codes), "voucher_id"].drop_duplicates().tolist()
     working = journal.loc[journal["voucher_id"].isin(selected_vouchers)].copy()
+    configured_roles = _normalise_customer_payment_roles(cashflow_role_categories)
+    receipt_categories = _cashflow_customer_receipt_categories(cashflow_role_categories)
 
     if working.empty:
         rollups = _empty_cashflow_ledger_rollups()
@@ -1223,7 +1379,7 @@ def build_cashflow_summary(
             .str.strip()
             .str.casefold()
         )
-        configured_roles = _normalise_customer_payment_roles(cashflow_role_categories)
+
         if configured_roles is None:
             # Direct callers from older integrations may not yet provide the
             # role configuration. Keep their legacy behavior during migration;
@@ -1464,6 +1620,14 @@ def build_cashflow_summary(
         }
         for period in periods
     }
+    customer_payment_customer_totals = _build_cashflow_customer_payment_customer_totals(customer_payment_details)
+    customer_payment_reconciliation = _build_cashflow_customer_payment_reconciliation(
+        customer_payment_details,
+        customer_payment_customer_totals,
+        category_totals,
+        receipt_categories,
+        tolerance=tolerance,
+    )
     return {
         'cashflow_ledger_rollups': rollups,
         'cashflow_drilldown_controls': drilldown_controls,
@@ -1478,6 +1642,9 @@ def build_cashflow_summary(
         "transfer_details": transfer_details,
         "transfer_reconciliation": transfer_reconciliation,
         "customer_payment_details": customer_payment_details,
+        "customer_payment_customer_totals": customer_payment_customer_totals,
+        "customer_payment_reconciliation": customer_payment_reconciliation,
+        "customer_payment_receipt_categories": sorted(receipt_categories),
         "deduction_details": deductions,
         "categories_needing_review": review,
         "balance_checks": balance_checks,
