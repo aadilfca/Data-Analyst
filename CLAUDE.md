@@ -44,14 +44,14 @@ One line per file group: what it is now. Full build history for every entry live
 - static/search_index.js → deleted; feature registry merged into `NAV_MANIFEST` in `client_context.js` — do not recreate. See CHANGELOG_ARCHIVE.md.
 - static/loading_ui.js → shared `window.LoadingUI` primitives, including token-based target-aware global progress-cursor ownership. See CHANGELOG_ARCHIVE.md.
 - static/api_utils.js → shared `apiFetch()` (GET debounce/retry) and `apiFetchMutate()` (non-retried writes, optional Loading UI); warning-only direct-`/api/` fetch guard; partial rollout. See CHANGELOG_ARCHIVE.md.
-- services/ledger_group_summary.py + ledger_report_source.py -> pure summary engine, SQL-first stored-data adapter, and validated upload-time Cashflows ledger rollups. See CHANGELOG_ARCHIVE.md.
+- services/ledger_group_summary.py + ledger_report_source.py -> summary engine, customer-payment reconciliation/read models, SQL-first stored-data adapter, and Cashflows ledger rollups. See CHANGELOG_ARCHIVE.md.
 - services/cash_bank_classification.py + scripts/backfill_cash_bank_transaction_classifications.py -> versioned derived Cash/Bank lines, Cash Flow category resolution, upload/backfill application, and audited reclassification without raw-row mutation. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_xlsx.py → static Bank/Cash workbook exporter for summaries, schedules, reviews, cross-checks, and reconciliation proofs. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_balance_source.py → validates stored opening/month-end balances and converts them to reconciliation-engine inputs. See CHANGELOG_ARCHIVE.md.
 - tests/test_account_control_center*.py + tests/test_cash_bank_configuration_sync.py + tests/test_cashflows*.py → regression coverage for setup, orphan assignment, derived classification, and Cashflows Reports UI.
 
 
-- static/reconciliation.html, static/reconciliation.js -> client-context Reports, Cashflows summary, classified transactions, Ledger Summary categories, and balance setup. See CHANGELOG_ARCHIVE.md.
+- static/reconciliation.html, static/reconciliation.js -> client-context Reports, Cashflows summary, customer-payment reconciliation, classified transactions, Ledger Summary categories, and balance setup. See CHANGELOG_ARCHIVE.md.
 
 ## Commands
 - Run app: [your actual run command]
@@ -221,6 +221,7 @@ One line per file group: what it is now. Full build history for every entry live
 - 2026-10-07: Defined the customer-wise Cashflows projection contract, grouping by customer account code and tying matched statement-eligible settlements to Received from customers.
 - 2026-10-07: Locked customer-payment composite voucher accounting rules in cash-bank-summary-module-spec.md.
 - 2026-10-07: Completed Phase 2 customer-payment engine separation with matched net receipts and derived drilldown rows.
+- 2026-10-07: Added in-place customer-wise Cashflows reconciliation, customer search, and voucher-view restoration; UI commit 9f0bf97.
 - 2026-10-07: Added Ledgerwise Summary reconciliation tab to Cashflows XLSX export with typed ledger totals and category differences.
 - 2026-10-06: Added source-identity Cashflows label backfill with prepared-snapshot invalidation.
 - 2026-10-06: New Cashflows classification rows now carry a derived account label with backward-compatible SQL fallback.

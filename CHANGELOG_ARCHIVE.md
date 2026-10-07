@@ -7645,3 +7645,11 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Implementation:** Hidden Type cells now remain in the table layout with zero width instead of being removed, preserving explicit period-column positions. Sticky total-row cells now use the same blue background as the amount cells.
 
 **Verification:** Focused reconciliation report tests passed 37/37; JavaScript syntax and git diff --check passed. No backend, accounting, or XLSX export change was required.
+
+## Cashflows customer-wise view toggle - 2026-10-07
+
+**Scope:** Add customer selection and customer-wise reconciliation beside voucher-level Customer payments without changing accounting calculations.
+
+**Implementation:** Added a customer search, unique customer totals with reconciliation columns, and an in-place view switch. `Load customer payments (loaded)` restores voucher-level rows. Commit `9f0bf97`.
+
+**Verification:** Aadil confirmed local UI behavior. Reconciliation tests passed 40/40; JavaScript syntax and diff checks passed. Three direct-window failures remain in unrelated default-period/style/layout work.
