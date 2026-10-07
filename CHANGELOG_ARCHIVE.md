@@ -1,5 +1,13 @@
 # Changelog Archive
 
+## Cashflows Ledgerwise Summary XLSX tab - 2026-10-07
+
+**Scope:** Add an additional Ledgerwise Summary worksheet to the Cashflows Export XLSX workbook while preserving all existing worksheets.
+
+**Implementation:** Groups active Cash/Bank ledger rollups by category and account code, showing ledger totals, Cashflows Summary totals, and typed differences. Uses reference-style category formatting and excludes the reference workbook confirmation/calculation rows and broken links.
+
+**Verification:** test_reconciliation_reports.py passed 39 tests; test_reconciliation_xlsx.py passed 6 tests with a workspace temporary base; Python compilation and git diff --check passed; user confirmed local export behavior.
+
 ## Cashflows targeted drilldown projection - Phase 5 - 2026-10-06
 
 - Added an upload-time indexed account-code rollup projection for category expansion; targeted loads filter by client, upload set, revision, category, and period before Python aggregation.

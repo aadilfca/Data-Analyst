@@ -1354,14 +1354,55 @@ def test_cashflow_export_preserves_visible_periods_and_totals():
     assert [drilldown.cell(5, column).value for column in range(1, 8)] == [
         "Customers", "Q1 2026", "Customers", "AR", "Bank", 125, 1
     ]
+    ledgerwise = workbook["Ledgerwise Summary"]
+    assert [ledgerwise.cell(4, column).value for column in range(1, 6)] == [
+        "Account Code",
+        "Account Name/Ledger",
+        "Ledger Total Amount (Cash and Bank)",
+        "Total Amount as per Cashflows Summary",
+        "Difference (if any)",
+    ]
+    assert [ledgerwise.cell(5, column).value for column in range(1, 6)] == [None, "Customers", 125, 175, -50]
+    assert [ledgerwise.cell(6, column).value for column in range(1, 4)] == ["AR", "Customers", 125]
+    assert [ledgerwise.cell(7, column).value for column in range(1, 6)] == [None, "Vendors", 80, 100, -20]
+    assert [ledgerwise.cell(8, column).value for column in range(1, 4)] == ["AP", "Vendors", 80]
+    assert ledgerwise.cell(5, 3).number_format == '#,##0.00;[Red](#,##0.00);0.00'
+    assert ledgerwise.cell(5, 2).fill.fgColor.rgb.endswith("D9EAF7")
+    assert ledgerwise.freeze_panes == "C5"
+    assert all("#REF!" not in str(cell.value) for row in ledgerwise.iter_rows() for cell in row if cell.value is not None)
     controls = workbook["Export Controls"]
     control_values = {controls.cell(row, 1).value: controls.cell(row, 2).value for row in range(5, controls.max_row + 1)}
     assert control_values["Drill-down rows"] == 2
     assert control_values["Drill-down Bank amount"] == 125
     assert control_values["Drill-down Cash amount"] == -80
     assert control_values["Drill-down detail total"] == 45
-    assert set(workbook.sheetnames) == {"Cashflows Summary", "Internal Transfers", "Customer Deductions", "Review Required", "Cashflows Ledger Drill-down", "Export Controls"}
+    assert set(workbook.sheetnames) == {"Cashflows Summary", "Ledgerwise Summary", "Internal Transfers", "Customer Deductions", "Review Required", "Cashflows Ledger Drill-down", "Export Controls"}
 
+
+
+def test_cashflow_ledgerwise_summary_reconciles_combined_cash_and_bank_ledgers():
+    preview = {
+        "periods": [{"key": "2026-01", "label": "Jan 2026"}],
+        "group_by": "month",
+        "category_totals": [
+            {"category": "Payments", "2026-01": -175.0, "Total": -175.0},
+            {"category": "Receipts", "2026-01": 30.0, "Total": 30.0},
+        ],
+        "ledger_rollups": [
+            {"category": "Payments", "period_key": "2026-01", "account_code": "P1", "account_name": "Supplier one", "treasury_type": "Bank", "amount": -100.0},
+            {"category": "Payments", "period_key": "2026-01", "account_code": "P1", "account_name": "Supplier one", "treasury_type": "Cash", "amount": -50.0},
+            {"category": "Payments", "period_key": "2026-01", "account_code": "P2", "account_name": "Supplier two", "treasury_type": "Bank", "amount": -25.0},
+            {"category": "Receipts", "period_key": "2026-01", "account_code": "R1", "account_name": "Customer one", "treasury_type": "Bank", "amount": 30.0},
+        ],
+    }
+
+    workbook = load_workbook(BytesIO(export_cashflow_xlsx(preview)), data_only=True)
+    sheet = workbook["Ledgerwise Summary"]
+    assert [sheet.cell(row, 2).value for row in range(5, 10)] == ["Payments", "Supplier one", "Supplier two", "Receipts", "Customer one"]
+    assert [sheet.cell(5, column).value for column in range(3, 6)] == [175, 175, 0]
+    assert [sheet.cell(6, column).value for column in range(1, 4)] == ["P1", "Supplier one", 150]
+    assert [sheet.cell(7, column).value for column in range(1, 4)] == ["P2", "Supplier two", 25]
+    assert [sheet.cell(8, column).value for column in range(3, 6)] == [30, 30, 0]
 
 
 def test_cashflow_export_uses_canonical_drilldown_and_active_filters():

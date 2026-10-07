@@ -34,6 +34,7 @@ EXCEL_BROWN = "7E350E"
 
 MONEY_FORMAT = '#,##0;[Red](#,##0);-'
 DATE_FORMAT = "dd-mmm-yy"
+LEDGERWISE_MONEY_FORMAT = '#,##0.00;[Red](#,##0.00);0.00'
 
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
@@ -160,6 +161,16 @@ def build_cashflow_workbook(
             period_end=period_end,
             group_by=group_by,
         )
+    ledgerwise_sheet = workbook.create_sheet("Ledgerwise Summary")
+    _write_cashflow_ledgerwise_summary_sheet(
+        ledgerwise_sheet,
+        summary_preview,
+        period_keys,
+        period_labels,
+        period_start=period_start,
+        period_end=period_end,
+        group_by=group_by,
+    )
     _write_cashflow_detail_sheet(
         workbook.create_sheet("Internal Transfers"),
         "Internal Transfers",
@@ -242,6 +253,10 @@ def build_cashflow_workbook(
 
     for sheet in workbook.worksheets:
         _finish_sheet(sheet)
+    for row_cells in ledgerwise_sheet.iter_rows(min_row=5, max_col=5):
+        for cell in row_cells[2:5]:
+            if cell.value is not None:
+                cell.number_format = LEDGERWISE_MONEY_FORMAT
     return workbook
 
 
@@ -463,6 +478,129 @@ def _write_cashflow_summary_sheet(
         _style_cashflow_summary_values(ws, row, total_columns=[len(period_keys) + 2], percentage_column=len(period_keys) + 3, local_total_column=len(period_keys) + 4)
         row += 3
     ws.freeze_panes = "B6"
+
+
+
+def _write_cashflow_ledgerwise_summary_sheet(
+    ws,
+    preview: Mapping[str, Any],
+    period_keys: list[str],
+    period_labels: list[str],
+    *,
+    period_start: str | None,
+    period_end: str | None,
+    group_by: str | None,
+) -> None:
+    """Write category totals with their underlying Cash/Bank ledger rows."""
+    _write_title(
+        ws,
+        "Ledgerwise Summary",
+        f"Category-wise ledger detail for {period_start or 'selected start'} to {period_end or 'selected end'}; grouping: {group_by or preview.get('group_by') or 'month'}. Category rows reconcile to the selected Cashflows Summary.",
+        5,
+    )
+    headers = [
+        "Account Code",
+        "Account Name/Ledger",
+        "Ledger Total Amount (Cash and Bank)",
+        "Total Amount as per Cashflows Summary",
+        "Difference (if any)",
+    ]
+    _write_table(ws, 4, headers, header=True)
+
+    summary_totals = _cashflow_ledgerwise_category_totals(preview, period_keys)
+    ledger_groups = _cashflow_ledgerwise_ledger_groups(preview.get("ledger_rollups") or [])
+    categories = list(summary_totals)
+    categories.extend(category for category in ledger_groups if category not in summary_totals)
+
+    row = 5
+    for category in categories:
+        summary_total = summary_totals.get(category, 0.0)
+        ledger_rows = ledger_groups.get(category, [])
+        ledger_total_raw = sum(item["amount"] for item in ledger_rows)
+        display_sign = -1.0 if summary_total < 0 else 1.0
+        display_summary_total = abs(summary_total) if summary_total < 0 else summary_total
+        display_ledger_total = ledger_total_raw * display_sign
+        _write_table(
+            ws,
+            row,
+            [None, category, display_ledger_total, display_summary_total, display_ledger_total - display_summary_total],
+            total=True,
+        )
+        _style_cashflow_ledgerwise_row(ws, row, category=True)
+        row += 1
+        for item in ledger_rows:
+            _write_table(
+                ws,
+                row,
+                [item["account_code"], item["account_name"], item["amount"] * display_sign, None, None],
+            )
+            _style_cashflow_ledgerwise_row(ws, row, ledger=True)
+            row += 1
+
+    if row == 5:
+        _write_table(ws, row, [None, "No ledger rows identified.", None, None, None])
+        _style_cashflow_ledgerwise_row(ws, row, ledger=True)
+    ws.freeze_panes = "C5"
+
+
+def _cashflow_ledgerwise_category_totals(
+    preview: Mapping[str, Any],
+    period_keys: list[str],
+) -> dict[str, float]:
+    """Normalize combined, single-treasury, and split summary totals by category."""
+    totals: dict[str, float] = {}
+    records = preview.get("treasury_view_totals") or preview.get("category_totals") or []
+    for record in records:
+        if not isinstance(record, Mapping):
+            continue
+        category = str(record.get("category") or "Unlabelled")
+        if record.get("Total") is not None:
+            amount = _number(record.get("Total")) or 0.0
+        elif record.get("total_amount") is not None:
+            amount = _number(record.get("total_amount")) or 0.0
+        else:
+            amount = sum(_number(record.get(key)) or 0.0 for key in period_keys)
+        totals[category] = totals.get(category, 0.0) + amount
+    return totals
+
+
+def _cashflow_ledgerwise_ledger_groups(
+    records: list[Mapping[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Aggregate period-level roll-ups into one row per category and ledger."""
+    grouped: dict[str, dict[tuple[str, str], dict[str, Any]]] = {}
+    for record in records:
+        if not isinstance(record, Mapping):
+            continue
+        category = str(record.get("category") or "Unlabelled")
+        account_code = str(record.get("account_code") or "").strip()
+        account_name = str(record.get("account_name") or "").strip()
+        key = (account_code, account_name)
+        category_rows = grouped.setdefault(category, {})
+        item = category_rows.setdefault(
+            key,
+            {"account_code": account_code, "account_name": account_name or account_code, "amount": 0.0},
+        )
+        item["amount"] += _number(record.get("amount")) or 0.0
+    return {category: list(rows.values()) for category, rows in grouped.items()}
+
+
+def _style_cashflow_ledgerwise_row(ws, row: int, *, category: bool = False, ledger: bool = False) -> None:
+    for column in range(1, 6):
+        cell = ws.cell(row, column)
+        cell.alignment = Alignment(
+            horizontal="left" if column in (1, 2) else "right",
+            vertical="center",
+            indent=1 if ledger and column == 2 else 0,
+        )
+        if column in (3, 4, 5):
+            cell.number_format = LEDGERWISE_MONEY_FORMAT
+        if category:
+            cell.fill = PatternFill("solid", fgColor=LIGHT_BLUE)
+            cell.font = Font(name="Arial", size=10, bold=True, color=NAVY)
+            cell.border = Border(bottom=Side(style="thin", color=NAVY))
+        elif ledger:
+            cell.font = Font(name="Arial", size=10, color=TEXT)
 
 
 def _cashflow_transfer_party_label(record: Mapping[str, Any], prefix: str) -> str:
