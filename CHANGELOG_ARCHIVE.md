@@ -1,5 +1,13 @@
 # Changelog Archive
 
+## Cashflows customer-payment accounting contract - 2026-10-07
+
+**Scope:** Lock the Gross/Net customer-payment treatment for reconciled Cashflows reporting.
+
+**Decision:** Customer receipts are voucher-level composites driven by configured category roles and account codes. The main statement uses matched net bank receipts; technical Bank credits are controls, customer-linked deductions are not double-counted, and unmatched or ambiguous vouchers remain for review. Customer ledger names stay in detail output, not main category expansion.
+
+**Verification:** Documentation-only Phase 1; no application code, source data, or cache structures changed.
+
 ## Cashflows Ledgerwise Summary XLSX tab - 2026-10-07
 
 **Scope:** Add an additional Ledgerwise Summary worksheet to the Cashflows Export XLSX workbook while preserving all existing worksheets.

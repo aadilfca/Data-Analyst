@@ -492,6 +492,16 @@ control totals.
 12. The report must prove itself to nil against the cash books and bank ledgers before it is
     shown as final.
 
+### 10.1 Customer-payment composite vouchers
+
+1. Identify customer payments only from configured Cashflow category roles and exact account-code assignments; account names are display-only.
+2. Build one voucher-level receipt from the customer credit and its same-voucher deduction roles: `net bank receipt = customer gross - bank charges - WHT - other deductions`.
+3. Gross method has a Bank debit plus a technical Bank credit; net method has only the net Bank debit. Cash receipts have no technical Bank credit.
+4. `actual bank movement = treasury debit - technical Bank credit`; the voucher is matched only when this equals the expected net receipt within the report tolerance.
+5. Technical Bank credits are reconciliation controls, never receipts, deductions, or standalone Cashflows lines.
+6. Matched customer-linked deductions are shown in the customer-payment detail but excluded from standalone main-statement payments. General charges remain as the residual of the configured charge category after customer-linked charges are consumed.
+7. Only matched composite receipts feed the main Customer Receipts category. Unmatched, multi-customer, or multi-receiving-account vouchers remain visible for review and do not silently affect the final statement.
+8. The main category expansion must show a clearly labelled derived customer-payment row, not customer ledger names. Customer names and codes remain in the voucher-level detail and customer-wise net-receipt summary.
 ---
 
 ## 11. Runtime performance and synchronization contract
