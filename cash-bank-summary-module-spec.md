@@ -524,6 +524,24 @@ configuration changes write a versioned derived transaction-line classification 
 not rewrite the uploaded JSON rows. Add, edit, and deactivate operations reclassify affected
 existing derived lines, with deactivation used instead of destructive deletion.
 
+### 11.1 Canonical voucher occurrence register (DV-1)
+
+Every source upload remains immutable. The register records one complete voucher occurrence per upload and keeps its source upload, normalized voucher identity, accounting-line fingerprint, decision, and canonical link.
+
+- Identity is client + configured Transaction Report template + normalized voucher ID; it is intentionally extensible for a future source-series/fiscal-context rule.
+- The version fingerprint uses voucher date plus the sorted complete set of account codes and debit/credit amounts. Display names, narration, category, and treasury classifications are excluded.
+- One matching identity/fingerprint is `current`; other exact copies are `exact_duplicate`. A changed fingerprint becomes `current_revised` and earlier versions are `superseded`; all remain auditable.
+- Missing IDs or inconsistent dates are `review_required`. Similar economics under different voucher IDs are never automatically removed.
+- DV-1 does not alter reports. A later controlled cutover will resolve affected vouchers during import and make prepared Cashflows snapshots read only the indexed current occurrence.
+
+### 11.2 Canonical source delivery phases
+
+1. **DV-1 — Register foundation:** schema, fingerprint, decision contract, and regression coverage; reports remain unchanged.
+2. **DV-2 — Historical shadow resolution:** populate and review current data without changing reporting results.
+3. **DV-3 — Incremental import resolution:** resolve only vouchers affected by a new upload and avoid cache invalidation for an exact copy.
+4. **DV-4 — Fast-path cutover:** prepared snapshots and Cashflows SQL read only indexed canonical current occurrences.
+5. **DV-5 — Audit evidence and acceptance:** expose decisions/counts, reconcile historical results, and test late/back-dated/revised uploads.
+6. **DV-6 — Desi data golden-rule registration:** after DV-5 acceptance, add the proven canonical-voucher, upload-time resolution, revision, cache, and audit-evidence rules to the project’s permanent Cashflows data/performance standard in `CLAUDE.md`.
 Cashflows must read that derived layer through SQL. The query applies the client, configured
 Transaction Report template, current-row, non-zero, and requested date filters before Python
 processing. It joins counter-account lines by voucher ID, keeps the complete selected voucher,

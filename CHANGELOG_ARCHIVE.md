@@ -1,5 +1,14 @@
 # Changelog Archive
 
+## Cashflows canonical voucher register — DV-1 - 2026-10-07
+
+**Scope:** Establish an audit-preserving source-voucher foundation without changing Cashflows source selection, totals, caches, or upload flow.
+
+**Implementation:** Added SQLite/PostgreSQL occurrence-register schema and indexes plus a pure resolver for normalized voucher identity, complete accounting-line fingerprints, exact duplicates, revised current versions, superseded versions, and review-required missing/inconsistent identifiers. Raw Client Data and classifications remain untouched.
+
+**Performance:** The register is not read by any current report. Later phases will resolve only affected upload vouchers and use the indexed canonical result before prepared rollups, avoiding report-time hashing or duplicate aggregation.
+
+**Verification:** Resolver, Cashflows schema-parity, and classification tests passed 18/18; an isolated SQLite schema smoke check passed. No client data or report result changed.
 ## Cashflows customer-wise accounting and display contract - 2026-10-07
 
 **Scope:** Define the customer-wise projection for the Cashflows report before implementation.

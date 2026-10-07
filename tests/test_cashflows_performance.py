@@ -22,7 +22,11 @@ from services.ledger_report_source import (
 
 def test_cashflow_sqlite_and_postgres_schema_contracts_stay_aligned():
     sqlite_schema = inspect.getsource(database.init_db)
-    postgres_schema = inspect.getsource(database.init_db_postgres) + inspect.getsource(database._ensure_postgres_cash_bank_transaction_classifications)
+    postgres_schema = (
+        inspect.getsource(database.init_db_postgres)
+        + inspect.getsource(database._ensure_postgres_cash_bank_transaction_classifications)
+        + inspect.getsource(database._ensure_postgres_cashflow_voucher_occurrences)
+    )
     required_tables = {
         "cash_bank_summary_read_models": (
             "client_id",
@@ -62,6 +66,20 @@ def test_cashflow_sqlite_and_postgres_schema_contracts_stay_aligned():
             "changed_by",
             "change_reason",
         ),
+        "cashflow_voucher_occurrences": (
+            "client_id",
+            "template_id",
+            "upload_id",
+            "voucher_id",
+            "voucher_identity",
+            "occurrence_key",
+            "voucher_fingerprint",
+            "fingerprint_version",
+            "transaction_date",
+            "source_line_count",
+            "decision_status",
+            "canonical_occurrence_id",
+        ),
     }
     required_indexes = (
         "idx_cash_bank_summary_read_models_client",
@@ -72,6 +90,9 @@ def test_cashflow_sqlite_and_postgres_schema_contracts_stay_aligned():
         "idx_cash_bank_classifications_client_account_date",
         "idx_cash_bank_classifications_source_version",
         "idx_cash_bank_classifications_client_period",
+        "idx_cashflow_voucher_occurrences_lookup",
+        "idx_cashflow_voucher_occurrences_upload",
+        "idx_cashflow_voucher_occurrences_canonical",
     )
 
     for table, columns in required_tables.items():

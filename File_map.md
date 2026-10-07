@@ -32,6 +32,7 @@ This document lists all source files in the project, grouped by directory, with 
 |------|---------|
 | `services/ledger_group_summary.py` | Pure pandas engine that selects complete vouchers by account code, validates balancing, builds category/month pivots, aggregates central Financial Statement categories, surfaces transfers and unmapped categories, and optionally derives reconciliation proofs. |
 | `services/ledger_report_source.py` | Read-only adapter that normalizes stored Client Data Bank journal rows and report-scoped Ledger Summary or central Financial Statement category assignments. |
+| `services/cashflow_voucher_canonicalization.py` | Pure, audit-preserving Cashflows voucher identity/fingerprint resolver; later phases persist occurrences and consume only the canonical current version. |
 | `services/reconciliation_balance_source.py` | Normalizes stored opening/month-end balance inputs and reports missing, duplicate, invalid, or out-of-period reconciliation evidence. |
 | `services/reconciliation_xlsx.py` | OpenPyXL exporter for professional Bank/Cash monthly summaries, schedules, review controls, cross-checks, and reconciliation proofs. |
 | `services/storage_cleanup.py` | PostgreSQL storage preview plus one-transaction, protected-data cleanup for approved logs, retired unlinked rows, deleted upload metadata, stale presence, and expired sessions. |
@@ -141,6 +142,7 @@ This document lists all source files in the project, grouped by directory, with 
 | `test_templates.py` | Playwright regression tests for Edit Template modal closure and draft-column persistence before explicit Save Template submission. |
 | `test_ledger_group_summary.py`, `test_ledger_report_source.py` | Unit tests for canonical voucher/category summaries, transfers, proofs, source normalization, diagnostics, and dataset selection. |
 | `test_cashflows_performance.py` | Verifies SQL-first Cashflows date filtering, voucher joins, derived-layer aggregation, and raw-JSON-free source preparation. |
+| `test_cashflow_voucher_canonicalization.py` | Verifies Cashflows voucher fingerprints and audit-safe decisions for exact duplicates, revisions, and review-required identities. |
 | `test_cashflows_classification_preview.py` | Verifies the read-only derived Cashflows classification preview, filtering, paging, and classification fields. |
 | `test_cashflows_direct_window_ui.py` | Static regression checks for the inline classified-transaction window and lazy Cashflows controls. |
 | `test_reconciliation.py`, `test_reconciliation_balance_source.py`, `test_reconciliation_reports.py` | Test account-group, balance-input, report-control, Financial Statement preview, preview/download, exact-code validation, transactional replacement, normalization, and completeness behavior. |

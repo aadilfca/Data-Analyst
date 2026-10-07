@@ -538,6 +538,37 @@ def init_db():
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_account_date ON cash_bank_transaction_classifications (client_id, account_code, transaction_date, is_current)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_source_version ON cash_bank_transaction_classifications (client_data_id, configuration_version)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_period ON cash_bank_transaction_classifications (client_id, transaction_month, transaction_fortnight, is_current)")
+        # DV-1 keeps source occurrences immutable while later phases select one
+        # canonical voucher version for reporting.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS cashflow_voucher_occurrences (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                template_id INTEGER NOT NULL,
+                upload_id INTEGER NOT NULL,
+                voucher_id TEXT,
+                voucher_identity TEXT,
+                occurrence_key TEXT NOT NULL,
+                voucher_fingerprint TEXT NOT NULL,
+                fingerprint_version INTEGER NOT NULL DEFAULT 1,
+                transaction_date TEXT,
+                source_line_count INTEGER NOT NULL DEFAULT 0,
+                source_extract_as_of TEXT,
+                decision_status TEXT NOT NULL DEFAULT 'review_required',
+                decision_reason TEXT,
+                canonical_occurrence_id INTEGER,
+                resolved_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                FOREIGN KEY (template_id) REFERENCES templates(id) ON DELETE CASCADE,
+                FOREIGN KEY (upload_id) REFERENCES uploaded_files(id) ON DELETE CASCADE,
+                FOREIGN KEY (canonical_occurrence_id) REFERENCES cashflow_voucher_occurrences(id) ON DELETE SET NULL,
+                UNIQUE(client_id, template_id, upload_id, occurrence_key)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cashflow_voucher_occurrences_lookup ON cashflow_voucher_occurrences (client_id, template_id, voucher_identity, decision_status)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cashflow_voucher_occurrences_upload ON cashflow_voucher_occurrences (upload_id, decision_status)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cashflow_voucher_occurrences_canonical ON cashflow_voucher_occurrences (canonical_occurrence_id)")
         conn.execute('''
             CREATE TABLE IF NOT EXISTS cash_bank_summary_read_models (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -4303,6 +4334,41 @@ def _ensure_postgres_cash_bank_transaction_classifications(conn):
     finally:
         cur.close()
 
+def _ensure_postgres_cashflow_voucher_occurrences(conn):
+    """Create the additive, audit-preserving canonical-voucher register."""
+    cur = conn.cursor()
+    try:
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS cashflow_voucher_occurrences (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+                upload_id INTEGER NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
+                voucher_id TEXT,
+                voucher_identity TEXT,
+                occurrence_key TEXT NOT NULL,
+                voucher_fingerprint TEXT NOT NULL,
+                fingerprint_version INTEGER NOT NULL DEFAULT 1,
+                transaction_date DATE,
+                source_line_count BIGINT NOT NULL DEFAULT 0,
+                source_extract_as_of TIMESTAMPTZ,
+                decision_status TEXT NOT NULL DEFAULT 'review_required',
+                decision_reason TEXT,
+                canonical_occurrence_id INTEGER REFERENCES cashflow_voucher_occurrences(id) ON DELETE SET NULL,
+                resolved_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(client_id, template_id, upload_id, occurrence_key)
+            )
+        ''')
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cashflow_voucher_occurrences_lookup ON cashflow_voucher_occurrences (client_id, template_id, voucher_identity, decision_status)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cashflow_voucher_occurrences_upload ON cashflow_voucher_occurrences (upload_id, decision_status)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cashflow_voucher_occurrences_canonical ON cashflow_voucher_occurrences (canonical_occurrence_id)")
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
 def _ensure_postgres_local_vendor_discovery_indexes(conn):
     """Create additive indexes for published-account Local Vendor discovery."""
     account_code = "COALESCE(row_data ->> 'Account Detail', row_data ->> 'Account Details', row_data ->> 'Account Code', row_data ->> 'Account No', row_data ->> 'Account Number', row_data ->> 'Code', row_data ->> 'Ledger Code', row_data ->> 'AccountID', row_data ->> 'Account Head', row_data ->> 'Ledger Detail')"
@@ -4337,6 +4403,7 @@ def init_db_postgres(conn):
         _ensure_postgres_report_category_tables(conn)
         _ensure_postgres_account_set_tables(conn)
         _ensure_postgres_cash_bank_transaction_classifications(conn)
+        _ensure_postgres_cashflow_voucher_occurrences(conn)
         migrated_assertions = _ensure_postgres_audit_rule_assertions(conn)
         migrated_compiled_rulebooks = _ensure_postgres_category_compiled_rulebooks(conn)
         migrated_cat_doc_assertions = _ensure_postgres_category_document_assertions(conn)
@@ -4553,6 +4620,31 @@ def init_db_postgres(conn):
     run("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_account_date ON cash_bank_transaction_classifications (client_id, account_code, transaction_date, is_current)")
     run("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_source_version ON cash_bank_transaction_classifications (client_data_id, configuration_version)")
     run("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_period ON cash_bank_transaction_classifications (client_id, transaction_month, transaction_fortnight, is_current)")
+    run('''
+        CREATE TABLE IF NOT EXISTS cashflow_voucher_occurrences (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+            upload_id INTEGER NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
+            voucher_id TEXT,
+            voucher_identity TEXT,
+            occurrence_key TEXT NOT NULL,
+            voucher_fingerprint TEXT NOT NULL,
+            fingerprint_version INTEGER NOT NULL DEFAULT 1,
+            transaction_date DATE,
+            source_line_count BIGINT NOT NULL DEFAULT 0,
+            source_extract_as_of TIMESTAMPTZ,
+            decision_status TEXT NOT NULL DEFAULT 'review_required',
+            decision_reason TEXT,
+            canonical_occurrence_id INTEGER REFERENCES cashflow_voucher_occurrences(id) ON DELETE SET NULL,
+            resolved_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE(client_id, template_id, upload_id, occurrence_key)
+        )
+    ''', "cashflow_voucher_occurrences")
+    run("CREATE INDEX IF NOT EXISTS idx_cashflow_voucher_occurrences_lookup ON cashflow_voucher_occurrences (client_id, template_id, voucher_identity, decision_status)")
+    run("CREATE INDEX IF NOT EXISTS idx_cashflow_voucher_occurrences_upload ON cashflow_voucher_occurrences (upload_id, decision_status)")
+    run("CREATE INDEX IF NOT EXISTS idx_cashflow_voucher_occurrences_canonical ON cashflow_voucher_occurrences (canonical_occurrence_id)")
     run('''
         CREATE TABLE IF NOT EXISTS cash_bank_summary_read_models (
             id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
