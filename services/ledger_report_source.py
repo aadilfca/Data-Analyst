@@ -34,6 +34,7 @@ CASHFLOW_CHILD_DETAILS_VERSION = 6
 CASHFLOW_DRILLDOWN_DETAILS_VERSION = 2
 CASHFLOW_DRILLDOWN_PROJECTION_VERSION = 1
 CASHFLOW_TREASURY_TOTALS_VERSION = 1
+CASHFLOW_SUMMARY_PAYLOAD_VERSION = 1
 CASHFLOW_TREASURY_VIEWS = ("combined", "bank", "cash", "split")
 
 _JOURNAL_ALIASES: Mapping[str, tuple[str, ...]] = {
@@ -1124,6 +1125,7 @@ def _cashflow_summary_payload(summary: Mapping[str, Any]) -> dict[str, Any]:
         "categories_needing_review": _cashflow_detail_records(summary.get("categories_needing_review")),
         "period_metrics": summary.get("period_metrics") or {},
         "receipt_presentation": summary.get("receipt_presentation") or "net",
+        "summary_payload_version": CASHFLOW_SUMMARY_PAYLOAD_VERSION,
     }
 
 
@@ -1189,6 +1191,7 @@ def _cashflow_summary_from_payload(
         "source_line_count": int(payload.get("source_line_count", 0) or 0),
         "period_metrics": payload.get("period_metrics") or {},
         "receipt_presentation": payload.get("receipt_presentation") or "net",
+        "summary_payload_version": int(payload.get("summary_payload_version", 0) or 0),
         "child_details_prepared": child_details_prepared,
         "child_details_version": child_details_version,
     }
@@ -1423,6 +1426,7 @@ def _cashflow_daily_rollup(
         "months": months,
         "periods": periods,
         "group_by": grouping,
+        "summary_payload_version": int(payload.get("summary_payload_version", 0) or 0),
         "category_totals": category_totals,
         "treasury_category_totals": treasury_category_totals,
         "treasury_reconciliation": treasury_reconciliation,
@@ -1439,6 +1443,7 @@ def _cashflow_daily_rollup(
         "category_review_count": totals["category_review_count"],
         "period_metrics": period_metrics,
         "receipt_presentation": payload.get("receipt_presentation") or "net",
+        "summary_payload_version": int(payload.get("summary_payload_version", 0) or 0),
         "child_details_prepared": child_details_prepared,
         "child_details_version": child_details_version,
         "cashflow_ledger_rollups": ledger_rollups,
@@ -1569,6 +1574,7 @@ def load_cashflow_prepared_summary(
         "sql_aggregated": True,
         "raw_json_parsing": False,
         "summary_read_model": "prepared_snapshot",
+        "summary_payload_version": int(summary.get("summary_payload_version", 0) or 0),
         "treasury_totals_version": int(summary.get("treasury_totals_version", 0) or 0),
         "child_details_prepared": bool(summary.get("child_details_prepared")),
         "child_details_version": int(summary.get("child_details_version", 0) or 0),
@@ -1756,6 +1762,7 @@ def load_cashflow_summary_read_model(
         "sql_aggregated": True,
         "raw_json_parsing": False,
         "summary_read_model": "hit",
+        "summary_payload_version": int(payload.get("summary_payload_version", 0) or 0),
         "treasury_totals_version": int(payload.get("treasury_totals_version", 0) or 0),
         "child_details_prepared": bool(payload.get("child_details_prepared")),
         "child_details_version": int(payload.get("child_details_version", 0) or 0),

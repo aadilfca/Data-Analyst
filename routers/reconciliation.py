@@ -22,6 +22,7 @@ from services.ledger_group_summary import LedgerBalanceError, build_cashflow_sum
 from services.ledger_report_source import (
     CASHFLOW_CHILD_DETAILS_VERSION,
     CASHFLOW_DRILLDOWN_DETAILS_VERSION,
+    CASHFLOW_SUMMARY_PAYLOAD_VERSION,
     CASHFLOW_COLUMN_ROLE_LABELS,
     CASHFLOW_REQUIRED_COLUMN_ROLES,
     CASHFLOW_TREASURY_TOTALS_VERSION,
@@ -1377,6 +1378,9 @@ def _cashflow_cache_can_serve_details(
     if cached_summary is None:
         return False
     metadata = cached_summary.get("metadata", {})
+    payload_version = metadata.get("summary_payload_version")
+    if payload_version is not None and int(payload_version or 0) < CASHFLOW_SUMMARY_PAYLOAD_VERSION:
+        return False
     if treasury_view != "combined" and int(metadata.get("treasury_totals_version", 0) or 0) < CASHFLOW_TREASURY_TOTALS_VERSION:
         return False
     if detail_sections:

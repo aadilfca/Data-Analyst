@@ -10,7 +10,7 @@ from openpyxl import load_workbook
 
 from routers import reconciliation
 from services.ledger_group_summary import build_cashflow_summary, build_financial_statement_summary
-from services.ledger_report_source import CASHFLOW_CHILD_DETAILS_VERSION, CASHFLOW_DRILLDOWN_DETAILS_VERSION
+from services.ledger_report_source import CASHFLOW_CHILD_DETAILS_VERSION, CASHFLOW_DRILLDOWN_DETAILS_VERSION, CASHFLOW_SUMMARY_PAYLOAD_VERSION
 from routers import settings as settings_router
 from services.reconciliation_xlsx import export_cashflow_xlsx
 
@@ -437,10 +437,13 @@ def test_cashflows_preview_exposes_compact_drilldown_contract():
 
 def test_cashflow_drilldown_cache_requires_current_payload_version():
     legacy = {'metadata': {'drilldown_details_prepared': True, 'drilldown_details_version': 0}, 'summary': _cashflow_summary()}
-    current = {'metadata': {'drilldown_details_prepared': True, 'drilldown_details_version': CASHFLOW_DRILLDOWN_DETAILS_VERSION}, 'summary': _cashflow_summary()}
+    current = {'metadata': {'summary_payload_version': CASHFLOW_SUMMARY_PAYLOAD_VERSION, 'drilldown_details_prepared': True, 'drilldown_details_version': CASHFLOW_DRILLDOWN_DETAILS_VERSION}, 'summary': _cashflow_summary()}
+    stale_summary = {'metadata': {'summary_payload_version': CASHFLOW_SUMMARY_PAYLOAD_VERSION - 1}, 'summary': _cashflow_summary()}
 
     assert reconciliation._cashflow_cache_can_serve_details(legacy, {'drilldown'}) is False
+    assert reconciliation._cashflow_cache_can_serve_details(stale_summary, None) is False
     assert reconciliation._cashflow_cache_can_serve_details(current, {'drilldown'}) is True
+    assert reconciliation._cashflow_cache_can_serve_details(current, None) is True
 
 
 def test_cashflow_drilldown_route_filters_and_paginates_server_side():
@@ -564,6 +567,12 @@ def test_cashflows_preview_passes_grouping_and_returns_period_descriptors():
         "bank_account_codes": ["B1"],
         "match_internal_transfers": False,
         "receipt_presentation": "net",
+        "customer_payment_roles": {
+            "customer_receipt": ["Received from customers"],
+            "bank_charge": ["Bank Charges"],
+            "withholding_tax": ["Withholding tax on export"],
+            "other_deduction": ["Other deductions"],
+        },
     }
     with (
         patch.object(reconciliation, "_require_active_client"),
@@ -586,6 +595,7 @@ def test_cashflows_preview_passes_grouping_and_returns_period_descriptors():
     assert response["preview"]["category_totals"][0]["2026-Q1"] == 125.0
     assert builder.call_args.kwargs["group_by"] == "quarter"
     assert builder.call_args.kwargs["group_by"] == response["group_by"]
+    assert builder.call_args.kwargs["cashflow_role_categories"] == configuration["customer_payment_roles"]
 
 
 def test_cashflows_preview_uses_summary_read_model_without_loading_detail_source():
@@ -805,6 +815,7 @@ def test_cashflow_summary_read_model_round_trip_preserves_period_totals():
     )
 
     payload = json.loads(writes[0][1][-1])
+    assert payload["summary_payload_version"] == CASHFLOW_SUMMARY_PAYLOAD_VERSION
 
     def query(sql, params):
         if "FROM uploaded_files" in sql:
@@ -831,6 +842,7 @@ def test_cashflow_summary_read_model_round_trip_preserves_period_totals():
     assert cached["metadata"]["cashflow_report_revision"] == 7
     assert cached["metadata"]["child_details_prepared"] is True
     assert cached["metadata"]["child_details_version"] == CASHFLOW_CHILD_DETAILS_VERSION
+    assert cached["metadata"]["summary_payload_version"] == CASHFLOW_SUMMARY_PAYLOAD_VERSION
     assert cached["summary"]["transfer_details"].loc[0, "amount"] == 20.0
     assert cached["summary"]["customer_payment_details"].loc[0, "method"] == "Gross"
     assert cached["summary"]["deduction_details"].loc[0, "account_name"] == "Tax"
@@ -972,6 +984,12 @@ def test_preparation_builds_one_daily_snapshot_after_committed_source_changes():
             return [{
                 "treasury": [{"account_code": "B1", "treasury_type": "bank"}],
                 "settings": {"source_template_id": 9, "match_internal_transfers": False, "receipt_presentation": "net"},
+                "customer_payment_roles": [
+                    {"role_key": "customer_receipt", "label": "Received from customers"},
+                    {"role_key": "bank_charge", "label": "Bank Charges"},
+                    {"role_key": "withholding_tax", "label": "Withholding tax on export"},
+                    {"role_key": "other_deduction", "label": "Other deductions"},
+                ],
             }]
         if "FROM uploaded_files" in sql:
             return [{"upload_id": 21, "file_name": "period.xlsx", "upload_date": "2026-04-01"}]
