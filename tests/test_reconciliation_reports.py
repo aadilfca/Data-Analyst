@@ -1011,6 +1011,12 @@ def test_preparation_builds_one_daily_snapshot_after_committed_source_changes():
     assert store.call_args.kwargs["group_by"] == "day"
     assert store.call_args.kwargs["source_upload_ids"] == [21]
     assert store.call_args.kwargs["report_revision"] == 6
+    assert builder.call_args.kwargs["cashflow_role_categories"] == {
+        "customer_receipt": ["Received from customers"],
+        "bank_charge": ["Bank Charges"],
+        "withholding_tax": ["Withholding tax on export"],
+        "other_deduction": ["Other deductions"],
+    }
 
 def test_cashflow_configuration_uses_one_query_and_preserves_sections():
     calls = []
