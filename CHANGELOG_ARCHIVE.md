@@ -1,5 +1,13 @@
 # Changelog Archive
 
+## Cashflows customer-payment engine separation - 2026-10-07
+
+**Scope:** Implement the approved Phase 2 accounting contract for customer-payment Cashflows reporting.
+
+**Implementation:** Main net receipts now use only matched Account Control Centre customer-payment vouchers and actual net bank settlement. Customer-linked deductions are consumed once, general charges remain separate, technical Bank credits remain reconciliation controls, unmatched vouchers stay out of the statement, and drilldown rows use a derived customer-payment label instead of customer ledger names.
+
+**Verification:** Engine and reconciliation coverage passed 69 tests; Python compilation and `git diff --check` passed. Post-configuration validation confirmed BRV-0126-159 reconciles at gross 6,838,636 less deductions 193,896 to net 6,644,740 with zero difference.
+
 ## Cashflows customer-payment accounting contract - 2026-10-07
 
 **Scope:** Lock the Gross/Net customer-payment treatment for reconciled Cashflows reporting.

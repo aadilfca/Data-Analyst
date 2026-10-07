@@ -19,6 +19,8 @@ DEFAULT_TOLERANCE = 0.005
 CASHFLOW_GROUPINGS = ("day", "fortnight", "month", "quarter", "half_year", "year")
 CASHFLOW_TREASURY_TOTAL_COLUMNS = ("category", "period_key", "bank_amount", "cash_amount", "mixed_amount", "total_amount")
 CASHFLOW_TREASURY_TOTALS_VERSION = 1
+CASHFLOW_CUSTOMER_PAYMENT_DERIVED_ACCOUNT_CODE = "__customer_payment__"
+CASHFLOW_CUSTOMER_PAYMENT_DERIVED_ACCOUNT_NAME = "Customer payment (net bank receipt)"
 
 
 class LedgerBalanceError(ValueError):
@@ -1132,9 +1134,10 @@ def build_cashflow_summary(
 
     Cash/Bank lines define the treasury leg. Counter-account lines are grouped
     by the Cash Flow category assigned in Account Control Centre. Customer
-    receipts default to net presentation: charge and withholding lines remain
-    available in ``deduction_details`` while the main customer category uses
-    the net treasury effect.
+    receipts default to net presentation: only matched configured customer
+    vouchers feed the main customer category, while charge and withholding
+    lines remain available in ``deduction_details`` and unmatched vouchers stay
+    visible for review.
     """
     start = pd.Timestamp(period_start)
     end = pd.Timestamp(period_end)
@@ -1283,6 +1286,12 @@ def build_cashflow_summary(
             tolerance=tolerance,
         )
         review_mask = mapped_categories.eq("") & ~contra["is_deduction"]
+        matched_customer_vouchers = set(
+            customer_payment_details.loc[
+                customer_payment_details["status"].eq("Matched"), "voucher_id"
+            ].tolist()
+        )
+        unmatched_customer_vouchers = customer_vouchers - matched_customer_vouchers
         if configured_roles is not None and customer_vouchers:
             review_mask = review_mask | residual_credit
         review = contra.loc[
@@ -1290,19 +1299,40 @@ def build_cashflow_summary(
             ["voucher_id", "date", "month", "period_key", "period_label", "account_code", "account_name", "voucher_detail", "debit", "credit", "category"],
         ].rename(columns={"category": "fallback_category"})
 
-        has_customer = contra.groupby("voucher_id", sort=False)["is_customer"].any().reindex(voucher_order, fill_value=False).to_numpy()
-        has_deduction = contra.groupby("voucher_id", sort=False)["is_deduction"].any().reindex(voucher_order, fill_value=False).to_numpy()
-        net_vouchers = voucher_order[has_customer & has_deduction] if presentation == "net" else pd.Index([], dtype=object)
-        net_special = contra["voucher_id"].isin(net_vouchers) & (contra["is_customer"] | contra["is_deduction"])
-        category_lines = contra.loc[~net_special, ["voucher_id", "category", "month", "period_key", "period_label", "amount"]]
-        if len(net_vouchers):
-            special = contra.loc[net_special]
-            net_rows = special.loc[special["is_customer"]].drop_duplicates("voucher_id", keep="first")[["voucher_id", "category", "month", "period_key", "period_label"]].copy()
-            net_amounts = special.groupby("voucher_id", sort=False)["amount"].sum()
-            net_rows["amount"] = net_rows["voucher_id"].map(net_amounts)
-            category_frame = pd.concat([category_lines, net_rows[["voucher_id", "category", "month", "period_key", "period_label", "amount"]]], ignore_index=True)
+        if presentation == "net":
+            net_vouchers = pd.Index(
+                [voucher_id for voucher_id in voucher_order if voucher_id in matched_customer_vouchers],
+                dtype=object,
+                name="voucher_id",
+            )
+            net_special = contra["voucher_id"].isin(customer_vouchers)
+            category_lines = contra.loc[
+                ~net_special,
+                ["voucher_id", "category", "month", "period_key", "period_label", "amount"],
+            ]
+            if len(net_vouchers):
+                special = contra.loc[net_special]
+                net_rows = special.loc[
+                    special["is_customer"] & special["voucher_id"].isin(net_vouchers)
+                ].drop_duplicates("voucher_id", keep="first")[[
+                    "voucher_id", "category", "month", "period_key", "period_label"
+                ]].copy()
+                detail_by_voucher = customer_payment_details.set_index("voucher_id")
+                net_amounts = detail_by_voucher["net_bank_settlement"]
+                net_rows["amount"] = net_rows["voucher_id"].map(net_amounts)
+                category_frame = pd.concat(
+                    [
+                        category_lines,
+                        net_rows[["voucher_id", "category", "month", "period_key", "period_label", "amount"]],
+                    ],
+                    ignore_index=True,
+                )
+            else:
+                category_frame = category_lines.copy()
         else:
-            category_frame = category_lines.copy()
+            net_vouchers = pd.Index([], dtype=object, name="voucher_id")
+            net_special = pd.Series(False, index=contra.index)
+            category_frame = contra[["voucher_id", "category", "month", "period_key", "period_label", "amount"]].copy()
 
         if include_drilldown:
             voucher_treasury_types = working.loc[working['is_treasury']].groupby('voucher_id')['account_code'].agg(
@@ -1338,6 +1368,8 @@ def build_cashflow_summary(
                 net_detail['voucher_detail'] = net_detail['voucher_id'].map(
                     customer_groups['voucher_detail'].agg(_join_unique_leg_values)
                 )
+                net_detail['account_code'] = CASHFLOW_CUSTOMER_PAYMENT_DERIVED_ACCOUNT_CODE
+                net_detail['account_name'] = CASHFLOW_CUSTOMER_PAYMENT_DERIVED_ACCOUNT_NAME
                 net_detail['amount'] = net_detail['voucher_id'].map(net_amounts)
                 net_detail['treasury_type'] = net_detail['voucher_id'].map(voucher_treasury_types).fillna('Unknown')
                 detail_lines = pd.concat([detail_lines, net_detail[detail_columns + ['treasury_type']]], ignore_index=True)
@@ -1373,6 +1405,10 @@ def build_cashflow_summary(
         deduction_rows["presentation"] = "shown_separately"
         if len(net_vouchers):
             deduction_rows.loc[deduction_rows["voucher_id"].isin(net_vouchers), "presentation"] = "netted_from_customer_receipt"
+        if presentation == "net" and unmatched_customer_vouchers:
+            deduction_rows.loc[
+                deduction_rows["voucher_id"].isin(unmatched_customer_vouchers), "presentation"
+            ] = "review_required"
         deductions = deduction_rows.drop(columns=["voucher_id"])
 
     unbalanced = balance_checks.loc[~balance_checks["balanced"]] if not balance_checks.empty else balance_checks

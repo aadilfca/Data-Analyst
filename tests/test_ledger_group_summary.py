@@ -347,6 +347,7 @@ def test_customer_voucher_residual_debits_are_deductions_and_credits_need_review
     assert detail["other_deductions"] == 2
     assert result["deduction_details"]["account_code"].tolist() == ["UNMAPPED-DEBIT"]
     assert result["categories_needing_review"]["account_code"].tolist() == ["RESIDUAL-CREDIT"]
+    assert result["category_totals"].empty
 
 
 def test_configured_customer_role_identifies_cash_and_bank_with_client_specific_labels():
@@ -438,6 +439,7 @@ def test_customer_payment_reconciliation_separates_technical_bank_credit_from_de
             "withholding_tax": ["Withholding tax"],
             "other_deduction": [],
         },
+        include_drilldown=True,
     )
 
     details = result["customer_payment_details"].set_index("voucher_id")
@@ -454,7 +456,106 @@ def test_customer_payment_reconciliation_separates_technical_bank_credit_from_de
     assert details.loc["CASH", "method"] == "Net"
     assert result["deduction_details"]["account_code"].tolist() == ["CHARGE", "WHT", "CHARGE", "WHT"]
     assert result["category_totals"].loc["Customer receipts", "Total"] == 244
+    customer_rollups = result["cashflow_ledger_rollups"].loc[
+        result["cashflow_ledger_rollups"]["category"] == "Customer receipts"
+    ]
+    assert set(customer_rollups["account_code"]) == {"__customer_payment__"}
+    assert set(customer_rollups["account_name"]) == {"Customer payment (net bank receipt)"}
 
+
+def test_customer_payment_ordinary_bank_charges_split_from_general_charges():
+    journal = pd.DataFrame(
+        [
+            ["CUSTOMER", "2026-01-05", "BANK", "Export bank", "Customer receipt", 100, 3],
+            ["CUSTOMER", "2026-01-05", "CUSTOMER", "Export customer", "Customer receipt", 0, 100],
+            ["CUSTOMER", "2026-01-05", "OBC", "Ordinary bank charges", "Customer receipt", 3, 0],
+            ["GENERAL", "2026-01-06", "BANK", "Export bank", "General bank charge", 0, 10],
+            ["GENERAL", "2026-01-06", "OBC", "Ordinary bank charges", "General bank charge", 10, 0],
+        ],
+        columns=["voucher_id", "date", "account_code", "account_name", "voucher_detail", "debit", "credit"],
+    )
+    coa = pd.DataFrame(
+        [
+            ["BANK", "Export bank", "Bank", ""],
+            ["CUSTOMER", "Export customer", "Receivable", "Customer receipts"],
+            ["OBC", "Ordinary bank charges", "Expense", "Bank charges"],
+        ],
+        columns=["account_code", "account_title", "account_type", "category"],
+    )
+
+    result = build_cashflow_summary(
+        journal,
+        coa,
+        cash_account_codes=[],
+        bank_account_codes=["BANK"],
+        period_start="2026-01-01",
+        period_end="2026-01-31",
+        include_drilldown=True,
+        cashflow_role_categories={
+            "customer_receipt": ["Customer receipts"],
+            "bank_charge": ["Bank charges"],
+            "withholding_tax": [],
+            "other_deduction": [],
+        },
+    )
+
+    payment = result["customer_payment_details"].iloc[0]
+    assert payment["bank_charges"] == 3
+    assert payment["net_bank_settlement"] == 97
+    assert payment["status"] == "Matched"
+    assert result["category_totals"].loc["Customer receipts", "Total"] == 97
+    assert result["category_totals"].loc["Bank charges", "Total"] == -10
+    assert result["deduction_details"]["presentation"].tolist() == [
+        "netted_from_customer_receipt",
+        "shown_separately",
+    ]
+    customer_rollups = result["cashflow_ledger_rollups"].loc[
+        result["cashflow_ledger_rollups"]["category"] == "Customer receipts"
+    ]
+    assert set(customer_rollups["account_name"]) == {"Customer payment (net bank receipt)"}
+    general_charge = result["cashflow_ledger_rollups"].loc[
+        result["cashflow_ledger_rollups"]["category"] == "Bank charges"
+    ]
+    assert general_charge["account_code"].tolist() == ["OBC"]
+    assert general_charge["amount"].tolist() == [-10.0]
+
+
+def test_unmatched_customer_payment_is_excluded_from_net_cashflow_statement():
+    journal = pd.DataFrame(
+        [
+            ["MULTI", "2026-01-05", "BANK", "Export bank", "Combined receipt", 100, 0],
+            ["MULTI", "2026-01-05", "CUSTOMER-1", "Customer one", "Combined receipt", 0, 60],
+            ["MULTI", "2026-01-05", "CUSTOMER-2", "Customer two", "Combined receipt", 0, 40],
+        ],
+        columns=["voucher_id", "date", "account_code", "account_name", "voucher_detail", "debit", "credit"],
+    )
+    coa = pd.DataFrame(
+        [
+            ["BANK", "Export bank", "Bank", ""],
+            ["CUSTOMER-1", "Customer one", "Receivable", "Customer receipts"],
+            ["CUSTOMER-2", "Customer two", "Receivable", "Customer receipts"],
+        ],
+        columns=["account_code", "account_title", "account_type", "category"],
+    )
+
+    result = build_cashflow_summary(
+        journal,
+        coa,
+        cash_account_codes=[],
+        bank_account_codes=["BANK"],
+        period_start="2026-01-01",
+        period_end="2026-01-31",
+        cashflow_role_categories={
+            "customer_receipt": ["Customer receipts"],
+            "bank_charge": [],
+            "withholding_tax": [],
+            "other_deduction": [],
+        },
+    )
+
+    assert result["customer_payment_details"].iloc[0]["status"] == "Review required"
+    assert "Customer receipts" not in result["category_totals"].index
+    assert result["cashflow_ledger_rollups"].empty
 
 def test_explicit_other_deduction_role_reconciles_customer_payment():
     journal = pd.DataFrame(
