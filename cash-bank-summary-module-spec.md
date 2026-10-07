@@ -502,6 +502,18 @@ control totals.
 6. Matched customer-linked deductions are shown in the customer-payment detail but excluded from standalone main-statement payments. General charges remain as the residual of the configured charge category after customer-linked charges are consumed.
 7. Only matched composite receipts feed the main Customer Receipts category. Unmatched, multi-customer, or multi-receiving-account vouchers remain visible for review and do not silently affect the final statement.
 8. The main category expansion must show a clearly labelled derived customer-payment row, not customer ledger names. Customer names and codes remain in the voucher-level detail and customer-wise net-receipt summary.
+
+### 10.2 Customer-wise customer-payment projection
+
+1. Scope the projection to the selected reporting period, grouping, and Cash/Bank treasury view.
+2. Group by the customer account code. The account name is display-only and must not be the grouping key.
+3. Build the projection from the canonical voucher-level customer-payment details; do not recalculate it in the browser or hardcode customer accounts.
+4. Expose these columns: Gross receipt, Bank charges, WHT, Other deductions, Total deductions, Technical Bank credit, Expected settlement, Actual settlement, Difference, and Status.
+5. Calculate Total deductions = Bank charges + WHT + Other deductions and Expected settlement = Gross receipt - Total deductions.
+6. Calculate Actual settlement using the existing engine result. For Bank receipts this is the treasury debit less the technical Bank credit; cash receipts have no technical Bank credit.
+7. Preserve matched, review, and unmatched customer rows. Technical Bank credits remain reconciliation controls and never become receipts or deductions.
+8. The statement-eligible customer-wise total includes only matched composite receipts and must equal the main Received from customers total within the report tolerance. Review and unmatched rows remain visible but are excluded from that total.
+9. Customer search is a presentation filter only: an empty selection shows all customers, a selected account code shows that customer, and Clear removes the filter. Global transaction search remains separate.
 ---
 
 ## 11. Runtime performance and synchronization contract

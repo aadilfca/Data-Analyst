@@ -1,5 +1,13 @@
 # Changelog Archive
 
+## Cashflows customer-wise accounting and display contract - 2026-10-07
+
+**Scope:** Define the customer-wise projection for the Cashflows report before implementation.
+
+**Decision:** Group by customer account code and derive Gross receipt, configured deductions, Technical Bank credit, Expected settlement, Actual settlement, Difference, and Status from the canonical voucher-level customer-payment result. Only matched statement-eligible settlements may contribute to the main Received from customers total; review and unmatched rows remain visible but excluded from that tie-out.
+
+**Verification:** Documentation-only CW-1; no application code, source data, or cache structures changed.
+
 ## Cashflows customer-payment engine separation - 2026-10-07
 
 **Scope:** Implement the approved Phase 2 accounting contract for customer-payment Cashflows reporting.

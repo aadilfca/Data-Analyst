@@ -218,6 +218,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-10-07: Defined the customer-wise Cashflows projection contract, grouping by customer account code and tying matched statement-eligible settlements to Received from customers.
 - 2026-10-07: Locked customer-payment composite voucher accounting rules in cash-bank-summary-module-spec.md.
 - 2026-10-07: Completed Phase 2 customer-payment engine separation with matched net receipts and derived drilldown rows.
 - 2026-10-07: Added Ledgerwise Summary reconciliation tab to Cashflows XLSX export with typed ledger totals and category differences.
