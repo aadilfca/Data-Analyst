@@ -15,7 +15,7 @@ from typing import Any, Callable, Mapping
 
 from psycopg2.extras import RealDictCursor, execute_values
 from database import execute_query_pg
-from services.ledger_report_source import latest_template_upload_selection_cte
+from services.ledger_report_source import cashflow_report_voucher_selection_cte
 
 
 _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
@@ -523,8 +523,12 @@ def load_cashflow_classification_preview(
     if page < 1 or limit < 1 or limit > 200:
         raise ValueError("Invalid classification preview pagination")
 
-    selection_cte = latest_template_upload_selection_cte()
-    selection_params = (client_id, client_id, template_id)
+    selection_cte = cashflow_report_voucher_selection_cte()
+    selection_params = (
+        client_id, template_id,
+        client_id, client_id, template_id,
+        client_id, template_id,
+    )
     where = [
         "cd.client_id = %s",
         "cd.template_id = %s",
@@ -583,8 +587,9 @@ def load_cashflow_classification_preview(
             'EXISTS ('
             ' SELECT 1'
             ' FROM cash_bank_transaction_classifications treasury'
-            ' JOIN selected_template_uploads treasury_upload'
-            ' ON treasury_upload.upload_id = treasury.upload_id'
+            ' JOIN selected_report_vouchers treasury_voucher'
+            ' ON treasury_voucher.upload_id = treasury.upload_id'
+            " AND treasury_voucher.voucher_identity = UPPER(REGEXP_REPLACE(COALESCE(treasury.voucher_id, ''), '\\s+', '', 'g'))"
             ' WHERE treasury.client_id = c.client_id'
             ' AND treasury.template_id = c.template_id'
             ' AND treasury.voucher_id = c.voucher_id'
@@ -622,8 +627,9 @@ def load_cashflow_classification_preview(
         FROM client_data cd
         JOIN cash_bank_transaction_classifications c
           ON c.client_data_id = cd.id
-        JOIN selected_template_uploads selected_upload
-          ON selected_upload.upload_id = cd.upload_id
+        JOIN selected_report_vouchers selected_report_voucher
+          ON selected_report_voucher.upload_id = cd.upload_id
+         AND selected_report_voucher.voucher_identity = UPPER(REGEXP_REPLACE(COALESCE(c.voucher_id, ''), '\\s+', '', 'g'))
         LEFT JOIN account_control_cashflow_category_assignments category_assignment
           ON category_assignment.client_id = c.client_id
          AND category_assignment.account_code = c.account_code
@@ -707,7 +713,7 @@ def load_cashflow_classification_preview(
         "limit": limit,
         "rows": formatted,
         "duplicate_upload_suppression": True,
-        "source_upload_selection": "latest upload per filename",
+        "source_upload_selection": "canonical current with filename fallback",
     }
 
 def _record_classification_counts(summary: BackfillSummary, row: Mapping[str, Any]) -> None:

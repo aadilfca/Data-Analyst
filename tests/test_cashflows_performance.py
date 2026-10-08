@@ -110,7 +110,7 @@ def test_cashflow_sql_source_filters_dates_joins_vouchers_and_aggregates_lines()
 
     def query(sql, params=None):
         calls.append((sql, params))
-        if "FROM uploaded_files" in sql:
+        if "SELECT upload_id, file_name, upload_date" in sql:
             return [
                 {"upload_id": 12, "file_name": "month.xlsx", "upload_date": "2026-01-02"},
                 {"upload_id": 11, "file_name": "month.xlsx", "upload_date": "2026-01-01"},
@@ -171,7 +171,7 @@ def test_cashflow_sql_source_filters_dates_joins_vouchers_and_aggregates_lines()
     assert "c.transaction_date AS date" in source_sql
     assert "c.account_name" in source_sql
     assert "FROM client_data cd" in source_sql
-    assert source_params == (7, [12], "2026-01-01", "2026-01-31")
+    assert source_params == (7, 9, 7, 7, 9, 7, 9, 7, "2026-01-01", "2026-01-31")
 
 
 def test_cashflow_sql_source_scopes_duplicate_vouchers_to_their_upload():
@@ -179,13 +179,13 @@ def test_cashflow_sql_source_scopes_duplicate_vouchers_to_their_upload():
 
     def query(sql, params=None):
         calls.append((sql, params))
-        if "FROM uploaded_files" in sql:
+        if "SELECT upload_id, file_name, upload_date" in sql:
             return [
                 {"upload_id": 12, "file_name": "january.xlsx", "upload_date": "2026-02-01"},
                 {"upload_id": 11, "file_name": "february.xlsx", "upload_date": "2026-02-01"},
             ]
-        assert params == (7, [11, 12], "2026-01-01", "2026-02-28")
-        assert "SELECT DISTINCT upload_id, voucher_id" in sql
+        assert params == (7, 9, 7, 7, 9, 7, 9, 7, "2026-01-01", "2026-02-28")
+        assert "selected_report_vouchers" in sql
         assert "v.upload_id = l.upload_id" in sql
         assert "v.voucher_id = l.voucher_id" in sql
         return [
@@ -240,7 +240,7 @@ def test_cashflow_sql_source_explicit_upload_uses_upload_identity_filter():
         assert "FROM uploaded_files" not in sql
         assert "c.upload_id = ANY(%s)" in sql
         assert "c.template_id = %s" not in sql
-        assert params == (7, [12], "2026-01-01", "2026-01-31")
+        assert params == ([12], 7, "2026-01-01", "2026-01-31")
         return [{
             "voucher_id": "V1",
             "date": "2026-01-05",
@@ -268,7 +268,7 @@ def test_cashflow_sql_source_explicit_upload_uses_upload_identity_filter():
     assert len(calls) == 1
 def test_cashflow_sql_source_preserves_each_transaction_date_for_bucketing():
     def query(sql, params=None):
-        if "FROM uploaded_files" in sql:
+        if "SELECT upload_id, file_name, upload_date" in sql:
             return [{"upload_id": 12, "file_name": "period.xlsx", "upload_date": "2026-02-01"}]
         return [
             {
@@ -312,7 +312,7 @@ def test_cashflow_read_models_require_current_report_revision_when_requested():
     calls = []
 
     def query(sql, params=None):
-        if "FROM uploaded_files" in sql:
+        if "SELECT upload_id, file_name, upload_date" in sql:
             return [{"upload_id": 12, "file_name": "period.xlsx", "upload_date": "2026-02-01"}]
         if "MIN(c.transaction_date)" in sql:
             return [{"period_start": "2026-01-01", "period_end": "2026-02-28"}]
@@ -425,7 +425,7 @@ def test_cashflow_prepared_drilldown_loader_targets_one_category_and_reaggregate
     calls = []
 
     def query(sql, params=None):
-        if "FROM uploaded_files" in sql:
+        if "SELECT upload_id, file_name, upload_date" in sql:
             return [{"upload_id": 21, "file_name": "period.xlsx", "upload_date": "2026-03-01"}]
         if "FROM cashflow_ledger_rollup_read_models" in sql:
             calls.append((sql, params))

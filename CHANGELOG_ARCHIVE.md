@@ -1,5 +1,21 @@
 # Changelog Archive
 
+## Cashflows canonical report-source transition — DV-4A.2 - 2026-10-08
+
+**Scope:** Make Cashflows SQL source rebuilds and the classified-transaction viewer use the same canonical voucher population.
+
+**Implementation:** Added a shared SQL selector. When canonical rows exist it selects only self-linked current/current-revised voucher occurrences by upload plus normalized voucher identity; an empty register retains the existing filename selection until controlled activation. Raw Client Data, classifications, and prepared snapshots remain untouched.
+
+**Verification:** 43 focused source, classification, resolver, occurrence, and performance tests passed; live read-only Leather Crop fallback returned 43,633 lines. No source data changed.
+## Cashflows canonical source contract — DV-4A.1 - 2026-10-08
+
+**Scope:** Define the indexed report-source selector before activating canonical-voucher reporting.
+
+**Implementation:** Added one selector for self-linked `current`/`current_revised` occurrences and a stable canonical source key. Exact reuploads reuse the existing report revision; only a new/revised accounting fingerprint advances it. Reports remain unchanged until DV-4A.2.
+
+**Verification:** Source, occurrence, and performance coverage passed 34/34; syntax and whitespace checks passed. No Client Data, occurrence rows, snapshots, or report output changed.
+
+
 ## Cashflows canonical voucher register — DV-1 - 2026-10-07
 
 **Scope:** Establish an audit-preserving source-voucher foundation without changing Cashflows source selection, totals, caches, or upload flow.

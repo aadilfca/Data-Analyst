@@ -59,12 +59,12 @@ def test_cashflows_classification_preview_uses_current_derived_rows_and_formats_
     }
     assert len(calls) == 2
     assert result["duplicate_upload_suppression"] is True
-    assert result["source_upload_selection"] == "latest upload per filename"
+    assert result["source_upload_selection"] == "canonical current with filename fallback"
     assert all("c.is_current = TRUE" in sql for sql, _ in calls)
     assert all("selected_template_uploads" in sql for sql, _ in calls)
     assert "cd.row_data" in calls[1][0]
-    assert calls[0][1][:3] == (5, 5, 9)
-    assert calls[0][1][3:7] == (5, 9, date(2026, 1, 1), date(2026, 1, 31))
+    assert calls[0][1][:7] == (5, 9, 5, 5, 9, 5, 9)
+    assert calls[0][1][7:11] == (5, 9, date(2026, 1, 1), date(2026, 1, 31))
 
 
 def test_cashflows_classification_preview_searches_all_displayed_classification_values():
@@ -152,7 +152,7 @@ def test_cashflows_classification_preview_uses_latest_upload_per_filename_cte():
     assert all("ROW_NUMBER() OVER" in sql for sql, _ in calls)
     assert all("PARTITION BY COALESCE" in sql for sql, _ in calls)
     assert all("JOIN selected_template_uploads" in sql for sql, _ in calls)
-    assert calls[0][1][:3] == (5, 5, 9)
+    assert calls[0][1][:7] == (5, 9, 5, 5, 9, 5, 9)
     assert calls[1][1][-2:] == (50, 50)
 
 def test_cashflows_classification_preview_filters_vouchers_by_treasury_view():
@@ -175,7 +175,7 @@ def test_cashflows_classification_preview_filters_vouchers_by_treasury_view():
     assert result['total_rows'] == 0
     assert len(calls) == 2
     assert all('FROM cash_bank_transaction_classifications treasury' in sql for sql, _ in calls)
-    assert all('JOIN selected_template_uploads treasury_upload' in sql for sql, _ in calls)
+    assert all('JOIN selected_report_vouchers treasury_voucher' in sql for sql, _ in calls)
     assert all('treasury.treasury_type IN (%s)' in sql for sql, _ in calls)
     assert all('treasury.upload_id = c.upload_id' not in sql for sql, _ in calls)
     assert all('cash' in params for _, params in calls)
@@ -245,6 +245,6 @@ def test_cashflows_classification_preview_requires_cash_or_bank_leg_for_combined
     assert result['total_rows'] == 0
     assert len(calls) == 2
     assert all('treasury.treasury_type IN (%s, %s)' in sql for sql, _ in calls)
-    assert all('JOIN selected_template_uploads treasury_upload' in sql for sql, _ in calls)
+    assert all('JOIN selected_report_vouchers treasury_voucher' in sql for sql, _ in calls)
     assert all('treasury.upload_id = c.upload_id' not in sql for sql, _ in calls)
     assert all('cash' in params and 'bank' in params for _, params in calls)

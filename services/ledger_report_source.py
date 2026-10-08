@@ -37,6 +37,8 @@ CASHFLOW_TREASURY_TOTALS_VERSION = 1
 CASHFLOW_SUMMARY_PAYLOAD_VERSION = 2
 CASHFLOW_TREASURY_VIEWS = ("combined", "bank", "cash", "split")
 
+CASHFLOW_CANONICAL_SOURCE_KEY = "canonical-v1"
+
 _JOURNAL_ALIASES: Mapping[str, tuple[str, ...]] = {
     "voucher_id": (
         "voucher_id",
@@ -391,6 +393,27 @@ class CashflowVoucherOccurrenceSource:
             item.get("severity") == "error" for item in self.diagnostics
         )
 
+
+@dataclass(frozen=True)
+class CashflowCanonicalVoucherSelection:
+    """Indexed current voucher occurrences available to the Cashflows fast path.
+
+    The durable Cashflows report revision controls cache freshness. The stable
+    source key intentionally does not change for an exact reupload, because
+    the accounting population is unchanged in that case.
+    """
+
+    template_id: int
+    occurrence_count: int
+    upload_ids: tuple[int, ...]
+
+    @property
+    def ready(self) -> bool:
+        return self.occurrence_count > 0
+
+    @property
+    def source_key(self) -> str:
+        return CASHFLOW_CANONICAL_SOURCE_KEY
 
 def build_report_source(
     client_data_rows: Sequence[Mapping[str, Any]] | pd.DataFrame,
@@ -832,6 +855,111 @@ def select_latest_template_upload_ids(
     selected = sorted(latest_by_name.values())
     return selected, max(0, len(rows) - len(selected))
 
+
+def canonical_cashflow_voucher_selection_cte() -> str:
+    """Return the report selector for one indexed canonical voucher version.
+
+    Raw uploads remain untouched. A report path joining this CTE must use the
+    selected upload and normalized voucher identity together, so an overlapping
+    monthly/daily upload cannot contribute the same voucher twice.
+    """
+
+    return """
+        WITH selected_canonical_vouchers AS (
+            SELECT
+                occurrence.id AS canonical_occurrence_id,
+                occurrence.upload_id,
+                occurrence.voucher_identity,
+                occurrence.voucher_fingerprint
+            FROM cashflow_voucher_occurrences occurrence
+            WHERE occurrence.client_id = %s
+              AND occurrence.template_id = %s
+              AND occurrence.canonical_occurrence_id = occurrence.id
+              AND occurrence.decision_status IN ('current', 'current_revised')
+        )
+    """
+
+
+def select_canonical_cashflow_vouchers(
+    client_id: int,
+    template_id: int,
+    query_fn: Callable[..., list[dict[str, Any]]],
+) -> CashflowCanonicalVoucherSelection:
+    """Load the small indexed selector needed by the canonical report path."""
+
+    rows = query_fn(
+        f"""
+        {canonical_cashflow_voucher_selection_cte()}
+        SELECT canonical_occurrence_id, upload_id
+        FROM selected_canonical_vouchers
+        ORDER BY canonical_occurrence_id
+        """,
+        (client_id, template_id),
+    )
+    occurrence_ids = {
+        int(row["canonical_occurrence_id"])
+        for row in rows
+        if row.get("canonical_occurrence_id") is not None
+    }
+    upload_ids = {
+        int(row["upload_id"])
+        for row in rows
+        if row.get("upload_id") is not None
+    }
+    return CashflowCanonicalVoucherSelection(
+        template_id=int(template_id),
+        occurrence_count=len(occurrence_ids),
+        upload_ids=tuple(sorted(upload_ids)),
+    )
+
+def cashflow_report_voucher_selection_cte() -> str:
+    """Select canonical vouchers, with a visible-safe filename fallback before activation.
+
+    The fallback exists only while a configured client has no occurrence-register
+    rows. Once the register is populated, all report paths select vouchers by
+    canonical upload plus normalized identity, never by filename coverage.
+    """
+
+    return """
+        WITH selected_canonical_vouchers AS (
+            SELECT occurrence.upload_id, occurrence.voucher_identity
+            FROM cashflow_voucher_occurrences occurrence
+            WHERE occurrence.client_id = %s
+              AND occurrence.template_id = %s
+              AND occurrence.canonical_occurrence_id = occurrence.id
+              AND occurrence.decision_status IN ('current', 'current_revised')
+        ), latest_template_uploads AS (
+            SELECT f.id AS upload_id,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY COALESCE(NULLIF(BTRIM(f.file_name), ''), f.id::text)
+                       ORDER BY f.upload_date DESC NULLS LAST, f.id DESC
+                   ) AS upload_rank
+            FROM uploaded_files f
+            WHERE f.client_id = %s
+              AND EXISTS (
+                  SELECT 1 FROM client_data cd
+                  WHERE cd.upload_id = f.id
+                    AND cd.client_id = %s
+                    AND cd.template_id = %s
+                    AND cd.is_deleted = FALSE
+              )
+        ), selected_template_uploads AS (
+            SELECT upload_id FROM latest_template_uploads WHERE upload_rank = 1
+        ), selected_report_vouchers AS (
+            SELECT upload_id, voucher_identity FROM selected_canonical_vouchers
+            UNION ALL
+            SELECT DISTINCT c.upload_id,
+                   UPPER(REGEXP_REPLACE(COALESCE(c.voucher_id, ''), '\\s+', '', 'g')) AS voucher_identity
+            FROM cash_bank_transaction_classifications c
+            JOIN selected_template_uploads selected_upload
+              ON selected_upload.upload_id = c.upload_id
+            WHERE NOT EXISTS (SELECT 1 FROM selected_canonical_vouchers)
+              AND c.client_id = %s
+              AND c.template_id = %s
+              AND c.is_current = TRUE
+              AND NULLIF(BTRIM(c.voucher_id), '') IS NOT NULL
+        )
+    """
 
 def load_cashflow_voucher_occurrence_source(
     client_id: int,
@@ -2299,8 +2427,30 @@ def load_cashflow_sql_source(
     if not selected_upload_ids:
         return None
 
-    query = """
-        WITH classified_lines AS (
+    if journal_template_id is not None and journal_upload_id is None:
+        source_cte = cashflow_report_voucher_selection_cte()
+        source_cte_separator = ","
+        source_join = """
+            JOIN selected_report_vouchers selected_report_voucher
+              ON selected_report_voucher.upload_id = c.upload_id
+             AND selected_report_voucher.voucher_identity = UPPER(REGEXP_REPLACE(COALESCE(c.voucher_id, ''), '\\s+', '', 'g'))
+        """
+        source_filter = ""
+        source_params: list[Any] = [
+            client_id, journal_template_id,
+            client_id, client_id, journal_template_id,
+            client_id, journal_template_id,
+        ]
+    else:
+        source_cte = "WITH"
+        source_cte_separator = ""
+        source_join = ""
+        source_filter = "AND c.upload_id = ANY(%s)"
+        source_params = [selected_upload_ids]
+
+    query = f"""
+        {source_cte}
+        {source_cte_separator} classified_lines AS (
             SELECT
                 c.client_data_id,
                 c.upload_id,
@@ -2335,6 +2485,7 @@ def load_cashflow_sql_source(
             JOIN cash_bank_transaction_classifications c
               ON cd.id = c.client_data_id
              AND cd.is_deleted = FALSE
+            {source_join}
             LEFT JOIN account_control_cashflow_category_assignments category_assignment
               ON category_assignment.client_id = c.client_id
              AND category_assignment.account_code = c.account_code
@@ -2343,7 +2494,7 @@ def load_cashflow_sql_source(
              AND category.client_id = c.client_id
              AND category.is_active = TRUE
             WHERE c.client_id = %s
-              AND c.upload_id = ANY(%s)
+              {source_filter}
               AND c.is_current = TRUE
               AND c.transaction_date >= %s
               AND c.transaction_date <= %s
@@ -2378,7 +2529,7 @@ def load_cashflow_sql_source(
     """
     rows = query_fn(
         query,
-        (client_id, selected_upload_ids, period_start, period_end),
+        tuple([*source_params, client_id, period_start, period_end]),
     )
     if not rows or not all("classification_status" in row for row in rows):
         return None
@@ -2425,6 +2576,8 @@ def load_cashflow_sql_source(
         "duplicate_upload_suppression": journal_template_id is not None and journal_upload_id is None,
         "duplicate_uploads_suppressed": suppressed_upload_count,
         "selected_template_upload_ids": selected_upload_ids,
+        "source_upload_selection": "canonical current with filename fallback",
+        "canonical_source_pending_activation": journal_template_id is not None and journal_upload_id is None,
         "date_prefilter_applied": True,
         "source_period_start": str(period_start),
         "source_period_end": str(period_end),
@@ -2434,6 +2587,7 @@ def load_cashflow_sql_source(
         "prepared_periods_requested": str(cashflow_group_by or "").casefold() in {"month", "fortnight"},
     }
     return LedgerReportSource(journal, coa, (), metadata, ())
+
 def load_ledger_report_source(
     client_id: int,
     *,

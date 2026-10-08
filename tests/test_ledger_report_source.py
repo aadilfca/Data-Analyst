@@ -2,7 +2,9 @@ import pandas as pd
 
 from services.ledger_report_source import (
     build_report_source,
+    canonical_cashflow_voucher_selection_cte,
     load_ledger_report_source,
+    select_canonical_cashflow_vouchers,
 )
 
 
@@ -38,6 +40,37 @@ def _journal_rows():
         },
     ]
 
+
+def test_canonical_cashflow_voucher_selector_uses_only_current_self_linked_occurrences():
+    calls = []
+
+    def query(sql, params=None):
+        calls.append((sql, params))
+        assert "canonical_occurrence_id = occurrence.id" in sql
+        assert "decision_status IN ('current', 'current_revised')" in sql
+        assert "latest_template_uploads" not in sql
+        return [
+            {"canonical_occurrence_id": 41, "upload_id": 12},
+            {"canonical_occurrence_id": 42, "upload_id": 13},
+            {"canonical_occurrence_id": 43, "upload_id": 13},
+        ]
+
+    selection = select_canonical_cashflow_vouchers(7, 9, query)
+
+    assert selection.ready
+    assert selection.occurrence_count == 3
+    assert selection.upload_ids == (12, 13)
+    assert selection.source_key == "canonical-v1"
+    assert calls[0][1] == (7, 9)
+
+
+def test_canonical_cashflow_voucher_selector_requires_a_populated_register():
+    selection = select_canonical_cashflow_vouchers(7, 9, lambda _sql, _params: [])
+
+    assert not selection.ready
+    assert selection.occurrence_count == 0
+    assert selection.upload_ids == ()
+    assert "selected_canonical_vouchers" in canonical_cashflow_voucher_selection_cte()
 
 def test_build_report_source_maps_client_data_and_coa_aliases():
     source = build_report_source(

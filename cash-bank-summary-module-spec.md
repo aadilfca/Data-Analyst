@@ -539,7 +539,7 @@ Every source upload remains immutable. The register records one complete voucher
 1. **DV-1 — Register foundation:** schema, fingerprint, decision contract, and regression coverage; reports remain unchanged.
 2. **DV-2 — Historical shadow resolution:** default-dry-run all-upload backfill creates re-run-safe audit decisions; reports remain unchanged.
 3. **DV-3 — Incremental import resolution:** resolve only vouchers affected by a new upload and avoid cache invalidation for an exact copy.
-4. **DV-4 — Fast-path cutover:** prepared snapshots and Cashflows SQL read only indexed canonical current occurrences.
+4. **DV-4 — Fast-path cutover:** prepared snapshots and Cashflows SQL read only indexed canonical current occurrences. The canonical source key stays stable for exact reuploads; the existing report revision advances only for a new or revised accounting fingerprint.
 5. **DV-5 — Audit evidence and acceptance:** expose decisions/counts, reconcile historical results, and test late/back-dated/revised uploads.
 6. **DV-6 — Desi data golden-rule registration:** after DV-5 acceptance, add the proven canonical-voucher, upload-time resolution, revision, cache, and audit-evidence rules to the project’s permanent Cashflows data/performance standard in `CLAUDE.md`.
 Cashflows must read that derived layer through SQL. The query applies the client, configured
