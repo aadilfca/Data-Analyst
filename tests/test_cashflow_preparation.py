@@ -6,7 +6,11 @@ import pytest
 
 import database
 from scripts.backfill_cashflow_prepared_read_model import run_client
-from services.cashflow_preparation import build_preparation_plan, prepare_client
+from services.cashflow_preparation import (
+    build_preparation_plan,
+    prepare_client,
+    prepare_incremental_client,
+)
 
 
 def _seed_cashflow_fixture(conn, *, include_treasury=True):
@@ -65,6 +69,71 @@ def _seed_cashflow_fixture(conn, *, include_treasury=True):
         )
     conn.commit()
     return template_id
+
+
+def _add_voucher_lines(
+    conn,
+    *,
+    template_id,
+    occurrence_id,
+    upload_id,
+    voucher_id,
+    first_client_data_id,
+    add_upload=False,
+    treasury=True,
+):
+    if add_upload:
+        conn.execute(
+            "INSERT INTO uploaded_files (id, file_name, file_path, client_id) VALUES (?, ?, ?, 1)",
+            (upload_id, f"source-{upload_id}.xlsx", f"source-{upload_id}.xlsx"),
+        )
+    conn.execute(
+        """INSERT INTO cashflow_voucher_occurrences
+           (id, client_id, template_id, upload_id, voucher_id, voucher_identity,
+            occurrence_key, voucher_fingerprint, source_line_count,
+            decision_status, canonical_occurrence_id)
+           VALUES (?, 1, ?, ?, ?, ?, ?, ?, 2, 'current', ?)""",
+        (
+            occurrence_id,
+            template_id,
+            upload_id,
+            voucher_id,
+            voucher_id,
+            f"upload-{upload_id}:{voucher_id}",
+            f"fingerprint-{occurrence_id}",
+            occurrence_id,
+        ),
+    )
+    rows = [
+        (first_client_data_id, "BANK", "Bank", 100, 0, "bank", "bank"),
+        (first_client_data_id + 1, "CUSTOMER", "Customer", 0, 100, None, "non_treasury"),
+    ]
+    for client_data_id, account_code, account_name, debit, credit, treasury_type, status in rows:
+        conn.execute(
+            "INSERT INTO client_data (id, client_id, template_id, upload_id, row_data, extract_date) VALUES (?, 1, ?, ?, ?, '2026-01-23')",
+            (client_data_id, template_id, upload_id, json.dumps({"Voucher ID": voucher_id, "Account": account_code})),
+        )
+        conn.execute(
+            """INSERT INTO cash_bank_transaction_classifications
+               (client_data_id, client_id, template_id, upload_id, voucher_id,
+                account_code, account_name, transaction_date, transaction_month,
+                transaction_fortnight, debit, credit, treasury_type,
+                configuration_version, classification_status, is_current)
+               VALUES (?, 1, ?, ?, ?, ?, ?, '2026-01-23', '2026-01',
+                       '2026-01-F2', ?, ?, ?, 1, ?, 1)""",
+            (
+                client_data_id,
+                template_id,
+                upload_id,
+                voucher_id,
+                account_code,
+                account_name,
+                debit,
+                credit,
+                treasury_type if treasury else None,
+                status,
+            ),
+        )
 
 
 def test_plan_includes_all_lines_of_an_eligible_voucher_and_maps_counter_accounts(monkeypatch):
@@ -164,5 +233,121 @@ def test_operator_runner_is_dry_by_default_and_applies_requested_revision(monkey
             assert applied["mode"] == "apply"
             assert applied["preparation_revision"] == 11
             assert conn.execute("SELECT COUNT(*) FROM cashflow_prepared_lines").fetchone()[0] == 3
+        finally:
+            conn.close()
+
+
+def test_incremental_revision_replaces_revised_voucher_and_preserves_unaffected_lines(monkeypatch):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        monkeypatch.setattr(database, "DB_NAME", f"{temp_dir}/cashflows.sqlite")
+        database.init_db()
+        conn = database.get_db()
+        try:
+            template_id = _seed_cashflow_fixture(conn)
+            _add_voucher_lines(
+                conn,
+                template_id=template_id,
+                occurrence_id=20,
+                upload_id=1,
+                voucher_id="V200",
+                first_client_data_id=201,
+            )
+            conn.commit()
+            prepare_client(conn, client_id=1, preparation_revision=1)
+            conn.commit()
+            raw_before = conn.execute("SELECT COUNT(*) FROM client_data").fetchone()[0]
+            _add_voucher_lines(
+                conn,
+                template_id=template_id,
+                occurrence_id=11,
+                upload_id=2,
+                voucher_id="V100",
+                first_client_data_id=301,
+                add_upload=True,
+            )
+            conn.execute(
+                "UPDATE cashflow_voucher_occurrences SET decision_status = 'superseded', canonical_occurrence_id = 11 WHERE id = 10"
+            )
+            conn.commit()
+            result = prepare_incremental_client(
+                conn,
+                client_id=1,
+                template_id=template_id,
+                affected_occurrence_ids=[10, 11],
+                current_occurrence_ids=[11],
+            )
+            conn.commit()
+            assert result["preparation_revision"] == 2
+            assert result["prepared_line_count"] == 2
+            rows = conn.execute(
+                "SELECT canonical_occurrence_id, source_client_data_id FROM cashflow_prepared_lines WHERE preparation_revision = 2"
+            ).fetchall()
+            assert 10 not in {row[0] for row in rows}
+            assert 11 in {row[0] for row in rows if row[1] in {301, 302}}
+            assert 20 in {row[0] for row in rows}
+            assert conn.execute(
+                "SELECT COUNT(*) FROM cashflow_prepared_rollups WHERE preparation_revision = 2"
+            ).fetchone()[0] == 4
+            assert conn.execute("SELECT COUNT(*) FROM client_data").fetchone()[0] == raw_before + 2
+        finally:
+            conn.close()
+
+
+def test_incremental_ineligible_revision_removes_old_prepared_lines(monkeypatch):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        monkeypatch.setattr(database, "DB_NAME", f"{temp_dir}/cashflows.sqlite")
+        database.init_db()
+        conn = database.get_db()
+        try:
+            template_id = _seed_cashflow_fixture(conn)
+            prepare_client(conn, client_id=1, preparation_revision=1)
+            conn.commit()
+            conn.execute(
+                "UPDATE cash_bank_transaction_classifications SET treasury_type = NULL, classification_status = 'non_treasury' WHERE client_data_id = 101"
+            )
+            conn.commit()
+            result = prepare_incremental_client(
+                conn,
+                client_id=1,
+                template_id=template_id,
+                affected_occurrence_ids=[10],
+                current_occurrence_ids=[10],
+            )
+            conn.commit()
+            assert result["excluded_ineligible_occurrence_count"] == 1
+            assert conn.execute(
+                "SELECT COUNT(*) FROM cashflow_prepared_lines WHERE preparation_revision = 2"
+            ).fetchone()[0] == 0
+            assert conn.execute(
+                "SELECT active_preparation_revision FROM cashflow_preparation_state WHERE client_id = 1"
+            ).fetchone()[0] == 2
+        finally:
+            conn.close()
+
+
+def test_incremental_noop_does_not_create_a_new_revision(monkeypatch):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        monkeypatch.setattr(database, "DB_NAME", f"{temp_dir}/cashflows.sqlite")
+        database.init_db()
+        conn = database.get_db()
+        try:
+            template_id = _seed_cashflow_fixture(conn)
+            prepare_client(conn, client_id=1, preparation_revision=1)
+            conn.commit()
+            result = prepare_incremental_client(
+                conn,
+                client_id=1,
+                template_id=template_id,
+                affected_occurrence_ids=[],
+                current_occurrence_ids=[],
+            )
+            assert result["changed"] is False
+            assert result["preparation_revision"] == 1
+            assert conn.execute(
+                "SELECT COUNT(*) FROM cashflow_prepared_lines WHERE preparation_revision = 1"
+            ).fetchone()[0] == 3
+            assert conn.execute(
+                "SELECT COUNT(*) FROM cashflow_prepared_lines WHERE preparation_revision = 2"
+            ).fetchone()[0] == 0
         finally:
             conn.close()

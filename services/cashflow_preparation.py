@@ -131,14 +131,133 @@ def _rollups(lines: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
                     "line_count": 0,
                 },
             )
-            bucket["debit_total"] += line["debit"]
-            bucket["credit_total"] += line["credit"]
-            bucket["net_total"] += line["net_amount"]
+            bucket["debit_total"] += _number(line.get("debit"))
+            bucket["credit_total"] += _number(line.get("credit"))
+            bucket["net_total"] += _number(line.get("net_amount"))
             bucket["line_count"] += 1
             voucher_sets[key].add(int(line["canonical_occurrence_id"]))
     for key, bucket in buckets.items():
         bucket["voucher_count"] = len(voucher_sets[key])
     return list(buckets.values())
+
+def _line_bucket_keys(lines: Sequence[Mapping[str, Any]]) -> set[tuple[str, str, str, str, str]]:
+    keys: set[tuple[str, str, str, str, str]] = set()
+    for line in lines:
+        for grain, period_key in (
+            ("month", line.get("transaction_month")),
+            ("fortnight", line.get("transaction_fortnight")),
+        ):
+            keys.add((
+                grain,
+                str(period_key or "__undated__"),
+                str(line.get("category_key") or "__unassigned__"),
+                str(line.get("account_code") or ""),
+                str(line.get("treasury_type") or "").casefold(),
+            ))
+    return keys
+
+
+def _prepared_line_from_classification(
+    row: Mapping[str, Any],
+    *,
+    client_id: int,
+    template_id: int,
+    occurrence_id: int,
+    category: Mapping[str, Any],
+) -> dict[str, Any]:
+    transaction_date = _date_text(row.get("transaction_date"))
+    month_key, fortnight_key = _period_keys(
+        transaction_date,
+        row.get("transaction_month"),
+        row.get("transaction_fortnight"),
+    )
+    debit = _number(row.get("debit"))
+    credit = _number(row.get("credit"))
+    return {
+        "client_id": client_id,
+        "template_id": template_id,
+        "canonical_occurrence_id": occurrence_id,
+        "upload_id": int(row["upload_id"]),
+        "source_client_data_id": int(row["client_data_id"]),
+        "voucher_id": row.get("voucher_id"),
+        "transaction_date": transaction_date or None,
+        "account_code": _normalize_account_code(row.get("account_code")),
+        "account_name": str(row.get("account_name") or "").strip(),
+        "debit": debit,
+        "credit": credit,
+        "net_amount": debit - credit,
+        "treasury_type": str(row.get("treasury_type") or "").casefold(),
+        "category_id": category["category_id"],
+        "category_label_snapshot": category["category_label"],
+        "category_key": category["category_key"],
+        "transaction_month": month_key,
+        "transaction_fortnight": fortnight_key,
+        "classification_status": str(row.get("classification_status") or "unmapped"),
+    }
+
+
+def _prepared_lines_for_occurrences(
+    query: QueryFn,
+    *,
+    client_id: int,
+    template_id: int,
+    occurrences: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    if not occurrences:
+        return {
+            "prepared_lines": [],
+            "rollups": [],
+            "eligible_occurrence_count": 0,
+            "excluded_ineligible_occurrence_count": 0,
+            "unmatched_occurrence_count": 0,
+        }
+    upload_ids = sorted({int(row["upload_id"]) for row in occurrences})
+    placeholders = ", ".join("%s" for _ in upload_ids)
+    classifications = query(
+        f"SELECT client_data_id, upload_id, voucher_id, transaction_date, account_code, account_name, debit, credit, treasury_type, transaction_month, transaction_fortnight, classification_status FROM cash_bank_transaction_classifications WHERE client_id = %s AND template_id = %s AND is_current = TRUE AND upload_id IN ({placeholders}) ORDER BY upload_id, client_data_id",
+        (client_id, template_id, *upload_ids),
+    )
+    category_rows = query(
+        "SELECT a.account_code, a.category_id, c.category_key, c.label AS category_label FROM account_control_cashflow_category_assignments a LEFT JOIN account_control_cashflow_categories c ON c.id = a.category_id AND c.client_id = a.client_id AND c.is_active = TRUE WHERE a.client_id = %s",
+        (client_id,),
+    )
+    categories = _category_lookup(category_rows)
+    lines_by_identity: dict[tuple[int, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in classifications:
+        identity = normalize_voucher_id(row.get("voucher_id"))
+        if identity:
+            lines_by_identity[(int(row["upload_id"]), identity)].append(row)
+    prepared_lines = []
+    excluded_ineligible = 0
+    unmatched_occurrences = 0
+    eligible_occurrences = 0
+    for occurrence in occurrences:
+        identity = normalize_voucher_id(occurrence.get("voucher_identity"))
+        source_lines = lines_by_identity.get((int(occurrence["upload_id"]), identity), [])
+        if not source_lines:
+            unmatched_occurrences += 1
+            continue
+        if not any(str(row.get("treasury_type") or "").casefold() in {"cash", "bank"} for row in source_lines):
+            excluded_ineligible += 1
+            continue
+        eligible_occurrences += 1
+        for row in source_lines:
+            account_code = _normalize_account_code(row.get("account_code"))
+            category = categories.get(account_code, {"category_id": None, "category_key": "__unassigned__", "category_label": ""})
+            prepared_lines.append(_prepared_line_from_classification(
+                row,
+                client_id=client_id,
+                template_id=template_id,
+                occurrence_id=int(occurrence["id"]),
+                category=category,
+            ))
+    return {
+        "prepared_lines": prepared_lines,
+        "rollups": _rollups(prepared_lines),
+        "eligible_occurrence_count": eligible_occurrences,
+        "excluded_ineligible_occurrence_count": excluded_ineligible,
+        "unmatched_occurrence_count": unmatched_occurrences,
+    }
 
 
 def build_preparation_plan(conn: Any, *, client_id: int) -> dict[str, Any]:
@@ -380,4 +499,204 @@ def prepare_client(conn: Any, *, client_id: int, preparation_revision: int | Non
         "preparation_revision": revision,
         "prepared_line_count": len(plan["prepared_lines"]),
         "rollup_count": len(plan["rollups"]),
+    }
+
+
+def _copy_prepared_revision(conn: Any, *, client_id: int, source_revision: int, target_revision: int) -> None:
+    _execute(conn, """
+        INSERT INTO cashflow_prepared_lines (
+            client_id, template_id, preparation_revision, canonical_occurrence_id, upload_id,
+            source_client_data_id, voucher_id, transaction_date, account_code, account_name,
+            debit, credit, net_amount, treasury_type, category_id, category_label_snapshot,
+            category_key, transaction_month, transaction_fortnight, classification_status
+        )
+        SELECT client_id, template_id, %s, canonical_occurrence_id, upload_id,
+               source_client_data_id, voucher_id, transaction_date, account_code, account_name,
+               debit, credit, net_amount, treasury_type, category_id, category_label_snapshot,
+               category_key, transaction_month, transaction_fortnight, classification_status
+        FROM cashflow_prepared_lines
+        WHERE client_id = %s AND preparation_revision = %s
+        """, (target_revision, client_id, source_revision))
+    _execute(conn, """
+        INSERT INTO cashflow_prepared_rollups (
+            client_id, template_id, preparation_revision, period_grain, period_key, category_id,
+            category_key, category_label_snapshot, account_code, account_name, treasury_type,
+            debit_total, credit_total, net_total, voucher_count, line_count
+        )
+        SELECT client_id, template_id, %s, period_grain, period_key, category_id,
+               category_key, category_label_snapshot, account_code, account_name, treasury_type,
+               debit_total, credit_total, net_total, voucher_count, line_count
+        FROM cashflow_prepared_rollups
+        WHERE client_id = %s AND preparation_revision = %s
+        """, (target_revision, client_id, source_revision))
+
+
+def _delete_rollup_keys(conn: Any, *, client_id: int, preparation_revision: int, keys: set[tuple[str, str, str, str, str]]) -> None:
+    for grain, period_key, category_key, account_code, treasury_type in keys:
+        _execute(conn, """
+            DELETE FROM cashflow_prepared_rollups
+            WHERE client_id = %s AND preparation_revision = %s
+              AND period_grain = %s AND period_key = %s
+              AND category_key = %s AND account_code = %s AND treasury_type = %s
+            """, (client_id, preparation_revision, grain, period_key, category_key, account_code, treasury_type))
+
+
+def _rollups_for_keys(conn: Any, *, client_id: int, preparation_revision: int, keys: set[tuple[str, str, str, str, str]]) -> list[dict[str, Any]]:
+    query = _query_fn(conn)
+    rollups = []
+    for grain, period_key, category_key, account_code, treasury_type in keys:
+        period_column = "transaction_month" if grain == "month" else "transaction_fortnight"
+        rows = query(
+            f"""SELECT canonical_occurrence_id, category_id, category_key, category_label_snapshot,
+                       account_code, account_name, debit, credit, net_amount, treasury_type,
+                       transaction_month, transaction_fortnight
+                FROM cashflow_prepared_lines
+                WHERE client_id = %s AND preparation_revision = %s
+                  AND COALESCE(NULLIF({period_column}, ''), '__undated__') = %s
+                  AND category_key = %s AND account_code = %s AND treasury_type = %s""",
+            (client_id, preparation_revision, period_key, category_key, account_code, treasury_type),
+        )
+        rollups.extend(_rollups(rows))
+    return rollups
+
+
+def _insert_prepared_lines(conn: Any, *, revision: int, lines: Sequence[Mapping[str, Any]]) -> None:
+    if not lines:
+        return
+    columns = (
+        "client_id", "template_id", "preparation_revision", "canonical_occurrence_id", "upload_id",
+        "source_client_data_id", "voucher_id", "transaction_date", "account_code", "account_name",
+        "debit", "credit", "net_amount", "treasury_type", "category_id", "category_label_snapshot",
+        "category_key", "transaction_month", "transaction_fortnight", "classification_status",
+    )
+    source_columns = tuple(column for column in columns if column != "preparation_revision")
+    rows = [tuple(line.get(column) for column in source_columns) for line in lines]
+    rows = [(row[0], row[1], revision, *row[2:]) for row in rows]
+    _write_values(
+        conn, "cashflow_prepared_lines", columns, rows,
+        "client_id, preparation_revision, canonical_occurrence_id, source_client_data_id",
+        ", ".join(f"{column}=excluded.{column}" for column in columns[5:]),
+    )
+
+
+def _insert_rollups(conn: Any, *, revision: int, client_id: int, template_id: int, rollups: Sequence[Mapping[str, Any]]) -> None:
+    if not rollups:
+        return
+    columns = (
+        "client_id", "template_id", "preparation_revision", "period_grain", "period_key", "category_id",
+        "category_key", "category_label_snapshot", "account_code", "account_name", "treasury_type",
+        "debit_total", "credit_total", "net_total", "voucher_count", "line_count",
+    )
+    rows = [tuple([client_id, template_id, revision] + [rollup[column] for column in columns[3:]]) for rollup in rollups]
+    _write_values(
+        conn, "cashflow_prepared_rollups", columns, rows,
+        "client_id, preparation_revision, period_grain, period_key, category_key, account_code, treasury_type",
+        ", ".join(f"{column}=excluded.{column}" for column in columns[5:]),
+    )
+
+
+def prepare_incremental_client(
+    conn: Any,
+    *,
+    client_id: int,
+    template_id: int,
+    affected_occurrence_ids: Sequence[int],
+    current_occurrence_ids: Sequence[int],
+    preparation_revision: int | None = None,
+) -> dict[str, Any]:
+    """Publish a copy-on-write revision for changed voucher occurrences."""
+    affected_ids = sorted({int(identifier) for identifier in affected_occurrence_ids})
+    current_ids = sorted({int(identifier) for identifier in current_occurrence_ids})
+    query = _query_fn(conn)
+    if not affected_ids:
+        state = query("SELECT active_preparation_revision FROM cashflow_preparation_state WHERE client_id = %s", (client_id,))
+        return {
+            "ready": True,
+            "changed": False,
+            "reason": "no_prepared_changes",
+            "client_id": client_id,
+            "preparation_revision": int(state[0].get("active_preparation_revision") or 0) if state else 0,
+            "prepared_line_count": 0,
+            "rollup_count": 0,
+        }
+    configured = query("SELECT source_template_id FROM account_control_cashflow_settings WHERE client_id = %s", (client_id,))
+    if not configured or int(configured[0].get("source_template_id") or 0) != int(template_id):
+        return {"ready": False, "changed": False, "reason": "template_not_configured", "client_id": client_id}
+    state = query(
+        "SELECT active_preparation_revision FROM cashflow_preparation_state WHERE client_id = %s",
+        (client_id,),
+    )
+    active_revision = int(state[0].get("active_preparation_revision") or 0) if state else 0
+    if active_revision <= 0:
+        return {"ready": False, "changed": False, "reason": "active_revision_missing", "client_id": client_id}
+    current_placeholders = ", ".join("%s" for _ in current_ids) or "NULL"
+    occurrences = query(
+        f"""SELECT id, upload_id, voucher_id, voucher_identity, decision_status
+            FROM cashflow_voucher_occurrences
+            WHERE client_id = %s AND template_id = %s AND id IN ({current_placeholders})
+              AND decision_status IN ('current', 'current_revised')
+              AND NULLIF(TRIM(COALESCE(voucher_identity, '')), '') IS NOT NULL
+            ORDER BY id""",
+        (client_id, template_id, *current_ids),
+    )
+    line_plan = _prepared_lines_for_occurrences(
+        query, client_id=client_id, template_id=template_id, occurrences=occurrences
+    )
+    affected_placeholders = ", ".join("%s" for _ in affected_ids)
+    old_lines = query(
+        f"""SELECT canonical_occurrence_id, category_id, category_key, category_label_snapshot,
+                   account_code, account_name, debit, credit, net_amount, treasury_type,
+                   transaction_month, transaction_fortnight
+            FROM cashflow_prepared_lines
+            WHERE client_id = %s AND preparation_revision = %s
+              AND canonical_occurrence_id IN ({affected_placeholders})""",
+        (client_id, active_revision, *affected_ids),
+    )
+    touched_keys = _line_bucket_keys(old_lines) | _line_bucket_keys(line_plan["prepared_lines"])
+    revision = int(preparation_revision or _next_revision(conn, client_id))
+    if revision == active_revision:
+        revision = _next_revision(conn, client_id)
+    _set_state_updating(conn, client_id, revision)
+    _execute(conn, "DELETE FROM cashflow_prepared_rollups WHERE client_id = %s AND preparation_revision = %s", (client_id, revision))
+    _execute(conn, "DELETE FROM cashflow_prepared_lines WHERE client_id = %s AND preparation_revision = %s", (client_id, revision))
+    _copy_prepared_revision(conn, client_id=client_id, source_revision=active_revision, target_revision=revision)
+    _execute(
+        conn,
+        f"""DELETE FROM cashflow_prepared_lines
+            WHERE client_id = %s AND preparation_revision = %s
+              AND canonical_occurrence_id IN ({affected_placeholders})""",
+        (client_id, revision, *affected_ids),
+    )
+    _insert_prepared_lines(conn, revision=revision, lines=line_plan["prepared_lines"])
+    _delete_rollup_keys(conn, client_id=client_id, preparation_revision=revision, keys=touched_keys)
+    replacement_rollups = _rollups_for_keys(
+        conn, client_id=client_id, preparation_revision=revision, keys=touched_keys
+    )
+    _insert_rollups(
+        conn, revision=revision, client_id=client_id, template_id=template_id, rollups=replacement_rollups
+    )
+    _execute(
+        conn,
+        """UPDATE cashflow_preparation_state
+           SET active_preparation_revision = %s, requested_preparation_revision = %s,
+               status = 'ready', completed_at = CURRENT_TIMESTAMP,
+               affected_row_count = %s, last_successful_build_at = CURRENT_TIMESTAMP,
+               last_error = NULL, updated_at = CURRENT_TIMESTAMP
+           WHERE client_id = %s""",
+        (revision, revision, len(line_plan["prepared_lines"]), client_id),
+    )
+    return {
+        "ready": True,
+        "changed": True,
+        "reason": "incremental_upload",
+        "client_id": client_id,
+        "template_id": template_id,
+        "preparation_revision": revision,
+        "affected_occurrence_count": len(affected_ids),
+        "current_occurrence_count": len(occurrences),
+        "eligible_occurrence_count": line_plan["eligible_occurrence_count"],
+        "excluded_ineligible_occurrence_count": line_plan["excluded_ineligible_occurrence_count"],
+        "unmatched_occurrence_count": line_plan["unmatched_occurrence_count"],
+        "prepared_line_count": len(line_plan["prepared_lines"]),
+        "rollup_count": len(replacement_rollups),
     }

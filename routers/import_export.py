@@ -12,6 +12,8 @@ from database import (
 from psycopg2.extras import Json
 from services.cash_bank_classification import load_treasury_mapping_postgres, upsert_classification_rows_postgres
 from services.ledger_report_source import invalidate_cashflow_summary_read_models, prepare_cashflow_summary_snapshot
+from services.cashflow_preparation import prepare_incremental_client
+from services.cashflow_voucher_occurrence_store import resolve_upload_occurrences_postgres
 from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime, time
@@ -50,8 +52,56 @@ def _log_upload_timing(stage):
     return decorate
 
 
-def _prepare_cashflow_snapshot_background(client_id: int, file_id: int, template_id: int):
-    """Prepare the Cashflows read model after import without delaying the upload response."""
+def _cashflow_occurrence_input_rows(rows, col_mapping, template_cols, rate_source, rate_precision):
+    """Build the complete incoming workbook representation for DV-3.
+
+    This intentionally includes otherwise unchanged rows, because they are part
+    of the voucher occurrence uploaded for audit and duplicate resolution.
+    """
+    result = []
+    for row in rows:
+        row_data = {
+            template_column: json_safe_cell_value(row[excel_column], preserve_native_dates=True)
+            for template_column, excel_column in col_mapping.items()
+            if excel_column in row
+        }
+        apply_rate_derivation(row_data, template_cols, rate_source, rate_precision)
+        result.append(reorder_row_data_by_template(row_data, template_cols))
+    return result
+
+
+def _prepare_cashflow_snapshot_background(
+    client_id: int,
+    file_id: int,
+    template_id: int,
+    cashflow_voucher_resolution: Optional[dict] = None,
+):
+    """Prepare the incremental read model and legacy fallback after import."""
+    try:
+        if cashflow_voucher_resolution and cashflow_voucher_resolution.get("preparation_required"):
+            with pg_transaction() as conn:
+                prepared_result = prepare_incremental_client(
+                    conn,
+                    client_id=client_id,
+                    template_id=template_id,
+                    affected_occurrence_ids=cashflow_voucher_resolution.get("affected_occurrence_ids", []),
+                    current_occurrence_ids=cashflow_voucher_resolution.get("current_occurrence_ids", []),
+                )
+            logger.info(
+                "cashflows_prepared_incremental client_id=%s template_id=%s file_id=%s result=%s",
+                client_id,
+                template_id,
+                file_id,
+                json.dumps(prepared_result, default=str, ensure_ascii=True),
+            )
+    except Exception as error:
+        logger.warning(
+            "cashflows_prepared_incremental_failed client_id=%s template_id=%s file_id=%s error=%s",
+            client_id,
+            template_id,
+            file_id,
+            error,
+        )
     try:
         prepare_cashflow_summary_snapshot(client_id)
     except Exception as error:
@@ -1669,6 +1719,12 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
     if rows_to_exclude:
         rows = filter_excluded_rows(rows, rows_to_exclude)
 
+    # Complete mapped workbook rows are retained for canonical voucher resolution.
+    # This must happen before change detection skips unchanged Client Data rows.
+    cashflow_occurrence_rows = _cashflow_occurrence_input_rows(
+        rows, col_mapping, template_cols, rate_source, rate_precision
+    )
+
     # ---- CHANGE DETECTION (Phase 2): Compare incoming rows with existing data ----
     # Change detection always runs; it groups rows by Document ID and identifies
     # unchanged, changed, new, and missing documents.
@@ -1709,6 +1765,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
     # execute_batch_insert_with_ids_pg(), via psycopg2.extras.execute_batch()/
     # execute_values()). The outer transaction defers the final commit until
     # both raw client_data and derived classification writes succeed.
+    cashflow_voucher_resolution = None
     with pg_transaction() as conn:
         treasury_mapping = load_treasury_mapping_postgres(conn, request.client_id)
         if change_detection is not None and change_detection.get("unchanged") is not None:
@@ -1929,23 +1986,53 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
                     for row_id, row_data in zip(first_upload_ids, first_upload_row_data_list)
                 ]
                 execute_batch_pg(conn, DATA_AUDIT_LOG_INSERT_SQL, first_upload_audit_params)
-    invalidate_cashflow_summary_read_models(
-        request.client_id,
-        reason="source_imported",
-        changed_by="Analyst",
-        write_fn=execute_write_pg,
-    )
-    IMPORT_PROGRESS[request.file_id]["status"] = "preparing"
-    if background_tasks is None:
-        # Direct callers and isolated tests retain the old synchronous contract.
-        _prepare_cashflow_snapshot_background(request.client_id, request.file_id, request.template_id)
-    else:
-        background_tasks.add_task(
-            _prepare_cashflow_snapshot_background,
-            request.client_id,
-            request.file_id,
-            request.template_id,
+
+        # Derived canonical decisions share this import transaction. A failure
+        # rolls back the configured Cashflows upload rather than leaving a
+        # successful source write without its integrity decision.
+        cashflow_voucher_resolution = resolve_upload_occurrences_postgres(
+            conn,
+            client_id=request.client_id,
+            template_id=request.template_id,
+            upload_id=request.file_id,
+            row_data=cashflow_occurrence_rows,
         )
+    legacy_snapshot_required = (
+        cashflow_voucher_resolution is None
+        or not cashflow_voucher_resolution.get("eligible")
+        or cashflow_voucher_resolution.get("cache_invalidation_required")
+    )
+    preparation_required = bool(
+        cashflow_voucher_resolution
+        and cashflow_voucher_resolution.get("preparation_required")
+    )
+    if legacy_snapshot_required:
+        invalidate_cashflow_summary_read_models(
+            request.client_id,
+            reason="source_imported",
+            changed_by="Analyst",
+            write_fn=execute_write_pg,
+        )
+    IMPORT_PROGRESS[request.file_id]["status"] = "preparing"
+    if legacy_snapshot_required or preparation_required:
+        if background_tasks is None:
+            # Direct callers and isolated tests retain the old synchronous contract.
+            _prepare_cashflow_snapshot_background(
+                request.client_id,
+                request.file_id,
+                request.template_id,
+                cashflow_voucher_resolution,
+            )
+        else:
+            background_tasks.add_task(
+                _prepare_cashflow_snapshot_background,
+                request.client_id,
+                request.file_id,
+                request.template_id,
+                cashflow_voucher_resolution,
+            )
+    else:
+        IMPORT_PROGRESS[request.file_id]["status"] = "complete"
     log_audit(
         "Analyst",
         "Import",
@@ -1971,7 +2058,8 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
         # 'incomplete') -- the frontend derives "truly rejected/excluded" as
         # rejected_count - force_included_count.
         "force_included_count": force_included_count,
-        "change_detection": change_detection  # Phase 2: detailed breakdown of unchanged/changed/new/missing
+        "change_detection": change_detection,  # Phase 2: detailed breakdown of unchanged/changed/new/missing
+        "cashflow_voucher_resolution": cashflow_voucher_resolution,
     }
 
 @router.get("/api/upload/import-status/{file_id}")
