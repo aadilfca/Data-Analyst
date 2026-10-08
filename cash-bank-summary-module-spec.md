@@ -537,7 +537,7 @@ Every source upload remains immutable. The register records one complete voucher
 ### 11.2 Canonical source delivery phases
 
 1. **DV-1 — Register foundation:** schema, fingerprint, decision contract, and regression coverage; reports remain unchanged.
-2. **DV-2 — Historical shadow resolution:** populate and review current data without changing reporting results.
+2. **DV-2 — Historical shadow resolution:** default-dry-run all-upload backfill creates re-run-safe audit decisions; reports remain unchanged.
 3. **DV-3 — Incremental import resolution:** resolve only vouchers affected by a new upload and avoid cache invalidation for an exact copy.
 4. **DV-4 — Fast-path cutover:** prepared snapshots and Cashflows SQL read only indexed canonical current occurrences.
 5. **DV-5 — Audit evidence and acceptance:** expose decisions/counts, reconcile historical results, and test late/back-dated/revised uploads.

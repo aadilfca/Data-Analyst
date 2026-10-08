@@ -107,6 +107,10 @@ def build_voucher_occurrences(rows: Iterable[Mapping[str, Any]]) -> list[dict[st
         identity = normalize_voucher_id(lines[0].get("voucher_id"))
         dates = sorted({_date_text(line.get("transaction_date", line.get("date"))) for line in lines if _date_text(line.get("transaction_date", line.get("date")))})
         fingerprint = voucher_fingerprint(lines)
+        source_extract_as_of = max(
+            (_text(line.get("source_extract_as_of")) for line in lines),
+            default="",
+        )
         occurrences.append(
             {
                 "client_id": client_id,
@@ -119,6 +123,7 @@ def build_voucher_occurrences(rows: Iterable[Mapping[str, Any]]) -> list[dict[st
                 "fingerprint_version": FINGERPRINT_VERSION,
                 "transaction_date": dates[0] if len(dates) == 1 else None,
                 "source_line_count": len(lines),
+                "source_extract_as_of": source_extract_as_of or None,
                 "has_multiple_dates": len(dates) > 1,
                 "source_sequence": max((line.get("source_sequence", upload_id) for line in lines), key=_source_priority),
             }

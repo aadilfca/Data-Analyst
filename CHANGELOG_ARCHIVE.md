@@ -9,6 +9,14 @@
 **Performance:** The register is not read by any current report. Later phases will resolve only affected upload vouchers and use the indexed canonical result before prepared rollups, avoiding report-time hashing or duplicate aggregation.
 
 **Verification:** Resolver, Cashflows schema-parity, and classification tests passed 18/18; an isolated SQLite schema smoke check passed. No client data or report result changed.
+
+## Cashflows canonical voucher register — DV-2 - 2026-10-07
+
+**Scope:** Populate and review canonical-voucher evidence without altering Cashflows reporting.
+
+**Implementation:** Added an operator-run, dry-run-by-default historical resolver. It reads every upload of the configured source template through the same column mapping, preserves complete voucher lines, and writes only idempotent occurrence decisions when `--apply` is explicit. Reports, source selection, snapshots, revisions, and raw Client Data remain unchanged.
+
+**Verification:** Focused syntax and 32 Cashflows resolver/source/performance tests passed. Isolated SQLite coverage proves dry-run non-mutation, exact-copy resolution, canonical links, raw-row preservation, and safe re-run behavior.
 ## Cashflows customer-wise accounting and display contract - 2026-10-07
 
 **Scope:** Define the customer-wise projection for the Cashflows report before implementation.

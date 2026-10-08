@@ -371,6 +371,27 @@ class LedgerReportSource:
         return [item for item in self.diagnostics if item.get("severity") == "error"]
 
 
+@dataclass(frozen=True)
+class CashflowVoucherOccurrenceSource:
+    """Complete normalized voucher lines for canonical-occurrence maintenance.
+
+    Unlike a report source, this intentionally retains every upload of the
+    configured Cashflows template. It is an audit/preparation input only and
+    never applies filename-based source selection or report-date filtering.
+    """
+
+    template_id: int | None
+    rows: tuple[dict[str, Any], ...]
+    diagnostics: tuple[dict[str, Any], ...]
+    metadata: Mapping[str, Any]
+
+    @property
+    def ready(self) -> bool:
+        return self.template_id is not None and not any(
+            item.get("severity") == "error" for item in self.diagnostics
+        )
+
+
 def build_report_source(
     client_data_rows: Sequence[Mapping[str, Any]] | pd.DataFrame,
     account_rows: Sequence[Mapping[str, Any]] | pd.DataFrame | None = None,
@@ -810,6 +831,109 @@ def select_latest_template_upload_ids(
         latest_by_name.setdefault(file_name, int(upload_id))
     selected = sorted(latest_by_name.values())
     return selected, max(0, len(rows) - len(selected))
+
+
+def load_cashflow_voucher_occurrence_source(
+    client_id: int,
+    *,
+    query_fn: Callable[..., list[dict[str, Any]]] = execute_query_pg,
+) -> CashflowVoucherOccurrenceSource:
+    """Load complete normalized lines from every configured-template upload.
+
+    This intentionally bypasses filename-based source selection: overlapping
+    uploads are the evidence that canonical voucher resolution must assess.
+    It is read-only and is not used by report generation.
+    """
+    settings_rows = query_fn(
+        """
+        SELECT source_template_id
+        FROM account_control_cashflow_settings
+        WHERE client_id = %s
+        """,
+        (client_id,),
+    )
+    template_id = settings_rows[0].get("source_template_id") if settings_rows else None
+    if template_id is None:
+        return CashflowVoucherOccurrenceSource(
+            None,
+            (),
+            (_diagnostic("cashflow_template_not_configured", "error", "Configure a Cashflows source template before resolving voucher occurrences."),),
+            {"client_id": client_id, "source_upload_selection": "all_configured_template_uploads"},
+        )
+    template_id = int(template_id)
+    mapping = _load_cashflow_column_mapping(client_id, template_id, query_fn)
+    missing_roles = [role for role in CASHFLOW_REQUIRED_COLUMN_ROLES if role not in mapping]
+    if missing_roles:
+        return CashflowVoucherOccurrenceSource(
+            template_id,
+            (),
+            (_diagnostic("cashflow_column_mapping_incomplete", "error", "Required Cashflows template columns are not mapped: " + ", ".join(missing_roles), fields=missing_roles, template_id=template_id),),
+            {"client_id": client_id, "template_id": template_id, "source_upload_selection": "all_configured_template_uploads"},
+        )
+
+    raw_rows = query_fn(
+        """
+        SELECT cd.id AS client_data_id, cd.client_id, cd.template_id, cd.upload_id,
+               cd.row_data, f.upload_date AS source_extract_as_of
+        FROM client_data cd
+        LEFT JOIN uploaded_files f ON f.id = cd.upload_id
+        WHERE cd.client_id = %s
+          AND cd.template_id = %s
+          AND cd.is_deleted = FALSE
+        ORDER BY f.upload_date NULLS LAST, cd.upload_id, cd.id
+        """,
+        (client_id, template_id),
+    )
+    uploads: dict[int, list[dict[str, Any]]] = {}
+    for row in raw_rows:
+        upload_id = row.get("upload_id")
+        if upload_id is not None:
+            uploads.setdefault(int(upload_id), []).append(dict(row))
+
+    lines: list[dict[str, Any]] = []
+    diagnostics: list[dict[str, Any]] = []
+    skipped_upload_ids: list[int] = []
+    for upload_id, upload_rows in uploads.items():
+        normalized = build_report_source(
+            upload_rows,
+            column_mapping=mapping,
+            metadata={"client_id": client_id, "template_id": template_id, "upload_id": upload_id},
+        )
+        diagnostics.extend({**diagnostic, "upload_id": upload_id} for diagnostic in normalized.diagnostics)
+        if not normalized.ready:
+            skipped_upload_ids.append(upload_id)
+            continue
+        source_extract_as_of = _text(upload_rows[0].get("source_extract_as_of"))
+        source_sequence: Any = source_extract_as_of or upload_id
+        for row in normalized.journal.to_dict("records"):
+            lines.append(
+                {
+                    "client_id": client_id,
+                    "template_id": template_id,
+                    "upload_id": upload_id,
+                    "voucher_id": row.get("voucher_id"),
+                    "transaction_date": row.get("date"),
+                    "account_code": row.get("account_code"),
+                    "account_name": row.get("account_name"),
+                    "voucher_detail": row.get("voucher_detail"),
+                    "debit": row.get("debit"),
+                    "credit": row.get("credit"),
+                    "source_extract_as_of": source_extract_as_of or None,
+                    "source_sequence": source_sequence,
+                }
+            )
+    metadata = {
+        "client_id": client_id,
+        "template_id": template_id,
+        "source_upload_selection": "all_configured_template_uploads",
+        "source_upload_count": len(uploads),
+        "source_upload_ids": sorted(uploads),
+        "skipped_upload_ids": skipped_upload_ids,
+        "source_row_count": len(raw_rows),
+        "normalized_line_count": len(lines),
+    }
+    return CashflowVoucherOccurrenceSource(template_id, tuple(lines), tuple(diagnostics), metadata)
+
 
 def _cashflow_upload_ids_key(upload_ids: Sequence[int]) -> str:
     return ",".join(str(int(upload_id)) for upload_id in sorted(set(upload_ids)))

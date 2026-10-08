@@ -44,9 +44,9 @@ One line per file group: what it is now. Full build history for every entry live
 - static/search_index.js → deleted; feature registry merged into `NAV_MANIFEST` in `client_context.js` — do not recreate. See CHANGELOG_ARCHIVE.md.
 - static/loading_ui.js → shared `window.LoadingUI` primitives, including token-based target-aware global progress-cursor ownership. See CHANGELOG_ARCHIVE.md.
 - static/api_utils.js → shared `apiFetch()` (GET debounce/retry) and `apiFetchMutate()` (non-retried writes, optional Loading UI); warning-only direct-`/api/` fetch guard; partial rollout. See CHANGELOG_ARCHIVE.md.
-- services/ledger_group_summary.py + ledger_report_source.py -> summary engine, customer-payment reconciliation/read models, SQL-first stored-data adapter, and Cashflows ledger rollups. See CHANGELOG_ARCHIVE.md.
+- services/ledger_group_summary.py + ledger_report_source.py -> summary engine, customer-payment read models, SQL sources, Cashflows rollups, and canonical-voucher input loading. See CHANGELOG_ARCHIVE.md.
 - services/cash_bank_classification.py + scripts/backfill_cash_bank_transaction_classifications.py -> versioned derived Cash/Bank lines, Cash Flow category resolution, upload/backfill application, and audited reclassification without raw-row mutation. See CHANGELOG_ARCHIVE.md.
-- services/cashflow_voucher_canonicalization.py -> pure, audit-preserving voucher identity/fingerprint resolver; later phases will persist and consume its canonical decisions. See CHANGELOG_ARCHIVE.md.
+- services/cashflow_voucher_canonicalization.py + scripts/backfill_cashflow_voucher_occurrences.py -> audit-preserving decisions and controlled historical register maintenance; reports remain unchanged. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_xlsx.py → static Bank/Cash workbook exporter for summaries, schedules, reviews, cross-checks, and reconciliation proofs. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_balance_source.py → validates stored opening/month-end balances and converts them to reconciliation-engine inputs. See CHANGELOG_ARCHIVE.md.
 - tests/test_account_control_center*.py + tests/test_cash_bank_configuration_sync.py + tests/test_cashflows*.py → regression coverage for setup, orphan assignment, derived classification, and Cashflows Reports UI.
@@ -220,6 +220,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 ## Status log
 - 2026-10-07: Added the isolated Cashflows canonical-voucher register and resolver foundation; reporting still uses the existing source path.
+- 2026-10-07: DV-2 now backfills audit-only canonical voucher decisions; Cashflows reports retain their existing source selection.
 - 2026-10-07: Defined the customer-wise Cashflows projection contract, grouping by customer account code and tying matched statement-eligible settlements to Received from customers.
 - 2026-10-07: Locked customer-payment composite voucher accounting rules in cash-bank-summary-module-spec.md.
 - 2026-10-07: Completed Phase 2 customer-payment engine separation with matched net receipts and derived drilldown rows.
