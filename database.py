@@ -569,6 +569,7 @@ def init_db():
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cashflow_voucher_occurrences_lookup ON cashflow_voucher_occurrences (client_id, template_id, voucher_identity, decision_status)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cashflow_voucher_occurrences_upload ON cashflow_voucher_occurrences (upload_id, decision_status)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cashflow_voucher_occurrences_canonical ON cashflow_voucher_occurrences (canonical_occurrence_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cashflow_voucher_occurrences_current ON cashflow_voucher_occurrences (client_id, template_id, decision_status, canonical_occurrence_id)")
         conn.execute('''
             CREATE TABLE IF NOT EXISTS cash_bank_summary_read_models (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -629,6 +630,114 @@ def init_db():
                 FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
             )
         ''')
+
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS cashflow_prepared_lines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                template_id INTEGER NOT NULL,
+                preparation_revision INTEGER NOT NULL,
+                canonical_occurrence_id INTEGER NOT NULL,
+                upload_id INTEGER NOT NULL,
+                source_client_data_id INTEGER NOT NULL,
+                voucher_id TEXT,
+                transaction_date TEXT,
+                account_code TEXT NOT NULL DEFAULT '',
+                account_name TEXT NOT NULL DEFAULT '',
+                debit REAL NOT NULL DEFAULT 0,
+                credit REAL NOT NULL DEFAULT 0,
+                net_amount REAL NOT NULL DEFAULT 0,
+                treasury_type TEXT NOT NULL DEFAULT '',
+                category_id INTEGER,
+                category_label_snapshot TEXT NOT NULL DEFAULT '',
+                category_key TEXT NOT NULL DEFAULT '',
+                transaction_month TEXT NOT NULL DEFAULT '',
+                transaction_fortnight TEXT NOT NULL DEFAULT '',
+                classification_status TEXT NOT NULL DEFAULT 'unmapped',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                FOREIGN KEY (template_id) REFERENCES templates(id) ON DELETE CASCADE,
+                FOREIGN KEY (canonical_occurrence_id) REFERENCES cashflow_voucher_occurrences(id) ON DELETE CASCADE,
+                FOREIGN KEY (upload_id) REFERENCES uploaded_files(id) ON DELETE CASCADE,
+                UNIQUE(client_id, preparation_revision, canonical_occurrence_id, source_client_data_id)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cashflow_prepared_lines_revision_occurrence ON cashflow_prepared_lines (client_id, preparation_revision, canonical_occurrence_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cashflow_prepared_lines_revision_source ON cashflow_prepared_lines (client_id, preparation_revision, source_client_data_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cashflow_prepared_lines_period ON cashflow_prepared_lines (client_id, preparation_revision, transaction_month, transaction_fortnight)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cashflow_prepared_lines_account ON cashflow_prepared_lines (client_id, preparation_revision, account_code, transaction_month)")
+
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS cashflow_prepared_rollups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                template_id INTEGER NOT NULL,
+                preparation_revision INTEGER NOT NULL,
+                period_grain TEXT NOT NULL,
+                period_key TEXT NOT NULL,
+                category_id INTEGER,
+                category_key TEXT NOT NULL DEFAULT '',
+                category_label_snapshot TEXT NOT NULL DEFAULT '',
+                account_code TEXT NOT NULL DEFAULT '',
+                account_name TEXT NOT NULL DEFAULT '',
+                treasury_type TEXT NOT NULL DEFAULT '',
+                debit_total REAL NOT NULL DEFAULT 0,
+                credit_total REAL NOT NULL DEFAULT 0,
+                net_total REAL NOT NULL DEFAULT 0,
+                voucher_count INTEGER NOT NULL DEFAULT 0,
+                line_count INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                FOREIGN KEY (template_id) REFERENCES templates(id) ON DELETE CASCADE,
+                UNIQUE(client_id, preparation_revision, period_grain, period_key, category_key, account_code, treasury_type)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cashflow_prepared_rollups_lookup ON cashflow_prepared_rollups (client_id, preparation_revision, period_grain, period_key)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cashflow_prepared_rollups_category ON cashflow_prepared_rollups (client_id, preparation_revision, category_key, account_code, period_key)")
+
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS cashflow_preparation_state (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL UNIQUE,
+                active_preparation_revision INTEGER NOT NULL DEFAULT 0,
+                requested_preparation_revision INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'ready' CHECK (status IN ('ready', 'updating', 'failed')),
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP,
+                affected_row_count INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                last_successful_build_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cashflow_preparation_state_status ON cashflow_preparation_state (status, active_preparation_revision)")
+
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS cashflow_preparation_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                reason TEXT NOT NULL,
+                affected_upload_ids TEXT NOT NULL DEFAULT '[]',
+                affected_account_codes TEXT NOT NULL DEFAULT '[]',
+                affected_voucher_identities TEXT NOT NULL DEFAULT '[]',
+                requested_preparation_revision INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'completed', 'failed', 'cancelled')),
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                error_details TEXT,
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                UNIQUE(client_id, requested_preparation_revision, reason)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cashflow_preparation_jobs_status ON cashflow_preparation_jobs (client_id, status, created_at)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cashflow_preparation_jobs_revision ON cashflow_preparation_jobs (client_id, requested_preparation_revision)")
 
         conn.execute('''
             CREATE TABLE IF NOT EXISTS error_codes (
@@ -4363,6 +4472,116 @@ def _ensure_postgres_cashflow_voucher_occurrences(conn):
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cashflow_voucher_occurrences_lookup ON cashflow_voucher_occurrences (client_id, template_id, voucher_identity, decision_status)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cashflow_voucher_occurrences_upload ON cashflow_voucher_occurrences (upload_id, decision_status)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cashflow_voucher_occurrences_canonical ON cashflow_voucher_occurrences (canonical_occurrence_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cashflow_voucher_occurrences_current ON cashflow_voucher_occurrences (client_id, template_id, decision_status, canonical_occurrence_id)")
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
+def _ensure_postgres_cashflow_prepared_tables(conn):
+    """Create the additive Cashflows prepared read-model tables and indexes."""
+    cur = conn.cursor()
+    try:
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS cashflow_prepared_lines (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+                preparation_revision BIGINT NOT NULL,
+                canonical_occurrence_id INTEGER NOT NULL REFERENCES cashflow_voucher_occurrences(id) ON DELETE CASCADE,
+                upload_id INTEGER NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
+                source_client_data_id INTEGER NOT NULL,
+                voucher_id TEXT,
+                transaction_date DATE,
+                account_code TEXT NOT NULL DEFAULT '',
+                account_name TEXT NOT NULL DEFAULT '',
+                debit NUMERIC NOT NULL DEFAULT 0,
+                credit NUMERIC NOT NULL DEFAULT 0,
+                net_amount NUMERIC NOT NULL DEFAULT 0,
+                treasury_type TEXT NOT NULL DEFAULT '',
+                category_id INTEGER,
+                category_label_snapshot TEXT NOT NULL DEFAULT '',
+                category_key TEXT NOT NULL DEFAULT '',
+                transaction_month TEXT NOT NULL DEFAULT '',
+                transaction_fortnight TEXT NOT NULL DEFAULT '',
+                classification_status TEXT NOT NULL DEFAULT 'unmapped',
+                created_at TIMESTAMPTZ DEFAULT now(),
+                updated_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(client_id, preparation_revision, canonical_occurrence_id, source_client_data_id)
+            )
+        ''')
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cashflow_prepared_lines_revision_occurrence ON cashflow_prepared_lines (client_id, preparation_revision, canonical_occurrence_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cashflow_prepared_lines_revision_source ON cashflow_prepared_lines (client_id, preparation_revision, source_client_data_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cashflow_prepared_lines_period ON cashflow_prepared_lines (client_id, preparation_revision, transaction_month, transaction_fortnight)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cashflow_prepared_lines_account ON cashflow_prepared_lines (client_id, preparation_revision, account_code, transaction_month)")
+
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS cashflow_prepared_rollups (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+                preparation_revision BIGINT NOT NULL,
+                period_grain TEXT NOT NULL,
+                period_key TEXT NOT NULL,
+                category_id INTEGER,
+                category_key TEXT NOT NULL DEFAULT '',
+                category_label_snapshot TEXT NOT NULL DEFAULT '',
+                account_code TEXT NOT NULL DEFAULT '',
+                account_name TEXT NOT NULL DEFAULT '',
+                treasury_type TEXT NOT NULL DEFAULT '',
+                debit_total NUMERIC NOT NULL DEFAULT 0,
+                credit_total NUMERIC NOT NULL DEFAULT 0,
+                net_total NUMERIC NOT NULL DEFAULT 0,
+                voucher_count BIGINT NOT NULL DEFAULT 0,
+                line_count BIGINT NOT NULL DEFAULT 0,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                updated_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(client_id, preparation_revision, period_grain, period_key, category_key, account_code, treasury_type)
+            )
+        ''')
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cashflow_prepared_rollups_lookup ON cashflow_prepared_rollups (client_id, preparation_revision, period_grain, period_key)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cashflow_prepared_rollups_category ON cashflow_prepared_rollups (client_id, preparation_revision, category_key, account_code, period_key)")
+
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS cashflow_preparation_state (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                client_id INTEGER NOT NULL UNIQUE REFERENCES clients(id) ON DELETE CASCADE,
+                active_preparation_revision BIGINT NOT NULL DEFAULT 0,
+                requested_preparation_revision BIGINT NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'ready' CHECK (status IN ('ready', 'updating', 'failed')),
+                started_at TIMESTAMPTZ,
+                completed_at TIMESTAMPTZ,
+                affected_row_count BIGINT NOT NULL DEFAULT 0,
+                last_error TEXT,
+                last_successful_build_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                updated_at TIMESTAMPTZ DEFAULT now()
+            )
+        ''')
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cashflow_preparation_state_status ON cashflow_preparation_state (status, active_preparation_revision)")
+
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS cashflow_preparation_jobs (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                reason TEXT NOT NULL,
+                affected_upload_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+                affected_account_codes JSONB NOT NULL DEFAULT '[]'::jsonb,
+                affected_voucher_identities JSONB NOT NULL DEFAULT '[]'::jsonb,
+                requested_preparation_revision BIGINT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'completed', 'failed', 'cancelled')),
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                error_details TEXT,
+                started_at TIMESTAMPTZ,
+                completed_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                updated_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(client_id, requested_preparation_revision, reason)
+            )
+        ''')
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cashflow_preparation_jobs_status ON cashflow_preparation_jobs (client_id, status, created_at)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cashflow_preparation_jobs_revision ON cashflow_preparation_jobs (client_id, requested_preparation_revision)")
     except Exception:
         conn.rollback()
         raise
@@ -4404,6 +4623,7 @@ def init_db_postgres(conn):
         _ensure_postgres_account_set_tables(conn)
         _ensure_postgres_cash_bank_transaction_classifications(conn)
         _ensure_postgres_cashflow_voucher_occurrences(conn)
+        _ensure_postgres_cashflow_prepared_tables(conn)
         migrated_assertions = _ensure_postgres_audit_rule_assertions(conn)
         migrated_compiled_rulebooks = _ensure_postgres_category_compiled_rulebooks(conn)
         migrated_cat_doc_assertions = _ensure_postgres_category_document_assertions(conn)
@@ -4645,6 +4865,7 @@ def init_db_postgres(conn):
     run("CREATE INDEX IF NOT EXISTS idx_cashflow_voucher_occurrences_lookup ON cashflow_voucher_occurrences (client_id, template_id, voucher_identity, decision_status)")
     run("CREATE INDEX IF NOT EXISTS idx_cashflow_voucher_occurrences_upload ON cashflow_voucher_occurrences (upload_id, decision_status)")
     run("CREATE INDEX IF NOT EXISTS idx_cashflow_voucher_occurrences_canonical ON cashflow_voucher_occurrences (canonical_occurrence_id)")
+    run("CREATE INDEX IF NOT EXISTS idx_cashflow_voucher_occurrences_current ON cashflow_voucher_occurrences (client_id, template_id, decision_status, canonical_occurrence_id)")
     run('''
         CREATE TABLE IF NOT EXISTS cash_bank_summary_read_models (
             id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -4673,7 +4894,104 @@ def init_db_postgres(conn):
             change_reason TEXT
         )
     ''', "cashflow_report_revisions")
-    # ---------- 10. error_codes ----------
+    # ---------- 10. prepared Cashflows read model ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS cashflow_prepared_lines (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+            preparation_revision BIGINT NOT NULL,
+            canonical_occurrence_id INTEGER NOT NULL REFERENCES cashflow_voucher_occurrences(id) ON DELETE CASCADE,
+            upload_id INTEGER NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
+            source_client_data_id INTEGER NOT NULL,
+            voucher_id TEXT,
+            transaction_date DATE,
+            account_code TEXT NOT NULL DEFAULT '',
+            account_name TEXT NOT NULL DEFAULT '',
+            debit NUMERIC NOT NULL DEFAULT 0,
+            credit NUMERIC NOT NULL DEFAULT 0,
+            net_amount NUMERIC NOT NULL DEFAULT 0,
+            treasury_type TEXT NOT NULL DEFAULT '',
+            category_id INTEGER,
+            category_label_snapshot TEXT NOT NULL DEFAULT '',
+            category_key TEXT NOT NULL DEFAULT '',
+            transaction_month TEXT NOT NULL DEFAULT '',
+            transaction_fortnight TEXT NOT NULL DEFAULT '',
+            classification_status TEXT NOT NULL DEFAULT 'unmapped',
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE(client_id, preparation_revision, canonical_occurrence_id, source_client_data_id)
+        )
+    ''', "cashflow_prepared_lines")
+    run("CREATE INDEX IF NOT EXISTS idx_cashflow_prepared_lines_revision_occurrence ON cashflow_prepared_lines (client_id, preparation_revision, canonical_occurrence_id)")
+    run("CREATE INDEX IF NOT EXISTS idx_cashflow_prepared_lines_revision_source ON cashflow_prepared_lines (client_id, preparation_revision, source_client_data_id)")
+    run("CREATE INDEX IF NOT EXISTS idx_cashflow_prepared_lines_period ON cashflow_prepared_lines (client_id, preparation_revision, transaction_month, transaction_fortnight)")
+    run("CREATE INDEX IF NOT EXISTS idx_cashflow_prepared_lines_account ON cashflow_prepared_lines (client_id, preparation_revision, account_code, transaction_month)")
+    run('''
+        CREATE TABLE IF NOT EXISTS cashflow_prepared_rollups (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+            preparation_revision BIGINT NOT NULL,
+            period_grain TEXT NOT NULL,
+            period_key TEXT NOT NULL,
+            category_id INTEGER,
+            category_key TEXT NOT NULL DEFAULT '',
+            category_label_snapshot TEXT NOT NULL DEFAULT '',
+            account_code TEXT NOT NULL DEFAULT '',
+            account_name TEXT NOT NULL DEFAULT '',
+            treasury_type TEXT NOT NULL DEFAULT '',
+            debit_total NUMERIC NOT NULL DEFAULT 0,
+            credit_total NUMERIC NOT NULL DEFAULT 0,
+            net_total NUMERIC NOT NULL DEFAULT 0,
+            voucher_count BIGINT NOT NULL DEFAULT 0,
+            line_count BIGINT NOT NULL DEFAULT 0,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE(client_id, preparation_revision, period_grain, period_key, category_key, account_code, treasury_type)
+        )
+    ''', "cashflow_prepared_rollups")
+    run("CREATE INDEX IF NOT EXISTS idx_cashflow_prepared_rollups_lookup ON cashflow_prepared_rollups (client_id, preparation_revision, period_grain, period_key)")
+    run("CREATE INDEX IF NOT EXISTS idx_cashflow_prepared_rollups_category ON cashflow_prepared_rollups (client_id, preparation_revision, category_key, account_code, period_key)")
+    run('''
+        CREATE TABLE IF NOT EXISTS cashflow_preparation_state (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            client_id INTEGER NOT NULL UNIQUE REFERENCES clients(id) ON DELETE CASCADE,
+            active_preparation_revision BIGINT NOT NULL DEFAULT 0,
+            requested_preparation_revision BIGINT NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'ready' CHECK (status IN ('ready', 'updating', 'failed')),
+            started_at TIMESTAMPTZ,
+            completed_at TIMESTAMPTZ,
+            affected_row_count BIGINT NOT NULL DEFAULT 0,
+            last_error TEXT,
+            last_successful_build_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now()
+        )
+    ''', "cashflow_preparation_state")
+    run("CREATE INDEX IF NOT EXISTS idx_cashflow_preparation_state_status ON cashflow_preparation_state (status, active_preparation_revision)")
+    run('''
+        CREATE TABLE IF NOT EXISTS cashflow_preparation_jobs (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            reason TEXT NOT NULL,
+            affected_upload_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+            affected_account_codes JSONB NOT NULL DEFAULT '[]'::jsonb,
+            affected_voucher_identities JSONB NOT NULL DEFAULT '[]'::jsonb,
+            requested_preparation_revision BIGINT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'completed', 'failed', 'cancelled')),
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            error_details TEXT,
+            started_at TIMESTAMPTZ,
+            completed_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE(client_id, requested_preparation_revision, reason)
+        )
+    ''', "cashflow_preparation_jobs")
+    run("CREATE INDEX IF NOT EXISTS idx_cashflow_preparation_jobs_status ON cashflow_preparation_jobs (client_id, status, created_at)")
+    run("CREATE INDEX IF NOT EXISTS idx_cashflow_preparation_jobs_revision ON cashflow_preparation_jobs (client_id, requested_preparation_revision)")
+    # ---------- 11. error_codes ----------
     run('''
         CREATE TABLE IF NOT EXISTS error_codes (
             id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
