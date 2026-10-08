@@ -9,7 +9,9 @@ from scripts.backfill_cashflow_prepared_read_model import run_client
 from services.cashflow_preparation import (
     build_preparation_plan,
     prepare_client,
+    prepare_incremental_category_client,
     prepare_incremental_client,
+    prepare_incremental_treasury_client,
 )
 
 
@@ -349,5 +351,115 @@ def test_incremental_noop_does_not_create_a_new_revision(monkeypatch):
             assert conn.execute(
                 "SELECT COUNT(*) FROM cashflow_prepared_lines WHERE preparation_revision = 2"
             ).fetchone()[0] == 0
+        finally:
+            conn.close()
+
+
+def test_incremental_category_change_updates_only_affected_account_lines(monkeypatch):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        monkeypatch.setattr(database, "DB_NAME", f"{temp_dir}/cashflows.sqlite")
+        database.init_db()
+        conn = database.get_db()
+        try:
+            template_id = _seed_cashflow_fixture(conn)
+            conn.execute(
+                "INSERT INTO account_control_cashflow_categories (id, client_id, category_key, label) VALUES (2, 1, 'tax_payments', 'Tax payments')"
+            )
+            prepare_client(conn, client_id=1, preparation_revision=1)
+            conn.commit()
+            raw_before = conn.execute("SELECT row_data FROM client_data WHERE id = 102").fetchone()[0]
+            conn.execute(
+                "UPDATE account_control_cashflow_category_assignments SET category_id = 2 WHERE client_id = 1 AND account_code = 'CUSTOMER'"
+            )
+            conn.commit()
+
+            result = prepare_incremental_category_client(
+                conn,
+                client_id=1,
+                account_codes=["CUSTOMER"],
+            )
+            conn.commit()
+
+            assert result["preparation_revision"] == 2
+            customer = conn.execute(
+                """SELECT category_key, category_label_snapshot
+                   FROM cashflow_prepared_lines
+                   WHERE preparation_revision = 2 AND account_code = 'CUSTOMER'"""
+            ).fetchone()
+            bank = conn.execute(
+                """SELECT category_key, category_label_snapshot
+                   FROM cashflow_prepared_lines
+                   WHERE preparation_revision = 2 AND account_code = 'BANK'"""
+            ).fetchone()
+            assert tuple(customer) == ("tax_payments", "Tax payments")
+            assert tuple(bank) == ("__unassigned__", "")
+            assert conn.execute(
+                """SELECT COUNT(*) FROM cashflow_prepared_rollups
+                   WHERE preparation_revision = 2 AND category_key = 'customer_receipts'"""
+            ).fetchone()[0] == 0
+            assert conn.execute("SELECT row_data FROM client_data WHERE id = 102").fetchone()[0] == raw_before
+        finally:
+            conn.close()
+
+
+def test_incremental_treasury_change_removes_all_lines_for_now_ineligible_voucher(monkeypatch):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        monkeypatch.setattr(database, "DB_NAME", f"{temp_dir}/cashflows.sqlite")
+        database.init_db()
+        conn = database.get_db()
+        try:
+            template_id = _seed_cashflow_fixture(conn)
+            prepare_client(conn, client_id=1, preparation_revision=1)
+            conn.commit()
+            conn.execute(
+                "UPDATE cash_bank_transaction_classifications SET treasury_type = NULL, classification_status = 'non_treasury' WHERE client_data_id = 101"
+            )
+            conn.commit()
+
+            result = prepare_incremental_treasury_client(
+                conn,
+                client_id=1,
+                account_codes=["BANK"],
+            )
+            conn.commit()
+
+            assert result["preparation_revision"] == 2
+            assert conn.execute(
+                "SELECT COUNT(*) FROM cashflow_prepared_lines WHERE preparation_revision = 2"
+            ).fetchone()[0] == 0
+            assert conn.execute(
+                "SELECT active_preparation_revision FROM cashflow_preparation_state WHERE client_id = 1"
+            ).fetchone()[0] == 2
+        finally:
+            conn.close()
+
+
+def test_incremental_treasury_change_adds_all_lines_for_newly_eligible_voucher(monkeypatch):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        monkeypatch.setattr(database, "DB_NAME", f"{temp_dir}/cashflows.sqlite")
+        database.init_db()
+        conn = database.get_db()
+        try:
+            template_id = _seed_cashflow_fixture(conn, include_treasury=False)
+            prepare_client(conn, client_id=1, preparation_revision=1)
+            conn.commit()
+            conn.execute(
+                "UPDATE cash_bank_transaction_classifications SET treasury_type = 'bank', classification_status = 'bank' WHERE client_data_id = 101"
+            )
+            conn.commit()
+
+            result = prepare_incremental_treasury_client(
+                conn,
+                client_id=1,
+                account_codes=["BANK"],
+            )
+            conn.commit()
+
+            assert result["preparation_revision"] == 2
+            assert {
+                row[0] for row in conn.execute(
+                    "SELECT source_client_data_id FROM cashflow_prepared_lines WHERE preparation_revision = 2"
+                ).fetchall()
+            } == {101, 102, 103}
         finally:
             conn.close()

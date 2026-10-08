@@ -700,3 +700,244 @@ def prepare_incremental_client(
         "prepared_line_count": len(line_plan["prepared_lines"]),
         "rollup_count": len(replacement_rollups),
     }
+
+
+def _no_prepared_change_result(query: QueryFn, *, client_id: int, reason: str) -> dict[str, Any]:
+    state = query(
+        "SELECT active_preparation_revision FROM cashflow_preparation_state WHERE client_id = %s",
+        (client_id,),
+    )
+    return {
+        "ready": True,
+        "changed": False,
+        "reason": reason,
+        "client_id": client_id,
+        "preparation_revision": int(state[0].get("active_preparation_revision") or 0) if state else 0,
+        "prepared_line_count": 0,
+        "rollup_count": 0,
+    }
+
+
+def prepare_incremental_category_client(
+    conn: Any,
+    *,
+    client_id: int,
+    account_codes: Sequence[str] = (),
+    category_ids: Sequence[int] = (),
+    preparation_revision: int | None = None,
+) -> dict[str, Any]:
+    """Publish a revision for only changed Cashflows category assignments."""
+    query = _query_fn(conn)
+    normalized_codes = sorted({
+        code
+        for code in (_normalize_account_code(value) for value in account_codes)
+        if code
+    })
+    normalized_category_ids = sorted({int(value) for value in category_ids})
+    if not normalized_codes and not normalized_category_ids:
+        return _no_prepared_change_result(query, client_id=client_id, reason="no_category_changes")
+
+    configured = query(
+        "SELECT source_template_id FROM account_control_cashflow_settings WHERE client_id = %s",
+        (client_id,),
+    )
+    if not configured or not configured[0].get("source_template_id"):
+        return {"ready": False, "changed": False, "reason": "template_not_configured", "client_id": client_id}
+    template_id = int(configured[0]["source_template_id"])
+    state = query(
+        "SELECT active_preparation_revision FROM cashflow_preparation_state WHERE client_id = %s",
+        (client_id,),
+    )
+    active_revision = int(state[0].get("active_preparation_revision") or 0) if state else 0
+    if active_revision <= 0:
+        return {"ready": False, "changed": False, "reason": "active_revision_missing", "client_id": client_id}
+
+    if normalized_category_ids:
+        placeholders = ", ".join("%s" for _ in normalized_category_ids)
+        assigned_codes = query(
+            f"""SELECT DISTINCT account_code
+                FROM account_control_cashflow_category_assignments
+                WHERE client_id = %s AND category_id IN ({placeholders})""",
+            (client_id, *normalized_category_ids),
+        )
+        normalized_codes = sorted({
+            code
+            for code in normalized_codes + [
+                _normalize_account_code(row.get("account_code")) for row in assigned_codes
+            ]
+            if code
+        })
+
+    if not normalized_codes:
+        return _no_prepared_change_result(query, client_id=client_id, reason="no_prepared_changes")
+
+    code_placeholders = ", ".join("%s" for _ in normalized_codes)
+    old_lines = query(
+        f"""SELECT canonical_occurrence_id, category_id, category_key, category_label_snapshot,
+                   account_code, account_name, debit, credit, net_amount, treasury_type,
+                   transaction_month, transaction_fortnight
+            FROM cashflow_prepared_lines
+            WHERE client_id = %s AND preparation_revision = %s
+              AND account_code IN ({code_placeholders})""",
+        (client_id, active_revision, *normalized_codes),
+    )
+    if not old_lines:
+        return _no_prepared_change_result(query, client_id=client_id, reason="no_prepared_changes")
+
+    category_rows = query(
+        f"""SELECT a.account_code, a.category_id, c.category_key, c.label AS category_label
+            FROM account_control_cashflow_category_assignments a
+            LEFT JOIN account_control_cashflow_categories c
+              ON c.id = a.category_id
+             AND c.client_id = a.client_id
+             AND c.is_active = TRUE
+            WHERE a.client_id = %s AND a.account_code IN ({code_placeholders})""",
+        (client_id, *normalized_codes),
+    )
+    categories = _category_lookup(category_rows)
+    revision = int(preparation_revision or _next_revision(conn, client_id))
+    if revision == active_revision:
+        revision = _next_revision(conn, client_id)
+    _set_state_updating(conn, client_id, revision)
+    _execute(conn, "DELETE FROM cashflow_prepared_rollups WHERE client_id = %s AND preparation_revision = %s", (client_id, revision))
+    _execute(conn, "DELETE FROM cashflow_prepared_lines WHERE client_id = %s AND preparation_revision = %s", (client_id, revision))
+    _copy_prepared_revision(conn, client_id=client_id, source_revision=active_revision, target_revision=revision)
+    for account_code in normalized_codes:
+        category = categories.get(account_code, {
+            "category_id": None,
+            "category_key": "__unassigned__",
+            "category_label": "",
+        })
+        _execute(
+            conn,
+            """UPDATE cashflow_prepared_lines
+               SET category_id = %s, category_label_snapshot = %s, category_key = %s
+               WHERE client_id = %s AND preparation_revision = %s AND account_code = %s""",
+            (
+                category["category_id"],
+                category["category_label"],
+                category["category_key"],
+                client_id,
+                revision,
+                account_code,
+            ),
+        )
+    new_lines = query(
+        f"""SELECT canonical_occurrence_id, category_id, category_key, category_label_snapshot,
+                   account_code, account_name, debit, credit, net_amount, treasury_type,
+                   transaction_month, transaction_fortnight
+            FROM cashflow_prepared_lines
+            WHERE client_id = %s AND preparation_revision = %s
+              AND account_code IN ({code_placeholders})""",
+        (client_id, revision, *normalized_codes),
+    )
+    touched_keys = _line_bucket_keys(old_lines) | _line_bucket_keys(new_lines)
+    _delete_rollup_keys(conn, client_id=client_id, preparation_revision=revision, keys=touched_keys)
+    replacement_rollups = _rollups_for_keys(
+        conn, client_id=client_id, preparation_revision=revision, keys=touched_keys
+    )
+    _insert_rollups(
+        conn, revision=revision, client_id=client_id, template_id=template_id, rollups=replacement_rollups
+    )
+    _execute(
+        conn,
+        """UPDATE cashflow_preparation_state
+           SET active_preparation_revision = %s, requested_preparation_revision = %s,
+               status = 'ready', completed_at = CURRENT_TIMESTAMP,
+               affected_row_count = %s, last_successful_build_at = CURRENT_TIMESTAMP,
+               last_error = NULL, updated_at = CURRENT_TIMESTAMP
+           WHERE client_id = %s""",
+        (revision, revision, len(new_lines), client_id),
+    )
+    return {
+        "ready": True,
+        "changed": True,
+        "reason": "incremental_category",
+        "client_id": client_id,
+        "template_id": template_id,
+        "preparation_revision": revision,
+        "affected_account_code_count": len(normalized_codes),
+        "prepared_line_count": len(new_lines),
+        "rollup_count": len(replacement_rollups),
+    }
+
+
+def prepare_incremental_treasury_client(
+    conn: Any,
+    *,
+    client_id: int,
+    account_codes: Sequence[str],
+    preparation_revision: int | None = None,
+) -> dict[str, Any]:
+    """Republish only vouchers affected by a Cash/Bank account selection change."""
+    query = _query_fn(conn)
+    normalized_codes = sorted({
+        code
+        for code in (_normalize_account_code(value) for value in account_codes)
+        if code
+    })
+    if not normalized_codes:
+        return _no_prepared_change_result(query, client_id=client_id, reason="no_treasury_changes")
+    configured = query(
+        "SELECT source_template_id FROM account_control_cashflow_settings WHERE client_id = %s",
+        (client_id,),
+    )
+    if not configured or not configured[0].get("source_template_id"):
+        return {"ready": False, "changed": False, "reason": "template_not_configured", "client_id": client_id}
+    template_id = int(configured[0]["source_template_id"])
+    code_placeholders = ", ".join("%s" for _ in normalized_codes)
+    classifications = query(
+        f"""SELECT upload_id, voucher_id
+            FROM cash_bank_transaction_classifications
+            WHERE client_id = %s AND template_id = %s AND is_current = TRUE
+              AND account_code IN ({code_placeholders})""",
+        (client_id, template_id, *normalized_codes),
+    )
+    occurrences = query(
+        """SELECT id, upload_id, voucher_identity
+           FROM cashflow_voucher_occurrences
+           WHERE client_id = %s AND template_id = %s
+             AND decision_status IN ('current', 'current_revised')
+             AND NULLIF(TRIM(COALESCE(voucher_identity, '')), '') IS NOT NULL""",
+        (client_id, template_id),
+    )
+    occurrence_by_identity = {
+        (int(row["upload_id"]), normalize_voucher_id(row.get("voucher_identity"))): int(row["id"])
+        for row in occurrences
+        if normalize_voucher_id(row.get("voucher_identity"))
+    }
+    current_ids = sorted({
+        occurrence_by_identity[(int(row["upload_id"]), identity)]
+        for row in classifications
+        if (identity := normalize_voucher_id(row.get("voucher_id")))
+        and (int(row["upload_id"]), identity) in occurrence_by_identity
+    })
+    state = query(
+        "SELECT active_preparation_revision FROM cashflow_preparation_state WHERE client_id = %s",
+        (client_id,),
+    )
+    active_revision = int(state[0].get("active_preparation_revision") or 0) if state else 0
+    old_ids = []
+    if active_revision > 0:
+        old_rows = query(
+            f"""SELECT DISTINCT canonical_occurrence_id
+                FROM cashflow_prepared_lines
+                WHERE client_id = %s AND preparation_revision = %s
+                  AND account_code IN ({code_placeholders})""",
+            (client_id, active_revision, *normalized_codes),
+        )
+        old_ids = [int(row["canonical_occurrence_id"]) for row in old_rows]
+    affected_ids = sorted(set(old_ids) | set(current_ids))
+    if not affected_ids:
+        return _no_prepared_change_result(query, client_id=client_id, reason="no_prepared_changes")
+    result = prepare_incremental_client(
+        conn,
+        client_id=client_id,
+        template_id=template_id,
+        affected_occurrence_ids=affected_ids,
+        current_occurrence_ids=current_ids,
+        preparation_revision=preparation_revision,
+    )
+    if result.get("changed"):
+        result["reason"] = "incremental_treasury"
+    return result

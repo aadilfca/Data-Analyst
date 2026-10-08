@@ -115,6 +115,7 @@ class CashBankConfigurationSyncTests(unittest.TestCase):
         self.assertTrue(result["changed"])
         self.assertEqual(result["configuration_version"], 2)
         self.assertEqual(result["action"], "edited")
+        self.assertEqual(result["affected_account_codes"], ["BANK", "CASH"])
         upsert.assert_called_once()
         self.assertEqual(upsert.call_args.kwargs["configuration_version"], 2)
         self.assertEqual(

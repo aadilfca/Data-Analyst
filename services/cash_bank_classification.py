@@ -292,9 +292,15 @@ def synchronize_treasury_accounts_postgres(
             "reclassified_rows": 0,
             "changed": False,
             "action": "unchanged",
+            "affected_account_codes": [],
         }
 
     action = _configuration_action(current_pairs, requested_pairs)
+    affected_account_codes = sorted({
+        str(account_code).strip()
+        for account_code, _treasury_type in current_pairs ^ requested_pairs
+        if str(account_code).strip()
+    })
     configuration_version = current_version + 1
     with conn.cursor() as cursor:
         cursor.execute(
@@ -382,6 +388,7 @@ def synchronize_treasury_accounts_postgres(
         "reclassified_rows": len(source_rows),
         "changed": True,
         "action": action,
+        "affected_account_codes": affected_account_codes,
     }
 def upsert_classification_rows_postgres(
     conn: Any,

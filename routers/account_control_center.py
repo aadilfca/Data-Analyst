@@ -16,6 +16,10 @@ from services.cash_bank_classification import (
     discover_historical_orphan_accounts_postgres,
     synchronize_treasury_accounts_postgres,
 )
+from services.cashflow_preparation import (
+    prepare_incremental_category_client,
+    prepare_incremental_treasury_client,
+)
 from services.ledger_report_source import invalidate_cashflow_summary_read_models, prepare_cashflow_summary_snapshot
 
 
@@ -23,8 +27,30 @@ from services.ledger_report_source import invalidate_cashflow_summary_read_model
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-def _refresh_cashflow_snapshot(client_id: int, reason: str) -> None:
+def _refresh_cashflow_snapshot(
+    client_id: int,
+    reason: str,
+    *,
+    category_account_codes: list[str] | None = None,
+    category_ids: list[int] | None = None,
+    treasury_account_codes: list[str] | None = None,
+) -> None:
     try:
+        if category_account_codes or category_ids:
+            with pg_transaction() as conn:
+                prepare_incremental_category_client(
+                    conn,
+                    client_id=client_id,
+                    account_codes=category_account_codes or (),
+                    category_ids=category_ids or (),
+                )
+        if treasury_account_codes:
+            with pg_transaction() as conn:
+                prepare_incremental_treasury_client(
+                    conn,
+                    client_id=client_id,
+                    account_codes=treasury_account_codes,
+                )
         invalidate_cashflow_summary_read_models(client_id, reason=reason, write_fn=execute_write_pg)
         prepare_cashflow_summary_snapshot(client_id)
     except Exception as error:
@@ -1110,7 +1136,7 @@ def update_cashflow_category(category_id: int, payload: CashFlowCategoryUpdatePa
            WHERE id = %s AND client_id = %s""",
         (category["label"], category["sort_order"], category["is_active"], category_id, category["client_id"]),
     )
-    _refresh_cashflow_snapshot(category["client_id"], "category_updated")
+    _refresh_cashflow_snapshot(category["client_id"], "category_updated", category_ids=[category_id])
 
 
     return {"saved": True, "category": {"id": category_id, **category}}
@@ -1128,7 +1154,11 @@ def save_cashflow_category_assignment(payload: CashFlowCategoryAssignmentPayload
     if account and account["classification"] != "leaf":
         raise HTTPException(400, "Assign the parent through the bulk child operation; direct assignments require a leaf account")
     _upsert_cashflow_category_assignment(assignment, _actor_name(session))
-    _refresh_cashflow_snapshot(assignment["client_id"], "category_assignment")
+    _refresh_cashflow_snapshot(
+        assignment["client_id"],
+        "category_assignment",
+        category_account_codes=[assignment["account_code"]],
+    )
     return {
         "saved": True,
         "account_code": assignment["account_code"],
@@ -1164,7 +1194,11 @@ def apply_cashflow_category_to_children(payload: CashFlowCategoryBulkAssignmentP
                 {"client_id": payload.client_id, "account_code": row["account_code"], "category_id": payload.category_id},
                 actor,
             )
-    _refresh_cashflow_snapshot(payload.client_id, "category_bulk_assignment")
+    _refresh_cashflow_snapshot(
+        payload.client_id,
+        "category_bulk_assignment",
+        category_account_codes=[row["account_code"] for row in leaves + historical_children],
+    )
 
 
     return {"saved": True, "parent_account_code": parent_code, "leaf_count": len(leaves) + len(historical_children), "historical_orphan_count": len(historical_children)}
@@ -1189,7 +1223,11 @@ def save_cashflow_treasury_accounts(payload: CashFlowTreasuryAccountsPayload, se
             bank_account_codes=sorted(bank_codes),
             changed_by=actor,
         )
-    _refresh_cashflow_snapshot(payload.client_id, "treasury_accounts")
+    _refresh_cashflow_snapshot(
+        payload.client_id,
+        "treasury_accounts",
+        treasury_account_codes=synchronization.get("affected_account_codes", []),
+    )
     return {
         "saved": True,
         "cash_account_codes": sorted(cash_codes),
