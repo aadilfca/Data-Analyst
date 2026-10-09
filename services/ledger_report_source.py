@@ -3076,41 +3076,106 @@ def load_cashflow_prepared_drilldown(
     group_by: str,
     category: str,
     report_revision: int | None = None,
+    treasury_view: str = "combined",
     query_fn: Callable[..., list[dict[str, Any]]] = execute_query_pg,
 ) -> dict[str, Any] | None:
-    """Load one category from the upload-time indexed drilldown projection."""
+    """Load one category from the active row-level Cashflows prepared model.
+
+    The query keeps the voucher-level treasury leg when grouping counter lines,
+    so drill-down remains faithful to the report population while avoiding the
+    legacy rollup read-model table. ``None`` deliberately preserves the
+    controlled fallback used during rollout or a failed preparation revision.
+    """
     from services.ledger_group_summary import _cashflow_periods, normalize_cashflow_grouping
 
     category_text = str(category or "").strip()
     if journal_template_id is None or not category_text:
         return None
-    source_identity = select_cashflow_report_source_identity(client_id, journal_template_id, query_fn)
-    if not source_identity.ready:
+    view = normalize_cashflow_treasury_view(treasury_view)
+    if view == "split":
         return None
-    upload_ids = list(source_identity.upload_ids)
-    revision = max(int(report_revision or get_cashflow_report_revision(client_id, query_fn=query_fn) or 1), 1)
-    query = """
-        SELECT period_start, period_key, period_label, category, account_code, account_name,
-               treasury_type, amount, line_count, category_total
-        FROM cashflow_ledger_rollup_read_models
+
+    state_rows = query_fn(
+        """
+        SELECT active_preparation_revision, status
+        FROM cashflow_preparation_state
         WHERE client_id = %s
-          AND template_id = %s
-          AND source_upload_ids_key = %s
-          AND report_revision = %s
-          AND source_group_by = %s
-          AND period_start >= %s
-          AND period_start <= %s
-          AND category = %s
-        ORDER BY period_start, category, account_code, treasury_type
-    """
+        """,
+        (client_id,),
+    )
+    if not state_rows:
+        return None
+    preparation_revision = int(state_rows[0].get("active_preparation_revision") or 0)
+    if preparation_revision <= 0:
+        return None
+
+    grouping = normalize_cashflow_grouping(group_by)
+    periods = _cashflow_periods(period_start, period_end, grouping)
+    if not periods:
+        return None
+
     rows = query_fn(
-        query,
+        """
+        WITH gateway AS (
+            SELECT canonical_occurrence_id,
+                   CASE
+                       WHEN MAX(CASE WHEN LOWER(COALESCE(treasury_type, '')) = 'bank' THEN 1 ELSE 0 END) = 1
+                        AND MAX(CASE WHEN LOWER(COALESCE(treasury_type, '')) = 'cash' THEN 1 ELSE 0 END) = 1
+                           THEN 'Bank, Cash'
+                       WHEN MAX(CASE WHEN LOWER(COALESCE(treasury_type, '')) = 'bank' THEN 1 ELSE 0 END) = 1
+                           THEN 'Bank'
+                       WHEN MAX(CASE WHEN LOWER(COALESCE(treasury_type, '')) = 'cash' THEN 1 ELSE 0 END) = 1
+                           THEN 'Cash'
+                       ELSE 'Unknown'
+                   END AS treasury_type
+            FROM cashflow_prepared_lines
+            WHERE client_id = %s
+              AND template_id = %s
+              AND preparation_revision = %s
+              AND transaction_date >= %s
+              AND transaction_date <= %s
+            GROUP BY canonical_occurrence_id
+        ), counter_lines AS (
+            SELECT p.transaction_date::date AS period_start,
+                   COALESCE(NULLIF(BTRIM(p.category_label_snapshot), ''),
+                            NULLIF(BTRIM(p.account_name), ''),
+                            'Unmapped account') AS category,
+                   p.account_code,
+                   COALESCE(NULLIF(BTRIM(p.account_name), ''), '') AS account_name,
+                   g.treasury_type,
+                   SUM(p.credit - p.debit) AS amount,
+                   COUNT(*) AS line_count
+            FROM cashflow_prepared_lines p
+            JOIN gateway g ON g.canonical_occurrence_id = p.canonical_occurrence_id
+            WHERE p.client_id = %s
+              AND p.template_id = %s
+              AND p.preparation_revision = %s
+              AND p.transaction_date >= %s
+              AND p.transaction_date <= %s
+              AND LOWER(COALESCE(p.treasury_type, '')) NOT IN ('cash', 'bank')
+            GROUP BY p.transaction_date::date,
+                     COALESCE(NULLIF(BTRIM(p.category_label_snapshot), ''),
+                              NULLIF(BTRIM(p.account_name), ''),
+                              'Unmapped account'),
+                     p.account_code,
+                     COALESCE(NULLIF(BTRIM(p.account_name), ''), ''),
+                     g.treasury_type
+        )
+        SELECT period_start, category, account_code, account_name,
+               treasury_type, amount, line_count
+        FROM counter_lines
+        WHERE category = %s
+        ORDER BY period_start, category, account_code, treasury_type
+        """,
         (
             client_id,
             journal_template_id,
-            source_identity.source_key,
-            revision,
-            "day",
+            preparation_revision,
+            period_start,
+            period_end,
+            client_id,
+            journal_template_id,
+            preparation_revision,
             period_start,
             period_end,
             category_text,
@@ -3118,63 +3183,62 @@ def load_cashflow_prepared_drilldown(
     )
     if not rows:
         return None
+
     frame = pd.DataFrame(rows)
     required = {
-        "period_start", "period_key", "period_label", "category", "account_code",
-        "account_name", "treasury_type", "amount", "line_count", "category_total",
+        "period_start", "category", "account_code", "account_name",
+        "treasury_type", "amount", "line_count",
     }
     if not required.issubset(frame.columns):
         return None
     frame["period_start"] = pd.to_datetime(frame["period_start"], errors="coerce").dt.normalize()
     frame["amount"] = pd.to_numeric(frame["amount"], errors="coerce")
     frame["line_count"] = pd.to_numeric(frame["line_count"], errors="coerce").fillna(0)
-    frame["category_total"] = pd.to_numeric(frame["category_total"], errors="coerce")
-    frame = frame.loc[frame["period_start"].notna() & frame["amount"].notna() & frame["category_total"].notna()].copy()
+    frame = frame.loc[frame["period_start"].notna() & frame["amount"].notna()].copy()
     if frame.empty:
         return None
-    grouping = normalize_cashflow_grouping(group_by)
-    periods = _cashflow_periods(period_start, period_end, grouping)
-    target_keys: list[str | None] = []
-    target_labels: list[str | None] = []
+
+    period_keys: list[str | None] = []
+    period_labels: list[str | None] = []
     for value in frame["period_start"]:
-        match = next((period for period in periods if pd.Timestamp(period["start"]) <= value <= pd.Timestamp(period["end"])), None)
-        target_keys.append(str(match["key"]) if match else None)
-        target_labels.append(str(match["label"]) if match else None)
-    frame["target_period_key"] = target_keys
-    frame["target_period_label"] = target_labels
-    frame = frame.loc[frame["target_period_key"].notna()].copy()
+        match = next(
+            (
+                period
+                for period in periods
+                if pd.Timestamp(period["start"]) <= value <= pd.Timestamp(period["end"])
+            ),
+            None,
+        )
+        period_keys.append(str(match["key"]) if match else None)
+        period_labels.append(str(match["label"]) if match else None)
+    frame["period_key"] = period_keys
+    frame["period_label"] = period_labels
+    frame = frame.loc[frame["period_key"].notna()].copy()
+    if view in {"cash", "bank"}:
+        wanted = "Cash" if view == "cash" else "Bank"
+        frame = frame.loc[frame["treasury_type"].astype(str).str.casefold().eq(wanted.casefold())].copy()
     if frame.empty:
         return None
-    expected = (
-        frame[["category", "period_start", "category_total", "target_period_key"]]
-        .drop_duplicates()
-        .groupby(["category", "target_period_key"], dropna=False)["category_total"]
-        .sum()
-    )
+
+    frame["category"] = frame["category"].fillna("").astype(str)
+    frame["account_code"] = frame["account_code"].fillna("").astype(str)
+    frame["account_name"] = frame["account_name"].fillna("").astype(str)
+    frame["treasury_type"] = frame["treasury_type"].fillna("Unknown").astype(str)
     grouped = (
-        frame.assign(
-            category=frame["category"].fillna("").astype(str),
-            account_code=frame["account_code"].fillna("").astype(str),
-            account_name=frame["account_name"].fillna("").astype(str),
-            treasury_type=frame["treasury_type"].fillna("Unknown").astype(str),
-        )
-        .groupby(
-            ["category", "target_period_key", "target_period_label", "account_code", "account_name", "treasury_type"],
+        frame.groupby(
+            ["category", "period_key", "period_label", "account_code", "account_name", "treasury_type"],
             dropna=False,
             sort=False,
         )
         .agg(amount=("amount", "sum"), line_count=("line_count", "sum"))
         .reset_index()
-        .rename(columns={"target_period_key": "period_key", "target_period_label": "period_label"})
     )
-    actual = grouped.groupby(["category", "period_key"], dropna=False)["amount"].sum()
-    for key, expected_total in expected.items():
-        actual_total = float(actual.get(key, 0.0) or 0.0)
-        if abs(actual_total - float(expected_total or 0.0)) > 0.01:
-            return None
+    if grouped.empty:
+        return None
     grouped["line_count"] = grouped["line_count"].round().astype(int)
     output_columns = [
-        "category", "period_key", "period_label", "account_code", "account_name", "treasury_type", "amount", "line_count",
+        "category", "period_key", "period_label", "account_code", "account_name",
+        "treasury_type", "amount", "line_count",
     ]
     detail_rows = _cashflow_detail_records(grouped[output_columns])
     detail_total = sum(_cashflow_projection_number(row.get("amount")) for row in detail_rows)
@@ -3185,22 +3249,22 @@ def load_cashflow_prepared_drilldown(
             "cash_bank_split": {"status": "Matched", "detail_total": detail_total},
         },
         "metadata": {
-            "targeted_drilldown_projection": True,
-            "drilldown_projection_version": CASHFLOW_DRILLDOWN_PROJECTION_VERSION,
-            "summary_read_model": "targeted_drilldown_projection",
+            "targeted_prepared_lines": True,
+            "summary_read_model": "prepared_lines",
             "sql_aggregated": True,
             "raw_json_parsing": False,
             "client_id": client_id,
             "journal_template_id": journal_template_id,
-            "source_upload_ids": upload_ids,
-            "cashflow_report_source_key": source_identity.source_key,
-            "cashflow_report_source_mode": source_identity.selection_mode,
-            "duplicate_uploads_suppressed": source_identity.duplicate_uploads_suppressed,
-            "cashflow_report_revision": revision,
+            "source_upload_ids": [],
+            "cashflow_report_source_key": f"prepared-v1:{client_id}:{journal_template_id}:{preparation_revision}",
+            "cashflow_report_source_mode": "prepared_lines",
+            "preparation_revision": preparation_revision,
+            "preparation_status": str(state_rows[0].get("status") or "ready"),
+            "cashflow_report_revision": max(int(report_revision or 1), 1),
             "source_row_count": int(frame["line_count"].sum()),
+            "treasury_filter_stage": f"prepared_lines_{view}",
         },
     }
-
 
 def load_cashflow_sql_source(
     client_id: int,

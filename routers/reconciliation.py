@@ -1934,6 +1934,7 @@ def cashflow_drilldown(
                 group_by=group_by,
                 category=category,
                 report_revision=configuration.get("cashflow_report_revision"),
+                treasury_view=treasury_view,
                 query_fn=execute_query_pg,
             )
         except Exception as error:
@@ -2090,6 +2091,25 @@ def export_cashflows_report(
     summary_filter = summary_filter.strip() if isinstance(summary_filter, str) else ""
     export_preview = dict(result["preview"])
     treasury_view = result.get("treasury_view") or normalize_cashflow_treasury_view(treasury_view)
+    source_metadata = (result.get("source") or {}).get("metadata") or {}
+    prepared_export_drilldown = None
+    if category and source_metadata.get("journal_template_id") is not None:
+        try:
+            prepared_export_drilldown = load_cashflow_prepared_drilldown(
+                client_id,
+                journal_template_id=source_metadata.get("journal_template_id"),
+                period_start=period_start,
+                period_end=period_end,
+                group_by=group_by,
+                category=category,
+                report_revision=result.get("cashflow_report_revision"),
+                treasury_view=treasury_view,
+                query_fn=execute_query_pg,
+            )
+        except Exception as error:
+            logger.warning("cashflows_prepared_export_drilldown_lookup_failed client_id=%s error=%s", client_id, error)
+        if prepared_export_drilldown is not None:
+            export_preview["ledger_rollups"] = prepared_export_drilldown.get("rows") or []
     if not treasury_type and treasury_view in {'bank', 'cash'}:
         treasury_type = treasury_view
     period_keys = [

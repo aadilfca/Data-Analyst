@@ -10,7 +10,7 @@ from openpyxl import load_workbook
 
 from routers import reconciliation
 from services.ledger_group_summary import build_cashflow_summary, build_financial_statement_summary
-from services.ledger_report_source import CASHFLOW_CHILD_DETAILS_VERSION, CASHFLOW_DRILLDOWN_DETAILS_VERSION, CASHFLOW_SUMMARY_PAYLOAD_VERSION
+from services.ledger_report_source import CASHFLOW_CHILD_DETAILS_VERSION, CASHFLOW_DRILLDOWN_DETAILS_VERSION, CASHFLOW_SUMMARY_PAYLOAD_VERSION, load_cashflow_prepared_drilldown
 from routers import settings as settings_router
 from services.reconciliation_xlsx import export_cashflow_xlsx
 
@@ -1137,6 +1137,57 @@ def test_cashflows_preview_logs_performance_stages(caplog):
 
 
 
+def test_prepared_drilldown_reads_active_prepared_lines_and_filters_bank():
+    def query(sql, params=None):
+        if "cashflow_preparation_state" in sql:
+            return [{"active_preparation_revision": 17, "status": "ready"}]
+        assert "FROM cashflow_prepared_lines" in sql
+        return [
+            {
+                "period_start": "2026-01-05",
+                "category": "Customers",
+                "account_code": "AR",
+                "account_name": "Customer",
+                "treasury_type": "Bank",
+                "amount": 100,
+                "line_count": 2,
+            },
+            {
+                "period_start": "2026-01-05",
+                "category": "Customers",
+                "account_code": "AR",
+                "account_name": "Customer",
+                "treasury_type": "Cash",
+                "amount": 50,
+                "line_count": 1,
+            },
+        ]
+
+    result = load_cashflow_prepared_drilldown(
+        7,
+        journal_template_id=9,
+        period_start="2026-01-01",
+        period_end="2026-01-31",
+        group_by="month",
+        category="Customers",
+        treasury_view="bank",
+        query_fn=query,
+    )
+
+    assert result["metadata"]["targeted_prepared_lines"] is True
+    assert result["metadata"]["preparation_revision"] == 17
+    assert result["metadata"]["treasury_filter_stage"] == "prepared_lines_bank"
+    assert result["rows"] == [{
+        "category": "Customers",
+        "period_key": "2026-01",
+        "period_label": "Jan-26",
+        "account_code": "AR",
+        "account_name": "Customer",
+        "treasury_type": "Bank",
+        "amount": 100,
+        "line_count": 2,
+    }]
+
 def test_cashflow_drilldown_uses_targeted_projection_for_category(caplog):
     targeted = {
         "rows": [
@@ -1520,6 +1571,52 @@ def test_cashflow_export_uses_canonical_drilldown_and_active_filters():
     assert export_preview["ledger_rollups"][0]["account_code"] == "AR"
     assert export_preview["export_filters"]["hide_zero_rows"] is True
     assert export_preview["export_filters"]["account_head"] == "Main customer"
+
+def test_cashflow_export_uses_prepared_category_drilldown_when_available():
+    result = {
+        "period_start": "2026-01-01",
+        "period_end": "2026-01-31",
+        "group_by": "month",
+        "cashflow_report_revision": 4,
+        "preview": {
+            "periods": [{"key": "2026-01", "start": "2026-01-01", "end": "2026-01-31", "label": "Jan 2026"}],
+            "category_totals": [{"category": "Customers", "2026-01": 100.0, "Total": 100.0}],
+            "ledger_rollups": [],
+        },
+        "source": {"ready": True, "metadata": {"journal_template_id": 9}},
+        "blocking_reasons": [],
+    }
+    prepared = {
+        "rows": [{
+            "category": "Customers",
+            "period_key": "2026-01",
+            "period_label": "Jan-26",
+            "account_code": "AR",
+            "account_name": "Prepared customer",
+            "treasury_type": "Bank",
+            "amount": 100,
+            "line_count": 2,
+        }]
+    }
+    with (
+        patch.object(reconciliation, "_build_cashflow_result", return_value=result),
+        patch.object(reconciliation, "load_cashflow_prepared_drilldown", return_value=prepared) as loader,
+        patch.object(reconciliation, "export_cashflow_xlsx", return_value=b"xlsx") as exporter,
+    ):
+        response = reconciliation.export_cashflows_report(
+            7,
+            "2026-01-01",
+            "2026-01-31",
+            group_by="month",
+            category="Customers",
+            treasury_view="bank",
+            session=None,
+        )
+
+    assert response.media_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    assert loader.call_args.kwargs["journal_template_id"] == 9
+    assert loader.call_args.kwargs["treasury_view"] == "bank"
+    assert exporter.call_args.args[0]["ledger_rollups"][0]["account_name"] == "Prepared customer"
 
 def test_reports_view_and_dashboard_entry_are_wired():
     root = Path(__file__).resolve().parents[1]
