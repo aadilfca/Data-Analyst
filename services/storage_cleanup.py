@@ -16,7 +16,7 @@ from database import execute_query_pg, execute_write_pg, pg_transaction
 CONFIRMATION_TEXT = "DELETE APPROVED STORAGE DATA"
 CLEANUP_SCOPE = (
     "approved_logs,retired_client_data,deleted_upload_metadata,"
-    "stale_presence,expired_sessions,cashflow_historical_revisions"
+    "stale_presence,expired_sessions,obsolete_cashflow_rollup,prepared_revisions"
 )
 REMOVABLE_LOG_TABLES = (
     "data_audit_log",
@@ -135,15 +135,6 @@ def _protected_counts() -> Dict[str, int]:
         "trial_balance_uploads": _count(
             "SELECT COUNT(*) AS count FROM public.trial_balance_uploads"
         ),
-        "cashflow_current_legacy_rollups": _count(
-            """
-            SELECT COUNT(*) AS count
-            FROM public.cashflow_ledger_rollup_read_models r
-            LEFT JOIN public.cashflow_report_revisions current_revision
-              ON current_revision.client_id = r.client_id
-            WHERE r.report_revision = COALESCE(current_revision.revision, 1)
-            """
-        ),
         "cashflow_current_prepared_lines": _count(
             """
             SELECT COUNT(*) AS count
@@ -168,15 +159,12 @@ def _protected_counts() -> Dict[str, int]:
 
 
 def _cashflow_revision_candidates() -> Dict[str, Any]:
-    """Measure only stale derived rows; clients without an active model are retained."""
+    """Measure obsolete legacy rows and stale prepared revisions."""
     legacy_rollups = _first(
         """
         SELECT COUNT(*) AS count,
                COALESCE(SUM(pg_column_size(r)), 0) AS payload_bytes
         FROM public.cashflow_ledger_rollup_read_models r
-        LEFT JOIN public.cashflow_report_revisions current_revision
-          ON current_revision.client_id = r.client_id
-        WHERE r.report_revision <> COALESCE(current_revision.revision, 1)
         """
     )
     prepared_lines = _first(
@@ -228,9 +216,9 @@ def _cashflow_revision_candidates() -> Dict[str, Any]:
         }
 
     return {
-        "legacy_rollup_revisions": candidate(
+        "legacy_rollup_rows": candidate(
             legacy_rollups,
-            "report_revision differs from the client's current compatibility marker",
+            "legacy rollup table is obsolete; current reports use prepared lines and rollups",
         ),
         "prepared_line_revisions": candidate(
             prepared_lines,
@@ -423,15 +411,9 @@ def apply_storage_cleanup(
             "DELETE FROM public.sessions WHERE expiry < CURRENT_TIMESTAMP"
         )
 
-        deleted_counts["cashflow_legacy_rollup_revisions"] = _delete_count(
+        deleted_counts["cashflow_legacy_rollup_rows"] = _delete_count(
             """
             DELETE FROM public.cashflow_ledger_rollup_read_models r
-            WHERE r.report_revision <> COALESCE(
-                (SELECT current_revision.revision
-                 FROM public.cashflow_report_revisions current_revision
-                 WHERE current_revision.client_id = r.client_id),
-                1
-            )
             """
         )
         deleted_counts["cashflow_prepared_rollup_revisions"] = _delete_count(
@@ -460,7 +442,6 @@ def apply_storage_cleanup(
             "verification_details",
             "trial_balance_accounts",
             "trial_balance_uploads",
-            "cashflow_current_legacy_rollups",
             "cashflow_current_prepared_lines",
             "cashflow_current_prepared_rollups",
         ):

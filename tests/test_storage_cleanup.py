@@ -78,7 +78,7 @@ class StorageCleanupPreviewTests(unittest.TestCase):
                 patch.object(cleanup_service, "_count", side_effect=[8, 9]):
             result = cleanup_service._cashflow_revision_candidates()
 
-        self.assertEqual(result["legacy_rollup_revisions"]["row_count"], 12)
+        self.assertEqual(result["legacy_rollup_rows"]["row_count"], 12)
         self.assertEqual(result["prepared_line_revisions"]["payload_bytes"], 300)
         self.assertEqual(result["prepared_rollup_revisions"]["formatted"], "400 B")
         self.assertEqual(result["retained_without_active_state"], {"prepared_lines": 8, "prepared_rollups": 9})
@@ -104,7 +104,6 @@ class StorageCleanupPreviewTests(unittest.TestCase):
             "verification_details": 3,
             "trial_balance_accounts": 4,
             "trial_balance_uploads": 1,
-            "cashflow_current_legacy_rollups": 5,
             "cashflow_current_prepared_lines": 6,
             "cashflow_current_prepared_rollups": 7,
         }
@@ -132,7 +131,7 @@ class StorageCleanupPreviewTests(unittest.TestCase):
             if query.lstrip().startswith("DELETE FROM public.cashflow_prepared_")
         ]
         retired_sql = next(query for query in delete_calls if "DELETE FROM public.client_data" in query)
-        self.assertIn("COALESCE", legacy_sql)
+        self.assertNotIn("report_revision", legacy_sql)
         self.assertEqual(len(prepared_sql), 2)
         self.assertTrue(all("active_preparation_revision > 0" in query for query in prepared_sql))
         self.assertIn("cash_bank_transaction_classifications", retired_sql)

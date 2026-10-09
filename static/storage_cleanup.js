@@ -54,6 +54,13 @@ function renderTableSizes(rows) {
 function renderCandidates(preview) {
     candidateBody.innerHTML = '';
     const rows = (preview.removable.logs || []).map(log => ({ name: log.table_name, count: log.row_count, size: log.formatted, rule: 'Approved removable application log' }));
+    const cashflow = preview.removable.cashflow_historical_revisions || {};
+    const legacy = cashflow.legacy_rollup_rows || {};
+    const preparedLines = cashflow.prepared_line_revisions || {};
+    const preparedRollups = cashflow.prepared_rollup_revisions || {};
+    rows.push({ name: 'Obsolete Cashflows legacy rollup rows', count: legacy.row_count, size: legacy.formatted, rule: legacy.rule });
+    rows.push({ name: 'Stale Cashflows prepared lines', count: preparedLines.row_count, size: preparedLines.formatted, rule: preparedLines.rule });
+    rows.push({ name: 'Stale Cashflows prepared rollups', count: preparedRollups.row_count, size: preparedRollups.formatted, rule: preparedRollups.rule });
     const retired = preview.removable.retired_client_data || {};
     rows.push({ name: 'Retired client_data', count: retired.row_count, size: retired.formatted, rule: retired.rule });
     rows.push({ name: 'Unreferenced deleted upload metadata', count: preview.removable.unreferenced_upload_metadata, size: 'Metadata only', rule: 'status=Deleted and no client_data row references upload' });
