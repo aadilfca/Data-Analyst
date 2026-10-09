@@ -1,4 +1,4 @@
-"""Build the revisioned Cashflows prepared read model.
+"""Build the current Cashflows prepared read model.
 
 This module is an operator/back-office service. It reads the canonical voucher
 register and current derived classifications, then writes complete prepared
@@ -392,14 +392,20 @@ def build_preparation_plan(conn: Any, *, client_id: int) -> dict[str, Any]:
     }
 
 
-def _next_revision(conn: Any, client_id: int) -> int:
+def _current_revision(conn: Any, client_id: int, requested_revision: int | None = None) -> int:
+    """Return the one stable marker used by the current prepared Cashflows set."""
     rows = _query_fn(conn)(
         "SELECT active_preparation_revision, requested_preparation_revision FROM cashflow_preparation_state WHERE client_id = %s",
         (client_id,),
     )
-    if not rows:
-        return 1
-    return max(int(rows[0].get("active_preparation_revision") or 0), int(rows[0].get("requested_preparation_revision") or 0)) + 1
+    if rows:
+        active_revision = int(rows[0].get("active_preparation_revision") or 0)
+        if active_revision > 0:
+            return active_revision
+        requested_state_revision = int(rows[0].get("requested_preparation_revision") or 0)
+    else:
+        requested_state_revision = 0
+    return max(int(requested_revision or 0), requested_state_revision, 1)
 
 
 def _set_state_updating(conn: Any, client_id: int, revision: int) -> None:
@@ -434,11 +440,11 @@ def _write_values(conn: Any, table: str, columns: Sequence[str], rows: Sequence[
 
 
 def prepare_client(conn: Any, *, client_id: int, preparation_revision: int | None = None) -> dict[str, Any]:
-    """Materialize one complete revision; the caller owns commit/rollback."""
+    """Replace the one current prepared set; the caller owns commit/rollback."""
     plan = build_preparation_plan(conn, client_id=client_id)
     if not plan["ready"]:
         return plan
-    revision = int(preparation_revision or _next_revision(conn, client_id))
+    revision = _current_revision(conn, client_id, preparation_revision)
     _set_state_updating(conn, client_id, revision)
     _execute(conn, "DELETE FROM cashflow_prepared_rollups WHERE client_id = %s AND preparation_revision = %s", (client_id, revision))
     _execute(conn, "DELETE FROM cashflow_prepared_lines WHERE client_id = %s AND preparation_revision = %s", (client_id, revision))
@@ -503,35 +509,6 @@ def prepare_client(conn: Any, *, client_id: int, preparation_revision: int | Non
         "prepared_line_count": len(plan["prepared_lines"]),
         "rollup_count": len(plan["rollups"]),
     }
-
-
-def _copy_prepared_revision(conn: Any, *, client_id: int, source_revision: int, target_revision: int) -> None:
-    _execute(conn, """
-        INSERT INTO cashflow_prepared_lines (
-            client_id, template_id, preparation_revision, canonical_occurrence_id, upload_id,
-            source_client_data_id, voucher_id, transaction_date, account_code, account_name,
-            debit, credit, net_amount, treasury_type, category_id, category_label_snapshot,
-            category_key, transaction_month, transaction_fortnight, classification_status
-        )
-        SELECT client_id, template_id, %s, canonical_occurrence_id, upload_id,
-               source_client_data_id, voucher_id, transaction_date, account_code, account_name,
-               debit, credit, net_amount, treasury_type, category_id, category_label_snapshot,
-               category_key, transaction_month, transaction_fortnight, classification_status
-        FROM cashflow_prepared_lines
-        WHERE client_id = %s AND preparation_revision = %s
-        """, (target_revision, client_id, source_revision))
-    _execute(conn, """
-        INSERT INTO cashflow_prepared_rollups (
-            client_id, template_id, preparation_revision, period_grain, period_key, category_id,
-            category_key, category_label_snapshot, account_code, account_name, treasury_type,
-            debit_total, credit_total, net_total, voucher_count, line_count
-        )
-        SELECT client_id, template_id, %s, period_grain, period_key, category_id,
-               category_key, category_label_snapshot, account_code, account_name, treasury_type,
-               debit_total, credit_total, net_total, voucher_count, line_count
-        FROM cashflow_prepared_rollups
-        WHERE client_id = %s AND preparation_revision = %s
-        """, (target_revision, client_id, source_revision))
 
 
 def _delete_rollup_keys(conn: Any, *, client_id: int, preparation_revision: int, keys: set[tuple[str, str, str, str, str]]) -> None:
@@ -607,7 +584,7 @@ def prepare_incremental_client(
     current_occurrence_ids: Sequence[int],
     preparation_revision: int | None = None,
 ) -> dict[str, Any]:
-    """Publish a copy-on-write revision for changed voucher occurrences."""
+    """Update the current prepared set in place for changed voucher occurrences."""
     affected_ids = sorted({int(identifier) for identifier in affected_occurrence_ids})
     current_ids = sorted({int(identifier) for identifier in current_occurrence_ids})
     query = _query_fn(conn)
@@ -656,13 +633,8 @@ def prepare_incremental_client(
         (client_id, active_revision, *affected_ids),
     )
     touched_keys = _line_bucket_keys(old_lines) | _line_bucket_keys(line_plan["prepared_lines"])
-    revision = int(preparation_revision or _next_revision(conn, client_id))
-    if revision == active_revision:
-        revision = _next_revision(conn, client_id)
+    revision = active_revision
     _set_state_updating(conn, client_id, revision)
-    _execute(conn, "DELETE FROM cashflow_prepared_rollups WHERE client_id = %s AND preparation_revision = %s", (client_id, revision))
-    _execute(conn, "DELETE FROM cashflow_prepared_lines WHERE client_id = %s AND preparation_revision = %s", (client_id, revision))
-    _copy_prepared_revision(conn, client_id=client_id, source_revision=active_revision, target_revision=revision)
     _execute(
         conn,
         f"""DELETE FROM cashflow_prepared_lines
@@ -729,7 +701,7 @@ def prepare_incremental_category_client(
     category_ids: Sequence[int] = (),
     preparation_revision: int | None = None,
 ) -> dict[str, Any]:
-    """Publish a revision for only changed Cashflows category assignments."""
+    """Update the current prepared set in place for category assignments."""
     query = _query_fn(conn)
     normalized_codes = sorted({
         code
@@ -798,13 +770,8 @@ def prepare_incremental_category_client(
         (client_id, *normalized_codes),
     )
     categories = _category_lookup(category_rows)
-    revision = int(preparation_revision or _next_revision(conn, client_id))
-    if revision == active_revision:
-        revision = _next_revision(conn, client_id)
+    revision = active_revision
     _set_state_updating(conn, client_id, revision)
-    _execute(conn, "DELETE FROM cashflow_prepared_rollups WHERE client_id = %s AND preparation_revision = %s", (client_id, revision))
-    _execute(conn, "DELETE FROM cashflow_prepared_lines WHERE client_id = %s AND preparation_revision = %s", (client_id, revision))
-    _copy_prepared_revision(conn, client_id=client_id, source_revision=active_revision, target_revision=revision)
     for account_code in normalized_codes:
         category = categories.get(account_code, {
             "category_id": None,
@@ -989,7 +956,7 @@ def enqueue_cashflow_preparation_job(
     preparation_revision: int | None = None,
 ) -> dict[str, Any]:
     """Persist one durable preparation request after its source transaction commits."""
-    revision = int(preparation_revision or _next_revision(conn, client_id))
+    revision = _current_revision(conn, client_id, preparation_revision)
     upload_ids = _safe_sequence(affected_upload_ids)
     account_codes = _safe_sequence(affected_account_codes)
     occurrence_ids = _safe_sequence(affected_occurrence_ids)
@@ -1022,7 +989,9 @@ def enqueue_cashflow_preparation_job(
                   affected_voucher_identities, requested_preparation_revision, status,
                   retry_count, error_details
            FROM cashflow_preparation_jobs
-           WHERE client_id = %s AND requested_preparation_revision = %s""",
+           WHERE client_id = %s AND requested_preparation_revision = %s
+           ORDER BY id DESC
+           LIMIT 1""",
         (client_id, revision),
     )
     if not rows:

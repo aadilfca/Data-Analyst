@@ -1041,9 +1041,8 @@ def backfill_account_names_sqlite(
                 """
                 INSERT INTO cashflow_report_revisions
                     (client_id, revision, changed_at, changed_by, change_reason)
-                VALUES (?, 2, CURRENT_TIMESTAMP, NULL, ?)
+                VALUES (?, 1, CURRENT_TIMESTAMP, NULL, ?)
                 ON CONFLICT(client_id) DO UPDATE SET
-                    revision = cashflow_report_revisions.revision + 1,
                     changed_at = CURRENT_TIMESTAMP,
                     changed_by = excluded.changed_by,
                     change_reason = excluded.change_reason
@@ -1130,9 +1129,8 @@ def backfill_account_names_postgres(
                         """
                         INSERT INTO cashflow_report_revisions
                             (client_id, revision, changed_at, changed_by, change_reason)
-                        VALUES (%s, 2, CURRENT_TIMESTAMP, NULL, %s)
+                        VALUES (%s, 1, CURRENT_TIMESTAMP, NULL, %s)
                         ON CONFLICT (client_id) DO UPDATE SET
-                            revision = cashflow_report_revisions.revision + 1,
                             changed_at = CURRENT_TIMESTAMP,
                             changed_by = EXCLUDED.changed_by,
                             change_reason = EXCLUDED.change_reason

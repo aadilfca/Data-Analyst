@@ -2563,13 +2563,12 @@ def advance_cashflow_report_revision(
     changed_by: str | None = None,
     write_fn: Callable[..., Any] = execute_write_pg,
 ) -> int:
-    """Advance the durable Cashflows revision after a committed application change."""
+    """Refresh the compatibility marker without creating another report copy."""
     revision = write_fn(
         """
         INSERT INTO cashflow_report_revisions (client_id, revision, changed_at, changed_by, change_reason)
         VALUES (%s, 2, CURRENT_TIMESTAMP, %s, %s)
         ON CONFLICT (client_id) DO UPDATE SET
-            revision = cashflow_report_revisions.revision + 1,
             changed_at = CURRENT_TIMESTAMP,
             changed_by = EXCLUDED.changed_by,
             change_reason = EXCLUDED.change_reason

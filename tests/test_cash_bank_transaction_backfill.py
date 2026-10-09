@@ -313,7 +313,29 @@ class CashBankTransactionBackfillTests(unittest.TestCase):
                 "SELECT revision FROM cashflow_report_revisions WHERE client_id = ?",
                 (self.client_id,),
             ).fetchone()[0],
-            2,
+            1,
+        )
+        self.connection.execute(
+            "UPDATE cash_bank_transaction_classifications SET account_name = NULL WHERE client_data_id = 2"
+        )
+        repeated = backfill_account_names_sqlite(
+            self.connection,
+            client_id=self.client_id,
+            batch_size=2,
+        )
+        self.assertEqual(repeated.updated_rows, 1)
+        self.assertEqual(
+            self.connection.execute(
+                "SELECT revision FROM cashflow_report_revisions WHERE client_id = ?",
+                (self.client_id,),
+            ).fetchone()[0],
+            1,
+        )
+        self.assertEqual(
+            self.connection.execute(
+                "SELECT account_name FROM cash_bank_transaction_classifications WHERE client_data_id = 2"
+            ).fetchone()[0],
+            "Bank account",
         )
         after = self.connection.execute(
             "SELECT id, row_data FROM client_data ORDER BY id"

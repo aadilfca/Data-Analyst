@@ -464,13 +464,15 @@ def test_cashflow_prepared_drilldown_loader_targets_one_category_and_reaggregate
     calls = []
 
     def query(sql, params=None):
+        if "FROM cashflow_preparation_state" in sql:
+            return [{"active_preparation_revision": 4, "status": "ready"}]
         if "SELECT canonical_occurrence_id, upload_id" in sql:
             return []
         if "FROM selected_report_vouchers" in sql:
             return [{"upload_id": 21, "voucher_identity": "V1", "duplicate_uploads_suppressed": 0}]
         if "SELECT upload_id, file_name, upload_date" in sql:
             return [{"upload_id": 21, "file_name": "period.xlsx", "upload_date": "2026-03-01"}]
-        if "FROM cashflow_ledger_rollup_read_models" in sql:
+        if "FROM cashflow_prepared_lines" in sql:
             calls.append((sql, params))
             return [
                 {"period_start": "2026-01-05", "period_key": "2026-01-05", "period_label": "05 Jan", "category": "Operating", "account_code": "EXP1", "account_name": "Utilities", "treasury_type": "Bank", "amount": 60, "line_count": 2, "category_total": 100},
@@ -493,8 +495,8 @@ def test_cashflow_prepared_drilldown_loader_targets_one_category_and_reaggregate
     )
 
     assert result is not None
-    assert result["metadata"]["targeted_drilldown_projection"] is True
-    assert result["metadata"]["drilldown_projection_version"] == CASHFLOW_DRILLDOWN_PROJECTION_VERSION
+    assert result["metadata"]["targeted_prepared_lines"] is True
+    assert result["metadata"]["summary_read_model"] == "prepared_lines"
     totals = {}
     for row in result["rows"]:
         totals[row["period_key"]] = totals.get(row["period_key"], 0) + row["amount"]

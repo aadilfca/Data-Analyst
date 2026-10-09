@@ -1,5 +1,13 @@
 # Changelog Archive
 
+## Cashflows current-only prepared model - Phase 4 - 2026-10-09
+
+**Status:** Complete. **Files:** `services/cashflow_preparation.py`, `services/ledger_report_source.py`, `services/cash_bank_classification.py`, and Cashflows regression tests.
+
+Prepared Cashflows now reuses one current preparation marker. Incremental upload, category, treasury, retry, recovery, and Cash/Bank account-label backfill paths update current lines and rollups in place; the old copy-on-write helper is removed. Cashflows report invalidation refreshes its compatibility marker without incrementing it, so legacy read-model writes reuse one key. Existing historical rows remain untouched for Phase 5 cleanup.
+
+**Checks:** Focused Cashflows suite passed 66 tests; no production cleanup or historical-row deletion was run.
+
 ## Lightweight upload change reports - 2026-10-09
 
 **Status:** Complete. **Files:** `database.py`, `routers/import_export.py`, `static/upload.js`, `tests/test_upload_validation_counts.py`.

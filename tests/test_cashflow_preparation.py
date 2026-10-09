@@ -287,17 +287,20 @@ def test_incremental_revision_replaces_revised_voucher_and_preserves_unaffected_
                 current_occurrence_ids=[11],
             )
             conn.commit()
-            assert result["preparation_revision"] == 2
+            assert result["preparation_revision"] == 1
             assert result["prepared_line_count"] == 2
             rows = conn.execute(
-                "SELECT canonical_occurrence_id, source_client_data_id FROM cashflow_prepared_lines WHERE preparation_revision = 2"
+                "SELECT canonical_occurrence_id, source_client_data_id FROM cashflow_prepared_lines WHERE preparation_revision = 1"
             ).fetchall()
             assert 10 not in {row[0] for row in rows}
             assert 11 in {row[0] for row in rows if row[1] in {301, 302}}
             assert 20 in {row[0] for row in rows}
             assert conn.execute(
-                "SELECT COUNT(*) FROM cashflow_prepared_rollups WHERE preparation_revision = 2"
+                "SELECT COUNT(*) FROM cashflow_prepared_rollups WHERE preparation_revision = 1"
             ).fetchone()[0] == 4
+            assert conn.execute(
+                "SELECT COUNT(*) FROM cashflow_prepared_lines WHERE preparation_revision = 2"
+            ).fetchone()[0] == 0
             assert conn.execute("SELECT COUNT(*) FROM client_data").fetchone()[0] == raw_before + 2
         finally:
             conn.close()
@@ -326,11 +329,11 @@ def test_incremental_ineligible_revision_removes_old_prepared_lines(monkeypatch)
             conn.commit()
             assert result["excluded_ineligible_occurrence_count"] == 1
             assert conn.execute(
-                "SELECT COUNT(*) FROM cashflow_prepared_lines WHERE preparation_revision = 2"
+                "SELECT COUNT(*) FROM cashflow_prepared_lines WHERE preparation_revision = 1"
             ).fetchone()[0] == 0
             assert conn.execute(
                 "SELECT active_preparation_revision FROM cashflow_preparation_state WHERE client_id = 1"
-            ).fetchone()[0] == 2
+            ).fetchone()[0] == 1
         finally:
             conn.close()
 
@@ -388,22 +391,22 @@ def test_incremental_category_change_updates_only_affected_account_lines(monkeyp
             )
             conn.commit()
 
-            assert result["preparation_revision"] == 2
+            assert result["preparation_revision"] == 1
             customer = conn.execute(
                 """SELECT category_key, category_label_snapshot
                    FROM cashflow_prepared_lines
-                   WHERE preparation_revision = 2 AND account_code = 'CUSTOMER'"""
+                   WHERE preparation_revision = 1 AND account_code = 'CUSTOMER'"""
             ).fetchone()
             bank = conn.execute(
                 """SELECT category_key, category_label_snapshot
                    FROM cashflow_prepared_lines
-                   WHERE preparation_revision = 2 AND account_code = 'BANK'"""
+                   WHERE preparation_revision = 1 AND account_code = 'BANK'"""
             ).fetchone()
             assert tuple(customer) == ("tax_payments", "Tax payments")
             assert tuple(bank) == ("__unassigned__", "")
             assert conn.execute(
                 """SELECT COUNT(*) FROM cashflow_prepared_rollups
-                   WHERE preparation_revision = 2 AND category_key = 'customer_receipts'"""
+                   WHERE preparation_revision = 1 AND category_key = 'customer_receipts'"""
             ).fetchone()[0] == 0
             assert conn.execute("SELECT row_data FROM client_data WHERE id = 102").fetchone()[0] == raw_before
         finally:
@@ -431,13 +434,13 @@ def test_incremental_treasury_change_removes_all_lines_for_now_ineligible_vouche
             )
             conn.commit()
 
-            assert result["preparation_revision"] == 2
+            assert result["preparation_revision"] == 1
             assert conn.execute(
-                "SELECT COUNT(*) FROM cashflow_prepared_lines WHERE preparation_revision = 2"
+                "SELECT COUNT(*) FROM cashflow_prepared_lines WHERE preparation_revision = 1"
             ).fetchone()[0] == 0
             assert conn.execute(
                 "SELECT active_preparation_revision FROM cashflow_preparation_state WHERE client_id = 1"
-            ).fetchone()[0] == 2
+            ).fetchone()[0] == 1
         finally:
             conn.close()
 
@@ -463,10 +466,10 @@ def test_incremental_treasury_change_adds_all_lines_for_newly_eligible_voucher(m
             )
             conn.commit()
 
-            assert result["preparation_revision"] == 2
+            assert result["preparation_revision"] == 1
             assert {
                 row[0] for row in conn.execute(
-                    "SELECT source_client_data_id FROM cashflow_prepared_lines WHERE preparation_revision = 2"
+                    "SELECT source_client_data_id FROM cashflow_prepared_lines WHERE preparation_revision = 1"
                 ).fetchall()
             } == {101, 102, 103}
         finally:
@@ -502,7 +505,7 @@ def test_durable_preparation_job_processes_and_publishes_revision(monkeypatch):
             assert result["status"] == "completed"
             status = get_cashflow_preparation_status(lambda sql, params: [dict(row) for row in conn.execute(sql.replace('%s', '?'), params or ()).fetchall()], client_id=1)
             assert status["status"] == "ready"
-            assert status["active_preparation_revision"] == 2
+            assert status["active_preparation_revision"] == 1
             assert conn.execute(
                 "SELECT status FROM cashflow_preparation_jobs WHERE id = ?", (job["job_id"],)
             ).fetchone()[0] == "completed"
@@ -574,7 +577,7 @@ def test_treasury_incremental_failure_falls_back_to_full_preparation(monkeypatch
             assert result["reason"] == "treasury_accounts_full_rebuild"
             assert tuple(conn.execute(
                 "SELECT active_preparation_revision, status FROM cashflow_preparation_state WHERE client_id = 1"
-            ).fetchone()) == (2, "ready")
+            ).fetchone()) == (1, "ready")
             assert conn.execute("SELECT COUNT(*) FROM treasury_savepoint_probe").fetchone()[0] == 0
         finally:
             conn.close()
@@ -726,9 +729,9 @@ def test_persisted_failed_state_can_be_recovered_by_a_full_preparation_job(monke
             assert result["status"] == "completed"
             assert tuple(conn.execute(
                 "SELECT active_preparation_revision, status FROM cashflow_preparation_state WHERE client_id = 1"
-            ).fetchone()) == (2, "ready")
+            ).fetchone()) == (1, "ready")
             assert conn.execute(
-                "SELECT COUNT(*) FROM cashflow_prepared_lines WHERE client_id = 1 AND preparation_revision = 2"
+                "SELECT COUNT(*) FROM cashflow_prepared_lines WHERE client_id = 1 AND preparation_revision = 1"
             ).fetchone()[0] == 3
         finally:
             conn.close()
@@ -772,7 +775,7 @@ def test_failed_preparation_job_keeps_previous_active_revision(monkeypatch):
             assert retry_result["status"] == "completed"
             assert tuple(conn.execute(
                 "SELECT active_preparation_revision, status FROM cashflow_preparation_state WHERE client_id = 1"
-            ).fetchone()) == (2, "ready")
+            ).fetchone()) == (1, "ready")
         finally:
             conn.close()
 

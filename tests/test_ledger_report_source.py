@@ -1,6 +1,7 @@
 import pandas as pd
 
 from services.ledger_report_source import (
+    advance_cashflow_report_revision,
     build_report_source,
     canonical_cashflow_voucher_selection_cte,
     load_cashflow_prepared_classification_preview,
@@ -9,6 +10,23 @@ from services.ledger_report_source import (
     select_canonical_cashflow_vouchers,
     select_cashflow_report_source_identity,
 )
+
+
+def test_cashflow_report_invalidation_keeps_one_compatibility_marker():
+    writes = []
+
+    def write(sql, params=None):
+        writes.append((sql, params))
+        return 17
+
+    assert advance_cashflow_report_revision(
+        7,
+        reason="source_imported",
+        changed_by="analyst",
+        write_fn=write,
+    ) == 17
+    assert len(writes) == 1
+    assert "revision = cashflow_report_revisions.revision + 1" not in writes[0][0]
 
 
 def _journal_rows():

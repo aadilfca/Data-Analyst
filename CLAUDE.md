@@ -47,7 +47,7 @@ One line per file group: what it is now. Full build history for every entry live
 - services/ledger_group_summary.py + ledger_report_source.py -> summary engine, customer-payment read models, SQL sources, Cashflows rollups, and canonical-voucher report-source contract. See CHANGELOG_ARCHIVE.md.
 - services/cash_bank_classification.py + scripts/backfill_cash_bank_transaction_classifications.py -> versioned derived Cash/Bank lines, affected-account reporting, category resolution, upload/backfill application, and audited reclassification without raw-row mutation. See CHANGELOG_ARCHIVE.md.
 - services/cashflow_voucher_canonicalization.py + cashflow_voucher_occurrence_store.py + scripts/backfill_cashflow_voucher_occurrences.py -> audit-preserving decisions and controlled occurrence maintenance; reports remain unchanged. See CHANGELOG_ARCHIVE.md.
-- services/cashflow_preparation.py + scripts/backfill_cashflow_prepared_read_model.py -> revisioned prepared Cashflows lines and rollups from winning occurrences; full backfill plus incremental upload, category, and treasury preparation, with durable job recovery. See CHANGELOG_ARCHIVE.md.
+- services/cashflow_preparation.py + scripts/backfill_cashflow_prepared_read_model.py -> current prepared Cashflows lines and rollups from winning occurrences; full and incremental preparation with durable job recovery. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_xlsx.py → static Bank/Cash workbook exporter for summaries, schedules, reviews, cross-checks, and reconciliation proofs. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_balance_source.py → validates stored opening/month-end balances and converts them to reconciliation-engine inputs. See CHANGELOG_ARCHIVE.md.
 - tests/test_account_control_center*.py + tests/test_cash_bank_configuration_sync.py + tests/test_cashflows*.py → regression coverage for setup, orphan assignment, derived classification, and Cashflows Reports UI.
@@ -252,3 +252,4 @@ Do this automatically at the end of the session without being asked.
 - 2026-10-02: Account Control Centre Phase 3 added processing feedback for category actions, Cash Flow settings, Treasury saves, and template mapping; regression coverage added.
 - 2026-10-09: Upload Validate now creates expiring server-side action plans; Import applies only approved additions, changes, and removals with stale-plan guards.
 - 2026-10-09: Phase 3 adds compact upload summaries, authenticated uploader metadata, changed-field old/new report values, and downloadable reports without storing detailed report copies.
+- 2026-10-09: Phase 4 makes prepared Cashflows and report invalidation current-only; incremental work no longer creates new copies.
