@@ -36,7 +36,8 @@ def storage_cleanup_preview(session=Depends(require_admin)):
 
 @router.post("/api/storage-cleanup/apply")
 def storage_cleanup_apply(payload: StorageCleanupApplyRequest, session=Depends(require_admin)):
-    """Apply the exact fresh preview after the administrator types its confirmation."""
+    """Reject destructive cleanup while the backup/redesign gate is active."""
+    raise HTTPException(status_code=423, detail='Storage cleanup is temporarily locked pending a verified database backup and current-only Cashflows redesign.')
     try:
         return apply_storage_cleanup(
             preview_hash=payload.preview_hash,

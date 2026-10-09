@@ -2,6 +2,7 @@
 // and the exact typed confirmation phrase.
 
 const CONFIRMATION_TEXT = 'DELETE APPROVED STORAGE DATA';
+const CLEANUP_FROZEN = true;
 const previewButton = document.getElementById('refreshPreviewBtn');
 const previewStatus = document.getElementById('previewStatus');
 const cleanupError = document.getElementById('cleanupError');
@@ -32,7 +33,8 @@ function clearError() {
 }
 
 function updateApplyState() {
-    applyButton.disabled = !currentPreviewHash || confirmationInput.value !== CONFIRMATION_TEXT;
+    applyButton.disabled = CLEANUP_FROZEN || !currentPreviewHash || confirmationInput.value !== CONFIRMATION_TEXT;
+    confirmationInput.disabled = CLEANUP_FROZEN;
 }
 
 function renderTableSizes(rows) {
@@ -104,6 +106,10 @@ async function loadPreview() {
 
 async function applyCleanup() {
     clearError();
+    if (CLEANUP_FROZEN) {
+        showError('Storage cleanup is temporarily locked pending a verified backup and Cashflows storage redesign.');
+        return;
+    }
     if (!currentPreviewHash || confirmationInput.value !== CONFIRMATION_TEXT) return;
     if (!window.confirm('Apply this fresh cleanup preview? Protected data will be retained.')) return;
     applyButton.disabled = true;

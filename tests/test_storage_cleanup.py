@@ -48,20 +48,16 @@ class StorageCleanupPreviewTests(unittest.TestCase):
                 )
         transaction.assert_not_called()
 
-    def test_apply_route_passes_fresh_hash_and_admin_operator(self):
+    def test_apply_route_is_locked_before_cleanup_service(self):
         payload = storage_cleanup.StorageCleanupApplyRequest(
-            preview_hash="fresh-hash",
+            preview_hash='fresh-hash',
             confirmation=cleanup_service.CONFIRMATION_TEXT,
         )
-        expected = {"mode": "applied", "deleted_counts": {"audit_log": 2}}
-        with patch.object(storage_cleanup, "apply_storage_cleanup", return_value=expected) as apply:
-            result = storage_cleanup.storage_cleanup_apply(payload, {"username": "admin", "role": "admin"})
-        self.assertEqual(result, expected)
-        apply.assert_called_once_with(
-            preview_hash="fresh-hash",
-            operator="admin",
-            confirmation=cleanup_service.CONFIRMATION_TEXT,
-        )
+        with patch.object(storage_cleanup, 'apply_storage_cleanup') as apply:
+            with self.assertRaises(HTTPException) as error:
+                storage_cleanup.storage_cleanup_apply(payload, {'username': 'admin', 'role': 'admin'})
+        self.assertEqual(error.exception.status_code, 423)
+        apply.assert_not_called()
 
     def test_delete_count_uses_returning_count_query(self):
         with patch.object(cleanup_service, "execute_query_pg", return_value=[{"count": 7}]) as query:
@@ -71,6 +67,76 @@ class StorageCleanupPreviewTests(unittest.TestCase):
             )
         query.assert_called_once()
         self.assertIn("WITH deleted AS (DELETE FROM public.audit_log RETURNING 1)", query.call_args.args[0])
+
+    def test_cashflow_revision_preview_reports_stale_rows_and_retains_uninitialized_clients(self):
+        first_rows = iter([
+            {"count": 12, "payload_bytes": 1200},
+            {"count": 3, "payload_bytes": 300},
+            {"count": 4, "payload_bytes": 400},
+        ])
+        with patch.object(cleanup_service, "_first", side_effect=lambda *args, **kwargs: next(first_rows)), \
+                patch.object(cleanup_service, "_count", side_effect=[8, 9]):
+            result = cleanup_service._cashflow_revision_candidates()
+
+        self.assertEqual(result["legacy_rollup_revisions"]["row_count"], 12)
+        self.assertEqual(result["prepared_line_revisions"]["payload_bytes"], 300)
+        self.assertEqual(result["prepared_rollup_revisions"]["formatted"], "400 B")
+        self.assertEqual(result["retained_without_active_state"], {"prepared_lines": 8, "prepared_rollups": 9})
+        self.assertIn("positive active preparation revision", result["safety_rule"])
+
+    def test_table_sizes_classify_cashflow_derived_tables(self):
+        with patch.object(cleanup_service, "execute_query_pg", return_value=[
+            {"table_name": "cash_bank_transaction_classifications", "table_bytes": 10, "index_bytes": 20, "total_bytes": 30},
+            {"table_name": "cashflow_prepared_lines", "table_bytes": 40, "index_bytes": 50, "total_bytes": 90},
+        ]):
+            result = cleanup_service._table_sizes()
+
+        self.assertEqual({row["classification"] for row in result}, {"derived current data"})
+        self.assertEqual({row["table_name"] for row in result}, {
+            "cash_bank_transaction_classifications",
+            "cashflow_prepared_lines",
+        })
+
+    def test_apply_contains_current_only_cashflow_and_reference_guards(self):
+        protected = {
+            "client_data_current": 10,
+            "client_data_retained_for_verification": 2,
+            "verification_details": 3,
+            "trial_balance_accounts": 4,
+            "trial_balance_uploads": 1,
+            "cashflow_current_legacy_rollups": 5,
+            "cashflow_current_prepared_lines": 6,
+            "cashflow_current_prepared_rollups": 7,
+        }
+        preview = {"preview_hash": "fresh-hash", "protected": protected}
+        delete_calls = []
+        transaction = MagicMock()
+        transaction.__enter__.return_value = transaction
+        transaction.__exit__.return_value = False
+        with patch.dict(os.environ, {"DATABASE_URL": "postgresql://test"}), \
+                patch.object(cleanup_service, "get_storage_cleanup_preview", side_effect=[preview, preview]), \
+                patch.object(cleanup_service, "pg_transaction", return_value=transaction), \
+                patch.object(cleanup_service, "execute_write_pg"), \
+                patch.object(cleanup_service, "_delete_count", side_effect=lambda query: delete_calls.append(query) or 0), \
+                patch.object(cleanup_service, "_protected_counts", return_value=protected):
+            result = cleanup_service.apply_storage_cleanup(
+                "fresh-hash",
+                "admin",
+                cleanup_service.CONFIRMATION_TEXT,
+            )
+
+        self.assertEqual(result["mode"], "applied")
+        legacy_sql = next(query for query in delete_calls if "cashflow_ledger_rollup_read_models" in query)
+        prepared_sql = [
+            query for query in delete_calls
+            if query.lstrip().startswith("DELETE FROM public.cashflow_prepared_")
+        ]
+        retired_sql = next(query for query in delete_calls if "DELETE FROM public.client_data" in query)
+        self.assertIn("COALESCE", legacy_sql)
+        self.assertEqual(len(prepared_sql), 2)
+        self.assertTrue(all("active_preparation_revision > 0" in query for query in prepared_sql))
+        self.assertIn("cash_bank_transaction_classifications", retired_sql)
+        self.assertIn("cashflow_prepared_lines", retired_sql)
 
     def test_existing_postgres_schema_path_ensures_cleanup_run_ledger(self):
         marker_cursor = MagicMock()

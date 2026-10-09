@@ -26,7 +26,7 @@ One line per file group: what it is now. Full build history for every entry live
 - database.py (users/sessions) → authenticated users and session records for Login → Client Cards → Dashboard; bcrypt, session-stored selected client, seeded placeholder admin. See CHANGELOG_ARCHIVE.md.
 - routers/auth.py → login/logout, current-session lookup, client selection, `get_current_user()`/`require_admin()` guards; timezone-aware session expiry. See CHANGELOG_ARCHIVE.md.
 - routers/users.py → Admin user management (list/create/edit/deactivate/reactivate/reset password); every endpoint `require_admin`, mutations SQLite-audited. See CHANGELOG_ARCHIVE.md.
-- routers/storage_cleanup.py + services/storage_cleanup.py + static/storage_cleanup.* → Admin-only storage preview and typed-confirmation cleanup transaction; VACUUM/compaction remains deferred. See CHANGELOG_ARCHIVE.md.
+- routers/storage_cleanup.py + services/storage_cleanup.py + static/storage_cleanup.* → Admin-only preview and typed-confirmation cleanup for logs, stale Cashflows revisions, and unreferenced data; VACUUM remains deferred. See CHANGELOG_ARCHIVE.md.
 - static/users.html, static/users.js → firm-level Manage Users UI (sortable/searchable rows, add/edit, deactivate, password reset); shared Admin header/tab strip. See CHANGELOG_ARCHIVE.md.
 - static/login.html, static/login.js → standalone login page posting to `/api/auth/login`, generic auth error; does not load `client_context.js`.
 - static/client_select.html, static/client_select.js → standalone Client Cards page with guarded selection, admin entry, and loading feedback. See CHANGELOG_ARCHIVE.md.
@@ -253,3 +253,5 @@ Do this automatically at the end of the session without being asked.
 - 2026-10-09: Upload Validate now creates expiring server-side action plans; Import applies only approved additions, changes, and removals with stale-plan guards.
 - 2026-10-09: Phase 3 adds compact upload summaries, authenticated uploader metadata, changed-field old/new report values, and downloadable reports without storing detailed report copies.
 - 2026-10-09: Phase 4 makes prepared Cashflows and report invalidation current-only; incremental work no longer creates new copies.
+- 2026-10-09: Phase 5 adds table-level Cashflows sizing, stale-revision candidates, and reference-guarded cleanup preview/apply.
+- 2026-10-09: Phase 0 freezes destructive Storage Cleanup at the UI and API until backup and current-only Cashflows redesign gates are complete.

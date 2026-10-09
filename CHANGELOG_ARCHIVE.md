@@ -1,5 +1,19 @@
 # Changelog Archive
 
+## Storage cleanup freeze - Phase 0 - 2026-10-09
+
+**Status:** Complete. **Files:** `routers/storage_cleanup.py`, `static/storage_cleanup.html`, `static/storage_cleanup.js`, `CLAUDE.md`.
+
+Destructive cleanup is temporarily locked at both the browser and API layers pending a verified database backup and the current-only Cashflows storage redesign. The preview remains read-only and available; the apply endpoint returns HTTP 423 before calling the cleanup service. No database cleanup was run.
+
+## Storage cleanup and stale Cashflows revision preview - Phase 5 - 2026-10-09
+
+**Status:** Implementation complete. **Files:** `services/storage_cleanup.py`, `tests/test_storage_cleanup.py`.
+
+Storage preview now includes Cash/Bank classifications, legacy Cashflows rollups, prepared lines/rollups, revision state, table bytes, and index bytes. Apply removes only non-current derived revisions and deleted Client Data with no Verification, evidence, classification, or prepared-line references. Current rows, uninitialized prepared models, and protected counts remain guarded in the transaction. VACUUM, compaction, index removal, and live production cleanup remain separate.
+
+**Checks:** New Phase 5 tests passed 3/3; storage-cleanup checks passed 10/10 excluding one legacy schema-bootstrap fixture; Cashflows regression suite passed 66/66. No live preview ran because `DATABASE_URL` was unavailable.
+
 ## Cashflows current-only prepared model - Phase 4 - 2026-10-09
 
 **Status:** Complete. **Files:** `services/cashflow_preparation.py`, `services/ledger_report_source.py`, `services/cash_bank_classification.py`, and Cashflows regression tests.

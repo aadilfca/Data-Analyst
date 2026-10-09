@@ -41,6 +41,7 @@
             <h1>🧹 Storage Cleanup</h1>
             <p>Review database storage before any administrator-approved cleanup.</p>
         </header>
+        <div class='cleanup-note cleanup-danger'><strong>Cleanup temporarily locked:</strong> destructive cleanup is disabled until a verified database backup and the current-only Cashflows storage redesign are complete.</div>
         <div class="cleanup-note"><strong>Protected data:</strong> current Data Bank rows, Verification details, Trial Balance data, and linked evidence are never deleted. Cleanup removes only the approved candidates shown in a fresh preview. VACUUM/compaction remains separate.</div>
         <div id="cleanupError" class="cleanup-error"></div>
         <section class="cleanup-card">
@@ -74,7 +75,7 @@
         </section>
         <section class="cleanup-card cleanup-danger">
             <h2>Apply approved cleanup</h2>
-            <p>Refresh the preview immediately before applying. The operation runs in one transaction and rolls back if any protected-data safety check changes.</p>
+            <p>Cleanup is currently locked. The preview remains available for review, but no deletion request can be submitted.</p>
             <div class="cleanup-confirm-row">
                 <label for="cleanupConfirmation">Type exactly: DELETE APPROVED STORAGE DATA
                     <input id="cleanupConfirmation" type="text" autocomplete="off" spellcheck="false" placeholder="DELETE APPROVED STORAGE DATA">
@@ -85,7 +86,7 @@
         </section>
     </div>
     <script src="/static/client_context.js?v=18"></script>
-    <script src="/static/storage_cleanup.js?v=1"></script>
+    <script src="/static/storage_cleanup.js?v=2"></script>
 </body>
 
 </html>

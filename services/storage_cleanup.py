@@ -16,7 +16,7 @@ from database import execute_query_pg, execute_write_pg, pg_transaction
 CONFIRMATION_TEXT = "DELETE APPROVED STORAGE DATA"
 CLEANUP_SCOPE = (
     "approved_logs,retired_client_data,deleted_upload_metadata,"
-    "stale_presence,expired_sessions"
+    "stale_presence,expired_sessions,cashflow_historical_revisions"
 )
 REMOVABLE_LOG_TABLES = (
     "data_audit_log",
@@ -30,11 +30,20 @@ PROTECTED_DATA_TABLES = (
     "trial_balance_accounts",
     "trial_balance_uploads",
 )
+CASHFLOW_DERIVED_TABLES = (
+    "cash_bank_transaction_classifications",
+    "cashflow_ledger_rollup_read_models",
+    "cashflow_prepared_lines",
+    "cashflow_prepared_rollups",
+)
 SIZING_TABLES = REMOVABLE_LOG_TABLES + PROTECTED_DATA_TABLES + (
     "uploaded_files",
     "verification_sessions",
     "verification_presence",
     "sessions",
+) + CASHFLOW_DERIVED_TABLES + (
+    "cashflow_report_revisions",
+    "cashflow_preparation_state",
 )
 
 
@@ -82,6 +91,7 @@ def _table_sizes() -> List[Dict[str, Any]]:
     )
     removable = set(REMOVABLE_LOG_TABLES)
     protected = set(PROTECTED_DATA_TABLES)
+    derived = set(CASHFLOW_DERIVED_TABLES)
     result = []
     for row in rows:
         total = int(row.get("total_bytes") or 0)
@@ -92,6 +102,7 @@ def _table_sizes() -> List[Dict[str, Any]]:
                 "classification": (
                     "removable log" if table_name in removable
                     else "protected data" if table_name in protected
+                    else "derived current data" if table_name in derived
                     else "operational metadata"
                 ),
                 "table_bytes": int(row.get("table_bytes") or 0),
@@ -124,6 +135,113 @@ def _protected_counts() -> Dict[str, int]:
         "trial_balance_uploads": _count(
             "SELECT COUNT(*) AS count FROM public.trial_balance_uploads"
         ),
+        "cashflow_current_legacy_rollups": _count(
+            """
+            SELECT COUNT(*) AS count
+            FROM public.cashflow_ledger_rollup_read_models r
+            LEFT JOIN public.cashflow_report_revisions current_revision
+              ON current_revision.client_id = r.client_id
+            WHERE r.report_revision = COALESCE(current_revision.revision, 1)
+            """
+        ),
+        "cashflow_current_prepared_lines": _count(
+            """
+            SELECT COUNT(*) AS count
+            FROM public.cashflow_prepared_lines p
+            JOIN public.cashflow_preparation_state state
+              ON state.client_id = p.client_id
+             AND state.active_preparation_revision = p.preparation_revision
+            WHERE state.active_preparation_revision > 0
+            """
+        ),
+        "cashflow_current_prepared_rollups": _count(
+            """
+            SELECT COUNT(*) AS count
+            FROM public.cashflow_prepared_rollups p
+            JOIN public.cashflow_preparation_state state
+              ON state.client_id = p.client_id
+             AND state.active_preparation_revision = p.preparation_revision
+            WHERE state.active_preparation_revision > 0
+            """
+        ),
+    }
+
+
+def _cashflow_revision_candidates() -> Dict[str, Any]:
+    """Measure only stale derived rows; clients without an active model are retained."""
+    legacy_rollups = _first(
+        """
+        SELECT COUNT(*) AS count,
+               COALESCE(SUM(pg_column_size(r)), 0) AS payload_bytes
+        FROM public.cashflow_ledger_rollup_read_models r
+        LEFT JOIN public.cashflow_report_revisions current_revision
+          ON current_revision.client_id = r.client_id
+        WHERE r.report_revision <> COALESCE(current_revision.revision, 1)
+        """
+    )
+    prepared_lines = _first(
+        """
+        SELECT COUNT(*) AS count,
+               COALESCE(SUM(pg_column_size(p)), 0) AS payload_bytes
+        FROM public.cashflow_prepared_lines p
+        JOIN public.cashflow_preparation_state state ON state.client_id = p.client_id
+        WHERE state.active_preparation_revision > 0
+          AND p.preparation_revision <> state.active_preparation_revision
+        """
+    )
+    prepared_rollups = _first(
+        """
+        SELECT COUNT(*) AS count,
+               COALESCE(SUM(pg_column_size(p)), 0) AS payload_bytes
+        FROM public.cashflow_prepared_rollups p
+        JOIN public.cashflow_preparation_state state ON state.client_id = p.client_id
+        WHERE state.active_preparation_revision > 0
+          AND p.preparation_revision <> state.active_preparation_revision
+        """
+    )
+    retained_without_active_state = {
+        "prepared_lines": _count(
+            """
+            SELECT COUNT(*) AS count
+            FROM public.cashflow_prepared_lines p
+            LEFT JOIN public.cashflow_preparation_state state ON state.client_id = p.client_id
+            WHERE state.client_id IS NULL OR state.active_preparation_revision <= 0
+            """
+        ),
+        "prepared_rollups": _count(
+            """
+            SELECT COUNT(*) AS count
+            FROM public.cashflow_prepared_rollups p
+            LEFT JOIN public.cashflow_preparation_state state ON state.client_id = p.client_id
+            WHERE state.client_id IS NULL OR state.active_preparation_revision <= 0
+            """
+        ),
+    }
+
+    def candidate(row: Dict[str, Any], rule: str) -> Dict[str, Any]:
+        payload_bytes = int(row.get("payload_bytes") or 0)
+        return {
+            "row_count": int(row.get("count") or 0),
+            "payload_bytes": payload_bytes,
+            "formatted": _format_bytes(payload_bytes),
+            "rule": rule,
+        }
+
+    return {
+        "legacy_rollup_revisions": candidate(
+            legacy_rollups,
+            "report_revision differs from the client's current compatibility marker",
+        ),
+        "prepared_line_revisions": candidate(
+            prepared_lines,
+            "preparation_revision differs from a positive active preparation revision",
+        ),
+        "prepared_rollup_revisions": candidate(
+            prepared_rollups,
+            "preparation_revision differs from a positive active preparation revision",
+        ),
+        "retained_without_active_state": retained_without_active_state,
+        "safety_rule": "Rows without a positive active preparation revision are retained for explicit rebuild/reconciliation.",
     }
 
 
@@ -177,10 +295,12 @@ def get_storage_cleanup_preview() -> Dict[str, Any]:
         SELECT COUNT(*) AS count,
                COALESCE(SUM(pg_column_size(cd.row_data)), 0) AS payload_bytes
         FROM public.client_data cd
-        WHERE cd.is_deleted = TRUE
+        WHERE (cd.is_deleted = TRUE OR cd.change_detection_status = 'deleted')
           AND NOT EXISTS (SELECT 1 FROM public.verification_details vd WHERE vd.client_data_id = cd.id)
           AND NOT EXISTS (SELECT 1 FROM public.voucher_line_documents vld WHERE vld.client_data_id = cd.id)
           AND NOT EXISTS (SELECT 1 FROM public.voucher_line_physical_bill_items vpbbi WHERE vpbbi.source_document_row_id = cd.id)
+          AND NOT EXISTS (SELECT 1 FROM public.cash_bank_transaction_classifications c WHERE c.client_data_id = cd.id)
+          AND NOT EXISTS (SELECT 1 FROM public.cashflow_prepared_lines p WHERE p.source_client_data_id = cd.id)
         """
     )
 
@@ -199,7 +319,7 @@ def get_storage_cleanup_preview() -> Dict[str, Any]:
                 "row_count": int(retired_candidate.get("count") or 0),
                 "payload_bytes": int(retired_candidate.get("payload_bytes") or 0),
                 "formatted": _format_bytes(int(retired_candidate.get("payload_bytes") or 0)),
-                "rule": "is_deleted=true and no Verification, document-link, or physical-bill source reference",
+                "rule": "deleted/change_deleted row with no Verification, document-link, physical-bill, classification, or prepared-line reference",
             },
             "unreferenced_upload_metadata": _count(
                 "SELECT COUNT(*) AS count FROM public.uploaded_files uf "
@@ -213,6 +333,7 @@ def get_storage_cleanup_preview() -> Dict[str, Any]:
             "expired_login_sessions": _count(
                 "SELECT COUNT(*) AS count FROM public.sessions WHERE expiry < CURRENT_TIMESTAMP"
             ),
+            "cashflow_historical_revisions": _cashflow_revision_candidates(),
         },
         "safety": [
             "This preview performs no INSERT, UPDATE, DELETE, TRUNCATE, or VACUUM operation.",
@@ -276,10 +397,12 @@ def apply_storage_cleanup(
         deleted_counts["retired_client_data"] = _delete_count(
             """
             DELETE FROM public.client_data cd
-            WHERE cd.is_deleted = TRUE
+            WHERE (cd.is_deleted = TRUE OR cd.change_detection_status = 'deleted')
               AND NOT EXISTS (SELECT 1 FROM public.verification_details vd WHERE vd.client_data_id = cd.id)
               AND NOT EXISTS (SELECT 1 FROM public.voucher_line_documents vld WHERE vld.client_data_id = cd.id)
               AND NOT EXISTS (SELECT 1 FROM public.voucher_line_physical_bill_items vpbbi WHERE vpbbi.source_document_row_id = cd.id)
+              AND NOT EXISTS (SELECT 1 FROM public.cash_bank_transaction_classifications c WHERE c.client_data_id = cd.id)
+              AND NOT EXISTS (SELECT 1 FROM public.cashflow_prepared_lines p WHERE p.source_client_data_id = cd.id)
             """
         )
         deleted_counts["unreferenced_deleted_upload_metadata"] = _delete_count(
@@ -300,6 +423,36 @@ def apply_storage_cleanup(
             "DELETE FROM public.sessions WHERE expiry < CURRENT_TIMESTAMP"
         )
 
+        deleted_counts["cashflow_legacy_rollup_revisions"] = _delete_count(
+            """
+            DELETE FROM public.cashflow_ledger_rollup_read_models r
+            WHERE r.report_revision <> COALESCE(
+                (SELECT current_revision.revision
+                 FROM public.cashflow_report_revisions current_revision
+                 WHERE current_revision.client_id = r.client_id),
+                1
+            )
+            """
+        )
+        deleted_counts["cashflow_prepared_rollup_revisions"] = _delete_count(
+            """
+            DELETE FROM public.cashflow_prepared_rollups p
+            USING public.cashflow_preparation_state state
+            WHERE state.client_id = p.client_id
+              AND state.active_preparation_revision > 0
+              AND p.preparation_revision <> state.active_preparation_revision
+            """
+        )
+        deleted_counts["cashflow_prepared_line_revisions"] = _delete_count(
+            """
+            DELETE FROM public.cashflow_prepared_lines p
+            USING public.cashflow_preparation_state state
+            WHERE state.client_id = p.client_id
+              AND state.active_preparation_revision > 0
+              AND p.preparation_revision <> state.active_preparation_revision
+            """
+        )
+
         protected_after = _protected_counts()
         for key in (
             "client_data_current",
@@ -307,6 +460,9 @@ def apply_storage_cleanup(
             "verification_details",
             "trial_balance_accounts",
             "trial_balance_uploads",
+            "cashflow_current_legacy_rollups",
+            "cashflow_current_prepared_lines",
+            "cashflow_current_prepared_rollups",
         ):
             if protected_after[key] != protected_before[key]:
                 raise RuntimeError(
