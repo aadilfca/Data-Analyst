@@ -3,8 +3,11 @@ import pandas as pd
 from services.ledger_report_source import (
     build_report_source,
     canonical_cashflow_voucher_selection_cte,
+    load_cashflow_prepared_classification_preview,
+    load_cashflow_prepared_rollup_summary,
     load_ledger_report_source,
     select_canonical_cashflow_vouchers,
+    select_cashflow_report_source_identity,
 )
 
 
@@ -41,6 +44,114 @@ def _journal_rows():
     ]
 
 
+def test_report_source_prefers_active_prepared_cashflow_revision():
+    calls = []
+
+    def query(sql, params=None):
+        calls.append((sql, params))
+        if "cashflow_preparation_state" in sql:
+            return [{"active_preparation_revision": 17, "status": "ready"}]
+        assert "FROM cashflow_prepared_lines" in sql
+        return [
+            {
+                "voucher_id": "V1",
+                "transaction_date": "2026-01-05",
+                "account_code": "BANK",
+                "account_name": "Bank",
+                "debit": 100,
+                "credit": 0,
+                "treasury_type": "bank",
+                "category_label_snapshot": "",
+                "transaction_month": "2026-01",
+                "transaction_fortnight": "2026-01-F1",
+                "upload_id": 12,
+                "source_client_data_id": 101,
+            },
+            {
+                "voucher_id": "V1",
+                "transaction_date": "2026-01-05",
+                "account_code": "EXP",
+                "account_name": "Expense",
+                "debit": 0,
+                "credit": 100,
+                "treasury_type": "",
+                "category_label_snapshot": "Operating",
+                "transaction_month": "2026-01",
+                "transaction_fortnight": "2026-01-F1",
+                "upload_id": 12,
+                "source_client_data_id": 102,
+            },
+        ]
+
+    source = load_ledger_report_source(
+        7,
+        journal_template_id=9,
+        period_start="2026-01-01",
+        period_end="2026-01-31",
+        account_category_source="cashflow",
+        query_fn=query,
+    )
+
+    assert source.ready
+    assert source.metadata["preparation_revision"] == 17
+    assert source.metadata["cashflow_report_source_mode"] == "prepared_revision"
+    assert source.journal["voucher_id"].tolist() == ["V1", "V1"]
+    assert source.journal["transaction_fortnight"].tolist() == ["2026-01-F1", "2026-01-F1"]
+    assert len(calls) == 2
+
+
+def test_prepared_rollup_summary_reads_active_revision():
+    calls = []
+
+    def query(sql, params=None):
+        calls.append((sql, params))
+        if "cashflow_preparation_state" in sql:
+            return [{"active_preparation_revision": 17, "status": "ready"}]
+        if "COUNT(DISTINCT voucher_id)" in sql:
+            return [{"period_key": "2026-01", "selected_voucher_count": 1}]
+        assert "FROM cashflow_prepared_rollups" in sql
+        return [
+            {
+                "period_key": "2026-01",
+                "category_label_snapshot": "Customers",
+                "account_code": "AR",
+                "account_name": "Customers",
+                "treasury_type": "",
+                "debit_total": 0,
+                "credit_total": 100,
+                "net_total": -100,
+                "line_count": 1,
+            },
+            {
+                "period_key": "2026-01",
+                "category_label_snapshot": "Bank",
+                "account_code": "BANK",
+                "account_name": "Bank",
+                "treasury_type": "bank",
+                "debit_total": 100,
+                "credit_total": 0,
+                "net_total": 100,
+                "line_count": 1,
+            },
+        ]
+
+    result = load_cashflow_prepared_rollup_summary(
+        7,
+        journal_template_id=9,
+        period_start="2026-01-01",
+        period_end="2026-01-31",
+        group_by="month",
+        receipt_presentation="net",
+        query_fn=query,
+    )
+
+    assert result["metadata"]["cashflow_report_source_mode"] == "prepared_rollups"
+    assert result["metadata"]["preparation_revision"] == 17
+    assert result["summary"]["category_totals"].loc["Customers", "2026-01"] == 100.0
+    assert result["summary"]["source_line_count"] == 2
+    assert result["summary"]["selected_voucher_count"] == 1
+    assert len(calls) == 3
+
 def test_canonical_cashflow_voucher_selector_uses_only_current_self_linked_occurrences():
     calls = []
 
@@ -71,6 +182,54 @@ def test_canonical_cashflow_voucher_selector_requires_a_populated_register():
     assert selection.occurrence_count == 0
     assert selection.upload_ids == ()
     assert "selected_canonical_vouchers" in canonical_cashflow_voucher_selection_cte()
+
+
+def test_source_identity_prefers_populated_canonical_register():
+    calls = []
+
+    def query(sql, params=None):
+        calls.append((sql, params))
+        assert "selected_canonical_vouchers" in sql
+        assert "selected_blank_vouchers" in sql
+        return [
+            {"canonical_occurrence_id": 41, "upload_id": 12, "voucher_identity": "V1", "duplicate_uploads_suppressed": 3},
+            {"canonical_occurrence_id": None, "upload_id": 13, "voucher_identity": "", "duplicate_uploads_suppressed": 3},
+        ]
+
+    identity = select_cashflow_report_source_identity(7, 9, query)
+
+    assert identity.ready
+    assert identity.selection_mode == "canonical_register"
+    assert identity.upload_ids == (12, 13)
+    assert identity.duplicate_uploads_suppressed == 3
+    assert identity.source_key.startswith("canonical-v1:")
+    assert len(calls) == 1
+
+def test_fresh_start_source_identity_uses_latest_voucher_population_and_blank_rows():
+    calls = []
+
+    def query(sql, params=None):
+        calls.append((sql, params))
+        if "SELECT canonical_occurrence_id, upload_id" in sql:
+            return []
+        if "FROM cashflow_preparation_state" in sql:
+            return []
+        assert "PARTITION BY voucher_identity" in sql
+        assert "selected_blank_vouchers" in sql
+        assert "file_name" not in sql
+        return [
+            {"upload_id": 22, "voucher_identity": "BPV-1", "duplicate_uploads_suppressed": 2},
+            {"upload_id": 24, "voucher_identity": "", "duplicate_uploads_suppressed": 2},
+        ]
+
+    identity = select_cashflow_report_source_identity(7, 9, query)
+
+    assert identity.ready
+    assert identity.selection_mode == "latest_voucher"
+    assert identity.upload_ids == (22, 24)
+    assert identity.duplicate_uploads_suppressed == 2
+    assert identity.source_key.startswith("latest-voucher-v1:")
+    assert calls[-1][1] == (7, 9, 7, 7, 9, 7, 9)
 
 def test_build_report_source_maps_client_data_and_coa_aliases():
     source = build_report_source(
@@ -337,6 +496,12 @@ def test_cashflow_template_query_filters_period_and_treasury_vouchers():
 
     def query(sql, params=None):
         calls.append((sql, params))
+        if "SELECT canonical_occurrence_id, upload_id" in sql:
+            return []
+        if "FROM cashflow_preparation_state" in sql:
+            return []
+        if "FROM selected_report_vouchers" in sql:
+            return []
         if "FROM account_control_cashflow_source_mappings" in sql:
             return mapping_rows
         if "FROM uploaded_files" in sql:
@@ -414,3 +579,121 @@ def test_build_report_source_normalizes_date_valued_account_code():
 
     assert source.ready
     assert source.journal.loc[0, "account_code"] == "01-05-2026"
+
+
+def test_prepared_classification_preview_reads_active_prepared_lines():
+    calls = []
+
+    def query(sql, params=None):
+        calls.append((sql, params))
+        if "cashflow_preparation_state" in sql:
+            return [{"active_preparation_revision": 17, "status": "ready"}]
+        if "SELECT COUNT(*) AS total" in sql:
+            return [{"total": 1}]
+        assert "FROM cashflow_prepared_lines p" in sql
+        return [{
+            "id": 101,
+            "row_data": {"Voucher ID": "V1", "Account": "BANK"},
+            "extract_amount": 100,
+            "extract_date": "2026-01-05",
+            "data_quality_flag": None,
+            "rate_source": None,
+            "voucher_id": "V1",
+            "account_code": "BANK",
+            "account_name": "Bank",
+            "transaction_date": "2026-01-05",
+            "debit": 100,
+            "credit": 0,
+            "treasury_type": "bank",
+            "classification_status": "bank",
+            "category_label_snapshot": "Bank receipts",
+            "transaction_month": "2026-01",
+            "transaction_fortnight": "2026-01-F1",
+        }]
+
+    result = load_cashflow_prepared_classification_preview(
+        5,
+        9,
+        "2026-01-01",
+        "2026-01-31",
+        treasury_view="combined",
+        query_fn=query,
+    )
+
+    assert result["source_mode"] == "prepared_lines"
+    assert result["preparation_revision"] == 17
+    assert result["rows"][0]["id"] == 101
+    assert result["rows"][0]["classification"] == {
+        "type": "Bank",
+        "account_code": "BANK",
+        "account_name": "Bank",
+        "assigned_category": "Bank receipts",
+        "classification_status": "bank",
+        "voucher_id": "V1",
+        "transaction_date": "2026-01-05",
+        "debit": 100,
+        "credit": 0,
+        "configuration_version": None,
+        "transaction_month": "2026-01",
+        "transaction_fortnight": "2026-01-F1",
+    }
+    assert any("FROM cashflow_prepared_lines p" in sql for sql, _ in calls)
+def test_prepared_rollup_summary_projects_bank_view_from_prepared_lines():
+    def query(sql, params=None):
+        if "cashflow_preparation_state" in sql:
+            return [{"active_preparation_revision": 17, "status": "ready"}]
+        if "COUNT(DISTINCT voucher_id)" in sql:
+            return [{"period_key": "2026-01", "selected_voucher_count": 1}]
+        if "FROM cashflow_prepared_rollups" in sql:
+            return [
+                {
+                    "period_key": "2026-01",
+                    "category_label_snapshot": "Operating",
+                    "account_code": "EXP",
+                    "account_name": "Expense",
+                    "treasury_type": "",
+                    "debit_total": 0,
+                    "credit_total": 100,
+                    "net_total": -100,
+                    "line_count": 1,
+                },
+                {
+                    "period_key": "2026-01",
+                    "category_label_snapshot": "Bank",
+                    "account_code": "BANK",
+                    "account_name": "Bank",
+                    "treasury_type": "bank",
+                    "debit_total": 100,
+                    "credit_total": 0,
+                    "net_total": 100,
+                    "line_count": 1,
+                },
+            ]
+        assert "WITH gateway AS" in sql
+        assert "cashflow_prepared_lines" in sql
+        return [{
+            "category": "Operating",
+            "period_key": "2026-01",
+            "amount": -100,
+            "bank_movement": 100,
+            "cash_movement": 0,
+        }]
+
+    result = load_cashflow_prepared_rollup_summary(
+        7,
+        journal_template_id=9,
+        period_start="2026-01-01",
+        period_end="2026-01-31",
+        group_by="month",
+        receipt_presentation="net",
+        treasury_view="bank",
+        query_fn=query,
+    )
+
+    assert result["metadata"]["treasury_filter_stage"] == "prepared_rollups_bank"
+    assert result["summary"]["category_totals"].loc["Operating", "2026-01"] == 100.0
+    treasury = result["summary"]["treasury_category_totals"]
+    row = treasury.loc[treasury["category"].eq("Operating")].iloc[0]
+    assert row["bank_amount"] == 100.0
+    assert row["cash_amount"] == 0.0
+    assert result["summary"]["treasury_reconciliation"]["status"] == "Matched"

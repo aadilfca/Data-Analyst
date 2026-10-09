@@ -10,8 +10,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
+import hashlib
 import json
 import re
+from time import perf_counter
 from typing import Any, Callable, Mapping, Sequence
 
 import pandas as pd
@@ -30,13 +32,12 @@ JOURNAL_COLUMNS = (
 )
 CASHFLOW_PREPARED_PERIOD_COLUMNS = ("transaction_month", "transaction_fortnight")
 COA_COLUMNS = ("account_code", "account_title", "account_type", "category")
-CASHFLOW_CHILD_DETAILS_VERSION = 6
+CASHFLOW_CHILD_DETAILS_VERSION = 7
 CASHFLOW_DRILLDOWN_DETAILS_VERSION = 2
 CASHFLOW_DRILLDOWN_PROJECTION_VERSION = 1
 CASHFLOW_TREASURY_TOTALS_VERSION = 1
-CASHFLOW_SUMMARY_PAYLOAD_VERSION = 2
+CASHFLOW_SUMMARY_PAYLOAD_VERSION = 3
 CASHFLOW_TREASURY_VIEWS = ("combined", "bank", "cash", "split")
-
 CASHFLOW_CANONICAL_SOURCE_KEY = "canonical-v1"
 
 _JOURNAL_ALIASES: Mapping[str, tuple[str, ...]] = {
@@ -414,6 +415,23 @@ class CashflowCanonicalVoucherSelection:
     @property
     def source_key(self) -> str:
         return CASHFLOW_CANONICAL_SOURCE_KEY
+
+
+@dataclass(frozen=True)
+class CashflowReportSourceIdentity:
+    """The stable report population identity used by every Cashflows cache."""
+
+    template_id: int
+    source_key: str
+    selection_mode: str
+    upload_ids: tuple[int, ...]
+    duplicate_uploads_suppressed: int
+    canonical_occurrence_count: int = 0
+
+    @property
+    def ready(self) -> bool:
+        return bool(self.upload_ids)
+
 
 def build_report_source(
     client_data_rows: Sequence[Mapping[str, Any]] | pd.DataFrame,
@@ -880,6 +898,41 @@ def canonical_cashflow_voucher_selection_cte() -> str:
     """
 
 
+def canonical_cashflow_report_voucher_selection_cte() -> str:
+    """Return the active report selector backed by the canonical register.
+
+    Non-blank vouchers use the self-linked current occurrence. Blank Voucher IDs
+    remain visible per upload as review-required rows, matching the fresh-start
+    selector's safety rule.
+    """
+
+    return """
+        WITH selected_canonical_vouchers AS (
+            SELECT
+                occurrence.id AS canonical_occurrence_id,
+                occurrence.upload_id,
+                occurrence.voucher_identity,
+                occurrence.voucher_fingerprint
+            FROM cashflow_voucher_occurrences occurrence
+            WHERE occurrence.client_id = %s
+              AND occurrence.template_id = %s
+              AND occurrence.canonical_occurrence_id = occurrence.id
+              AND occurrence.decision_status IN ('current', 'current_revised')
+              AND occurrence.voucher_identity IS NOT NULL
+        ), selected_blank_vouchers AS (
+            SELECT DISTINCT occurrence.upload_id, ''::text AS voucher_identity
+            FROM cashflow_voucher_occurrences occurrence
+            WHERE occurrence.client_id = %s
+              AND occurrence.template_id = %s
+              AND occurrence.voucher_identity IS NULL
+              AND occurrence.decision_status = 'review_required'
+        ), selected_report_vouchers AS (
+            SELECT upload_id, voucher_identity FROM selected_canonical_vouchers
+            UNION ALL
+            SELECT upload_id, voucher_identity FROM selected_blank_vouchers
+        )
+    """
+
 def select_canonical_cashflow_vouchers(
     client_id: int,
     template_id: int,
@@ -912,52 +965,155 @@ def select_canonical_cashflow_vouchers(
         upload_ids=tuple(sorted(upload_ids)),
     )
 
-def cashflow_report_voucher_selection_cte() -> str:
-    """Select canonical vouchers, with a visible-safe filename fallback before activation.
 
-    The fallback exists only while a configured client has no occurrence-register
-    rows. Once the register is populated, all report paths select vouchers by
-    canonical upload plus normalized identity, never by filename coverage.
+def _cashflow_source_identity_from_rows(
+    rows: list[dict[str, Any]],
+    *,
+    template_id: int,
+    selection_mode: str,
+    source_prefix: str,
+) -> CashflowReportSourceIdentity:
+    upload_ids = tuple(sorted({int(row["upload_id"]) for row in rows if row.get("upload_id") is not None}))
+    population_parts = [
+        f"{int(row['upload_id'])}:{str(row.get('voucher_identity') or '')}"
+        for row in rows
+        if row.get("upload_id") is not None
+    ]
+    population_key = hashlib.sha256("\n".join(population_parts).encode("utf-8")).hexdigest()[:20]
+    suppressed_count = int(rows[0].get("duplicate_uploads_suppressed") or 0) if rows else 0
+    return CashflowReportSourceIdentity(
+        template_id=int(template_id),
+        source_key=f"{source_prefix}:{population_key}" if rows else "",
+        selection_mode=selection_mode,
+        upload_ids=upload_ids,
+        duplicate_uploads_suppressed=suppressed_count,
+    )
+
+
+def select_cashflow_report_source_identity(
+    client_id: int,
+    template_id: int,
+    query_fn: Callable[..., list[dict[str, Any]]],
+) -> CashflowReportSourceIdentity:
+    """Resolve the report population from the indexed register, with safe fallback."""
+
+    canonical_rows = query_fn(
+        f"""
+        {canonical_cashflow_report_voucher_selection_cte()}
+        , register_stats AS (
+            SELECT
+                (
+                    SELECT COUNT(*)
+                    FROM cashflow_voucher_occurrences occurrence
+                    WHERE occurrence.client_id = %s
+                      AND occurrence.template_id = %s
+                      AND occurrence.voucher_identity IS NOT NULL
+                ) - (
+                    SELECT COUNT(*) FROM selected_canonical_vouchers
+                ) AS duplicate_uploads_suppressed
+        )
+        SELECT canonical_occurrence_id, upload_id, voucher_identity,
+               register_stats.duplicate_uploads_suppressed
+        FROM (
+            SELECT canonical_occurrence_id, upload_id, voucher_identity
+            FROM selected_canonical_vouchers
+            UNION ALL
+            SELECT NULL::bigint, upload_id, voucher_identity
+            FROM selected_blank_vouchers
+        ) selected_register
+        CROSS JOIN register_stats
+        ORDER BY upload_id, voucher_identity
+        """,
+        (client_id, template_id, client_id, template_id, client_id, template_id),
+    )
+    if canonical_rows:
+        return _cashflow_source_identity_from_rows(
+            canonical_rows,
+            template_id=template_id,
+            selection_mode="canonical_register",
+            source_prefix="canonical-v1",
+        )
+
+    rows = query_fn(
+        f"""
+        {cashflow_report_voucher_selection_cte()}
+        SELECT upload_id, voucher_identity,
+               (
+                   SELECT COUNT(*) FROM eligible_nonblank_occurrences
+               ) - (
+                   SELECT COUNT(*) FROM selected_nonblank_vouchers
+               ) AS duplicate_uploads_suppressed
+        FROM selected_report_vouchers
+        ORDER BY upload_id, voucher_identity
+        """,
+        (client_id, template_id, client_id, client_id, template_id, client_id, template_id),
+    )
+    return _cashflow_source_identity_from_rows(
+        rows,
+        template_id=template_id,
+        selection_mode="latest_voucher",
+        source_prefix="latest-voucher-v1",
+    )
+
+def cashflow_report_voucher_selection_cte() -> str:
+    """Select one latest complete upload occurrence per normalized Voucher ID.
+
+    This is the fresh-start Excel-style rule. It deliberately does not activate
+    the parked occurrence register. Blank Voucher IDs are retained per upload so
+    they remain visible without being merged into one synthetic voucher.
     """
 
     return """
-        WITH selected_canonical_vouchers AS (
-            SELECT occurrence.upload_id, occurrence.voucher_identity
-            FROM cashflow_voucher_occurrences occurrence
-            WHERE occurrence.client_id = %s
-              AND occurrence.template_id = %s
-              AND occurrence.canonical_occurrence_id = occurrence.id
-              AND occurrence.decision_status IN ('current', 'current_revised')
-        ), latest_template_uploads AS (
-            SELECT f.id AS upload_id,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY COALESCE(NULLIF(BTRIM(f.file_name), ''), f.id::text)
-                       ORDER BY f.upload_date DESC NULLS LAST, f.id DESC
-                   ) AS upload_rank
+        WITH source_request AS (
+            SELECT %s::bigint AS client_id, %s::bigint AS template_id
+        ), eligible_template_uploads AS (
+            SELECT f.id AS upload_id, f.upload_date
             FROM uploaded_files f
             WHERE f.client_id = %s
+              AND f.client_id = (SELECT client_id FROM source_request)
               AND EXISTS (
                   SELECT 1 FROM client_data cd
                   WHERE cd.upload_id = f.id
                     AND cd.client_id = %s
                     AND cd.template_id = %s
+                    AND cd.client_id = (SELECT client_id FROM source_request)
+                    AND cd.template_id = (SELECT template_id FROM source_request)
                     AND cd.is_deleted = FALSE
               )
-        ), selected_template_uploads AS (
-            SELECT upload_id FROM latest_template_uploads WHERE upload_rank = 1
-        ), selected_report_vouchers AS (
-            SELECT upload_id, voucher_identity FROM selected_canonical_vouchers
-            UNION ALL
-            SELECT DISTINCT c.upload_id,
-                   UPPER(REGEXP_REPLACE(COALESCE(c.voucher_id, ''), '\\s+', '', 'g')) AS voucher_identity
+        ), eligible_voucher_occurrences AS (
+            SELECT DISTINCT
+                c.upload_id,
+                UPPER(REGEXP_REPLACE(COALESCE(c.voucher_id, ''), '\\s+', '', 'g')) AS voucher_identity,
+                eligible.upload_date
             FROM cash_bank_transaction_classifications c
-            JOIN selected_template_uploads selected_upload
-              ON selected_upload.upload_id = c.upload_id
-            WHERE NOT EXISTS (SELECT 1 FROM selected_canonical_vouchers)
-              AND c.client_id = %s
+            JOIN eligible_template_uploads eligible
+              ON eligible.upload_id = c.upload_id
+            WHERE c.client_id = %s
               AND c.template_id = %s
               AND c.is_current = TRUE
-              AND NULLIF(BTRIM(c.voucher_id), '') IS NOT NULL
+        ), eligible_nonblank_occurrences AS (
+            SELECT upload_id, voucher_identity, upload_date
+            FROM eligible_voucher_occurrences
+            WHERE voucher_identity <> ''
+        ), ranked_nonblank_occurrences AS (
+            SELECT upload_id, voucher_identity,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY voucher_identity
+                       ORDER BY upload_date DESC NULLS LAST, upload_id DESC
+                   ) AS occurrence_rank
+            FROM eligible_nonblank_occurrences
+        ), selected_nonblank_vouchers AS (
+            SELECT upload_id, voucher_identity
+            FROM ranked_nonblank_occurrences
+            WHERE occurrence_rank = 1
+        ), selected_blank_vouchers AS (
+            SELECT DISTINCT upload_id, voucher_identity
+            FROM eligible_voucher_occurrences
+            WHERE voucher_identity = ''
+        ), selected_report_vouchers AS (
+            SELECT upload_id, voucher_identity FROM selected_nonblank_vouchers
+            UNION ALL
+            SELECT upload_id, voucher_identity FROM selected_blank_vouchers
         )
     """
 
@@ -1097,6 +1253,622 @@ def normalize_cashflow_treasury_view(value: Any) -> str:
         allowed = ", ".join(CASHFLOW_TREASURY_VIEWS)
         raise ValueError(f"treasury_view must be one of: {allowed}")
     return view
+
+
+def load_cashflow_prepared_rollup_summary(
+    client_id: int,
+    *,
+    journal_template_id: int | None,
+    period_start: Any,
+    period_end: Any,
+    group_by: str,
+    receipt_presentation: str,
+    treasury_view: str = "combined",
+    query_fn: Callable[..., list[dict[str, Any]]] = execute_query_pg,
+) -> dict[str, Any] | None:
+    """Read active upload-time rollups for the lightweight Cashflows summary."""
+    from services.ledger_group_summary import (
+        DEFAULT_TOLERANCE,
+        _cashflow_periods,
+        _cashflow_treasury_reconciliation,
+        normalize_cashflow_grouping,
+    )
+
+    if journal_template_id is None:
+        return None
+    view = normalize_cashflow_treasury_view(treasury_view)
+    # Split is still served by the controlled fallback until the prepared
+    # model stores the full split presentation contract. Cash and Bank can be
+    # projected safely from the prepared voucher lines below.
+    if view == "split":
+        return None
+    grouping = normalize_cashflow_grouping(group_by)
+    if grouping == "day":
+        return None
+
+    grain = "fortnight" if grouping == "fortnight" else "month"
+    target_periods = _cashflow_periods(period_start, period_end, grouping)
+    base_periods = _cashflow_periods(period_start, period_end, grain)
+    if not target_periods or not base_periods:
+        return None
+
+    state_rows = query_fn(
+        """
+        SELECT active_preparation_revision, status
+        FROM cashflow_preparation_state
+        WHERE client_id = %s
+        """,
+        (client_id,),
+    )
+    if not state_rows:
+        return None
+    preparation_revision = int(state_rows[0].get("active_preparation_revision") or 0)
+    if preparation_revision <= 0:
+        return None
+
+    rows = query_fn(
+        """
+        SELECT period_key, category_label_snapshot, account_code, account_name,
+               treasury_type, debit_total, credit_total, net_total,
+               line_count
+        FROM cashflow_prepared_rollups
+        WHERE client_id = %s
+          AND template_id = %s
+          AND preparation_revision = %s
+          AND period_grain = %s
+          AND period_key >= %s
+          AND period_key <= %s
+        ORDER BY period_key, category_label_snapshot, account_code, treasury_type
+        """,
+        (
+            client_id,
+            journal_template_id,
+            preparation_revision,
+            grain,
+            base_periods[0]["key"],
+            base_periods[-1]["key"],
+        ),
+    )
+    if not rows:
+        return None
+
+    target_for_base: dict[str, dict[str, str]] = {}
+    for base in base_periods:
+        base_start = pd.Timestamp(base["start"]).normalize()
+        target = next(
+            (
+                period
+                for period in target_periods
+                if pd.Timestamp(period["start"]) <= base_start <= pd.Timestamp(period["end"])
+            ),
+            None,
+        )
+        if target is not None:
+            target_for_base[str(base["key"])] = target
+
+    metric_period_column = "transaction_fortnight" if grain == "fortnight" else "transaction_month"
+    voucher_metric_rows = query_fn(
+        f"""
+        SELECT {metric_period_column} AS period_key, COUNT(DISTINCT voucher_id) AS selected_voucher_count
+        FROM cashflow_prepared_lines
+        WHERE client_id = %s
+          AND template_id = %s
+          AND preparation_revision = %s
+          AND transaction_date >= %s
+          AND transaction_date <= %s
+        GROUP BY {metric_period_column}
+        """,
+        (client_id, journal_template_id, preparation_revision, period_start, period_end),
+    )
+    selected_vouchers_by_period: dict[str, int] = {}
+    for metric_row in voucher_metric_rows:
+        target = target_for_base.get(str(metric_row.get("period_key") or ""))
+        if target is not None:
+            selected_vouchers_by_period[str(target["key"])] = int(metric_row.get("selected_voucher_count") or 0)
+    category_buckets: dict[tuple[str, str], float] = {}
+    period_metrics = {
+        str(period["key"]): {
+            "source_line_count": 0,
+            "selected_voucher_count": 0,
+            "internal_transfer_count": 0,
+            "category_review_count": 0,
+            "deduction_count": 0,
+        }
+        for period in target_periods
+    }
+    source_line_count = 0
+    for row in rows:
+        target = target_for_base.get(str(row.get("period_key") or ""))
+        if target is None:
+            continue
+        line_count = int(row.get("line_count") or 0)
+        source_line_count += line_count
+        period_metrics[str(target["key"])]["source_line_count"] += line_count
+        period_metrics[str(target["key"])]["selected_voucher_count"] = selected_vouchers_by_period.get(str(target["key"]), 0)
+        treasury_type = str(row.get("treasury_type") or "").strip().casefold()
+        if treasury_type in {"cash", "bank"}:
+            continue
+        category = str(row.get("category_label_snapshot") or "").strip()
+        if not category:
+            category = str(row.get("account_name") or "").strip() or "Unmapped account"
+        key = (category, str(target["key"]))
+        category_buckets[key] = category_buckets.get(key, 0.0) - float(row.get("net_total") or 0.0)
+
+    period_keys = [str(period["key"]) for period in target_periods]
+    categories = sorted({category for category, _period_key in category_buckets})
+    category_rows = [
+        {
+            "category": category,
+            **{
+                period_key: float(category_buckets.get((category, period_key), 0.0))
+                for period_key in period_keys
+            },
+        }
+        for category in categories
+    ]
+    if category_rows:
+        category_totals = pd.DataFrame(category_rows).set_index("category")
+        category_totals.index.name = "category"
+        category_totals["Total"] = category_totals[period_keys].sum(axis=1)
+    else:
+        category_totals = pd.DataFrame(columns=[*period_keys, "Total"], dtype=float)
+        category_totals.index.name = "category"
+
+    treasury_category_totals = pd.DataFrame(
+        [
+            {
+                "category": category,
+                "period_key": period_key,
+                "bank_amount": 0.0,
+                "cash_amount": 0.0,
+                "mixed_amount": float(category_totals.loc[category, period_key]),
+                "total_amount": float(category_totals.loc[category, period_key]),
+            }
+            for category in category_totals.index
+            for period_key in period_keys
+        ],
+        columns=[
+            "category",
+            "period_key",
+            "bank_amount",
+            "cash_amount",
+            "mixed_amount",
+            "total_amount",
+        ],
+    )
+    if view in {"cash", "bank"}:
+        metric_period_column = "transaction_fortnight" if grain == "fortnight" else "transaction_month"
+        allocation_rows = query_fn(
+            f"""
+            WITH gateway AS (
+                SELECT canonical_occurrence_id,
+                       SUM(CASE WHEN LOWER(COALESCE(treasury_type, '')) = 'bank'
+                                THEN debit - credit ELSE 0 END) AS bank_movement,
+                       SUM(CASE WHEN LOWER(COALESCE(treasury_type, '')) = 'cash'
+                                THEN debit - credit ELSE 0 END) AS cash_movement
+                FROM cashflow_prepared_lines
+                WHERE client_id = %s
+                  AND template_id = %s
+                  AND preparation_revision = %s
+                  AND transaction_date >= %s
+                  AND transaction_date <= %s
+                GROUP BY canonical_occurrence_id
+            ), category_lines AS (
+                SELECT canonical_occurrence_id,
+                       {metric_period_column} AS period_key,
+                       COALESCE(NULLIF(BTRIM(category_label_snapshot), ''),
+                                NULLIF(BTRIM(account_name), ''),
+                                'Unmapped account') AS category,
+                       SUM(debit - credit) AS amount
+                FROM cashflow_prepared_lines
+                WHERE client_id = %s
+                  AND template_id = %s
+                  AND preparation_revision = %s
+                  AND transaction_date >= %s
+                  AND transaction_date <= %s
+                  AND LOWER(COALESCE(treasury_type, '')) NOT IN ('cash', 'bank')
+                GROUP BY canonical_occurrence_id, {metric_period_column}, category
+            )
+            SELECT c.category, c.period_key, c.amount,
+                   g.bank_movement, g.cash_movement
+            FROM category_lines c
+            JOIN gateway g ON g.canonical_occurrence_id = c.canonical_occurrence_id
+            ORDER BY c.period_key, c.category
+            """,
+            (
+                client_id,
+                journal_template_id,
+                preparation_revision,
+                period_start,
+                period_end,
+                client_id,
+                journal_template_id,
+                preparation_revision,
+                period_start,
+                period_end,
+            ),
+        )
+        allocated: dict[tuple[str, str], dict[str, float]] = {}
+        for row in allocation_rows:
+            base_period = str(row.get("period_key") or "")
+            target = target_for_base.get(base_period)
+            if target is None:
+                continue
+            key = (str(row.get("category") or "Unmapped account"), str(target["key"]))
+            bucket = allocated.setdefault(
+                key,
+                {"bank_amount": 0.0, "cash_amount": 0.0, "mixed_amount": 0.0, "total_amount": 0.0},
+            )
+            amount = -float(row.get("amount") or 0.0)
+            bank_weight = abs(float(row.get("bank_movement") or 0.0))
+            cash_weight = abs(float(row.get("cash_movement") or 0.0))
+            denominator = bank_weight + cash_weight
+            if denominator <= DEFAULT_TOLERANCE:
+                bucket["mixed_amount"] += amount
+            else:
+                bucket["bank_amount"] += amount * bank_weight / denominator
+                bucket["cash_amount"] += amount * cash_weight / denominator
+            bucket["total_amount"] += amount
+        treasury_category_totals = pd.DataFrame(
+            [
+                {"category": category, "period_key": period_key, **values}
+                for (category, period_key), values in allocated.items()
+            ],
+            columns=[
+                "category",
+                "period_key",
+                "bank_amount",
+                "cash_amount",
+                "mixed_amount",
+                "total_amount",
+            ],
+        )
+    summary = {
+        "months": [
+            str(period)
+            for period in pd.period_range(
+                pd.Timestamp(period_start).to_period("M"),
+                pd.Timestamp(period_end).to_period("M"),
+                freq="M",
+            )
+        ],
+        "periods": target_periods,
+        "group_by": grouping,
+        "summary_payload_version": 0,
+        "category_totals": category_totals,
+        "treasury_category_totals": treasury_category_totals,
+        "treasury_reconciliation": _cashflow_treasury_reconciliation(
+            category_totals,
+            treasury_category_totals,
+            period_keys,
+            tolerance=DEFAULT_TOLERANCE,
+        ),
+        "treasury_totals_version": CASHFLOW_TREASURY_TOTALS_VERSION,
+        "transfer_details": pd.DataFrame(),
+        "transfer_reconciliation": None,
+        "customer_payment_details": pd.DataFrame(),
+        "customer_payment_customer_totals": pd.DataFrame(),
+        "customer_payment_period_totals": pd.DataFrame(),
+        "customer_payment_reconciliation": {},
+        "customer_payment_receipt_categories": [],
+        "deduction_details": pd.DataFrame(),
+        "categories_needing_review": pd.DataFrame(),
+        "selected_vouchers": [],
+        "source_line_count": source_line_count,
+        "selected_voucher_count": sum(item["selected_voucher_count"] for item in period_metrics.values()),
+        "internal_transfer_count": 0,
+        "category_review_count": 0,
+        "period_metrics": period_metrics,
+        "receipt_presentation": receipt_presentation,
+        "child_details_prepared": False,
+        "child_details_version": 0,
+        "cashflow_ledger_rollups": pd.DataFrame(),
+        "cashflow_drilldown_controls": {},
+        "cashflow_drilldown_prepared": False,
+        "drilldown_details_version": 0,
+    }
+    metadata = {
+        "client_id": client_id,
+        "journal_template_id": journal_template_id,
+        "source_template_ids": [journal_template_id],
+        "source_upload_ids": [],
+        "selected_template_upload_ids": [],
+        "source_upload_selection": "active prepared Cashflows rollups",
+        "cashflow_report_source_key": (
+            f"prepared-rollups-v1:{client_id}:{journal_template_id}:{preparation_revision}"
+        ),
+        "cashflow_report_source_mode": "prepared_rollups",
+        "preparation_revision": preparation_revision,
+        "preparation_status": str(state_rows[0].get("status") or "ready"),
+        "summary_read_model": "prepared_rollups",
+        "source_row_count": source_line_count,
+        "valid_row_count": source_line_count,
+        "rejected_row_count": 0,
+        "layout_row_count": 0,
+        "date_prefilter_applied": True,
+        "treasury_filter_stage": f"prepared_rollups_{view}",
+        "sql_aggregated": True,
+        "raw_json_parsing": False,
+        "source_period_start": str(period_start),
+        "source_period_end": str(period_end),
+    }
+    return {"summary": summary, "metadata": metadata}
+
+def load_cashflow_prepared_classification_preview(
+    client_id: int,
+    template_id: int,
+    period_start: Any,
+    period_end: Any,
+    *,
+    page: int = 1,
+    limit: int = 50,
+    search: str | None = None,
+    classification_type: str | None = None,
+    account_code: str | None = None,
+    category: str | None = None,
+    treasury_view: str | None = None,
+    query_fn: Callable[..., list[dict[str, Any]]] = execute_query_pg,
+) -> dict[str, Any] | None:
+    """Read the Data Bank Cashflows classification view from prepared lines.
+
+    ``cashflow_prepared_lines`` is the row-level companion to the report rollups.
+    It already contains canonical-voucher selection, Cash/Bank eligibility,
+    counter-account inclusion, category snapshots, and derived periods, so the
+    Data Bank classification window does not rebuild those decisions.
+    """
+    if page < 1 or limit < 1 or limit > 200:
+        raise ValueError("Invalid classification preview pagination")
+    state_rows = query_fn(
+        """
+        SELECT active_preparation_revision, status
+        FROM cashflow_preparation_state
+        WHERE client_id = %s
+        """,
+        (client_id,),
+    )
+    if not state_rows:
+        return None
+    preparation_revision = int(state_rows[0].get("active_preparation_revision") or 0)
+    if preparation_revision <= 0:
+        return None
+
+    where = [
+        "p.client_id = %s",
+        "p.template_id = %s",
+        "p.preparation_revision = %s",
+        "p.transaction_date >= %s",
+        "p.transaction_date <= %s",
+        "cd.is_deleted = FALSE",
+    ]
+    params: list[Any] = [
+        client_id,
+        template_id,
+        preparation_revision,
+        period_start,
+        period_end,
+    ]
+
+    if search and search.strip():
+        like = f"%{search.strip()}%"
+        where.append(
+            "(LOWER(COALESCE(p.voucher_id, '')) LIKE LOWER(%s) "
+            "OR LOWER(COALESCE(p.account_code, '')) LIKE LOWER(%s) "
+            "OR LOWER(COALESCE(p.account_name, '')) LIKE LOWER(%s) "
+            "OR LOWER(COALESCE(p.category_label_snapshot, '')) LIKE LOWER(%s) "
+            "OR EXISTS (SELECT 1 FROM jsonb_each_text(cd.row_data) pair "
+            "WHERE LOWER(pair.value) LIKE LOWER(%s)))"
+        )
+        params.extend([like] * 5)
+
+    if classification_type == "cash":
+        where.append("p.treasury_type = 'cash'")
+    elif classification_type == "bank":
+        where.append("p.treasury_type = 'bank'")
+    elif classification_type == "counter":
+        where.append("p.classification_status = 'non_treasury'")
+    elif classification_type == "review":
+        where.append("p.classification_status = 'unmapped'")
+    elif classification_type not in (None, ""):
+        raise ValueError("Invalid classification type")
+
+    treasury_filter = str(treasury_view or "combined").strip().casefold()
+    if treasury_filter not in {"combined", "cash", "bank"}:
+        raise ValueError("Invalid treasury view")
+    treasury_types = ["cash", "bank"] if treasury_filter == "combined" else [treasury_filter]
+    where.append(
+        "EXISTS ("
+        " SELECT 1 FROM cashflow_prepared_lines treasury"
+        " WHERE treasury.client_id = p.client_id"
+        "   AND treasury.template_id = p.template_id"
+        "   AND treasury.preparation_revision = p.preparation_revision"
+        "   AND treasury.canonical_occurrence_id = p.canonical_occurrence_id"
+        "   AND treasury.treasury_type = ANY(%s)"
+        ")"
+    )
+    params.append(treasury_types)
+
+    if account_code and account_code.strip():
+        where.append("LOWER(p.account_code) = LOWER(%s)")
+        params.append(account_code.strip())
+    if category and category.strip().casefold() == "__unassigned__":
+        where.append("NULLIF(BTRIM(COALESCE(p.category_label_snapshot, '')), '') IS NULL")
+    elif category and category.strip():
+        where.append("LOWER(COALESCE(p.category_label_snapshot, '')) LIKE LOWER(%s)")
+        params.append(f"%{category.strip()}%")
+
+    where_sql = " AND ".join(where)
+    from_sql = """
+        FROM cashflow_prepared_lines p
+        JOIN client_data cd
+          ON cd.id = p.source_client_data_id
+         AND cd.client_id = p.client_id
+    """
+    count_rows = query_fn(
+        f"SELECT COUNT(*) AS total {from_sql} WHERE {where_sql}",
+        tuple(params),
+    )
+    total = int(count_rows[0].get("total") or 0) if count_rows else 0
+    offset = (page - 1) * limit
+    rows = query_fn(
+        f"""
+        SELECT cd.id, cd.row_data, cd.extract_amount, p.transaction_date AS extract_date,
+               cd.data_quality_flag, cd.rate_source, p.voucher_id, p.account_code,
+               p.account_name, p.transaction_date, p.debit, p.credit, p.treasury_type,
+               p.classification_status, p.category_label_snapshot, p.transaction_month,
+               p.transaction_fortnight
+        {from_sql}
+        WHERE {where_sql}
+        ORDER BY p.transaction_date DESC NULLS LAST, p.voucher_id, p.account_code, cd.id
+        LIMIT %s OFFSET %s
+        """,
+        tuple([*params, limit, offset]),
+    )
+    formatted: list[dict[str, Any]] = []
+    for row in rows:
+        status = row.get("classification_status") or "unmapped"
+        treasury_type = str(row.get("treasury_type") or "").casefold()
+        if treasury_type in {"cash", "bank"}:
+            display_type = treasury_type.title()
+        elif status == "non_treasury":
+            display_type = "Counter-account"
+        else:
+            display_type = "Needs review"
+        formatted.append({
+            "id": row.get("id"),
+            "row_data": row.get("row_data") or {},
+            "extract_amount": row.get("extract_amount"),
+            "extract_date": row.get("extract_date"),
+            "data_quality_flag": row.get("data_quality_flag"),
+            "rate_source": row.get("rate_source"),
+            "classification": {
+                "type": display_type,
+                "account_code": row.get("account_code"),
+                "account_name": row.get("account_name") or "",
+                "assigned_category": row.get("category_label_snapshot") or "",
+                "classification_status": status,
+                "voucher_id": row.get("voucher_id"),
+                "transaction_date": row.get("transaction_date"),
+                "debit": row.get("debit") or 0,
+                "credit": row.get("credit") or 0,
+                "configuration_version": None,
+                "transaction_month": row.get("transaction_month"),
+                "transaction_fortnight": row.get("transaction_fortnight"),
+            },
+        })
+    return {
+        "total_rows": total,
+        "page": page,
+        "limit": limit,
+        "rows": formatted,
+        "duplicate_upload_suppression": True,
+        "source_upload_selection": "active prepared Cashflows revision",
+        "source_mode": "prepared_lines",
+        "preparation_revision": preparation_revision,
+        "preparation_status": str(state_rows[0].get("status") or "ready"),
+    }
+
+def load_cashflow_prepared_line_source(
+    client_id: int,
+    *,
+    journal_template_id: int | None,
+    period_start: Any,
+    period_end: Any,
+    query_fn: Callable[..., list[dict[str, Any]]] = execute_query_pg,
+) -> LedgerReportSource | None:
+    """Load the active revisioned Cashflows lines without rebuilding classifications.
+
+    The preparation service has already applied canonical-voucher selection,
+    Cash/Bank eligibility, counter-account inclusion, category snapshots, and
+    month/fortnight keys. A missing active revision deliberately returns None
+    so the controlled SQL fallback remains available during rollout.
+    """
+    if journal_template_id is None or period_start is None or period_end is None:
+        return None
+    state_rows = query_fn(
+        """
+        SELECT active_preparation_revision, status
+        FROM cashflow_preparation_state
+        WHERE client_id = %s
+        """,
+        (client_id,),
+    )
+    if not state_rows:
+        return None
+    preparation_revision = int(state_rows[0].get("active_preparation_revision") or 0)
+    if preparation_revision <= 0:
+        return None
+    rows = query_fn(
+        """
+        SELECT voucher_id, transaction_date, account_code, account_name,
+               debit, credit, treasury_type, category_label_snapshot,
+               transaction_month, transaction_fortnight, upload_id,
+               source_client_data_id
+        FROM cashflow_prepared_lines
+        WHERE client_id = %s
+          AND template_id = %s
+          AND preparation_revision = %s
+          AND transaction_date >= %s
+          AND transaction_date <= %s
+        ORDER BY transaction_date, voucher_id, account_code, source_client_data_id
+        """,
+        (client_id, journal_template_id, preparation_revision, period_start, period_end),
+    )
+    records = [dict(row) for row in rows]
+    journal = pd.DataFrame(records).rename(
+        columns={
+            "transaction_date": "date",
+            "category_label_snapshot": "category",
+        }
+    )
+    for column in (*JOURNAL_COLUMNS, *CASHFLOW_PREPARED_PERIOD_COLUMNS, "treasury_type", "category"):
+        if column not in journal:
+            journal[column] = ""
+    journal = journal.reindex(columns=[*JOURNAL_COLUMNS, "treasury_type", "category", *CASHFLOW_PREPARED_PERIOD_COLUMNS])
+    if journal.empty:
+        journal = pd.DataFrame(columns=[*JOURNAL_COLUMNS, "treasury_type", "category", *CASHFLOW_PREPARED_PERIOD_COLUMNS])
+    else:
+        journal["date"] = pd.to_datetime(journal["date"], errors="coerce")
+        for column in ("debit", "credit"):
+            journal[column] = pd.to_numeric(journal[column], errors="coerce").fillna(0.0)
+        journal["voucher_id"] = journal["voucher_id"].map(_text)
+        journal["account_code"] = journal["account_code"].map(_canonical_code)
+        for column in ("account_name", "voucher_detail", "treasury_type", "category", *CASHFLOW_PREPARED_PERIOD_COLUMNS):
+            journal[column] = journal[column].map(_text)
+    coa = (
+        journal[["account_code", "account_name", "treasury_type", "category"]]
+        .drop_duplicates("account_code", keep="last")
+        .rename(columns={"account_name": "account_title", "treasury_type": "account_type"})
+        .reset_index(drop=True)
+        if not journal.empty
+        else pd.DataFrame(columns=COA_COLUMNS)
+    )
+    upload_ids = sorted({int(row["upload_id"]) for row in records if row.get("upload_id") is not None})
+    source_client_data_ids = {int(row["source_client_data_id"]) for row in records if row.get("source_client_data_id") is not None}
+    metadata = {
+        "client_id": client_id,
+        "journal_template_id": journal_template_id,
+        "source_template_ids": [journal_template_id],
+        "source_upload_ids": upload_ids,
+        "selected_template_upload_ids": upload_ids,
+        "source_upload_selection": "active prepared Cashflows revision",
+        "cashflow_report_source_key": f"prepared-v1:{client_id}:{journal_template_id}:{preparation_revision}",
+        "cashflow_report_source_mode": "prepared_revision",
+        "preparation_revision": preparation_revision,
+        "preparation_status": str(state_rows[0].get("status") or "ready"),
+        "source_row_count": len(records),
+        "valid_row_count": len(records),
+        "source_client_data_count": len(source_client_data_ids),
+        "rejected_row_count": 0,
+        "layout_row_count": 0,
+        "date_prefilter_applied": True,
+        "source_period_start": str(period_start),
+        "source_period_end": str(period_end),
+        "treasury_filter_stage": "prepared_revision",
+        "sql_aggregated": False,
+        "raw_json_parsing": False,
+        "prepared_periods_requested": True,
+    }
+    return LedgerReportSource(journal, coa, (), metadata, ())
 
 
 def project_cashflow_treasury_view(summary: Mapping[str, Any], treasury_view: str = "combined") -> dict[str, Any]:
@@ -1378,6 +2150,7 @@ def _cashflow_summary_payload(summary: Mapping[str, Any]) -> dict[str, Any]:
         "transfer_reconciliation": dict(transfer_reconciliation),
         "customer_payment_details": _cashflow_detail_records(summary.get("customer_payment_details")),
         "customer_payment_customer_totals": _cashflow_detail_records(summary.get("customer_payment_customer_totals")),
+        "customer_payment_period_totals": _cashflow_detail_records(summary.get("customer_payment_period_totals")),
         "customer_payment_reconciliation": dict(summary.get("customer_payment_reconciliation") or {}),
         "customer_payment_receipt_categories": [str(value) for value in summary.get("customer_payment_receipt_categories") or []],
         "deduction_details": _cashflow_detail_records(summary.get("deduction_details")),
@@ -1396,6 +2169,7 @@ def _cashflow_summary_from_payload(
 ) -> dict[str, Any]:
     from services.ledger_group_summary import (
         _build_cashflow_customer_payment_customer_totals,
+        _build_cashflow_customer_payment_period_totals,
         _build_cashflow_customer_payment_reconciliation,
         build_cashflow_transfer_reconciliation,
     )
@@ -1435,6 +2209,17 @@ def _cashflow_summary_from_payload(
             customer_payment_receipt_categories,
             tolerance=0.02,
         )
+    customer_payment_period_totals = (
+        _build_cashflow_customer_payment_period_totals(
+            customer_payment_details,
+            periods,
+            category_totals,
+            customer_payment_receipt_categories,
+            tolerance=0.02,
+        )
+        if child_details_prepared
+        else pd.DataFrame()
+    )
     drilldown_version = int(payload.get("drilldown_details_version", 0) or 0)
     drilldown_prepared = (
         include_drilldown
@@ -1459,6 +2244,7 @@ def _cashflow_summary_from_payload(
         ) if child_details_prepared else None,
         "customer_payment_details": customer_payment_details,
         "customer_payment_customer_totals": customer_payment_customer_totals,
+        "customer_payment_period_totals": customer_payment_period_totals,
         "customer_payment_reconciliation": customer_payment_reconciliation,
         "customer_payment_receipt_categories": customer_payment_receipt_categories,
         "deduction_details": _cashflow_detail_frame(payload, "deduction_details") if child_details_prepared else pd.DataFrame(),
@@ -1596,6 +2382,7 @@ def _cashflow_daily_rollup(
     from services.ledger_group_summary import (
         DEFAULT_TOLERANCE,
         _build_cashflow_customer_payment_customer_totals,
+        _build_cashflow_customer_payment_period_totals,
         _build_cashflow_customer_payment_reconciliation,
         _build_cashflow_drilldown_controls,
         _cashflow_periods,
@@ -1689,6 +2476,13 @@ def _cashflow_daily_rollup(
         customer_payment_receipt_categories,
         tolerance=DEFAULT_TOLERANCE,
     )
+    customer_payment_period_totals = _build_cashflow_customer_payment_period_totals(
+        customer_payment_details,
+        periods,
+        category_totals,
+        customer_payment_receipt_categories,
+        tolerance=DEFAULT_TOLERANCE,
+    ) if child_details_prepared else pd.DataFrame()
     if child_details_prepared:
         totals["internal_transfer_count"] = len(transfer_details)
         totals["category_review_count"] = len(review)
@@ -1725,6 +2519,7 @@ def _cashflow_daily_rollup(
         "transfer_reconciliation": transfer_reconciliation,
         "customer_payment_details": customer_payment_details,
         "customer_payment_customer_totals": customer_payment_customer_totals,
+        "customer_payment_period_totals": customer_payment_period_totals,
         "customer_payment_reconciliation": customer_payment_reconciliation,
         "customer_payment_receipt_categories": customer_payment_receipt_categories,
         "deduction_details": deduction_details,
@@ -1799,9 +2594,10 @@ def load_cashflow_prepared_summary(
     """Roll a full-range daily snapshot into the requested report periods."""
     if journal_template_id is None:
         return None
-    upload_ids, suppressed_count = select_latest_template_upload_ids(client_id, journal_template_id, query_fn)
-    if not upload_ids:
+    source_identity = select_cashflow_report_source_identity(client_id, journal_template_id, query_fn)
+    if not source_identity.ready:
         return None
+    upload_ids = list(source_identity.upload_ids)
     bounds = _cashflow_snapshot_bounds(client_id, journal_template_id, upload_ids, query_fn)
     if bounds is None:
         return None
@@ -1809,7 +2605,7 @@ def load_cashflow_prepared_summary(
     query_params: list[Any] = [
         client_id,
         journal_template_id,
-        _cashflow_upload_ids_key(upload_ids),
+        source_identity.source_key,
         source_start,
         source_end,
         receipt_presentation,
@@ -1854,8 +2650,10 @@ def load_cashflow_prepared_summary(
         "source_template_ids": [journal_template_id],
         "source_upload_ids": upload_ids,
         "selected_template_upload_ids": upload_ids,
-        "duplicate_upload_suppression": True,
-        "duplicate_uploads_suppressed": suppressed_count,
+        "cashflow_report_source_key": source_identity.source_key,
+        "cashflow_report_source_mode": source_identity.selection_mode,
+        "duplicate_upload_suppression": source_identity.selection_mode == "latest_voucher",
+        "duplicate_uploads_suppressed": source_identity.duplicate_uploads_suppressed,
         "source_row_count": int(summary.get("source_line_count", 0) or 0),
         "valid_row_count": int(summary.get("source_line_count", 0) or 0),
         "rejected_row_count": 0,
@@ -1912,9 +2710,10 @@ def prepare_cashflow_summary_snapshot(
     template_id = configuration.get("source_template_id")
     if template_id is None:
         return {"status": "skipped", "reason": "template_not_configured"}
-    upload_ids, _suppressed_count = select_latest_template_upload_ids(client_id, int(template_id), query_fn)
-    if not upload_ids:
+    source_identity = select_cashflow_report_source_identity(client_id, int(template_id), query_fn)
+    if not source_identity.ready:
         return {"status": "skipped", "reason": "no_source_uploads"}
+    upload_ids = list(source_identity.upload_ids)
     bounds = _cashflow_snapshot_bounds(client_id, int(template_id), upload_ids, query_fn)
     if bounds is None:
         return {"status": "skipped", "reason": "no_classified_dates"}
@@ -1950,6 +2749,7 @@ def prepare_cashflow_summary_snapshot(
         client_id,
         journal_template_id=int(template_id),
         source_upload_ids=source.metadata.get("selected_template_upload_ids") or upload_ids,
+        source_key=source.metadata.get("cashflow_report_source_key") or source_identity.source_key,
         configuration_version=source.metadata.get("classification_configuration_version") or 1,
         report_revision=report_revision,
         period_start=source_start,
@@ -1976,10 +2776,11 @@ def load_cashflow_summary_read_model(
     """Load an exact summary-only snapshot when the source/configuration is unchanged."""
     if journal_template_id is None:
         return None
-    upload_ids, suppressed_count = select_latest_template_upload_ids(client_id, journal_template_id, query_fn)
-    if not upload_ids:
+    source_identity = select_cashflow_report_source_identity(client_id, journal_template_id, query_fn)
+    if not source_identity.ready:
         return None
-    upload_key = _cashflow_upload_ids_key(upload_ids)
+    upload_ids = list(source_identity.upload_ids)
+    upload_key = source_identity.source_key
     query_params: list[Any] = [
         client_id,
         journal_template_id,
@@ -2042,8 +2843,10 @@ def load_cashflow_summary_read_model(
         "source_template_ids": [journal_template_id],
         "source_upload_ids": upload_ids,
         "selected_template_upload_ids": upload_ids,
-        "duplicate_upload_suppression": True,
-        "duplicate_uploads_suppressed": suppressed_count,
+        "cashflow_report_source_key": source_identity.source_key,
+        "cashflow_report_source_mode": source_identity.selection_mode,
+        "duplicate_upload_suppression": source_identity.selection_mode == "latest_voucher",
+        "duplicate_uploads_suppressed": source_identity.duplicate_uploads_suppressed,
         "source_row_count": int(payload.get("source_line_count", 0) or 0),
         "valid_row_count": int(payload.get("source_line_count", 0) or 0),
         "rejected_row_count": 0,
@@ -2148,15 +2951,16 @@ def _store_cashflow_drilldown_projection(
     *,
     journal_template_id: int,
     source_upload_ids: Sequence[int],
+    source_key: str,
     configuration_version: int | None,
     report_revision: int,
     summary: Mapping[str, Any],
     write_fn: Callable[..., Any],
 ) -> int:
     records = _cashflow_drilldown_projection_records(summary, source_group_by="day")
-    if not records or not source_upload_ids:
+    if not records or not source_upload_ids or not source_key:
         return 0
-    upload_key = _cashflow_upload_ids_key(source_upload_ids)
+    upload_key = source_key
     columns = [
         "client_id", "template_id", "source_upload_ids_key", "configuration_version", "report_revision",
         "source_group_by", "period_start", "period_end", "period_key", "period_label", "category",
@@ -2215,6 +3019,7 @@ def store_cashflow_summary_read_model(
     group_by: str,
     summary: Mapping[str, Any],
     report_revision: int | None = None,
+    source_key: str | None = None,
     write_fn: Callable[..., Any] = execute_write_pg,
     write_drilldown_projection: bool = False,
 ) -> None:
@@ -2222,6 +3027,7 @@ def store_cashflow_summary_read_model(
     if journal_template_id is None or not source_upload_ids:
         return
     payload = _cashflow_summary_payload(summary)
+    source_cache_key = source_key or _cashflow_upload_ids_key(source_upload_ids)
     write_fn(
         """
         INSERT INTO cash_bank_summary_read_models (
@@ -2238,7 +3044,7 @@ def store_cashflow_summary_read_model(
         (
             client_id,
             journal_template_id,
-            _cashflow_upload_ids_key(source_upload_ids),
+            source_cache_key,
             int(configuration_version or 1),
             int(report_revision or 1),
             period_start,
@@ -2253,6 +3059,7 @@ def store_cashflow_summary_read_model(
             client_id,
             journal_template_id=int(journal_template_id),
             source_upload_ids=source_upload_ids,
+            source_key=source_cache_key,
             configuration_version=configuration_version,
             report_revision=int(report_revision or 1),
             summary=summary,
@@ -2277,9 +3084,10 @@ def load_cashflow_prepared_drilldown(
     category_text = str(category or "").strip()
     if journal_template_id is None or not category_text:
         return None
-    upload_ids, suppressed_count = select_latest_template_upload_ids(client_id, journal_template_id, query_fn)
-    if not upload_ids:
+    source_identity = select_cashflow_report_source_identity(client_id, journal_template_id, query_fn)
+    if not source_identity.ready:
         return None
+    upload_ids = list(source_identity.upload_ids)
     revision = max(int(report_revision or get_cashflow_report_revision(client_id, query_fn=query_fn) or 1), 1)
     query = """
         SELECT period_start, period_key, period_label, category, account_code, account_name,
@@ -2300,7 +3108,7 @@ def load_cashflow_prepared_drilldown(
         (
             client_id,
             journal_template_id,
-            _cashflow_upload_ids_key(upload_ids),
+            source_identity.source_key,
             revision,
             "day",
             period_start,
@@ -2385,7 +3193,9 @@ def load_cashflow_prepared_drilldown(
             "client_id": client_id,
             "journal_template_id": journal_template_id,
             "source_upload_ids": upload_ids,
-            "duplicate_uploads_suppressed": suppressed_count,
+            "cashflow_report_source_key": source_identity.source_key,
+            "cashflow_report_source_mode": source_identity.selection_mode,
+            "duplicate_uploads_suppressed": source_identity.duplicate_uploads_suppressed,
             "cashflow_report_revision": revision,
             "source_row_count": int(frame["line_count"].sum()),
         },
@@ -2415,39 +3225,58 @@ def load_cashflow_sql_source(
         return None
 
     selected_upload_ids: list[int]
-    suppressed_upload_count = 0
+    source_identity: CashflowReportSourceIdentity | None = None
+    source_identity_seconds = 0.0
+    classification_query_seconds = 0.0
     if journal_upload_id is not None:
         selected_upload_ids = [int(journal_upload_id)]
+        source_key = _cashflow_upload_ids_key(selected_upload_ids)
+        source_mode = "explicit_upload"
+        suppressed_upload_count = 0
     elif journal_template_id is not None:
-        selected_upload_ids, suppressed_upload_count = select_latest_template_upload_ids(
-            client_id, journal_template_id, query_fn
-        )
+        source_identity_started = perf_counter()
+        source_identity = select_cashflow_report_source_identity(client_id, journal_template_id, query_fn)
+        source_identity_seconds = perf_counter() - source_identity_started
+        selected_upload_ids = list(source_identity.upload_ids)
+        source_key = source_identity.source_key
+        source_mode = source_identity.selection_mode
+        suppressed_upload_count = source_identity.duplicate_uploads_suppressed
     else:
         return None
     if not selected_upload_ids:
         return None
 
     if journal_template_id is not None and journal_upload_id is None:
-        source_cte = cashflow_report_voucher_selection_cte()
-        source_cte_separator = ","
-        source_join = """
-            JOIN selected_report_vouchers selected_report_voucher
-              ON selected_report_voucher.upload_id = c.upload_id
-             AND selected_report_voucher.voucher_identity = UPPER(REGEXP_REPLACE(COALESCE(c.voucher_id, ''), '\\s+', '', 'g'))
-        """
-        source_filter = ""
-        source_params: list[Any] = [
-            client_id, journal_template_id,
-            client_id, client_id, journal_template_id,
-            client_id, journal_template_id,
-        ]
+        if source_identity and source_identity.selection_mode == "canonical_register":
+            source_cte = canonical_cashflow_report_voucher_selection_cte()
+            source_cte_separator = ","
+            source_join = """
+                JOIN selected_report_vouchers selected_report_voucher
+                  ON selected_report_voucher.upload_id = c.upload_id
+                 AND selected_report_voucher.voucher_identity = UPPER(REGEXP_REPLACE(COALESCE(c.voucher_id, ''), '\\s+', '', 'g'))
+            """
+            source_filter = ""
+            source_params = [client_id, journal_template_id, client_id, journal_template_id]
+        else:
+            source_cte = cashflow_report_voucher_selection_cte()
+            source_cte_separator = ","
+            source_join = """
+                JOIN selected_report_vouchers selected_report_voucher
+                  ON selected_report_voucher.upload_id = c.upload_id
+                 AND selected_report_voucher.voucher_identity = UPPER(REGEXP_REPLACE(COALESCE(c.voucher_id, ''), '\\s+', '', 'g'))
+            """
+            source_filter = ""
+            source_params = [
+                client_id, journal_template_id,
+                client_id, client_id, journal_template_id,
+                client_id, journal_template_id,
+            ]
     else:
         source_cte = "WITH"
         source_cte_separator = ""
         source_join = ""
         source_filter = "AND c.upload_id = ANY(%s)"
         source_params = [selected_upload_ids]
-
     query = f"""
         {source_cte}
         {source_cte_separator} classified_lines AS (
@@ -2527,13 +3356,16 @@ def load_cashflow_sql_source(
         GROUP BY l.upload_id, l.voucher_id, l.date, l.account_code
         ORDER BY l.date, l.voucher_id, l.account_code
     """
+    classification_query_started = perf_counter()
     rows = query_fn(
         query,
         tuple([*source_params, client_id, period_start, period_end]),
     )
+    classification_query_seconds = perf_counter() - classification_query_started
     if not rows or not all("classification_status" in row for row in rows):
         return None
 
+    source_transform_started = perf_counter()
     records = [dict(row) for row in rows]
     journal = pd.DataFrame(records).reindex(columns=[*JOURNAL_COLUMNS, *CASHFLOW_PREPARED_PERIOD_COLUMNS])
     if journal.empty:
@@ -2573,11 +3405,13 @@ def load_cashflow_sql_source(
         "valid_row_count": int(sum(int(row.get("source_line_count") or 0) for row in records)),
         "rejected_row_count": 0,
         "layout_row_count": 0,
-        "duplicate_upload_suppression": journal_template_id is not None and journal_upload_id is None,
+        "duplicate_upload_suppression": source_mode == "latest_voucher",
         "duplicate_uploads_suppressed": suppressed_upload_count,
         "selected_template_upload_ids": selected_upload_ids,
-        "source_upload_selection": "canonical current with filename fallback",
-        "canonical_source_pending_activation": journal_template_id is not None and journal_upload_id is None,
+        "cashflow_report_source_key": source_key,
+        "cashflow_report_source_mode": source_mode,
+        "source_upload_selection": "latest complete voucher occurrence by upload date and ID",
+        "canonical_source_pending_activation": False,
         "date_prefilter_applied": True,
         "source_period_start": str(period_start),
         "source_period_end": str(period_end),
@@ -2585,9 +3419,11 @@ def load_cashflow_sql_source(
         "sql_aggregated": True,
         "raw_json_parsing": False,
         "prepared_periods_requested": str(cashflow_group_by or "").casefold() in {"month", "fortnight"},
+        "cashflow_source_identity_seconds": source_identity_seconds,
+        "cashflow_classification_query_seconds": classification_query_seconds,
+        "cashflow_source_transform_seconds": perf_counter() - source_transform_started,
     }
     return LedgerReportSource(journal, coa, (), metadata, ())
-
 def load_ledger_report_source(
     client_id: int,
     *,
@@ -2603,6 +3439,15 @@ def load_ledger_report_source(
     """Load one explicit Client Data Bank dataset and its client categories."""
 
     if account_category_source == "cashflow":
+        prepared = load_cashflow_prepared_line_source(
+            client_id,
+            journal_template_id=journal_template_id,
+            period_start=period_start,
+            period_end=period_end,
+            query_fn=query_fn,
+        )
+        if prepared is not None:
+            return prepared
         optimized = load_cashflow_sql_source(
             client_id,
             journal_upload_id=journal_upload_id,

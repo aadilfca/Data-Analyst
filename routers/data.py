@@ -19,6 +19,7 @@ import database
 from routers.verification import get_assignment_status_map
 from routers.audit_rules import build_verification_field_policy
 from services.cash_bank_classification import load_cashflow_classification_preview
+from services.ledger_report_source import load_cashflow_prepared_classification_preview
 
 router = APIRouter()
 
@@ -539,19 +540,41 @@ def get_cashflows_classification_preview(
     if configured_template_id is not None and int(configured_template_id) != template_id:
         raise HTTPException(409, "This template is not the Cashflows source template configured in Account Control Centre.")
 
-    result = load_cashflow_classification_preview(
-        client_id,
-        template_id,
-        start_date,
-        end_date,
-        page=page,
-        limit=limit,
-        search=search,
-        classification_type=classification_type,
-        account_code=account_code,
-        category=category,
-        treasury_view=treasury_view,
-    )
+    # Use the active prepared row model when available. It is the same row-level
+    # population that feeds Cashflows reporting, while the legacy classification
+    # query remains a controlled fallback during rollout or recovery.
+    try:
+        result = load_cashflow_prepared_classification_preview(
+            client_id,
+            template_id,
+            start_date,
+            end_date,
+            page=page,
+            limit=limit,
+            search=search,
+            classification_type=classification_type,
+            account_code=account_code,
+            category=category,
+            treasury_view=treasury_view,
+            query_fn=execute_query_pg,
+        )
+    except Exception as error:
+        print(f"[cashflows] prepared Data Bank preview fallback: {error}")
+        result = None
+    if result is None:
+        result = load_cashflow_classification_preview(
+            client_id,
+            template_id,
+            start_date,
+            end_date,
+            page=page,
+            limit=limit,
+            search=search,
+            classification_type=classification_type,
+            account_code=account_code,
+            category=category,
+            treasury_view=treasury_view,
+        )
     result.update({
         "template_id": template_id,
         "template_name": template[0].get("template_name") or "Transaction Report",
