@@ -110,6 +110,10 @@ def test_cashflow_sql_source_filters_dates_joins_vouchers_and_aggregates_lines()
 
     def query(sql, params=None):
         calls.append((sql, params))
+        if "SELECT canonical_occurrence_id, upload_id" in sql:
+            return []
+        if "FROM selected_report_vouchers" in sql:
+            return [{"upload_id": 12, "voucher_identity": "V1", "duplicate_uploads_suppressed": 1}]
         if "SELECT upload_id, file_name, upload_date" in sql:
             return [
                 {"upload_id": 12, "file_name": "month.xlsx", "upload_date": "2026-01-02"},
@@ -160,9 +164,12 @@ def test_cashflow_sql_source_filters_dates_joins_vouchers_and_aggregates_lines()
     assert source.metadata["source_row_count"] == 3
     assert source.journal.loc[0, "account_code"] == "B1"
     assert source.coa.set_index("account_code").loc["EXP", "category"] == "Repairs"
+    assert source.metadata["cashflow_source_identity_seconds"] >= 0
+    assert source.metadata["cashflow_classification_query_seconds"] >= 0
+    assert source.metadata["cashflow_source_transform_seconds"] >= 0
 
-    assert len(calls) == 2
-    source_sql, source_params = calls[1]
+    assert len(calls) == 3
+    source_sql, source_params = calls[-1]
     assert "c.is_current = TRUE" in source_sql
     assert "c.transaction_date >= %s" in source_sql
     assert "c.transaction_date <= %s" in source_sql
@@ -179,6 +186,10 @@ def test_cashflow_sql_source_scopes_duplicate_vouchers_to_their_upload():
 
     def query(sql, params=None):
         calls.append((sql, params))
+        if "SELECT canonical_occurrence_id, upload_id" in sql:
+            return []
+        if "FROM selected_report_vouchers" in sql:
+            return [{"upload_id": 12, "voucher_identity": "V1", "duplicate_uploads_suppressed": 1}]
         if "SELECT upload_id, file_name, upload_date" in sql:
             return [
                 {"upload_id": 12, "file_name": "january.xlsx", "upload_date": "2026-02-01"},
@@ -188,34 +199,19 @@ def test_cashflow_sql_source_scopes_duplicate_vouchers_to_their_upload():
         assert "selected_report_vouchers" in sql
         assert "v.upload_id = l.upload_id" in sql
         assert "v.voucher_id = l.voucher_id" in sql
-        return [
-            {
-                "voucher_id": "V1",
-                "date": "2026-01-05",
-                "account_code": "B1",
-                "account_name": "Bank January",
-                "voucher_detail": "January receipt",
-                "debit": 100,
-                "credit": 0,
-                "treasury_type": "bank",
-                "category": "",
-                "source_line_count": 1,
-                "classification_status": "cash",
-            },
-            {
-                "voucher_id": "V1",
-                "date": "2026-02-05",
-                "account_code": "EXP",
-                "account_name": "Expense February",
-                "voucher_detail": "February payment",
-                "debit": 0,
-                "credit": 100,
-                "treasury_type": None,
-                "category": "Repairs",
-                "source_line_count": 1,
-                "classification_status": "cash",
-            },
-        ]
+        return [{
+            "voucher_id": "V1",
+            "date": "2026-02-05",
+            "account_code": "EXP",
+            "account_name": "Expense February",
+            "voucher_detail": "February payment",
+            "debit": 0,
+            "credit": 100,
+            "treasury_type": None,
+            "category": "Repairs",
+            "source_line_count": 1,
+            "classification_status": "cash",
+        }]
 
     source = load_cashflow_sql_source(
         7,
@@ -226,10 +222,12 @@ def test_cashflow_sql_source_scopes_duplicate_vouchers_to_their_upload():
     )
 
     assert source is not None
-    assert source.journal["voucher_id"].tolist() == ["V1", "V1"]
-    assert source.journal["date"].dt.strftime("%Y-%m-%d").tolist() == ["2026-01-05", "2026-02-05"]
-    assert source.metadata["source_upload_ids"] == [11, 12]
-    assert len(calls) == 2
+    assert source.journal["voucher_id"].tolist() == ["V1"]
+    assert source.journal["date"].dt.strftime("%Y-%m-%d").tolist() == ["2026-02-05"]
+    assert source.metadata["source_upload_ids"] == [12]
+    assert source.metadata["cashflow_report_source_mode"] == "latest_voucher"
+    assert source.metadata["duplicate_uploads_suppressed"] == 1
+    assert len(calls) == 3
 
 
 def test_cashflow_sql_source_explicit_upload_uses_upload_identity_filter():
@@ -268,6 +266,13 @@ def test_cashflow_sql_source_explicit_upload_uses_upload_identity_filter():
     assert len(calls) == 1
 def test_cashflow_sql_source_preserves_each_transaction_date_for_bucketing():
     def query(sql, params=None):
+        if "SELECT canonical_occurrence_id, upload_id" in sql:
+            return []
+        if "FROM selected_report_vouchers" in sql:
+            return [
+                {"upload_id": 12, "voucher_identity": "V1", "duplicate_uploads_suppressed": 0},
+                {"upload_id": 12, "voucher_identity": "V2", "duplicate_uploads_suppressed": 0},
+            ]
         if "SELECT upload_id, file_name, upload_date" in sql:
             return [{"upload_id": 12, "file_name": "period.xlsx", "upload_date": "2026-02-01"}]
         return [
@@ -312,6 +317,10 @@ def test_cashflow_read_models_require_current_report_revision_when_requested():
     calls = []
 
     def query(sql, params=None):
+        if "SELECT canonical_occurrence_id, upload_id" in sql:
+            return []
+        if "FROM selected_report_vouchers" in sql:
+            return [{"upload_id": 12, "voucher_identity": "V1", "duplicate_uploads_suppressed": 0}]
         if "SELECT upload_id, file_name, upload_date" in sql:
             return [{"upload_id": 12, "file_name": "period.xlsx", "upload_date": "2026-02-01"}]
         if "MIN(c.transaction_date)" in sql:
@@ -348,6 +357,32 @@ def test_cashflow_read_models_require_current_report_revision_when_requested():
 
 
 
+def test_latest_voucher_source_key_scopes_read_model_lookup_without_filename_selection():
+    calls = []
+
+    def query(sql, params=None):
+        if "SELECT canonical_occurrence_id, upload_id" in sql:
+            return []
+        if "FROM selected_report_vouchers" in sql:
+            return [{"upload_id": 12, "voucher_identity": "V1", "duplicate_uploads_suppressed": 0}]
+        if "FROM cash_bank_summary_read_models" in sql:
+            calls.append((sql, params))
+            assert params[2].startswith("latest-voucher-v1:")
+            return []
+        raise AssertionError(f"Unexpected source query: {sql}")
+
+    assert load_cashflow_summary_read_model(
+        7,
+        journal_template_id=9,
+        period_start="2026-01-01",
+        period_end="2026-01-31",
+        group_by="month",
+        receipt_presentation="net",
+        report_revision=12,
+        query_fn=query,
+    ) is None
+    assert len(calls) == 1
+
 def test_cashflow_snapshot_persists_targeted_projection_rows_when_requested():
     writes = []
     summary = {
@@ -370,6 +405,7 @@ def test_cashflow_snapshot_persists_targeted_projection_rows_when_requested():
         source_upload_ids=[21],
         configuration_version=3,
         report_revision=4,
+        source_key="canonical-v1",
         period_start="2026-01-05",
         period_end="2026-01-05",
         group_by="day",
@@ -381,6 +417,8 @@ def test_cashflow_snapshot_persists_targeted_projection_rows_when_requested():
     assert len(writes) == 2
     assert "cash_bank_summary_read_models" in writes[0][0]
     assert "cashflow_ledger_rollup_read_models" in writes[1][0]
+    assert writes[0][1][2] == "canonical-v1"
+    assert writes[1][1][2] == "canonical-v1"
     assert len(writes[1][1]) == 17
 
 
@@ -406,6 +444,7 @@ def test_cashflow_snapshot_deduplicates_projection_conflict_keys_before_bulk_ups
         source_upload_ids=[21],
         configuration_version=3,
         report_revision=4,
+        source_key="canonical-v1",
         period_start="2026-01-05",
         period_end="2026-01-05",
         group_by="day",
@@ -425,6 +464,10 @@ def test_cashflow_prepared_drilldown_loader_targets_one_category_and_reaggregate
     calls = []
 
     def query(sql, params=None):
+        if "SELECT canonical_occurrence_id, upload_id" in sql:
+            return []
+        if "FROM selected_report_vouchers" in sql:
+            return [{"upload_id": 21, "voucher_identity": "V1", "duplicate_uploads_suppressed": 0}]
         if "SELECT upload_id, file_name, upload_date" in sql:
             return [{"upload_id": 21, "file_name": "period.xlsx", "upload_date": "2026-03-01"}]
         if "FROM cashflow_ledger_rollup_read_models" in sql:

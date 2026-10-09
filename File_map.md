@@ -9,7 +9,7 @@ This document lists all source files in the project, grouped by directory, with 
 | `CHANGELOG_ARCHIVE.md` | Detailed forensic write-ups of past phases (verification steps, test output) — only consulted when a phase touches an already-logged file/pattern. |
 | `KNOWN_ISSUES.md` | Findings log for the Code Health Review protocol defined in `CLAUDE.md` — one row per finding (`Date \| Module \| Finding \| Severity`, severity being Fix / Feature / Defer). Append-only; kept out of `CLAUDE.md` because it grows on every review, same reasoning as `CHANGELOG_ARCHIVE.md`. Starts empty. |
 | `CLINE.md` | Rules file for a separate AI tool, Cline (FIND/REPLACE code format, file-access/communication style) — not read by Claude Code. Appears to predate the current CLAUDE.md-driven workflow: it tells the agent to auto-determine affected files without asking, which conflicts with this project's current two-hard-stops rule in CLAUDE.md's Workflow rules. Kept only for whichever sessions still use Cline directly. |
-| `database.py` | SQLite/PostgreSQL schema, migrations, account-set foundation, audit logging, pooled Postgres helpers, and additive Local Vendor discovery indexes. |
+| `database.py` | SQLite/PostgreSQL schema, migrations, audit logging, pooled Postgres helpers, and prepared Cashflows read-model tables. |
 | `.env.example` | Committed template documenting the `DATABASE_URL` (Supabase connection string) and optional `PG_POOL_MIN`/`PG_POOL_MAX` env vars the Postgres connection layer reads (defaults 3 / 15). Copy to `.env` (git-ignored) and fill in real values. |
 | `main.py` | FastAPI entry point: static mount, domain-router registration, global error logging, and direct Uvicorn launch. |
 | `storage_cleanup.py` | Command-line entry point for Storage Cleanup preview; apply requires an explicit fresh hash and exact confirmation phrase. VACUUM/compaction remains deferred. |
@@ -26,21 +26,19 @@ This document lists all source files in the project, grouped by directory, with 
 | `AUDIT_RULES_TRACEABILITY_INVESTIGATION.md` | Read-only logic trace (2026-09-20) of whether every Category rule type (Documents, Cross-checks, Approval Required, Signature Specimens, Voucher-level Checks) reaches `compute_and_persist_cleared_status()`'s six gates and is reflected in Verification. Carries the rule-type → defined → consumed → shown → gap table, plus findings grouped as defined-but-unread, hardcoded-with-no-rule, engine/UI disagreements, and silently-dropped rules. No code changes; findings mirrored into `KNOWN_ISSUES.md`. |
 | `deactivate_pw_test_voucher_checks.py` | Standalone, manually-run script (confirmed fix, 2026-08-24) — deactivates (`is_active = FALSE`, never deletes) 6 leftover Playwright test rows in `audit_rule_voucher_checks` (ids 16-21) that leaked into real client data (Leather Crop). Exports the 13 affected `voucher_check_status` rows to a durable CSV before deactivating, re-checks `compute_and_persist_cleared_status()` on the affected vouchers and flags any Cleared/Query flip, and diagnoses (read-only, no live mutating call) whether the leftover rows caused the `verify_voucher_checks` 400 on CRV-0126-104 (confirmed they did not — that voucher's real checks were also untouched). Not wired into any API endpoint. |
 | `pw_test_voucher_checks_audit_export_2026-08-24.csv` | Durable audit-trail export (git-tracked) of the 13 `voucher_check_status` rows against Leather Crop that referenced the deactivated PW-test check ids, captured immediately before deactivation by `deactivate_pw_test_voucher_checks.py`. |
----
 ## Services (`services/`)
 | File | Purpose |
 |------|---------|
 | `services/ledger_group_summary.py` | Pure pandas engine that selects complete vouchers by account code, validates balancing, builds category/month pivots, aggregates central Financial Statement categories, surfaces transfers and unmapped categories, and optionally derives reconciliation proofs. |
 | `services/ledger_report_source.py` | Read-only adapter that normalizes Client Data Bank journals, report categories, and complete all-upload voucher inputs for canonical maintenance. |
-| `services/cashflow_voucher_canonicalization.py` | Pure, audit-preserving Cashflows voucher identity/fingerprint resolver used by controlled historical register maintenance. |
+| `services/cashflow_voucher_canonicalization.py`, `services/cashflow_voucher_occurrence_store.py`, `services/cashflow_preparation.py` | Audit-preserving voucher decisions, occurrence persistence, and full/incremental upload, category, and treasury revisioned prepared Cashflows lines/rollups. |
 | `services/reconciliation_balance_source.py` | Normalizes stored opening/month-end balance inputs and reports missing, duplicate, invalid, or out-of-period reconciliation evidence. |
 | `services/reconciliation_xlsx.py` | OpenPyXL exporter for professional Bank/Cash monthly summaries, schedules, review controls, cross-checks, and reconciliation proofs. |
 | `services/storage_cleanup.py` | PostgreSQL storage preview plus one-transaction, protected-data cleanup for approved logs, retired unlinked rows, deleted upload metadata, stale presence, and expired sessions. |
-| `services/cash_bank_classification.py` | Versioned Cash/Bank derived transaction-line builder and controlled SQLite/PostgreSQL backfill service; never mutates raw Client Data. |
+| `services/cash_bank_classification.py` | Versioned Cash/Bank derived transaction-line builder, affected-account reporting, and controlled SQLite/PostgreSQL backfill service; never mutates raw Client Data. |
 
 ## Operations Scripts (`scripts/`)
-
-| `scripts/backfill_cash_bank_transaction_classifications.py`, `scripts/backfill_cashflow_voucher_occurrences.py` | Explicit operator-run backfills; the canonical-voucher resolver defaults to dry-run and requires `--apply`, without changing raw data or reports. |
+| `scripts/backfill_cash_bank_transaction_classifications.py`, `scripts/backfill_cashflow_voucher_occurrences.py`, `scripts/backfill_cashflow_prepared_read_model.py` | Explicit operator-run backfills; default dry-run and `--apply` for writes. |
 ## Routers (`routers/`)
 | File | Purpose |
 |------|---------|
@@ -49,7 +47,7 @@ This document lists all source files in the project, grouped by directory, with 
 | `dashboard.py` | Root/health endpoints and the main dashboard's stats (total uploads, pending verifications, total records, last upload). |
 | `data.py` | Client Data Bank backend: dataset listing, paginated row preview (`get_preview_rows` — search/amount/Sunday/data-quality filters, per-row voucher-line assignment flags, document grouping with subtotal rows), per-upload row listing, dataset/template soft-delete + restore, availability checklist, the per-day coverage calendar (`get_availability_calendar` — Sundays + firm-wide holidays), and the row revision history endpoint. Runs on Postgres (Supabase migration, Phase 5 of 8). |
 | `error_log.py` | CRUD and stats for the `error_log` table populated by the global exception handler — list with filters, get one, mark resolved, delete, stats summary. |
-| `import_export.py` | The upload/import flow: raw `.xlsx`/`.xls` upload, auto-mapping Excel headers to template columns, flexible date-format parsing (`parse_date_flexible`/`classify_date_cell`), row exclusion and force-include overrides, row-level rejection on blank Document ID/Amount/Date (`get_critical_field_columns`/`find_critical_blank_reasons`/`compute_data_quality_flag`), duplicate checking, validate-only, and the main validate+import endpoint with change detection (`compare_transactions` — groups by `document_group_id`, classifies unchanged/changed/new/missing). Also serves the downloadable template Excel and the Save Column Mapping feature (save/load/clear a client+template's column mapping). Runs on Postgres (Supabase migration, Phase 5 of 8) — batched writes via `execute_batch_insert_with_ids_pg()`, `row_data` written via `Json(...)`. |
+| `import_export.py` | The upload/import flow: raw `.xlsx`/`.xls` upload, auto-mapping Excel headers to template columns, flexible date-format parsing (`parse_date_flexible`/`classify_date_cell`), row exclusion and force-include overrides, row-level rejection on blank Document ID/Amount/Date (`get_critical_field_columns`/`find_critical_blank_reasons`/`compute_data_quality_flag`), duplicate checking, validate-only, and the main validate+import endpoint with change detection (`compare_transactions` — groups by `document_group_id`, classifies unchanged/changed/new/missing) and incremental Cashflows preparation handoff. Also serves the downloadable template Excel and the Save Column Mapping feature (save/load/clear a client+template's column mapping). Runs on Postgres (Supabase migration, Phase 5 of 8) — batched writes via `execute_batch_insert_with_ids_pg()`, `row_data` written via `Json(...)`. |
 | `settings.py` | Get/update global app settings (date format, amount grouping, decimal precision, default date range, materiality threshold) stored as key-value pairs, plus full CRUD for the firm-wide Holiday list (`GET/POST /api/settings/holidays`, `PUT/DELETE /api/settings/holidays/{id}` — date/label/repeats-yearly, registered above the generic `/{key}` catch-all route). |
 | `templates.py` | Master column CRUD (case-insensitive duplicate check, close-match advisory endpoint), template CRUD (with pivot-table column mappings, `sort_order`, quick-add-column support), template reordering, `GET /api/templates/{id}/columns` (cached column-list-by-template lookup, reused by the Audit Rules Cross-check matrix editor), and backup/export + restore of the entire setup (now also includes `uploaded_files`, a fix that surfaced during the Postgres cutover — see below). Also hosts the Rate-derivation requirement's `rate_source` field (Phase 5 of 9) — `imported`/`derived`, restricted server-side (`resolve_rate_source()`) to the Purchase Order/Store Receiving/Vendor Bill templates only; any other template's `rate_source` always stores as NULL regardless of payload. Runs on Postgres (Supabase migration, Phase 5 of 8). |
 | `verification.py` | Cash/Bank and all other Verification workstreams; every workstream requires Account Control Centre account assignments, with no prefix or legacy Account Set fallback. |
@@ -58,7 +56,6 @@ This document lists all source files in the project, grouped by directory, with 
 | `audit_rules.py` | Audit Rules module backend: full CRUD (soft-delete/restore) for the three reusable rule-building entities — Documents (with auth roles, cross-check-eligible fields, and a `template_id` link to the Data Bank template their evidence is searched in), Cross-checks (rebuilt as a document×field matrix — label-less positional field rows + per-(row×Document) template-column cells; endpoints `GET .../{id}/matrix`, `POST .../{id}/fields`, `DELETE .../cross-check-fields/{id}`, `PUT .../{id}/field-order`, `PUT .../cross-check-fields/{id}/cells/{doc_id}`, `PUT .../{id}/documents`, `PUT .../{id}/meta`; the legacy flat `compare_field` model + its create/update endpoint stay only until the verification engine is migrated), and Categories (bundling Documents + Cross-checks, with a locked containment rule). Categories are what `verification.py`'s Transaction Type / audit guidance now sources from. Also hosts the Validation Rules module's backend (Phase 2 of 7): per-document `approval_required` toggle within a Category (`PUT /api/audit-rules/categories/{id}/documents/{doc_id}/approval`), automatic `matrix_version` bump (`bump_category_matrix_version()`, fired on document-membership change or an actual approval-flag change), and CRUD for `signature_specimens` (client+document+role → expected signatory name) — now soft-delete/restore like the other three entities (Soft-delete conversion, Phase 1 of 4 done): `is_active` column, `DELETE .../{id}` deactivates, `include_inactive` on the list GET, `POST .../{id}/restore`, plus a separate low-visibility `DELETE .../{id}/hard-delete` for genuine data-entry corrections only. Phase 2 of 4 done: the old DB-level `UNIQUE(client_id, document_id, role_name)` constraint is gone (table rebuild in `database.py`), replaced by app-level `validate_no_duplicate_active_signatory()` — blocks only a duplicate ACTIVE entry for the same person (name-matched); multiple different active people per role are allowed. |
 | `trial_balance.py` | Trial Balance import, hierarchy classification, history, category assignment, and shared latest parsed-upload lookup. |
 | `account_control_center.py` | Simplified client/account mapping, Financial Statement/Notes category CRUD, field-scoped assignments, and legacy Account Set drafts, versioning, resolution, preview, and publication APIs. |
----
 ## Static Files (`static/`)
 ### HTML Pages
 | File | Purpose |
@@ -85,9 +82,7 @@ This document lists all source files in the project, grouped by directory, with 
 | `template-viewer.html` | Shared, reusable template-data viewer, parameterised by `?template=N` — date range + search toolbar over one template's Data Bank rows, reached from Verification's Client Data Links card strip. |
 | `audit_workbook.html` | Audit Workbook (5-phase requirement, complete) — read-only voucher-level list view of a session's verification results (Voucher No./Date/Description/Amount/Status), distinct from the existing Cashbook selection screen, parameterised by `?session=<id>` (same pattern as `template-viewer.html`'s `?template=N`). Fetch/render/filter logic lives in `audit_workbook.js`; status filter chips (All/Cleared/Query/Pending) are functional and the running-total footer reflects whatever's currently filtered/visible; a row click jumps straight to that voucher inside Verification. Peer nav bar (`#awVerificationBtn` + a static "you are here" Audit Workbook indicator) mirrors Verification's own `#cashbookBar` button pair. |
 | `reconciliation.html`, `reconciliation.js` | Client-context Reports and setup: exact-code groups, Ledger Summary category definitions/assignments, monthly balance entry, diagnostics, preview, and download. |
----
 ### JavaScript Files
-
 | File | Purpose |
 |------|---------|
 | `login.js` | Login page submit handler — POSTs `{username, password}` to `/api/auth/login`, redirects to `client_select.html` on success, shows a single generic error message on 401/403 (no branching by status/message text). No `client_context.js` dependency — defines its own fetch, no shared `API_BASE`. Submit button loading feedback (Shared Loading UI, Phase 2 of 6) uses `window.LoadingUI.showSpinner()`/`hideSpinner()` (`loading_ui.js`) instead of a bare `disabled = true/false` toggle. |
@@ -116,15 +111,11 @@ This document lists all source files in the project, grouped by directory, with 
 | `loading_ui.js` | Shared loading UI utility (Phase 1 of 6) — `window.LoadingUI.showSkeleton`/`hideSkeleton`, `showSpinner`/`hideSpinner` (button/action, message escalates to "still working…" after 3s), `showFieldLoading`/`hideFieldLoading` (inline dropdown/field spinner). Consumers: `login.html`/`login.js` (Phase 2, spinner), `databank.html`/`databank.js` (Phase 3, skeleton on the preview table). Remaining page-by-page rollout is later phases. |
 | `api_utils.js` | Shared `apiFetch()` utility (Fast Data Handling, all 13 phases done) — `window.ApiUtils.apiFetch(url, options, config)`, same call contract as native `fetch()`. Optional `config.debounce`/`debounceKey` (default 400ms, supersedes prior pending call with a `debounced: true` rejection); single automatic retry after a flat 1.5s on a GET whose first attempt threw or returned 5xx (never on 4xx or non-GET methods), showing a self-injected "Retrying..." toast (`#apiRetryToast`) for the wait. Self-installing like `loading_ui.js`/`procedure_modal.js`. Wired into every GET call site in `databank.js`/`script.js`/`audit_rules.js`/`verification.js`. |
 
----
-
 ### CSS
 
 | File | Purpose |
 |------|---------|
 | `style.css` | All application styling — navbar (incl. quick-navigation menu, plus the separate `.firm-navbar`/`.firm-nav-brand`/`.firm-nav-area` firm-level header and its `.firm-tabs`/`.firm-tab` Admin tab strip), module grid, tables, modals (each modal's `.modal-content`/`.modal-header` scoped per-id, not shared base classes), the Upload page's grids/popovers, the Data Bank's datasets table/calendar/preview, and the Verification module's voucher-line grid, Supporting-Document modal, and popovers. |
-
----
 
 ## Tests (`tests/`)
 
@@ -142,14 +133,12 @@ This document lists all source files in the project, grouped by directory, with 
 | `test_templates.py` | Playwright regression tests for Edit Template modal closure and draft-column persistence before explicit Save Template submission. |
 | `test_ledger_group_summary.py`, `test_ledger_report_source.py` | Unit tests for canonical voucher/category summaries, canonical source selection, transfers, proofs, source normalization, diagnostics, and dataset selection. |
 | `test_cashflows_performance.py` | Verifies SQL-first Cashflows date filtering, voucher joins, derived-layer aggregation, and raw-JSON-free source preparation. |
-| `test_cashflow_voucher_canonicalization.py`, `test_cashflow_voucher_occurrence_backfill.py` | Verifies fingerprints, audit-safe decisions, dry-run/apply behavior, canonical links, raw-data preservation, and re-run safety. |
-| `test_cashflows_classification_preview.py` | Verifies the read-only derived Cashflows classification preview, filtering, paging, and classification fields. |
-| `test_cashflows_direct_window_ui.py` | Static regression checks for the inline classified-transaction window and lazy Cashflows controls. |
+| `test_cashflow_voucher_canonicalization.py`, `test_cashflow_voucher_occurrence_backfill.py`, `test_cashflow_prepared_schema.py`, `test_cashflow_preparation.py` | Verifies voucher decisions, prepared-schema integrity, eligibility, category mapping, incremental replacement/no-op behavior, raw-data preservation, and rerun safety. |
+| `test_cashflows_classification_preview.py`, `test_cashflows_direct_window_ui.py` | Verifies the derived Cashflows preview and inline classified-transaction controls. |
 | `test_reconciliation.py`, `test_reconciliation_balance_source.py`, `test_reconciliation_reports.py` | Test account-group, balance-input, report-control, Financial Statement preview, preview/download, exact-code validation, transactional replacement, normalization, and completeness behavior. |
 | `test_reconciliation_xlsx.py` | Tests report workbook structure, formatting, typed values, missing-balance handling, and local Bank/Cash golden movement matching. |
 | `test_pg_pool_retry.py` | Unit tests for `database.py`'s stale-pooled-connection recovery — fake pool/connection/cursor (no live Postgres): `_run_pooled_pg` retries once and succeeds, propagates a non-stale error untouched, gives up after one retry; `_is_stale_pg_connection_error` type+message match; `_getconn_pg_checked` skips a closed connection; the recovery log line fires. |
 
----
 ## Notes
 - **Static files** are served under `/static/` and rely on `client_context.js` for global client selection and navbar behavior on every page.
 - **Routers** are mounted in `main.py`; each handles one domain (clients, verification, data, audit_rules, trial_balance, etc.).
@@ -157,7 +146,5 @@ This document lists all source files in the project, grouped by directory, with 
 - **Uploads** are stored in the `uploads/` directory (created at runtime).
 - **Change detection** uses `document_group_id`/`change_detection_status` on `client_data`; document grouping everywhere in the app assumes the first template column (lowest `sort_order`) is a unique document key.
 - **Verification routing** uses Account Control Centre account assignments for every workstream. Voucher-prefix rows remain historical compatibility data only; Cash/Bank Payment vs Receipt uses the selected Treasury account leg.
-
----
 
 *This file map is maintained alongside the project — updated whenever a file is added, removed, or repurposed. Full build history and verification detail live in `CHANGELOG_ARCHIVE.md`, not here.*

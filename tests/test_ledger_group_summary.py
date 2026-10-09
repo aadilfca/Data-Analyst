@@ -519,6 +519,58 @@ def test_customer_payment_customer_totals_group_and_reconcile_main_receipts():
     assert result["customer_payment_reconciliation"]["status"] == "Matched"
 
 
+def test_customer_payment_period_totals_follow_main_cashflow_periods():
+    journal = pd.DataFrame(
+        [
+            ["JAN", "2026-01-05", "BANK", "Export bank", "January receipt", 97, 0],
+            ["JAN", "2026-01-05", "CUST", "Customer", "January receipt", 0, 100],
+            ["JAN", "2026-01-05", "CHARGE", "Bank charge", "January receipt", 1, 0],
+            ["JAN", "2026-01-05", "WHT", "Withholding tax", "January receipt", 2, 0],
+            ["FEB", "2026-02-05", "BANK", "Export bank", "February receipt", 50, 0],
+            ["FEB", "2026-02-05", "CUST", "Customer", "February receipt", 0, 50],
+        ],
+        columns=["voucher_id", "date", "account_code", "account_name", "voucher_detail", "debit", "credit"],
+    )
+    coa = pd.DataFrame(
+        [
+            ["BANK", "Export bank", "Bank", ""],
+            ["CUST", "Customer", "Receivable", "Received from customers"],
+            ["CHARGE", "Bank charge", "Expense", "Bank charges"],
+            ["WHT", "Withholding tax", "Tax", "Withholding tax"],
+        ],
+        columns=["account_code", "account_title", "account_type", "category"],
+    )
+
+    result = build_cashflow_summary(
+        journal,
+        coa,
+        cash_account_codes=[],
+        bank_account_codes=["BANK"],
+        period_start="2026-01-01",
+        period_end="2026-03-31",
+        group_by="month",
+        cashflow_role_categories={
+            "customer_receipt": ["Received from customers"],
+            "bank_charge": ["Bank charges"],
+            "withholding_tax": ["Withholding tax"],
+            "other_deduction": [],
+        },
+    )
+
+    totals = result["customer_payment_period_totals"].set_index("period_key")
+    assert totals.index.tolist() == ["2026-01", "2026-02", "2026-03"]
+    assert totals.loc["2026-01", "customer_gross_amount"] == 100
+    assert totals.loc["2026-01", "bank_charges"] == 1
+    assert totals.loc["2026-01", "withholding_tax"] == 2
+    assert totals.loc["2026-01", "statement_eligible_actual_settlement"] == 97
+    assert totals.loc["2026-01", "main_received_from_customers_total"] == 97
+    assert totals.loc["2026-01", "difference"] == 0
+    assert totals.loc["2026-01", "status"] == "Matched"
+    assert totals.loc["2026-02", "statement_eligible_actual_settlement"] == 50
+    assert totals.loc["2026-02", "main_received_from_customers_total"] == 50
+    assert totals.loc["2026-03", "voucher_count"] == 0
+    assert totals.loc["2026-03", "status"] == "Matched"
+
 def test_customer_payment_ordinary_bank_charges_split_from_general_charges():
     journal = pd.DataFrame(
         [

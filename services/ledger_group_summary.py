@@ -485,6 +485,31 @@ def _empty_cashflow_customer_payment_customer_totals() -> pd.DataFrame:
     )
 
 
+def _empty_cashflow_customer_payment_period_totals() -> pd.DataFrame:
+    return pd.DataFrame(
+        columns=[
+            "period_key",
+            "period_label",
+            "period_start",
+            "period_end",
+            "voucher_count",
+            "matched_voucher_count",
+            "review_voucher_count",
+            "customer_gross_amount",
+            "bank_charges",
+            "withholding_tax",
+            "other_deductions",
+            "deductions_total",
+            "technical_bank_offset",
+            "expected_net_settlement",
+            "net_bank_settlement",
+            "statement_eligible_actual_settlement",
+            "main_received_from_customers_total",
+            "difference",
+            "status",
+        ]
+    )
+
 def _build_cashflow_customer_payment_customer_totals(
     details: pd.DataFrame,
 ) -> pd.DataFrame:
@@ -563,6 +588,80 @@ def _build_cashflow_customer_payment_customer_totals(
         ]
     ].sort_values(["customer_account_name", "customer_account_code"]).reset_index(drop=True)
 
+
+def _build_cashflow_customer_payment_period_totals(
+    details: pd.DataFrame,
+    periods: Sequence[Mapping[str, str]],
+    category_totals: pd.DataFrame,
+    receipt_categories: Sequence[str],
+    *,
+    tolerance: float,
+) -> pd.DataFrame:
+    """Aggregate customer-payment receipts by the main Cashflows reporting periods."""
+    if not periods:
+        return _empty_cashflow_customer_payment_period_totals()
+    frame = details.copy() if details is not None else pd.DataFrame()
+    for column in ("period_key", "status"):
+        if column not in frame:
+            frame[column] = ""
+        frame[column] = frame[column].fillna("").astype(str).str.strip()
+    numeric_columns = (
+        "customer_gross_amount",
+        "bank_charges",
+        "withholding_tax",
+        "other_deductions",
+        "deductions_total",
+        "technical_bank_offset",
+        "expected_net_settlement",
+        "net_bank_settlement",
+    )
+    for column in numeric_columns:
+        if column not in frame:
+            frame[column] = 0.0
+        frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0.0)
+    if "voucher_id" not in frame:
+        frame["voucher_id"] = ""
+    frame["_matched"] = frame["status"].eq("Matched")
+    receipt_category_names = {
+        str(value).strip().casefold()
+        for value in receipt_categories
+        if str(value).strip()
+    }
+    rows: list[dict[str, Any]] = []
+    for period in periods:
+        period_key = str(period.get("key") or "")
+        selected = frame.loc[frame["period_key"].eq(period_key)]
+        voucher_count = int(selected["voucher_id"].nunique()) if not selected.empty else 0
+        matched_voucher_count = int(selected["_matched"].sum()) if not selected.empty else 0
+        eligible_settlement = float(selected.loc[selected["_matched"], "net_bank_settlement"].sum()) if not selected.empty else 0.0
+        main_total = 0.0
+        if isinstance(category_totals, pd.DataFrame) and not category_totals.empty and period_key in category_totals:
+            for category in category_totals.index:
+                if str(category).strip().casefold() in receipt_category_names:
+                    main_total += float(category_totals.loc[category].get(period_key, 0.0) or 0.0)
+        difference = eligible_settlement - main_total
+        rows.append({
+            "period_key": period_key,
+            "period_label": str(period.get("label") or period_key),
+            "period_start": str(period.get("start") or ""),
+            "period_end": str(period.get("end") or ""),
+            "voucher_count": voucher_count,
+            "matched_voucher_count": matched_voucher_count,
+            "review_voucher_count": voucher_count - matched_voucher_count,
+            "customer_gross_amount": float(selected["customer_gross_amount"].sum()) if not selected.empty else 0.0,
+            "bank_charges": float(selected["bank_charges"].sum()) if not selected.empty else 0.0,
+            "withholding_tax": float(selected["withholding_tax"].sum()) if not selected.empty else 0.0,
+            "other_deductions": float(selected["other_deductions"].sum()) if not selected.empty else 0.0,
+            "deductions_total": float(selected["deductions_total"].sum()) if not selected.empty else 0.0,
+            "technical_bank_offset": float(selected["technical_bank_offset"].sum()) if not selected.empty else 0.0,
+            "expected_net_settlement": float(selected["expected_net_settlement"].sum()) if not selected.empty else 0.0,
+            "net_bank_settlement": float(selected["net_bank_settlement"].sum()) if not selected.empty else 0.0,
+            "statement_eligible_actual_settlement": eligible_settlement,
+            "main_received_from_customers_total": main_total,
+            "difference": difference,
+            "status": "Matched" if voucher_count == matched_voucher_count and abs(difference) <= tolerance else "Review required",
+        })
+    return pd.DataFrame(rows, columns=_empty_cashflow_customer_payment_period_totals().columns)
 
 def _cashflow_customer_receipt_categories(
     cashflow_role_categories: Mapping[str, Sequence[Any]] | None,
@@ -1628,6 +1727,13 @@ def build_cashflow_summary(
         receipt_categories,
         tolerance=tolerance,
     )
+    customer_payment_period_totals = _build_cashflow_customer_payment_period_totals(
+        customer_payment_details,
+        periods,
+        category_totals,
+        receipt_categories,
+        tolerance=tolerance,
+    )
     return {
         'cashflow_ledger_rollups': rollups,
         'cashflow_drilldown_controls': drilldown_controls,
@@ -1643,6 +1749,7 @@ def build_cashflow_summary(
         "transfer_reconciliation": transfer_reconciliation,
         "customer_payment_details": customer_payment_details,
         "customer_payment_customer_totals": customer_payment_customer_totals,
+        "customer_payment_period_totals": customer_payment_period_totals,
         "customer_payment_reconciliation": customer_payment_reconciliation,
         "customer_payment_receipt_categories": sorted(receipt_categories),
         "deduction_details": deductions,

@@ -10292,6 +10292,10 @@ body.cashflows-processing-open { overflow: hidden; }
 .cashflows-detail-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }.cashflows-detail-grid > .cashflows-report-section { width: 100%; box-sizing: border-box; }
 .cashflows-detail-search-toolbar { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; }
 .cashflows-detail-search-input { flex: 1 1 520px; min-width: 280px; box-sizing: border-box; padding: 9px 11px; border: 1px solid #cbd5e1; border-radius: 7px; background: #fff; font: inherit; }
+.cashflows-customer-payments-toolbar { flex-wrap: nowrap; }
+.cashflows-customer-payments-toolbar #cashflowsCustomerPaymentsSearch { flex: 1 1 auto; min-width: 240px; }
+.cashflows-customer-payments-toolbar #cashflowsCustomerPaymentsCustomerSearch { flex: 0 1 185px; min-width: 145px; max-width: 210px; }
+.cashflows-customer-payments-toolbar .cashflows-secondary { flex: 0 0 auto; padding-left: 10px; padding-right: 10px; white-space: nowrap; }
 .cashflows-detail-search-input:focus { border-color: #1769aa; outline: 2px solid rgba(23, 105, 170, .14); outline-offset: 1px; }
 .cashflows-table-wrap { overflow-x: auto; overflow-y: visible; }.cashflows-table { width: 100%; border-collapse: collapse; font-size: 12px; }.cashflows-table th, .cashflows-table td { padding: 9px 10px; border-bottom: 1px solid #e6edf2; white-space: nowrap; }.cashflows-table th { background: #f4f8fa; color: #526675; font-size: 11px; text-transform: uppercase; }.cashflows-table th.cashflows-table-text, .cashflows-table td.cashflows-table-text { text-align: left; }.cashflows-table th.cashflows-table-number, .cashflows-table td.cashflows-table-number { text-align: right; }.cashflows-table tbody tr:hover { background: #f8fbfd; }.cashflows-empty { color: #71808c; text-align: center !important; }
 .cashflows-customer-payments-table { min-width: 1750px; }
@@ -10302,6 +10306,12 @@ body.cashflows-processing-open { overflow: hidden; }
 .cashflows-search-clear { position: absolute; top: 50%; right: 4px; width: 28px; height: 28px; transform: translateY(-50%); border: 0; border-radius: 5px; background: transparent; color: #526675; font-size: 20px; line-height: 1; cursor: pointer; }
 .cashflows-search-clear:hover, .cashflows-search-clear:focus { background: #eef5f8; outline: none; }
 @media (max-width: 760px) { .cashflows-detail-grid { grid-template-columns: 1fr; display: grid; } }
+
+@media (max-width: 760px) {
+    .cashflows-customer-payments-toolbar { flex-wrap: wrap; }
+    .cashflows-customer-payments-toolbar #cashflowsCustomerPaymentsSearch,
+    .cashflows-customer-payments-toolbar #cashflowsCustomerPaymentsCustomerSearch { flex: 1 1 100%; max-width: none; }
+}
 
 .cashflows-lazy-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 .cashflows-lazy-actions[hidden], .cashflows-report-section[hidden] { display: none; }

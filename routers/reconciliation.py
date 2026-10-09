@@ -11,7 +11,7 @@ import re
 from time import perf_counter
 from typing import Any, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 import pandas as pd
 from pydantic import BaseModel, Field
@@ -31,11 +31,17 @@ from services.ledger_report_source import (
     project_cashflow_treasury_view,
     load_cashflow_summary_read_model,
     load_cashflow_prepared_summary,
+    load_cashflow_prepared_rollup_summary,
     load_cashflow_prepared_drilldown,
-    get_cashflow_report_revision,
+    select_cashflow_report_source_identity,
     invalidate_cashflow_summary_read_models,
     load_ledger_report_source,
     store_cashflow_summary_read_model,
+)
+from services.cashflow_preparation import (
+    get_cashflow_preparation_status,
+    retry_cashflow_preparation_job,
+    run_cashflow_preparation_job_postgres,
 )
 from services.reconciliation_balance_source import (
     load_reconciliation_balance_source,
@@ -1325,6 +1331,7 @@ def _cashflow_preview(
             "transfer_reconciliation": None,
             "customer_payment_details": [],
             "customer_payment_customer_totals": [],
+            "customer_payment_period_totals": [],
             "customer_payment_customer_options": [],
             "customer_payment_reconciliation": {},
             "customer_payment_selected_account_code": "",
@@ -1341,6 +1348,7 @@ def _cashflow_preview(
     loaded = {"transfers", "customer_payments", "deductions", "review"} if detail_sections is None else set(detail_sections)
     review = summary.get("categories_needing_review")
     customer_rows = _frame_records(summary.get("customer_payment_customer_totals")) if "customer_payments" in loaded else []
+    customer_period_rows = _frame_records(summary.get("customer_payment_period_totals")) if "customer_payments" in loaded else []
     customer_options = []
     seen_customer_codes: set[str] = set()
     for row in customer_rows:
@@ -1379,6 +1387,7 @@ def _cashflow_preview(
         "transfer_reconciliation": summary.get("transfer_reconciliation") if "transfers" in loaded else None,
         "customer_payment_details": _frame_records(summary.get("customer_payment_details")) if "customer_payments" in loaded else [],
         "customer_payment_customer_totals": customer_rows,
+        "customer_payment_period_totals": customer_period_rows,
         "customer_payment_customer_options": customer_options,
         "customer_payment_reconciliation": dict(summary.get("customer_payment_reconciliation") or {}) if "customer_payments" in loaded else {},
         "customer_payment_selected_account_code": selected_customer_code,
@@ -1448,15 +1457,39 @@ def _build_cashflow_result(
     configuration_started = perf_counter()
     configuration = _cashflow_configuration(client_id)
     configuration_seconds = perf_counter() - configuration_started
+    preparation_status = get_cashflow_preparation_status(execute_query_pg, client_id=client_id)
     configured_template_id = configuration.get("source_template_id")
     report_revision = max(int(configuration.get("cashflow_report_revision") or 1), 1)
     diagnostics: list[dict[str, Any]] = []
     include_drilldown = bool(detail_sections and "drilldown" in detail_sections)
     source_started = perf_counter()
+    summary_read_model_lookup_seconds = 0.0
+    prepared_snapshot_lookup_seconds = 0.0
+    prepared_rollup_lookup_seconds = 0.0
+    source_build_seconds = 0.0
     cache_mode = "not_requested"
     cached_summary = None
-    if detail_sections is not None and configured_template_id is not None and not force_refresh:
+    if detail_sections == set() and configured_template_id is not None and not force_refresh:
+        prepared_rollup_started = perf_counter()
+        try:
+            cached_summary = load_cashflow_prepared_rollup_summary(
+                client_id,
+                journal_template_id=configured_template_id,
+                period_start=start,
+                period_end=end,
+                group_by=grouping,
+                receipt_presentation=configuration["receipt_presentation"],
+                treasury_view=treasury_view,
+                query_fn=execute_query_pg,
+            )
+        except Exception as error:
+            logger.warning("cashflows_prepared_rollup_lookup_failed client_id=%s error=%s", client_id, error)
+        finally:
+            prepared_rollup_lookup_seconds = perf_counter() - prepared_rollup_started
+
+    if cached_summary is None and detail_sections is not None and configured_template_id is not None and not force_refresh:
         cache_mode = "source_rebuild"
+        cache_lookup_started = perf_counter()
         try:
             cached_summary = load_cashflow_summary_read_model(
                 client_id,
@@ -1473,7 +1506,10 @@ def _build_cashflow_result(
                 cached_summary = None
         except Exception as error:
             logger.warning("cashflows_summary_read_model_lookup_failed client_id=%s error=%s", client_id, error)
+        finally:
+            summary_read_model_lookup_seconds = perf_counter() - cache_lookup_started
     if cached_summary is None and detail_sections is not None and configured_template_id is not None and not force_refresh:
+        prepared_lookup_started = perf_counter()
         try:
             cached_summary = load_cashflow_prepared_summary(
                 client_id,
@@ -1490,6 +1526,8 @@ def _build_cashflow_result(
                 cached_summary = None
         except Exception as error:
             logger.warning("cashflows_prepared_snapshot_lookup_failed client_id=%s error=%s", client_id, error)
+        finally:
+            prepared_snapshot_lookup_seconds = perf_counter() - prepared_lookup_started
     if cached_summary is not None:
         cache_mode = str((cached_summary.get("metadata") or {}).get("summary_read_model") or "cache_hit")
         source = LedgerReportSource(
@@ -1502,6 +1540,7 @@ def _build_cashflow_result(
     else:
         if force_refresh:
             cache_mode = "forced_source_rebuild"
+        source_build_started = perf_counter()
         try:
             source = load_ledger_report_source(
                 client_id,
@@ -1517,8 +1556,16 @@ def _build_cashflow_result(
                 ],
             )
         except ValueError as error:
-            raise HTTPException(400, str(error)) from error
+                raise HTTPException(400, str(error)) from error
+        finally:
+            source_build_seconds = perf_counter() - source_build_started
     source_seconds = perf_counter() - source_started
+    source_metadata_timings = source.metadata
+    canonical_selection_seconds = float(source_metadata_timings.get("cashflow_source_identity_seconds") or 0.0)
+    classification_query_seconds = float(source_metadata_timings.get("cashflow_classification_query_seconds") or 0.0)
+    source_transform_seconds = float(source_metadata_timings.get("cashflow_source_transform_seconds") or 0.0)
+    prepared_source_mode = str(source_metadata_timings.get("cashflow_report_source_mode") or "fallback")
+    prepared_revision = int(source_metadata_timings.get("preparation_revision") or 0)
     diagnostics.extend(source.diagnostics)
     if configured_template_id is None:
         diagnostics.append(_report_diagnostic("cashflow_template_not_configured", "error", "Configure and map the Transaction Report template in Account Control Centre before generating Cashflows."))
@@ -1560,6 +1607,7 @@ def _build_cashflow_result(
                 client_id,
                 journal_template_id=configured_template_id,
                 source_upload_ids=source_metadata_for_cache.get("selected_template_upload_ids") or source_metadata_for_cache.get("source_upload_ids") or [],
+                source_key=source_metadata_for_cache.get("cashflow_report_source_key"),
                 configuration_version=source_metadata_for_cache.get("classification_configuration_version"),
                 report_revision=report_revision,
                 period_start=start,
@@ -1583,6 +1631,7 @@ def _build_cashflow_result(
         blocking_reasons.append(controls["categories"]["message"])
     source_metadata = dict(source.metadata)
     source_metadata["cashflow_report_revision"] = report_revision
+    source_metadata["cashflow_preparation_status"] = preparation_status["status"]
     freshness_generated_at = source_metadata.get("summary_read_model_created_at") or datetime.now().astimezone().isoformat()
     source_quality = {
         "source_row_count": int(source_metadata.get("source_row_count") or 0),
@@ -1598,12 +1647,17 @@ def _build_cashflow_result(
     total_seconds = perf_counter() - request_started
     cache_hit = cached_summary is not None
     read_model = str((cached_summary.get("metadata") or {}).get("summary_read_model") or "none") if cached_summary else "none"
-    authoritative = bool(force_refresh or cache_mode in {"forced_source_rebuild", "source_rebuild", "completed"})
+    authoritative = bool(force_refresh or cache_mode in {"forced_source_rebuild", "source_rebuild", "completed", "prepared_rollups", "prepared_snapshot"})
     logger.info(
         "cashflows_performance client_id=%s period_start=%s period_end=%s group_by=%s details=%s "
         "validation_seconds=%.3f configuration_seconds=%.3f source_seconds=%.3f "
+        "summary_read_model_lookup_seconds=%.3f prepared_rollup_lookup_seconds=%.3f "
+        "prepared_snapshot_lookup_seconds=%.3f "
+        "source_build_seconds=%.3f canonical_selection_seconds=%.3f "
+        "classification_query_seconds=%.3f source_transform_seconds=%.3f "
         "summary_seconds=%.3f format_seconds=%.3f total_seconds=%.3f "
         "source_rows=%s valid_rows=%s selected_vouchers=%s summary_status=%s cache_mode=%s "
+        "prepared_source_mode=%s prepared_revision=%s "
         "cache_hit=%s read_model=%s report_revision=%s authoritative=%s",
         client_id,
         start.date().isoformat(),
@@ -1613,6 +1667,13 @@ def _build_cashflow_result(
         validation_seconds,
         configuration_seconds,
         source_seconds,
+        summary_read_model_lookup_seconds,
+        prepared_rollup_lookup_seconds,
+        prepared_snapshot_lookup_seconds,
+        source_build_seconds,
+        canonical_selection_seconds,
+        classification_query_seconds,
+        source_transform_seconds,
         summary_seconds,
         format_seconds,
         total_seconds,
@@ -1621,6 +1682,8 @@ def _build_cashflow_result(
         int(summary.get("selected_voucher_count", 0)) if summary else 0,
         summary_status,
         cache_mode,
+        prepared_source_mode,
+        prepared_revision,
         cache_hit,
         read_model,
         report_revision,
@@ -1633,6 +1696,7 @@ def _build_cashflow_result(
         "group_by": grouping,
         "treasury_view": treasury_view,
         "cashflow_report_revision": report_revision,
+        "preparation": preparation_status,
         "freshness": {
             "mode": cache_mode,
             "report_revision": report_revision,
@@ -1752,9 +1816,82 @@ def cashflow_revision(
     client_id: int = Query(..., ge=1),
     session=Depends(require_admin),
 ):
-    """Return the lightweight durable revision used to validate browser caches."""
+    """Return the durable revision and compact source identity for browser caches."""
     _require_active_client(client_id)
-    return {"client_id": client_id, "cashflow_report_revision": get_cashflow_report_revision(client_id)}
+    request_started = perf_counter()
+    configuration_started = perf_counter()
+    configuration = _cashflow_configuration(client_id)
+    configuration_seconds = perf_counter() - configuration_started
+    template_id = configuration.get("source_template_id")
+    source_key = None
+    source_identity_seconds = 0.0
+    if template_id is not None:
+        source_identity_started = perf_counter()
+        source_key = select_cashflow_report_source_identity(
+            client_id,
+            int(template_id),
+            execute_query_pg,
+        ).source_key
+        source_identity_seconds = perf_counter() - source_identity_started
+    report_revision = max(int(configuration.get("cashflow_report_revision") or 1), 1)
+    logger.info(
+        "cashflows_revision_performance",
+        extra={
+            "client_id": client_id,
+            "configuration_seconds": configuration_seconds,
+            "source_identity_seconds": source_identity_seconds,
+            "total_seconds": perf_counter() - request_started,
+            "report_revision": report_revision,
+            "source_key_present": bool(source_key),
+        },
+    )
+    return {
+        "client_id": client_id,
+        "cashflow_report_revision": report_revision,
+        "cashflow_report_source_key": source_key,
+    }
+
+
+@router.get("/api/reconciliation/cashflows/preparation-status")
+def cashflow_preparation_status(
+    client_id: int = Query(..., ge=1),
+    session=Depends(require_admin),
+):
+    """Return the durable Cashflows preparation state for setup/report status displays."""
+    _require_active_client(client_id)
+    return get_cashflow_preparation_status(execute_query_pg, client_id=client_id)
+
+
+def _run_cashflow_preparation_retry_background(job_id: int, client_id: int) -> None:
+    result = run_cashflow_preparation_job_postgres(job_id)
+    logger.info("cashflows_preparation_retry client_id=%s job_id=%s result=%s", client_id, job_id, result)
+    try:
+        prepare_cashflow_summary_snapshot(client_id)
+    except Exception as error:
+        logger.warning("cashflows_snapshot_preparation_failed client_id=%s job_id=%s error=%s", client_id, job_id, error)
+
+
+@router.post("/api/reconciliation/cashflows/preparation-retry")
+def retry_cashflow_preparation(
+    client_id: int = Query(..., ge=1),
+    job_id: int = Query(..., ge=1),
+    background_tasks: BackgroundTasks = None,
+    session=Depends(require_admin),
+):
+    """Retry one failed preparation job while retaining its previous active revision."""
+    _require_active_client(client_id)
+    with pg_transaction() as conn:
+        try:
+            job = retry_cashflow_preparation_job(conn, job_id=job_id, client_id=client_id)
+        except LookupError as error:
+            raise HTTPException(404, "Cashflows preparation job not found") from error
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
+    if background_tasks is None:
+        _run_cashflow_preparation_retry_background(job_id, client_id)
+    else:
+        background_tasks.add_task(_run_cashflow_preparation_retry_background, job_id, client_id)
+    return job
 
 
 @router.get("/api/reconciliation/cashflows/preview")

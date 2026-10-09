@@ -18,7 +18,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, real DB size (Postgres/SQLite) in MB, and live overview KPIs. See CHANGELOG_ARCHIVE.md.
 - routers/data.py + static/databank.* → Client Data Bank availability, calendars, overdue uploads, preview/filtering, frequency settings, and guarded mutations. See CHANGELOG_ARCHIVE.md.
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
-- routers/import_export.py + static/upload.* → Excel upload, mapping, validation/import, date handling, change detection, export, saved mappings, and guarded actions. See CHANGELOG_ARCHIVE.md.
+- routers/import_export.py -> Excel upload, mapping, validation/import, change detection, upload-time Cashflows resolution and incremental prepared-read-model handoff, export, and guarded actions. See CHANGELOG_ARCHIVE.md.
 - routers/settings.py + static/settings.* → application settings and the firm-wide Holiday list; header/tabs rendered by `client_context.js`. See CHANGELOG_ARCHIVE.md.
 - routers/templates.py + static/templates.*, static/columns.* → master-column and template CRUD, mapping/reordering, rate rules, backup/restore, and setup loading feedback. See CHANGELOG_ARCHIVE.md.
 - static/client_settings.html, static/client_settings.js -> retired direct-bookmark information page; all Verification account routing is configured centrally in Account Control Centre. See CHANGELOG_ARCHIVE.md.
@@ -33,7 +33,7 @@ One line per file group: what it is now. Full build history for every entry live
 - static/procedure_modal.js → shared Verification/Audit Workbook Procedure modal for grouped Data Table search, evidence/Forms, procedures, and observations. See CHANGELOG_ARCHIVE.md.
 - static/audit_workbook.js, static/audit_workbook.html → Audit Workbook: session rows, filtering, totals, shared Procedure Modal, and cached evidence/Form completion badges. See CHANGELOG_ARCHIVE.md.
 - routers/trial_balance.py → Trial Balance upload, hierarchy, categories, deletion, and shared latest parsed-upload lookup. See CHANGELOG_ARCHIVE.md.
-- routers/account_control_center.py → client/account mappings, Cash Flow categories, treasury setup, and historical-orphan category assignments. See CHANGELOG_ARCHIVE.md.
+- routers/account_control_center.py → client/account mappings, Cash Flow categories, treasury setup, historical-orphan assignments, and incremental prepared-model gateways. See CHANGELOG_ARCHIVE.md.
 - static/trial_balance.html, static/trial_balance.js → Trial Balance upload/review UI with scoped loading feedback; Period End supplies backend `as_of_date` (no separate input). See CHANGELOG_ARCHIVE.md and the period-input Convention below.
 - static/account_control_center.html, static/account_control_center.js → central mappings, Cash/Bank setup, and historical-orphan Cash Flow category assignment. See CHANGELOG_ARCHIVE.md.
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
@@ -44,9 +44,10 @@ One line per file group: what it is now. Full build history for every entry live
 - static/search_index.js → deleted; feature registry merged into `NAV_MANIFEST` in `client_context.js` — do not recreate. See CHANGELOG_ARCHIVE.md.
 - static/loading_ui.js → shared `window.LoadingUI` primitives, including token-based target-aware global progress-cursor ownership. See CHANGELOG_ARCHIVE.md.
 - static/api_utils.js → shared `apiFetch()` (GET debounce/retry) and `apiFetchMutate()` (non-retried writes, optional Loading UI); warning-only direct-`/api/` fetch guard; partial rollout. See CHANGELOG_ARCHIVE.md.
-- services/ledger_group_summary.py + ledger_report_source.py -> summary engine, customer-payment read models, SQL sources, Cashflows rollups, and canonical-voucher report-source transition. See CHANGELOG_ARCHIVE.md.
-- services/cash_bank_classification.py + scripts/backfill_cash_bank_transaction_classifications.py -> versioned derived Cash/Bank lines, Cash Flow category resolution, upload/backfill application, and audited reclassification without raw-row mutation. See CHANGELOG_ARCHIVE.md.
-- services/cashflow_voucher_canonicalization.py + scripts/backfill_cashflow_voucher_occurrences.py -> audit-preserving decisions and controlled historical register maintenance; reports remain unchanged. See CHANGELOG_ARCHIVE.md.
+- services/ledger_group_summary.py + ledger_report_source.py -> summary engine, customer-payment read models, SQL sources, Cashflows rollups, and canonical-voucher report-source contract. See CHANGELOG_ARCHIVE.md.
+- services/cash_bank_classification.py + scripts/backfill_cash_bank_transaction_classifications.py -> versioned derived Cash/Bank lines, affected-account reporting, category resolution, upload/backfill application, and audited reclassification without raw-row mutation. See CHANGELOG_ARCHIVE.md.
+- services/cashflow_voucher_canonicalization.py + cashflow_voucher_occurrence_store.py + scripts/backfill_cashflow_voucher_occurrences.py -> audit-preserving decisions and controlled occurrence maintenance; reports remain unchanged. See CHANGELOG_ARCHIVE.md.
+- services/cashflow_preparation.py + scripts/backfill_cashflow_prepared_read_model.py -> revisioned prepared Cashflows lines and rollups from winning occurrences; full backfill plus incremental upload, category, and treasury preparation, with durable job recovery. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_xlsx.py → static Bank/Cash workbook exporter for summaries, schedules, reviews, cross-checks, and reconciliation proofs. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_balance_source.py → validates stored opening/month-end balances and converts them to reconciliation-engine inputs. See CHANGELOG_ARCHIVE.md.
 - tests/test_account_control_center*.py + tests/test_cash_bank_configuration_sync.py + tests/test_cashflows*.py → regression coverage for setup, orphan assignment, derived classification, and Cashflows Reports UI.
@@ -219,109 +220,22 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+
+- Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; performance findings reference the investigation documents.
+- 2026-10-08: Phase 1 added idempotent Cashflows prepared-line, rollup, state, and job schema in SQLite/PostgreSQL with focused tests.
+- 2026-10-08: Phase 2 added full initial prepared Cashflows backfill service, operator script, eligibility/category rules, and regression coverage.
+- 2026-10-08: Phase 3 added affected-occurrence upload preparation, exact-duplicate no-op handling, copy-on-write revisions, and affected rollup refreshes.
+- 2026-10-08: Phase 4 added incremental category-assignment and Cash/Bank eligibility preparation with affected-voucher rollup refreshes.
 - 2026-10-09: Durable preparation jobs now normalize nullable scopes, isolate failed transactions, preserve active revisions, and recover safely after restart.
-
-- 2026-10-08: DV-4A.1/4A.2 added the canonical report-source selector, falling back to filename coverage until an occurrence register is populated.- 2026-10-07: Added the isolated Cashflows canonical-voucher register and resolver foundation; reporting still uses the existing source path.
-- 2026-10-07: DV-2 now backfills audit-only canonical voucher decisions; Cashflows reports retain their existing source selection.
-- 2026-10-07: Defined the customer-wise Cashflows projection contract, grouping by customer account code and tying matched statement-eligible settlements to Received from customers.
-- 2026-10-07: Locked customer-payment composite voucher accounting rules in cash-bank-summary-module-spec.md.
-- 2026-10-07: Completed Phase 2 customer-payment engine separation with matched net receipts and derived drilldown rows.
-- 2026-10-07: Added in-place customer-wise Cashflows reconciliation, customer search, and voucher-view restoration; UI commit 9f0bf97.
-- 2026-10-07: Added Ledgerwise Summary reconciliation tab to Cashflows XLSX export with typed ledger totals and category differences.
-- 2026-10-06: Added source-identity Cashflows label backfill with prepared-snapshot invalidation.
-- 2026-10-06: New Cashflows classification rows now carry a derived account label with backward-compatible SQL fallback.
-- 2026-10-06: Cashflows wide reports now expose a compact accessible draggable scrollbar while visible.
-- 2026-10-06: Cashflows Phase 3 now prepares validated account rollups at upload-time and reuses them across reporting periods with safe fallback.
-- 2026-10-06: Cashflows summary loads now skip unused ledger hydration; supplied trace confirms successful lazy drilldown requests.
-- 2026-10-06: Cashflows category expansion now uses an indexed upload-time account-code projection with validated fallback.
-
-Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; performance findings also reference the investigation documents.
-- 2026-07-09/20: Upload, Verification, Audit Rules, quick navigation, and shared date-import groundwork shipped.
-- 2026-07-21/25: Client Data Bank, Trial Balance, dynamic links, supporting documents, and observation rollup foundations shipped.
-- 2026-07-27/08-02: Validation Rules, cross-document checks, rate/backfill, Categories, Signature Specimen, and Cleared Requirements shipped.
-- 2026-08-05/12: Verification fixtures, session/cashbook UX, Audit Workbook, and stylesheet cache-busting were completed.
-- 2026-08-18/31: Physical Bills, global navigation, database/performance work, admin/client sessions, Postgres migration, and shared Loading UI shipped.
-- 2026-09-01/08: Cross-check matrix, tray lifecycle, configurable fields, Forms, assertions, and Category Control Centre acceptance completed.
-- 2026-09-09/14: Database sizing, Audit Rules feedback, Ledger Reconciliation Phases 1-8, Physical Bill split, Forms calculations, and Storage Cleanup Phase B progressed.
-- 2026-09-15/21: Verification search, Procedure routing, Physical Bill layout, status gates, assertions, and rulebook traceability were refined.
-- 2026-09-22/25: Rulebook migration, Account Sets, vendor/import workstreams, and simplified Account Control Centre routing progressed.
-- 2026-09-26: Reports hub, Cash Flow Setup, treasury panels, Cashflows source/template intake, repair/quarantine, and explicit load workflow shipped.
-- 2026-09-27: Cashflows gained configured-template multi-upload loading, derived classification, SQL filtering/aggregation, performance safeguards, and lazy detail loading.
-- 2026-09-28: Cashflows gained date-preserving multi-select periods, external grouping, streamlined controls, global Up navigation, transient toasts, and blocking summary processing UI.
-- 2026-09-28: Cashflows backfill now processes all PostgreSQL batches, and daily/fortnightly summaries keep categories as rows with periods as columns.
-- 2026-09-29: Cashflows repeated summary loads now stay in-page after restoring the report form submit handler.
-- 2026-09-29: Cashflows now uses upload-time Month/Fortnight keys for grouping, preserving date-boundary integrity with safe legacy fallback.
-- 2026-09-29: Cashflows gained an invalidated summary read model for repeat summary requests, with detailed-path fallback on cache misses.
-- 2026-09-29: Cashflows balancing added exact set-based validation counts and row-order-safe import detection; snapshot preparation remains post-response.
-- 2026-09-30: Cashflows child sections now use prepared detail read models with legacy fallback; the main summary path remains unchanged.
-- 2026-09-30: Cashflows inter-account transfers now expose transfer legs, review status, cache-version fallback, and exclusive full-width detail windows; main summary unchanged.
-- 2026-09-30: Cashflows Internal Transfers XLSX now matches the report window with account legs, variance, statuses, and aligned numeric/text fields.
-- 2026-09-30: Cashflows transfer reconciliation now shows matched/review controls for pure, mixed, and ambiguous vouchers without changing main totals.
-- 2026-10-01: Cashflows customer-payment roles now drive Cash/Bank receipt classification through live and prepared paths; regression coverage added.
-- 2026-10-01: Cashflows customer-payment residual debits now classify as Other deductions while residual credits remain for review.
-- 2026-10-01: Cashflows customer-payment Gross/Net reconciliation now separates technical Bank credits from receipt deductions; CP-4 coverage added.
-- 2026-10-01: Customer-payment report now presents receiving account, deduction totals, settlement values, and difference with wide-table scrolling.
-- 2026-10-01: Cashflows prepared-detail cache version advanced with safe fallback; the main summary path remains unchanged.
-- 2026-10-01: Customer-payment test coverage expanded and empty transfer-leg handling fixed for multiple receiving accounts.
-- 2026-10-02: Cashflows ledger drill-down shipped with paginated filters, Cash/Bank controls, loading feedback, category suggestions, and static-HTML revalidation.
-- 2026-10-02: Cashflows Phase 3 added cache-mode and drill-down endpoint timing logs; query optimization awaits authenticated cold/warm samples.
-- 2026-10-02: Cashflows Phase 4 added all-grouping summary/drill-down, boundary, zero-fill, Cash/Bank, and partial-balance acceptance coverage.
-- 2026-10-02: Cashflows Phase 5 added filtered XLSX ledger drill-down output with canonical summary, Cash/Bank, and export-control parity.
-- 2026-10-02: Cashflows Phase 6A added default zero hiding, whole-number dash-zero display, and consistent summary styling.
-- 2026-10-02: Cashflows Phase 6B moved ledger drill-down beside Load summary while retaining right-aligned zero-row and XLSX actions.
-- 2026-10-02: Cashflows Phase 6C added drill-down shortcuts and placed their existing detail reports below the ledger table.
-- 2026-10-03: Cashflows Phase 6D added all-column search to cached detail reports and classified transactions without changing fast-fetching or accounting paths.
-- 2026-10-03: Cashflows now preserves signed values across every selected period grain, with section-aware bracket display in browser and XLSX; fetch path unchanged.
-- 2026-10-03: Cashflows TV-0 baseline recorded treasury-view contract and 1.4-2.1-second warm-request comparison point.
-- 2026-10-03: Cashflows TV-1 added cached Bank/Cash/Mixed treasury totals with combined-total reconciliation; no extra SQL fetch.
-- 2026-10-03: Cashflows TV-2 added combined/Bank/Cash/split API projection with version-gated cache reuse and legacy-safe fallback.
-- 2026-10-03: Cashflows TV-3 added the main treasury-view selector and cached Bank-only/Cash-only summary rendering; export remains TV-5 scope.
-- 2026-10-03: Cashflows TV-4 added responsive period-by-period Bank/Cash/Mixed/Total split presentation with reconciliation status.
-- 2026-10-03: Cashflows TV-5 aligned XLSX export and ledger drill-down with the selected treasury view using the cached projection path.
-- 2026-10-03: Data Bank Cashflows classification now selects latest upload per filename across periods through a shared two-query SQL path; raw previews remain unchanged.
-- 2026-10-03: Cashflows added inline category-to-ledger expansion with cached loading and fixed cached re-expansion collapse; frontend regression coverage updated.
-- 2026-10-03: Cashflows drawer now uses compact context, six transaction columns, Apply-only filters, voucher-level Cash/Bank matching, and summary-aligned fallback category filtering.
-- 2026-10-04: Cashflows ledger drill-down now requires every voucher to hit an assigned Cash/Bank account; valid Cash/Bank JVs remain eligible while non-treasury JVs are excluded.
-- 2026-10-04: Cashflows transaction drawer now fits six columns within the modal, wraps only Voucher Detail, keeps the sticky header clear, and hides redundant success status space.
-- 2026-10-04: Cashflows transaction drawer now presents executive-friendly Receipts (Cr) before Payments (Dr) without changing underlying debit/credit values.
-- 2026-10-04: Cashflows transaction amounts and totals now align right with tabular numerals; visible pending/loading alerts were replaced by an accessible busy cursor state.
-- 2026-10-04: Cashflows main-summary numeric columns now use right alignment and tabular numerals; category labels remain left-aligned.
-- 2026-10-04: Cashflows inline ledger rows now share the main summary grid; category and ledger labels align at one left baseline.
-- 2026-10-04: Cashflows summary header/search updated in reconciliation HTML, JS, CSS, with direct-window regression coverage.
-- 2026-10-04: Cashflows global header label and navbar-to-panel spacing refined in reconciliation HTML, JS, CSS, with regression coverage.
-- 2026-10-04: Cashflows summary headers now stick below the global navbar through a dedicated non-scrolling wrapper and regression coverage.
-
-- 2026-10-04: Cashflows sticky-header gutter now masks the 2.5px navbar gap; cache-buster and direct-window regression coverage updated.
-
-- 2026-10-04: Cashflows ledger drill-down now uses a compact inherited context and detail-only toolbar with no redundant summary panel.
-
-- 2026-10-04: Cashflows ledger drill-down now shares the main summary sticky-header boundary and has no nested vertical scroll.
-- 2026-10-04: Cashflows ledger drill-down added server-backed account-head filtering and a cascade-safe single-row toolbar in reconciliation HTML, JS, CSS, and tests.
-- 2026-10-05: Cashflows ledger drill-down now reuses the initial roll-up baseline for local filters, pagination, and Clear.
-- 2026-10-05: Cashflows freshness now adds revision checks, explicit source refresh/version status, upload-scoped joins, and revision-aware browser caches.
-- 2026-10-05: Cashflows transaction drawer now clears stale rows between ledger openings; reconciliation.js and direct-window regression coverage updated.
-- 2026-10-05: Cashflows summary now enforces shared column geometry and synchronized pane hover states for expanded ledgers; reconciliation UI/tests updated.
-- 2026-10-05: Cashflows split-view hover now covers frozen and first-period cells through stable paired-row state; legacy first-column overrides removed and regression coverage added.
-- 2026-10-05: Cashflows split view now hides zero-only Mixed / unresolved columns and removes redundant reconciliation UI while preserving backend and XLSX fields.
-- 2026-10-05: Cashflows summary cache keys now include the active report revision; Treasury-view contexts remain separate and hard refresh bypasses cache.
-- 2026-10-05: Cashflows compatible parent-period cache reuse now supports daily, fortnightly, monthly, quarterly, half-yearly, and annual child summaries only when parent periods fully cover each child period.
-- 2026-10-05: Cashflows server read-model lookups now require the current report revision; stale exact or daily snapshots fall through to source rebuilding.
-- 2026-10-05: Cashflows maintenance now records cache/read-model/revision diagnostics and tests SQLite/PostgreSQL schema parity; retention and production EXPLAIN remain deferred.
-- 2026-10-06: Cashflows Phase 6 focused acceptance passed 139/139; full-suite failures are outside Cashflows, and authenticated live-browser acceptance remains pending.
-- 2026-10-06: Cashflows report controls now use a split refresh action, stacked freshness notices, and a stable single-row responsive toolbar.
-
-- 2026-10-06: Cashflows summary categories, totals, percentages, and local totals now use the requested browser and XLSX emphasis; focused formatting tests passed.
-- 2026-10-06: Cashflows summary now freezes Category and Type, wraps expanded ledgers, and exposes account codes on hover.
-- 2026-10-06: Cashflows Type stays hidden for collapsed categories; expansion loading now spans the full frozen pane cleanly.
-- 2026-10-06: Cashflows summary now uses one aligned table container with sticky Category and Type columns during expansion loading.
-- 2026-10-06: Cashflows period columns now retain their widths when Type is hidden; sticky total-row shading is restored.
-- 2026-10-06: Cashflows summary now fills available width for short period selections while preserving horizontal scrolling for wider reports.
-- 2026-10-06: Cashflows summary now shows ledger Cash/Bank labels inline, with no separate Type column or hover seam.
-- 2026-10-06: Cashflows ledger labels now stay on one line and the expanded Category cell keeps the light row shade.
-- 2026-10-06: Cashflows expanded ledgers now show only the account name plus Cash or Bank, excluding slash-delimited transaction details.
-- 2026-10-06: Cashflows summary now uses a dedicated sticky header below the global navbar with one frozen Category pane.
-- 2026-10-06: Cashflows short period selections now fill the available values-pane width while preserving wider-report scrolling.
-
+- 2026-10-08: Phase 2A fixed filename-based overlap selection; derived preview and Cashflows now share latest normalized Voucher ID selection.
+- 2026-10-08: Cashflows canonical source selection and cache identity are revision-safe; the report still has a controlled fallback.
+- 2026-10-07/08: Canonical voucher register, resolver, occurrence store, and upload-time audit maintenance were added without report cutover.
+- 2026-10-06: Cashflows read models, classification, summary controls, account labels, and freshness/loading safeguards were refined.
+- 2026-10-01/02: Cash Flow historical-orphan alignment and Account Control Centre processing feedback were added.
+- 2026-09-26/30: Cashflows setup, source intake, upload classification, period settings, cache, balancing, and export parity progressed.
+- 2026-09-01/25: Database sizing, Ledger Reconciliation, Rulebook, Account Sets, Verification, Forms, vendor/import, and cleanup work progressed.
+- 2026-08-05/31: Verification fixtures, database/performance work, Postgres migration, administration, Client Data, and shared Loading UI shipped.
+- 2026-07-09/08-02: Upload, Verification, Audit Rules, navigation, Client Data Bank, Trial Balance, templates, Categories, and foundational requirements shipped.
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
 - Findings from a Code Health Review session go to `KNOWN_ISSUES.md`, not the Status log — the Status log records changes made, that file records issues found

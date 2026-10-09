@@ -256,8 +256,17 @@ def _initialize_postgres_in_background():
             init_db_postgres(pg_conn)
         finally:
             release_raw_conn_pg(pg_conn)
+        from services.cashflow_preparation import recover_cashflow_preparation_jobs_postgres
+        try:
+            recovery_results = recover_cashflow_preparation_jobs_postgres()
+        except Exception as recovery_error:
+            recovery_results = [{"status": "deferred", "error": str(recovery_error)}]
+            print(f"Cashflows preparation recovery deferred: {recovery_error}", flush=True)
         startup_state["postgres"] = "ready"
-        print("Postgres (Supabase) schema initialized", flush=True)
+        print(
+            f"Postgres (Supabase) schema initialized; Cashflows recovery results: {recovery_results}",
+            flush=True,
+        )
     except Exception as e:
         startup_state["postgres"] = "degraded"
         print(f"Postgres init skipped (non-fatal): {e}", flush=True)

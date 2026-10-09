@@ -524,7 +524,32 @@ configuration changes write a versioned derived transaction-line classification 
 not rewrite the uploaded JSON rows. Add, edit, and deactivate operations reclassify affected
 existing derived lines, with deactivation used instead of destructive deletion.
 
+### 11.0 Effective Cashflows source rule (fresh-start)
+
+For Cashflows reporting, each normalized Voucher ID has one effective occurrence: the latest
+complete occurrence in the configured Transaction Report uploads, ordered by upload date and then
+upload ID. This is the Excel-style logical replacement rule.
+
+- Normalize Voucher ID by trimming, removing internal whitespace, and standardizing case.
+- Treat all mapped accounting lines for one normalized Voucher ID within one upload as one occurrence.
+- Include every line from the winning occurrence; preserve legitimate repeated account lines.
+- Keep blank Voucher ID rows visible and flagged; never merge all blank IDs into one voucher.
+- Keep raw Client Data and audit evidence immutable. 'Overwrite' means report-source replacement,
+  not physical deletion or rewriting of uploaded rows.
+- Keep derived classification one-to-one with raw Client Data lines; categories and treasury
+  assignments continue to come only from Account Control Centre.
+- Feed the same effective population to the main summary, drilldown, ledger expansion, Customer
+  Payments, customer-wise and period-wise views, and XLSX export.
+
+The agreed performance targets apply under the free-tier/Mumbai Supabase and low-connectivity
+conditions: approximately 2 seconds for a cold Cashflows report and under 500 ms for a warm report.
+Phase 6 must measure these targets and confirm that duplicate suppression does not materially slow
+SQL-first or prepared-read-model paths.
+
 ### 11.1 Canonical voucher occurrence register (DV-1)
+
+Status: parked internal infrastructure while the fresh-start source rule is proven. It is not the
+active Phase 1 business rule and must not be backfilled or activated in this phase.
 
 Every source upload remains immutable. The register records one complete voucher occurrence per upload and keeps its source upload, normalized voucher identity, accounting-line fingerprint, decision, and canonical link.
 
@@ -536,9 +561,12 @@ Every source upload remains immutable. The register records one complete voucher
 
 ### 11.2 Canonical source delivery phases
 
+These DV phases remain implementation history/backlog. Reuse, simplification, or retirement of the
+parked register requires a later approved cleanup decision after the fresh-start rule passes validation.
+
 1. **DV-1 — Register foundation:** schema, fingerprint, decision contract, and regression coverage; reports remain unchanged.
 2. **DV-2 — Historical shadow resolution:** default-dry-run all-upload backfill creates re-run-safe audit decisions; reports remain unchanged.
-3. **DV-3 — Incremental import resolution:** resolve only vouchers affected by a new upload and avoid cache invalidation for an exact copy.
+3. **DV-3 — Incremental import resolution:** resolve only incoming voucher identities transactionally; exact copies retain audit evidence without cache invalidation.
 4. **DV-4 — Fast-path cutover:** prepared snapshots and Cashflows SQL read only indexed canonical current occurrences. The canonical source key stays stable for exact reuploads; the existing report revision advances only for a new or revised accounting fingerprint.
 5. **DV-5 — Audit evidence and acceptance:** expose decisions/counts, reconcile historical results, and test late/back-dated/revised uploads.
 6. **DV-6 — Desi data golden-rule registration:** after DV-5 acceptance, add the proven canonical-voucher, upload-time resolution, revision, cache, and audit-evidence rules to the project’s permanent Cashflows data/performance standard in `CLAUDE.md`.

@@ -1,5 +1,61 @@
 # Changelog Archive
 
+## Cashflows Account Control Centre incremental preparation - Phase 4 - 2026-10-08
+
+**Scope:** Update prepared Cashflows data only for category or Cash/Bank configuration changes.
+
+**Implementation:** Category assignments now update affected prepared account lines and rollups under a copy-on-write revision. Treasury changes identify affected account codes and republish only their vouchers, preserving all counter-account lines. Raw rows and the legacy snapshot fallback remain unchanged.
+
+**Verification:** Focused preparation, synchronization, and Account Control Centre tests passed 39/39; Python compilation and `git diff --check` passed. No user-facing report cutover or background status workflow was added.
+
+## Cashflows incremental upload preparation - Phase 3 - 2026-10-08
+
+**Scope:** Update only affected prepared Cashflows vouchers after an upload while keeping the current report fallback unchanged.
+
+**Implementation:** Canonical upload resolution now returns changed identities and affected occurrence IDs. Incremental preparation uses a copy-on-write revision, removes superseded or newly ineligible voucher lines, inserts current eligible lines, refreshes affected rollup buckets, and skips exact duplicates. The upload handoff keeps the previous prepared revision active until the new transaction succeeds.
+
+**Verification:** Eight focused preparation tests, Python compilation, and the combined Cashflows regression set passed 48/48. No report cutover or live upload was run.
+
+## Cashflows prepared read-model initial backfill - Phase 2 - 2026-10-08
+
+**Scope:** Build the first complete prepared Cashflows revision from winning canonical voucher occurrences without changing report reads or raw source data.
+
+**Implementation:** Added an in-memory preparation plan, Cash/Bank voucher eligibility, all-line inclusion, account-code category snapshots, month/fortnight rollups, revisioned state activation, and a dry-run/apply operator script.
+
+**Verification:** Four Phase 2 tests plus the Phase 1 and canonical Cashflows regression set passed 44/44. No production backfill, report cutover, upload change, or Account Control Centre mutation was run.
+
+## Cashflows prepared read-model schema - Phase 1 - 2026-10-08
+
+**Scope:** Add the database foundation for prepared Cashflows lines, rollups, preparation state, and durable jobs without changing the active report or upload flow.
+
+**Implementation:** Added idempotent SQLite and PostgreSQL tables, PostgreSQL fast-path creation for existing databases, revision-scoped uniqueness, source-line identity for repeated account lines, report grouping indexes, and JSON change-scope fields. Raw Client Data has no preparation-cleanup foreign key.
+
+**Verification:** Three isolated schema tests plus the focused Cashflows regression set passed 40/40. Python compilation and `git diff --check` passed. No live migration, source data, report output, or cache changed.
+
+## Cashflows fresh-start duplication gate — Phase 2A — 2026-10-08
+
+**Finding:** The derived classification table was one-to-one with raw Client Data. Duplication came from the shared selector choosing the newest file per filename, allowing the same normalized Voucher ID from different filenames into the derived window and Cashflows source.
+
+**Implementation:** The shared selector now chooses one latest complete upload occurrence per normalized Voucher ID by upload date, then upload ID. All winning-upload lines remain included; blank Voucher IDs remain separately selectable. The parked occurrence register remains inactive.
+
+**Verification:** Focused source/performance tests passed 30/30. Live Leather Crop checks returned 31,276 derived-preview rows with 31,276 distinct raw lines, zero extra join rows, and zero repeated selected non-blank Voucher IDs. No source data, database rows, caches, or occurrence-register rows changed.
+
+## Cashflows fresh-start source-selection contract - Phase 1 - 2026-10-08
+
+**Decision:** Cashflows uses one latest complete occurrence per normalized Voucher ID, including all winning-upload lines and preserving repeated account lines. Raw Client Data remains immutable; 'overwrite' means logical report replacement. The parked occurrence register is not activated in this phase.
+
+**Performance:** Agreed targets are approximately 2 seconds cold and under 500 ms warm under the free-tier/Mumbai Supabase and low-connectivity conditions; Phase 6 will measure them.
+
+**Verification:** Documentation-only; no application code, source data, caches, or occurrence-register rows changed.
+
+## Cashflows canonical report-source cache safety — DV-4A.3 - 2026-10-08
+
+**Scope:** Prevent a prepared or browser-cached Cashflows result being reused after canonical-source activation when its report revision has not changed.
+
+**Implementation:** Added one indexed source identity: canonical-v1 for current canonical occurrences, otherwise the existing filename-upload key. Summary snapshots, targeted drilldowns, previews, revision checks, and bounded browser caches now require that identity. Raw data and schema remain unchanged.
+
+**Verification:** Focused source, report, and UI-contract coverage passed 69 tests; four unrelated pre-existing UI-contract failures remain in the combined suite. Syntax and whitespace checks passed.
+
 ## Cashflows canonical report-source transition — DV-4A.2 - 2026-10-08
 
 **Scope:** Make Cashflows SQL source rebuilds and the classified-transaction viewer use the same canonical voucher population.
@@ -14,8 +70,6 @@
 **Implementation:** Added one selector for self-linked `current`/`current_revised` occurrences and a stable canonical source key. Exact reuploads reuse the existing report revision; only a new/revised accounting fingerprint advances it. Reports remain unchanged until DV-4A.2.
 
 **Verification:** Source, occurrence, and performance coverage passed 34/34; syntax and whitespace checks passed. No Client Data, occurrence rows, snapshots, or report output changed.
-
-
 ## Cashflows canonical voucher register — DV-1 - 2026-10-07
 
 **Scope:** Establish an audit-preserving source-voucher foundation without changing Cashflows source selection, totals, caches, or upload flow.
@@ -26,6 +80,13 @@
 
 **Verification:** Resolver, Cashflows schema-parity, and classification tests passed 18/18; an isolated SQLite schema smoke check passed. No client data or report result changed.
 
+## Cashflows canonical voucher register — DV-3 - 2026-10-08
+
+**Scope:** Resolve future configured-template uploads incrementally while preserving the existing Cashflows report path.
+
+**Implementation:** Added one shared occurrence store for SQLite/PostgreSQL backfill and PostgreSQL import transactions. The upload resolver uses complete mapped workbook vouchers, including unchanged rows, compares only affected indexed identities, records exact/revised decisions, and invalidates snapshots only if the canonical accounting fingerprint changed.
+
+**Verification:** Focused import, source, resolver, backfill, and performance coverage passed 34/34. No report SQL, UI, raw Client Data, or category classification rule changed.
 ## Cashflows canonical voucher register — DV-2 - 2026-10-07
 
 **Scope:** Populate and review canonical-voucher evidence without altering Cashflows reporting.
@@ -56,6 +117,14 @@
 **Decision:** Customer receipts are voucher-level composites driven by configured category roles and account codes. The main statement uses matched net bank receipts; technical Bank credits are controls, customer-linked deductions are not double-counted, and unmatched or ambiguous vouchers remain for review. Customer ledger names stay in detail output, not main category expansion.
 
 **Verification:** Documentation-only Phase 1; no application code, source data, or cache structures changed.
+
+## Cashflows default period alignment - 2026-10-07
+
+**Scope:** Make the Cashflows Reports initial period consistently Jan-Jun 2026 across local and Render deployments; manual period selection remains unchanged.
+
+**Implementation:** The frontend now initializes the Cashflows period to 2026-01-01 through 2026-06-30 and bumps the reconciliation JavaScript asset version to prevent stale deployment caching.
+
+**Verification:** Focused reconciliation report tests passed 39/39; JavaScript syntax and git diff --check passed. Render acceptance is pending user confirmation.
 
 ## Cashflows Ledgerwise Summary XLSX tab - 2026-10-07
 
@@ -7686,6 +7755,7 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Implementation:** Added a customer search, unique customer totals with reconciliation columns, and an in-place view switch. `Load customer payments (loaded)` restores voucher-level rows. Commit `9f0bf97`.
 
 **Verification:** Aadil confirmed local UI behavior. Reconciliation tests passed 40/40; JavaScript syntax and diff checks passed. Three direct-window failures remain in unrelated default-period/style/layout work.
+
 ## Cashflows durable preparation job recovery - 2026-10-09
 
 **Scope:** Complete the preparation-service safety pass after local testing showed intermittent `object is not iterable` and aborted-transaction failures during Cash/Bank changes.

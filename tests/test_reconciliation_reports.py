@@ -616,6 +616,26 @@ def test_cashflow_preview_exposes_customer_wise_rows_and_selected_customer_filte
             },
         ]
     )
+    summary["customer_payment_period_totals"] = pd.DataFrame(
+        [
+            {
+                "period_key": "2026-Q1",
+                "period_label": "Q1 2026",
+                "statement_eligible_actual_settlement": 100.0,
+                "main_received_from_customers_total": 100.0,
+                "difference": 0.0,
+                "status": "Matched",
+            },
+            {
+                "period_key": "2026-Q2",
+                "period_label": "Q2 2026",
+                "statement_eligible_actual_settlement": 0.0,
+                "main_received_from_customers_total": 50.0,
+                "difference": -50.0,
+                "status": "Review required",
+            },
+        ]
+    )
     summary["customer_payment_reconciliation"] = {
         "statement_eligible_customer_total": 100.0,
         "main_received_from_customers_total": 100.0,
@@ -636,6 +656,8 @@ def test_cashflow_preview_exposes_customer_wise_rows_and_selected_customer_filte
     ]
     assert [row["customer_account_code"] for row in response["customer_payment_customer_totals"]] == ["CUST-2"]
     assert response["customer_payment_reconciliation"]["status"] == "Matched"
+    assert [row["period_key"] for row in response["customer_payment_period_totals"]] == ["2026-Q1", "2026-Q2"]
+    assert response["customer_payment_period_totals"][0]["difference"] == 0.0
     assert response["customer_payment_selected_account_code"] == "CUST-2"
 
 
@@ -787,7 +809,7 @@ def test_cashflows_preview_rejects_previous_child_details_version():
         "summary": _cashflow_summary(),
     }
 
-    assert CASHFLOW_CHILD_DETAILS_VERSION == 6
+    assert CASHFLOW_CHILD_DETAILS_VERSION == 7
     assert reconciliation._cashflow_cache_can_serve_details(cached, {"customer_payments"}) is False
 
 
@@ -858,6 +880,7 @@ def test_cashflow_summary_read_model_round_trip_preserves_period_totals():
     payload = json.loads(writes[0][1][-1])
     assert payload["summary_payload_version"] == CASHFLOW_SUMMARY_PAYLOAD_VERSION
     assert "customer_payment_customer_totals" in payload
+    assert "customer_payment_period_totals" in payload
     assert "customer_payment_reconciliation" in payload
 
     def query(sql, params):
@@ -888,6 +911,7 @@ def test_cashflow_summary_read_model_round_trip_preserves_period_totals():
     assert cached["metadata"]["summary_payload_version"] == CASHFLOW_SUMMARY_PAYLOAD_VERSION
     assert cached["summary"]["transfer_details"].loc[0, "amount"] == 20.0
     assert cached["summary"]["customer_payment_details"].loc[0, "method"] == "Gross"
+    assert "period_key" in cached["summary"]["customer_payment_period_totals"].columns
     assert cached["summary"]["deduction_details"].loc[0, "account_name"] == "Tax"
     assert cached["summary"]["categories_needing_review"].loc[0, "account_code"] == "4100"
 
@@ -1034,6 +1058,8 @@ def test_preparation_builds_one_daily_snapshot_after_committed_source_changes():
                     {"role_key": "other_deduction", "label": "Other deductions"},
                 ],
             }]
+        if "SELECT canonical_occurrence_id, upload_id" in sql:
+            return []
         if "FROM uploaded_files" in sql:
             return [{"upload_id": 21, "file_name": "period.xlsx", "upload_date": "2026-04-01"}]
         if "MIN(c.transaction_date)" in sql:
@@ -1654,6 +1680,9 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "prefix + '_account_name'" in javascript
     assert "status_display" in javascript
     assert "setActiveCashflowWindow" in javascript
+    assert "const CASHFLOW_DEFAULT_START = '2026-01-01';" in javascript
+    assert "const CASHFLOW_DEFAULT_END = '2026-06-30';" in javascript
+    assert "<script src='/static/reconciliation.js?v=33'></script>" in html
     assert "cashflows-table-number" in javascript
     assert "grid-template-columns: minmax(0, 1fr)" in stylesheet
     assert ".cashflows-table td.cashflows-table-text" in stylesheet
@@ -1840,11 +1869,17 @@ def test_cashflows_preview_force_refresh_bypasses_cached_snapshots_and_reports_f
     assert response["freshness"]["report_revision"] == 7
 
 
-def test_cashflow_revision_endpoint_returns_lightweight_durable_revision():
+def test_cashflow_revision_endpoint_returns_lightweight_revision_and_source_key():
     with (
         patch.object(reconciliation, "_require_active_client"),
+        patch.object(reconciliation, "_cashflow_configuration", return_value={"source_template_id": 9}),
         patch.object(reconciliation, "get_cashflow_report_revision", return_value=12),
+        patch.object(reconciliation, "select_cashflow_report_source_identity", return_value=SimpleNamespace(source_key="canonical-v1")),
     ):
         response = reconciliation.cashflow_revision(7, session=None)
 
-    assert response == {"client_id": 7, "cashflow_report_revision": 12}
+    assert response == {
+        "client_id": 7,
+        "cashflow_report_revision": 12,
+        "cashflow_report_source_key": "canonical-v1",
+    }

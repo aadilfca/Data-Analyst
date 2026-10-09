@@ -754,8 +754,19 @@ def test_cashflow_summary_cache_is_revision_safe_and_bounded():
     assert "Parent-period cache" in javascript
     assert '"period_metrics": summary.get("period_metrics") or {}' in reconciliation_source
     assert "cashflowSummaryCache.clear()" in javascript
-    assert "ensureCashflowRevisionFresh(true, true)" in javascript
+    assert "ensureCashflowRevisionFresh(false, true)" in javascript
+    assert "ensureCashflowRevisionFresh(true, true)" not in javascript
     assert "if (forceRefresh) query.set('refresh', 'true');" in javascript
+
+
+def test_cashflow_revision_endpoint_reuses_configuration_revision_and_logs_stages():
+    router_source = Path(__file__).resolve().parents[1].joinpath("routers", "reconciliation.py").read_text(encoding="utf-8")
+
+    assert "configuration_seconds" in router_source
+    assert "source_identity_seconds" in router_source
+    assert "cashflows_revision_performance" in router_source
+    assert '"cashflow_report_revision": report_revision' in router_source
+    assert "get_cashflow_report_revision(client_id)" not in router_source
 
 
 def test_cashflow_preview_endpoint_passes_selected_treasury_view():

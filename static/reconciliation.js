@@ -30,6 +30,7 @@
     let cashflowDrilldownGeneration = 0;
     let lastCashflowDrilldownResult = null;
     let cashflowReportRevision = 0;
+    let cashflowReportSourceKey = "";
     let cashflowRevisionCheckPromise = null;
     let cashflowRevisionCheckedAt = 0;
     const CASHFLOW_REVISION_CHECK_TTL_MS = 15000;
@@ -479,9 +480,11 @@
             if (input) input.value = '';
         });
         const customerSearch = element('cashflowsCustomerPaymentsCustomerSearch');
-        if (customerSearch) customerSearch.value = '';
+        if (customerSearch) { customerSearch.value = ''; customerSearch.hidden = false; }
         const customerWisePanel = element('cashflowsCustomerWisePanel');
         if (customerWisePanel) customerWisePanel.hidden = true;
+        const customerPeriodWisePanel = element('cashflowsCustomerPeriodWisePanel');
+        if (customerPeriodWisePanel) customerPeriodWisePanel.hidden = true;
         const customerPaymentsVoucherPanel = element('cashflowsCustomerPaymentsVoucherPanel');
         if (customerPaymentsVoucherPanel) customerPaymentsVoucherPanel.hidden = false;
         const customerPaymentsHeading = element('cashflowsCustomerPaymentsHeading');
@@ -581,11 +584,64 @@
                 + metric('Difference', formatInternationalAmount(reconciliation.difference));
         }
         const voucherPanel = element('cashflowsCustomerPaymentsVoucherPanel');
+        const periodPanel = element('cashflowsCustomerPeriodWisePanel');
+        const customerSearch = element('cashflowsCustomerPaymentsCustomerSearch');
         if (voucherPanel) voucherPanel.hidden = true;
+        if (periodPanel) periodPanel.hidden = true;
+        if (customerSearch) customerSearch.hidden = false;
         const heading = element('cashflowsCustomerPaymentsHeading');
         if (heading) heading.textContent = 'Customer-wise payments';
         const count = element('cashflowsCustomerPaymentCount');
         if (count) count.textContent = String(rows.length) + ' customer(s)';
+        panel.hidden = false;
+    }
+    function renderCashflowCustomerPeriodWise(preview) {
+        const panel = element('cashflowsCustomerPeriodWisePanel');
+        const table = element('cashflowsCustomerPeriodWiseTable');
+        if (!panel || !table) return;
+        const rows = Array.isArray(preview && preview.customer_payment_period_totals)
+            ? preview.customer_payment_period_totals
+            : [];
+        renderTable(table, [
+            { key: 'period_label', label: 'Period' },
+            { key: 'customer_gross_amount', label: 'Gross receipt', amount: true },
+            { key: 'bank_charges', label: 'Bank charges', amount: true },
+            { key: 'withholding_tax', label: 'WHT', amount: true },
+            { key: 'other_deductions', label: 'Other deductions', amount: true },
+            { key: 'deductions_total', label: 'Total deductions', amount: true },
+            { key: 'technical_bank_offset', label: 'Technical Bank credit', amount: true },
+            { key: 'expected_net_settlement', label: 'Expected settlement', amount: true },
+            { key: 'statement_eligible_actual_settlement', label: 'Actual settlement', amount: true },
+            { key: 'main_received_from_customers_total', label: 'Received from customers', amount: true },
+            { key: 'difference', label: 'Difference', amount: true },
+            { key: 'status', label: 'Status' },
+        ], rows, 'No customer payments are available for the selected periods.');
+        const status = rows.length && rows.every(function (row) { return row.status === 'Matched'; }) ? 'Matched' : 'Review required';
+        const statusElement = element('cashflowsCustomerPeriodWiseStatus');
+        if (statusElement) {
+            statusElement.textContent = status;
+            statusElement.className = 'cashflows-transfer-status ' + (status === 'Matched' ? 'is-matched' : 'is-review');
+        }
+        const reconciliation = preview.customer_payment_reconciliation || {};
+        const metric = function (label, value) {
+            return '<div class="cashflows-transfer-metric"><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(value) + '</strong></div>';
+        };
+        const reconciliationPanel = element('cashflowsCustomerPeriodWiseReconciliation');
+        if (reconciliationPanel) {
+            reconciliationPanel.innerHTML = metric('Period-wise eligible total', formatInternationalAmount(reconciliation.statement_eligible_customer_total))
+                + metric('Received from customers', formatInternationalAmount(reconciliation.main_received_from_customers_total))
+                + metric('Difference', formatInternationalAmount(reconciliation.difference));
+        }
+        const voucherPanel = element('cashflowsCustomerPaymentsVoucherPanel');
+        const customerPanel = element('cashflowsCustomerWisePanel');
+        const customerSearch = element('cashflowsCustomerPaymentsCustomerSearch');
+        if (voucherPanel) voucherPanel.hidden = true;
+        if (customerPanel) customerPanel.hidden = true;
+        if (customerSearch) customerSearch.hidden = true;
+        const heading = element('cashflowsCustomerPaymentsHeading');
+        if (heading) heading.textContent = 'Period-wise customer payments';
+        const count = element('cashflowsCustomerPaymentCount');
+        if (count) count.textContent = String(rows.length) + ' period(s)';
         panel.hidden = false;
     }
     function renderCashflowChild(section, preview) {
@@ -606,11 +662,13 @@
             if (activeCashflowWindow === section) element('cashflowsTransfersSection').hidden = false;
         } else if (section === 'customer_payments') {
             const customerWisePanel = element('cashflowsCustomerWisePanel');
+            const customerPeriodWisePanel = element('cashflowsCustomerPeriodWisePanel');
             const customerPaymentsVoucherPanel = element('cashflowsCustomerPaymentsVoucherPanel');
             const customerPaymentsHeading = element('cashflowsCustomerPaymentsHeading');
             const customerWiseActive = !!customerWisePanel && !customerWisePanel.hidden;
-            if (customerPaymentsVoucherPanel) customerPaymentsVoucherPanel.hidden = customerWiseActive;
-            if (customerPaymentsHeading) customerPaymentsHeading.textContent = customerWiseActive ? 'Customer-wise payments' : 'Customer payments';
+            const customerPeriodWiseActive = !!customerPeriodWisePanel && !customerPeriodWisePanel.hidden;
+            if (customerPaymentsVoucherPanel) customerPaymentsVoucherPanel.hidden = customerWiseActive || customerPeriodWiseActive;
+            if (customerPaymentsHeading) customerPaymentsHeading.textContent = customerPeriodWiseActive ? 'Period-wise customer payments' : (customerWiseActive ? 'Customer-wise payments' : 'Customer payments');
             const rows = (preview.customer_payment_details || []).map(function (row) {
                 return Object.assign({}, row, {
                     date_display: formatCashflowTransferDate(row.date || row.period_label || row.month),
@@ -635,7 +693,7 @@
                 { key: 'status_display', label: 'Status' },
                 { key: 'voucher_detail', label: 'Description' },
             ], rows, 'No customer payments identified.');
-            if (!customerWiseActive) element('cashflowsCustomerPaymentCount').textContent = formatCashflowDetailCount('cashflowsCustomerPaymentsTable', rows.length, 'payment(s)');
+            if (!customerWiseActive && !customerPeriodWiseActive) element('cashflowsCustomerPaymentCount').textContent = formatCashflowDetailCount('cashflowsCustomerPaymentsTable', rows.length, 'payment(s)');
             if (activeCashflowWindow === section) element('cashflowsCustomerPaymentsSection').hidden = false;
         } else if (section === 'deductions') {
             const rows = preview.deduction_details || [];
@@ -726,10 +784,10 @@
         if (selected && accounts.has(selected.toLowerCase())) select.value = selected;
     }
     function cashflowDrilldownContextKey(start, end) {
-        return [clientId, start, end, cashflowSelection.groupBy || 'month', cashflowTreasuryView || 'combined', cashflowReportRevision].join('|');
+        return [clientId, start, end, cashflowSelection.groupBy || 'month', cashflowTreasuryView || 'combined', cashflowReportRevision, cashflowReportSourceKey || 'unresolved'].join('|');
     }
     function cashflowSummaryContextKey(start, end, groupBy, treasuryView, revision) {
-        return [clientId, start, end, groupBy || 'month', treasuryView || 'combined', Number(revision || cashflowReportRevision || 0)].join('|');
+        return [clientId, start, end, groupBy || 'month', treasuryView || 'combined', Number(revision || cashflowReportRevision || 0), cashflowReportSourceKey || 'unresolved'].join('|');
     }
     const cashflowGroupingRank = { day: 0, fortnight: 1, month: 2, quarter: 3, half_year: 4, year: 5 };
     function cashflowGroupingCanAggregate(parentGroup, childGroup) {
@@ -931,7 +989,7 @@
     function findCashflowParentSummary(start, end, groupBy, treasuryView) {
         const entries = Array.from(cashflowSummaryCache.values()).reverse();
         for (const entry of entries) {
-            if (!entry || entry.revision !== cashflowReportRevision) continue;
+            if (!entry || entry.revision !== cashflowReportRevision || entry.sourceKey !== cashflowReportSourceKey) continue;
             const parent = entry.result;
             const parentStart = fromIso(parent && parent.period_start);
             const parentEnd = fromIso(parent && parent.period_end);
@@ -948,7 +1006,7 @@
         if (!result || !cashflowReportRevision || !result.period_start || !result.period_end) return;
         const key = cashflowSummaryContextKey(result.period_start, result.period_end, result.group_by, result.treasury_view, cashflowReportRevision);
         cashflowSummaryCache.delete(key);
-        cashflowSummaryCache.set(key, { result: result, revision: cashflowReportRevision });
+        cashflowSummaryCache.set(key, { result: result, revision: cashflowReportRevision, sourceKey: cashflowReportSourceKey });
         while (cashflowSummaryCache.size > cashflowSummaryCacheLimit) {
             cashflowSummaryCache.delete(cashflowSummaryCache.keys().next().value);
         }
@@ -957,7 +1015,7 @@
         const key = cashflowSummaryContextKey(start, end, groupBy, treasuryView, cashflowReportRevision);
         const entry = cashflowSummaryCache.get(key);
         if (!entry) return null;
-        if (entry.revision !== cashflowReportRevision) {
+        if (entry.revision !== cashflowReportRevision || entry.sourceKey !== cashflowReportSourceKey) {
             cashflowSummaryCache.delete(key);
             return null;
         }
@@ -974,17 +1032,29 @@
         const revision = Number(raw);
         return Number.isFinite(revision) && revision > 0 ? revision : 0;
     }
+    function cashflowReportSourceKeyFromResult(result) {
+        const source = result && result.source || {};
+        const metadata = source.metadata || {};
+        const raw = result && result.cashflow_report_source_key != null
+            ? result.cashflow_report_source_key
+            : (source.cashflow_report_source_key != null ? source.cashflow_report_source_key : metadata.cashflow_report_source_key);
+        return String(raw || '').trim();
+    }
+    function clearCashflowReportCaches() {
+        cashflowSummaryCache.clear();
+        cashflowDrilldownBaseCache.clear();
+        resetCashflowInlineLedgerState();
+        cashflowChildPreviews = {};
+    }
     function syncCashflowReportRevision(result) {
         const incoming = cashflowReportRevisionFromResult(result);
-        if (!incoming) return true;
-        if (cashflowReportRevision && incoming < cashflowReportRevision) return false;
-        if (cashflowReportRevision && incoming !== cashflowReportRevision) {
-            cashflowSummaryCache.clear();
-            cashflowDrilldownBaseCache.clear();
-            resetCashflowInlineLedgerState();
-            cashflowChildPreviews = {};
-        }
-        cashflowReportRevision = incoming;
+        const incomingSourceKey = cashflowReportSourceKeyFromResult(result);
+        if (incoming && cashflowReportRevision && incoming < cashflowReportRevision) return false;
+        const revisionChanged = Boolean(incoming && cashflowReportRevision && incoming !== cashflowReportRevision);
+        const sourceChanged = Boolean(incomingSourceKey && cashflowReportSourceKey && incomingSourceKey !== cashflowReportSourceKey);
+        if (revisionChanged || sourceChanged) clearCashflowReportCaches();
+        if (incoming) cashflowReportRevision = incoming;
+        if (incomingSourceKey) cashflowReportSourceKey = incomingSourceKey;
         cashflowRevisionCheckedAt = Date.now();
         return true;
     }
@@ -996,15 +1066,17 @@
         cashflowRevisionCheckPromise = api("/api/reconciliation/cashflows/revision?client_id=" + encodeURIComponent(clientId))
             .then(function (result) {
                 const incoming = Number(result && result.cashflow_report_revision || 0);
-                if (incoming && cashflowReportRevision && incoming !== cashflowReportRevision) {
-                    cashflowSummaryCache.clear();
-                    cashflowDrilldownBaseCache.clear();
-                    resetCashflowInlineLedgerState();
-                    cashflowChildPreviews = {};
-                    cashflowReportRevision = incoming;
+                const incomingSourceKey = String(result && result.cashflow_report_source_key || '').trim();
+                const revisionChanged = Boolean(incoming && cashflowReportRevision && incoming !== cashflowReportRevision);
+                const sourceChanged = Boolean(incomingSourceKey && cashflowReportSourceKey && incomingSourceKey !== cashflowReportSourceKey);
+                if (revisionChanged || sourceChanged) {
+                    clearCashflowReportCaches();
+                    if (incoming) cashflowReportRevision = incoming;
+                    if (incomingSourceKey) cashflowReportSourceKey = incomingSourceKey;
                     return false;
                 }
                 if (incoming) cashflowReportRevision = incoming;
+                if (incomingSourceKey) cashflowReportSourceKey = incomingSourceKey;
                 cashflowRevisionCheckedAt = Date.now();
                 return true;
             })
@@ -2518,7 +2590,7 @@
         try {
             if (cachedSummary) {
                 setCashflowProcessingStep('load', 'Checking the cached Cashflows summary.');
-                const isFresh = await ensureCashflowRevisionFresh(true, true);
+                const isFresh = await ensureCashflowRevisionFresh(false, true);
                 const freshSummary = isFresh
                     ? (takeCashflowSummary(start, end, cashflowSelection.groupBy, cashflowTreasuryView)
                         || findCashflowParentSummary(start, end, cashflowSelection.groupBy, cashflowTreasuryView))
@@ -2787,24 +2859,15 @@
         window.history.replaceState({}, '', window.location.pathname + '?' + params.toString());
         setReportView(false);
     }
+    const CASHFLOW_DEFAULT_START = '2026-01-01';
+    const CASHFLOW_DEFAULT_END = '2026-06-30';
     function defaultPeriods() {
-        const today = new Date();
         cashflowGroupingPreference = 'month';
-        const start = toIso(yearStart(today)); const end = toIso(today);
-        cashflowSelection = { start: start, end: end, groupBy: 'month' };
+        cashflowSelection = { start: CASHFLOW_DEFAULT_START, end: CASHFLOW_DEFAULT_END, groupBy: 'month' };
         syncCashflowSelection();
     }
     async function loadCashflowDefaultPeriods() {
-        try {
-            const result = await api('/api/settings/cashflows-defaults');
-            const resolved = result.resolved_period || {};
-            if (!resolved.start || !resolved.end) throw new Error('Incomplete Cashflows defaults');
-            cashflowGroupingPreference = 'month';
-            cashflowSelection = { start: resolved.start, end: resolved.end, groupBy: 'month' };
-            syncCashflowSelection();
-        } catch (error) {
-            defaultPeriods();
-        }
+        defaultPeriods();
     }
     async function initialise() {
         setCashflowSummaryFilterVisibility(false);
@@ -2974,15 +3037,23 @@
             const preview = await loadCashflowChild('customer_payments');
             const customerPreview = cashflowChildPreviews.customer_payments || preview;
             const customerWisePanel = element('cashflowsCustomerWisePanel');
+            const customerPeriodWisePanel = element('cashflowsCustomerPeriodWisePanel');
             const customerPaymentsVoucherPanel = element('cashflowsCustomerPaymentsVoucherPanel');
             const customerPaymentsHeading = element('cashflowsCustomerPaymentsHeading');
             const customerWiseSearch = element('cashflowsCustomerPaymentsCustomerSearch');
-            if (customerWiseSearch) customerWiseSearch.value = '';
+            if (customerWiseSearch) { customerWiseSearch.value = ''; customerWiseSearch.hidden = false; }
             if (customerWisePanel) customerWisePanel.hidden = true;
+            if (customerPeriodWisePanel) customerPeriodWisePanel.hidden = true;
             if (customerPaymentsVoucherPanel) customerPaymentsVoucherPanel.hidden = false;
             if (customerPaymentsHeading) customerPaymentsHeading.textContent = 'Customer payments';
             if (customerPreview) renderCashflowChild('customer_payments', customerPreview);
         }
+        const customerPeriodWiseButton = element('cashflowsCustomerPaymentsPeriodWiseButton');
+        if (customerPeriodWiseButton) customerPeriodWiseButton.addEventListener('click', async function () {
+            const preview = await loadCashflowChild('customer_payments');
+            const customerPreview = cashflowChildPreviews.customer_payments || preview;
+            if (customerPreview) renderCashflowCustomerPeriodWise(customerPreview);
+        });
         const customerWiseSearch = element('cashflowsCustomerPaymentsCustomerSearch');
         const customerWiseButton = element('cashflowsCustomerPaymentsCustomerWiseButton');
         const customerWiseClear = element('cashflowsCustomerPaymentsSearchClear');

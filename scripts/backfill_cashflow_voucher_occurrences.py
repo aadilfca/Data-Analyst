@@ -28,6 +28,7 @@ from services.cashflow_voucher_canonicalization import (
     resolve_voucher_occurrences,
 )
 from services.ledger_report_source import load_cashflow_voucher_occurrence_source
+from services.cashflow_voucher_occurrence_store import persist_postgres_occurrences, persist_sqlite_occurrences
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -93,160 +94,11 @@ def _plan_for_client(
     }
 
 
-def _write_values(decision: Mapping[str, Any]) -> tuple[Any, ...]:
-    return (
-        decision["client_id"],
-        decision["template_id"],
-        decision["upload_id"],
-        decision.get("voucher_id"),
-        decision.get("voucher_identity"),
-        decision["occurrence_key"],
-        decision["voucher_fingerprint"],
-        decision["fingerprint_version"],
-        decision.get("transaction_date"),
-        decision.get("source_line_count") or 0,
-        decision.get("source_extract_as_of"),
-        decision["decision_status"],
-        decision.get("decision_reason"),
-    )
-
-
-def _write_sqlite(conn: Any, decisions: Sequence[Mapping[str, Any]]) -> None:
-    if not decisions:
-        return
-    conn.executemany(
-        """
-        INSERT INTO cashflow_voucher_occurrences (
-            client_id, template_id, upload_id, voucher_id, voucher_identity,
-            occurrence_key, voucher_fingerprint, fingerprint_version,
-            transaction_date, source_line_count, source_extract_as_of,
-            decision_status, decision_reason, canonical_occurrence_id, resolved_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP)
-        ON CONFLICT(client_id, template_id, upload_id, occurrence_key) DO UPDATE SET
-            voucher_id = excluded.voucher_id,
-            voucher_identity = excluded.voucher_identity,
-            voucher_fingerprint = excluded.voucher_fingerprint,
-            fingerprint_version = excluded.fingerprint_version,
-            transaction_date = excluded.transaction_date,
-            source_line_count = excluded.source_line_count,
-            source_extract_as_of = excluded.source_extract_as_of,
-            decision_status = excluded.decision_status,
-            decision_reason = excluded.decision_reason,
-            canonical_occurrence_id = NULL,
-            resolved_at = CURRENT_TIMESTAMP
-        """,
-        [_write_values(decision) for decision in decisions],
-    )
-    _link_sqlite_canonicals(conn, decisions)
-    conn.commit()
-
-
-def _link_sqlite_canonicals(conn: Any, decisions: Sequence[Mapping[str, Any]]) -> None:
-    for client_id, template_id in sorted({(item["client_id"], item["template_id"]) for item in decisions}):
-        rows = conn.execute(
-            """
-            SELECT id, occurrence_key
-            FROM cashflow_voucher_occurrences
-            WHERE client_id = ? AND template_id = ?
-            """,
-            (client_id, template_id),
-        ).fetchall()
-        occurrence_ids = {row["occurrence_key"]: row["id"] for row in rows}
-        updates = []
-        for decision in decisions:
-            if decision["client_id"] != client_id or decision["template_id"] != template_id:
-                continue
-            updates.append(
-                (
-                    occurrence_ids.get(decision.get("canonical_occurrence_key")),
-                    decision["decision_status"],
-                    decision.get("decision_reason"),
-                    decision["client_id"],
-                    decision["template_id"],
-                    decision["upload_id"],
-                    decision["occurrence_key"],
-                )
-            )
-        conn.executemany(
-            """
-            UPDATE cashflow_voucher_occurrences
-            SET canonical_occurrence_id = ?, decision_status = ?, decision_reason = ?, resolved_at = CURRENT_TIMESTAMP
-            WHERE client_id = ? AND template_id = ? AND upload_id = ? AND occurrence_key = ?
-            """,
-            updates,
-        )
-
-
-def _write_postgres(conn: Any, decisions: Sequence[Mapping[str, Any]]) -> None:
-    if not decisions:
-        return
-    try:
-        with conn.cursor() as cursor:
-            cursor.executemany(
-                """
-                INSERT INTO cashflow_voucher_occurrences (
-                    client_id, template_id, upload_id, voucher_id, voucher_identity,
-                    occurrence_key, voucher_fingerprint, fingerprint_version,
-                    transaction_date, source_line_count, source_extract_as_of,
-                    decision_status, decision_reason, canonical_occurrence_id, resolved_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, CURRENT_TIMESTAMP)
-                ON CONFLICT(client_id, template_id, upload_id, occurrence_key) DO UPDATE SET
-                    voucher_id = EXCLUDED.voucher_id,
-                    voucher_identity = EXCLUDED.voucher_identity,
-                    voucher_fingerprint = EXCLUDED.voucher_fingerprint,
-                    fingerprint_version = EXCLUDED.fingerprint_version,
-                    transaction_date = EXCLUDED.transaction_date,
-                    source_line_count = EXCLUDED.source_line_count,
-                    source_extract_as_of = EXCLUDED.source_extract_as_of,
-                    decision_status = EXCLUDED.decision_status,
-                    decision_reason = EXCLUDED.decision_reason,
-                    canonical_occurrence_id = NULL,
-                    resolved_at = CURRENT_TIMESTAMP
-                """,
-                [_write_values(decision) for decision in decisions],
-            )
-            for client_id, template_id in sorted({(item["client_id"], item["template_id"]) for item in decisions}):
-                cursor.execute(
-                    """
-                    SELECT id, occurrence_key
-                    FROM cashflow_voucher_occurrences
-                    WHERE client_id = %s AND template_id = %s
-                    """,
-                    (client_id, template_id),
-                )
-                occurrence_ids = {key: identifier for identifier, key in cursor.fetchall()}
-                updates = []
-                for decision in decisions:
-                    if decision["client_id"] == client_id and decision["template_id"] == template_id:
-                        updates.append(
-                            (
-                                occurrence_ids.get(decision.get("canonical_occurrence_key")),
-                                decision["decision_status"],
-                                decision.get("decision_reason"),
-                                decision["client_id"],
-                                decision["template_id"],
-                                decision["upload_id"],
-                                decision["occurrence_key"],
-                            )
-                        )
-                cursor.executemany(
-                    """
-                    UPDATE cashflow_voucher_occurrences
-                    SET canonical_occurrence_id = %s, decision_status = %s, decision_reason = %s, resolved_at = CURRENT_TIMESTAMP
-                    WHERE client_id = %s AND template_id = %s AND upload_id = %s AND occurrence_key = %s
-                    """,
-                    updates,
-                )
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-
-
 def run_sqlite_backfill(conn: Any, *, client_id: int, apply: bool = False) -> dict[str, Any]:
     decisions, summary = _plan_for_client(client_id, _sqlite_query(conn))
     if apply and summary["ready"]:
-        _write_sqlite(conn, decisions)
+        persist_sqlite_occurrences(conn, decisions)
+        conn.commit()
     summary["mode"] = "apply" if apply else "dry_run"
     summary["written_occurrence_count"] = len(decisions) if apply and summary["ready"] else 0
     return summary
@@ -255,7 +107,8 @@ def run_sqlite_backfill(conn: Any, *, client_id: int, apply: bool = False) -> di
 def run_postgres_backfill(conn: Any, *, client_id: int, apply: bool = False) -> dict[str, Any]:
     decisions, summary = _plan_for_client(client_id, _postgres_query(conn))
     if apply and summary["ready"]:
-        _write_postgres(conn, decisions)
+        persist_postgres_occurrences(conn, decisions)
+        conn.commit()
     summary["mode"] = "apply" if apply else "dry_run"
     summary["written_occurrence_count"] = len(decisions) if apply and summary["ready"] else 0
     return summary

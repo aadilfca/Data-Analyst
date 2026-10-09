@@ -1,4 +1,7 @@
-# Development Plan
+## Active roadmap - Excel-style Cashflows database strategy - 2026-10-08
+
+This roadmap supersedes the earlier future-phase sequence while preserving its completed work. The design target is a simple PostgreSQL/Supabase implementation that behaves like the user's Excel model: immutable raw data, upload-time derived transaction data, and fast prepared summaries instead of repeated full recalculation.
+
 
 ### Prepared-read-model transition checkpoint - 2026-10-09
 
@@ -9,6 +12,83 @@ Completed: prepared-line, rollup, state, and job schema; initial backfill; incre
 Remaining: prove the 2-second half-year, 3-second full-year, and sub-500-ms warm targets; complete parallel reconciliation across all report views and exports; repair/retry the historical client-5 failed job through normal application recovery; then retire only proven-obsolete fallback work.
 
 **This phase:** Phase 4 transaction-safety hardening is locally accepted and ready for the next performance/reconciliation gate.
+### Phase 0 - Database baseline and design proof
+**Status:** Starting; read-only investigation first.
+
+Confirm the current schema, report source, derived-data grain, upload/batch metadata, indexes, snapshot/read-model path, and measured time spent in cold report generation, warm validation, category expansion, and category changes. No schema or application change is allowed until the design is documented and approved.
+
+**Exit condition:** one agreed database design covering raw Client Data, upload batches, winning Voucher IDs, prepared transaction rows, category revision, summary read models, cache invalidation, and required indexes.
+
+### Phase 1 - Business and accounting contract
+**Status:** Completed.
+
+The contract remains: one winning occurrence per normalized non-blank Voucher ID; retain every line from the winning upload; preserve raw data; assign categories through Account Control Centre; and use the same valid population across all Cashflows views.
+
+### Phase 2A - Duplication gate
+**Status:** Implemented and locally verified; retain as a completed gate.
+
+The shared latest-voucher selector prevents filename-based overlap while retaining legitimate repeated account lines. The parked canonical occurrence register remains optional until Phase 0 proves it is needed for performance.
+
+### Phase 2B - Active canonical Voucher register
+**Status:** Implemented and backfilled for client 5/template 1; Aadil acceptance remains pending.
+
+The existing occurrence register is now the preferred report selector, with the fresh-start SQL window retained as fallback. Historical decisions were backfilled from current prepared classifications, preserving raw Client Data and derived classification rows. The register contains one current occurrence per normalized non-blank Voucher ID, while older exact duplicates and superseded versions remain auditable.
+
+**Evidence:** 44 active uploads processed; 32,791 occurrence decisions stored; 13,014 current non-blank winners; zero duplicate current normalized Voucher IDs; 60,222 selected classified lines with no duplicate classification row join. The canonical source hash matches the previous latest-voucher population hash.
+
+**Remaining:** full cold report timing is not accepted here; Phase 6 must measure and optimise the remaining classification/source query. The browser/server cache and accounting totals must be tested by Aadil before Git actions.
+### Phase 3 - Upload-time prepared transaction data
+**Status:** Pending; follows Phase 0 approval.
+
+Prepare reusable normalized Voucher ID, account, counter-account, category, date/month/period, amount, party, and cashflow-classification fields during upload. Keep raw Client Data immutable and make prepared data rebuildable.
+
+### Phase 4 - Fast Cashflow read models
+**Status:** Partially present; optimisation pending.
+
+Use compact indexed summaries for the main report, category expansion, Customer Payments, customer-wise, period-wise, and XLSX outputs. Avoid repeating full derived-window preparation during every report request.
+
+### Phase 5 - Category-change and cache safety
+**Status:** Partially implemented; targeted refresh remains pending.
+
+Category changes must update the authoritative mapping, refresh affected prepared data or summaries, advance the report revision, invalidate stale caches, and prevent another Cashflows tab from silently retaining old results. Preserve the existing hard-refresh and revision protections.
+
+### Phase 6 - Performance validation
+**Status:** Pending.
+
+Acceptance targets are: full-year cold report approximately 3 seconds maximum; half-year and shorter cold report approximately 2 seconds or below; warm report under 500 ms. Measure category expansion separately for cold and warm use.
+
+### Phase 7 - Accounting reconciliation
+**Status:** Partially validated; full matrix pending.
+
+Validate ordinary receipts, payments, revised/backdated uploads, duplicate Voucher IDs, repeated account lines, blank Voucher IDs, category changes, Customer Payments, customer-wise, period-wise, and XLSX results.
+
+### Phase 8 - Cleanup, documentation, and Git
+**Status:** Pending.
+
+Decide on obsolete superseded code only after correctness and performance acceptance. Update documentation, wait for Aadil's local-server test, and stage/commit/push only after explicit approval.
+
+# Development Plan
+
+## Cashflows fresh-start duplication gate — 2026-10-08
+
+### Phase 2A — Derived-window duplication gate
+
+**Status:** Implemented and verified locally; Aadil acceptance remains pending.
+
+The derived classification window must use the same Excel-style source population as Cashflows: one latest complete occurrence per normalized Voucher ID, ordered by upload date and then upload ID. Raw Client Data and derived classification history remain immutable; blank Voucher IDs stay visible and separately flagged.
+
+**Exit condition:** the derived preview and Cashflows SQL source return no repeated non-blank normalized Voucher ID from older uploads, preserve every line from the winning occurrence, and retain legitimate repeated account lines. Only after this gate passes will the Phase 2 comparison report be accepted.
+
+### Phase 5A — Warm-cache freshness timing gate
+
+**Status:** Planned; log review shows the existing warm path is not yet within the agreed target.
+
+This gate follows Phase 5 cache-safety work and precedes Phase 6 performance optimization. The existing browser/server cache protection must remain authoritative: freshness checks cannot be removed merely to make the report appear faster. Measure the warm request as separate stages—freshness/revision validation, cached summary reuse, report rendering, and total time—then optimize the slow stage only where the evidence justifies it.
+
+The supplied WebInspector trace recorded a 2,439.7 ms Cashflows preview and two revision checks of 2,304.0 ms and 2,090.4 ms. Server wait accounted for almost all of each request, so the trace indicates an expensive freshness/source-identity check rather than a transfer-size or browser-rendering problem. The trace does not prove that the summary cache itself missed because it contains no repeated identical preview request.
+
+**Acceptance:** retain the cold target of approximately 2 seconds; run five repeated requests for the same complete report context after the first successful load, with every warm report generation under 500 ms end-to-end. Record the server revision-check and cached-summary stages separately. If the warm target fails, optimize the freshness lookup or request sequencing without weakening revision/source-key invalidation, stale-response protection, hard refresh, or accounting correctness.
+
 ## Adjusted priority - Verification workstreams - 2026-09-24
 
 Financial Statement preview groundwork is committed for future use, but Financial Statements and Notes remain deferred operationally. The active scope is verification of Cash, Bank, Local Vendor, Import Vendor, Export Customer, Payroll, and Contractor vouchers.

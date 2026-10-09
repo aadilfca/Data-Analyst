@@ -15,11 +15,16 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert "cashflowsCustomerPaymentsCustomerSearch" in html
     assert "cashflowsCustomerPaymentsCustomerOptions" in html
     assert "cashflowsCustomerPaymentsCustomerWiseButton" in html
+    assert "cashflowsCustomerPaymentsPeriodWiseButton" in html
+    assert "cashflowsCustomerPaymentsPeriodWiseSelect" not in html
+    assert "cashflowsCustomerPeriodWiseTable" in html
     assert "cashflowsCustomerWiseTable" in html
     assert "cashflowsCustomerPaymentsVoucherPanel" in html
     assert "cashflowsCustomerPaymentsHeading" in html
     assert "showCashflowVoucherPayments" in script
     assert "renderCashflowCustomerWise" in script
+    assert "renderCashflowCustomerPeriodWise" in script
+    assert "customer_payment_period_totals" in script
     assert "customer_payment_customer_totals" in script
     assert "customer_payment_reconciliation" in script
     assert "cashflowsTransactionsTable" in html
@@ -48,7 +53,10 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert "account_head" in script
     assert "cashflowDrilldownBaseCache" in script
     assert "cashflowReportRevision" in script
+    assert 'let cashflowReportSourceKey = "";' in script
     assert "cashflowReportRevisionFromResult" in script
+    assert "cashflowReportSourceKeyFromResult" in script
+    assert "cashflow_report_source_key" in script
     assert "metadata.cashflow_report_revision" in script
     assert "syncCashflowReportRevision" in script
     assert "resetCashflowDrilldownFilters" in script
@@ -176,6 +184,20 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert ".cashflows-toast" in styles
     assert ".cashflows-processing" in styles
     assert ".cashflows-processing-panel" in styles
+
+def test_cashflows_report_does_not_expose_preparation_status_polling():
+    html = (ROOT / "static" / "reconciliation.html").read_text(encoding="utf-8")
+    script = (ROOT / "static" / "reconciliation.js").read_text(encoding="utf-8")
+    account_control = (ROOT / "static" / "account_control_center.js").read_text(encoding="utf-8")
+
+    assert "cashflowsPreparationAlert" not in html
+    assert "/api/reconciliation/cashflows/preparation-status" not in script
+    assert "/api/reconciliation/cashflows/preparation-retry" not in script
+    assert "Back office Cashflows" not in script
+    assert "/api/reconciliation/cashflows/preparation-status" not in account_control
+    assert "/api/reconciliation/cashflows/preparation-retry" not in account_control
+    assert "Back office Cashflows" not in account_control
+
 
 def test_cashflows_summary_contains_inline_category_ledger_contract():
     inline_html = (ROOT / 'static' / 'reconciliation.html').read_text(encoding='utf-8')
