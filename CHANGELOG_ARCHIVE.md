@@ -1,5 +1,17 @@
 # Changelog Archive
 
+## Database management and backup policy - Phase 1 - 2026-10-09
+
+**Status:** Documentation complete. **Files:** `CLAUDE.md`, `CHANGELOG_ARCHIVE.md`.
+
+**Decision:** Supabase is the production working store, not the permanent archive. Keep one active client dataset/import, retain only current operational rows, prevent duplicate re-imports through normalized source and row identity, and keep generated files outside Supabase.
+
+**Controls:** Client deletion requires a scoped CSV/XLSX export package; whole-database or schema destruction requires a logical SQL dump. Backups must have two protected external copies and quarterly restore tests. Supabase retains only compact metadata, counts, fingerprints, checksums, and necessary procedure definitions/run summaries.
+
+**Capacity and maintenance:** Warn at 300 MB, stop new imports at 400 MB, and never intentionally approach the 500 MB Free-plan quota. Keep only primary/unique and measured query indexes; inspect bloat after large deletes and reserve `VACUUM FULL` or compaction for approved maintenance.
+
+**Boundary:** This phase changes documentation only. No live cleanup, deletion, migration, schema change, backup upload, or code implementation was performed. Later phases will implement and verify these controls.
+
 ## Storage cleanup freeze - Phase 0 - 2026-10-09
 
 **Status:** Complete. **Files:** `routers/storage_cleanup.py`, `static/storage_cleanup.html`, `static/storage_cleanup.js`, `CLAUDE.md`.

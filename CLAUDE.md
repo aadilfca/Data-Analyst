@@ -63,6 +63,17 @@ One line per file group: what it is now. Full build history for every entry live
 - **Automated backend tests**: `pytest` + FastAPI's `TestClient` (httpx-backed) are installed in `venv` (see `requirements-dev.txt` — deliberately kept out of `requirements.txt`, which stays production-accurate). `tests/` has 4 tests: `test_verification_indexes.py` and `test_upload_validation_counts.py` (pure function/schema checks) plus the newer `test_app_smoke.py` (real HTTP request/response through `main.app` via `TestClient`, proving the app actually boots and routers respond). All three test files use the same isolation pattern — monkeypatch `database.DB_NAME` to a `tempfile.TemporaryDirectory()` path and call `init_db()` before touching anything — **never** the real `test.db`; follow this pattern for any new test rather than hitting the live database. Run before reporting a backend fix "done" when it's plausible to catch it this way — this project's Status log has multiple instances of the same bug (e.g. Cleared/Query status logic) getting fixed, silently re-broken, and fixed again.
 - **Browser automation for UI verification**: `playwright` (Python, also in `requirements-dev.txt`) is installed in `venv` — `./venv/Scripts/python.exe -c "from playwright.sync_api import sync_playwright; ..."` launches a real headless Chromium against the live dev server (`localhost:5000`), no npm/Node install needed. Use it to actually reproduce/screenshot a UI bug (real DOM, real CSS, `page.evaluate()` for computed styles/`getBoundingClientRect()`, `performance.getEntriesByType('resource')` for cache/timing) instead of guessing from a description alone.
 
+## Database management and backup rules
+- Production Supabase is a working store, not an archive; keep one active client dataset/import and only current operational rows.
+- Do not store source Excel, CSV, SQL dumps, reports, or workpapers in Supabase Database or Storage; keep controlled external/offline copies and only metadata, counts, fingerprints, and checksums in Supabase.
+- Every re-import compares a normalized source fingerprint and stable row identity, then applies only additions, changes, and explicit removals; unchanged rows and historical duplicates are never copied.
+- Before client-data, audit-result, or full-table deletion, require an export package: scoped CSV/XLSX for client deletion and a full logical SQL dump for whole-database or schema destruction.
+- Keep at least two protected external backup copies and test restoration at least quarterly; retention follows firm and client obligations.
+- Treat 300 MB as a warning and 400 MB as an import-stop threshold; never intentionally approach Supabase Free's 500 MB database quota. Review table, index, and bloat growth weekly.
+- Retain primary/unique and measured query indexes; remove only unused indexes or indexes owned by dropped tables. Inspect bloat after large deletes; reserve `VACUUM FULL` and compaction for approved maintenance.
+- Retain audit-procedure definitions and compact run metadata; export detailed workpapers/results and remove temporary or intermediate copies after completion.
+- Future code affecting imports, deletion, reports, procedures, cleanup, or backups must preserve these rules and update the matching `CHANGELOG_ARCHIVE.md` entry.
+
 ## Conventions
 - No inline event handlers (onclick, onload, onchange, etc.) in HTML
 - No <script> inside HTML containers
@@ -222,6 +233,7 @@ One line per file group: what it is now. Full build history for every entry live
 ## Status log
 
 - Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; performance findings reference the investigation documents.
+- 2026-10-09: Phase 1 documented Supabase working-set, backup-before-delete, external archive, index/vacuum, and 500 MB safety rules in `CLAUDE.md`.
 - 2026-10-08: Phase 1 added idempotent Cashflows prepared-line, rollup, state, and job schema in SQLite/PostgreSQL with focused tests.
 - 2026-10-08: Phase 2 added full initial prepared Cashflows backfill service, operator script, eligibility/category rules, and regression coverage.
 - 2026-10-08: Phase 3 added affected-occurrence upload preparation, exact-duplicate no-op handling, copy-on-write revisions, and affected rollup refreshes.
