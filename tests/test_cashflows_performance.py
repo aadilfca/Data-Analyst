@@ -414,12 +414,10 @@ def test_cashflow_snapshot_persists_targeted_projection_rows_when_requested():
         write_drilldown_projection=True,
     )
 
-    assert len(writes) == 2
+    assert len(writes) == 1
     assert "cash_bank_summary_read_models" in writes[0][0]
-    assert "cashflow_ledger_rollup_read_models" in writes[1][0]
+    assert "cashflow_ledger_rollup_read_models" not in writes[0][0]
     assert writes[0][1][2] == "canonical-v1"
-    assert writes[1][1][2] == "canonical-v1"
-    assert len(writes[1][1]) == 17
 
 
 def test_cashflow_snapshot_deduplicates_projection_conflict_keys_before_bulk_upsert():
@@ -453,11 +451,9 @@ def test_cashflow_snapshot_deduplicates_projection_conflict_keys_before_bulk_ups
         write_drilldown_projection=True,
     )
 
-    assert len(writes) == 2
-    projection_params = writes[1][1]
-    assert len(projection_params) == 17
-    assert projection_params[14] == 150.0
-    assert projection_params[15] == 3
+    assert len(writes) == 1
+    assert "cashflow_ledger_rollup_read_models" not in writes[0][0]
+    assert "cashflow_ledger_rollups" in writes[0][1][-1]
 
 
 def test_cashflow_prepared_drilldown_loader_targets_one_category_and_reaggregates_periods():

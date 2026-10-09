@@ -10,7 +10,7 @@ from openpyxl import load_workbook
 
 from routers import reconciliation
 from services.ledger_group_summary import build_cashflow_summary, build_financial_statement_summary
-from services.ledger_report_source import CASHFLOW_CHILD_DETAILS_VERSION, CASHFLOW_DRILLDOWN_DETAILS_VERSION, CASHFLOW_SUMMARY_PAYLOAD_VERSION, load_cashflow_prepared_drilldown
+from services.ledger_report_source import CASHFLOW_CHILD_DETAILS_VERSION, CASHFLOW_DRILLDOWN_DETAILS_VERSION, CASHFLOW_SUMMARY_PAYLOAD_VERSION, load_cashflow_prepared_drilldown, load_cashflow_prepared_rollup_summary
 from routers import settings as settings_router
 from services.reconciliation_xlsx import export_cashflow_xlsx
 
@@ -72,6 +72,22 @@ def _cashflow_summary():
         "category_review_count": 0,
         "receipt_presentation": "net",
     }
+
+
+def test_prepared_rollup_summary_maps_fortnights_across_months():
+    def query(sql, params=None):
+        if "cashflow_preparation_state" in sql: return [{"active_preparation_revision": 17, "status": "ready"}]
+        if "COUNT(DISTINCT voucher_id)" in sql: return [{"period_key": key, "selected_voucher_count": 1} for key in ("2026-01-F1", "2026-01-F2", "2026-02-F1", "2026-02-F2")]
+        assert "FROM cashflow_prepared_rollups" in sql
+        return [{"period_key": key, "category_label_snapshot": "Sales", "account_code": "4000", "account_name": "Sales", "treasury_type": "", "debit_total": 0, "credit_total": amount, "net_total": -amount, "line_count": 1} for key, amount in (("2026-01-F1", 100), ("2026-01-F2", 200), ("2026-02-F1", 300), ("2026-02-F2", 400))]
+    result = load_cashflow_prepared_rollup_summary(
+        7, journal_template_id=9, period_start="2026-01-01", period_end="2026-02-28",
+        group_by="fortnight", receipt_presentation="net", query_fn=query,
+    )
+    assert [period["key"] for period in result["summary"]["periods"]] == ["2026-01-1", "2026-01-2", "2026-02-1", "2026-02-2"]
+    totals = result["summary"]["category_totals"].loc["Sales"]
+    assert [totals[key] for key in ("2026-01-1", "2026-01-2", "2026-02-1", "2026-02-2")] == [100.0, 200.0, 300.0, 400.0]
+    assert result["summary"]["selected_voucher_count"] == 4
 
 
 def _saved_codes(_client_id, group_label=None):

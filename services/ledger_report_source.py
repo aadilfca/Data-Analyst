@@ -1287,10 +1287,19 @@ def load_cashflow_prepared_rollup_summary(
         return None
 
     grain = "fortnight" if grouping == "fortnight" else "month"
+
+    def stored_period_key(period: Mapping[str, Any]) -> str:
+        """Translate display fortnight keys to the persisted F1/F2 format."""
+        key = str(period["key"])
+        if grain == "fortnight":
+            return f"{key[:7]}-F{key[-1:]}"
+        return key
+
     target_periods = _cashflow_periods(period_start, period_end, grouping)
     base_periods = _cashflow_periods(period_start, period_end, grain)
     if not target_periods or not base_periods:
         return None
+    stored_base_period_keys = [stored_period_key(period) for period in base_periods]
 
     state_rows = query_fn(
         """
@@ -1325,8 +1334,8 @@ def load_cashflow_prepared_rollup_summary(
             journal_template_id,
             preparation_revision,
             grain,
-            base_periods[0]["key"],
-            base_periods[-1]["key"],
+            stored_base_period_keys[0],
+            stored_base_period_keys[-1],
         ),
     )
     if not rows:
@@ -1344,7 +1353,7 @@ def load_cashflow_prepared_rollup_summary(
             None,
         )
         if target is not None:
-            target_for_base[str(base["key"])] = target
+            target_for_base[stored_period_key(base)] = target
 
     metric_period_column = "transaction_fortnight" if grain == "fortnight" else "transaction_month"
     voucher_metric_rows = query_fn(
@@ -3022,7 +3031,12 @@ def store_cashflow_summary_read_model(
     write_fn: Callable[..., Any] = execute_write_pg,
     write_drilldown_projection: bool = False,
 ) -> None:
-    """Persist one completed summary-only snapshot for safe repeat loads."""
+    """Persist the replaceable current summary cache without legacy rollup copies.
+
+    Current Cashflows detail and drill-down data come from the prepared lines and
+    prepared rollups. The old cashflow_ledger_rollup_read_models projection is
+    retained for later cleanup but is no longer written by new reports.
+    """
     if journal_template_id is None or not source_upload_ids:
         return
     payload = _cashflow_summary_payload(summary)
@@ -3053,18 +3067,9 @@ def store_cashflow_summary_read_model(
             json.dumps(payload),
         ),
     )
-    if write_drilldown_projection:
-        _store_cashflow_drilldown_projection(
-            client_id,
-            journal_template_id=int(journal_template_id),
-            source_upload_ids=source_upload_ids,
-            source_key=source_cache_key,
-            configuration_version=configuration_version,
-            report_revision=int(report_revision or 1),
-            summary=summary,
-            write_fn=write_fn,
-        )
-
+    # The legacy drill-down projection is intentionally not written. It used
+    # report_revision in its conflict key and therefore accumulated full report
+    # copies. Prepared lines/rollups are the current-only detail source.
 
 def load_cashflow_prepared_drilldown(
     client_id: int,
