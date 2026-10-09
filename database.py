@@ -430,6 +430,17 @@ def init_db():
                 status TEXT DEFAULT 'Pending',
                 upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 client_id INTEGER,
+                template_id INTEGER,
+                uploaded_by TEXT DEFAULT 'Analyst',
+                comparison_mode TEXT,
+                date_range_start TEXT,
+                date_range_end TEXT,
+                summary_total_count INTEGER DEFAULT 0,
+                summary_added_count INTEGER DEFAULT 0,
+                summary_changed_count INTEGER DEFAULT 0,
+                summary_removed_count INTEGER DEFAULT 0,
+                summary_unchanged_count INTEGER DEFAULT 0,
+                summary_updated_at TIMESTAMP,
                 FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE SET NULL
             )
         ''')
@@ -1307,15 +1318,33 @@ def init_db():
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rules_config_changes_version ON audit_rules_config_changes (config_version)")
 
         # --- Schema upgrades for existing databases ---
-        # Add client_id column to uploaded_files if missing
+        # Keep upload history compact: file metadata plus one current summary, never
+        # a second copy of the workbook or a full row-level report.
         try:
             cur = conn.execute("PRAGMA table_info(uploaded_files)")
             columns = [row[1] for row in cur.fetchall()]
-            if 'client_id' not in columns:
-                conn.execute("ALTER TABLE uploaded_files ADD COLUMN client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL")
-                print("✅ Added client_id column to uploaded_files")
+            upload_summary_columns = {
+                'client_id': 'INTEGER REFERENCES clients(id) ON DELETE SET NULL',
+                'template_id': 'INTEGER REFERENCES templates(id) ON DELETE SET NULL',
+                'uploaded_by': "TEXT DEFAULT 'Analyst'",
+                'comparison_mode': 'TEXT',
+                'date_range_start': 'TEXT',
+                'date_range_end': 'TEXT',
+                'summary_total_count': 'INTEGER DEFAULT 0',
+                'summary_added_count': 'INTEGER DEFAULT 0',
+                'summary_changed_count': 'INTEGER DEFAULT 0',
+                'summary_removed_count': 'INTEGER DEFAULT 0',
+                'summary_unchanged_count': 'INTEGER DEFAULT 0',
+                'summary_updated_at': 'TIMESTAMP',
+            }
+            for column_name, definition in upload_summary_columns.items():
+                if column_name not in columns:
+                    conn.execute(
+                        f"ALTER TABLE uploaded_files ADD COLUMN {column_name} {definition}"
+                    )
+                    print(f"✅ Added {column_name} column to uploaded_files")
         except Exception as e:
-            print("⚠️ Could not add client_id to uploaded_files:", e)
+            print("⚠️ Could not add upload summary columns:", e)
         
         # Create indexes on client_data for performance
         conn.execute("CREATE INDEX IF NOT EXISTS idx_client_data_client ON client_data (client_id)")
@@ -4190,6 +4219,22 @@ def _ensure_postgres_upload_validation_plans(conn):
         )
 
 
+def _ensure_postgres_upload_summary_columns(conn):
+    """Add compact upload-summary metadata to existing Postgres schemas."""
+    with conn.cursor() as cur:
+        cur.execute("ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS template_id INTEGER REFERENCES templates(id) ON DELETE SET NULL")
+        cur.execute("ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS uploaded_by TEXT DEFAULT 'Analyst'")
+        cur.execute("ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS comparison_mode TEXT")
+        cur.execute("ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS date_range_start TEXT")
+        cur.execute("ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS date_range_end TEXT")
+        cur.execute("ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS summary_total_count INTEGER DEFAULT 0")
+        cur.execute("ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS summary_added_count INTEGER DEFAULT 0")
+        cur.execute("ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS summary_changed_count INTEGER DEFAULT 0")
+        cur.execute("ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS summary_removed_count INTEGER DEFAULT 0")
+        cur.execute("ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS summary_unchanged_count INTEGER DEFAULT 0")
+        cur.execute("ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS summary_updated_at TIMESTAMPTZ")
+
+
 def _ensure_postgres_audit_rule_assertions(conn):
     """Add audit_rule_assertions (+ its 5 seed rows) to an already-marked Postgres schema.
 
@@ -4662,6 +4707,7 @@ def init_db_postgres(conn):
         cur.close()
         _ensure_postgres_storage_cleanup_runs(conn)
         _ensure_postgres_upload_validation_plans(conn)
+        _ensure_postgres_upload_summary_columns(conn)
         migrated_document_type = _ensure_postgres_audit_rule_document_type_constraint(conn)
         migrated_form_columns = _ensure_postgres_form_field_columns(conn)
         migrated_form_tables = _ensure_postgres_form_tables(conn)
@@ -4798,7 +4844,18 @@ def init_db_postgres(conn):
             record_count INTEGER DEFAULT 0,
             status TEXT DEFAULT 'Pending',
             upload_date TIMESTAMPTZ DEFAULT now(),
-            client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL
+            client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+            template_id INTEGER REFERENCES templates(id) ON DELETE SET NULL,
+            uploaded_by TEXT DEFAULT 'Analyst',
+            comparison_mode TEXT,
+            date_range_start TEXT,
+            date_range_end TEXT,
+            summary_total_count INTEGER DEFAULT 0,
+            summary_added_count INTEGER DEFAULT 0,
+            summary_changed_count INTEGER DEFAULT 0,
+            summary_removed_count INTEGER DEFAULT 0,
+            summary_unchanged_count INTEGER DEFAULT 0,
+            summary_updated_at TIMESTAMPTZ
         )
     ''', "uploaded_files")
 

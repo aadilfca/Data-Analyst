@@ -83,6 +83,7 @@ let uploadActionInFlight = false;
 let validationStatus = 'idle'; // 'idle' | 'validating' | 'valid' | 'invalid'
 let validationPlanId = null;
 let lastChangePreview = null;
+let lastUploadSummary = null;
 // Pre-import Rate mode visibility (Phase D of the Rate-derivation requirement) --
 // the validate response's rate_mode field ({template_setting, effective_source, label}),
 // or null for a non-eligible template. Only ever trustworthy alongside a 'valid'
@@ -362,6 +363,7 @@ function resetValidationState() {
     validationStatus = 'idle';
     validationPlanId = null;
     lastChangePreview = null;
+    lastUploadSummary = null;
     if (importBtn) {
         importBtn.innerHTML = 'Validate';
         importBtn.style.background = '';
@@ -1387,29 +1389,65 @@ if (resetBtn) {
         showStatus('🔄 Reset complete. Select a template and upload a file.', 'info');
     });
 }
-function downloadChangeReport(report) {
-    if (!report || !report.length) return;
+function downloadChangeReport(report, summary = {}) {
+    const reportRows = Array.isArray(report) ? report : [];
+    const dateRange = summary.date_range || {};
     const escapeCsv = value => {
-        const text = Array.isArray(value) ? value.join('; ') : (value ?? '');
+        let text = value;
+        if (Array.isArray(value)) text = value.join('; ');
+        else if (value && typeof value === 'object') text = JSON.stringify(value);
+        text = text ?? '';
         return `"${String(text).replace(/"/g, '""')}"`;
     };
-    const header = ['Action', 'Client Data ID', 'Document ID', 'Line Key', 'Changed Fields'];
-    const rows = report.map(item => [
-        item.action,
-        item.client_data_id,
-        item.document_id,
-        item.line_key,
-        item.changed_fields,
-    ]);
+    const header = [
+        'Upload ID', 'Upload Date', 'Uploaded By', 'File Name', 'Template',
+        'Comparison Mode', 'Date Range Start', 'Date Range End', 'Total Lines',
+        'Added', 'Changed', 'Removed', 'Unchanged', 'Action', 'Client Data ID',
+        'Document ID', 'Line Key', 'Changed Fields', 'Old Values', 'New Values'
+    ];
+    const metadata = [
+        summary.upload_id,
+        summary.upload_date,
+        summary.uploaded_by,
+        summary.file_name,
+        summary.template_name,
+        summary.comparison_mode,
+        dateRange.start,
+        dateRange.end,
+        summary.total_rows,
+        summary.added_count,
+        summary.changed_count,
+        summary.removed_count,
+        summary.unchanged_count,
+    ];
+    const rows = reportRows.length
+        ? reportRows.map(item => [
+            ...metadata,
+            item.action,
+            item.client_data_id,
+            item.document_id,
+            item.line_key,
+            item.changed_fields,
+            item.old_values,
+            item.new_values,
+        ])
+        : [[...metadata, 'SUMMARY', '', '', '', '', '', '']];
     const csv = [header, ...rows].map(row => row.map(escapeCsv).join(',')).join('\r\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = 'upload-change-report.csv';
+    anchor.download = `upload-change-report-${summary.upload_id || 'latest'}.csv`;
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
     setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function attachValidationReportDownload(report, summary) {
+    const button = document.getElementById('downloadValidationReportBtn');
+    if (button) {
+        button.addEventListener('click', () => downloadChangeReport(report, summary));
+    }
 }
 
 // ---------- IMPORT SUMMARY POPUP ----------
@@ -1446,6 +1484,7 @@ function showImportSummary(result) {
     const newRows = cd.new_count || 0;
     const deleted = cd.missing_count || result.deleted_count || 0;
     const changeReport = cd.report || [];
+    const uploadSummary = result.upload_summary || {};
     
     let statusIcon = '✅';
     let statusColor = '#16a34a';
@@ -1573,7 +1612,7 @@ function showImportSummary(result) {
         ` : ''}
         <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:20px; flex-wrap:wrap;">
             <a href="/static/databank.html" target="_blank" style="padding:8px 20px; background:#3b82f6; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer; text-decoration:none; display:inline-block; font-size:14px;">View in Data Bank</a>
-            ${changeReport.length ? '<button id="downloadChangeReportBtn" style="padding:8px 20px; background:#0f766e; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer; font-size:14px;">Download change report</button>' : ''}
+            <button id="downloadChangeReportBtn" style="padding:8px 20px; background:#0f766e; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer; font-size:14px;">Download upload report</button>
             <button id="importSummaryCloseBtn" style="padding:8px 24px; background:#e2e8f0; color:#1a1a2e; border:none; border-radius:6px; font-weight:600; cursor:pointer; font-size:14px;">Close</button>
         </div>
     `;
@@ -1583,7 +1622,7 @@ function showImportSummary(result) {
 
     const downloadReportBtn = overlay.querySelector('#downloadChangeReportBtn');
     if (downloadReportBtn) {
-        downloadReportBtn.addEventListener('click', () => downloadChangeReport(changeReport));
+        downloadReportBtn.addEventListener('click', () => downloadChangeReport(changeReport, uploadSummary));
     }
     
     // Close on button click
@@ -1938,6 +1977,7 @@ if (importBtn) {
             const newRowsCount = result.new_rows_count || 0;
             const existingRowsCount = result.existing_rows_count || 0;
             lastChangePreview = result.change_detection || null;
+            lastUploadSummary = result.upload_summary || null;
             const previewAdded = lastChangePreview ? (lastChangePreview.new_count || 0) : newRowsCount;
             const previewChanged = lastChangePreview ? (lastChangePreview.changed_count || 0) : 0;
             const previewRemoved = lastChangePreview ? (lastChangePreview.missing_count || 0) : 0;
@@ -1958,6 +1998,16 @@ if (importBtn) {
             } else {
                 showStatus('ℹ️ Validation complete. All validated lines are unchanged; no import is available.', 'info', extraMsg + changePreviewMsg);
                 setBadge('ℹ️ Upload ignored: no changes');
+            }
+            if (lastUploadSummary && statusMessage) {
+                statusMessage.insertAdjacentHTML(
+                    'beforeend',
+                    '<div style="font-size:12px; margin-top:4px;"><button id="downloadValidationReportBtn" style="padding:4px 10px; background:#0f766e; color:white; border:none; border-radius:5px; font-weight:600; cursor:pointer; font-size:11px;">Download upload report</button></div>'
+                );
+                attachValidationReportDownload(
+                    lastChangePreview ? lastChangePreview.report : [],
+                    lastUploadSummary
+                );
             }
             updatePreviewButtonState();
             // Validation succeeded -- this is the genuine "ready to import" milestone the step

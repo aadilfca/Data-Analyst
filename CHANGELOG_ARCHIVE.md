@@ -1,5 +1,13 @@
 # Changelog Archive
 
+## Lightweight upload change reports - 2026-10-09
+
+**Status:** Complete. **Files:** `database.py`, `routers/import_export.py`, `static/upload.js`, `tests/test_upload_validation_counts.py`.
+
+Upload metadata now records the authenticated uploader. `uploaded_files` retains one compact summary per upload: template, comparison mode, date range, row counts, and summary timestamp. The detailed report remains in the response/browser only and is downloadable as CSV; it includes upload metadata, action, document/line key, changed fields, and old/new values only for changed fields. Unchanged uploads remain `Ignored` and can also download a summary report. No full report JSON or historical row copy is stored.
+
+**Checks:** `venv/Scripts/python.exe -m pytest tests/test_upload_validation_counts.py -q` (9 passed); Python compilation, JavaScript syntax, and `git diff --check` passed.
+
 ## Server-side upload validation plans - 2026-10-09
 
 **Status:** Complete. **Files:** `database.py`, `routers/import_export.py`, `static/upload.html`, `static/upload.js`, `tests/test_upload_validation_counts.py`.

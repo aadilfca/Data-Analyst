@@ -18,11 +18,11 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, real DB size (Postgres/SQLite) in MB, and live overview KPIs. See CHANGELOG_ARCHIVE.md.
 - routers/data.py + static/databank.* → Client Data Bank availability, calendars, overdue uploads, preview/filtering, frequency settings, and guarded mutations. See CHANGELOG_ARCHIVE.md.
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
-- routers/import_export.py -> Excel upload, mapping, server-side validation plans, action-only import/change detection, upload-time Cashflows resolution, export, and guarded actions. See CHANGELOG_ARCHIVE.md.
+- routers/import_export.py -> Excel upload, mapping, server-side validation plans, action-only import/change detection, compact upload summaries, downloadable change reports, upload-time Cashflows resolution, export, and guarded actions. See CHANGELOG_ARCHIVE.md.
 - routers/settings.py + static/settings.* → application settings and the firm-wide Holiday list; header/tabs rendered by `client_context.js`. See CHANGELOG_ARCHIVE.md.
 - routers/templates.py + static/templates.*, static/columns.* → master-column and template CRUD, mapping/reordering, rate rules, backup/restore, and setup loading feedback. See CHANGELOG_ARCHIVE.md.
 - static/client_settings.html, static/client_settings.js -> retired direct-bookmark information page; all Verification account routing is configured centrally in Account Control Centre. See CHANGELOG_ARCHIVE.md.
-- database.py, main.py → SQLite/PostgreSQL schema, upload validation-plan migration, Account Set migrations, router registration, and versioned Rulebook snapshot storage. See CHANGELOG_ARCHIVE.md.
+- database.py, main.py → SQLite/PostgreSQL schema, upload validation-plan and compact-summary migrations, Account Set migrations, router registration, and versioned Rulebook snapshot storage. See CHANGELOG_ARCHIVE.md.
 - database.py (users/sessions) → authenticated users and session records for Login → Client Cards → Dashboard; bcrypt, session-stored selected client, seeded placeholder admin. See CHANGELOG_ARCHIVE.md.
 - routers/auth.py → login/logout, current-session lookup, client selection, `get_current_user()`/`require_admin()` guards; timezone-aware session expiry. See CHANGELOG_ARCHIVE.md.
 - routers/users.py → Admin user management (list/create/edit/deactivate/reactivate/reset password); every endpoint `require_admin`, mutations SQLite-audited. See CHANGELOG_ARCHIVE.md.
@@ -251,3 +251,4 @@ Do this automatically at the end of the session without being asked.
 - 2026-10-02: Account Control Centre Phase 2 added inline leaf-save and parent-bulk processing feedback; regression coverage added.
 - 2026-10-02: Account Control Centre Phase 3 added processing feedback for category actions, Cash Flow settings, Treasury saves, and template mapping; regression coverage added.
 - 2026-10-09: Upload Validate now creates expiring server-side action plans; Import applies only approved additions, changes, and removals with stale-plan guards.
+- 2026-10-09: Phase 3 adds compact upload summaries, authenticated uploader metadata, changed-field old/new report values, and downloadable reports without storing detailed report copies.

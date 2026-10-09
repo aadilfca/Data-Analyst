@@ -4,12 +4,13 @@ import unittest
 from unittest.mock import patch
 
 import database
-from database import execute_write, init_db
+from database import execute_query, execute_write, init_db
 from routers.import_export import (
     ColumnMapping,
     ImportRequest,
     _build_validation_plan_payload,
     _validation_request_signature,
+    build_change_report,
     compare_transactions,
     count_new_and_existing_rows,
 )
@@ -276,6 +277,53 @@ class UploadValidationCountTests(unittest.TestCase):
             _validation_request_signature(first),
             _validation_request_signature(second),
         )
+
+    def test_change_report_keeps_old_and_new_values_only_for_changed_fields(self):
+        template_cols = [
+            {"id": 1, "column_name": "Voucher", "data_type": "Text"},
+            {"id": 2, "column_name": "Amount", "data_type": "Numeric"},
+            {"id": 3, "column_name": "Narration", "data_type": "Text"},
+        ]
+        report = build_change_report(
+            {
+                "changed": [{
+                    "client_data_id": 10,
+                    "old_row_data": {"Voucher": "CPV-1", "Amount": 100, "Narration": "old"},
+                    "new_row_data": {"Voucher": "CPV-1", "Amount": 125, "Narration": "new"},
+                }],
+                "new": [],
+                "missing": [],
+            },
+            template_cols,
+            1,
+        )
+
+        self.assertEqual(report[0]["changed_fields"], ["Amount", "Narration"])
+        self.assertEqual(report[0]["old_values"], {"Amount": 100, "Narration": "old"})
+        self.assertEqual(report[0]["new_values"], {"Amount": 125, "Narration": "new"})
+        self.assertNotIn("old_row_data", report[0])
+        self.assertNotIn("new_row_data", report[0])
+
+    def test_uploaded_files_has_only_compact_upload_summary_columns(self):
+        columns = {
+            row["name"]
+            for row in execute_query("PRAGMA table_info(uploaded_files)")
+        }
+
+        self.assertTrue({
+            "template_id",
+            "uploaded_by",
+            "comparison_mode",
+            "date_range_start",
+            "date_range_end",
+            "summary_total_count",
+            "summary_added_count",
+            "summary_changed_count",
+            "summary_removed_count",
+            "summary_unchanged_count",
+            "summary_updated_at",
+        }.issubset(columns))
+        self.assertNotIn("change_report_json", columns)
 
 if __name__ == "__main__":
     unittest.main()

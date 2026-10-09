@@ -1,4 +1,4 @@
-from fastapi import APIRouter, BackgroundTasks, File, UploadFile, HTTPException, Body
+from fastapi import APIRouter, BackgroundTasks, Depends, File, UploadFile, HTTPException, Body
 from fastapi.responses import StreamingResponse
 import hashlib, os, json, logging, openpyxl, pandas as pd
 from io import BytesIO
@@ -21,6 +21,7 @@ from services.cashflow_voucher_occurrence_store import resolve_upload_occurrence
 from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime, time
+from routers.auth import get_current_user
 
 # ⭐ MUST HAVE THIS LINE
 router = APIRouter()
@@ -484,6 +485,14 @@ def build_change_report(change_detection: dict, template_cols: list, template_id
             "document_id": old_row.get(template_cols[0]["column_name"]) if template_cols else None,
             "line_key": _comparison_line_key(template_cols, new_row, template_id),
             "changed_fields": _changed_field_names(old_row, new_row),
+            "old_values": {
+                field: old_row.get(field)
+                for field in _changed_field_names(old_row, new_row)
+            },
+            "new_values": {
+                field: new_row.get(field)
+                for field in _changed_field_names(old_row, new_row)
+            },
         })
     for row_data in change_detection.get("new", []):
         report.append({
@@ -517,6 +526,83 @@ def public_change_detection(change_detection: dict, template_cols: list, templat
         "date_range": change_detection.get("date_range"),
         "report": build_change_report(change_detection, template_cols, template_id),
     }
+
+
+def _response_timestamp(value):
+    if value is None:
+        return None
+    return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+
+def _build_upload_summary(
+    file_info: dict,
+    template: dict,
+    request: "ImportRequest",
+    change_detection: dict,
+    total_rows: int,
+    status: Optional[str] = None,
+) -> dict:
+    """Build metadata/counts only; detailed action rows remain download-only."""
+    date_range = change_detection.get("date_range") or {}
+    return {
+        "upload_id": request.file_id,
+        "file_name": file_info.get("file_name"),
+        "upload_date": _response_timestamp(file_info.get("upload_date")),
+        "uploaded_by": file_info.get("uploaded_by") or "Analyst",
+        "client_id": request.client_id,
+        "template_id": request.template_id,
+        "template_name": template.get("template_name"),
+        "comparison_mode": change_detection.get("comparison_mode") or request.comparison_mode,
+        "date_range": date_range,
+        "status": status or file_info.get("status"),
+        "total_rows": total_rows,
+        "added_count": change_detection.get("new_count", 0),
+        "changed_count": change_detection.get("changed_count", 0),
+        "removed_count": change_detection.get("missing_count", 0),
+        "unchanged_count": change_detection.get("unchanged_count", 0),
+    }
+
+
+def _persist_upload_summary(
+    request: "ImportRequest",
+    change_detection: dict,
+    total_rows: int,
+    status: Optional[str] = None,
+):
+    """Persist one small summary on uploaded_files; never persist the detailed report."""
+    date_range = change_detection.get("date_range") or {}
+    assignments = [
+        "client_id = %s",
+        "template_id = %s",
+        "comparison_mode = %s",
+        "date_range_start = %s",
+        "date_range_end = %s",
+        "summary_total_count = %s",
+        "summary_added_count = %s",
+        "summary_changed_count = %s",
+        "summary_removed_count = %s",
+        "summary_unchanged_count = %s",
+        "summary_updated_at = CURRENT_TIMESTAMP",
+    ]
+    params = [
+        request.client_id,
+        request.template_id,
+        change_detection.get("comparison_mode") or request.comparison_mode,
+        date_range.get("start"),
+        date_range.get("end"),
+        total_rows,
+        change_detection.get("new_count", 0),
+        change_detection.get("changed_count", 0),
+        change_detection.get("missing_count", 0),
+        change_detection.get("unchanged_count", 0),
+    ]
+    if status is not None:
+        assignments.insert(2, "status = %s")
+        params.insert(2, status)
+    execute_write_pg(
+        f"UPDATE uploaded_files SET {', '.join(assignments)} WHERE id = %s",
+        (*params, request.file_id),
+    )
 
 def _row_fingerprint_token(row_data: dict) -> str:
     """Stable compact guard for one current Client Data row."""
@@ -1540,7 +1626,7 @@ def compute_data_quality_flag(row_data: dict, critical_cols: dict) -> Optional[s
 
 # ---------- EXISTING UPLOAD ENDPOINT ----------
 @router.post("/api/import-excel")
-async def import_excel(file: UploadFile = File(...)):
+async def import_excel(file: UploadFile = File(...), session=Depends(get_current_user)):
     if not file.filename.endswith(('.xlsx', '.xls')):
         raise HTTPException(400, "Only .xlsx and .xls files are supported")
     contents = await file.read()
@@ -1551,10 +1637,11 @@ async def import_excel(file: UploadFile = File(...)):
     with open(file_path, "wb") as f:
         f.write(contents)
     file_id = execute_write_pg(
-        "INSERT INTO uploaded_files (file_name, file_path, file_type, record_count, status) VALUES (%s, %s, %s, %s, %s) RETURNING id",
-        (file.filename, file_path, 'excel', len(df), 'Pending')
+        "INSERT INTO uploaded_files (file_name, file_path, file_type, record_count, status, uploaded_by) "
+        "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+        (file.filename, file_path, 'excel', len(df), 'Pending', session["username"])
     )
-    log_audit("Analyst", "Upload", "Import", f"Uploaded file: {file.filename} ({len(df)} rows)")
+    log_audit(session["username"], "Upload", "Import", f"Uploaded file: {file.filename} ({len(df)} rows)")
     return {"message": f"File '{file.filename}' uploaded successfully ({len(df)} rows)", "file_id": file_id, "record_count": len(df)}
 
 # ---------- AUTO-MAP ENDPOINT (FIXED with Pydantic model) ----------
@@ -1928,7 +2015,11 @@ def validate_only(request: ImportRequest, perf: bool = False):
     template = execute_query_pg("SELECT id, template_name, rate_source FROM templates WHERE id = %s AND is_active = TRUE", (request.template_id,))
     if not template:
         raise HTTPException(404, "Template not found")
-    file_info = execute_query_pg("SELECT file_path FROM uploaded_files WHERE id = %s", (request.file_id,))
+    file_info = execute_query_pg(
+        "SELECT file_path, file_name, upload_date, uploaded_by, status "
+        "FROM uploaded_files WHERE id = %s",
+        (request.file_id,),
+    )
     if not file_info:
         raise HTTPException(404, "File not found")
 
@@ -2132,6 +2223,7 @@ def validate_only(request: ImportRequest, perf: bool = False):
     )
     validation_plan_id = None
     can_import = bool(actionable and not validation_errors)
+    summary_status = None
     if can_import:
         plan_payload = _build_validation_plan_payload(
             change_detection,
@@ -2149,15 +2241,24 @@ def validate_only(request: ImportRequest, perf: bool = False):
             file_info[0]["file_path"],
             plan_payload,
         )
-        execute_write_pg(
-            "UPDATE uploaded_files SET status = 'Validated', client_id = %s WHERE id = %s",
-            (request.client_id, request.file_id),
-        )
+        summary_status = "Validated"
     elif not validation_errors:
-        execute_write_pg(
-            "UPDATE uploaded_files SET status = 'Ignored', client_id = %s WHERE id = %s",
-            (request.client_id, request.file_id),
-        )
+        summary_status = "Ignored"
+
+    _persist_upload_summary(
+        request,
+        change_detection,
+        len(rows),
+        status=summary_status,
+    )
+    upload_summary = _build_upload_summary(
+        file_info[0],
+        template[0],
+        request,
+        change_detection,
+        len(rows),
+        status=summary_status,
+    )
 
     # A row can appear in both lists (e.g. a real Numeric format error in one
     # column plus a blank Date in another) -- union by row_number so it's only
@@ -2180,6 +2281,7 @@ def validate_only(request: ImportRequest, perf: bool = False):
         "can_import": can_import,
         "validation_plan_id": validation_plan_id,
         "rate_mode": rate_mode,
+        "upload_summary": upload_summary,
     }
 
 DATA_AUDIT_LOG_INSERT_SQL = (
@@ -2216,7 +2318,8 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
     if not template:
         raise HTTPException(404, "Template not found")
     file_info = execute_query_pg(
-        "SELECT file_path FROM uploaded_files WHERE id = %s",
+        "SELECT file_path, file_name, upload_date, uploaded_by, status "
+        "FROM uploaded_files WHERE id = %s",
         (request.file_id,),
     )
     if not file_info:
@@ -2624,6 +2727,21 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
     if background_tasks is None:
         IMPORT_PROGRESS[request.file_id]["status"] = "complete"
 
+    _persist_upload_summary(
+        request,
+        change_detection,
+        total_rows_attempted,
+        status="Imported",
+    )
+    upload_summary = _build_upload_summary(
+        file_info[0],
+        template[0],
+        request,
+        change_detection,
+        total_rows_attempted,
+        status="Imported",
+    )
+
     return {
         "status": "success",
         "message": f"Successfully imported: {inserted_count} added, {updated_count} changed, {deleted_count} removed",
@@ -2636,6 +2754,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
         "rejected_count": len(rejected_rows),
         "force_included_count": force_included_count,
         "change_detection": public_change_detection(change_detection, template_cols, request.template_id),
+        "upload_summary": upload_summary,
         "cashflow_voucher_resolution": cashflow_voucher_resolution,
         "cashflow_preparation_job": preparation_job,
     }
@@ -2652,7 +2771,11 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
     template = execute_query_pg("SELECT id, template_name, rate_source FROM templates WHERE id = %s AND is_active = TRUE", (request.template_id,))
     if not template:
         raise HTTPException(404, "Template not found")
-    file_info = execute_query_pg("SELECT file_path FROM uploaded_files WHERE id = %s", (request.file_id,))
+    file_info = execute_query_pg(
+        "SELECT file_path, file_name, upload_date, uploaded_by, status "
+        "FROM uploaded_files WHERE id = %s",
+        (request.file_id,),
+    )
     if not file_info:
         raise HTTPException(404, "File not found")
     # Validate client exists
@@ -2864,9 +2987,9 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
 
     public_changes = public_change_detection(change_detection, template_cols, request.template_id)
     if not (change_detection["new_count"] or change_detection["changed_count"] or change_detection["missing_count"]):
-        execute_write_pg(
-            "UPDATE uploaded_files SET status = 'Ignored', client_id = %s WHERE id = %s",
-            (request.client_id, request.file_id),
+        _persist_upload_summary(request, change_detection, len(rows), status="Ignored")
+        upload_summary = _build_upload_summary(
+            file_info[0], template[0], request, change_detection, len(rows), status="Ignored"
         )
         IMPORT_PROGRESS[request.file_id] = {"current": 0, "total": 0, "status": "ignored"}
         log_audit(
@@ -2888,6 +3011,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
             "rejected_count": len(rejected_rows),
             "force_included_count": force_included_count,
             "change_detection": public_changes,
+            "upload_summary": upload_summary,
             "cashflow_voucher_resolution": None,
             "cashflow_preparation_job": None,
         }
@@ -3208,6 +3332,21 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
     if background_tasks is None:
         IMPORT_PROGRESS[request.file_id]["status"] = "complete"
 
+    _persist_upload_summary(
+        request,
+        change_detection,
+        total_rows_attempted,
+        status="Imported",
+    )
+    upload_summary = _build_upload_summary(
+        file_info[0],
+        template[0],
+        request,
+        change_detection,
+        total_rows_attempted,
+        status="Imported",
+    )
+
     return {
         "status": "success",
         "message": f"Successfully imported: {inserted_count} added, {updated_count} changed, {deleted_count} removed",
@@ -3224,6 +3363,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
         # rejected_count - force_included_count.
         "force_included_count": force_included_count,
         "change_detection": public_changes,
+        "upload_summary": upload_summary,
         "cashflow_voucher_resolution": cashflow_voucher_resolution,
         "cashflow_preparation_job": preparation_job,
     }
