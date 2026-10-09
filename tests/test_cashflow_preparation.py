@@ -5,13 +5,21 @@ import tempfile
 import pytest
 
 import database
+import services.cashflow_preparation as preparation
 from scripts.backfill_cashflow_prepared_read_model import run_client
 from services.cashflow_preparation import (
     build_preparation_plan,
+    cashflow_preparation_requires_recovery,
+    enqueue_cashflow_preparation_job,
+    get_cashflow_preparation_status,
+    mark_cashflow_preparation_job_failed,
     prepare_client,
     prepare_incremental_category_client,
     prepare_incremental_client,
     prepare_incremental_treasury_client,
+    process_cashflow_preparation_job,
+    recover_cashflow_preparation_jobs_postgres,
+    retry_cashflow_preparation_job,
 )
 
 
@@ -461,5 +469,418 @@ def test_incremental_treasury_change_adds_all_lines_for_newly_eligible_voucher(m
                     "SELECT source_client_data_id FROM cashflow_prepared_lines WHERE preparation_revision = 2"
                 ).fetchall()
             } == {101, 102, 103}
+        finally:
+            conn.close()
+
+
+def test_durable_preparation_job_processes_and_publishes_revision(monkeypatch):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        monkeypatch.setattr(database, "DB_NAME", f"{temp_dir}/cashflows.sqlite")
+        database.init_db()
+        conn = database.get_db()
+        try:
+            _seed_cashflow_fixture(conn)
+            prepare_client(conn, client_id=1, preparation_revision=1)
+            conn.commit()
+            conn.execute(
+                "UPDATE cashflow_prepared_lines SET category_key = 'old_category' WHERE account_code = 'CUSTOMER' AND preparation_revision = 1"
+            )
+            conn.execute(
+                "UPDATE account_control_cashflow_category_assignments SET category_id = NULL WHERE account_code = 'CUSTOMER'"
+            )
+            conn.commit()
+            job = enqueue_cashflow_preparation_job(
+                conn,
+                client_id=1,
+                reason="category_assignment",
+                affected_account_codes=["CUSTOMER"],
+            )
+            assert get_cashflow_preparation_status(lambda sql, params: [dict(row) for row in conn.execute(sql.replace('%s', '?'), params or ()).fetchall()], client_id=1)["status"] == "updating"
+            result = process_cashflow_preparation_job(conn, job_id=job["job_id"])
+            conn.commit()
+
+            assert result["status"] == "completed"
+            status = get_cashflow_preparation_status(lambda sql, params: [dict(row) for row in conn.execute(sql.replace('%s', '?'), params or ()).fetchall()], client_id=1)
+            assert status["status"] == "ready"
+            assert status["active_preparation_revision"] == 2
+            assert conn.execute(
+                "SELECT status FROM cashflow_preparation_jobs WHERE id = ?", (job["job_id"],)
+            ).fetchone()[0] == "completed"
+        finally:
+            conn.close()
+
+
+def test_no_prepared_change_job_returns_state_to_ready(monkeypatch):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        monkeypatch.setattr(database, "DB_NAME", f"{temp_dir}/cashflows.sqlite")
+        database.init_db()
+        conn = database.get_db()
+        try:
+            _seed_cashflow_fixture(conn)
+            prepare_client(conn, client_id=1, preparation_revision=1)
+            conn.commit()
+            job = enqueue_cashflow_preparation_job(
+                conn,
+                client_id=1,
+                reason="category_assignment",
+                affected_account_codes=["UNTOUCHED"],
+            )
+            result = process_cashflow_preparation_job(conn, job_id=job["job_id"])
+            conn.commit()
+
+            assert result["status"] == "completed"
+            assert result["changed"] is False
+            assert tuple(conn.execute(
+                "SELECT active_preparation_revision, requested_preparation_revision, status FROM cashflow_preparation_state WHERE client_id = 1"
+            ).fetchone()) == (1, 1, "ready")
+        finally:
+            conn.close()
+
+
+def test_treasury_incremental_failure_falls_back_to_full_preparation(monkeypatch):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        monkeypatch.setattr(database, "DB_NAME", f"{temp_dir}/cashflows.sqlite")
+        database.init_db()
+        conn = database.get_db()
+        try:
+            _seed_cashflow_fixture(conn)
+            prepare_client(conn, client_id=1, preparation_revision=1)
+            conn.commit()
+            job = enqueue_cashflow_preparation_job(
+                conn,
+                client_id=1,
+                reason="treasury_accounts",
+                affected_account_codes=["BANK"],
+            )
+            conn.execute("CREATE TABLE treasury_savepoint_probe (value TEXT)")
+
+            def fail_after_a_write(connection, **kwargs):
+                connection.execute(
+                    "INSERT INTO treasury_savepoint_probe (value) VALUES (?)",
+                    ("must be rolled back",),
+                )
+                raise TypeError("object is not iterable")
+
+            monkeypatch.setattr(
+                preparation,
+                "prepare_incremental_treasury_client",
+                fail_after_a_write,
+            )
+
+            result = process_cashflow_preparation_job(conn, job_id=job["job_id"])
+            conn.commit()
+
+            assert result["status"] == "completed"
+            assert result["reason"] == "treasury_accounts_full_rebuild"
+            assert tuple(conn.execute(
+                "SELECT active_preparation_revision, status FROM cashflow_preparation_state WHERE client_id = 1"
+            ).fetchone()) == (2, "ready")
+            assert conn.execute("SELECT COUNT(*) FROM treasury_savepoint_probe").fetchone()[0] == 0
+        finally:
+            conn.close()
+
+
+def test_enqueue_accepts_nullable_or_scalar_job_scopes(monkeypatch):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        monkeypatch.setattr(database, "DB_NAME", f"{temp_dir}/cashflows.sqlite")
+        database.init_db()
+        conn = database.get_db()
+        try:
+            _seed_cashflow_fixture(conn)
+            job = preparation.enqueue_cashflow_preparation_job(
+                conn,
+                client_id=1,
+                reason="incremental_upload",
+                affected_upload_ids=101,
+                affected_occurrence_ids=None,
+                current_occurrence_ids=None,
+                category_ids=None,
+            )
+            conn.commit()
+
+            stored = conn.execute(
+                "SELECT affected_upload_ids, affected_voucher_identities FROM cashflow_preparation_jobs WHERE id = ?",
+                (job["job_id"],),
+            ).fetchone()
+            assert json.loads(stored[0]) == [101]
+            assert json.loads(stored[1]) == {
+                "affected_occurrence_ids": [],
+                "current_occurrence_ids": [],
+                "category_ids": [],
+            }
+        finally:
+            conn.close()
+
+
+def test_runner_persists_failure_and_leaves_connection_usable(monkeypatch):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        monkeypatch.setattr(database, "DB_NAME", f"{temp_dir}/cashflows.sqlite")
+        database.init_db()
+        conn = database.get_db()
+
+        class _Transaction:
+            def __enter__(self):
+                return conn
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                if exc_type:
+                    conn.rollback()
+                else:
+                    conn.commit()
+
+        try:
+            _seed_cashflow_fixture(conn)
+            prepare_client(conn, client_id=1, preparation_revision=1)
+            conn.commit()
+            job = enqueue_cashflow_preparation_job(
+                conn,
+                client_id=1,
+                reason="unsupported_change",
+            )
+            conn.commit()
+            monkeypatch.setattr(database, "pg_transaction", lambda: _Transaction())
+
+            def fail_build(*args, **kwargs):
+                raise RuntimeError("simulated preparation failure")
+
+            monkeypatch.setattr(preparation, "prepare_client", fail_build)
+
+            result = preparation.run_cashflow_preparation_job_postgres(job["job_id"])
+
+            assert result["status"] == "failed"
+            assert conn.execute(
+                "SELECT status, error_details FROM cashflow_preparation_jobs WHERE id = ?",
+                (job["job_id"],),
+            ).fetchone()[0] == "failed"
+            assert tuple(conn.execute(
+                "SELECT active_preparation_revision, status FROM cashflow_preparation_state WHERE client_id = 1"
+            ).fetchone()) == (1, "failed")
+            assert conn.execute("SELECT 1").fetchone()[0] == 1
+        finally:
+            conn.close()
+
+def test_first_treasury_change_bootstraps_missing_preparation_revision(monkeypatch):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        monkeypatch.setattr(database, "DB_NAME", f"{temp_dir}/cashflows.sqlite")
+        database.init_db()
+        conn = database.get_db()
+        try:
+            _seed_cashflow_fixture(conn)
+            conn.execute(
+                "UPDATE cash_bank_transaction_classifications SET treasury_type = NULL, classification_status = 'non_treasury' WHERE client_data_id = 101"
+            )
+            conn.commit()
+            job = enqueue_cashflow_preparation_job(
+                conn,
+                client_id=1,
+                reason="treasury_accounts",
+                affected_account_codes=["BANK"],
+            )
+
+            result = process_cashflow_preparation_job(conn, job_id=job["job_id"])
+            conn.commit()
+
+            assert result["status"] == "completed"
+            assert result["preparation_revision"] == 1
+            assert tuple(conn.execute(
+                "SELECT active_preparation_revision, status FROM cashflow_preparation_state WHERE client_id = 1"
+            ).fetchone()) == (1, "ready")
+            assert conn.execute(
+                "SELECT COUNT(*) FROM cashflow_prepared_lines WHERE client_id = 1 AND preparation_revision = 1"
+            ).fetchone()[0] == 0
+            assert conn.execute(
+                "SELECT status FROM cashflow_preparation_jobs WHERE id = ?", (job["job_id"],)
+            ).fetchone()[0] == "completed"
+        finally:
+            conn.close()
+
+
+def test_persisted_failed_state_can_be_recovered_by_a_full_preparation_job(monkeypatch):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        monkeypatch.setattr(database, "DB_NAME", f"{temp_dir}/cashflows.sqlite")
+        database.init_db()
+        conn = database.get_db()
+        try:
+            _seed_cashflow_fixture(conn)
+            conn.execute(
+                """INSERT INTO cashflow_preparation_state
+                   (client_id, active_preparation_revision, requested_preparation_revision, status, last_error)
+                   VALUES (1, 0, 1, 'failed', 'active_revision_missing')"""
+            )
+            conn.commit()
+            assert cashflow_preparation_requires_recovery(
+                lambda sql, params: [
+                    dict(row) for row in conn.execute(sql.replace('%s', '?'), params or ()).fetchall()
+                ],
+                client_id=1,
+            )
+
+            job = enqueue_cashflow_preparation_job(
+                conn,
+                client_id=1,
+                reason="preparation_recovery",
+            )
+            result = process_cashflow_preparation_job(conn, job_id=job["job_id"])
+            conn.commit()
+
+            assert result["status"] == "completed"
+            assert tuple(conn.execute(
+                "SELECT active_preparation_revision, status FROM cashflow_preparation_state WHERE client_id = 1"
+            ).fetchone()) == (2, "ready")
+            assert conn.execute(
+                "SELECT COUNT(*) FROM cashflow_prepared_lines WHERE client_id = 1 AND preparation_revision = 2"
+            ).fetchone()[0] == 3
+        finally:
+            conn.close()
+
+
+def test_failed_preparation_job_keeps_previous_active_revision(monkeypatch):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        monkeypatch.setattr(database, "DB_NAME", f"{temp_dir}/cashflows.sqlite")
+        database.init_db()
+        conn = database.get_db()
+        try:
+            _seed_cashflow_fixture(conn)
+            prepare_client(conn, client_id=1, preparation_revision=1)
+            conn.commit()
+            job = enqueue_cashflow_preparation_job(
+                conn,
+                client_id=1,
+                reason="unsupported_change",
+            )
+            conn.commit()
+            with pytest.raises(RuntimeError, match="simulated preparation failure"):
+                raise RuntimeError("simulated preparation failure")
+            conn.rollback()
+            mark_cashflow_preparation_job_failed(conn, job_id=job["job_id"], error="simulated preparation failure")
+            conn.commit()
+
+            state = conn.execute(
+                "SELECT active_preparation_revision, status, last_error FROM cashflow_preparation_state WHERE client_id = 1"
+            ).fetchone()
+            assert tuple(state) == (1, "failed", "simulated preparation failure")
+            assert conn.execute(
+                "SELECT status FROM cashflow_preparation_jobs WHERE id = ?", (job["job_id"],)
+            ).fetchone()[0] == "failed"
+            with pytest.raises(LookupError):
+                retry_cashflow_preparation_job(conn, job_id=job["job_id"], client_id=2)
+            retry = retry_cashflow_preparation_job(conn, job_id=job["job_id"])
+            conn.commit()
+            assert retry["status"] == "pending"
+            retry_result = process_cashflow_preparation_job(conn, job_id=job["job_id"])
+            conn.commit()
+            assert retry_result["status"] == "completed"
+            assert tuple(conn.execute(
+                "SELECT active_preparation_revision, status FROM cashflow_preparation_state WHERE client_id = 1"
+            ).fetchone()) == (2, "ready")
+        finally:
+            conn.close()
+
+
+def test_startup_recovery_requeues_only_latest_failed_treasury_job(monkeypatch):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        monkeypatch.setattr(database, "DB_NAME", f"{temp_dir}/cashflows.sqlite")
+        database.init_db()
+        conn = database.get_db()
+
+        class _Transaction:
+            def __enter__(self):
+                return conn
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                if exc_type:
+                    conn.rollback()
+                else:
+                    conn.commit()
+
+        try:
+            _seed_cashflow_fixture(conn)
+            conn.execute(
+                """INSERT INTO cashflow_preparation_state
+                   (client_id, active_preparation_revision, requested_preparation_revision, status)
+                   VALUES (1, 1, 3, 'failed')"""
+            )
+            conn.execute(
+                """INSERT INTO cashflow_preparation_jobs
+                   (client_id, reason, affected_account_codes, affected_voucher_identities,
+                    requested_preparation_revision, status, retry_count)
+                   VALUES (1, 'treasury_accounts', '[\"OLD\"]', '{}', 2, 'failed', 0)"""
+            )
+            conn.execute(
+                """INSERT INTO cashflow_preparation_jobs
+                   (client_id, reason, affected_account_codes, affected_voucher_identities,
+                    requested_preparation_revision, status, retry_count)
+                   VALUES (1, 'treasury_accounts', '[\"NEW\"]', '{}', 3, 'failed', 0)"""
+            )
+            conn.commit()
+            monkeypatch.setattr(database, "pg_transaction", lambda: _Transaction())
+            monkeypatch.setattr(
+                preparation,
+                "run_cashflow_preparation_job_postgres",
+                lambda job_id: {"job_id": job_id, "status": "completed"},
+            )
+
+            results = recover_cashflow_preparation_jobs_postgres()
+
+            latest_id = conn.execute(
+                "SELECT id FROM cashflow_preparation_jobs WHERE requested_preparation_revision = 3"
+            ).fetchone()[0]
+            assert results == [{"job_id": latest_id, "status": "completed"}]
+            assert tuple(conn.execute(
+                "SELECT status, retry_count FROM cashflow_preparation_jobs WHERE requested_preparation_revision = 2"
+            ).fetchone()) == ("failed", 0)
+            assert tuple(conn.execute(
+                "SELECT status, retry_count FROM cashflow_preparation_jobs WHERE requested_preparation_revision = 3"
+            ).fetchone()) == ("pending", 1)
+        finally:
+            conn.close()
+
+
+def test_startup_recovery_never_leaves_runner_exception_pending(monkeypatch):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        monkeypatch.setattr(database, "DB_NAME", f"{temp_dir}/cashflows.sqlite")
+        database.init_db()
+        conn = database.get_db()
+
+        class _Transaction:
+            def __enter__(self):
+                return conn
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                if exc_type:
+                    conn.rollback()
+                else:
+                    conn.commit()
+
+        try:
+            _seed_cashflow_fixture(conn)
+            conn.execute(
+                """INSERT INTO cashflow_preparation_state
+                   (client_id, active_preparation_revision, requested_preparation_revision, status)
+                   VALUES (1, 1, 2, 'updating')"""
+            )
+            conn.execute(
+                """INSERT INTO cashflow_preparation_jobs
+                   (client_id, reason, affected_account_codes, affected_voucher_identities,
+                    requested_preparation_revision, status, retry_count)
+                   VALUES (1, 'treasury_accounts', '[\"BANK\"]', '{}', 2, 'pending', 0)"""
+            )
+            conn.commit()
+            monkeypatch.setattr(database, "pg_transaction", lambda: _Transaction())
+            monkeypatch.setattr(
+                preparation,
+                "run_cashflow_preparation_job_postgres",
+                lambda job_id: (_ for _ in ()).throw(RuntimeError("runner stopped before execution")),
+            )
+
+            results = recover_cashflow_preparation_jobs_postgres()
+
+            assert results[0]["status"] == "failed"
+            assert conn.execute(
+                "SELECT status, error_details FROM cashflow_preparation_jobs"
+            ).fetchone()[0] == "failed"
+            assert conn.execute(
+                "SELECT status, last_error FROM cashflow_preparation_state"
+            ).fetchone()[0] == "failed"
         finally:
             conn.close()

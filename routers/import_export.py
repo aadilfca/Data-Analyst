@@ -12,7 +12,10 @@ from database import (
 from psycopg2.extras import Json
 from services.cash_bank_classification import load_treasury_mapping_postgres, upsert_classification_rows_postgres
 from services.ledger_report_source import invalidate_cashflow_summary_read_models, prepare_cashflow_summary_snapshot
-from services.cashflow_preparation import prepare_incremental_client
+from services.cashflow_preparation import (
+    enqueue_cashflow_preparation_job,
+    run_cashflow_preparation_job_postgres,
+)
 from services.cashflow_voucher_occurrence_store import resolve_upload_occurrences_postgres
 from typing import List, Optional
 from pydantic import BaseModel
@@ -75,31 +78,30 @@ def _prepare_cashflow_snapshot_background(
     file_id: int,
     template_id: int,
     cashflow_voucher_resolution: Optional[dict] = None,
+    preparation_job_id: Optional[int] = None,
 ):
-    """Prepare the incremental read model and legacy fallback after import."""
+    """Run the durable preparation job and refresh the legacy fallback after import."""
+    preparation_status = "complete"
     try:
-        if cashflow_voucher_resolution and cashflow_voucher_resolution.get("preparation_required"):
-            with pg_transaction() as conn:
-                prepared_result = prepare_incremental_client(
-                    conn,
-                    client_id=client_id,
-                    template_id=template_id,
-                    affected_occurrence_ids=cashflow_voucher_resolution.get("affected_occurrence_ids", []),
-                    current_occurrence_ids=cashflow_voucher_resolution.get("current_occurrence_ids", []),
-                )
+        if preparation_job_id:
+            prepared_result = run_cashflow_preparation_job_postgres(preparation_job_id)
+            preparation_status = "complete" if prepared_result.get("status") == "completed" else str(prepared_result.get("status") or "failed")
             logger.info(
-                "cashflows_prepared_incremental client_id=%s template_id=%s file_id=%s result=%s",
+                "cashflows_prepared_job client_id=%s template_id=%s file_id=%s job_id=%s result=%s",
                 client_id,
                 template_id,
                 file_id,
+                preparation_job_id,
                 json.dumps(prepared_result, default=str, ensure_ascii=True),
             )
     except Exception as error:
+        preparation_status = "failed"
         logger.warning(
-            "cashflows_prepared_incremental_failed client_id=%s template_id=%s file_id=%s error=%s",
+            "cashflows_prepared_job_failed client_id=%s template_id=%s file_id=%s job_id=%s error=%s",
             client_id,
             template_id,
             file_id,
+            preparation_job_id,
             error,
         )
     try:
@@ -114,7 +116,7 @@ def _prepare_cashflow_snapshot_background(
     finally:
         progress = IMPORT_PROGRESS.get(file_id)
         if progress is not None:
-            progress["status"] = "complete"
+            progress["status"] = preparation_status
 
 # In-memory progress for an import, keyed by file_id. Row writes finish inside the
 # request; Cashflows snapshot preparation continues as a bounded background task.
@@ -2013,8 +2015,19 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
             changed_by="Analyst",
             write_fn=execute_write_pg,
         )
+    preparation_job = None
     IMPORT_PROGRESS[request.file_id]["status"] = "preparing"
     if legacy_snapshot_required or preparation_required:
+        if preparation_required:
+            with pg_transaction() as conn:
+                preparation_job = enqueue_cashflow_preparation_job(
+                    conn,
+                    client_id=request.client_id,
+                    reason="incremental_upload",
+                    affected_upload_ids=[request.file_id],
+                    affected_occurrence_ids=cashflow_voucher_resolution.get("affected_occurrence_ids", []),
+                    current_occurrence_ids=cashflow_voucher_resolution.get("current_occurrence_ids", []),
+                )
         if background_tasks is None:
             # Direct callers and isolated tests retain the old synchronous contract.
             _prepare_cashflow_snapshot_background(
@@ -2022,6 +2035,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
                 request.file_id,
                 request.template_id,
                 cashflow_voucher_resolution,
+                preparation_job["job_id"] if preparation_job else None,
             )
         else:
             background_tasks.add_task(
@@ -2030,6 +2044,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
                 request.file_id,
                 request.template_id,
                 cashflow_voucher_resolution,
+                preparation_job["job_id"] if preparation_job else None,
             )
     else:
         IMPORT_PROGRESS[request.file_id]["status"] = "complete"
@@ -2060,6 +2075,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
         "force_included_count": force_included_count,
         "change_detection": change_detection,  # Phase 2: detailed breakdown of unchanged/changed/new/missing
         "cashflow_voucher_resolution": cashflow_voucher_resolution,
+        "cashflow_preparation_job": preparation_job,
     }
 
 @router.get("/api/upload/import-status/{file_id}")

@@ -10,6 +10,8 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+import json
+import logging
 from typing import Any, Callable, Mapping, Sequence
 
 from psycopg2.extras import RealDictCursor, execute_values
@@ -23,6 +25,7 @@ from services.cashflow_voucher_canonicalization import (
 
 
 QueryFn = Callable[[str, Sequence[Any] | None], list[dict[str, Any]]]
+logger = logging.getLogger(__name__)
 
 
 def _is_sqlite(conn: Any) -> bool:
@@ -941,3 +944,482 @@ def prepare_incremental_treasury_client(
     if result.get("changed"):
         result["reason"] = "incremental_treasury"
     return result
+
+
+def _json_list(value: Any) -> list[Any]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return []
+    return list(value) if isinstance(value, (list, tuple)) else []
+
+
+def _json_scope(value: Any) -> dict[str, Any]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return {}
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _safe_sequence(value: Any) -> tuple[Any, ...]:
+    """Treat nullable or scalar job scope values as an empty/one-item sequence."""
+    if value is None:
+        return ()
+    if isinstance(value, (str, bytes)):
+        return (value,)
+    try:
+        return tuple(value)
+    except TypeError:
+        return (value,)
+
+
+def enqueue_cashflow_preparation_job(
+    conn: Any,
+    *,
+    client_id: int,
+    reason: str,
+    affected_upload_ids: Sequence[int] = (),
+    affected_account_codes: Sequence[str] = (),
+    affected_occurrence_ids: Sequence[int] = (),
+    current_occurrence_ids: Sequence[int] = (),
+    category_ids: Sequence[int] = (),
+    preparation_revision: int | None = None,
+) -> dict[str, Any]:
+    """Persist one durable preparation request after its source transaction commits."""
+    revision = int(preparation_revision or _next_revision(conn, client_id))
+    upload_ids = _safe_sequence(affected_upload_ids)
+    account_codes = _safe_sequence(affected_account_codes)
+    occurrence_ids = _safe_sequence(affected_occurrence_ids)
+    current_ids = _safe_sequence(current_occurrence_ids)
+    category_id_values = _safe_sequence(category_ids)
+    scope = {
+        "affected_occurrence_ids": sorted({int(value) for value in occurrence_ids}),
+        "current_occurrence_ids": sorted({int(value) for value in current_ids}),
+        "category_ids": sorted({int(value) for value in category_id_values}),
+    }
+    _set_state_updating(conn, client_id, revision)
+    _execute(
+        conn,
+        """INSERT INTO cashflow_preparation_jobs
+           (client_id, reason, affected_upload_ids, affected_account_codes,
+            affected_voucher_identities, requested_preparation_revision, status,
+            retry_count, error_details)
+           VALUES (%s, %s, %s, %s, %s, %s, 'pending', 0, NULL)""",
+        (
+            client_id,
+            reason,
+            json.dumps(sorted({int(value) for value in upload_ids})),
+            json.dumps(sorted({str(value).strip() for value in account_codes if str(value).strip()})),
+            json.dumps(scope),
+            revision,
+        ),
+    )
+    rows = _query_fn(conn)(
+        """SELECT id, client_id, reason, affected_upload_ids, affected_account_codes,
+                  affected_voucher_identities, requested_preparation_revision, status,
+                  retry_count, error_details
+           FROM cashflow_preparation_jobs
+           WHERE client_id = %s AND requested_preparation_revision = %s""",
+        (client_id, revision),
+    )
+    if not rows:
+        raise RuntimeError("Cashflows preparation job was not persisted")
+    row = rows[0]
+    return {
+        "job_id": int(row["id"]),
+        "client_id": client_id,
+        "reason": reason,
+        "requested_preparation_revision": revision,
+        "status": str(row.get("status") or "pending"),
+    }
+
+
+def get_cashflow_preparation_status(query: QueryFn, *, client_id: int) -> dict[str, Any]:
+    """Return the durable preparation state and latest job for user-facing status."""
+    state_rows = query(
+        """SELECT client_id, active_preparation_revision, requested_preparation_revision,
+                  status, started_at, completed_at, affected_row_count, last_error,
+                  last_successful_build_at
+           FROM cashflow_preparation_state
+           WHERE client_id = %s""",
+        (client_id,),
+    )
+    job_rows = query(
+        """SELECT id, reason, requested_preparation_revision, status, retry_count,
+                  error_details, started_at, completed_at, created_at, updated_at
+           FROM cashflow_preparation_jobs
+           WHERE client_id = %s
+           ORDER BY id DESC
+           LIMIT 1""",
+        (client_id,),
+    )
+    state = state_rows[0] if state_rows else {
+        "client_id": client_id,
+        "active_preparation_revision": 0,
+        "requested_preparation_revision": 0,
+        "status": "ready",
+        "started_at": None,
+        "completed_at": None,
+        "affected_row_count": 0,
+        "last_error": None,
+        "last_successful_build_at": None,
+    }
+    job = job_rows[0] if job_rows else None
+    status = str(state.get("status") or "ready")
+    reported_requested_revision = int(state.get("requested_preparation_revision") or 0)
+    latest_job_revision = int(job.get("requested_preparation_revision") or 0) if job else 0
+    state_revision = int(state.get("requested_preparation_revision") or 0)
+    if (
+        status == "updating"
+        and job
+        and str(job.get("status") or "") == "completed"
+        and latest_job_revision == state_revision
+        and int(state.get("active_preparation_revision") or 0) > 0
+    ):
+        status = "ready"
+        reported_requested_revision = int(state.get("active_preparation_revision") or 0)
+    return {
+        "client_id": client_id,
+        "status": status,
+        "ready": status == "ready",
+        "updating": status == "updating",
+        "failed": status == "failed",
+        "fallback_active": status != "ready",
+        "active_preparation_revision": int(state.get("active_preparation_revision") or 0),
+        "requested_preparation_revision": reported_requested_revision,
+        "started_at": state.get("started_at"),
+        "completed_at": state.get("completed_at"),
+        "affected_row_count": int(state.get("affected_row_count") or 0),
+        "last_error": state.get("last_error"),
+        "last_successful_build_at": state.get("last_successful_build_at"),
+        "latest_job": {
+            "id": int(job["id"]),
+            "reason": job.get("reason"),
+            "requested_preparation_revision": int(job.get("requested_preparation_revision") or 0),
+            "status": job.get("status"),
+            "retry_count": int(job.get("retry_count") or 0),
+            "error_details": job.get("error_details"),
+            "started_at": job.get("started_at"),
+            "completed_at": job.get("completed_at"),
+            "created_at": job.get("created_at"),
+            "updated_at": job.get("updated_at"),
+        } if job else None,
+    }
+
+
+def cashflow_preparation_requires_recovery(query: QueryFn, *, client_id: int) -> bool:
+    """Return whether a failed client has no active revision to serve or update."""
+    rows = query(
+        """SELECT active_preparation_revision, status
+           FROM cashflow_preparation_state
+           WHERE client_id = %s""",
+        (client_id,),
+    )
+    if not rows:
+        return False
+    return (
+        int(rows[0].get("active_preparation_revision") or 0) <= 0
+        and str(rows[0].get("status") or "") == "failed"
+    )
+
+
+def mark_cashflow_preparation_job_failed(conn: Any, *, job_id: int, error: Any) -> dict[str, Any]:
+    """Record failure while retaining the job's previous active revision."""
+    query = _query_fn(conn)
+    rows = query(
+        "SELECT client_id, requested_preparation_revision FROM cashflow_preparation_jobs WHERE id = %s",
+        (job_id,),
+    )
+    if not rows:
+        return {"job_id": job_id, "status": "missing"}
+    client_id = int(rows[0]["client_id"])
+    revision = int(rows[0].get("requested_preparation_revision") or 0)
+    message = str(error) if isinstance(error, str) else f"{type(error).__name__}: {error}"
+    message = message[:4000]
+    _execute(
+        conn,
+        """UPDATE cashflow_preparation_jobs
+           SET status = 'failed', error_details = %s, completed_at = CURRENT_TIMESTAMP,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = %s""",
+        (message, job_id),
+    )
+    _execute(
+        conn,
+        """UPDATE cashflow_preparation_state
+           SET status = 'failed', last_error = %s, updated_at = CURRENT_TIMESTAMP
+           WHERE client_id = %s AND requested_preparation_revision = %s""",
+        (message, client_id, revision),
+    )
+    return {"job_id": job_id, "client_id": client_id, "status": "failed", "error": message}
+
+
+def retry_cashflow_preparation_job(
+    conn: Any,
+    *,
+    job_id: int,
+    client_id: int | None = None,
+) -> dict[str, Any]:
+    """Put one failed job back into the durable queue using the same revision."""
+    query = _query_fn(conn)
+    rows = query(
+        """SELECT id, client_id, requested_preparation_revision, status
+           FROM cashflow_preparation_jobs
+           WHERE id = %s
+             AND (%s IS NULL OR client_id = %s)
+             AND id = (
+                 SELECT MAX(latest.id)
+                 FROM cashflow_preparation_jobs AS latest
+                 WHERE latest.client_id = cashflow_preparation_jobs.client_id
+             )""",
+        (job_id, client_id, client_id),
+    )
+    if not rows:
+        raise LookupError(f"Cashflows preparation job {job_id} was not found")
+    job = rows[0]
+    if str(job.get("status") or "") != "failed":
+        raise ValueError("Only a failed Cashflows preparation job can be retried")
+    client_id = int(job["client_id"])
+    revision = int(job.get("requested_preparation_revision") or 0)
+    _set_state_updating(conn, client_id, revision)
+    _execute(
+        conn,
+        """UPDATE cashflow_preparation_jobs
+           SET status = 'pending', error_details = NULL, completed_at = NULL,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = %s""",
+        (job_id,),
+    )
+    return {
+        "job_id": job_id,
+        "client_id": client_id,
+        "requested_preparation_revision": revision,
+        "status": "pending",
+    }
+
+
+def recover_cashflow_preparation_jobs_postgres() -> list[dict[str, Any]]:
+    """Resume safe-to-retry preparation work after a process restart.
+
+    Pending and interrupted-running jobs are resumed. Only the latest failed treasury
+    job for each client receives one automatic retry; other failures stay visible for
+    an explicit operator retry instead of looping on every server restart.
+    """
+    from database import pg_transaction
+
+    candidates: list[dict[str, Any]] = []
+    with pg_transaction() as conn:
+        rows = _query_fn(conn)(
+            """SELECT id, client_id, reason, requested_preparation_revision, status, retry_count
+               FROM cashflow_preparation_jobs AS job
+               WHERE job.id = (
+                   SELECT MAX(latest.id)
+                   FROM cashflow_preparation_jobs AS latest
+                   WHERE latest.client_id = job.client_id
+               )
+                 AND (
+                     job.status IN ('pending', 'running')
+                     OR (job.status = 'failed' AND job.reason = 'treasury_accounts'
+                         AND COALESCE(job.retry_count, 0) < 1)
+                 )
+               ORDER BY job.client_id, job.id DESC"""
+        )
+        candidates = list(rows)
+        for row in candidates:
+            status = str(row.get("status") or "")
+            if status == "failed":
+                _set_state_updating(
+                    conn,
+                    int(row["client_id"]),
+                    int(row["requested_preparation_revision"]),
+                )
+                _execute(
+                    conn,
+                    """UPDATE cashflow_preparation_jobs
+                       SET status = 'pending', error_details = NULL, completed_at = NULL,
+                           retry_count = COALESCE(retry_count, 0) + 1,
+                           updated_at = CURRENT_TIMESTAMP
+                       WHERE id = %s AND status = 'failed'""",
+                    (int(row["id"]),),
+                )
+            elif status == "running":
+                _set_state_updating(
+                    conn,
+                    int(row["client_id"]),
+                    int(row["requested_preparation_revision"]),
+                )
+                _execute(
+                    conn,
+                    """UPDATE cashflow_preparation_jobs
+                       SET status = 'pending', started_at = NULL, updated_at = CURRENT_TIMESTAMP
+                       WHERE id = %s AND status = 'running'""",
+                    (int(row["id"]),),
+                )
+
+    results: list[dict[str, Any]] = []
+    for row in candidates:
+        job_id = int(row["id"])
+        try:
+            results.append(run_cashflow_preparation_job_postgres(job_id))
+        except Exception as error:
+            logger.exception("cashflows_startup_recovery_failed job_id=%s", job_id)
+            try:
+                with pg_transaction() as conn:
+                    results.append(mark_cashflow_preparation_job_failed(conn, job_id=job_id, error=error))
+            except Exception as persist_error:  # pragma: no cover - only reached if the database is unavailable
+                logger.exception("cashflows_startup_recovery_failure_persist_failed job_id=%s", job_id)
+                results.append({
+                    "job_id": job_id,
+                    "status": "failed",
+                    "error": str(error),
+                    "persist_error": str(persist_error),
+                })
+    return results
+
+
+def process_cashflow_preparation_job(conn: Any, *, job_id: int) -> dict[str, Any]:
+    """Execute one persisted job; the caller owns the transaction boundary."""
+    query = _query_fn(conn)
+    rows = query(
+        """SELECT id, client_id, reason, affected_upload_ids, affected_account_codes,
+                  affected_voucher_identities, requested_preparation_revision, status
+           FROM cashflow_preparation_jobs
+           WHERE id = %s""",
+        (job_id,),
+    )
+    if not rows:
+        raise LookupError(f"Cashflows preparation job {job_id} was not found")
+    job = rows[0]
+    if str(job.get("status") or "") == "completed":
+        return {"job_id": job_id, "client_id": int(job["client_id"]), "status": "completed", "changed": False}
+    client_id = int(job["client_id"])
+    reason = str(job.get("reason") or "")
+    revision = int(job.get("requested_preparation_revision") or 0)
+    account_codes = _json_list(job.get("affected_account_codes"))
+    scope = _json_scope(job.get("affected_voucher_identities"))
+    _execute(
+        conn,
+        """UPDATE cashflow_preparation_jobs
+           SET status = 'running', retry_count = COALESCE(retry_count, 0) + 1,
+               started_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+           WHERE id = %s""",
+        (job_id,),
+    )
+    if reason == "incremental_upload":
+        configured = query(
+            "SELECT source_template_id FROM account_control_cashflow_settings WHERE client_id = %s",
+            (client_id,),
+        )
+        if not configured or not configured[0].get("source_template_id"):
+            raise RuntimeError("Cashflows source template is not configured")
+        result = prepare_incremental_client(
+            conn,
+            client_id=client_id,
+            template_id=int(configured[0]["source_template_id"]),
+            affected_occurrence_ids=_json_list(scope.get("affected_occurrence_ids")),
+            current_occurrence_ids=_json_list(scope.get("current_occurrence_ids")),
+            preparation_revision=revision,
+        )
+    elif reason in {"category_assignment", "category_bulk_assignment", "category_updated"}:
+        result = prepare_incremental_category_client(
+            conn,
+            client_id=client_id,
+            account_codes=account_codes,
+            category_ids=_json_list(scope.get("category_ids")),
+            preparation_revision=revision,
+        )
+    elif reason == "treasury_accounts":
+        # The incremental path can fail after issuing writes. PostgreSQL marks
+        # the surrounding transaction aborted in that case, so the fallback
+        # full build must first return to a clean savepoint.
+        treasury_savepoint = "cashflows_treasury_incremental"
+        _execute(conn, f"SAVEPOINT {treasury_savepoint}")
+        try:
+            result = prepare_incremental_treasury_client(
+                conn,
+                client_id=client_id,
+                account_codes=account_codes,
+                preparation_revision=revision,
+            )
+        except Exception:
+            try:
+                _execute(conn, f"ROLLBACK TO SAVEPOINT {treasury_savepoint}")
+                _execute(conn, f"RELEASE SAVEPOINT {treasury_savepoint}")
+            except Exception:
+                logger.exception(
+                    "cashflows_treasury_incremental_rollback_failed client_id=%s job_id=%s revision=%s",
+                    client_id,
+                    job_id,
+                    revision,
+                )
+                raise
+            logger.exception(
+                "cashflows_treasury_incremental_fallback client_id=%s job_id=%s revision=%s",
+                client_id,
+                job_id,
+                revision,
+            )
+            result = prepare_client(conn, client_id=client_id, preparation_revision=revision)
+            if result.get("ready"):
+                result["reason"] = "treasury_accounts_full_rebuild"
+        else:
+            _execute(conn, f"RELEASE SAVEPOINT {treasury_savepoint}")
+    elif reason == "preparation_recovery":
+        result = prepare_client(conn, client_id=client_id, preparation_revision=revision)
+    else:
+        result = prepare_client(conn, client_id=client_id, preparation_revision=revision)
+    if (
+        result.get("ready")
+        and not result.get("changed")
+        and int(result.get("preparation_revision") or 0) <= 0
+    ):
+        result = prepare_client(conn, client_id=client_id, preparation_revision=revision)
+    if not result.get("ready") and result.get("reason") == "active_revision_missing":
+        result = prepare_client(conn, client_id=client_id, preparation_revision=revision)
+    if not result.get("ready"):
+        raise RuntimeError(str(result.get("reason") or "Cashflows preparation was not ready"))
+    if not result.get("changed"):
+        _execute(
+            conn,
+            """UPDATE cashflow_preparation_state
+               SET requested_preparation_revision = active_preparation_revision,
+                   status = 'ready', completed_at = CURRENT_TIMESTAMP,
+                   last_error = NULL, updated_at = CURRENT_TIMESTAMP
+               WHERE client_id = %s
+                 AND requested_preparation_revision = %s
+                 AND active_preparation_revision > 0""",
+            (client_id, revision),
+        )
+    _execute(
+        conn,
+        """UPDATE cashflow_preparation_jobs
+           SET status = 'completed', error_details = NULL, completed_at = CURRENT_TIMESTAMP,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = %s""",
+        (job_id,),
+    )
+    return {"job_id": job_id, "client_id": client_id, "status": "completed", **result}
+
+
+def run_cashflow_preparation_job_postgres(job_id: int) -> dict[str, Any]:
+    """Run a job in a durable transaction and persist failure separately if needed."""
+    from database import pg_transaction
+
+    try:
+        with pg_transaction() as conn:
+            return process_cashflow_preparation_job(conn, job_id=job_id)
+    except Exception as error:
+        logger.exception("cashflows_preparation_job_failed job_id=%s", job_id)
+        try:
+            with pg_transaction() as conn:
+                return mark_cashflow_preparation_job_failed(conn, job_id=job_id, error=error)
+        except Exception as persist_error:
+            logger.exception(
+                "cashflows_preparation_failure_persist_failed job_id=%s error=%s",
+                job_id,
+                persist_error,
+            )
+            return {"job_id": job_id, "status": "failed", "error": str(error)}

@@ -219,6 +219,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-10-09: Durable preparation jobs now normalize nullable scopes, isolate failed transactions, preserve active revisions, and recover safely after restart.
 
 - 2026-10-08: DV-4A.1/4A.2 added the canonical report-source selector, falling back to filename coverage until an occurrence register is populated.- 2026-10-07: Added the isolated Cashflows canonical-voucher register and resolver foundation; reporting still uses the existing source path.
 - 2026-10-07: DV-2 now backfills audit-only canonical voucher decisions; Cashflows reports retain their existing source selection.

@@ -1,5 +1,14 @@
 # Development Plan
 
+### Prepared-read-model transition checkpoint - 2026-10-09
+
+**Status:** Core transition implemented; acceptance and fallback retirement remain pending.
+
+Completed: prepared-line, rollup, state, and job schema; initial backfill; incremental upload, category, and Cash/Bank preparation; revision-safe active switching; prepared summary/classification/drill-down/export readers; and durable failure/retry recovery.
+
+Remaining: prove the 2-second half-year, 3-second full-year, and sub-500-ms warm targets; complete parallel reconciliation across all report views and exports; repair/retry the historical client-5 failed job through normal application recovery; then retire only proven-obsolete fallback work.
+
+**This phase:** Phase 4 transaction-safety hardening is locally accepted and ready for the next performance/reconciliation gate.
 ## Adjusted priority - Verification workstreams - 2026-09-24
 
 Financial Statement preview groundwork is committed for future use, but Financial Statements and Notes remain deferred operationally. The active scope is verification of Cash, Bank, Local Vendor, Import Vendor, Export Customer, Payroll, and Contractor vouchers.

@@ -6,7 +6,7 @@ import logging
 import re
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from database import execute_query_pg, execute_write_pg, log_audit, pg_transaction
@@ -17,8 +17,10 @@ from services.cash_bank_classification import (
     synchronize_treasury_accounts_postgres,
 )
 from services.cashflow_preparation import (
-    prepare_incremental_category_client,
-    prepare_incremental_treasury_client,
+    cashflow_preparation_requires_recovery,
+    enqueue_cashflow_preparation_job,
+    mark_cashflow_preparation_job_failed,
+    run_cashflow_preparation_job_postgres,
 )
 from services.ledger_report_source import invalidate_cashflow_summary_read_models, prepare_cashflow_summary_snapshot
 
@@ -34,27 +36,102 @@ def _refresh_cashflow_snapshot(
     category_account_codes: list[str] | None = None,
     category_ids: list[int] | None = None,
     treasury_account_codes: list[str] | None = None,
-) -> None:
+    preparation_job: dict[str, Any] | None = None,
+    background_tasks: BackgroundTasks | None = None,
+) -> dict[str, Any] | None:
     try:
-        if category_account_codes or category_ids:
+        if preparation_job is None and (category_account_codes or category_ids):
             with pg_transaction() as conn:
-                prepare_incremental_category_client(
+                preparation_job = enqueue_cashflow_preparation_job(
                     conn,
                     client_id=client_id,
-                    account_codes=category_account_codes or (),
+                    reason=reason,
+                    affected_account_codes=category_account_codes or (),
                     category_ids=category_ids or (),
                 )
-        if treasury_account_codes:
+        elif preparation_job is None and treasury_account_codes:
             with pg_transaction() as conn:
-                prepare_incremental_treasury_client(
+                preparation_job = enqueue_cashflow_preparation_job(
                     conn,
                     client_id=client_id,
-                    account_codes=treasury_account_codes,
+                    reason=reason,
+                    affected_account_codes=treasury_account_codes,
+                )
+        if preparation_job is None and cashflow_preparation_requires_recovery(
+            execute_query_pg,
+            client_id=client_id,
+        ):
+            with pg_transaction() as conn:
+                preparation_job = enqueue_cashflow_preparation_job(
+                    conn,
+                    client_id=client_id,
+                    reason="preparation_recovery",
                 )
         invalidate_cashflow_summary_read_models(client_id, reason=reason, write_fn=execute_write_pg)
-        prepare_cashflow_summary_snapshot(client_id)
+        if preparation_job and background_tasks is not None:
+            background_tasks.add_task(
+                _run_cashflow_preparation_job_background,
+                preparation_job["job_id"],
+                client_id,
+                reason,
+            )
+            prepare_cashflow_summary_snapshot(client_id)
+        elif preparation_job:
+            _run_cashflow_preparation_job_background(preparation_job["job_id"], client_id, reason)
+        else:
+            prepare_cashflow_summary_snapshot(client_id)
+        return preparation_job
     except Exception as error:
         logger.warning("cashflows_snapshot_preparation_failed client_id=%s reason=%s error=%s", client_id, reason, error)
+        return None
+
+
+def _cashflow_treasury_change_codes(
+    client_id: int,
+    cash_account_codes: set[str],
+    bank_account_codes: set[str],
+) -> list[str]:
+    rows = execute_query_pg(
+        """SELECT account_code, treasury_type
+           FROM account_control_cashflow_treasury_accounts
+           WHERE client_id = %s AND is_active = TRUE""",
+        (client_id,),
+    )
+    current_pairs = {
+        (str(row["account_code"]), str(row["treasury_type"]))
+        for row in rows
+    }
+    requested_pairs = {
+        (str(code), "cash") for code in cash_account_codes
+    } | {
+        (str(code), "bank") for code in bank_account_codes
+    }
+    return sorted({
+        str(account_code).strip()
+        for account_code, _treasury_type in current_pairs ^ requested_pairs
+        if str(account_code).strip()
+    })
+
+
+def _run_cashflow_preparation_job_background(job_id: int, client_id: int, reason: str) -> None:
+    result = run_cashflow_preparation_job_postgres(job_id)
+    logger.info(
+        "cashflows_preparation_job client_id=%s reason=%s job_id=%s result=%s",
+        client_id,
+        reason,
+        job_id,
+        result,
+    )
+    try:
+        prepare_cashflow_summary_snapshot(client_id)
+    except Exception as error:
+        logger.warning(
+            "cashflows_snapshot_preparation_failed client_id=%s reason=%s job_id=%s error=%s",
+            client_id,
+            reason,
+            job_id,
+            error,
+        )
 
 _SELECTOR_TYPES = {
     "include_subtree",
@@ -1122,7 +1199,7 @@ def create_cashflow_category(payload: CashFlowCategoryPayload, session=Depends(r
     return {"saved": True, "category": category}
 
 @router.put("/api/account-control-center/cashflow/categories/{category_id}")
-def update_cashflow_category(category_id: int, payload: CashFlowCategoryUpdatePayload, session=Depends(require_admin)):
+def update_cashflow_category(category_id: int, payload: CashFlowCategoryUpdatePayload, session=Depends(require_admin), background_tasks: BackgroundTasks = None):
     category = _clean_cashflow_category_update(payload)
     rows = execute_query_pg(
         "SELECT id FROM account_control_cashflow_categories WHERE id = %s AND client_id = %s",
@@ -1136,13 +1213,18 @@ def update_cashflow_category(category_id: int, payload: CashFlowCategoryUpdatePa
            WHERE id = %s AND client_id = %s""",
         (category["label"], category["sort_order"], category["is_active"], category_id, category["client_id"]),
     )
-    _refresh_cashflow_snapshot(category["client_id"], "category_updated", category_ids=[category_id])
+    preparation_job = _refresh_cashflow_snapshot(
+        category["client_id"],
+        "category_updated",
+        category_ids=[category_id],
+        background_tasks=background_tasks,
+    )
 
 
-    return {"saved": True, "category": {"id": category_id, **category}}
+    return {"saved": True, "category": {"id": category_id, **category}, "cashflow_preparation_job": preparation_job}
 
 @router.put("/api/account-control-center/cashflow/category-assignment")
-def save_cashflow_category_assignment(payload: CashFlowCategoryAssignmentPayload, session=Depends(require_admin)):
+def save_cashflow_category_assignment(payload: CashFlowCategoryAssignmentPayload, session=Depends(require_admin), background_tasks: BackgroundTasks = None):
     assignment = _clean_cashflow_category_assignment(payload)
     _validate_cashflow_category(assignment["client_id"], assignment["category_id"])
     _upload, accounts = _latest_control_accounts(assignment["client_id"])
@@ -1154,21 +1236,23 @@ def save_cashflow_category_assignment(payload: CashFlowCategoryAssignmentPayload
     if account and account["classification"] != "leaf":
         raise HTTPException(400, "Assign the parent through the bulk child operation; direct assignments require a leaf account")
     _upsert_cashflow_category_assignment(assignment, _actor_name(session))
-    _refresh_cashflow_snapshot(
+    preparation_job = _refresh_cashflow_snapshot(
         assignment["client_id"],
         "category_assignment",
         category_account_codes=[assignment["account_code"]],
+        background_tasks=background_tasks,
     )
     return {
         "saved": True,
         "account_code": assignment["account_code"],
         "category_id": assignment["category_id"],
         "classification_scope": "historical_orphan" if orphan and not account else "current_trial_balance",
+        "cashflow_preparation_job": preparation_job,
     }
 
 
 @router.post("/api/account-control-center/cashflow/category-assignment/apply-to-children")
-def apply_cashflow_category_to_children(payload: CashFlowCategoryBulkAssignmentPayload, session=Depends(require_admin)):
+def apply_cashflow_category_to_children(payload: CashFlowCategoryBulkAssignmentPayload, session=Depends(require_admin), background_tasks: BackgroundTasks = None):
     parent_code = _clean_control_account_code(payload.parent_account_code)
     _validate_cashflow_category(payload.client_id, payload.category_id)
     _upload, accounts = _latest_control_accounts(payload.client_id)
@@ -1194,17 +1278,18 @@ def apply_cashflow_category_to_children(payload: CashFlowCategoryBulkAssignmentP
                 {"client_id": payload.client_id, "account_code": row["account_code"], "category_id": payload.category_id},
                 actor,
             )
-    _refresh_cashflow_snapshot(
+    preparation_job = _refresh_cashflow_snapshot(
         payload.client_id,
         "category_bulk_assignment",
         category_account_codes=[row["account_code"] for row in leaves + historical_children],
+        background_tasks=background_tasks,
     )
 
 
-    return {"saved": True, "parent_account_code": parent_code, "leaf_count": len(leaves) + len(historical_children), "historical_orphan_count": len(historical_children)}
+    return {"saved": True, "parent_account_code": parent_code, "leaf_count": len(leaves) + len(historical_children), "historical_orphan_count": len(historical_children), "cashflow_preparation_job": preparation_job}
 
 @router.put("/api/account-control-center/cashflow/treasury-accounts")
-def save_cashflow_treasury_accounts(payload: CashFlowTreasuryAccountsPayload, session=Depends(require_admin)):
+def save_cashflow_treasury_accounts(payload: CashFlowTreasuryAccountsPayload, session=Depends(require_admin), background_tasks: BackgroundTasks = None):
     cash_codes = {_clean_control_account_code(code) for code in payload.cash_account_codes}
     bank_codes = {_clean_control_account_code(code) for code in payload.bank_account_codes}
     if cash_codes & bank_codes:
@@ -1215,23 +1300,62 @@ def save_cashflow_treasury_accounts(payload: CashFlowTreasuryAccountsPayload, se
     if invalid:
         raise HTTPException(400, "Cash and Bank selections must be leaf accounts from the latest Trial Balance")
     actor = _actor_name(session)
-    with pg_transaction() as conn:
-        synchronization = synchronize_treasury_accounts_postgres(
-            conn,
-            client_id=payload.client_id,
-            cash_account_codes=sorted(cash_codes),
-            bank_account_codes=sorted(bank_codes),
-            changed_by=actor,
-        )
-    _refresh_cashflow_snapshot(
+    early_change_codes = _cashflow_treasury_change_codes(
+        payload.client_id,
+        cash_codes,
+        bank_codes,
+    )
+    recovery_required = cashflow_preparation_requires_recovery(
+        execute_query_pg,
+        client_id=payload.client_id,
+    )
+    preparation_job = None
+    if early_change_codes or recovery_required:
+        with pg_transaction() as conn:
+            preparation_job = enqueue_cashflow_preparation_job(
+                conn,
+                client_id=payload.client_id,
+                reason="preparation_recovery" if recovery_required else "treasury_accounts",
+                affected_account_codes=() if recovery_required else early_change_codes,
+            )
+    try:
+        with pg_transaction() as conn:
+            synchronization = synchronize_treasury_accounts_postgres(
+                conn,
+                client_id=payload.client_id,
+                cash_account_codes=sorted(cash_codes),
+                bank_account_codes=sorted(bank_codes),
+                changed_by=actor,
+            )
+    except Exception as error:
+        if preparation_job:
+            try:
+                with pg_transaction() as conn:
+                    mark_cashflow_preparation_job_failed(
+                        conn,
+                        job_id=preparation_job["job_id"],
+                        error=error,
+                    )
+            except Exception as cleanup_error:
+                logger.warning(
+                    "cashflows_preparation_job_failure_record_failed client_id=%s job_id=%s error=%s",
+                    payload.client_id,
+                    preparation_job["job_id"],
+                    cleanup_error,
+                )
+        raise
+    preparation_job = _refresh_cashflow_snapshot(
         payload.client_id,
         "treasury_accounts",
         treasury_account_codes=synchronization.get("affected_account_codes", []),
+        preparation_job=preparation_job,
+        background_tasks=background_tasks,
     )
     return {
         "saved": True,
         "cash_account_codes": sorted(cash_codes),
         "bank_account_codes": sorted(bank_codes),
+        "cashflow_preparation_job": preparation_job,
         **synchronization,
     }
 

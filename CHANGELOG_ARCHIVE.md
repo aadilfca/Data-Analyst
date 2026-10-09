@@ -7686,3 +7686,12 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Implementation:** Added a customer search, unique customer totals with reconciliation columns, and an in-place view switch. `Load customer payments (loaded)` restores voucher-level rows. Commit `9f0bf97`.
 
 **Verification:** Aadil confirmed local UI behavior. Reconciliation tests passed 40/40; JavaScript syntax and diff checks passed. Three direct-window failures remain in unrelated default-period/style/layout work.
+## Cashflows durable preparation job recovery - 2026-10-09
+
+**Scope:** Complete the preparation-service safety pass after local testing showed intermittent `object is not iterable` and aborted-transaction failures during Cash/Bank changes.
+
+**Implementation:** Nullable or scalar job scopes are normalized before persistence. Failed preparation work is recorded through a fresh transaction while the last active revision remains available. The runner no longer closes a pooled connection owned by the transaction manager, and failure-persistence problems are logged separately. Existing copy-on-write revision publishing, treasury savepoint fallback, retry, and startup recovery remain intact.
+
+**Verification:** The preparation and Account Control Centre suites passed 48/48; Python compilation and `git diff --check` passed. Aadil confirmed no error alert appeared during local report loading and Cash/Bank remove/add testing. The live read-only status check still shows the historical client-5 failed job at active revision 3/requested revision 7; no live repair was performed in this phase.
+
+**Transition checkpoint:** Prepared schema, initial backfill, incremental upload/category/treasury processing, summary/classification/drill-down/export prepared readers, and revision-safe fallback are implemented. Full performance acceptance, complete parallel reconciliation, and removal of controlled fallback remain pending.

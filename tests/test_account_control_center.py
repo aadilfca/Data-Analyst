@@ -327,6 +327,29 @@ class CashFlowControlTests(unittest.TestCase):
             control_center.save_cashflow_treasury_accounts(payload, session={"username": "Admin"})
         self.assertEqual(raised.exception.status_code, 400)
 
+    def test_treasury_change_codes_detects_added_and_removed_accounts(self):
+        with patch.object(control_center, "execute_query_pg", return_value=[
+            {"account_code": "CASH", "treasury_type": "cash"},
+            {"account_code": "BANK", "treasury_type": "bank"},
+        ]):
+            changed = control_center._cashflow_treasury_change_codes(
+                1,
+                {"BANK"},
+                set(),
+            )
+        self.assertEqual(changed, ["BANK", "CASH"])
+
+    def test_treasury_change_codes_returns_empty_for_unchanged_accounts(self):
+        with patch.object(control_center, "execute_query_pg", return_value=[
+            {"account_code": "CASH", "treasury_type": "cash"},
+        ]):
+            changed = control_center._cashflow_treasury_change_codes(
+                1,
+                {"CASH"},
+                set(),
+            )
+        self.assertEqual(changed, [])
+
 
 class FinancialStatementControlTests(unittest.TestCase):
     def test_tab_payloads_track_only_the_fields_they_supply(self):
