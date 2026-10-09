@@ -435,6 +435,23 @@ def init_db():
         ''')
 
         conn.execute('''
+            CREATE TABLE IF NOT EXISTS upload_validation_plans (
+                plan_id TEXT PRIMARY KEY,
+                file_id INTEGER NOT NULL,
+                client_id INTEGER NOT NULL,
+                template_id INTEGER NOT NULL,
+                file_sha256 TEXT NOT NULL,
+                request_signature TEXT NOT NULL,
+                plan_json TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'ready',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP NOT NULL,
+                applied_at TIMESTAMP,
+                FOREIGN KEY (file_id) REFERENCES uploaded_files(id) ON DELETE CASCADE
+            )
+        ''')
+
+        conn.execute('''
             CREATE TABLE IF NOT EXISTS verifications (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_id INTEGER,
@@ -4144,6 +4161,34 @@ def _ensure_postgres_storage_cleanup_runs(conn):
     with conn.cursor() as cleanup_cur:
         cleanup_cur.execute(_STORAGE_CLEANUP_RUNS_SQL)
 
+def _ensure_postgres_upload_validation_plans(conn):
+    """Create the short-lived server-side upload action-plan store."""
+    with conn.cursor() as cur:
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS upload_validation_plans (
+                plan_id TEXT PRIMARY KEY,
+                file_id INTEGER NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+                file_sha256 TEXT NOT NULL,
+                request_signature TEXT NOT NULL,
+                plan_json JSONB NOT NULL,
+                status TEXT NOT NULL DEFAULT 'ready'
+                    CHECK (status IN ('ready', 'applied', 'expired', 'superseded')),
+                created_at TIMESTAMPTZ DEFAULT now(),
+                expires_at TIMESTAMPTZ NOT NULL,
+                applied_at TIMESTAMPTZ
+            )
+        ''')
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_upload_validation_plans_expiry "
+            "ON upload_validation_plans (expires_at, status)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_upload_validation_plans_file "
+            "ON upload_validation_plans (file_id, status)"
+        )
+
 
 def _ensure_postgres_audit_rule_assertions(conn):
     """Add audit_rule_assertions (+ its 5 seed rows) to an already-marked Postgres schema.
@@ -4616,6 +4661,7 @@ def init_db_postgres(conn):
     if cur.fetchone()[0] is not None:
         cur.close()
         _ensure_postgres_storage_cleanup_runs(conn)
+        _ensure_postgres_upload_validation_plans(conn)
         migrated_document_type = _ensure_postgres_audit_rule_document_type_constraint(conn)
         migrated_form_columns = _ensure_postgres_form_field_columns(conn)
         migrated_form_tables = _ensure_postgres_form_tables(conn)
@@ -4755,6 +4801,25 @@ def init_db_postgres(conn):
             client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL
         )
     ''', "uploaded_files")
+
+    run('''
+        CREATE TABLE IF NOT EXISTS upload_validation_plans (
+            plan_id TEXT PRIMARY KEY,
+            file_id INTEGER NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
+            client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+            file_sha256 TEXT NOT NULL,
+            request_signature TEXT NOT NULL,
+            plan_json JSONB NOT NULL,
+            status TEXT NOT NULL DEFAULT 'ready'
+                CHECK (status IN ('ready', 'applied', 'expired', 'superseded')),
+            created_at TIMESTAMPTZ DEFAULT now(),
+            expires_at TIMESTAMPTZ NOT NULL,
+            applied_at TIMESTAMPTZ
+        )
+    ''', "upload_validation_plans")
+    run("CREATE INDEX IF NOT EXISTS idx_upload_validation_plans_expiry ON upload_validation_plans (expires_at, status)")
+    run("CREATE INDEX IF NOT EXISTS idx_upload_validation_plans_file ON upload_validation_plans (file_id, status)")
 
     # ---------- 7. verifications ----------
     run('''

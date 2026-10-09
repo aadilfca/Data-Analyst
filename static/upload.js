@@ -14,7 +14,7 @@ function getElement(id) {
 const templateDropdown = getElement('templateDropdown');
 const sheetSelector = getElement('sheetSelector');
 const sheetField = getElement('sheetField');
-const statusBadge = getElement('statusBadge');
+const statusBadge = document.getElementById('statusBadge');
 const dateDelimiterDropdown = getElement('dateDelimiterDropdown');
 const dateOrderDropdown = getElement('dateOrderDropdown');
 const dateFormatGroup = getElement('dateFormatGroup');
@@ -40,6 +40,7 @@ const saveMappingBtn = getElement('saveMappingBtn');
 const clearMappingBtn = getElement('clearMappingBtn');
 
 const modeActions = getElement('modeActions');
+const comparisonModeDropdown = getElement('comparisonModeDropdown');
 
 const downloadBtn = getElement('downloadBtn');
 const importBtn = getElement('importBtn');
@@ -80,6 +81,8 @@ let isProcessing = false;
 // complete async sequence while the rest of the page remains usable.
 let uploadActionInFlight = false;
 let validationStatus = 'idle'; // 'idle' | 'validating' | 'valid' | 'invalid'
+let validationPlanId = null;
+let lastChangePreview = null;
 // Pre-import Rate mode visibility (Phase D of the Rate-derivation requirement) --
 // the validate response's rate_mode field ({template_setting, effective_source, label}),
 // or null for a non-eligible template. Only ever trustworthy alongside a 'valid'
@@ -175,6 +178,7 @@ function saveUploadSessionState() {
         fileName: selectedFile ? selectedFile.name : null,
         dateDelimiter: selectedDateDelimiter,
         dateOrder: selectedDateOrder,
+        comparisonMode: comparisonModeDropdown ? comparisonModeDropdown.value : 'correction',
         excludedRowNumbers: Array.from(excludedRowNumbers),
         // Lightweight snapshot for the read-only "locked preview" a restored session shows
         // before the file is re-selected (renderRestorePreview()) -- just the column-name/type/
@@ -235,6 +239,10 @@ async function restoreUploadSessionState() {
         dateOrderDropdown.value = selectedDateOrder;
     }
     updateDateFormatTriggerLabel();
+
+    if (comparisonModeDropdown && (state.comparisonMode === 'correction' || state.comparisonMode === 'replace_range')) {
+        comparisonModeDropdown.value = state.comparisonMode;
+    }
 
     // Stash Sheet/row-exclusion targets for when the user re-selects a file.
     pendingRestoreSheetName = state.sheetName || null;
@@ -352,6 +360,8 @@ function clearRestorePreview() {
 // ---------- RESET VALIDATION STATE ----------
 function resetValidationState() {
     validationStatus = 'idle';
+    validationPlanId = null;
+    lastChangePreview = null;
     if (importBtn) {
         importBtn.innerHTML = 'Validate';
         importBtn.style.background = '';
@@ -547,6 +557,13 @@ if (dateOrderDropdown) {
         selectedDateOrder = this.value;
         refreshDateFormatPreview();
         updateDateFormatTriggerLabel();
+        saveUploadSessionState();
+    });
+}
+
+if (comparisonModeDropdown) {
+    comparisonModeDropdown.addEventListener('change', function() {
+        resetValidationState();
         saveUploadSessionState();
     });
 }
@@ -932,6 +949,7 @@ if (clearBtn) {
 function resetUpload() {
     selectedFile = null;
     fileId = null;
+    if (comparisonModeDropdown) comparisonModeDropdown.value = 'correction';
     if (fileInfo) fileInfo.style.display = 'none';
     if (fileInput) fileInput.value = '';
     if (mappingPanel) mappingPanel.style.display = 'none';
@@ -1369,6 +1387,31 @@ if (resetBtn) {
         showStatus('🔄 Reset complete. Select a template and upload a file.', 'info');
     });
 }
+function downloadChangeReport(report) {
+    if (!report || !report.length) return;
+    const escapeCsv = value => {
+        const text = Array.isArray(value) ? value.join('; ') : (value ?? '');
+        return `"${String(text).replace(/"/g, '""')}"`;
+    };
+    const header = ['Action', 'Client Data ID', 'Document ID', 'Line Key', 'Changed Fields'];
+    const rows = report.map(item => [
+        item.action,
+        item.client_data_id,
+        item.document_id,
+        item.line_key,
+        item.changed_fields,
+    ]);
+    const csv = [header, ...rows].map(row => row.map(escapeCsv).join(',')).join('\r\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'upload-change-report.csv';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 // ---------- IMPORT SUMMARY POPUP ----------
 function showImportSummary(result) {
     // Create overlay
@@ -1401,11 +1444,12 @@ function showImportSummary(result) {
     const unchanged = cd.unchanged_count || 0;
     const changed = cd.changed_count || 0;
     const newRows = cd.new_count || 0;
-    const deleted = cd.deleted_count || 0;
+    const deleted = cd.missing_count || result.deleted_count || 0;
+    const changeReport = cd.report || [];
     
     let statusIcon = '✅';
     let statusColor = '#16a34a';
-    let statusText = 'Import Successful';
+    let statusText = result.ignored ? 'Upload Ignored' : 'Import Successful';
     if (errorCount > 0) {
         statusIcon = '⚠️';
         statusColor = '#f59e0b';
@@ -1414,7 +1458,9 @@ function showImportSummary(result) {
 
     // Build a plain, single-line outcome summary (no inline emoji, no run-on sentence).
     let detailMessage = '';
-    if (inserted > 0 && updated > 0) {
+    if (result.ignored) {
+        detailMessage = 'All validated lines were unchanged. No data was written.';
+    } else if (inserted > 0 && updated > 0) {
         detailMessage = `${inserted} new row${inserted === 1 ? '' : 's'} inserted &middot; ${updated} existing row${updated === 1 ? '' : 's'} updated`;
     } else if (inserted > 0) {
         detailMessage = `${inserted} new row${inserted === 1 ? '' : 's'} inserted`;
@@ -1441,11 +1487,11 @@ function showImportSummary(result) {
                     </div>
                     <div style="background:#f8fafc; border-left:3px solid #16a34a; border-radius:6px; padding:8px 10px;">
                         <div style="font-size:18px; font-weight:700; color:#334155;">${newRows}</div>
-                        <div style="font-size:11px; color:#64748b;">New</div>
+                        <div style="font-size:11px; color:#64748b;">Added</div>
                     </div>
                     <div style="background:#f8fafc; border-left:3px solid #dc2626; border-radius:6px; padding:8px 10px;">
                         <div style="font-size:18px; font-weight:700; color:#334155;">${deleted}</div>
-                        <div style="font-size:11px; color:#64748b;">Missing</div>
+                        <div style="font-size:11px; color:#64748b;">Removed</div>
                     </div>
                 </div>
                 <div style="font-size:11px; color:#94a3b8; margin-top:8px;">
@@ -1527,12 +1573,18 @@ function showImportSummary(result) {
         ` : ''}
         <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:20px; flex-wrap:wrap;">
             <a href="/static/databank.html" target="_blank" style="padding:8px 20px; background:#3b82f6; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer; text-decoration:none; display:inline-block; font-size:14px;">View in Data Bank</a>
+            ${changeReport.length ? '<button id="downloadChangeReportBtn" style="padding:8px 20px; background:#0f766e; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer; font-size:14px;">Download change report</button>' : ''}
             <button id="importSummaryCloseBtn" style="padding:8px 24px; background:#e2e8f0; color:#1a1a2e; border:none; border-radius:6px; font-weight:600; cursor:pointer; font-size:14px;">Close</button>
         </div>
     `;
     
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
+
+    const downloadReportBtn = overlay.querySelector('#downloadChangeReportBtn');
+    if (downloadReportBtn) {
+        downloadReportBtn.addEventListener('click', () => downloadChangeReport(changeReport));
+    }
     
     // Close on button click
     overlay.querySelector('#importSummaryCloseBtn').addEventListener('click', function() {
@@ -1809,6 +1861,8 @@ if (importBtn) {
             client_id: parseInt(clientId),
             mappings: finalMappings,
             mode: 'create',
+            comparison_mode: comparisonModeDropdown ? comparisonModeDropdown.value : 'correction',
+            validation_plan_id: validationPlanId,
             unique_column_id: null,
             sheet_name: currentSheet || 'Sheet1',
             // Selected date format (Phase 3 dropdowns) – drives Date validation/import parsing on the backend.
@@ -1828,6 +1882,10 @@ if (importBtn) {
         if (validationStatus === 'valid') {
             // Perform the actual import
             await performImport(payload);
+            return;
+        }
+        if (validationStatus === 'ignored') {
+            showStatus('ℹ️ Upload stopped. All validated lines are unchanged; nothing will be imported.', 'info');
             return;
         }
 
@@ -1859,6 +1917,7 @@ if (importBtn) {
                 // user-excluded rows, and does not auto-exclude them.
                 setValidationFailedRows(result.errors);
                 validationStatus = 'invalid';
+                validationPlanId = null;
                 // Reset button state
                 importBtn.innerHTML = 'Validate';
                 importBtn.disabled = false;
@@ -1878,15 +1937,28 @@ if (importBtn) {
             const totalRows = result.total_rows || 0;
             const newRowsCount = result.new_rows_count || 0;
             const existingRowsCount = result.existing_rows_count || 0;
-            validationStatus = 'valid';
-            importBtn.innerHTML = '🚀 Upload';
-            importBtn.style.background = '#16a34a';
+            lastChangePreview = result.change_detection || null;
+            const previewAdded = lastChangePreview ? (lastChangePreview.new_count || 0) : newRowsCount;
+            const previewChanged = lastChangePreview ? (lastChangePreview.changed_count || 0) : 0;
+            const previewRemoved = lastChangePreview ? (lastChangePreview.missing_count || 0) : 0;
+            const previewUnchanged = lastChangePreview ? (lastChangePreview.unchanged_count || 0) : existingRowsCount;
+            const canImport = Boolean(result.can_import && result.validation_plan_id);
+            validationPlanId = canImport ? result.validation_plan_id : null;
+            validationStatus = canImport ? 'valid' : 'ignored';
+            importBtn.innerHTML = canImport ? '🚀 Import selected changes' : 'No changes to import';
+            importBtn.style.background = canImport ? '#16a34a' : '#94a3b8';
             importBtn.style.color = 'white';
-            importBtn.disabled = false;
+            importBtn.disabled = !canImport;
             let statusMsg = `✅ Validation passed! ${totalRows} rows identified. Click "Upload" to import all rows.`;
             const extraMsg = `<span style="color: maroon; font-weight: bold;">${newRowsCount} new row(s) • ${existingRowsCount} already exists in client data</span>`;
-            showStatus(statusMsg, 'success', extraMsg);
-            setBadge('✅ Data valid, ready to upload');
+            const changePreviewMsg = `<br><span style="color: #475569; font-weight: 600;">${previewAdded} added · ${previewChanged} changed · ${previewRemoved} removed · ${previewUnchanged} unchanged</span>`;
+            if (canImport) {
+                showStatus('✅ Validation passed. Import will process only additions, changes, and removals.', 'success', extraMsg + changePreviewMsg);
+                setBadge('✅ Changes validated, ready to import');
+            } else {
+                showStatus('ℹ️ Validation complete. All validated lines are unchanged; no import is available.', 'info', extraMsg + changePreviewMsg);
+                setBadge('ℹ️ Upload ignored: no changes');
+            }
             updatePreviewButtonState();
             // Validation succeeded -- this is the genuine "ready to import" milestone the step
             // strip's final step represents (confirmed with the user: mapping-resolved alone
@@ -1908,6 +1980,18 @@ if (importBtn) {
 // ---------- PERFORM IMPORT (after validation) ----------
 async function performImport(payload) {
     try {
+        if (payload.comparison_mode === 'replace_range') {
+            const rangeText = lastChangePreview && lastChangePreview.date_range
+                ? ` (${lastChangePreview.date_range.start} to ${lastChangePreview.date_range.end})`
+                : '';
+            const confirmed = window.confirm(
+                `This will remove current lines missing from the complete uploaded date range${rangeText}. Continue?`
+            );
+            if (!confirmed) {
+                showStatus('Upload cancelled. No data was changed.', 'info');
+                return;
+            }
+        }
         window.LoadingUI.showSpinner(importBtn, 'Importing');
         showStatus('⏳ Importing data...', 'loading');
         setBadge('⏳ Importing...', 'loading');
@@ -1976,6 +2060,8 @@ async function performImport(payload) {
                 showImportSummary(result);
             }
             setBadge('✅ Import complete');
+            validationPlanId = null;
+            validationStatus = 'idle';
         }
     } catch (error) {
         showStatus('❌ Import error: ' + error.message, 'error');

@@ -1,5 +1,13 @@
 # Changelog Archive
 
+## Server-side upload validation plans - 2026-10-09
+
+**Status:** Complete. **Files:** `database.py`, `routers/import_export.py`, `static/upload.html`, `static/upload.js`, `tests/test_upload_validation_counts.py`.
+
+Validate now compares once and creates a 30-minute server-side action plan containing only actionable rows and concurrency fingerprints. Unchanged uploads are marked `Ignored` and cannot proceed to Import. Import validates the file hash, request signature, and guarded current rows, then applies only additions, changes, and explicit replacement removals in one transaction. Completed and expired plans are purged. Browser Import now carries the plan ID and only enables when actions exist. No historical versions or unchanged-row copies are stored in the plan.
+
+**Checks:** `venv/Scripts/python.exe -m pytest tests/test_upload_validation_counts.py -q` (7 passed); Python compile, JavaScript syntax, and diff checks passed. One adjacent legacy Cashflow test fixture remains incompatible because its fake cursor lacks `execute()`.
+
 ## Cashflows Account Control Centre incremental preparation - Phase 4 - 2026-10-08
 
 **Scope:** Update prepared Cashflows data only for category or Cash/Bank configuration changes.

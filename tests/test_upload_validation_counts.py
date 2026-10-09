@@ -5,7 +5,14 @@ from unittest.mock import patch
 
 import database
 from database import execute_write, init_db
-from routers.import_export import count_new_and_existing_rows
+from routers.import_export import (
+    ColumnMapping,
+    ImportRequest,
+    _build_validation_plan_payload,
+    _validation_request_signature,
+    compare_transactions,
+    count_new_and_existing_rows,
+)
 
 
 class UploadValidationCountTests(unittest.TestCase):
@@ -77,5 +84,198 @@ class UploadValidationCountTests(unittest.TestCase):
 
         self.assertEqual(counts, (1, 1))
         query.assert_called_once()
+
+    def test_current_row_comparison_classifies_unchanged_changed_and_added(self):
+        template_cols = [
+            {"id": 1, "column_name": "Voucher", "data_type": "Text"},
+            {"id": 2, "column_name": "Amount", "data_type": "Numeric"},
+        ]
+
+        class MappingStub:
+            def __init__(self, excel_column_name):
+                self.excel_column_name = excel_column_name
+
+        mapping_dict = {1: MappingStub("Voucher"), 2: MappingStub("Amount")}
+        existing = [
+            {"id": 10, "row_data": {"Voucher": "UNCHANGED", "Amount": 100}, "version": 4,
+             "extract_date": None, "validation_status": "Verified", "verification_detail_id": 1},
+            {"id": 11, "row_data": {"Voucher": "CHANGED", "Amount": 100}, "version": 2,
+             "extract_date": None, "validation_status": "Pending", "verification_detail_id": None},
+        ]
+        incoming = [
+            {"Voucher": "UNCHANGED", "Amount": 100},
+            {"Voucher": "CHANGED", "Amount": 125},
+            {"Voucher": "ADDED", "Amount": 50},
+        ]
+
+        with patch("routers.import_export.execute_query_pg", return_value=existing):
+            result = compare_transactions(
+                1, 1, template_cols, incoming, {"Voucher": "Voucher", "Amount": "Amount"},
+                mapping_dict,
+            )
+
+        self.assertEqual(result["unchanged_count"], 1)
+        self.assertEqual(result["changed_count"], 1)
+        self.assertEqual(result["new_count"], 1)
+        self.assertEqual(result["missing_count"], 0)
+        self.assertEqual(result["unchanged"], [10])
+        self.assertEqual(result["changed"][0]["client_data_id"], 11)
+
+    def test_multi_line_document_ids_are_compared_without_duplicate_rejection(self):
+        template_cols = [
+            {"id": 1, "column_name": "Voucher ID", "data_type": "Text"},
+            {"id": 2, "column_name": "Account Name", "data_type": "Text"},
+            {"id": 3, "column_name": "Debit Amount", "data_type": "Numeric"},
+        ]
+
+        class MappingStub:
+            def __init__(self, excel_column_name):
+                self.excel_column_name = excel_column_name
+
+        mapping_dict = {
+            1: MappingStub("Voucher ID"),
+            2: MappingStub("Account Name"),
+            3: MappingStub("Debit Amount"),
+        }
+        existing = [
+            {"id": 30, "row_data": {"Voucher ID": "CPV-0126-100", "Account Name": "Expense", "Debit Amount": 100},
+             "version": 1, "extract_date": None, "validation_status": "Pending", "verification_detail_id": None},
+            {"id": 31, "row_data": {"Voucher ID": "CPV-0126-100", "Account Name": "Cash", "Debit Amount": 0},
+             "version": 1, "extract_date": None, "validation_status": "Pending", "verification_detail_id": None},
+        ]
+        incoming = [
+            {"Voucher ID": "CPV-0126-100", "Account Name": "Expense", "Debit Amount": 125},
+            {"Voucher ID": "CPV-0126-100", "Account Name": "Cash", "Debit Amount": 0},
+        ]
+
+        with patch("routers.import_export.execute_query_pg", return_value=existing):
+            result = compare_transactions(
+                1, 1, template_cols, incoming,
+                {"Voucher ID": "Voucher ID", "Account Name": "Account Name", "Debit Amount": "Debit Amount"},
+                mapping_dict,
+            )
+
+        self.assertEqual(result["unchanged_count"], 1)
+        self.assertEqual(result["changed_count"], 1)
+        self.assertEqual(result["new_count"], 0)
+        self.assertEqual(result["missing_count"], 0)
+        self.assertEqual(result["unchanged"], [31])
+        self.assertEqual(result["changed"][0]["client_data_id"], 30)
+
+    def test_complete_replacement_removes_only_missing_lines_inside_detected_date_range(self):
+        template_cols = [
+            {"id": 1, "column_name": "Voucher", "data_type": "Text"},
+            {"id": 2, "column_name": "Amount", "data_type": "Numeric"},
+            {"id": 3, "column_name": "Date", "data_type": "Date"},
+        ]
+
+        class MappingStub:
+            def __init__(self, excel_column_name):
+                self.excel_column_name = excel_column_name
+
+        mapping_dict = {
+            1: MappingStub("Voucher"),
+            2: MappingStub("Amount"),
+            3: MappingStub("Date"),
+        }
+        existing = [
+            {"id": 20, "row_data": {"Voucher": "KEEP", "Amount": 100, "Date": "01/01/2026"},
+             "version": 1, "extract_date": "2026-01-01", "validation_status": "Pending", "verification_detail_id": None},
+            {"id": 21, "row_data": {"Voucher": "REMOVE", "Amount": 200, "Date": "02/01/2026"},
+             "version": 1, "extract_date": "2026-01-02", "validation_status": "Pending", "verification_detail_id": None},
+            {"id": 22, "row_data": {"Voucher": "OUTSIDE", "Amount": 300, "Date": "03/01/2026"},
+             "version": 1, "extract_date": "2026-01-03", "validation_status": "Pending", "verification_detail_id": None},
+        ]
+
+        with patch("routers.import_export.execute_query_pg", return_value=existing):
+            result = compare_transactions(
+                1, 1, template_cols,
+                [
+                    {"Voucher": "KEEP", "Amount": 100, "Date": "01/01/2026"},
+                    {"Voucher": "NEW", "Amount": 150, "Date": "02/01/2026"},
+                ],
+                {"Voucher": "Voucher", "Amount": "Amount", "Date": "Date"},
+                mapping_dict,
+                comparison_mode="replace_range",
+                date_delimiter="/",
+                date_order="DMY",
+            )
+
+        self.assertEqual(result["date_range"], {"start": "2026-01-01", "end": "2026-01-02"})
+        self.assertEqual(result["new_count"], 1)
+        self.assertEqual(result["missing_count"], 1)
+        self.assertEqual(result["missing"][0]["client_data_id"], 21)
+
+    def test_validation_plan_keeps_only_actionable_rows_and_fingerprints(self):
+        template_cols = [
+            {"id": 1, "column_name": "Voucher", "data_type": "Text"},
+            {"id": 2, "column_name": "Amount", "data_type": "Numeric"},
+        ]
+        change_detection = {
+            "comparison_mode": "correction",
+            "date_range": None,
+            "unchanged_count": 7,
+            "changed_count": 1,
+            "new_count": 1,
+            "missing_count": 1,
+            "changed": [{
+                "client_data_id": 10,
+                "old_row_data": {"Voucher": "CHANGED", "Amount": 100},
+                "new_row_data": {"Voucher": "CHANGED", "Amount": 125},
+                "old_version": 3,
+                "verification_detail_id": 99,
+            }],
+            "new": [{"Voucher": "ADDED", "Amount": 50}],
+            "missing": [{
+                "client_data_id": 11,
+                "old_row_data": {"Voucher": "REMOVED", "Amount": 75},
+                "old_version": 2,
+                "verification_detail_id": None,
+            }],
+        }
+
+        payload = _build_validation_plan_payload(
+            change_detection,
+            template_cols,
+            1,
+            total_rows=10,
+            rejected_rows=[],
+            force_included_count=0,
+            rate_source=None,
+            date_delimiter="/",
+            date_order="DMY",
+        )
+
+        self.assertEqual(payload["unchanged_count"], 7)
+        self.assertEqual(len(payload["changed"]), 1)
+        self.assertEqual(len(payload["new"]), 1)
+        self.assertEqual(len(payload["missing"]), 1)
+        self.assertNotIn("old_row_data", payload["changed"][0])
+        self.assertNotIn("old_row_data", payload["missing"][0])
+        self.assertTrue(payload["changed"][0]["expected_old_fingerprint"])
+        self.assertEqual(payload["new"][0]["row_data"]["Voucher"], "ADDED")
+
+    def test_validation_signature_ignores_plan_id(self):
+        base = {
+            "template_id": 1,
+            "file_id": 2,
+            "client_id": 3,
+            "mappings": [
+                ColumnMapping(
+                    template_column_id=1,
+                    template_column_name="Voucher",
+                    excel_column_name="Voucher",
+                )
+            ],
+            "comparison_mode": "correction",
+        }
+        first = ImportRequest(**base, validation_plan_id="plan-one")
+        second = ImportRequest(**base, validation_plan_id="plan-two")
+
+        self.assertEqual(
+            _validation_request_signature(first),
+            _validation_request_signature(second),
+        )
+
 if __name__ == "__main__":
     unittest.main()

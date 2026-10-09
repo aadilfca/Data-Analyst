@@ -1503,6 +1503,14 @@
 
                     <!-- Consolidated action bar: overwrite note + Upload/Reset (Download Template lives in the top bar) -->
                     <div class="action-bar" id="modeActions" style="display:none;">
+                        <div class="action-note">
+                            <label for="comparisonModeDropdown" style="display:block; font-weight:600; margin-bottom:4px; color:#475569;">Upload treatment</label>
+                            <select id="comparisonModeDropdown" style="padding:5px 8px; border:1px solid #cbd5e1; border-radius:5px; font-size:12px; color:#334155;">
+                                <option value="correction">Correction / additions and changes only</option>
+                                <option value="replace_range">Complete replacement / remove missing lines</option>
+                            </select>
+                            <div style="margin-top:4px;">Unchanged lines are ignored. Removal applies only to a complete replacement.</div>
+                        </div>
                         <span class="action-note">📄 Changed documents will be overwritten. New documents will be added.</span>
                         <div class="action-buttons">
                             <button class="btn-primary" id="importBtn" disabled>🚀 Upload</button>
@@ -1648,7 +1656,7 @@
 
     <script src="/static/loading_ui.js?v=2"></script>
     <script src="/static/client_context.js?v=18"></script>
-    <script src="/static/upload.js?v=7"></script>
+    <script src="/static/upload.js?v=9"></script>
 </body>
 
 </html>
