@@ -12,6 +12,7 @@ INDEX_NAMES = {
     "idx_cash_bank_classifications_client_voucher",
     "idx_cash_bank_classifications_client_account_date",
     "idx_cash_bank_classifications_source_version",
+    "idx_cash_bank_classifications_one_current_source",
 }
 
 

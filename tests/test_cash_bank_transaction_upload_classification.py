@@ -11,11 +11,20 @@ from services.cash_bank_classification import upsert_classification_rows_postgre
 
 
 class _Cursor:
+    def __init__(self):
+        self.rows = []
+
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
         return False
+
+    def execute(self, statement, params=None):
+        self.rows = []
+
+    def fetchall(self):
+        return self.rows
 
 
 class _Connection:
@@ -133,8 +142,8 @@ class UploadClassificationTests(unittest.TestCase):
                 configuration_version=1,
             )
 
-        sql = execute_values.call_args.args[1]
-        self.assertIn("ON CONFLICT (client_data_id, configuration_version)", sql)
+        sql_statements = [call.args[1] for call in execute_values.call_args_list]
+        self.assertIn("UPDATE cash_bank_transaction_classifications", sql_statements[0])
         self.assertEqual(derived[0]["classification_status"], "cash")
         self.assertEqual(derived[0]["account_name"], "Cash in hand")
         self.assertEqual(source_row["row_data"], original_payload)

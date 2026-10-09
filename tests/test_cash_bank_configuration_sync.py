@@ -1,4 +1,4 @@
-"""Phase 5 coverage for versioned Account Control Centre synchronization."""
+"""Coverage for current-only Account Control Centre synchronization."""
 
 import unittest
 from unittest.mock import patch
@@ -91,7 +91,7 @@ class CashBankConfigurationSyncTests(unittest.TestCase):
         self.assertEqual(classification._configuration_action(current, current | {("BANK", "bank")}), "added")
         self.assertEqual(classification._configuration_action(current, {("BANK", "bank")}), "edited")
 
-    def test_sync_creates_new_version_soft_deactivates_and_preserves_source_payload(self):
+    def test_sync_updates_current_rows_and_preserves_source_payload(self):
         connection = _Connection()
         source_before = {
             "id": 44,
@@ -124,7 +124,7 @@ class CashBankConfigurationSyncTests(unittest.TestCase):
         )
         sql = "\n".join(statement for statement, _params in connection.cursor_instance.statements)
         self.assertIn("SET is_active = FALSE", sql)
-        self.assertIn("SET is_current = FALSE", sql)
+        self.assertNotIn("SET is_current = FALSE", sql)
         self.assertNotIn("DELETE FROM account_control_cashflow_treasury_accounts", sql)
 
 

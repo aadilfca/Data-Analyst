@@ -402,6 +402,39 @@ class CashBankTransactionBackfillTests(unittest.TestCase):
             0,
         )
 
+    def test_new_configuration_updates_current_rows_in_place(self):
+        first = backfill_sqlite(
+            self.connection,
+            client_id=self.client_id,
+            configuration_version=1,
+        )
+        self.assertEqual(first.inserted_rows, 4)
+
+        second = backfill_sqlite(
+            self.connection,
+            client_id=self.client_id,
+            configuration_version=2,
+        )
+        self.assertEqual(second.inserted_rows, 0)
+        self.assertEqual(second.skipped_existing_rows, 4)
+        self.assertEqual(
+            self.connection.execute(
+                "SELECT COUNT(*) FROM cash_bank_transaction_classifications"
+            ).fetchone()[0],
+            4,
+        )
+        self.assertEqual(
+            self.connection.execute(
+                "SELECT COUNT(DISTINCT configuration_version) FROM cash_bank_transaction_classifications WHERE is_current = 1"
+            ).fetchone()[0],
+            1,
+        )
+        self.assertEqual(
+            self.connection.execute(
+                "SELECT MIN(configuration_version) FROM cash_bank_transaction_classifications WHERE is_current = 1"
+            ).fetchone()[0],
+            2,
+        )
     def test_postgres_account_name_backfill_dry_run_uses_source_identity(self):
         source_rows = [
             {

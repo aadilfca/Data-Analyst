@@ -520,8 +520,8 @@ def init_db():
             )
         ''')
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_client_data_client_deleted_extract_date ON client_data (client_id, is_deleted, extract_date)")
-        # Derived, versioned Cash/Bank classifications remain separate from
-        # uploaded row_data so reporting can reclassify without mutating it.
+        # Derived Cash/Bank classifications remain separate from uploaded
+        # row_data, but only one current row is allowed for each source line.
         conn.execute('''
             CREATE TABLE IF NOT EXISTS cash_bank_transaction_classifications (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -566,6 +566,7 @@ def init_db():
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_account_date ON cash_bank_transaction_classifications (client_id, account_code, transaction_date, is_current)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_source_version ON cash_bank_transaction_classifications (client_data_id, configuration_version)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_period ON cash_bank_transaction_classifications (client_id, transaction_month, transaction_fortnight, is_current)")
+        create_index_with_retry(conn, "CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_bank_classifications_one_current_source ON cash_bank_transaction_classifications (client_data_id) WHERE is_current = 1")
         # DV-1 keeps source occurrences immutable while later phases select one
         # canonical voucher version for reporting.
         conn.execute('''
@@ -4473,6 +4474,7 @@ def _ensure_postgres_cash_bank_transaction_classifications(conn):
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_account_date ON cash_bank_transaction_classifications (client_id, account_code, transaction_date, is_current)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_source_version ON cash_bank_transaction_classifications (client_data_id, configuration_version)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cash_bank_classifications_client_period ON cash_bank_transaction_classifications (client_id, transaction_month, transaction_fortnight, is_current)")
+        cur.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_bank_classifications_one_current_source ON cash_bank_transaction_classifications (client_data_id) WHERE is_current = TRUE')
         cur.execute('''
             CREATE TABLE IF NOT EXISTS cash_bank_summary_read_models (
                 id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

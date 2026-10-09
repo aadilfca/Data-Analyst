@@ -252,11 +252,12 @@ def synchronize_treasury_accounts_postgres(
     bank_account_codes: list[str],
     changed_by: str,
 ) -> dict[str, Any]:
-    """Save a versioned Cash/Bank snapshot and reclassify existing lines atomically.
+    """Save a Cash/Bank mapping and reclassify current lines atomically.
 
     The caller owns the surrounding transaction. The current mapping is soft
-    deactivated, the requested mapping becomes active, and a new derived
-    classification version is written without changing client_data.row_data.
+    deactivated, the requested mapping becomes active, and the current derived
+    classification row is updated in place without changing client_data.row_data.
+    Older derived rows are not removed here; that is a separate cleanup phase.
     """
     requested_pairs = {
         (str(code), "cash") for code in cash_account_codes
@@ -355,14 +356,7 @@ def synchronize_treasury_accounts_postgres(
                 template="(%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)",
                 page_size=500,
             )
-        cursor.execute(
-            """
-            UPDATE cash_bank_transaction_classifications
-            SET is_current = FALSE
-            WHERE client_id = %s AND is_current = TRUE
-            """,
-            (client_id,),
-        )
+
         cursor.execute(
             """
             SELECT id, client_id, template_id, upload_id, row_data, extract_date
@@ -396,7 +390,12 @@ def upsert_classification_rows_postgres(
     treasury_mapping: Mapping[str, set[str]],
     configuration_version: int = 1,
 ) -> list[dict[str, Any]]:
-    """Upsert derived rows for new or changed upload lines without committing."""
+    """Upsert current derived rows without creating a version per source line.
+
+    Existing current rows are updated in place. A row is inserted only when a
+    source line has no current classification yet. Historical non-current rows
+    are deliberately left untouched for the later cleanup phase.
+    """
     derived_rows = [
         build_classification_row(row, treasury_mapping, configuration_version)
         for row in source_rows
@@ -426,43 +425,90 @@ def upsert_classification_rows_postgres(
         )
         for row in derived_rows
     ]
-    with conn.cursor() as cursor:
+    with conn.cursor(cursor_factory=RealDictCursor) as cursor:
         execute_values(
             cursor,
             """
-            INSERT INTO cash_bank_transaction_classifications (
+            UPDATE cash_bank_transaction_classifications AS target
+            SET client_id = incoming.client_id,
+                template_id = incoming.template_id,
+                upload_id = incoming.upload_id,
+                voucher_id = incoming.voucher_id,
+                account_code = incoming.account_code,
+                account_name = incoming.account_name,
+                transaction_date = incoming.transaction_date,
+                transaction_month = incoming.transaction_month,
+                transaction_fortnight = incoming.transaction_fortnight,
+                debit = incoming.debit,
+                credit = incoming.credit,
+                treasury_type = incoming.treasury_type,
+                treasury_account_code = incoming.treasury_account_code,
+                configuration_version = incoming.configuration_version,
+                classification_status = incoming.classification_status,
+                is_current = TRUE,
+                classified_at = CURRENT_TIMESTAMP
+            FROM (VALUES %s) AS incoming(
                 client_data_id, client_id, template_id, upload_id,
-                voucher_id, account_code, account_name, transaction_date, transaction_month, transaction_fortnight, debit, credit,
+                voucher_id, account_code, account_name, transaction_date,
+                transaction_month, transaction_fortnight, debit, credit,
                 treasury_type, treasury_account_code, configuration_version,
                 classification_status, is_current
-            ) VALUES %s
-            ON CONFLICT (client_data_id, configuration_version)
-            DO UPDATE SET
-                client_id = EXCLUDED.client_id,
-                template_id = EXCLUDED.template_id,
-                upload_id = EXCLUDED.upload_id,
-                voucher_id = EXCLUDED.voucher_id,
-                account_code = EXCLUDED.account_code,
-                account_name = EXCLUDED.account_name,
-                transaction_date = EXCLUDED.transaction_date,
-                transaction_month = EXCLUDED.transaction_month,
-                transaction_fortnight = EXCLUDED.transaction_fortnight,
-                debit = EXCLUDED.debit,
-                credit = EXCLUDED.credit,
-                treasury_type = EXCLUDED.treasury_type,
-                treasury_account_code = EXCLUDED.treasury_account_code,
-                classification_status = EXCLUDED.classification_status,
-                is_current = EXCLUDED.is_current,
-                classified_at = CURRENT_TIMESTAMP
+            )
+            WHERE target.client_data_id = incoming.client_data_id
+              AND target.is_current = TRUE
             """,
             values,
             page_size=500,
         )
-        if hasattr(cursor, "execute"):
-            cursor.execute(
-                "DELETE FROM cash_bank_summary_read_models WHERE client_id = ANY(%s)",
-                ([int(row["client_id"]) for row in derived_rows],),
+        cursor.execute(
+            """
+            SELECT client_data_id
+            FROM cash_bank_transaction_classifications
+            WHERE is_current = TRUE AND client_data_id = ANY(%s)
+            """,
+            ([int(row["client_data_id"]) for row in derived_rows],),
+        )
+        current_ids = {int(row["client_data_id"]) for row in cursor.fetchall()}
+        insert_rows = [
+            row for row in values if int(row[0]) not in current_ids
+        ]
+        if insert_rows:
+            execute_values(
+                cursor,
+                """
+                INSERT INTO cash_bank_transaction_classifications (
+                    client_data_id, client_id, template_id, upload_id,
+                    voucher_id, account_code, account_name, transaction_date,
+                    transaction_month, transaction_fortnight, debit, credit,
+                    treasury_type, treasury_account_code, configuration_version,
+                    classification_status, is_current
+                ) VALUES %s
+                ON CONFLICT (client_data_id, configuration_version)
+                DO UPDATE SET
+                    client_id = EXCLUDED.client_id,
+                    template_id = EXCLUDED.template_id,
+                    upload_id = EXCLUDED.upload_id,
+                    voucher_id = EXCLUDED.voucher_id,
+                    account_code = EXCLUDED.account_code,
+                    account_name = EXCLUDED.account_name,
+                    transaction_date = EXCLUDED.transaction_date,
+                    transaction_month = EXCLUDED.transaction_month,
+                    transaction_fortnight = EXCLUDED.transaction_fortnight,
+                    debit = EXCLUDED.debit,
+                    credit = EXCLUDED.credit,
+                    treasury_type = EXCLUDED.treasury_type,
+                    treasury_account_code = EXCLUDED.treasury_account_code,
+                    classification_status = EXCLUDED.classification_status,
+                    is_current = TRUE,
+                    classified_at = CURRENT_TIMESTAMP
+                """,
+                insert_rows,
+                page_size=500,
             )
+        cursor.execute(
+            "DELETE FROM cash_bank_summary_read_models WHERE client_id = ANY(%s)",
+            ([int(row["client_id"]) for row in derived_rows],),
+        )
     return derived_rows
 
 @dataclass
@@ -752,19 +798,41 @@ def backfill_sqlite(
     batch_size: int = 500,
     dry_run: bool = False,
 ) -> BackfillSummary:
-    """Backfill SQLite derived classifications in committed batches."""
+    """Backfill SQLite classifications while keeping one current row per source."""
     if batch_size < 1:
         raise ValueError("batch_size must be positive")
     client_ids = _client_ids_sqlite(conn, client_id)
     summary = BackfillSummary("sqlite", int(configuration_version), dry_run, client_ids)
 
+    update_sql = """
+        UPDATE cash_bank_transaction_classifications
+        SET client_id=?, template_id=?, upload_id=?, voucher_id=?,
+            account_code=?, account_name=?, transaction_date=?,
+            transaction_month=?, transaction_fortnight=?, debit=?, credit=?,
+            treasury_type=?, treasury_account_code=?, configuration_version=?,
+            classification_status=?, is_current=1, classified_at=CURRENT_TIMESTAMP
+        WHERE client_data_id=? AND is_current=1
+    """
     insert_sql = """
-        INSERT OR IGNORE INTO cash_bank_transaction_classifications (
+        INSERT INTO cash_bank_transaction_classifications (
             client_data_id, client_id, template_id, upload_id,
-            voucher_id, account_code, account_name, transaction_date, transaction_month, transaction_fortnight, debit, credit,
+            voucher_id, account_code, account_name, transaction_date,
+            transaction_month, transaction_fortnight, debit, credit,
             treasury_type, treasury_account_code, configuration_version,
             classification_status, is_current
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(client_data_id, configuration_version) DO UPDATE SET
+            client_id=excluded.client_id, template_id=excluded.template_id,
+            upload_id=excluded.upload_id, voucher_id=excluded.voucher_id,
+            account_code=excluded.account_code, account_name=excluded.account_name,
+            transaction_date=excluded.transaction_date,
+            transaction_month=excluded.transaction_month,
+            transaction_fortnight=excluded.transaction_fortnight,
+            debit=excluded.debit, credit=excluded.credit,
+            treasury_type=excluded.treasury_type,
+            treasury_account_code=excluded.treasury_account_code,
+            classification_status=excluded.classification_status,
+            is_current=1, classified_at=CURRENT_TIMESTAMP
     """
 
     for current_client_id in client_ids:
@@ -794,58 +862,60 @@ def backfill_sqlite(
             ids = [int(row["id"]) for row in source_dicts]
             existing_rows = conn.execute(
                 f"""
-                SELECT client_data_id
+                SELECT client_data_id, configuration_version
                 FROM cash_bank_transaction_classifications
-                WHERE configuration_version = ?
+                WHERE is_current = 1
                   AND client_data_id IN ({",".join("?" for _ in ids)})
                 """,
-                (configuration_version, *ids),
+                tuple(ids),
             ).fetchall()
             existing_ids = {int(row[0]) for row in existing_rows}
-            insert_rows = []
-            for source_row in source_dicts:
+            derived_rows = [
+                build_classification_row(source_row, mapping, configuration_version)
+                for source_row in source_dicts
+            ]
+            for derived_row in derived_rows:
                 summary.source_rows += 1
-                derived_row = build_classification_row(
-                    source_row, mapping, configuration_version
-                )
                 _record_classification_counts(summary, derived_row)
                 if derived_row["client_data_id"] in existing_ids:
                     summary.skipped_existing_rows += 1
-                else:
-                    insert_rows.append(derived_row)
-
-            if not dry_run and insert_rows:
-                try:
-                    conn.executemany(
-                        insert_sql,
-                        [
-                            (
-                                row["client_data_id"],
-                                row["client_id"],
-                                row["template_id"],
-                                row["upload_id"],
-                                row["voucher_id"],
-                                row["account_code"],
-                                row["account_name"],
-                                row["transaction_date"],
-                                row["transaction_month"],
-                                row["transaction_fortnight"],
-                                row["debit"],
-                                row["credit"],
-                                row["treasury_type"],
-                                row["treasury_account_code"],
-                                row["configuration_version"],
-                                row["classification_status"],
-                                row["is_current"],
-                            )
-                            for row in insert_rows
-                        ],
+            if not dry_run:
+                update_rows = [
+                    (
+                        row["client_id"], row["template_id"], row["upload_id"],
+                        row["voucher_id"], row["account_code"], row["account_name"],
+                        row["transaction_date"], row["transaction_month"],
+                        row["transaction_fortnight"], row["debit"], row["credit"],
+                        row["treasury_type"], row["treasury_account_code"],
+                        row["configuration_version"], row["classification_status"],
+                        row["client_data_id"],
                     )
+                    for row in derived_rows
+                    if row["client_data_id"] in existing_ids
+                ]
+                insert_rows = [
+                    (
+                        row["client_data_id"], row["client_id"], row["template_id"],
+                        row["upload_id"], row["voucher_id"], row["account_code"],
+                        row["account_name"], row["transaction_date"],
+                        row["transaction_month"], row["transaction_fortnight"],
+                        row["debit"], row["credit"], row["treasury_type"],
+                        row["treasury_account_code"], row["configuration_version"],
+                        row["classification_status"], row["is_current"],
+                    )
+                    for row in derived_rows
+                    if row["client_data_id"] not in existing_ids
+                ]
+                try:
+                    if update_rows:
+                        conn.executemany(update_sql, update_rows)
+                    if insert_rows:
+                        conn.executemany(insert_sql, insert_rows)
                     conn.commit()
+                    summary.inserted_rows += len(insert_rows)
                 except Exception:
                     conn.rollback()
                     raise
-                summary.inserted_rows += len(insert_rows)
 
     return summary
 
@@ -868,26 +938,14 @@ def backfill_postgres(
     batch_size: int = 500,
     dry_run: bool = False,
 ) -> BackfillSummary:
-    """Backfill PostgreSQL derived classifications in committed batches."""
+    """Backfill PostgreSQL classifications while keeping one current row per source."""
     if batch_size < 1:
         raise ValueError("batch_size must be positive")
     client_ids = _client_ids_postgres(conn, client_id)
     summary = BackfillSummary("postgres", int(configuration_version), dry_run, client_ids)
-    insert_sql = """
-        INSERT INTO cash_bank_transaction_classifications (
-            client_data_id, client_id, template_id, upload_id,
-            voucher_id, account_code, account_name, transaction_date, transaction_month, transaction_fortnight, debit, credit,
-            treasury_type, treasury_account_code, configuration_version,
-            classification_status, is_current
-        ) VALUES %s
-        ON CONFLICT (client_data_id, configuration_version) DO NOTHING
-    """
 
     try:
         for current_client_id in client_ids:
-            # Keep the source cursor alive while checking each batch against
-            # the derived table. Reusing one cursor for both queries resets
-            # the source result set after the first batch.
             with (
                 conn.cursor(cursor_factory=RealDictCursor) as source_cursor,
                 conn.cursor(cursor_factory=RealDictCursor) as lookup_cursor,
@@ -920,13 +978,14 @@ def backfill_postgres(
                         """
                         SELECT client_data_id
                         FROM cash_bank_transaction_classifications
-                        WHERE configuration_version = %s
-                          AND client_data_id = ANY(%s)
+                        WHERE is_current = TRUE AND client_data_id = ANY(%s)
                         """,
-                        (configuration_version, ids),
+                        (ids,),
                     )
-                    existing_ids = {int(row["client_data_id"]) for row in lookup_cursor.fetchall()}
-                    insert_rows = []
+                    existing_ids = {
+                        int(row["client_data_id"])
+                        for row in lookup_cursor.fetchall()
+                    }
                     for source_row in source_dicts:
                         summary.source_rows += 1
                         derived_row = build_classification_row(
@@ -935,39 +994,18 @@ def backfill_postgres(
                         _record_classification_counts(summary, derived_row)
                         if derived_row["client_data_id"] in existing_ids:
                             summary.skipped_existing_rows += 1
-                        else:
-                            insert_rows.append(derived_row)
 
-                    if not dry_run and insert_rows:
-                        execute_values(
-                            lookup_cursor,
-                            insert_sql,
-                            [
-                                (
-                                    row["client_data_id"],
-                                    row["client_id"],
-                                    row["template_id"],
-                                    row["upload_id"],
-                                    row["voucher_id"],
-                                    row["account_code"],
-                                    row["account_name"],
-                                    row["transaction_date"],
-                                    row["transaction_month"],
-                                    row["transaction_fortnight"],
-                                    row["debit"],
-                                    row["credit"],
-                                    row["treasury_type"],
-                                    row["treasury_account_code"],
-                                    row["configuration_version"],
-                                    row["classification_status"],
-                                    True,
-                                )
-                                for row in insert_rows
-                            ],
-                            page_size=batch_size,
+                    if not dry_run:
+                        upsert_classification_rows_postgres(
+                            conn,
+                            source_dicts,
+                            mapping,
+                            configuration_version=configuration_version,
+                        )
+                        summary.inserted_rows += len(
+                            [row for row in source_dicts if int(row["id"]) not in existing_ids]
                         )
                         conn.commit()
-                        summary.inserted_rows += len(insert_rows)
     except Exception:
         conn.rollback()
         raise
