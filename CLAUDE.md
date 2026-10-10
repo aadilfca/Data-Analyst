@@ -15,7 +15,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/reconciliation.py -> client-scoped account groups, report categories, standardized opening/month-end balance inputs, and the Cashflows SQL-first preview. See CHANGELOG_ARCHIVE.md.
 
 - routers/clients.py + static/clients.* → firm-level client management; admin-only except the paginated `GET /api/clients`. See CHANGELOG_ARCHIVE.md.
-- routers/dashboard.py + static/index.html, script.js → dashboard cards, real DB size (Postgres/SQLite) in MB, and live overview KPIs. See CHANGELOG_ARCHIVE.md.
+- routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, and database size with PostgreSQL table/index breakdown. See CHANGELOG_ARCHIVE.md.
 - routers/data.py + static/databank.* → Client Data Bank availability, calendars, overdue uploads, preview/filtering, frequency settings, and guarded mutations. See CHANGELOG_ARCHIVE.md.
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
 - routers/import_export.py -> Excel upload, mapping, server-side validation plans, action-only import/change detection, compact upload summaries, downloadable change reports, upload-time Cashflows resolution, export, and guarded actions. See CHANGELOG_ARCHIVE.md.
@@ -64,14 +64,16 @@ One line per file group: what it is now. Full build history for every entry live
 - **Browser automation for UI verification**: `playwright` (Python, also in `requirements-dev.txt`) is installed in `venv` — `./venv/Scripts/python.exe -c "from playwright.sync_api import sync_playwright; ..."` launches a real headless Chromium against the live dev server (`localhost:5000`), no npm/Node install needed. Use it to actually reproduce/screenshot a UI bug (real DOM, real CSS, `page.evaluate()` for computed styles/`getBoundingClientRect()`, `performance.getEntriesByType('resource')` for cache/timing) instead of guessing from a description alone.
 
 ## Database management and backup rules
-- Production Supabase is a working store, not an archive; keep one active client dataset/import and only current operational rows.
-- Do not store source Excel, CSV, SQL dumps, reports, or workpapers in Supabase Database or Storage; keep controlled external/offline copies and only metadata, counts, fingerprints, and checksums in Supabase.
-- Every re-import compares a normalized source fingerprint and stable row identity, then applies only additions, changes, and explicit removals; unchanged rows and historical duplicates are never copied.
-- Before client-data, audit-result, or full-table deletion, require an export package: scoped CSV/XLSX for client deletion and a full logical SQL dump for whole-database or schema destruction.
+- `client_data` is the sole canonical transaction store: one active row per stable client/template/transaction identity, with raw values and report-required derived columns stored together and indexed.
+- Production Supabase is a working store, not an archive; keep one active canonical data set per client/template and only current operational rows.
+- Every re-import compares a normalized source fingerprint and stable row identity: exact repeats are ignored, changed rows update in place with derived columns recalculated, new backdated rows are inserted once, and removals require explicit replacement scope.
+- Do not retain durable copies of transaction rows in report/read-model, occurrence, revision, or cache tables; compact configuration, audit metadata, counts, fingerprints, and checksums are allowed, while legacy copies must not grow and are migration targets.
+- Source Excel/CSV files, SQL dumps, reports, and workpapers stay in controlled external/offline storage; Supabase may hold temporary staging metadata only and must not retain backup files.
+- During development, uploaded Excel/Trial Balance data may be removed through the approved app flows without a backup-export gate; reinstate scoped CSV/XLSX exports before production client-data deletion, while whole-database/schema destruction still requires a logical SQL dump.
 - Keep at least two protected external backup copies and test restoration at least quarterly; retention follows firm and client obligations.
-- Treat 300 MB as a warning and 400 MB as an import-stop threshold; never intentionally approach Supabase Free's 500 MB database quota. Review table, index, and bloat growth weekly.
+- Treat 300 MB as a warning and 400 MB as an import-stop threshold; never intentionally approach Supabase Free's 500 MB database quota. Review table, index, and bloat growth weekly; perform a read-only size check before retrying a failed large import.
 - Retain primary/unique and measured query indexes; remove only unused indexes or indexes owned by dropped tables. Inspect bloat after large deletes; reserve `VACUUM FULL` and compaction for approved maintenance.
-- Retain audit-procedure definitions and compact run metadata; export detailed workpapers/results and remove temporary or intermediate copies after completion.
+- Retain audit-procedure definitions and compact run metadata, but do not duplicate full transaction rows in audit history; export detailed workpapers/results and remove temporary or intermediate copies after completion.
 - Future code affecting imports, deletion, reports, procedures, cleanup, or backups must preserve these rules and update the matching `CHANGELOG_ARCHIVE.md` entry.
 
 ## Conventions
@@ -233,6 +235,10 @@ One line per file group: what it is now. Full build history for every entry live
 ## Status log
 
 - Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; performance findings reference the investigation documents.
+- 2026-10-10: Phase 1 redrafted strict single-source data, re-import, backup, cleanup, quota, and index policies; code implementation remains pending.
+- 2026-10-09: Phase 3 verified current-only upload comparison and idempotent unchanged imports; targeted regression coverage passes 10/10.
+- 2026-10-09: Fixed maiden-upload Cash/Bank DATE casting; added regression coverage and documented failed-import index-bloat monitoring.
+- 2026-10-09: Hardened upload conflicts with unique stored paths, surfaced 409 details, and reset stale validation state after conflict.
 - 2026-10-09: Phase 1 documented Supabase working-set, backup-before-delete, external archive, index/vacuum, and 500 MB safety rules in `CLAUDE.md`.
 - 2026-10-08: Phase 1 added idempotent Cashflows prepared-line, rollup, state, and job schema in SQLite/PostgreSQL with focused tests.
 - 2026-10-08: Phase 2 added full initial prepared Cashflows backfill service, operator script, eligibility/category rules, and regression coverage.
@@ -266,4 +272,4 @@ Do this automatically at the end of the session without being asked.
 - 2026-10-09: Phase 3 adds compact upload summaries, authenticated uploader metadata, changed-field old/new report values, and downloadable reports without storing detailed report copies.
 - 2026-10-09: Phase 4 makes prepared Cashflows and report invalidation current-only; incremental work no longer creates new copies.
 - 2026-10-09: Phase 5 adds table-level Cashflows sizing, stale-revision candidates, and reference-guarded cleanup preview/apply.
-- 2026-10-09: Phase 0 freezes destructive Storage Cleanup at the UI and API until backup and current-only Cashflows redesign gates are complete.
+- 2026-10-10: Storage Cleanup is unlocked for development testing; uploaded-data deletion remains available while Audit Rules and current operational data stay protected.

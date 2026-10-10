@@ -1,5 +1,34 @@
 # Changelog Archive
 
+## Single-source data management and backup policy — Phase 1 — 2026-10-10
+
+**Status:** Documentation complete. **Files:** `CLAUDE.md`, `CHANGELOG_ARCHIVE.md`, `KNOWN_ISSUES.md`.
+
+**Decision:** `client_data` is the only canonical transaction set. A stable client/template/transaction identity may exist once in the active set; raw values and report-required derived columns live together and are indexed. Repeated cumulative uploads compare normalized identity and fingerprint: unchanged rows are skipped, corrections update in place, and newly supplied backdated rows are inserted once.
+
+**Storage boundary:** Durable transaction copies in classifications, occurrence registers, prepared lines/rollups, report snapshots, and historical revisions are not part of the target policy. They are legacy migration targets and must not grow. Configuration, compact audit metadata, counts, fingerprints, checksums, and procedure/run metadata remain allowed where operationally necessary.
+
+**Backup boundary:** Source workbooks, exports, SQL dumps, reports, and workpapers remain external/offline. Supabase stores no backup files. Production deletion requires an approved scoped export or logical dump as appropriate, two protected backup copies, and tested restoration; development deletion remains temporarily exempt per the existing rule.
+
+**Current-state findings:** Upload comparison is already close to this model, but dataset deletion is soft-only, `data_audit_log` stores full old/new row snapshots, Cashflows still has prepared/classification/occurrence/fallback source paths, and no 300 MB warning or 400 MB import-stop gate is enforced in code. The setup backup is not a complete disaster-recovery backup.
+
+**Checks:** Read-only review completed across the approved data, import, report, cleanup, backup, sizing, index, and regression files. Focused tests returned 44 passed and 1 failure: the SQLite preparation-job test still expects an identity constraint intentionally removed from the current-only PostgreSQL job-history design.
+
+**Boundary:** This phase changes documentation only. No application code, schema, Supabase data, cleanup, migration, backup export, or deletion was performed. Implementation begins only in later approved phases.
+
+## Dashboard database-size breakdown - 2026-10-10
+
+**Status:** Complete. **Files:** `routers/dashboard.py`, `static/index.html`, `static/script.js`, `static/style.css`, `tests/test_app_smoke.py`, `CLAUDE.md`.
+
+The dashboard database-size endpoint now returns PostgreSQL table data, index size, total size, percentage of the database, and an explicit other-overhead remainder. The dashboard keeps the headline total and adds a refreshable breakdown table. Local SQLite safely reports one file-level row because portable table accounting is unavailable there.
+## Storage cleanup development unlock - 2026-10-10
+
+**Status:** Complete. **Files:** `routers/storage_cleanup.py`, `static/storage_cleanup.html`/`.js`, `tests/test_storage_cleanup.py`, `CLAUDE.md`.
+
+Removed the temporary HTTP 423/API and browser freeze so the existing preview, exact confirmation, stale-preview, admin, protected-data, and transactional safeguards can be tested during development. Uploaded Excel/Trial Balance deletion remains available through its existing app flows; Audit Rules and Categories retain their own guarded soft-delete/restore lifecycle.
+
+The backup-export requirement is now explicitly deferred for development and must be reinstated before production cleanup. No live cleanup or database mutation was performed.
+
 ## Database management and backup policy - Phase 1 - 2026-10-09
 
 **Status:** Documentation complete. **Files:** `CLAUDE.md`, `CHANGELOG_ARCHIVE.md`.
@@ -11,6 +40,36 @@
 **Capacity and maintenance:** Warn at 300 MB, stop new imports at 400 MB, and never intentionally approach the 500 MB Free-plan quota. Keep only primary/unique and measured query indexes; inspect bloat after large deletes and reserve `VACUUM FULL` or compaction for approved maintenance.
 
 **Boundary:** This phase changes documentation only. No live cleanup, deletion, migration, schema change, backup upload, or code implementation was performed. Later phases will implement and verify these controls.
+
+## Working-data lifecycle verification - Phase 3 - 2026-10-09
+
+**Status:** Complete. **Files:** `tests/test_upload_validation_counts.py`, `CLAUDE.md`, `CHANGELOG_ARCHIVE.md`.
+
+**Finding:** The existing import flow already compares normalized document/line identities, skips unchanged rows, updates changed rows in place, inserts additions, bounds replacement removals to the selected range, expires validation plans, and stores only compact upload summaries.
+
+**Implementation:** Added a regression test proving an identical re-import produces one unchanged row with zero additions, changes, or removals. No production code or schema rewrite was justified.
+
+**Checks:** `./venv/Scripts/python.exe -m pytest tests/test_upload_validation_counts.py -q` passed 10/10. No live data, database schema, or cleanup operation changed.
+
+**Boundary:** `data_audit_log` still stores full old/new snapshots for the existing row-history feature; reducing that storage requires a separate approved phase covering its data and UI readers.
+
+## Maiden upload date cast and failed-import storage gate - 2026-10-09
+
+**Status:** Complete. **Files:** `services/cash_bank_classification.py`, `tests/test_cash_bank_transaction_upload_classification.py`, `CLAUDE.md`.
+
+**Finding:** A failed maiden import persisted no client rows, but the failed large transaction expanded `client_data` index space to about 12.4 MB. The existing quota and weekly-bloat rules did not explicitly require a post-failure size check.
+
+**Implementation:** Cash/Bank upload classification now casts the incoming `transaction_date` text to PostgreSQL `DATE` before the update path. The rulebook now requires a read-only size check before retrying a failed large import; no cleanup, `VACUUM`, or `REINDEX` was run.
+
+**Checks:** Classification and upload-validation regression tests passed 15/15.
+
+## Validation-plan conflict hardening - 2026-10-09
+
+**Status:** Complete. **Files:** routers/import_export.py, static/upload.js, tests/test_upload_validation_counts.py, CLAUDE.md.
+
+**Finding:** Repeated uploads with the same workbook name reused one physical path, so a later upload could invalidate an earlier validation plan; the UI also hid nested 409 detail. The reviewed workbook contains 64,879 transaction rows plus one total row and is balanced.
+
+**Implementation:** Store each upload under a unique path while retaining the original display name. Import now shows the backend conflict reason and clears the stale validation plan so the user can validate the current file again. No workbook or database data was changed.
 
 ## Storage cleanup freeze - Phase 0 - 2026-10-09
 
