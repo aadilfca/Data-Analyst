@@ -362,6 +362,7 @@ def synchronize_treasury_accounts_postgres(
             SELECT id, client_id, template_id, upload_id, row_data, extract_date
             FROM client_data
             WHERE client_id = %s AND is_deleted = FALSE
+              AND change_detection_status != 'deleted'
             ORDER BY id
             """,
             (client_id,),
@@ -505,6 +506,55 @@ def upsert_classification_rows_postgres(
                 insert_rows,
                 page_size=500,
             )
+        # Phase 2 canonical store: keep report-required derivations on the
+        # source client_data row. row_data is never changed here.
+        canonical_values = [
+            (
+                row["client_data_id"],
+                row["voucher_id"],
+                row["account_code"],
+                row["account_name"],
+                row["transaction_date"],
+                row["transaction_month"],
+                row["transaction_fortnight"],
+                row["debit"],
+                row["credit"],
+                row["treasury_type"],
+                row["treasury_account_code"],
+                row["classification_status"],
+                row["configuration_version"],
+            )
+            for row in derived_rows
+        ]
+        execute_values(
+            cursor,
+            """
+            UPDATE client_data AS target
+            SET derived_voucher_id = incoming.derived_voucher_id,
+                derived_account_code = incoming.derived_account_code,
+                derived_account_name = incoming.derived_account_name,
+                derived_transaction_date = NULLIF(incoming.derived_transaction_date, '')::date,
+                derived_transaction_month = incoming.derived_transaction_month,
+                derived_transaction_fortnight = incoming.derived_transaction_fortnight,
+                derived_debit = incoming.derived_debit,
+                derived_credit = incoming.derived_credit,
+                derived_treasury_type = incoming.derived_treasury_type,
+                derived_treasury_account_code = incoming.derived_treasury_account_code,
+                derived_classification_status = incoming.derived_classification_status,
+                derived_version = incoming.derived_version
+            FROM (VALUES %s) AS incoming(
+                client_data_id, derived_voucher_id, derived_account_code,
+                derived_account_name, derived_transaction_date,
+                derived_transaction_month, derived_transaction_fortnight,
+                derived_debit, derived_credit, derived_treasury_type,
+                derived_treasury_account_code, derived_classification_status,
+                derived_version
+            )
+            WHERE target.id = incoming.client_data_id
+            """,
+            canonical_values,
+            page_size=500,
+        )
         cursor.execute(
             "DELETE FROM cash_bank_summary_read_models WHERE client_id = ANY(%s)",
             ([int(row["client_id"]) for row in derived_rows],),
@@ -586,6 +636,7 @@ def load_cashflow_classification_preview(
         "cd.client_id = %s",
         "cd.template_id = %s",
         "cd.is_deleted = FALSE",
+        "cd.change_detection_status != 'deleted'",
         "c.is_current = TRUE",
         "c.transaction_date >= %s",
         "c.transaction_date <= %s",
@@ -785,7 +836,7 @@ def _client_ids_sqlite(conn: Any, client_id: int | None) -> list[int]:
     if client_id is not None:
         return [int(client_id)]
     rows = conn.execute(
-        "SELECT DISTINCT client_id FROM client_data WHERE is_deleted = 0 ORDER BY client_id"
+        "SELECT DISTINCT client_id FROM client_data WHERE is_deleted = 0 AND change_detection_status != 'deleted' ORDER BY client_id"
     ).fetchall()
     return [int(row[0]) for row in rows]
 
@@ -850,6 +901,7 @@ def backfill_sqlite(
             SELECT id, client_id, template_id, upload_id, row_data, extract_date
             FROM client_data
             WHERE client_id = ? AND is_deleted = 0
+              AND change_detection_status != 'deleted'
             ORDER BY id
             """,
             (current_client_id,),
@@ -906,11 +958,36 @@ def backfill_sqlite(
                     for row in derived_rows
                     if row["client_data_id"] not in existing_ids
                 ]
+                canonical_rows = [
+                    (
+                        row["voucher_id"], row["account_code"], row["account_name"],
+                        row["transaction_date"], row["transaction_month"],
+                        row["transaction_fortnight"], row["debit"], row["credit"],
+                        row["treasury_type"], row["treasury_account_code"],
+                        row["classification_status"], row["configuration_version"],
+                        row["client_data_id"],
+                    )
+                    for row in derived_rows
+                ]
                 try:
                     if update_rows:
                         conn.executemany(update_sql, update_rows)
                     if insert_rows:
                         conn.executemany(insert_sql, insert_rows)
+                    if canonical_rows:
+                        conn.executemany(
+                            """
+                            UPDATE client_data
+                            SET derived_voucher_id=?, derived_account_code=?,
+                                derived_account_name=?, derived_transaction_date=?,
+                                derived_transaction_month=?, derived_transaction_fortnight=?,
+                                derived_debit=?, derived_credit=?, derived_treasury_type=?,
+                                derived_treasury_account_code=?,
+                                derived_classification_status=?, derived_version=?
+                            WHERE id=?
+                            """,
+                            canonical_rows,
+                        )
                     conn.commit()
                     summary.inserted_rows += len(insert_rows)
                 except Exception:
@@ -924,7 +1001,7 @@ def _client_ids_postgres(conn: Any, client_id: int | None) -> list[int]:
     with conn.cursor() as cursor:
         if client_id is None:
             cursor.execute(
-                "SELECT DISTINCT client_id FROM client_data WHERE is_deleted = FALSE ORDER BY client_id"
+                "SELECT DISTINCT client_id FROM client_data WHERE is_deleted = FALSE AND change_detection_status != 'deleted' ORDER BY client_id"
             )
             return [int(row[0]) for row in cursor.fetchall()]
     return [int(client_id)]
@@ -964,6 +1041,7 @@ def backfill_postgres(
                     SELECT id, client_id, template_id, upload_id, row_data, extract_date
                     FROM client_data
                     WHERE client_id = %s AND is_deleted = FALSE
+                      AND change_detection_status != 'deleted'
                     ORDER BY id
                     """,
                     (current_client_id,),
@@ -1036,6 +1114,7 @@ def backfill_account_names_sqlite(
             WHERE c.client_id = ?
               AND c.is_current = 1
               AND cd.is_deleted = 0
+              AND cd.change_detection_status != 'deleted'
               AND NULLIF(TRIM(c.account_name), '') IS NULL
             ORDER BY c.client_data_id
             """,
@@ -1128,6 +1207,7 @@ def backfill_account_names_postgres(
                     WHERE c.client_id = %s
                       AND c.is_current = TRUE
                       AND cd.is_deleted = FALSE
+                      AND cd.change_detection_status != 'deleted'
                       AND NULLIF(BTRIM(c.account_name), '') IS NULL
                     ORDER BY c.client_data_id
                     """,

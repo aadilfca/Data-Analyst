@@ -235,7 +235,7 @@ One line per file group: what it is now. Full build history for every entry live
 ## Status log
 
 - Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; performance findings reference the investigation documents.
-- 2026-10-10: Phase 1 redrafted strict single-source data, re-import, backup, cleanup, quota, and index policies; code implementation remains pending.
+- 2026-10-10: Phase 1 documented single-source policies; Phase 2 added canonical identities, derived columns, indexes, and active-row state.
 - 2026-10-09: Phase 3 verified current-only upload comparison and idempotent unchanged imports; targeted regression coverage passes 10/10.
 - 2026-10-09: Fixed maiden-upload Cash/Bank DATE casting; added regression coverage and documented failed-import index-bloat monitoring.
 - 2026-10-09: Hardened upload conflicts with unique stored paths, surfaced 409 details, and reset stale validation state after conflict.

@@ -9,6 +9,7 @@ from routers.import_export import (
     ColumnMapping,
     ImportRequest,
     _build_validation_plan_payload,
+    _canonical_source_identity,
     _validation_request_signature,
     build_change_report,
     compare_transactions,
@@ -121,6 +122,24 @@ class UploadValidationCountTests(unittest.TestCase):
         self.assertEqual(result["missing_count"], 0)
         self.assertEqual(result["unchanged"], [10])
         self.assertEqual(result["changed"][0]["client_data_id"], 11)
+    def test_canonical_source_identity_is_repeatable_and_line_stable(self):
+        template_cols = [
+            {'id': 1, 'column_name': 'Voucher ID', 'data_type': 'Text'},
+            {'id': 2, 'column_name': 'Line No', 'data_type': 'Text'},
+            {'id': 3, 'column_name': 'Amount', 'data_type': 'Numeric'},
+        ]
+        original = {'Voucher ID': 'V-1', 'Line No': '2', 'Amount': 100}
+        corrected = {'Voucher ID': 'V-1', 'Line No': '2', 'Amount': 125}
+
+        self.assertEqual(
+            _canonical_source_identity(template_cols, original, 7),
+            _canonical_source_identity(template_cols, original, 7),
+        )
+        self.assertEqual(
+            _canonical_source_identity(template_cols, original, 7),
+            _canonical_source_identity(template_cols, corrected, 7),
+        )
+
 
     def test_multi_line_document_ids_are_compared_without_duplicate_rejection(self):
         template_cols = [
@@ -324,6 +343,31 @@ class UploadValidationCountTests(unittest.TestCase):
             "summary_updated_at",
         }.issubset(columns))
         self.assertNotIn("change_report_json", columns)
+
+    def test_client_data_has_canonical_identity_derived_columns_and_indexes(self):
+        columns = {
+            row["name"]
+            for row in execute_query("PRAGMA table_info(client_data)")
+        }
+        self.assertTrue({
+            "source_identity",
+            "source_fingerprint",
+            "derived_voucher_id",
+            "derived_account_code",
+            "derived_transaction_date",
+            "derived_treasury_type",
+            "derived_classification_status",
+        }.issubset(columns))
+
+        indexes = {
+            row["name"]
+            for row in execute_query("PRAGMA index_list(client_data)")
+        }
+        self.assertTrue({
+            "idx_client_data_active_identity",
+            "idx_client_data_active_derived_date",
+            "idx_client_data_active_derived_classification",
+        }.issubset(indexes))
 
 if __name__ == "__main__":
     unittest.main()

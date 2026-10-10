@@ -185,9 +185,9 @@ def get_data_audit_history(client_data_id):
 # Database size visibility (dashboard/per-client/per-template): this is a fixed
 # per-row byte allowance covering client_data's other columns (id, client_id,
 # template_id, upload_id, extract_amount, extract_date, created_at, created_by,
-# is_deleted, version, data_quality_flag) plus SQLite's own per-row overhead.
-# It is an ESTIMATE only, not exact disk usage.
-ROW_OVERHEAD_BYTES = 100
+# is_deleted, version, identity/fingerprint, and canonical derived columns) plus
+# SQLite/Postgres per-row overhead. It is an ESTIMATE only, not exact disk usage.
+ROW_OVERHEAD_BYTES = 256
 
 
 def estimate_client_data_size(client_id: int = None, template_id: int = None) -> dict:
@@ -200,7 +200,7 @@ def estimate_client_data_size(client_id: int = None, template_id: int = None) ->
     Computed live on every call, no caching - deferred until/if it becomes a
     performance issue with data growth (per the confirmed requirement).
     """
-    where_clauses = ["is_deleted = 0"]
+    where_clauses = ["is_deleted = 0", "change_detection_status != 'deleted'"]
     params = []
     if client_id is not None:
         where_clauses.append("client_id = ?")
@@ -514,6 +514,20 @@ def init_db():
                 is_deleted INTEGER DEFAULT 0,
                 version INTEGER DEFAULT 1,
                 data_quality_flag TEXT DEFAULT NULL,
+                source_identity TEXT DEFAULT NULL,
+                source_fingerprint TEXT DEFAULT NULL,
+                derived_voucher_id TEXT DEFAULT NULL,
+                derived_account_code TEXT DEFAULT NULL,
+                derived_account_name TEXT DEFAULT NULL,
+                derived_transaction_date TEXT DEFAULT NULL,
+                derived_transaction_month TEXT DEFAULT NULL,
+                derived_transaction_fortnight TEXT DEFAULT NULL,
+                derived_debit REAL DEFAULT 0,
+                derived_credit REAL DEFAULT 0,
+                derived_treasury_type TEXT DEFAULT NULL,
+                derived_treasury_account_code TEXT DEFAULT NULL,
+                derived_classification_status TEXT DEFAULT NULL,
+                derived_version INTEGER DEFAULT 1,
                 FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
                 FOREIGN KEY (template_id) REFERENCES templates(id) ON DELETE CASCADE,
                 FOREIGN KEY (upload_id) REFERENCES uploaded_files(id) ON DELETE CASCADE
@@ -761,8 +775,7 @@ def init_db():
                 completed_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
-                UNIQUE(client_id, requested_preparation_revision, reason)
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
             )
         ''')
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cashflow_preparation_jobs_status ON cashflow_preparation_jobs (client_id, status, created_at)")
@@ -1432,6 +1445,38 @@ def init_db():
                 print("✅ Added rate_source column to client_data")
         except Exception as e:
             print("⚠️ Could not add rate_source to client_data:", e)
+
+        # Canonical source identity and report-required derived fields. These
+        # live on client_data so reports can use one row set without copying
+        # transaction data into another durable table.
+        canonical_columns = {
+            'source_identity': 'TEXT DEFAULT NULL',
+            'source_fingerprint': 'TEXT DEFAULT NULL',
+            'derived_voucher_id': 'TEXT DEFAULT NULL',
+            'derived_account_code': 'TEXT DEFAULT NULL',
+            'derived_account_name': 'TEXT DEFAULT NULL',
+            'derived_transaction_date': 'TEXT DEFAULT NULL',
+            'derived_transaction_month': 'TEXT DEFAULT NULL',
+            'derived_transaction_fortnight': 'TEXT DEFAULT NULL',
+            'derived_debit': 'REAL DEFAULT 0',
+            'derived_credit': 'REAL DEFAULT 0',
+            'derived_treasury_type': 'TEXT DEFAULT NULL',
+            'derived_treasury_account_code': 'TEXT DEFAULT NULL',
+            'derived_classification_status': 'TEXT DEFAULT NULL',
+            'derived_version': 'INTEGER DEFAULT 1',
+        }
+        try:
+            cur = conn.execute("PRAGMA table_info(client_data)")
+            columns = {row[1] for row in cur.fetchall()}
+            for column_name, definition in canonical_columns.items():
+                if column_name not in columns:
+                    conn.execute(f"ALTER TABLE client_data ADD COLUMN {column_name} {definition}")
+                    print(f"✅ Added {column_name} column to client_data")
+        except Exception as e:
+            print("⚠️ Could not add canonical client_data columns:", e)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_client_data_active_identity ON client_data (client_id, template_id, is_deleted, source_identity)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_client_data_active_derived_date ON client_data (client_id, is_deleted, derived_transaction_date)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_client_data_active_derived_classification ON client_data (client_id, is_deleted, derived_treasury_type, derived_transaction_date)")
 
         # Schema cleanup: drop source_grn_row_id column (Populate Physical Bill from
         # GRN/ERP Vendor Bill requirement, Phase 4 of 4, FINAL) -- this column belonged to
@@ -4668,12 +4713,18 @@ def _ensure_postgres_cashflow_prepared_tables(conn):
                 started_at TIMESTAMPTZ,
                 completed_at TIMESTAMPTZ,
                 created_at TIMESTAMPTZ DEFAULT now(),
-                updated_at TIMESTAMPTZ DEFAULT now(),
-                UNIQUE(client_id, requested_preparation_revision, reason)
+                updated_at TIMESTAMPTZ DEFAULT now()
             )
         ''')
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cashflow_preparation_jobs_status ON cashflow_preparation_jobs (client_id, status, created_at)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cashflow_preparation_jobs_revision ON cashflow_preparation_jobs (client_id, requested_preparation_revision)")
+        # Current-only preparation keeps one stable revision per client, so every upload
+        # after the first queued a job with the same (client, revision, reason) and this
+        # former unique rule rejected it. Job history is run metadata: allow repeats.
+        cur.execute(
+            "ALTER TABLE cashflow_preparation_jobs "
+            "DROP CONSTRAINT IF EXISTS cashflow_preparation_jobs_client_id_requested_preparation_r_key"
+        )
     except Exception:
         conn.rollback()
         raise
@@ -4690,6 +4741,44 @@ def _ensure_postgres_local_vendor_discovery_indexes(conn):
         cur.execute("CREATE INDEX IF NOT EXISTS idx_client_data_vendor_account_active ON client_data (client_id, (" + account_code + "), extract_date DESC, id DESC)" + predicate)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_client_data_vendor_group_active ON client_data (client_id, document_group_id)" + predicate)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_client_data_vendor_voucher_active ON client_data (client_id, (" + voucher_id + "))" + predicate)
+    finally:
+        cur.close()
+
+
+def _ensure_postgres_client_data_canonical_columns(conn):
+    """Add canonical identity/derived columns and their measured indexes."""
+    cur = conn.cursor()
+    try:
+        columns = {
+            "source_identity": "TEXT DEFAULT NULL",
+            "source_fingerprint": "TEXT DEFAULT NULL",
+            "derived_voucher_id": "TEXT DEFAULT NULL",
+            "derived_account_code": "TEXT DEFAULT NULL",
+            "derived_account_name": "TEXT DEFAULT NULL",
+            "derived_transaction_date": "DATE DEFAULT NULL",
+            "derived_transaction_month": "TEXT DEFAULT NULL",
+            "derived_transaction_fortnight": "TEXT DEFAULT NULL",
+            "derived_debit": "REAL DEFAULT 0",
+            "derived_credit": "REAL DEFAULT 0",
+            "derived_treasury_type": "TEXT DEFAULT NULL",
+            "derived_treasury_account_code": "TEXT DEFAULT NULL",
+            "derived_classification_status": "TEXT DEFAULT NULL",
+            "derived_version": "INTEGER DEFAULT 1",
+        }
+        for name, definition in columns.items():
+            cur.execute(f"ALTER TABLE client_data ADD COLUMN IF NOT EXISTS {name} {definition}")
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_client_data_active_identity "
+            "ON client_data (client_id, template_id, is_deleted, source_identity)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_client_data_active_derived_date "
+            "ON client_data (client_id, is_deleted, derived_transaction_date)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_client_data_active_derived_classification "
+            "ON client_data (client_id, is_deleted, derived_treasury_type, derived_transaction_date)"
+        )
     finally:
         cur.close()
 
@@ -4725,6 +4814,7 @@ def init_db_postgres(conn):
         migrated_vc_assertions = _ensure_postgres_voucher_check_assertions(conn)
         migrated_ruleset_hash = _ensure_postgres_applied_ruleset_hash(conn)
         _ensure_postgres_local_vendor_discovery_indexes(conn)
+        _ensure_postgres_client_data_canonical_columns(conn)
         conn.commit()
         migration_notes = []
         if migrated_document_type:
@@ -4922,7 +5012,21 @@ def init_db_postgres(conn):
             data_quality_flag TEXT DEFAULT NULL,
             document_group_id TEXT DEFAULT NULL,
             change_detection_status TEXT DEFAULT 'active',
-            rate_source TEXT DEFAULT NULL
+            rate_source TEXT DEFAULT NULL,
+            source_identity TEXT DEFAULT NULL,
+            source_fingerprint TEXT DEFAULT NULL,
+            derived_voucher_id TEXT DEFAULT NULL,
+            derived_account_code TEXT DEFAULT NULL,
+            derived_account_name TEXT DEFAULT NULL,
+            derived_transaction_date DATE DEFAULT NULL,
+            derived_transaction_month TEXT DEFAULT NULL,
+            derived_transaction_fortnight TEXT DEFAULT NULL,
+            derived_debit REAL DEFAULT 0,
+            derived_credit REAL DEFAULT 0,
+            derived_treasury_type TEXT DEFAULT NULL,
+            derived_treasury_account_code TEXT DEFAULT NULL,
+            derived_classification_status TEXT DEFAULT NULL,
+            derived_version INTEGER DEFAULT 1
         )
     ''', "client_data")
     run("CREATE INDEX IF NOT EXISTS idx_client_data_client_deleted_extract_date ON client_data (client_id, is_deleted, extract_date)")
@@ -4932,6 +5036,7 @@ def init_db_postgres(conn):
     run("CREATE INDEX IF NOT EXISTS idx_client_data_date ON client_data (extract_date)")
     run("CREATE INDEX IF NOT EXISTS idx_client_data_deleted ON client_data (is_deleted)")
     run("CREATE INDEX IF NOT EXISTS idx_client_data_client_date ON client_data (client_id, extract_date)")
+    _ensure_postgres_client_data_canonical_columns(conn)
     _ensure_postgres_local_vendor_discovery_indexes(conn)
     run('''
         CREATE TABLE IF NOT EXISTS cash_bank_transaction_classifications (
@@ -5109,8 +5214,7 @@ def init_db_postgres(conn):
             started_at TIMESTAMPTZ,
             completed_at TIMESTAMPTZ,
             created_at TIMESTAMPTZ DEFAULT now(),
-            updated_at TIMESTAMPTZ DEFAULT now(),
-            UNIQUE(client_id, requested_preparation_revision, reason)
+            updated_at TIMESTAMPTZ DEFAULT now()
         )
     ''', "cashflow_preparation_jobs")
     run("CREATE INDEX IF NOT EXISTS idx_cashflow_preparation_jobs_status ON cashflow_preparation_jobs (client_id, status, created_at)")
@@ -6918,7 +7022,7 @@ def estimate_client_data_size_pg(client_id: int = None, template_id: int = None)
     but LENGTH() needs an explicit ::text cast since Postgres's LENGTH()
     doesn't accept jsonb directly (row_data is JSONB here, TEXT in SQLite).
     """
-    where_clauses = ["is_deleted = FALSE"]
+    where_clauses = ["is_deleted = FALSE", "change_detection_status != 'deleted'"]
     params = []
     if client_id is not None:
         where_clauses.append("client_id = %s")

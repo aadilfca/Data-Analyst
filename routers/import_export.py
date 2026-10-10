@@ -615,6 +615,19 @@ def _row_fingerprint_token(row_data: dict) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _canonical_source_identity(template_cols: list, row_data: dict, template_id: int) -> str:
+    """Return a compact identity for the one canonical client_data row.
+
+    A configured line identifier gives a stable identity across corrections and
+    reordering. Templates without one fall back to the row fingerprint because
+    their document key alone cannot distinguish multiple lines in one document.
+    """
+    line_key = _comparison_line_key(template_cols, row_data, template_id)
+    if not get_line_key_column(template_cols):
+        line_key = f"{line_key}|fingerprint:{_row_fingerprint_token(row_data)}"
+    return hashlib.sha256(line_key.encode("utf-8")).hexdigest()
+
+
 def _validation_file_sha256(file_path: str) -> str:
     digest = hashlib.sha256()
     with open(file_path, "rb") as source:
@@ -2530,6 +2543,10 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
             amount, date_str = extract_columns_from_row(
                 new_row_data, template_cols, effective_delimiter, effective_order
             )
+            source_identity = _canonical_source_identity(
+                template_cols, new_row_data, request.template_id
+            )
+            source_fingerprint = _row_fingerprint_token(new_row_data)
             changed_client_data_params.append((
                 Json(new_row_data, dumps=lambda value: json.dumps(value, default=str)),
                 request.file_id,
@@ -2538,6 +2555,8 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
                 rate_source,
                 amount,
                 date_str,
+                source_identity,
+                source_fingerprint,
                 item["client_data_id"],
             ))
             changed_classification_sources.append({
@@ -2564,7 +2583,8 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
                 SET row_data = %s, upload_id = %s, document_group_id = %s,
                     change_detection_status = 'active', is_deleted = FALSE,
                     data_quality_flag = %s, rate_source = %s,
-                    extract_amount = %s, extract_date = %s
+                    extract_amount = %s, extract_date = %s,
+                    source_identity = %s, source_fingerprint = %s
                 WHERE id = %s
                 """,
                 changed_client_data_params,
@@ -2589,6 +2609,10 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
             amount, date_str = extract_columns_from_row(
                 new_row_data, template_cols, effective_delimiter, effective_order
             )
+            source_identity = _canonical_source_identity(
+                template_cols, new_row_data, request.template_id
+            )
+            source_fingerprint = _row_fingerprint_token(new_row_data)
             new_client_data_params.append((
                 request.client_id,
                 request.template_id,
@@ -2601,6 +2625,8 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
                 get_document_group_id(template_cols, new_row_data, request.template_id),
                 compute_data_quality_flag(new_row_data, critical_cols),
                 rate_source,
+                source_identity,
+                source_fingerprint,
             ))
             inserted_count += 1
             IMPORT_PROGRESS[request.file_id]["current"] += 1
@@ -2612,11 +2638,12 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
                 INSERT INTO client_data
                     (client_id, template_id, upload_id, row_data, extract_amount,
                      extract_date, created_by, version, change_detection_status,
-                     document_group_id, data_quality_flag, rate_source)
+                     document_group_id, data_quality_flag, rate_source,
+                     source_identity, source_fingerprint)
                 VALUES %s RETURNING id
                 """,
                 new_client_data_params,
-                template="(%s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, %s, %s)",
+                template="(%s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, %s, %s, %s, %s)",
             )
             for row_id, new_row_data in zip(new_ids, new_rows):
                 amount, date_str = extract_columns_from_row(
@@ -3071,8 +3098,12 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
                 # changed-row re-upload, so a row's amount/date would never refresh even after the
                 # extraction bug above was fixed.
                 amount, date_str = extract_columns_from_row(new_row_data, template_cols, effective_delimiter, effective_order)
+                source_identity = _canonical_source_identity(
+                    template_cols, new_row_data, request.template_id
+                )
+                source_fingerprint = _row_fingerprint_token(new_row_data)
                 changed_client_data_params.append(
-                    (Json(new_row_data, dumps=lambda d: json.dumps(d, default=str)), request.file_id, doc_group_id, data_quality_flag, rate_source, amount, date_str, cid)
+                    (Json(new_row_data, dumps=lambda d: json.dumps(d, default=str)), request.file_id, doc_group_id, data_quality_flag, rate_source, amount, date_str, source_identity, source_fingerprint, cid)
                 )
                 changed_classification_sources.append({
                     "id": cid,
@@ -3094,7 +3125,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
                     conn,
                     """
                     UPDATE client_data
-                    SET row_data = %s, upload_id = %s, document_group_id = %s, change_detection_status = 'active', is_deleted = FALSE, data_quality_flag = %s, rate_source = %s, extract_amount = %s, extract_date = %s
+                    SET row_data = %s, upload_id = %s, document_group_id = %s, change_detection_status = 'active', is_deleted = FALSE, data_quality_flag = %s, rate_source = %s, extract_amount = %s, extract_date = %s, source_identity = %s, source_fingerprint = %s
                     WHERE id = %s
                     """,
                     changed_client_data_params
@@ -3122,12 +3153,16 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
             for new_row_data in change_detection["new"]:
                 amount, date_str = extract_columns_from_row(new_row_data, template_cols, effective_delimiter, effective_order)
                 doc_group_id = get_document_group_id(template_cols, new_row_data, request.template_id)
+                source_identity = _canonical_source_identity(
+                    template_cols, new_row_data, request.template_id
+                )
+                source_fingerprint = _row_fingerprint_token(new_row_data)
                 # data_quality_flag (Phase 4 of the blank-field-rejection requirement) --
                 # 'incomplete' for a force-included row still carrying a blank critical field.
                 data_quality_flag = compute_data_quality_flag(new_row_data, critical_cols)
                 new_client_data_params.append(
                     (request.client_id, request.template_id, request.file_id,
-                     Json(new_row_data, dumps=lambda d: json.dumps(d, default=str)), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag, rate_source)
+                     Json(new_row_data, dumps=lambda d: json.dumps(d, default=str)), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag, rate_source, source_identity, source_fingerprint)
                 )
                 new_row_data_list.append(new_row_data)
                 new_extract_dates.append(date_str)
@@ -3138,11 +3173,11 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
                 new_ids = execute_batch_insert_with_ids_pg(
                     conn,
                     """
-                    INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status, document_group_id, data_quality_flag, rate_source)
+                    INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status, document_group_id, data_quality_flag, rate_source, source_identity, source_fingerprint)
                     VALUES %s RETURNING id
                     """,
                     new_client_data_params,
-                    template="(%s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, %s, %s)"
+                    template="(%s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, %s, %s, %s, %s)"
                 )
                 new_classification_sources = [
                     {
@@ -3211,6 +3246,10 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
 
                 # Compute document_group_id from the first column value
                 doc_group_id = get_document_group_id(template_cols, row_data, request.template_id)
+                source_identity = _canonical_source_identity(
+                    template_cols, row_data, request.template_id
+                )
+                source_fingerprint = _row_fingerprint_token(row_data)
 
                 # Extract amount and date for indexing
                 amount, date_str = extract_columns_from_row(row_data, template_cols, effective_delimiter, effective_order)
@@ -3221,7 +3260,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
 
                 first_upload_client_data_params.append(
                     (request.client_id, request.template_id, request.file_id,
-                     Json(row_data, dumps=lambda d: json.dumps(d, default=str)), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag, rate_source)
+                     Json(row_data, dumps=lambda d: json.dumps(d, default=str)), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag, rate_source, source_identity, source_fingerprint)
                 )
                 first_upload_row_data_list.append(row_data)
                 first_upload_extract_dates.append(date_str)
@@ -3232,11 +3271,11 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
                 first_upload_ids = execute_batch_insert_with_ids_pg(
                     conn,
                     """
-                    INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status, document_group_id, data_quality_flag, rate_source)
+                    INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status, document_group_id, data_quality_flag, rate_source, source_identity, source_fingerprint)
                     VALUES %s RETURNING id
                     """,
                     first_upload_client_data_params,
-                    template="(%s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, %s, %s)"
+                    template="(%s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, %s, %s, %s, %s)"
                 )
                 first_classification_sources = [
                     {

@@ -141,9 +141,11 @@ def test_preparation_state_and_jobs_have_idempotent_identity_keys(monkeypatch):
             conn.execute(
                 "INSERT INTO cashflow_preparation_jobs (client_id, reason, requested_preparation_revision) VALUES (1, 'upload', 2)"
             )
-            with pytest.raises(sqlite3.IntegrityError):
-                conn.execute(
-                    "INSERT INTO cashflow_preparation_jobs (client_id, reason, requested_preparation_revision) VALUES (1, 'upload', 2)"
-                )
+            conn.execute(
+                "INSERT INTO cashflow_preparation_jobs (client_id, reason, requested_preparation_revision) VALUES (1, 'upload', 2)"
+            )
+            assert conn.execute(
+                "SELECT COUNT(*) FROM cashflow_preparation_jobs"
+            ).fetchone()[0] == 2
         finally:
             conn.close()

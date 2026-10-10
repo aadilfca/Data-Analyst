@@ -221,11 +221,11 @@ def get_datasets(client_id: int = Query(..., description="Client ID")):
             COALESCE(t.template_name, 'Unknown') AS template_name,
             COUNT(cd2.id) AS actual_row_count
         FROM uploaded_files u
-        LEFT JOIN client_data cd ON cd.upload_id = u.id AND cd.is_deleted = FALSE
+        LEFT JOIN client_data cd ON cd.upload_id = u.id AND cd.is_deleted = FALSE AND cd.change_detection_status != 'deleted'
         LEFT JOIN templates t ON t.id = cd.template_id
-        LEFT JOIN client_data cd2 ON cd2.upload_id = u.id AND cd2.is_deleted = FALSE
+        LEFT JOIN client_data cd2 ON cd2.upload_id = u.id AND cd2.is_deleted = FALSE AND cd2.change_detection_status != 'deleted'
         WHERE (u.client_id = %s OR EXISTS (
-            SELECT 1 FROM client_data cd3 WHERE cd3.upload_id = u.id AND cd3.client_id = %s AND cd3.is_deleted = FALSE
+            SELECT 1 FROM client_data cd3 WHERE cd3.upload_id = u.id AND cd3.client_id = %s AND cd3.is_deleted = FALSE AND cd3.change_detection_status != 'deleted'
         ))
         GROUP BY u.id, t.id, cd.template_id, t.template_name
         ORDER BY u.upload_date DESC
@@ -413,7 +413,7 @@ def compute_overdue_uploads(client_id: Optional[int] = None) -> list:
     frequency_lookup). Returns only pairs that are actually overdue
     (days_overdue > 0), sorted most-overdue-first.
     """
-    where = ["cd.is_deleted = FALSE", "c.is_active = TRUE", "t.is_active = TRUE"]
+    where = ["cd.is_deleted = FALSE", "cd.change_detection_status != 'deleted'", "c.is_active = TRUE", "t.is_active = TRUE"]
     params = []
     if client_id is not None:
         where.append("cd.client_id = %s")
@@ -675,6 +675,7 @@ def get_preview_rows(
         "cd.client_id = %s",
         "cd.template_id = %s",
         "cd.is_deleted = FALSE",
+        "cd.change_detection_status != 'deleted'",
         "cd.extract_date BETWEEN %s AND %s"
     ]
     base_params = [client_id, template_id, date_start, date_end]
@@ -826,7 +827,7 @@ def get_dataset_rows(
         raise HTTPException(404, "Upload not found")
 
     # Build WHERE clause dynamically
-    where_clauses = ["upload_id = %s AND is_deleted = FALSE"]
+    where_clauses = ["upload_id = %s AND is_deleted = FALSE AND change_detection_status != 'deleted'"]
     params = [upload_id]
 
     # Search in row_data JSONB (case-insensitive) - jsonb_each_text is the
@@ -916,13 +917,13 @@ def delete_dataset(upload_id: int):
 
     # Fetch all rows in this dataset (to log their data before deletion)
     rows = execute_query_pg(
-        "SELECT id, row_data FROM client_data WHERE upload_id = %s AND is_deleted = FALSE",
+        "SELECT id, row_data FROM client_data WHERE upload_id = %s AND is_deleted = FALSE AND change_detection_status != 'deleted'",
         (upload_id,)
     )
 
     # Soft-delete all rows
     execute_write_pg(
-        "UPDATE client_data SET is_deleted = TRUE WHERE upload_id = %s",
+        "UPDATE client_data SET is_deleted = TRUE, change_detection_status = 'deleted' WHERE upload_id = %s",
         (upload_id,)
     )
 
@@ -955,13 +956,13 @@ def restore_dataset(upload_id: int):
 
     # Fetch rows that are currently deleted
     rows = execute_query_pg(
-        "SELECT id, row_data FROM client_data WHERE upload_id = %s AND is_deleted = TRUE",
+        "SELECT id, row_data FROM client_data WHERE upload_id = %s AND is_deleted = TRUE AND change_detection_status = 'deleted'",
         (upload_id,)
     )
 
-    # Restore rows (set is_deleted = FALSE)
+    # Restore rows as active canonical rows.
     execute_write_pg(
-        "UPDATE client_data SET is_deleted = FALSE WHERE upload_id = %s",
+        "UPDATE client_data SET is_deleted = FALSE, change_detection_status = 'active' WHERE upload_id = %s",
         (upload_id,)
     )
 
@@ -1004,6 +1005,7 @@ def delete_template_data(
         SELECT DISTINCT upload_id
         FROM client_data
         WHERE client_id = %s AND template_id = %s AND is_deleted = FALSE
+          AND change_detection_status != 'deleted'
         """,
         (client_id, template_id)
     )
@@ -1013,14 +1015,14 @@ def delete_template_data(
 
     # Count rows to be deleted
     count_result = execute_query_pg(
-        "SELECT COUNT(*) as count FROM client_data WHERE client_id = %s AND template_id = %s AND is_deleted = FALSE",
+        "SELECT COUNT(*) as count FROM client_data WHERE client_id = %s AND template_id = %s AND is_deleted = FALSE AND change_detection_status != 'deleted'",
         (client_id, template_id)
     )
     row_count = count_result[0]['count'] if count_result else 0
 
     # Soft-delete client_data rows
     execute_write_pg(
-        "UPDATE client_data SET is_deleted = TRUE WHERE client_id = %s AND template_id = %s AND is_deleted = FALSE",
+        "UPDATE client_data SET is_deleted = TRUE, change_detection_status = 'deleted' WHERE client_id = %s AND template_id = %s AND is_deleted = FALSE AND change_detection_status != 'deleted'",
         (client_id, template_id)
     )
 
@@ -1170,6 +1172,7 @@ async def _compute_document_count(client_id: int, tid: int, fallback_row_count: 
             SELECT COUNT(DISTINCT cd.row_data->>'{key_column}') as doc_count
             FROM client_data cd
             WHERE cd.client_id = %s AND cd.template_id = %s AND cd.is_deleted = FALSE
+              AND cd.change_detection_status != 'deleted'
             """,
             (client_id, tid)
         )
@@ -1244,6 +1247,7 @@ async def get_availability(
             ON cd.template_id = t.id
             AND cd.client_id = %s
             AND cd.is_deleted = FALSE
+            AND cd.change_detection_status != 'deleted'
             AND cd.extract_date BETWEEN %s AND %s
     """
     params = [client_id, date_start, date_end]
@@ -1269,6 +1273,7 @@ async def get_availability(
             ON cd.template_id = t.id
             AND cd.client_id = %s
             AND cd.is_deleted = FALSE
+            AND cd.change_detection_status != 'deleted'
     """
     total_params = [client_id]
 
@@ -1450,6 +1455,7 @@ def get_availability_calendar(
             """
             SELECT DISTINCT extract_date FROM client_data
             WHERE client_id = %s AND template_id = %s AND is_deleted = FALSE
+              AND change_detection_status != 'deleted'
               AND extract_date BETWEEN %s AND %s
             """,
             (client_id, tid, month_start, month_end)

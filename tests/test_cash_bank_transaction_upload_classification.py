@@ -144,6 +144,10 @@ class UploadClassificationTests(unittest.TestCase):
 
         sql_statements = [call.args[1] for call in execute_values.call_args_list]
         self.assertIn("UPDATE cash_bank_transaction_classifications", sql_statements[0])
+        self.assertTrue(
+            any("UPDATE client_data AS target" in statement for statement in sql_statements),
+            "canonical client_data derived fields must be refreshed",
+        )
         self.assertEqual(derived[0]["classification_status"], "cash")
         self.assertEqual(derived[0]["account_name"], "Cash in hand")
         self.assertEqual(source_row["row_data"], original_payload)

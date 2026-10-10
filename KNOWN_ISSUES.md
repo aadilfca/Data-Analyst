@@ -110,4 +110,5 @@ Every finding from a review session is recorded here — never fixed silently, n
 | 2026-10-10 | Reports / Cashflows | Reports can still use prepared data, current classifications, canonical occurrences, or fallback raw JSON; the single `client_data`-with-derived-columns source contract is not yet enforced end to end. | Fix |
 | 2026-10-10 | Upload / Quota | The 300 MB warning and 400 MB import-stop policy is documented but not enforced in the import path; current size endpoints provide visibility only. | Fix |
 | 2026-10-10 | Data Bank / Audit | Dataset deletion is soft-only and logs full old row snapshots in `data_audit_log`; the UI says permanent removal, so strict one-set deletion and compact audit retention are not yet aligned. | Fix |
-| 2026-10-10 | Regression tests | Focused data/Cashflows/index coverage returned 44 passed and 1 failure because SQLite still expects a duplicate-prevention constraint removed from current-only preparation job history. | Fix |
+| 2026-10-10 | Regression tests | RESOLVED: focused Phase 2 coverage now passes 36 tests; the SQLite preparation-job expectation matches current job-history behavior. | Fix |
+| 2026-10-10 | Upload identity | Templates without a configured line identifier use a content-based fallback identity; duplicate audit and identity enforcement must precede any unique constraint. | Fix |

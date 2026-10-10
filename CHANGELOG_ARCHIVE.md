@@ -1,5 +1,15 @@
 # Changelog Archive
 
+## Single-source data management — Phase 2 — 2026-10-10
+
+**Status:** Implemented locally. **Files:** `database.py`, `routers/import_export.py`, `routers/data.py`, `services/cash_bank_classification.py`, focused tests.
+
+`client_data` now has source identity/fingerprint fields, report-required Cash/Bank derived columns, active-row indexes, and a conservative size estimate. Re-import writes identity/fingerprint on inserts and in-place corrections; Cash/Bank derivation refreshes the canonical row without changing raw `row_data`. Deletion/restore now maintains `change_detection_status`.
+
+The existing classification/occurrence/prepared tables remain compatibility paths and are not deleted in this phase. No unique identity constraint is added yet: duplicate legacy identities must be audited before enforcement. Supabase migration and quota gates remain pending production work.
+
+**Checks:** compile checks and focused tests passed: 36 passed, 1 warning (pytest cache permission only). No live Supabase migration or data mutation was performed.
+
 ## Single-source data management and backup policy — Phase 1 — 2026-10-10
 
 **Status:** Documentation complete. **Files:** `CLAUDE.md`, `CHANGELOG_ARCHIVE.md`, `KNOWN_ISSUES.md`.
