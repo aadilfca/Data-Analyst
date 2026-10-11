@@ -16,7 +16,7 @@ from database import execute_query_pg, execute_write_pg, pg_transaction
 CONFIRMATION_TEXT = "DELETE APPROVED STORAGE DATA"
 CLEANUP_SCOPE = (
     "approved_logs,retired_client_data,deleted_upload_metadata,"
-    "stale_presence,expired_sessions,obsolete_cashflow_rollup,prepared_revisions"
+    "stale_presence,expired_sessions,obsolete_cashflow_copies,prepared_revisions"
 )
 REMOVABLE_LOG_TABLES = (
     "data_audit_log",
@@ -32,6 +32,7 @@ PROTECTED_DATA_TABLES = (
 )
 CASHFLOW_DERIVED_TABLES = (
     "cash_bank_transaction_classifications",
+    "cash_bank_summary_read_models",
     "cashflow_ledger_rollup_read_models",
     "cashflow_prepared_lines",
     "cashflow_prepared_rollups",
@@ -53,6 +54,17 @@ class CleanupConfirmationError(ValueError):
 
 class CleanupPreviewStaleError(ValueError):
     """The administrator is applying a preview that no longer matches the DB."""
+
+
+PERMANENT_DATA_DELETE_CONFIRMATION = "PERMANENTLY DELETE SELECTED DATA"
+
+
+class DataPurgeProtectedError(ValueError):
+    """The requested data still has protected verification/evidence references."""
+
+
+class DataPurgePreviewStaleError(ValueError):
+    """The permanent-data-delete preview no longer matches PostgreSQL."""
 
 
 def _first(query: str, params=None) -> Dict[str, Any]:
@@ -233,6 +245,33 @@ def _cashflow_revision_candidates() -> Dict[str, Any]:
     }
 
 
+def _cashflow_legacy_copy_candidates() -> Dict[str, Any]:
+    """Measure transaction-level copies that are no longer report sources."""
+    candidates: Dict[str, Any] = {}
+    for table_name in (
+        "cash_bank_transaction_classifications",
+        "cash_bank_summary_read_models",
+        "cashflow_ledger_rollup_read_models",
+        "cashflow_prepared_lines",
+        "cashflow_prepared_rollups",
+    ):
+        row = _first(
+            f"""SELECT COUNT(*) AS count,
+                       COALESCE(SUM(pg_column_size(t)), 0) AS payload_bytes
+                FROM public.{table_name} t"""
+        )
+        candidates[table_name] = {
+            "row_count": int(row.get("count") or 0),
+            "payload_bytes": int(row.get("payload_bytes") or 0),
+            "formatted": _format_bytes(int(row.get("payload_bytes") or 0)),
+            "rule": "legacy transaction/report copy; canonical client_data is the only report source",
+        }
+    return {
+        "tables": candidates,
+        "safety_rule": "cashflow_voucher_occurrences is retained because it stores compact decision metadata only",
+    }
+
+
 def _preview_fingerprint_payload(preview: Dict[str, Any]) -> Dict[str, Any]:
     """Select all candidate/protection aggregates that must match before apply."""
     return {
@@ -251,6 +290,357 @@ def _preview_hash(preview: Dict[str, Any]) -> str:
         default=str,
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def _purge_scope_predicate(alias: str, client_id: int, template_id: int | None = None):
+    """Return a parameterized client/template predicate for purge SQL."""
+    predicate = f"{alias}.client_id = %s"
+    params = [client_id]
+    if template_id is not None:
+        predicate += f" AND {alias}.template_id = %s"
+        params.append(template_id)
+    return predicate, params
+
+
+def _purge_target_uploads(client_id: int, template_id: int | None = None) -> List[Dict[str, Any]]:
+    """Find upload metadata owned by the requested source-data scope."""
+    direct = "uf.client_id = %s"
+    source = "cd.client_id = %s"
+    params = [client_id, client_id]
+    if template_id is not None:
+        direct += " AND uf.template_id = %s"
+        source += " AND cd.template_id = %s"
+        params = [client_id, template_id, client_id, template_id]
+    return execute_query_pg(
+        f"""
+        SELECT uf.id, uf.file_name, uf.file_path, uf.status
+        FROM public.uploaded_files uf
+        WHERE ({direct})
+           OR EXISTS (
+                SELECT 1 FROM public.client_data cd
+                WHERE cd.upload_id = uf.id AND {source}
+           )
+        ORDER BY uf.id
+        """,
+        params,
+    )
+
+
+def _purge_scoped_count(
+    table_name: str,
+    alias: str,
+    client_id: int,
+    template_id: int | None = None,
+) -> int:
+    predicate, params = _purge_scope_predicate(alias, client_id, template_id)
+    return _count(f"SELECT COUNT(*) AS count FROM public.{table_name} {alias} WHERE {predicate}", params)
+
+
+def _purge_protected_counts(client_id: int, template_id: int | None = None) -> Dict[str, int]:
+    predicate, params = _purge_scope_predicate("cd", client_id, template_id)
+    protected = {
+        "verification_details": _count(
+            f"""
+            SELECT COUNT(*) AS count
+            FROM public.verification_details vd
+            JOIN public.client_data cd ON cd.id = vd.client_data_id
+            WHERE {predicate}
+            """,
+            params,
+        ),
+        "voucher_line_documents": _count(
+            f"""
+            SELECT COUNT(*) AS count
+            FROM public.voucher_line_documents vld
+            JOIN public.client_data cd ON cd.id = vld.client_data_id
+            WHERE {predicate}
+            """,
+            params,
+        ),
+        "physical_bill_items": _count(
+            f"""
+            SELECT COUNT(*) AS count
+            FROM public.voucher_line_physical_bill_items item
+            JOIN public.client_data cd ON cd.id = item.source_document_row_id
+            WHERE {predicate}
+            """,
+            params,
+        ),
+        "prepared_lines": _count(
+            f"""
+            SELECT COUNT(*) AS count
+            FROM public.cashflow_prepared_lines p
+            JOIN public.client_data cd ON cd.id = p.source_client_data_id
+            WHERE {predicate}
+            """,
+            params,
+        ),
+    }
+    return protected
+
+
+def _purge_preview_hash(preview: Dict[str, Any]) -> str:
+    payload = {
+        "scope": preview["scope"],
+        "upload_ids": preview["upload_ids"],
+        "counts": preview["counts"],
+        "protected": preview["protected"],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def get_client_data_purge_preview(
+    client_id: int,
+    template_id: int | None = None,
+) -> Dict[str, Any]:
+    """Return a read-only, exact-scope preview for permanent source-data deletion."""
+    if not os.environ.get("DATABASE_URL"):
+        raise RuntimeError("PostgreSQL is not configured")
+
+    client = _first(
+        "SELECT id, client_name, is_active FROM public.clients WHERE id = %s",
+        (client_id,),
+    )
+    if not client:
+        raise ValueError("Client not found")
+    if template_id is not None and not _first(
+        "SELECT id, template_name FROM public.templates WHERE id = %s",
+        (template_id,),
+    ):
+        raise ValueError("Template not found")
+
+    uploads = _purge_target_uploads(client_id, template_id)
+    upload_ids = [int(row["id"]) for row in uploads]
+    predicate, params = _purge_scope_predicate("cd", client_id, template_id)
+    counts = {
+        "client_data": _purge_scoped_count("client_data", "cd", client_id, template_id),
+        "cash_bank_transaction_classifications": _purge_scoped_count(
+            "cash_bank_transaction_classifications", "c", client_id, template_id
+        ),
+        "cashflow_voucher_occurrences": _purge_scoped_count(
+            "cashflow_voucher_occurrences", "o", client_id, template_id
+        ),
+        "cashflow_prepared_lines": _purge_scoped_count(
+            "cashflow_prepared_lines", "p", client_id, template_id
+        ),
+        "cashflow_prepared_rollups": _purge_scoped_count(
+            "cashflow_prepared_rollups", "p", client_id, template_id
+        ),
+        "cash_bank_summary_read_models": _purge_scoped_count(
+            "cash_bank_summary_read_models", "s", client_id, template_id
+        ),
+        "cashflow_ledger_rollup_read_models": _purge_scoped_count(
+            "cashflow_ledger_rollup_read_models", "r", client_id, template_id
+        ),
+        "data_audit_log": _count(
+            f"""
+            SELECT COUNT(*) AS count
+            FROM public.data_audit_log a
+            JOIN public.client_data cd ON cd.id = a.client_data_id
+            WHERE {predicate}
+            """,
+            params,
+        ),
+        "upload_validation_plans": _purge_scoped_count(
+            "upload_validation_plans", "p", client_id, template_id
+        ),
+        "verifications": _count(
+            "SELECT COUNT(*) AS count FROM public.verifications WHERE file_id = ANY(%s)",
+            (upload_ids,),
+        ) if upload_ids else 0,
+        "uploaded_files": len(upload_ids),
+    }
+    if template_id is None:
+        counts.update({
+            "cashflow_report_revisions": _count(
+                "SELECT COUNT(*) AS count FROM public.cashflow_report_revisions WHERE client_id = %s",
+                (client_id,),
+            ),
+            "cashflow_preparation_state": _count(
+                "SELECT COUNT(*) AS count FROM public.cashflow_preparation_state WHERE client_id = %s",
+                (client_id,),
+            ),
+            "cashflow_preparation_jobs": _count(
+                "SELECT COUNT(*) AS count FROM public.cashflow_preparation_jobs WHERE client_id = %s",
+                (client_id,),
+            ),
+            "verification_sessions": _count(
+                "SELECT COUNT(*) AS count FROM public.verification_sessions WHERE client_id = %s",
+                (client_id,),
+            ),
+        })
+
+    protected = _purge_protected_counts(client_id, template_id)
+    preview = {
+        "mode": "permanent_data_delete_dry_run",
+        "scope": {"client_id": client_id, "template_id": template_id},
+        "client": {
+            "id": client_id,
+            "name": client["client_name"],
+            "is_active": bool(client["is_active"]),
+        },
+        "upload_ids": upload_ids,
+        "staged_file_names": [row["file_name"] for row in uploads],
+        "counts": counts,
+        "protected": protected,
+        "can_apply": not any(protected.values()),
+        "safety": [
+            "This preview performs no INSERT, UPDATE, DELETE, or VACUUM operation.",
+            "Any verification, evidence, physical-bill, or prepared-line reference blocks deletion.",
+            "The apply operation re-runs this exact preview hash inside a transaction.",
+            "Staged source files are removed only after the database transaction commits.",
+        ],
+    }
+    preview["preview_hash"] = _purge_preview_hash(preview)
+    return preview
+
+
+def _safe_upload_file_path(file_path: str) -> str | None:
+    if not file_path:
+        return None
+    root = os.path.abspath("uploads")
+    candidate = os.path.abspath(file_path)
+    try:
+        if os.path.commonpath([root, candidate]) != root:
+            return None
+    except ValueError:
+        return None
+    return candidate
+
+
+def _remove_staged_upload_files(paths: List[str]) -> List[str]:
+    failures = []
+    for file_path in paths:
+        safe_path = _safe_upload_file_path(file_path)
+        if not safe_path:
+            failures.append(file_path)
+            continue
+        if not os.path.exists(safe_path):
+            continue
+        try:
+            os.remove(safe_path)
+        except OSError:
+            failures.append(file_path)
+    return failures
+
+
+def apply_client_data_purge(
+    preview_hash: str,
+    operator: str,
+    confirmation: str,
+    client_id: int,
+    template_id: int | None = None,
+) -> Dict[str, Any]:
+    """Permanently remove one client/template source-data scope after preview approval."""
+    if confirmation != PERMANENT_DATA_DELETE_CONFIRMATION:
+        raise CleanupConfirmationError(
+            f"Type exactly: {PERMANENT_DATA_DELETE_CONFIRMATION}"
+        )
+
+    fresh_preview = get_client_data_purge_preview(client_id, template_id)
+    if preview_hash != fresh_preview["preview_hash"]:
+        raise DataPurgePreviewStaleError(
+            "The permanent-delete preview is stale. Refresh the preview before applying it."
+        )
+    if not fresh_preview["can_apply"]:
+        raise DataPurgeProtectedError(
+            "Protected verification or evidence references exist; deletion was not performed."
+        )
+
+    upload_ids = fresh_preview["upload_ids"]
+    upload_rows = _purge_target_uploads(client_id, template_id)
+    staged_paths = [row["file_path"] for row in upload_rows]
+    predicate, params = _purge_scope_predicate("cd", client_id, template_id)
+    operator = (operator or "Unknown administrator")[:200]
+    deleted_counts: Dict[str, int] = {}
+
+    with pg_transaction():
+        execute_write_pg("SET LOCAL statement_timeout = '120s'")
+        execute_query_pg(
+            "SELECT pg_advisory_xact_lock(hashtext(%s))",
+            (f"permanent-data-delete:{client_id}:{template_id or 'all'}",),
+        )
+        locked_preview = get_client_data_purge_preview(client_id, template_id)
+        if preview_hash != locked_preview["preview_hash"]:
+            raise DataPurgePreviewStaleError(
+                "The permanent-delete preview changed while waiting for the deletion lock."
+            )
+        if not locked_preview["can_apply"]:
+            raise DataPurgeProtectedError(
+                "Protected verification or evidence references appeared; deletion was rolled back."
+            )
+
+        delete_specs = [
+            ("cashflow_prepared_lines", f"DELETE FROM public.cashflow_prepared_lines p WHERE {predicate.replace('cd.', 'p.')}"),
+            ("cashflow_prepared_rollups", f"DELETE FROM public.cashflow_prepared_rollups p WHERE {predicate.replace('cd.', 'p.')}"),
+            ("cash_bank_summary_read_models", f"DELETE FROM public.cash_bank_summary_read_models s WHERE {predicate.replace('cd.', 's.')}"),
+            ("cashflow_ledger_rollup_read_models", f"DELETE FROM public.cashflow_ledger_rollup_read_models r WHERE {predicate.replace('cd.', 'r.')}"),
+            ("cash_bank_transaction_classifications", f"DELETE FROM public.cash_bank_transaction_classifications c WHERE {predicate.replace('cd.', 'c.')}"),
+            ("cashflow_voucher_occurrences", f"DELETE FROM public.cashflow_voucher_occurrences o WHERE {predicate.replace('cd.', 'o.')}"),
+            ("data_audit_log", f"""
+                DELETE FROM public.data_audit_log a
+                USING public.client_data cd
+                WHERE a.client_data_id = cd.id AND {predicate}
+            """),
+            ("upload_validation_plans", f"DELETE FROM public.upload_validation_plans p WHERE {predicate.replace('cd.', 'p.')}"),
+        ]
+        if upload_ids:
+            delete_specs.append((
+                "verifications",
+                "DELETE FROM public.verifications WHERE file_id = ANY(%s)",
+            ))
+        for name, sql in delete_specs:
+            sql_params = (upload_ids,) if name == "verifications" else params
+            deleted_counts[name] = _delete_count(sql.replace("%s", "%s")) if not sql_params else _count(
+                "WITH deleted AS (" + sql.rstrip() + " RETURNING 1) SELECT COUNT(*) AS count FROM deleted",
+                sql_params,
+            )
+
+        if template_id is None:
+            for name, sql in (
+                ("cashflow_report_revisions", "DELETE FROM public.cashflow_report_revisions WHERE client_id = %s"),
+                ("cashflow_preparation_state", "DELETE FROM public.cashflow_preparation_state WHERE client_id = %s"),
+                ("cashflow_preparation_jobs", "DELETE FROM public.cashflow_preparation_jobs WHERE client_id = %s"),
+                ("verification_sessions", "DELETE FROM public.verification_sessions WHERE client_id = %s"),
+            ):
+                deleted_counts[name] = _count(
+                    "WITH deleted AS (" + sql + " RETURNING 1) SELECT COUNT(*) AS count FROM deleted",
+                    (client_id,),
+                )
+
+        deleted_counts["client_data"] = _count(
+            "WITH deleted AS (DELETE FROM public.client_data cd WHERE "
+            + predicate
+            + " RETURNING 1) SELECT COUNT(*) AS count FROM deleted",
+            params,
+        )
+        if upload_ids:
+            deleted_counts["uploaded_files"] = _count(
+                "WITH deleted AS (DELETE FROM public.uploaded_files WHERE id = ANY(%s) RETURNING 1) "
+                "SELECT COUNT(*) AS count FROM deleted",
+                (upload_ids,),
+            )
+        else:
+            deleted_counts["uploaded_files"] = 0
+
+        execute_write_pg(
+            "INSERT INTO audit_log (\"user\", action, module, details) VALUES (%s, %s, %s, %s)",
+            (operator, "Permanent data delete", "DataBank", json.dumps({
+                "client_id": client_id,
+                "template_id": template_id,
+                "deleted_counts": deleted_counts,
+            }, sort_keys=True)),
+        )
+
+    file_cleanup_failures = _remove_staged_upload_files(staged_paths)
+    return {
+        "mode": "permanent_data_delete_applied",
+        "scope": fresh_preview["scope"],
+        "deleted_counts": deleted_counts,
+        "staged_file_cleanup_failures": file_cleanup_failures,
+        "verification": get_client_data_purge_preview(client_id, template_id),
+    }
 
 
 def get_storage_cleanup_preview() -> Dict[str, Any]:
@@ -322,6 +712,7 @@ def get_storage_cleanup_preview() -> Dict[str, Any]:
                 "SELECT COUNT(*) AS count FROM public.sessions WHERE expiry < CURRENT_TIMESTAMP"
             ),
             "cashflow_historical_revisions": _cashflow_revision_candidates(),
+            "cashflow_legacy_transaction_copies": _cashflow_legacy_copy_candidates(),
         },
         "safety": [
             "This preview performs no INSERT, UPDATE, DELETE, TRUNCATE, or VACUUM operation.",
@@ -382,6 +773,20 @@ def apply_storage_cleanup(
                 f"DELETE FROM public.{table_name}"
             )
 
+        # These are all rebuildable transaction/report copies. Delete them
+        # before retired client_data so their foreign-key references do not
+        # unnecessarily protect rows already marked for removal.
+        for table_name in (
+            "cash_bank_transaction_classifications",
+            "cash_bank_summary_read_models",
+            "cashflow_ledger_rollup_read_models",
+            "cashflow_prepared_lines",
+            "cashflow_prepared_rollups",
+        ):
+            deleted_counts[f"cashflow_legacy_{table_name}"] = _delete_count(
+                f"DELETE FROM public.{table_name}"
+            )
+
         deleted_counts["retired_client_data"] = _delete_count(
             """
             DELETE FROM public.client_data cd
@@ -411,30 +816,6 @@ def apply_storage_cleanup(
             "DELETE FROM public.sessions WHERE expiry < CURRENT_TIMESTAMP"
         )
 
-        deleted_counts["cashflow_legacy_rollup_rows"] = _delete_count(
-            """
-            DELETE FROM public.cashflow_ledger_rollup_read_models r
-            """
-        )
-        deleted_counts["cashflow_prepared_rollup_revisions"] = _delete_count(
-            """
-            DELETE FROM public.cashflow_prepared_rollups p
-            USING public.cashflow_preparation_state state
-            WHERE state.client_id = p.client_id
-              AND state.active_preparation_revision > 0
-              AND p.preparation_revision <> state.active_preparation_revision
-            """
-        )
-        deleted_counts["cashflow_prepared_line_revisions"] = _delete_count(
-            """
-            DELETE FROM public.cashflow_prepared_lines p
-            USING public.cashflow_preparation_state state
-            WHERE state.client_id = p.client_id
-              AND state.active_preparation_revision > 0
-              AND p.preparation_revision <> state.active_preparation_revision
-            """
-        )
-
         protected_after = _protected_counts()
         for key in (
             "client_data_current",
@@ -442,8 +823,6 @@ def apply_storage_cleanup(
             "verification_details",
             "trial_balance_accounts",
             "trial_balance_uploads",
-            "cashflow_current_prepared_lines",
-            "cashflow_current_prepared_rollups",
         ):
             if protected_after[key] != protected_before[key]:
                 raise RuntimeError(

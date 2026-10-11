@@ -8,6 +8,14 @@ from typing import Optional, List
 from database import execute_query_pg, execute_write_pg, log_audit
 from datetime import datetime
 from routers.auth import require_admin
+from services.storage_cleanup import (
+    CleanupConfirmationError,
+    DataPurgePreviewStaleError,
+    DataPurgeProtectedError,
+    PERMANENT_DATA_DELETE_CONFIRMATION,
+    apply_client_data_purge,
+    get_client_data_purge_preview,
+)
 
 router = APIRouter()
 
@@ -39,6 +47,12 @@ class ClientResponse(BaseModel):
     phone: Optional[str]
     is_active: bool
     created_at: str
+
+
+class ClientDataPurgeRequest(BaseModel):
+    preview_hash: str
+    confirmation: str
+    template_id: Optional[int] = None
 
 # ---------- HELPER ----------
 def row_to_client(row: dict) -> dict:
@@ -159,6 +173,43 @@ def delete_client(client_id: int, session=Depends(require_admin)):
     execute_write_pg("UPDATE clients SET is_active = FALSE WHERE id = %s", (client_id,))
     log_audit("Admin", "Delete", "Clients", f"Soft-deleted client: {existing[0]['client_name']} (ID: {client_id})")
     return {"message": f"Client deleted (soft-delete) successfully"}
+
+
+@router.get("/api/clients/{client_id}/data-purge-preview")
+def client_data_purge_preview(client_id: int, template_id: Optional[int] = None, session=Depends(require_admin)):
+    """Return an exact, read-only preview for permanent client-data deletion."""
+    try:
+        return get_client_data_purge_preview(client_id, template_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/api/clients/{client_id}/data-purge")
+def client_data_purge(client_id: int, payload: ClientDataPurgeRequest, session=Depends(require_admin)):
+    """Apply a freshly previewed permanent source-data deletion."""
+    try:
+        return apply_client_data_purge(
+            preview_hash=payload.preview_hash,
+            operator=session.get("username", "Unknown administrator"),
+            confirmation=payload.confirmation,
+            client_id=client_id,
+            template_id=payload.template_id,
+        )
+    except CleanupConfirmationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{exc}. Required phrase: {PERMANENT_DATA_DELETE_CONFIRMATION}",
+        ) from exc
+    except DataPurgePreviewStaleError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except DataPurgeProtectedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 @router.post("/api/clients/{client_id}/restore", response_model=dict)
 def restore_client(client_id: int, session=Depends(require_admin)):

@@ -123,6 +123,7 @@ This document lists all source files in the project, grouped by directory, with 
 |------|---------|
 | `test_app_smoke.py` | Boots the real app via FastAPI's `TestClient` against a temp SQLite DB and proves routers respond (dashboard page + `/api/clients`). |
 | `test_upload_validation_counts.py` | Verifies `count_new_and_existing_rows` correctly distinguishes new vs. already-imported rows for the same client/template. |
+| `test_data_deletion.py` | Verifies guarded permanent source-data deletion scope, preview freshness, protected references, deletion order, and route error handling. |
 | `test_cash_bank_transaction_classification.py`, `test_cash_bank_transaction_backfill.py`, `test_cash_bank_transaction_upload_classification.py` | Verifies the versioned Cash/Bank derived layer, controlled backfill, upload-time classification, idempotence, rollback, and raw-data preservation. |
 | `test_verification_indexes.py`, `test_verification_account_sets.py` | Verifies cashbook lookup indexing, simplified and legacy routing, JV Treasury legs, transfers, prefix fallback, Cash movement signs, explicit debit/credit rules for all non-Treasury workstreams, signed preview/session presentation, imbalance detection, and Treasury exclusion. |
 | `test_account_control_center.py` | Tests simplified mapping schema/normalization, partial assignment preservation, Financial Statement and Notes category lifecycle, Cash/Bank configuration schema, plus legacy Account Set schema, Postgres upgrade, selector resolution, exclusions, and publication guards. |

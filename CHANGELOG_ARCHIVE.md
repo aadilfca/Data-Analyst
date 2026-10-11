@@ -1,5 +1,15 @@
 # Changelog Archive
 
+## Guarded permanent source-data deletion - Phase 1 - 2026-10-11
+
+**Scope:** Stop accumulating soft-deleted source rows and provide an exact, administrator-approved deletion path for one client or client/template scope without mutating live data during development.
+
+**Implementation:** Added read-only permanent-data deletion previews and preview-hash/typed-confirmation apply routes under `routers/clients.py`. The transaction removes derived Cashflows rows, classifications, occurrence metadata, audit row payloads, validation plans, verification file metadata, source `client_data`, and upload metadata in dependency order; protected Verification, evidence, physical-bill, and prepared-line references block the operation. Staged files under the application `uploads/` directory are removed after a successful database commit. Legacy source-data soft-delete, restore, and template-delete endpoints now reject with a migration message instead of creating further retained rows.
+
+**Verification:** Added focused deletion service/route tests. `tests/test_data_deletion.py` and `tests/test_storage_cleanup.py` passed 20 tests; Python compilation passed. No live purge, vacuum, Supabase mutation, commit, or push was performed.
+
+**Next:** Wire the Data Bank/client UI to the preview/apply contract and separately correct the no-line-ID duplicate gate and `null:` error label.
+
 ## Single-source data management — Phase 2 — 2026-10-10
 
 **Status:** Implemented locally. **Files:** `database.py`, `routers/import_export.py`, `routers/data.py`, `services/cash_bank_classification.py`, focused tests.
@@ -7884,3 +7894,19 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Verification:** The preparation and Account Control Centre suites passed 48/48; Python compilation and `git diff --check` passed. Aadil confirmed no error alert appeared during local report loading and Cash/Bank remove/add testing. The live read-only status check still shows the historical client-5 failed job at active revision 3/requested revision 7; no live repair was performed in this phase.
 
 **Transition checkpoint:** Prepared schema, initial backfill, incremental upload/category/treasury processing, summary/classification/drill-down/export prepared readers, and revision-safe fallback are implemented. Full performance acceptance, complete parallel reconciliation, and removal of controlled fallback remain pending.
+
+## Cashflows canonical one-set data policy - Phase 3 - 2026-10-11
+
+**Scope:** Enforce one active transaction set under the Supabase storage limit: `client_data` raw values plus derived columns are the only report source, while compact occurrence metadata remains allowed for audit decisions.
+
+**Implementation:** Cashflows reports, classification preview/backfill, repeat-upload processing, and source SQL now read or update canonical `client_data`. Prepared lines/rollups, classification rows, and durable report snapshots no longer receive transaction-copy writes; preparation remains a metadata-only job boundary. Added a database source-policy marker, canonical-source guards, and admin preview/apply cleanup for obsolete copies while protecting active `client_data` and compact voucher occurrences.
+
+**Verification:** Python compilation passed. Focused Phase 3 suites passed 43 tests with 16 legacy prepared-copy tests explicitly skipped because their retired behavior is no longer the contract. No destructive table drop or production cleanup was performed; final removal remains a controlled migration decision.
+
+## Strict upload identity and duplicate gates - 2026-10-11
+
+**Scope:** Prevent a repeated January-style upload or repeated source line from creating a second active canonical transaction while preserving corrections and new backdated rows.
+
+**Implementation:** `uploaded_files` now records a compact SHA-256 source hash. Import validation rejects repeated normalized source identities within one upload, and both direct and validation-plan imports block collisions with other active `client_data` rows before writing. SQLite/PostgreSQL bootstrap now attempts a partial unique active-identity index and leaves it safely deferred with a warning when existing duplicate groups block activation.
+
+**Verification:** Focused gate tests passed 20/20; the combined import, classification, Cashflows, preparation, schema, configuration, performance, and cleanup checks passed 37/37, with the existing intentional preparation-copy skips unchanged. The current Supabase duplicate groups were not modified.

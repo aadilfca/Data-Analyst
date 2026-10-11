@@ -12,13 +12,13 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- routers/reconciliation.py -> client-scoped account groups, report categories, standardized opening/month-end balance inputs, and the Cashflows SQL-first preview. See CHANGELOG_ARCHIVE.md.
+- routers/reconciliation.py -> client-scoped account groups, report categories, standardized opening/month-end balance inputs, and Cashflows reports sourced from canonical `client_data`; prepared/read-model report paths are retired or gated. See CHANGELOG_ARCHIVE.md.
 
 - routers/clients.py + static/clients.* → firm-level client management; admin-only except the paginated `GET /api/clients`. See CHANGELOG_ARCHIVE.md.
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, and database size with PostgreSQL table/index breakdown. See CHANGELOG_ARCHIVE.md.
 - routers/data.py + static/databank.* → Client Data Bank availability, calendars, overdue uploads, preview/filtering, frequency settings, and guarded mutations. See CHANGELOG_ARCHIVE.md.
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
-- routers/import_export.py -> Excel upload, mapping, server-side validation plans, action-only import/change detection, compact upload summaries, downloadable change reports, upload-time Cashflows resolution, export, and guarded actions. See CHANGELOG_ARCHIVE.md.
+- routers/import_export.py -> Excel upload, mapping, server-side validation plans, strict source-file/duplicate-line gates, action-only import/change detection, compact upload summaries, downloadable change reports, upload-time resolution, export, and guarded actions. See CHANGELOG_ARCHIVE.md.
 - routers/settings.py + static/settings.* → application settings and the firm-wide Holiday list; header/tabs rendered by `client_context.js`. See CHANGELOG_ARCHIVE.md.
 - routers/templates.py + static/templates.*, static/columns.* → master-column and template CRUD, mapping/reordering, rate rules, backup/restore, and setup loading feedback. See CHANGELOG_ARCHIVE.md.
 - static/client_settings.html, static/client_settings.js -> retired direct-bookmark information page; all Verification account routing is configured centrally in Account Control Centre. See CHANGELOG_ARCHIVE.md.
@@ -26,7 +26,7 @@ One line per file group: what it is now. Full build history for every entry live
 - database.py (users/sessions) → authenticated users and session records for Login → Client Cards → Dashboard; bcrypt, session-stored selected client, seeded placeholder admin. See CHANGELOG_ARCHIVE.md.
 - routers/auth.py → login/logout, current-session lookup, client selection, `get_current_user()`/`require_admin()` guards; timezone-aware session expiry. See CHANGELOG_ARCHIVE.md.
 - routers/users.py → Admin user management (list/create/edit/deactivate/reactivate/reset password); every endpoint `require_admin`, mutations SQLite-audited. See CHANGELOG_ARCHIVE.md.
-- routers/storage_cleanup.py + services/storage_cleanup.py + static/storage_cleanup.* → Admin-only preview and typed-confirmation cleanup for logs, stale Cashflows revisions, and unreferenced data; VACUUM remains deferred. See CHANGELOG_ARCHIVE.md.
+- routers/storage_cleanup.py + services/storage_cleanup.py + static/storage_cleanup.* → Admin-only preview and typed-confirmation cleanup for logs, obsolete Cashflows copies, stale revisions, and unreferenced data; canonical `client_data` is protected and VACUUM remains deferred. See CHANGELOG_ARCHIVE.md.
 - static/users.html, static/users.js → firm-level Manage Users UI (sortable/searchable rows, add/edit, deactivate, password reset); shared Admin header/tab strip. See CHANGELOG_ARCHIVE.md.
 - static/login.html, static/login.js → standalone login page posting to `/api/auth/login`, generic auth error; does not load `client_context.js`.
 - static/client_select.html, static/client_select.js → standalone Client Cards page with guarded selection, admin entry, and loading feedback. See CHANGELOG_ARCHIVE.md.
@@ -44,13 +44,14 @@ One line per file group: what it is now. Full build history for every entry live
 - static/search_index.js → deleted; feature registry merged into `NAV_MANIFEST` in `client_context.js` — do not recreate. See CHANGELOG_ARCHIVE.md.
 - static/loading_ui.js → shared `window.LoadingUI` primitives, including token-based target-aware global progress-cursor ownership. See CHANGELOG_ARCHIVE.md.
 - static/api_utils.js → shared `apiFetch()` (GET debounce/retry) and `apiFetchMutate()` (non-retried writes, optional Loading UI); warning-only direct-`/api/` fetch guard; partial rollout. See CHANGELOG_ARCHIVE.md.
-- services/ledger_group_summary.py + ledger_report_source.py -> summary engine, customer-payment read models, SQL sources, Cashflows rollups, and canonical-voucher report-source contract. See CHANGELOG_ARCHIVE.md.
-- services/cash_bank_classification.py + scripts/backfill_cash_bank_transaction_classifications.py -> versioned derived Cash/Bank lines, affected-account reporting, category resolution, upload/backfill application, and audited reclassification without raw-row mutation. See CHANGELOG_ARCHIVE.md.
-- services/cashflow_voucher_canonicalization.py + cashflow_voucher_occurrence_store.py + scripts/backfill_cashflow_voucher_occurrences.py -> audit-preserving decisions and controlled occurrence maintenance; reports remain unchanged. See CHANGELOG_ARCHIVE.md.
-- services/cashflow_preparation.py + scripts/backfill_cashflow_prepared_read_model.py -> current prepared Cashflows lines and rollups from winning occurrences; full and incremental preparation with durable job recovery. See CHANGELOG_ARCHIVE.md.
+- services/ledger_group_summary.py + ledger_report_source.py -> summary engine and canonical `client_data` Cashflows report source; legacy prepared/read-model loaders remain migration-only. See CHANGELOG_ARCHIVE.md.
+- services/cash_bank_classification.py + scripts/backfill_cash_bank_transaction_classifications.py -> derived Cash/Bank columns on `client_data`, affected-account reporting, category resolution, upload/backfill application, and audited reclassification without raw-row mutation; legacy classification copies are no longer written. See CHANGELOG_ARCHIVE.md.
+- services/cashflow_voucher_canonicalization.py + cashflow_voucher_occurrence_store.py + scripts/backfill_cashflow_voucher_occurrences.py -> compact audit-preserving occurrence decisions and controlled maintenance; transaction rows remain in `client_data`. See CHANGELOG_ARCHIVE.md.
+- services/cashflow_preparation.py + scripts/backfill_cashflow_prepared_read_model.py -> metadata-only preparation/job recovery boundary; prepared transaction copies and rollups are no longer rebuilt. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_xlsx.py → static Bank/Cash workbook exporter for summaries, schedules, reviews, cross-checks, and reconciliation proofs. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_balance_source.py → validates stored opening/month-end balances and converts them to reconciliation-engine inputs. See CHANGELOG_ARCHIVE.md.
 - tests/test_account_control_center*.py + tests/test_cash_bank_configuration_sync.py + tests/test_cashflows*.py → regression coverage for setup, orphan assignment, derived classification, and Cashflows Reports UI.
+- tests/test_data_deletion.py → focused permanent-data deletion preview/apply, protection, ordering, and staged-file cleanup tests.
 
 
 - static/reconciliation.html, static/reconciliation.js -> client-context Reports, Cashflows summary, customer-payment reconciliation, classified transactions, Ledger Summary categories, and balance setup. See CHANGELOG_ARCHIVE.md.
@@ -66,9 +67,11 @@ One line per file group: what it is now. Full build history for every entry live
 ## Database management and backup rules
 - `client_data` is the sole canonical transaction store: one active row per stable client/template/transaction identity, with raw values and report-required derived columns stored together and indexed.
 - Production Supabase is a working store, not an archive; keep one active canonical data set per client/template and only current operational rows.
-- Every re-import compares a normalized source fingerprint and stable row identity: exact repeats are ignored, changed rows update in place with derived columns recalculated, new backdated rows are inserted once, and removals require explicit replacement scope.
-- Do not retain durable copies of transaction rows in report/read-model, occurrence, revision, or cache tables; compact configuration, audit metadata, counts, fingerprints, and checksums are allowed, while legacy copies must not grow and are migration targets.
-- Source Excel/CSV files, SQL dumps, reports, and workpapers stay in controlled external/offline storage; Supabase may hold temporary staging metadata only and must not retain backup files.
+- Every re-import stores a source-file SHA-256 and compares normalized row fingerprints and stable row identity: exact repeats are ignored, duplicate lines are rejected, changed rows update in place with derived columns recalculated, new backdated rows are inserted once, and removals require explicit replacement scope.
+- Active canonical identities are database-unique where existing data is clean; if duplicate groups block index activation, imports remain application-gated and the migration must report the blocker rather than delete or merge rows.
+- Do not retain durable copies of transaction rows in report/read-model, occurrence, revision, cache, or audit-payload tables; compact configuration, counts, fingerprints, checksums, and run metadata are allowed, while legacy copies must not grow and are migration targets.
+- Source Excel/CSV files, SQL dumps, reports, and workpapers stay in controlled external/offline storage; Supabase may hold temporary staging metadata only, and rejected/ignored/fully deleted upload files and metadata must be removed.
+- Explicit whole-dataset or whole-client data deletion is permanent: the guarded preview/apply flow removes source rows, derived classifications, occurrence metadata, audit row payloads, upload metadata, validation plans, and staged files. Soft-delete and restore are not valid source-data lifecycle operations; protected verification/evidence references block the purge.
 - During development, uploaded Excel/Trial Balance data may be removed through the approved app flows without a backup-export gate; reinstate scoped CSV/XLSX exports before production client-data deletion, while whole-database/schema destruction still requires a logical SQL dump.
 - Keep at least two protected external backup copies and test restoration at least quarterly; retention follows firm and client obligations.
 - Treat 300 MB as a warning and 400 MB as an import-stop threshold; never intentionally approach Supabase Free's 500 MB database quota. Review table, index, and bloat growth weekly; perform a read-only size check before retrying a failed large import.
@@ -273,3 +276,6 @@ Do this automatically at the end of the session without being asked.
 - 2026-10-09: Phase 4 makes prepared Cashflows and report invalidation current-only; incremental work no longer creates new copies.
 - 2026-10-09: Phase 5 adds table-level Cashflows sizing, stale-revision candidates, and reference-guarded cleanup preview/apply.
 - 2026-10-10: Storage Cleanup is unlocked for development testing; uploaded-data deletion remains available while Audit Rules and current operational data stay protected.
+- 2026-10-11: Phase 3 makes `client_data` the enforced Cashflows source, stops legacy transaction-copy writes, and adds guarded cleanup preview/apply for obsolete copies.
+- 2026-10-11: Strict data gates add upload SHA-256 tracking, reject repeated normalized lines, block active-identity collisions, and defer uniqueness activation safely when existing duplicates require review.
+- 2026-10-11: Phase 1 adds guarded permanent-data deletion preview/apply, blocks new soft-delete/restore calls, protects verification references, and verifies staged-file cleanup after commit.

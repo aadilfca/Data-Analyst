@@ -906,79 +906,28 @@ def get_dataset_rows(
 @router.delete("/api/data/datasets/{upload_id}")
 def delete_dataset(upload_id: int):
     """
-    Soft-delete all rows of a dataset (set is_deleted=1) and mark upload as 'Deleted'.
+    Retired endpoint: soft deletion is no longer permitted for source data.
+
+    Permanent deletion must use the administrator preview/apply workflow exposed
+    by /api/clients/{client_id}/data-purge-preview and /api/clients/{client_id}/data-purge.
     """
-    upload = execute_query_pg(
-        "SELECT id, file_name FROM uploaded_files WHERE id = %s",
-        (upload_id,)
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "Soft deletion is disabled for source data. Use the administrator "
+            "permanent-data deletion preview/apply workflow."
+        ),
     )
-    if not upload:
-        raise HTTPException(404, "Upload not found")
-
-    # Fetch all rows in this dataset (to log their data before deletion)
-    rows = execute_query_pg(
-        "SELECT id, row_data FROM client_data WHERE upload_id = %s AND is_deleted = FALSE AND change_detection_status != 'deleted'",
-        (upload_id,)
-    )
-
-    # Soft-delete all rows
-    execute_write_pg(
-        "UPDATE client_data SET is_deleted = TRUE, change_detection_status = 'deleted' WHERE upload_id = %s",
-        (upload_id,)
-    )
-
-    # Log each row deletion. row_data is JSONB - already a native dict, no
-    # json.loads() needed.
-    for row in rows:
-        old_data = row["row_data"] or {}
-        log_data_audit_pg(row["id"], "Analyst", "DELETE", old_data, None)
-
-    # Update upload status
-    execute_write_pg(
-        "UPDATE uploaded_files SET status = 'Deleted' WHERE id = %s",
-        (upload_id,)
-    )
-    log_audit("Analyst", "Delete", "DataBank", f"Deleted dataset upload_id={upload_id} ({len(rows)} rows)")
-
-    return {"message": f"Dataset '{upload[0]['file_name']}' deleted successfully ({len(rows)} rows)"}
 
 @router.post("/api/data/datasets/{upload_id}/restore")
 def restore_dataset(upload_id: int):
     """
-    Restore a soft-deleted dataset.
+    Retired endpoint: permanently deleted source data is not restorable.
     """
-    upload = execute_query_pg(
-        "SELECT id, file_name FROM uploaded_files WHERE id = %s AND status = 'Deleted'",
-        (upload_id,)
+    raise HTTPException(
+        status_code=410,
+        detail="Dataset restore is disabled because source-data deletion is permanent.",
     )
-    if not upload:
-        raise HTTPException(404, "Deleted upload not found")
-
-    # Fetch rows that are currently deleted
-    rows = execute_query_pg(
-        "SELECT id, row_data FROM client_data WHERE upload_id = %s AND is_deleted = TRUE AND change_detection_status = 'deleted'",
-        (upload_id,)
-    )
-
-    # Restore rows as active canonical rows.
-    execute_write_pg(
-        "UPDATE client_data SET is_deleted = FALSE, change_detection_status = 'active' WHERE upload_id = %s",
-        (upload_id,)
-    )
-
-    # Log each row restore. row_data is JSONB - already a native dict, no
-    # json.loads() needed.
-    for row in rows:
-        new_data = row["row_data"] or {}
-        log_data_audit_pg(row["id"], "Analyst", "RESTORE", None, new_data)
-
-    execute_write_pg(
-        "UPDATE uploaded_files SET status = 'Imported' WHERE id = %s",
-        (upload_id,)
-    )
-    log_audit("Analyst", "Restore", "DataBank", f"Restored dataset upload_id={upload_id} ({len(rows)} rows)")
-
-    return {"message": f"Dataset '{upload[0]['file_name']}' restored successfully ({len(rows)} rows)"}
 
 @router.delete("/api/data/template/{template_id}")
 def delete_template_data(
@@ -986,63 +935,15 @@ def delete_template_data(
     client_id: int = Query(..., description="Client ID")
 ):
     """
-    Soft-delete all client_data rows for a given client and template.
-    Also marks all associated uploaded_files as 'Deleted'.
+    Retired endpoint: soft deletion is no longer permitted for source data.
     """
-    # Verify client exists
-    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
-    if not client:
-        raise HTTPException(404, "Client not found or inactive")
-
-    # Verify template exists and is active
-    template = execute_query_pg("SELECT id, template_name FROM templates WHERE id = %s AND is_active = TRUE", (template_id,))
-    if not template:
-        raise HTTPException(404, "Template not found or inactive")
-
-    # Get all upload_ids for this client+template that have data
-    uploads = execute_query_pg(
-        """
-        SELECT DISTINCT upload_id
-        FROM client_data
-        WHERE client_id = %s AND template_id = %s AND is_deleted = FALSE
-          AND change_detection_status != 'deleted'
-        """,
-        (client_id, template_id)
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "Soft deletion is disabled for source data. Use the administrator "
+            "permanent-data deletion preview/apply workflow."
+        ),
     )
-
-    if not uploads:
-        return {"message": f"No data found for template '{template[0]['template_name']}' and client {client_id}."}
-
-    # Count rows to be deleted
-    count_result = execute_query_pg(
-        "SELECT COUNT(*) as count FROM client_data WHERE client_id = %s AND template_id = %s AND is_deleted = FALSE AND change_detection_status != 'deleted'",
-        (client_id, template_id)
-    )
-    row_count = count_result[0]['count'] if count_result else 0
-
-    # Soft-delete client_data rows
-    execute_write_pg(
-        "UPDATE client_data SET is_deleted = TRUE, change_detection_status = 'deleted' WHERE client_id = %s AND template_id = %s AND is_deleted = FALSE AND change_detection_status != 'deleted'",
-        (client_id, template_id)
-    )
-
-    # Mark uploaded_files as 'Deleted'
-    upload_ids = [u['upload_id'] for u in uploads]
-    if upload_ids:
-        placeholders = ','.join(['%s'] * len(upload_ids))
-        execute_write_pg(
-            f"UPDATE uploaded_files SET status = 'Deleted' WHERE id IN ({placeholders})",
-            upload_ids
-        )
-    
-    log_audit("Analyst", "Delete", "DataBank", f"Deleted {row_count} rows for template {template[0]['template_name']} (client {client_id})")
-    
-    return {
-        "message": f"Deleted {row_count} rows for template '{template[0]['template_name']}'.",
-        "rows_deleted": row_count,
-        "template_id": template_id,
-        "template_name": template[0]['template_name']
-    }
 
 # ==============================================
 # 📊 ROW REVISION HISTORY ENDPOINT
