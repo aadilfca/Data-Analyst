@@ -82,6 +82,12 @@ This document lists all source files in the project, grouped by directory, with 
 | `template-viewer.html` | Shared, reusable template-data viewer, parameterised by `?template=N` — date range + search toolbar over one template's Data Bank rows, reached from Verification's Client Data Links card strip. |
 | `audit_workbook.html` | Audit Workbook (5-phase requirement, complete) — read-only voucher-level list view of a session's verification results (Voucher No./Date/Description/Amount/Status), distinct from the existing Cashbook selection screen, parameterised by `?session=<id>` (same pattern as `template-viewer.html`'s `?template=N`). Fetch/render/filter logic lives in `audit_workbook.js`; status filter chips (All/Cleared/Query/Pending) are functional and the running-total footer reflects whatever's currently filtered/visible; a row click jumps straight to that voucher inside Verification. Peer nav bar (`#awVerificationBtn` + a static "you are here" Audit Workbook indicator) mirrors Verification's own `#cashbookBar` button pair. |
 | `reconciliation.html`, `reconciliation.js` | Client-context Reports and setup: exact-code groups, Ledger Summary category definitions/assignments, monthly balance entry, diagnostics, preview, and download. |
+
+### Static Vendor Assets
+
+| File | Purpose |
+|------|---------|
+| `vendor/xlsx.full.min.js` | Local SheetJS 0.18.5 browser bundle used by `upload.html` so Excel parsing works when external CDN access is blocked. |
 ### JavaScript Files
 | File | Purpose |
 |------|---------|
@@ -122,7 +128,7 @@ This document lists all source files in the project, grouped by directory, with 
 | File | Purpose |
 |------|---------|
 | `test_app_smoke.py` | Boots the real app via FastAPI's `TestClient` against a temp SQLite DB and proves routers respond (dashboard page + `/api/clients`). |
-| `test_upload_validation_counts.py` | Verifies `count_new_and_existing_rows` correctly distinguishes new vs. already-imported rows for the same client/template. |
+| `test_upload_validation_counts.py`, `test_import_duplicate_gates.py` | Verifies upload delta counts, stable identity gates, duplicate-line rejection, and repeated-upload behavior. |
 | `test_data_deletion.py` | Verifies guarded permanent source-data deletion scope, preview freshness, protected references, deletion order, and route error handling. |
 | `test_cash_bank_transaction_classification.py`, `test_cash_bank_transaction_backfill.py`, `test_cash_bank_transaction_upload_classification.py` | Verifies the versioned Cash/Bank derived layer, controlled backfill, upload-time classification, idempotence, rollback, and raw-data preservation. |
 | `test_verification_indexes.py`, `test_verification_account_sets.py` | Verifies cashbook lookup indexing, simplified and legacy routing, JV Treasury legs, transfers, prefix fallback, Cash movement signs, explicit debit/credit rules for all non-Treasury workstreams, signed preview/session presentation, imbalance detection, and Treasury exclusion. |

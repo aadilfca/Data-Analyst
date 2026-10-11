@@ -8,7 +8,7 @@ from uuid import uuid4
 from database import (
     execute_query_pg, execute_write_pg, log_audit, pg_transaction,
     log_data_audit_pg, execute_batch_pg, execute_batch_insert_with_ids_pg,
-    start_db_metrics, get_db_metrics, get_db_query_details, stop_db_metrics,
+    start_db_metrics, get_db_metrics, get_db_query_details, stop_db_metrics, log_error,
 )
 from psycopg2.extras import Json
 from services.cash_bank_classification import load_treasury_mapping_postgres, upsert_classification_rows_postgres
@@ -26,6 +26,12 @@ from routers.auth import get_current_user
 # ⭐ MUST HAVE THIS LINE
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _build_upload_storage_path(original_filename: str) -> str:
+    safe_name = os.path.basename(original_filename or 'upload.xlsx')
+    return os.path.join('uploads', f'{uuid4().hex}_{safe_name}')
+
 
 def _log_upload_timing(stage):
     """Opt-in timing for upload diagnostics; normal requests pay no timing-log cost."""
@@ -63,16 +69,59 @@ def _cashflow_occurrence_input_rows(rows, col_mapping, template_cols, rate_sourc
     This intentionally includes otherwise unchanged rows, because they are part
     of the voucher occurrence uploaded for audit and duplicate resolution.
     """
-    result = []
-    for row in rows:
-        row_data = {
-            template_column: json_safe_cell_value(row[excel_column], preserve_native_dates=True)
-            for template_column, excel_column in col_mapping.items()
-            if excel_column in row
-        }
-        apply_rate_derivation(row_data, template_cols, rate_source, rate_precision)
-        result.append(reorder_row_data_by_template(row_data, template_cols))
-    return result
+    return [
+        _canonical_import_row_data(
+            row, col_mapping, template_cols, rate_source, rate_precision
+        )
+        for row in rows
+    ]
+
+
+UPLOAD_PREPARATION_WARNING = (
+    "Data saved. The Cashflows update could not be queued, so Cashflows reports "
+    "use the direct calculation until it is rebuilt."
+)
+
+
+def _enqueue_upload_preparation(request, cashflow_voucher_resolution):
+    """Queue the post-import Cashflows job without turning a saved import into a 500.
+
+    The import rows are already committed when this runs, so a queueing failure must
+    not be reported as a failed upload (that invites a needless retry). It is logged
+    and returned as a warning; the legacy snapshot refresh still runs afterwards.
+    """
+    try:
+        with pg_transaction() as conn:
+            job = enqueue_cashflow_preparation_job(
+                conn,
+                client_id=request.client_id,
+                reason="incremental_upload",
+                affected_upload_ids=[request.file_id],
+                affected_occurrence_ids=cashflow_voucher_resolution.get("affected_occurrence_ids", []),
+                current_occurrence_ids=cashflow_voucher_resolution.get("current_occurrence_ids", []),
+            )
+        return job, None
+    except Exception as error:
+        logger.warning(
+            "cashflows_prepared_job_enqueue_failed client_id=%s file_id=%s error=%s",
+            request.client_id,
+            request.file_id,
+            error,
+        )
+        try:
+            log_error(
+                client_id=request.client_id,
+                module="Upload",
+                endpoint="/api/upload/import",
+                method="POST",
+                status_code=200,
+                error_category="Cashflows preparation",
+                error_message=f"Import saved; Cashflows job not queued: {error}",
+                input_data={"file_id": request.file_id, "template_id": request.template_id},
+            )
+        except Exception as log_failure:
+            logger.warning("cashflows_prepared_job_enqueue_log_failed error=%s", log_failure)
+        return None, UPLOAD_PREPARATION_WARNING
 
 
 def _prepare_cashflow_snapshot_background(
@@ -524,6 +573,11 @@ def public_change_detection(change_detection: dict, template_cols: list, templat
         "total_existing_before_import": change_detection.get("total_existing_before_import", 0),
         "comparison_mode": change_detection.get("comparison_mode"),
         "date_range": change_detection.get("date_range"),
+        "duplicate_group_count": change_detection.get("duplicate_group_count", 0),
+        "duplicate_row_count": change_detection.get("duplicate_row_count", 0),
+        "duplicate_skipped_count": change_detection.get("duplicate_skipped_count", 0),
+        "duplicate_row_numbers": change_detection.get("duplicate_row_numbers", []),
+        "duplicate_skipped_row_numbers": change_detection.get("duplicate_skipped_row_numbers", []),
         "report": build_change_report(change_detection, template_cols, template_id),
     }
 
@@ -560,6 +614,9 @@ def _build_upload_summary(
         "changed_count": change_detection.get("changed_count", 0),
         "removed_count": change_detection.get("missing_count", 0),
         "unchanged_count": change_detection.get("unchanged_count", 0),
+        "duplicate_group_count": change_detection.get("duplicate_group_count", 0),
+        "duplicate_row_count": change_detection.get("duplicate_row_count", 0),
+        "duplicate_skipped_count": change_detection.get("duplicate_skipped_count", 0),
     }
 
 
@@ -604,6 +661,16 @@ def _persist_upload_summary(
         (*params, request.file_id),
     )
 
+
+def _is_duplicate_upload_noop(prior_same_file: Optional[dict], change_detection: dict) -> bool:
+    """Return True only when the same source file has no canonical delta to apply."""
+    if not prior_same_file:
+        return False
+    return not any(
+        change_detection.get(key, 0)
+        for key in ("new_count", "changed_count", "missing_count")
+    )
+
 def _row_fingerprint_token(row_data: dict) -> str:
     """Stable compact guard for one current Client Data row."""
     payload = json.dumps(
@@ -634,6 +701,46 @@ def _validation_file_sha256(file_path: str) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _ensure_uploaded_file_hash(file_id: int, file_path: str, current_hash: str = None) -> Optional[str]:
+    """Persist a compact source-file hash when the stored path is available."""
+    if current_hash:
+        return current_hash
+    if not file_path or not os.path.isfile(file_path):
+        return None
+    file_hash = _validation_file_sha256(file_path)
+    execute_write_pg(
+        "UPDATE uploaded_files SET file_sha256 = %s WHERE id = %s AND file_sha256 IS DISTINCT FROM %s",
+        (file_hash, file_id, file_hash),
+    )
+    return file_hash
+
+
+def _find_prior_import_with_same_hash(
+    file_id: int,
+    client_id: int,
+    template_id: int,
+    file_hash: Optional[str],
+) -> Optional[dict]:
+    """Find a prior imported source file with identical bytes for audit messaging."""
+    if not file_hash:
+        return None
+    rows = execute_query_pg(
+        """
+        SELECT id, file_name, upload_date
+        FROM uploaded_files
+        WHERE id <> %s
+          AND client_id = %s
+          AND template_id = %s
+          AND status = 'Imported'
+          AND file_sha256 = %s
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (file_id, client_id, template_id, file_hash),
+    )
+    return rows[0] if rows else None
 
 
 def _validation_request_signature(request: "ImportRequest") -> str:
@@ -675,6 +782,9 @@ def _build_validation_plan_payload(
             "verification_detail_id": item.get("verification_detail_id"),
             "document_group_id": get_document_group_id(template_cols, new_row, template_id),
             "line_key": _comparison_line_key(template_cols, new_row, template_id),
+            "source_identity": item.get("source_identity") or _canonical_source_identity(
+                template_cols, old_row, template_id
+            ),
         })
 
     new_rows = []
@@ -713,6 +823,11 @@ def _build_validation_plan_payload(
         "changed_count": len(changed),
         "new_count": len(new_rows),
         "missing_count": len(missing),
+        "duplicate_group_count": change_detection.get("duplicate_group_count", 0),
+        "duplicate_row_count": change_detection.get("duplicate_row_count", 0),
+        "duplicate_skipped_count": change_detection.get("duplicate_skipped_count", 0),
+        "duplicate_row_numbers": change_detection.get("duplicate_row_numbers", []),
+        "duplicate_skipped_row_numbers": change_detection.get("duplicate_skipped_row_numbers", []),
         "changed": changed,
         "new": new_rows,
         "missing": missing,
@@ -950,148 +1065,6 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
                          comparison_mode: str = "correction",
                          date_delimiter: str = DEFAULT_DATE_DELIMITER,
                          date_order: str = DEFAULT_DATE_ORDER) -> dict:
-    """Compare current rows by stable line identity and optional date scope."""
-    if comparison_mode not in {"correction", "replace_range"}:
-        raise HTTPException(400, "Invalid upload comparison mode")
-
-    result = {
-        "unchanged_count": 0,
-        "changed_count": 0,
-        "new_count": 0,
-        "missing_count": 0,
-        "total_existing_before_import": 0,
-        "unchanged": [],
-        "changed": [],
-        "new": [],
-        "missing": [],
-        "comparison_mode": comparison_mode,
-        "date_range": None,
-    }
-
-    incoming_records = []
-    incoming_dates = []
-    for raw_row in incoming_rows:
-        row_data = {}
-        for template_column, excel_column in col_mapping.items():
-            if excel_column in raw_row:
-                row_data[template_column] = json_safe_cell_value(
-                    raw_row[excel_column], preserve_native_dates=True
-                )
-        apply_rate_derivation(row_data, template_cols, rate_source, rate_precision)
-        row_data = reorder_row_data_by_template(row_data, template_cols)
-        line_key = _comparison_line_key(template_cols, row_data, template_id)
-        date_text = _date_text_for_row(row_data, template_cols, date_delimiter, date_order)
-        if date_text:
-            incoming_dates.append(date_text)
-        incoming_records.append({
-            "line_key": line_key,
-            "row_data": row_data,
-            "date_text": date_text,
-        })
-
-    if comparison_mode == "replace_range":
-        if not incoming_dates:
-            raise HTTPException(400, "A complete replacement requires a valid Date column and date range.")
-        if any(record["date_text"] is None for record in incoming_records):
-            raise HTTPException(400, "A complete replacement cannot include a line with a blank or invalid Date.")
-        result["date_range"] = {"start": min(incoming_dates), "end": max(incoming_dates)}
-
-    incoming_by_key = {}
-    for record in incoming_records:
-        if record["line_key"] in incoming_by_key:
-            raise HTTPException(
-                400,
-                "The upload contains duplicate lines with the same Document ID and line identifier. "
-                "Remove the duplicate before importing.",
-            )
-        incoming_by_key[record["line_key"]] = record
-
-    existing_rows = execute_query_pg(
-        """
-        SELECT cd.id, cd.row_data, cd.version, cd.document_group_id,
-               cd.extract_date, vd.validation_status, vd.id AS verification_detail_id
-        FROM client_data cd
-        LEFT JOIN LATERAL (
-            SELECT id, validation_status
-            FROM verification_details
-            WHERE client_data_id = cd.id
-            ORDER BY id DESC
-            LIMIT 1
-        ) vd ON TRUE
-        WHERE cd.client_id = %s AND cd.template_id = %s AND cd.is_deleted = FALSE
-        """,
-        (client_id, template_id),
-    )
-    result["total_existing_before_import"] = len(existing_rows)
-
-    existing_by_key = {}
-    for row in existing_rows:
-        try:
-            row_data = json.loads(row["row_data"]) if isinstance(row["row_data"], str) else row["row_data"]
-        except Exception:
-            continue
-        line_key = _comparison_line_key(template_cols, row_data, template_id)
-        if line_key in existing_by_key:
-            raise HTTPException(
-                400,
-                "Existing data contains duplicate current lines with the same Document ID and line identifier. "
-                "Resolve the duplicate before importing.",
-            )
-        existing_by_key[line_key] = {
-            "client_data_id": row["id"],
-            "old_row_data": row_data,
-            "old_version": row.get("version", 1),
-            "old_validation_status": row.get("validation_status") or "Pending",
-            "verification_detail_id": row.get("verification_detail_id"),
-            "extract_date": _date_text(row.get("extract_date")) or _date_text_for_row(
-                row_data, template_cols, date_delimiter, date_order
-            ),
-        }
-
-    for line_key, incoming in incoming_by_key.items():
-        existing = existing_by_key.get(line_key)
-        if existing is None:
-            result["new"].append(incoming["row_data"])
-            result["new_count"] += 1
-        elif _row_comparison_fingerprint(incoming["row_data"]) == _row_comparison_fingerprint(existing["old_row_data"]):
-            result["unchanged"].append(existing["client_data_id"])
-            result["unchanged_count"] += 1
-        else:
-            result["changed"].append({
-                "client_data_id": existing["client_data_id"],
-                "old_row_data": existing["old_row_data"],
-                "new_row_data": incoming["row_data"],
-                "old_validation_status": existing["old_validation_status"],
-                "old_version": existing["old_version"],
-                "verification_detail_id": existing["verification_detail_id"],
-            })
-            result["changed_count"] += 1
-
-    if comparison_mode == "replace_range":
-        start_date = result["date_range"]["start"]
-        end_date = result["date_range"]["end"]
-        for existing in existing_by_key.values():
-            existing_date = existing.get("extract_date")
-            if existing_date and start_date <= existing_date <= end_date:
-                line_key = _comparison_line_key(template_cols, existing["old_row_data"], template_id)
-                if line_key not in incoming_by_key:
-                    result["missing"].append({
-                        "client_data_id": existing["client_data_id"],
-                        "old_row_data": existing["old_row_data"],
-                        "validation_status": existing["old_validation_status"],
-                        "verification_detail_id": existing["verification_detail_id"],
-                    })
-                    result["missing_count"] += 1
-
-    return result
-
-
-def compare_transactions(client_id: int, template_id: int, template_cols: list,
-                         incoming_rows: list, col_mapping: dict, mapping_dict: dict,
-                         rate_source: Optional[str] = None, rate_precision: int = 0,
-                         comparison_mode: str = "correction",
-                         date_delimiter: str = DEFAULT_DATE_DELIMITER,
-                         date_order: str = DEFAULT_DATE_ORDER) -> dict:
     """Compare exact lines first, then classify unmatched lines within each document."""
     if comparison_mode not in {"correction", "replace_range"}:
         raise HTTPException(400, "Invalid upload comparison mode")
@@ -1140,6 +1113,7 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
     existing_rows = execute_query_pg(
         """
         SELECT cd.id, cd.row_data, cd.version, cd.document_group_id,
+               cd.source_identity,
                cd.extract_date, vd.validation_status, vd.id AS verification_detail_id
         FROM client_data cd
         LEFT JOIN LATERAL (
@@ -1168,6 +1142,7 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
             "old_version": row.get("version", 1),
             "old_validation_status": row.get("validation_status") or "Pending",
             "verification_detail_id": row.get("verification_detail_id"),
+            "source_identity": row.get("source_identity"),
             "extract_date": _date_text(row.get("extract_date")) or _date_text_for_row(
                 row_data, template_cols, date_delimiter, date_order
             ),
@@ -1221,6 +1196,7 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
                     "old_validation_status": old["old_validation_status"],
                     "old_version": old["old_version"],
                     "verification_detail_id": old["verification_detail_id"],
+                    "source_identity": old.get("source_identity"),
                 })
                 result["changed_count"] += 1
 
@@ -1237,6 +1213,7 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
                 "old_validation_status": old["old_validation_status"],
                 "old_version": old["old_version"],
                 "verification_detail_id": old["verification_detail_id"],
+                "source_identity": old.get("source_identity"),
             })
             result["changed_count"] += 1
         for new in unmatched_incoming[pair_count:]:
@@ -1454,6 +1431,170 @@ def reorder_row_data_by_template(row_data: dict, template_cols: list) -> dict:
             for t_col in template_cols if t_col['column_name'] in row_data}
 
 
+def _canonical_import_row_data(
+    row: dict,
+    col_mapping: dict,
+    template_cols: list,
+    rate_source: Optional[str],
+    rate_precision: int,
+) -> dict:
+    """Build exactly the row payload that the import path stores in ``client_data``."""
+    row_data = {
+        template_column: json_safe_cell_value(
+            row[excel_column], preserve_native_dates=True
+        )
+        for template_column, excel_column in col_mapping.items()
+        if excel_column in row
+    }
+    apply_rate_derivation(row_data, template_cols, rate_source, rate_precision)
+    return reorder_row_data_by_template(row_data, template_cols)
+
+
+def _deduplicate_exact_rows(
+    rows: list,
+    col_mapping: dict,
+    template_cols: list,
+    template_id: int,
+    rate_source: Optional[str],
+    rate_precision: int,
+    row_numbers: Optional[list] = None,
+) -> dict:
+    """Keep one occurrence of each exact canonical line and report skipped copies.
+
+    Exact canonical duplicates are safe to collapse because they carry the same
+    raw and derived values. Rows with the same stable line identity but different
+    content remain in the unique list so the strict identity gate can reject them.
+    """
+    unique_rows = []
+    seen = {}
+    groups = []
+    affected_row_numbers = []
+    skipped_row_numbers = []
+    unique_row_numbers = []
+
+    for position, row in enumerate(rows):
+        row_number = row_numbers[position] if row_numbers else position + 2
+        row_data = _canonical_import_row_data(
+            row, col_mapping, template_cols, rate_source, rate_precision
+        )
+        fingerprint = _row_fingerprint_token(row_data)
+        occurrence = seen.get(fingerprint)
+        if occurrence is None:
+            seen[fingerprint] = {
+                "row_numbers": [row_number],
+                "row": row,
+            }
+            unique_rows.append(row)
+            unique_row_numbers.append(row_number)
+            continue
+
+        occurrence["row_numbers"].append(row_number)
+        skipped_row_numbers.append(row_number)
+
+    for occurrence in seen.values():
+        if len(occurrence["row_numbers"]) < 2:
+            continue
+        groups.append(occurrence["row_numbers"])
+        affected_row_numbers.extend(occurrence["row_numbers"])
+
+    return {
+        "rows": unique_rows,
+        "row_numbers": unique_row_numbers,
+        "duplicate_group_count": len(groups),
+        "duplicate_row_count": len(affected_row_numbers),
+        "duplicate_skipped_count": len(skipped_row_numbers),
+        "duplicate_row_numbers": sorted(affected_row_numbers),
+        "duplicate_skipped_row_numbers": sorted(skipped_row_numbers),
+    }
+
+
+def _strict_duplicate_row_errors(
+    rows: list,
+    col_mapping: dict,
+    template_cols: list,
+    template_id: int,
+    rate_source: Optional[str],
+    rate_precision: int,
+    row_numbers: Optional[list] = None,
+) -> list:
+    """Return blocking errors for repeated canonical transaction lines in one upload.
+
+    A repeated normalized source identity is never silently deduplicated. Templates
+    with a line key reject repeated line keys; templates without one reject exact
+    repeated rows inside the same document group.
+    """
+    grouped = {}
+    for position, row in enumerate(rows):
+        row_number = row_numbers[position] if row_numbers else position + 2
+        row_data = _canonical_import_row_data(
+            row, col_mapping, template_cols, rate_source, rate_precision
+        )
+        source_identity = _canonical_source_identity(
+            template_cols, row_data, template_id
+        )
+        grouped.setdefault(source_identity, []).append(
+            (row_number, get_document_group_id(template_cols, row_data, template_id))
+        )
+
+    errors = []
+    for source_identity, occurrences in grouped.items():
+        if len(occurrences) < 2:
+            continue
+        row_numbers = [row_number for row_number, _ in occurrences]
+        document_group_id = occurrences[0][1]
+        for row_number in row_numbers:
+            other_rows = [value for value in row_numbers if value != row_number]
+            errors.append({
+                "row_number": row_number,
+                "errors": [{
+                    "column": "Row-level",
+                    "excel_column": None,
+                    "error_type": "duplicate_row",
+                    "message": (
+                        "Duplicate transaction line detected in this upload; "
+                        f"the same normalized line also appears on row(s) {other_rows}."
+                    ),
+                    "document_group_id": document_group_id,
+                    "source_identity": source_identity,
+                }],
+            })
+    return errors
+
+
+def _assert_active_identity_collisions(
+    client_id: int,
+    template_id: int,
+    source_identities: list,
+    excluded_client_data_ids: list = None,
+) -> None:
+    """Block writes that would collide with a different active canonical row."""
+    identities = list(dict.fromkeys(identity for identity in source_identities if identity))
+    if not identities:
+        return
+    query = """
+        SELECT id, source_identity
+        FROM client_data
+        WHERE client_id = %s
+          AND template_id = %s
+          AND is_deleted = FALSE
+          AND change_detection_status <> 'deleted'
+          AND source_identity = ANY(%s)
+    """
+    params = [client_id, template_id, identities]
+    excluded = list(dict.fromkeys(excluded_client_data_ids or []))
+    if excluded:
+        query += " AND NOT (id = ANY(%s))"
+        params.append(excluded)
+    collisions = execute_query_pg(query, tuple(params))
+    if collisions:
+        raise HTTPException(
+            409,
+            "Import blocked: one or more rows would duplicate an existing active "
+            f"canonical transaction identity ({len(collisions)} collision(s)). "
+            "Review the source file before retrying.",
+        )
+
+
 # ---------- HELPER: Compute document_group_id from the first template column ----------
 def get_document_group_id(template_cols: list, row_data: dict, template_id: int) -> str:
     """
@@ -1646,13 +1787,14 @@ async def import_excel(file: UploadFile = File(...), session=Depends(get_current
     df = pd.read_excel(BytesIO(contents))
     upload_dir = "uploads"
     os.makedirs(upload_dir, exist_ok=True)
-    file_path = os.path.join(upload_dir, file.filename)
+    file_path = _build_upload_storage_path(file.filename)
     with open(file_path, "wb") as f:
         f.write(contents)
+    file_sha256 = hashlib.sha256(contents).hexdigest()
     file_id = execute_write_pg(
-        "INSERT INTO uploaded_files (file_name, file_path, file_type, record_count, status, uploaded_by) "
-        "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-        (file.filename, file_path, 'excel', len(df), 'Pending', session["username"])
+        "INSERT INTO uploaded_files (file_name, file_path, file_type, record_count, status, uploaded_by, file_sha256) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+        (file.filename, file_path, 'excel', len(df), 'Pending', session["username"], file_sha256)
     )
     log_audit(session["username"], "Upload", "Import", f"Uploaded file: {file.filename} ({len(df)} rows)")
     return {"message": f"File '{file.filename}' uploaded successfully ({len(df)} rows)", "file_id": file_id, "record_count": len(df)}
@@ -2029,7 +2171,7 @@ def validate_only(request: ImportRequest, perf: bool = False):
     if not template:
         raise HTTPException(404, "Template not found")
     file_info = execute_query_pg(
-        "SELECT file_path, file_name, upload_date, uploaded_by, status "
+        "SELECT file_path, file_name, upload_date, uploaded_by, status, file_sha256 "
         "FROM uploaded_files WHERE id = %s",
         (request.file_id,),
     )
@@ -2040,6 +2182,15 @@ def validate_only(request: ImportRequest, perf: bool = False):
     client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (request.client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive")
+
+    file_sha256 = _ensure_uploaded_file_hash(
+        request.file_id,
+        file_info[0].get("file_path"),
+        file_info[0].get("file_sha256"),
+    )
+    prior_same_file = _find_prior_import_with_same_hash(
+        request.file_id, request.client_id, request.template_id, file_sha256
+    )
 
     # Resolve the effective date format: use what the frontend sent, falling back
     # to the module defaults if absent (delimiter checks None since "" is itself valid).
@@ -2213,11 +2364,26 @@ def validate_only(request: ImportRequest, perf: bool = False):
         if item["row_number"] not in force_include_set
     ]
     comparison_rows = filter_excluded_rows(rows, rows_to_exclude)
+    comparison_row_numbers = [
+        row_number
+        for row_number in range(2, 2 + len(rows))
+        if row_number not in set(rows_to_exclude)
+    ]
+    deduplication = _deduplicate_exact_rows(
+        comparison_rows,
+        col_mapping,
+        template_cols,
+        request.template_id,
+        rate_source,
+        rate_precision,
+        row_numbers=comparison_row_numbers,
+    )
+    unique_comparison_rows = deduplication["rows"]
     change_detection = compare_transactions(
         client_id=request.client_id,
         template_id=request.template_id,
         template_cols=template_cols,
-        incoming_rows=comparison_rows,
+        incoming_rows=unique_comparison_rows,
         col_mapping=col_mapping,
         mapping_dict=mapping_dict,
         rate_source=rate_source,
@@ -2226,6 +2392,11 @@ def validate_only(request: ImportRequest, perf: bool = False):
         date_delimiter=effective_delimiter,
         date_order=effective_order,
     )
+    change_detection.update({
+        key: value
+        for key, value in deduplication.items()
+        if key != "rows"
+    })
     public_changes = public_change_detection(change_detection, template_cols, request.template_id)
     new_count = change_detection["new_count"]
     existing_count = change_detection["unchanged_count"] + change_detection["changed_count"]
@@ -2234,9 +2405,24 @@ def validate_only(request: ImportRequest, perf: bool = False):
         or change_detection["changed_count"]
         or change_detection["missing_count"]
     )
+    duplicate_upload_noop = _is_duplicate_upload_noop(prior_same_file, change_detection)
+    duplicate_errors = []
+    if not duplicate_upload_noop:
+        duplicate_errors = _strict_duplicate_row_errors(
+            unique_comparison_rows,
+            col_mapping,
+            template_cols,
+            request.template_id,
+            rate_source,
+            rate_precision,
+            row_numbers=deduplication["row_numbers"],
+        )
+        validation_errors.extend(duplicate_errors)
     validation_plan_id = None
     can_import = bool(actionable and not validation_errors)
     summary_status = None
+    if duplicate_errors:
+        summary_status = "Rejected"
     if can_import:
         plan_payload = _build_validation_plan_payload(
             change_detection,
@@ -2292,6 +2478,14 @@ def validate_only(request: ImportRequest, perf: bool = False):
         "existing_rows_count": existing_count,
         "change_detection": public_changes,
         "can_import": can_import,
+        "duplicate_upload_id": prior_same_file.get("id") if prior_same_file else None,
+        "duplicate_upload_detected": bool(prior_same_file),
+        "duplicate_upload_noop": duplicate_upload_noop,
+        "duplicate_group_count": deduplication["duplicate_group_count"],
+        "duplicate_row_count": deduplication["duplicate_row_count"],
+        "duplicate_skipped_count": deduplication["duplicate_skipped_count"],
+        "duplicate_row_numbers": deduplication["duplicate_row_numbers"],
+        "duplicate_skipped_row_numbers": deduplication["duplicate_skipped_row_numbers"],
         "validation_plan_id": validation_plan_id,
         "rate_mode": rate_mode,
         "upload_summary": upload_summary,
@@ -2331,7 +2525,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
     if not template:
         raise HTTPException(404, "Template not found")
     file_info = execute_query_pg(
-        "SELECT file_path, file_name, upload_date, uploaded_by, status "
+        "SELECT file_path, file_name, upload_date, uploaded_by, status, file_sha256 "
         "FROM uploaded_files WHERE id = %s",
         (request.file_id,),
     )
@@ -2370,6 +2564,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
         current_rows = execute_query_pg(
             """
             SELECT cd.id, cd.row_data, cd.version, cd.document_group_id,
+                   cd.source_identity,
                    cd.extract_date, vd.validation_status, vd.id AS verification_detail_id
             FROM client_data cd
             LEFT JOIN LATERAL (
@@ -2408,6 +2603,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
             "old_validation_status": current.get("validation_status") or "Pending",
             "old_version": current.get("version", 1),
             "verification_detail_id": current.get("verification_detail_id"),
+            "source_identity": item.get("source_identity") or current.get("source_identity"),
         })
 
     missing = []
@@ -2457,11 +2653,38 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
             if any(_row_fingerprint_token(row) in existing_fingerprints for row in new_rows):
                 raise HTTPException(409, "New data was added after validation. Validate the file again.")
 
+    planned_identities = [
+        item.get("source_identity") or _canonical_source_identity(
+            template_cols, item["new_row_data"], request.template_id
+        )
+        for item in changed
+    ] + [
+        _canonical_source_identity(template_cols, row_data, request.template_id)
+        for row_data in new_rows
+    ]
+    if len(planned_identities) != len(set(planned_identities)):
+        raise HTTPException(
+            409,
+            "Validation plan blocked: it contains repeated canonical transaction "
+            "identities. Validate the source file again after removing duplicates.",
+        )
+    _assert_active_identity_collisions(
+        request.client_id,
+        request.template_id,
+        planned_identities,
+        [item["client_data_id"] for item in changed],
+    )
+
     change_detection = {
         "unchanged_count": plan_payload.get("unchanged_count", 0),
         "changed_count": len(changed),
         "new_count": len(new_rows),
         "missing_count": len(missing),
+        "duplicate_group_count": plan_payload.get("duplicate_group_count", 0),
+        "duplicate_row_count": plan_payload.get("duplicate_row_count", 0),
+        "duplicate_skipped_count": plan_payload.get("duplicate_skipped_count", 0),
+        "duplicate_row_numbers": plan_payload.get("duplicate_row_numbers", []),
+        "duplicate_skipped_row_numbers": plan_payload.get("duplicate_skipped_row_numbers", []),
         "total_existing_before_import": None,
         "unchanged": [],
         "changed": changed,
@@ -2528,6 +2751,12 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
                         409,
                         "Current data changed after validation. Validate the file again.",
                     )
+        _assert_active_identity_collisions(
+            request.client_id,
+            request.template_id,
+            planned_identities,
+            [item["client_data_id"] for item in changed],
+        )
         execute_write_pg(
             "UPDATE uploaded_files SET status = 'Imported', client_id = %s WHERE id = %s",
             (request.client_id, request.file_id),
@@ -2543,7 +2772,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
             amount, date_str = extract_columns_from_row(
                 new_row_data, template_cols, effective_delimiter, effective_order
             )
-            source_identity = _canonical_source_identity(
+            source_identity = item.get("source_identity") or _canonical_source_identity(
                 template_cols, new_row_data, request.template_id
             )
             source_fingerprint = _row_fingerprint_token(new_row_data)
@@ -2711,18 +2940,13 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
             write_fn=execute_write_pg,
         )
     preparation_job = None
+    preparation_warning = None
     IMPORT_PROGRESS[request.file_id]["status"] = "preparing"
     if legacy_snapshot_required or preparation_required:
         if preparation_required:
-            with pg_transaction() as conn:
-                preparation_job = enqueue_cashflow_preparation_job(
-                    conn,
-                    client_id=request.client_id,
-                    reason="incremental_upload",
-                    affected_upload_ids=[request.file_id],
-                    affected_occurrence_ids=cashflow_voucher_resolution.get("affected_occurrence_ids", []),
-                    current_occurrence_ids=cashflow_voucher_resolution.get("current_occurrence_ids", []),
-                )
+            preparation_job, preparation_warning = _enqueue_upload_preparation(
+                request, cashflow_voucher_resolution
+            )
         if background_tasks is None:
             _prepare_cashflow_snapshot_background(
                 request.client_id,
@@ -2784,6 +3008,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
         "upload_summary": upload_summary,
         "cashflow_voucher_resolution": cashflow_voucher_resolution,
         "cashflow_preparation_job": preparation_job,
+        "cashflow_preparation_warning": preparation_warning,
     }
 
 
@@ -2799,7 +3024,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
     if not template:
         raise HTTPException(404, "Template not found")
     file_info = execute_query_pg(
-        "SELECT file_path, file_name, upload_date, uploaded_by, status "
+        "SELECT file_path, file_name, upload_date, uploaded_by, status, file_sha256 "
         "FROM uploaded_files WHERE id = %s",
         (request.file_id,),
     )
@@ -2809,6 +3034,15 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
     client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (request.client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive")
+
+    file_sha256 = _ensure_uploaded_file_hash(
+        request.file_id,
+        file_info[0].get("file_path"),
+        file_info[0].get("file_sha256"),
+    )
+    prior_same_file = _find_prior_import_with_same_hash(
+        request.file_id, request.client_id, request.template_id, file_sha256
+    )
 
     # Resolve the effective date format: use what the frontend sent, falling back
     # to the module defaults if absent (delimiter checks None since "" is itself valid).
@@ -2972,6 +3206,18 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
     if rows_to_exclude:
         rows = filter_excluded_rows(rows, rows_to_exclude)
 
+    comparison_row_numbers = list(range(2, 2 + len(rows)))
+    deduplication = _deduplicate_exact_rows(
+        rows,
+        col_mapping,
+        template_cols,
+        request.template_id,
+        rate_source,
+        rate_precision,
+        row_numbers=comparison_row_numbers,
+    )
+    rows = deduplication["rows"]
+
     # Complete mapped workbook rows are retained for canonical voucher resolution.
     # This must happen before change detection skips unchanged Client Data rows.
     cashflow_occurrence_rows = _cashflow_occurrence_input_rows(
@@ -3011,6 +3257,70 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
             "comparison_mode": request.comparison_mode,
             "date_range": None,
         }
+    change_detection.update({
+        key: value
+        for key, value in deduplication.items()
+        if key != "rows"
+    })
+
+    duplicate_upload_noop = _is_duplicate_upload_noop(prior_same_file, change_detection)
+    duplicate_errors = []
+    if not duplicate_upload_noop:
+        duplicate_errors = _strict_duplicate_row_errors(
+            rows,
+            col_mapping,
+            template_cols,
+            request.template_id,
+            rate_source,
+            rate_precision,
+            row_numbers=deduplication["row_numbers"],
+        )
+    if duplicate_errors:
+        _persist_upload_summary(
+            request,
+            {
+                "comparison_mode": request.comparison_mode,
+                "date_range": None,
+                "new_count": 0,
+                "changed_count": 0,
+                "missing_count": 0,
+                "unchanged_count": 0,
+            },
+            total_rows_attempted,
+            status="Rejected",
+        )
+        return {
+            "status": "validation_failed",
+            "errors": duplicate_errors,
+            "total_rows": total_rows_attempted,
+            "error_count": len(duplicate_errors),
+            "rejected_rows": rejected_rows,
+            "rejected_count": len(rejected_rows),
+            "duplicate_upload_id": prior_same_file.get("id") if prior_same_file else None,
+            "duplicate_upload_detected": bool(prior_same_file),
+            "duplicate_upload_noop": False,
+            "duplicate_group_count": deduplication["duplicate_group_count"],
+            "duplicate_row_count": deduplication["duplicate_row_count"],
+            "duplicate_skipped_count": deduplication["duplicate_skipped_count"],
+            "duplicate_row_numbers": deduplication["duplicate_row_numbers"],
+            "duplicate_skipped_row_numbers": deduplication["duplicate_skipped_row_numbers"],
+        }
+
+    pending_identities = [
+        item.get("source_identity") or _canonical_source_identity(
+            template_cols, item.get("new_row_data") or {}, request.template_id
+        )
+        for item in change_detection.get("changed", [])
+    ] + [
+        _canonical_source_identity(template_cols, row_data, request.template_id)
+        for row_data in change_detection.get("new", [])
+    ]
+    _assert_active_identity_collisions(
+        request.client_id,
+        request.template_id,
+        pending_identities,
+        [item.get("client_data_id") for item in change_detection.get("changed", [])],
+    )
 
     public_changes = public_change_detection(change_detection, template_cols, request.template_id)
     if not (change_detection["new_count"] or change_detection["changed_count"] or change_detection["missing_count"]):
@@ -3027,7 +3337,12 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
         )
         return {
             "status": "success",
-            "message": "Upload ignored: all validated lines are unchanged.",
+            "message": (
+                "Upload ignored: this source file is already imported and all "
+                "validated lines are unchanged."
+                if duplicate_upload_noop
+                else "Upload ignored: all validated lines are unchanged."
+            ),
             "ignored": True,
             "total_rows": len(rows),
             "imported_count": 0,
@@ -3036,6 +3351,9 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
             "validation_errors": [],
             "rejected_rows": rejected_rows,
             "rejected_count": len(rejected_rows),
+            "duplicate_upload_id": prior_same_file.get("id") if prior_same_file else None,
+            "duplicate_upload_detected": bool(prior_same_file),
+            "duplicate_upload_noop": duplicate_upload_noop,
             "force_included_count": force_included_count,
             "change_detection": public_changes,
             "upload_summary": upload_summary,
@@ -3071,6 +3389,16 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
     # both raw client_data and derived classification writes succeed.
     cashflow_voucher_resolution = None
     with pg_transaction() as conn:
+        execute_query_pg(
+            "SELECT pg_advisory_xact_lock(hashtext(%s))",
+            (f"upload-data:{request.client_id}:{request.template_id}",),
+        )
+        _assert_active_identity_collisions(
+            request.client_id,
+            request.template_id,
+            pending_identities,
+            [item.get("client_data_id") for item in change_detection.get("changed", [])],
+        )
         treasury_mapping = load_treasury_mapping_postgres(conn, request.client_id)
         if change_detection is not None and change_detection.get("unchanged") is not None:
             # --- Re-upload scenario: handle each category ---
@@ -3098,7 +3426,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
                 # changed-row re-upload, so a row's amount/date would never refresh even after the
                 # extraction bug above was fixed.
                 amount, date_str = extract_columns_from_row(new_row_data, template_cols, effective_delimiter, effective_order)
-                source_identity = _canonical_source_identity(
+                source_identity = item.get("source_identity") or _canonical_source_identity(
                     template_cols, new_row_data, request.template_id
                 )
                 source_fingerprint = _row_fingerprint_token(new_row_data)
@@ -3329,18 +3657,13 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
             write_fn=execute_write_pg,
         )
     preparation_job = None
+    preparation_warning = None
     IMPORT_PROGRESS[request.file_id]["status"] = "preparing"
     if legacy_snapshot_required or preparation_required:
         if preparation_required:
-            with pg_transaction() as conn:
-                preparation_job = enqueue_cashflow_preparation_job(
-                    conn,
-                    client_id=request.client_id,
-                    reason="incremental_upload",
-                    affected_upload_ids=[request.file_id],
-                    affected_occurrence_ids=cashflow_voucher_resolution.get("affected_occurrence_ids", []),
-                    current_occurrence_ids=cashflow_voucher_resolution.get("current_occurrence_ids", []),
-                )
+            preparation_job, preparation_warning = _enqueue_upload_preparation(
+                request, cashflow_voucher_resolution
+            )
         if background_tasks is None:
             # Direct callers and isolated tests retain the old synchronous contract.
             _prepare_cashflow_snapshot_background(
@@ -3405,6 +3728,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
         "upload_summary": upload_summary,
         "cashflow_voucher_resolution": cashflow_voucher_resolution,
         "cashflow_preparation_job": preparation_job,
+        "cashflow_preparation_warning": preparation_warning,
     }
 
 @router.get("/api/upload/import-status/{file_id}")

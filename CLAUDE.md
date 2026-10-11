@@ -18,7 +18,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, and database size with PostgreSQL table/index breakdown. See CHANGELOG_ARCHIVE.md.
 - routers/data.py + static/databank.* → Client Data Bank availability, calendars, overdue uploads, preview/filtering, frequency settings, and guarded mutations. See CHANGELOG_ARCHIVE.md.
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
-- routers/import_export.py -> Excel upload, mapping, server-side validation plans, strict source-file/duplicate-line gates, action-only import/change detection, compact upload summaries, downloadable change reports, upload-time resolution, export, and guarded actions. See CHANGELOG_ARCHIVE.md.
+- routers/import_export.py -> Excel upload, mapping, strict hash/identity gates, action-only delta imports, compact summaries, and guarded import actions. See CHANGELOG_ARCHIVE.md.
 - routers/settings.py + static/settings.* → application settings and the firm-wide Holiday list; header/tabs rendered by `client_context.js`. See CHANGELOG_ARCHIVE.md.
 - routers/templates.py + static/templates.*, static/columns.* → master-column and template CRUD, mapping/reordering, rate rules, backup/restore, and setup loading feedback. See CHANGELOG_ARCHIVE.md.
 - static/client_settings.html, static/client_settings.js -> retired direct-bookmark information page; all Verification account routing is configured centrally in Account Control Centre. See CHANGELOG_ARCHIVE.md.
@@ -51,7 +51,7 @@ One line per file group: what it is now. Full build history for every entry live
 - services/reconciliation_xlsx.py → static Bank/Cash workbook exporter for summaries, schedules, reviews, cross-checks, and reconciliation proofs. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_balance_source.py → validates stored opening/month-end balances and converts them to reconciliation-engine inputs. See CHANGELOG_ARCHIVE.md.
 - tests/test_account_control_center*.py + tests/test_cash_bank_configuration_sync.py + tests/test_cashflows*.py → regression coverage for setup, orphan assignment, derived classification, and Cashflows Reports UI.
-- tests/test_data_deletion.py → focused permanent-data deletion preview/apply, protection, ordering, and staged-file cleanup tests.
+- tests/test_data_deletion.py + tests/test_import_duplicate_gates.py → focused deletion and upload identity-gate regression tests.
 
 
 - static/reconciliation.html, static/reconciliation.js -> client-context Reports, Cashflows summary, customer-payment reconciliation, classified transactions, Ledger Summary categories, and balance setup. See CHANGELOG_ARCHIVE.md.
@@ -67,7 +67,7 @@ One line per file group: what it is now. Full build history for every entry live
 ## Database management and backup rules
 - `client_data` is the sole canonical transaction store: one active row per stable client/template/transaction identity, with raw values and report-required derived columns stored together and indexed.
 - Production Supabase is a working store, not an archive; keep one active canonical data set per client/template and only current operational rows.
-- Every re-import stores a source-file SHA-256 and compares normalized row fingerprints and stable row identity: exact repeats are ignored, duplicate lines are rejected, changed rows update in place with derived columns recalculated, new backdated rows are inserted once, and removals require explicit replacement scope.
+- Every re-import stores a source-file SHA-256 and compares normalized row fingerprints and stable row identity: an unchanged previously imported file is an informational no-op; exact repeated lines within any upload are counted and only the first copy is retained; conflicting same-identity lines remain blocked; changed rows update in place, new backdated rows insert once, and removals require explicit replacement scope.
 - Active canonical identities are database-unique where existing data is clean; if duplicate groups block index activation, imports remain application-gated and the migration must report the blocker rather than delete or merge rows.
 - Do not retain durable copies of transaction rows in report/read-model, occurrence, revision, cache, or audit-payload tables; compact configuration, counts, fingerprints, checksums, and run metadata are allowed, while legacy copies must not grow and are migration targets.
 - Source Excel/CSV files, SQL dumps, reports, and workpapers stay in controlled external/offline storage; Supabase may hold temporary staging metadata only, and rejected/ignored/fully deleted upload files and metadata must be removed.
@@ -277,5 +277,7 @@ Do this automatically at the end of the session without being asked.
 - 2026-10-09: Phase 5 adds table-level Cashflows sizing, stale-revision candidates, and reference-guarded cleanup preview/apply.
 - 2026-10-10: Storage Cleanup is unlocked for development testing; uploaded-data deletion remains available while Audit Rules and current operational data stay protected.
 - 2026-10-11: Phase 3 makes `client_data` the enforced Cashflows source, stops legacy transaction-copy writes, and adds guarded cleanup preview/apply for obsolete copies.
-- 2026-10-11: Strict data gates add upload SHA-256 tracking, reject repeated normalized lines, block active-identity collisions, and defer uniqueness activation safely when existing duplicates require review.
+- 2026-10-11: Strict data gates add upload SHA-256 tracking, count and skip exact repeated lines, block conflicting active-identity collisions, and defer uniqueness activation safely when existing duplicates require review.
 - 2026-10-11: Phase 1 adds guarded permanent-data deletion preview/apply, blocks new soft-delete/restore calls, protects verification references, and verifies staged-file cleanup after commit.
+- 2026-10-11: Phase 2 hardens upload identity preservation, hash lookup indexing, duplicate-line messaging, and row-level validation errors.
+- 2026-10-11: Upload now uses a local SheetJS bundle, removing the blocked CDN dependency that prevented Excel files from being read.

@@ -9,7 +9,10 @@ from routers.import_export import (
     ColumnMapping,
     ImportRequest,
     _build_validation_plan_payload,
+    _build_upload_storage_path,
     _canonical_source_identity,
+    _is_duplicate_upload_noop,
+    _strict_duplicate_row_errors,
     _validation_request_signature,
     build_change_report,
     compare_transactions,
@@ -25,6 +28,14 @@ class UploadValidationCountTests(unittest.TestCase):
 
     def tearDown(self):
         self.tmpdir.cleanup()
+
+    def test_same_name_uploads_use_distinct_storage_paths(self):
+        first_path = _build_upload_storage_path('All voucher one fine.xlsx')
+        second_path = _build_upload_storage_path('All voucher one fine.xlsx')
+
+        self.assertNotEqual(first_path, second_path)
+        self.assertEqual(os.path.basename(first_path).split('_', 1)[1], 'All voucher one fine.xlsx')
+        self.assertEqual(os.path.basename(second_path).split('_', 1)[1], 'All voucher one fine.xlsx')
 
     def test_counts_existing_and_new_rows(self):
         execute_write(
@@ -122,6 +133,86 @@ class UploadValidationCountTests(unittest.TestCase):
         self.assertEqual(result["missing_count"], 0)
         self.assertEqual(result["unchanged"], [10])
         self.assertEqual(result["changed"][0]["client_data_id"], 11)
+
+    def test_identical_reimport_is_idempotent_and_creates_no_actions(self):
+        template_cols = [
+            {'id': 1, 'column_name': 'Voucher', 'data_type': 'Text'},
+            {'id': 2, 'column_name': 'Amount', 'data_type': 'Numeric'},
+        ]
+
+        class MappingStub:
+            def __init__(self, excel_column_name):
+                self.excel_column_name = excel_column_name
+
+        mapping_dict = {
+            1: MappingStub('Voucher'),
+            2: MappingStub('Amount'),
+        }
+        existing = [{
+            'id': 19,
+            'row_data': {'Voucher': 'UNCHANGED', 'Amount': 100},
+            'version': 3,
+            'extract_date': None,
+            'validation_status': 'Verified',
+            'verification_detail_id': 4,
+        }]
+
+        with patch('routers.import_export.execute_query_pg', return_value=existing):
+            result = compare_transactions(
+                1,
+                1,
+                template_cols,
+                [{'Voucher': 'UNCHANGED', 'Amount': 100}],
+                {'Voucher': 'Voucher', 'Amount': 'Amount'},
+                mapping_dict,
+            )
+
+        self.assertEqual(result['unchanged_count'], 1)
+        self.assertEqual(result['changed_count'], 0)
+        self.assertEqual(result['new_count'], 0)
+        self.assertEqual(result['missing_count'], 0)
+        self.assertEqual(result['unchanged'], [19])
+        self.assertEqual(result['changed'], [])
+        self.assertEqual(result['new'], [])
+        self.assertEqual(result['missing'], [])
+
+    def test_changed_row_keeps_existing_canonical_identity(self):
+        template_cols = [
+            {'id': 1, 'column_name': 'Voucher', 'data_type': 'Text'},
+            {'id': 2, 'column_name': 'Amount', 'data_type': 'Numeric'},
+        ]
+
+        class MappingStub:
+            def __init__(self, excel_column_name):
+                self.excel_column_name = excel_column_name
+
+        existing = [{
+            'id': 27,
+            'row_data': {'Voucher': 'V-1', 'Amount': 100},
+            'source_identity': 'stable-identity',
+            'version': 2,
+            'extract_date': None,
+            'validation_status': 'Pending',
+            'verification_detail_id': None,
+        }]
+        with patch('routers.import_export.execute_query_pg', return_value=existing):
+            result = compare_transactions(
+                1,
+                1,
+                template_cols,
+                [{'Voucher': 'V-1', 'Amount': 125}],
+                {'Voucher': 'Voucher', 'Amount': 'Amount'},
+                {1: MappingStub('Voucher'), 2: MappingStub('Amount')},
+            )
+
+        self.assertEqual(result['changed'][0]['source_identity'], 'stable-identity')
+
+    def test_same_source_file_with_no_delta_is_not_importable(self):
+        self.assertTrue(_is_duplicate_upload_noop(
+            {"id": 397},
+            {"new_count": 0, "changed_count": 0, "missing_count": 0},
+        ))
+
     def test_canonical_source_identity_is_repeatable_and_line_stable(self):
         template_cols = [
             {'id': 1, 'column_name': 'Voucher ID', 'data_type': 'Text'},
@@ -139,7 +230,6 @@ class UploadValidationCountTests(unittest.TestCase):
             _canonical_source_identity(template_cols, original, 7),
             _canonical_source_identity(template_cols, corrected, 7),
         )
-
 
     def test_multi_line_document_ids_are_compared_without_duplicate_rejection(self):
         template_cols = [
@@ -238,6 +328,11 @@ class UploadValidationCountTests(unittest.TestCase):
             "changed_count": 1,
             "new_count": 1,
             "missing_count": 1,
+            "duplicate_group_count": 2,
+            "duplicate_row_count": 4,
+            "duplicate_skipped_count": 2,
+            "duplicate_row_numbers": [8, 9, 12, 13],
+            "duplicate_skipped_row_numbers": [9, 13],
             "changed": [{
                 "client_data_id": 10,
                 "old_row_data": {"Voucher": "CHANGED", "Amount": 100},
@@ -274,6 +369,10 @@ class UploadValidationCountTests(unittest.TestCase):
         self.assertNotIn("old_row_data", payload["missing"][0])
         self.assertTrue(payload["changed"][0]["expected_old_fingerprint"])
         self.assertEqual(payload["new"][0]["row_data"]["Voucher"], "ADDED")
+        self.assertEqual(payload["duplicate_group_count"], 2)
+        self.assertEqual(payload["duplicate_row_count"], 4)
+        self.assertEqual(payload["duplicate_skipped_count"], 2)
+        self.assertEqual(payload["duplicate_skipped_row_numbers"], [9, 13])
 
     def test_validation_signature_ignores_plan_id(self):
         base = {
@@ -365,9 +464,69 @@ class UploadValidationCountTests(unittest.TestCase):
         }
         self.assertTrue({
             "idx_client_data_active_identity",
+            "idx_client_data_active_identity_unique",
             "idx_client_data_active_derived_date",
             "idx_client_data_active_derived_classification",
         }.issubset(indexes))
+
+    def test_uploaded_files_persists_compact_source_file_hash(self):
+        columns = {
+            row["name"]
+            for row in execute_query("PRAGMA table_info(uploaded_files)")
+        }
+
+        self.assertIn("file_sha256", columns)
+        indexes = {
+            row["name"]
+            for row in execute_query("PRAGMA index_list(uploaded_files)")
+        }
+        self.assertIn("idx_uploaded_files_source_hash_scope", indexes)
+
+    def test_strict_gate_rejects_exact_duplicate_lines_inside_one_document(self):
+        template_cols = [
+            {"id": 1, "column_name": "Voucher ID", "data_type": "Text"},
+            {"id": 2, "column_name": "Account", "data_type": "Text"},
+            {"id": 3, "column_name": "Amount", "data_type": "Numeric"},
+        ]
+        rows = [
+            {"Voucher": "V-1", "Ledger": "Cash", "Amount": 100},
+            {"Voucher": "V-1", "Ledger": "Cash", "Amount": 100},
+        ]
+
+        errors = _strict_duplicate_row_errors(
+            rows,
+            {"Voucher ID": "Voucher", "Account": "Ledger", "Amount": "Amount"},
+            template_cols,
+            1,
+            None,
+            0,
+        )
+
+        self.assertEqual([error["row_number"] for error in errors], [2, 3])
+        self.assertEqual(errors[0]["errors"][0]["error_type"], "duplicate_row")
+        self.assertEqual(errors[0]["errors"][0]["column"], "Row-level")
+
+    def test_strict_gate_allows_same_line_content_in_different_documents(self):
+        template_cols = [
+            {"id": 1, "column_name": "Voucher ID", "data_type": "Text"},
+            {"id": 2, "column_name": "Account", "data_type": "Text"},
+            {"id": 3, "column_name": "Amount", "data_type": "Numeric"},
+        ]
+        rows = [
+            {"Voucher": "V-1", "Ledger": "Cash", "Amount": 100},
+            {"Voucher": "V-2", "Ledger": "Cash", "Amount": 100},
+        ]
+
+        errors = _strict_duplicate_row_errors(
+            rows,
+            {"Voucher ID": "Voucher", "Account": "Ledger", "Amount": "Amount"},
+            template_cols,
+            1,
+            None,
+            0,
+        )
+
+        self.assertEqual(errors, [])
 
 if __name__ == "__main__":
     unittest.main()

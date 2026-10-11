@@ -8,7 +8,21 @@
 
 **Verification:** Added focused deletion service/route tests. `tests/test_data_deletion.py` and `tests/test_storage_cleanup.py` passed 20 tests; Python compilation passed. No live purge, vacuum, Supabase mutation, commit, or push was performed.
 
-**Next:** Wire the Data Bank/client UI to the preview/apply contract and separately correct the no-line-ID duplicate gate and `null:` error label.
+**Next:** Wire the Data Bank/client UI to the preview/apply contract.
+
+## Strict upload identity gate - Phase 2 - 2026-10-11
+
+**Scope:** Ensure repeated uploads produce only additions, changes, and scoped removals; prevent ambiguous duplicate lines before any canonical write.
+
+**Implementation:** Removed the duplicate comparison definition, preserved an existing canonical identity when a matched row changes, added a scoped source-hash lookup index in SQLite/PostgreSQL, and changed duplicate validation errors to a clear `Row-level` label. An unchanged previously imported file now returns an informational no-op before duplicate-line checks, with no validation plan or canonical write.
+
+**Verification:** Added identity/index/message regression coverage; targeted upload tests, Python compilation, and JavaScript syntax checks passed. No live Supabase upload or mutation was run.
+
+## Exact duplicate-line gate - 2026-10-11
+
+**Implementation:** Validation canonicalizes each mapped row before comparison, retains the first exact line, reports duplicate groups/affected rows/skipped copies, and compares only the deduplicated set. Conflicting rows that share a stable identity remain blocking errors.
+
+**Verification:** Playwright validated the Leather Crop Jan-26 workbook: 3,536 source rows, 9 groups, 31 affected duplicate rows, 22 skipped copies, and 3,514 uploadable new rows. Validation only; no import was performed.
 
 ## Single-source data management — Phase 2 — 2026-10-10
 
@@ -7910,3 +7924,11 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Implementation:** `uploaded_files` now records a compact SHA-256 source hash. Import validation rejects repeated normalized source identities within one upload, and both direct and validation-plan imports block collisions with other active `client_data` rows before writing. SQLite/PostgreSQL bootstrap now attempts a partial unique active-identity index and leaves it safely deferred with a warning when existing duplicate groups block activation.
 
 **Verification:** Focused gate tests passed 20/20; the combined import, classification, Cashflows, preparation, schema, configuration, performance, and cleanup checks passed 37/37, with the existing intentional preparation-copy skips unchanged. The current Supabase duplicate groups were not modified.
+
+## Local SheetJS upload parser - 2026-10-11
+
+**Scope:** Restore browser-side Excel reading when the external SheetJS CDN is blocked by the runtime network policy.
+
+**Implementation:** Added the exact SheetJS 0.18.5 browser bundle under `static/vendor/` and changed `static/upload.html` to load it locally. Upload, mapping, preview, and duplicate-data gates remain unchanged.
+
+**Verification:** Playwright reproduced `XLSX is not defined` with the CDN blocked, then confirmed the local bundle loads and exposes `window.XLSX`; the Jan-26 workbook proceeds past file reading.

@@ -432,6 +432,7 @@ def init_db():
                 client_id INTEGER,
                 template_id INTEGER,
                 uploaded_by TEXT DEFAULT 'Analyst',
+                file_sha256 TEXT DEFAULT NULL,
                 comparison_mode TEXT,
                 date_range_start TEXT,
                 date_range_end TEXT,
@@ -758,6 +759,25 @@ def init_db():
             )
         ''')
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_cashflow_preparation_state_status ON cashflow_preparation_state (status, active_preparation_revision)")
+
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS cashflow_report_source_policy (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                source_table TEXT NOT NULL DEFAULT 'client_data',
+                legacy_copy_writes_enabled INTEGER NOT NULL DEFAULT 0 CHECK (legacy_copy_writes_enabled = 0),
+                policy_version INTEGER NOT NULL DEFAULT 1,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_uploaded_files_source_hash_scope "
+            "ON uploaded_files (client_id, template_id, file_sha256, status)"
+        )
+        conn.execute('''
+            INSERT OR IGNORE INTO cashflow_report_source_policy
+                (id, source_table, legacy_copy_writes_enabled, policy_version)
+            VALUES (1, 'client_data', 0, 1)
+        ''')
 
         conn.execute('''
             CREATE TABLE IF NOT EXISTS cashflow_preparation_jobs (
@@ -1341,6 +1361,7 @@ def init_db():
                 'client_id': 'INTEGER REFERENCES clients(id) ON DELETE SET NULL',
                 'template_id': 'INTEGER REFERENCES templates(id) ON DELETE SET NULL',
                 'uploaded_by': "TEXT DEFAULT 'Analyst'",
+                'file_sha256': 'TEXT DEFAULT NULL',
                 'comparison_mode': 'TEXT',
                 'date_range_start': 'TEXT',
                 'date_range_end': 'TEXT',
@@ -1477,6 +1498,37 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_client_data_active_identity ON client_data (client_id, template_id, is_deleted, source_identity)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_client_data_active_derived_date ON client_data (client_id, is_deleted, derived_transaction_date)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_client_data_active_derived_classification ON client_data (client_id, is_deleted, derived_treasury_type, derived_transaction_date)")
+        duplicate_identity_groups = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM (
+                SELECT client_id, template_id, source_identity
+                FROM client_data
+                WHERE is_deleted = 0
+                  AND change_detection_status <> 'deleted'
+                  AND source_identity IS NOT NULL
+                  AND source_identity <> ''
+                GROUP BY client_id, template_id, source_identity
+                HAVING COUNT(*) > 1
+            ) duplicate_groups
+            """
+        ).fetchone()[0]
+        if duplicate_identity_groups == 0:
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_client_data_active_identity_unique
+                ON client_data (client_id, template_id, source_identity)
+                WHERE is_deleted = 0
+                  AND change_detection_status <> 'deleted'
+                  AND source_identity IS NOT NULL
+                  AND source_identity <> ''
+                """
+            )
+        else:
+            print(
+                f"WARNING: active identity uniqueness remains disabled; "
+                f"{duplicate_identity_groups} duplicate group(s) require review"
+            )
 
         # Schema cleanup: drop source_grn_row_id column (Populate Physical Bill from
         # GRN/ERP Vendor Bill requirement, Phase 4 of 4, FINAL) -- this column belonged to
@@ -4270,6 +4322,7 @@ def _ensure_postgres_upload_summary_columns(conn):
     with conn.cursor() as cur:
         cur.execute("ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS template_id INTEGER REFERENCES templates(id) ON DELETE SET NULL")
         cur.execute("ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS uploaded_by TEXT DEFAULT 'Analyst'")
+        cur.execute("ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS file_sha256 TEXT DEFAULT NULL")
         cur.execute("ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS comparison_mode TEXT")
         cur.execute("ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS date_range_start TEXT")
         cur.execute("ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS date_range_end TEXT")
@@ -4279,6 +4332,10 @@ def _ensure_postgres_upload_summary_columns(conn):
         cur.execute("ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS summary_removed_count INTEGER DEFAULT 0")
         cur.execute("ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS summary_unchanged_count INTEGER DEFAULT 0")
         cur.execute("ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS summary_updated_at TIMESTAMPTZ")
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_uploaded_files_source_hash_scope "
+            "ON uploaded_files (client_id, template_id, file_sha256, status)"
+        )
 
 
 def _ensure_postgres_audit_rule_assertions(conn):
@@ -4779,6 +4836,65 @@ def _ensure_postgres_client_data_canonical_columns(conn):
             "CREATE INDEX IF NOT EXISTS idx_client_data_active_derived_classification "
             "ON client_data (client_id, is_deleted, derived_treasury_type, derived_transaction_date)"
         )
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM (
+                SELECT client_id, template_id, source_identity
+                FROM client_data
+                WHERE is_deleted = FALSE
+                  AND change_detection_status <> 'deleted'
+                  AND source_identity IS NOT NULL
+                  AND source_identity <> ''
+                GROUP BY client_id, template_id, source_identity
+                HAVING COUNT(*) > 1
+            ) duplicate_groups
+            """
+        )
+        duplicate_identity_groups = cur.fetchone()[0]
+        if duplicate_identity_groups == 0:
+            cur.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_client_data_active_identity_unique
+                ON client_data (client_id, template_id, source_identity)
+                WHERE is_deleted = FALSE
+                  AND change_detection_status <> 'deleted'
+                  AND source_identity IS NOT NULL
+                  AND source_identity <> ''
+                """
+            )
+        else:
+            print(
+                f"WARNING: active identity uniqueness remains disabled; "
+                f"{duplicate_identity_groups} duplicate group(s) require review"
+            )
+    finally:
+        cur.close()
+
+
+def _ensure_postgres_cashflow_report_source_policy(conn):
+    """Persist the canonical-source rule and disable legacy copy writes."""
+    cur = conn.cursor()
+    try:
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS cashflow_report_source_policy (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                source_table TEXT NOT NULL DEFAULT 'client_data',
+                legacy_copy_writes_enabled BOOLEAN NOT NULL DEFAULT FALSE CHECK (legacy_copy_writes_enabled = FALSE),
+                policy_version INTEGER NOT NULL DEFAULT 1,
+                updated_at TIMESTAMPTZ DEFAULT now()
+            )
+        ''')
+        cur.execute('''
+            INSERT INTO cashflow_report_source_policy
+                (id, source_table, legacy_copy_writes_enabled, policy_version)
+            VALUES (1, 'client_data', FALSE, 1)
+            ON CONFLICT (id) DO UPDATE SET
+                source_table = 'client_data',
+                legacy_copy_writes_enabled = FALSE,
+                policy_version = GREATEST(cashflow_report_source_policy.policy_version, 1),
+                updated_at = CURRENT_TIMESTAMP
+        ''')
     finally:
         cur.close()
 
@@ -4807,6 +4923,7 @@ def init_db_postgres(conn):
         _ensure_postgres_cash_bank_transaction_classifications(conn)
         _ensure_postgres_cashflow_voucher_occurrences(conn)
         _ensure_postgres_cashflow_prepared_tables(conn)
+        _ensure_postgres_cashflow_report_source_policy(conn)
         migrated_assertions = _ensure_postgres_audit_rule_assertions(conn)
         migrated_compiled_rulebooks = _ensure_postgres_category_compiled_rulebooks(conn)
         migrated_cat_doc_assertions = _ensure_postgres_category_document_assertions(conn)
@@ -4928,7 +5045,7 @@ def init_db_postgres(conn):
 
     # ---------- 6. uploaded_files ----------
     run('''
-        CREATE TABLE IF NOT EXISTS uploaded_files (
+            CREATE TABLE IF NOT EXISTS uploaded_files (
             id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             file_name TEXT NOT NULL,
             file_path TEXT NOT NULL,
@@ -4939,6 +5056,7 @@ def init_db_postgres(conn):
             client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL,
             template_id INTEGER REFERENCES templates(id) ON DELETE SET NULL,
             uploaded_by TEXT DEFAULT 'Analyst',
+            file_sha256 TEXT DEFAULT NULL,
             comparison_mode TEXT,
             date_range_start TEXT,
             date_range_end TEXT,
@@ -4950,6 +5068,10 @@ def init_db_postgres(conn):
             summary_updated_at TIMESTAMPTZ
         )
     ''', "uploaded_files")
+    run(
+        "CREATE INDEX IF NOT EXISTS idx_uploaded_files_source_hash_scope "
+        "ON uploaded_files (client_id, template_id, file_sha256, status)"
+    )
 
     run('''
         CREATE TABLE IF NOT EXISTS upload_validation_plans (
@@ -6073,6 +6195,7 @@ def init_db_postgres(conn):
     ''', "sessions")
     run("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id)")
 
+    _ensure_postgres_cashflow_report_source_policy(conn)
     conn.commit()
     print("[postgres] all tables/indexes created")
 

@@ -1570,6 +1570,13 @@ function showImportSummary(result) {
         `;
     }
 
+    // The rows are saved even when the follow-up Cashflows job could not be queued;
+    // say so plainly so a saved upload is never mistaken for a failed one.
+    // The text itself is set via textContent once the modal exists (no HTML injection).
+    const preparationWarning = result.cashflow_preparation_warning
+        ? `<div id="importSummaryPreparationWarning" style="font-size:12px; color:#92400e; background:#fffbeb; border-left:3px solid #f59e0b; padding:10px 12px; border-radius:6px; margin-top:16px;"></div>`
+        : '';
+
     // Explanatory note about debit/credit lines, styled as a plain muted info box.
     const note = `<div style="font-size:12px; color:#64748b; background:#f8fafc; padding:10px 12px; border-radius:6px; margin-top:16px;">
         <strong style="color:#475569;">Note:</strong> Each voucher may appear twice in the file (debit and credit).
@@ -1598,13 +1605,14 @@ function showImportSummary(result) {
         </div>
         ${changeSummary}
         ${rejectionSummary}
+        ${preparationWarning}
         ${note}
         ${errorCount > 0 ? `
             <div style="background:#fef2f2; border:1px solid #fecaca; padding:12px; border-radius:8px; margin-top:16px; max-height:150px; overflow-y:auto;">
                 <div style="font-weight:600; color:#991b1b; margin-bottom:4px; font-size:13px;">${errorCount} validation error${errorCount === 1 ? '' : 's'}</div>
                 ${errors.slice(0,5).map(err => `
                     <div style="font-size:12px; color:#991b1b; padding:2px 0; border-bottom:1px solid #fecaca;">
-                        Row ${err.row_number}: ${err.errors.map(e => `${e.column} - ${e.message}`).join('; ')}
+                        Row ${err.row_number}: ${err.errors.map(e => `${e.column || 'Row-level'} - ${e.message}`).join('; ')}
                     </div>
                 `).join('')}
                 ${errors.length > 5 ? `<div style="font-size:12px; color:#991b1b; margin-top:2px;">...and ${errors.length - 5} more.</div>` : ''}
@@ -1619,6 +1627,11 @@ function showImportSummary(result) {
     
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
+
+    const preparationWarningBox = overlay.querySelector('#importSummaryPreparationWarning');
+    if (preparationWarningBox) {
+        preparationWarningBox.textContent = result.cashflow_preparation_warning;
+    }
 
     const downloadReportBtn = overlay.querySelector('#downloadChangeReportBtn');
     if (downloadReportBtn) {
@@ -1660,7 +1673,7 @@ function showValidationErrors(result) {
     const errors = result.errors || [];
     errors.forEach(err => {
         const rowNum = err.row_number;
-        const errMsgs = err.errors.map(e => `${e.column}: ${e.message}`).join('; ');
+        const errMsgs = err.errors.map(e => `${e.column || 'Row-level'}: ${e.message}`).join('; ');
         errorRows += `<tr style="border-bottom:1px solid #f0f2f5;">
             <td style="padding:6px 10px; font-weight:600;">${rowNum}</td>
             <td style="padding:6px 10px; color:#dc2626;">${errMsgs}</td>
@@ -1949,6 +1962,24 @@ if (importBtn) {
             // for a blank Document ID/Amount/Date independently of other rows' validation errors.
             setRejectedRows(result.rejected_rows);
 
+            const totalRows = result.total_rows || 0;
+            const newRowsCount = result.new_rows_count || 0;
+            const existingRowsCount = result.existing_rows_count || 0;
+            lastChangePreview = result.change_detection || null;
+            lastUploadSummary = result.upload_summary || null;
+            const previewAdded = lastChangePreview ? (lastChangePreview.new_count || 0) : newRowsCount;
+            const previewChanged = lastChangePreview ? (lastChangePreview.changed_count || 0) : 0;
+            const previewRemoved = lastChangePreview ? (lastChangePreview.missing_count || 0) : 0;
+            const previewUnchanged = lastChangePreview ? (lastChangePreview.unchanged_count || 0) : existingRowsCount;
+            const duplicateRowCount = result.duplicate_row_count || (lastChangePreview && lastChangePreview.duplicate_row_count) || 0;
+            const duplicateSkippedCount = result.duplicate_skipped_count || (lastChangePreview && lastChangePreview.duplicate_skipped_count) || 0;
+            const duplicateGroupCount = result.duplicate_group_count || (lastChangePreview && lastChangePreview.duplicate_group_count) || 0;
+            const extraMsg = `<span style="color: maroon; font-weight: bold;">${newRowsCount} new row(s) can be uploaded • ${existingRowsCount} already exists in client data</span>`;
+            const changePreviewMsg = `<br><span style="color: #475569; font-weight: 600;">${previewAdded} added · ${previewChanged} changed · ${previewRemoved} removed · ${previewUnchanged} unchanged</span>`;
+            const duplicateSummaryMsg = duplicateRowCount
+                ? `<br><span style="color: #92400e; font-weight: 600;">${duplicateRowCount} duplicate row(s) found in ${duplicateGroupCount} group(s); ${duplicateSkippedCount} repeated copy/copies will be skipped.</span>`
+                : '';
+
             if (result.has_errors) {
                 // Show validation errors
                 showValidationErrors(result);
@@ -1961,7 +1992,7 @@ if (importBtn) {
                 importBtn.innerHTML = 'Validate';
                 importBtn.disabled = false;
                 importBtn.style.background = '#22c55e'; // Keep green but maybe orange? We'll keep default.
-                showStatus('❌ Validation failed. Please fix errors and try again.', 'error');
+                showStatus('❌ Validation failed. Please fix errors and try again.', 'error', extraMsg + duplicateSummaryMsg + changePreviewMsg);
                 setBadge('❌ Validation failed', 'error');
                 return;
             }
@@ -1973,15 +2004,6 @@ if (importBtn) {
             // resolved Auto/Forced Imported/Derived decision until the next mapping change.
             lastRateModeInfo = result.rate_mode || null;
             renderRateModeIndicator();
-            const totalRows = result.total_rows || 0;
-            const newRowsCount = result.new_rows_count || 0;
-            const existingRowsCount = result.existing_rows_count || 0;
-            lastChangePreview = result.change_detection || null;
-            lastUploadSummary = result.upload_summary || null;
-            const previewAdded = lastChangePreview ? (lastChangePreview.new_count || 0) : newRowsCount;
-            const previewChanged = lastChangePreview ? (lastChangePreview.changed_count || 0) : 0;
-            const previewRemoved = lastChangePreview ? (lastChangePreview.missing_count || 0) : 0;
-            const previewUnchanged = lastChangePreview ? (lastChangePreview.unchanged_count || 0) : existingRowsCount;
             const canImport = Boolean(result.can_import && result.validation_plan_id);
             validationPlanId = canImport ? result.validation_plan_id : null;
             validationStatus = canImport ? 'valid' : 'ignored';
@@ -1990,13 +2012,14 @@ if (importBtn) {
             importBtn.style.color = 'white';
             importBtn.disabled = !canImport;
             let statusMsg = `✅ Validation passed! ${totalRows} rows identified. Click "Upload" to import all rows.`;
-            const extraMsg = `<span style="color: maroon; font-weight: bold;">${newRowsCount} new row(s) • ${existingRowsCount} already exists in client data</span>`;
-            const changePreviewMsg = `<br><span style="color: #475569; font-weight: 600;">${previewAdded} added · ${previewChanged} changed · ${previewRemoved} removed · ${previewUnchanged} unchanged</span>`;
-            if (canImport) {
-                showStatus('✅ Validation passed. Import will process only additions, changes, and removals.', 'success', extraMsg + changePreviewMsg);
+            if (!canImport && result.duplicate_upload_noop) {
+                showStatus('This data is already uploaded. Nothing needs to be uploaded.', 'info', extraMsg + duplicateSummaryMsg + changePreviewMsg);
+                setBadge('Same data - upload stopped');
+            } else if (canImport) {
+                showStatus('✅ Validation passed. Import will process only additions, changes, and removals.', 'success', extraMsg + duplicateSummaryMsg + changePreviewMsg);
                 setBadge('✅ Changes validated, ready to import');
             } else {
-                showStatus('ℹ️ Validation complete. All validated lines are unchanged; no import is available.', 'info', extraMsg + changePreviewMsg);
+                showStatus('ℹ️ Validation complete. All validated lines are unchanged; no import is available.', 'info', extraMsg + duplicateSummaryMsg + changePreviewMsg);
                 setBadge('ℹ️ Upload ignored: no changes');
             }
             if (lastUploadSummary && statusMessage) {
@@ -2065,7 +2088,16 @@ async function performImport(payload) {
             body: JSON.stringify(payload)
         });
         const result = await res.json();
-        if (!res.ok) throw new Error(result.message || 'Import failed');
+        if (!res.ok) {
+            const serverMessage = result?.error?.http_detail
+                || result?.error?.user_message
+                || result?.message
+                || ('Import failed (' + res.status + ')');
+            if (res.status === 409) {
+                resetValidationState();
+            }
+            throw new Error(serverMessage);
+        }
 
         // --- Handle overwrite progress (if modal is open) ---
         const modalRef = window._overwriteModal;
@@ -2570,7 +2602,7 @@ function renderRowExclusionPage() {
         if (flagged) titleParts.push('Possible junk row: blank or "total"/"subtotal" value in the key column');
         if (failed) {
             const rowErrors = validationFailedRows.get(excelRowNumber) || [];
-            const msg = rowErrors.map(e => `${e.column}: ${e.message}`).join('; ');
+            const msg = rowErrors.map(e => `${e.column || 'Row-level'}: ${e.message}`).join('; ');
             titleParts.push('Failed validation' + (msg ? ': ' + msg : ''));
         }
         if (titleParts.length) tdRowNum.title = titleParts.join(' | ');
