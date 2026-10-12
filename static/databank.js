@@ -49,6 +49,18 @@ let previewTemplateName = '';
 let previewMode = 'raw'; // raw Client Data preview or read-only Cashflows classification preview
 let isPreviewOpen = false;
 let isPreviewLoading = false;
+// Data Bank response cache: keep a bounded set of complete preview pages in
+// memory for this page session. The request key includes every server-side
+// filter, so a cached page can never be reused for a different view.
+const PREVIEW_CACHE_MAX_ENTRIES = 12;
+const previewPageCache = new Map();
+const previewPageInFlight = new Map();
+let previewCacheGeneration = 0;
+let previewRequestSequence = 0;
+// Availability is also keyed by its client/date scope. This prevents duplicate
+// entry/date-range requests while keeping the cache limited to this page tab.
+const availabilityCache = new Map();
+const availabilityInFlight = new Map();
 // Phase 3B: delete is scoped per template, so one confirmed destructive action blocks only its
 // own repeated request while other datasets and unrelated controls remain available.
 const deleteTemplateInFlight = new Set();
@@ -705,6 +717,69 @@ async function fetchAvailabilityEndpoint(url) {
     }
 }
 
+function getAvailabilityCacheKey(clientId, dateRange) {
+    return `${clientId}|${dateRange.start}|${dateRange.end}`;
+}
+
+async function loadAvailabilityPayload(clientId, dateRange) {
+    const cacheKey = getAvailabilityCacheKey(clientId, dateRange);
+    const cached = availabilityCache.get(cacheKey);
+    if (cached) return cached;
+
+    const pending = availabilityInFlight.get(cacheKey);
+    if (pending) return pending;
+
+    const cacheGeneration = previewCacheGeneration;
+    const request = (async () => {
+        const params = new URLSearchParams({
+            client_id: clientId,
+            date_start: dateRange.start,
+            date_end: dateRange.end
+        });
+        const [res, dbSizeRes] = await Promise.all([
+            fetchAvailabilityEndpoint(`${API_BASE}/api/data/availability?${params.toString()}`),
+            fetchAvailabilityEndpoint(`${API_BASE}/api/data/db-size?client_id=${clientId}`)
+        ]);
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || 'Failed to fetch availability');
+        }
+        const data = await res.json();
+        const dbSizeData = dbSizeRes.ok ? await dbSizeRes.json() : null;
+        const payload = { data, dbSizeData, clientId };
+        if (cacheGeneration === previewCacheGeneration) {
+            availabilityCache.set(cacheKey, payload);
+        }
+        return payload;
+    })();
+
+    availabilityInFlight.set(cacheKey, request);
+    try {
+        return await request;
+    } finally {
+        if (availabilityInFlight.get(cacheKey) === request) {
+            availabilityInFlight.delete(cacheKey);
+        }
+    }
+}
+
+function invalidateDataBankCaches({ clientId = null, templateId = null } = {}) {
+    previewCacheGeneration += 1;
+
+    for (const [key, entry] of previewPageCache.entries()) {
+        if ((clientId === null || entry.clientId === clientId) &&
+            (templateId === null || entry.templateId === templateId)) {
+            previewPageCache.delete(key);
+        }
+    }
+
+    for (const [key, entry] of availabilityCache.entries()) {
+        if (clientId === null || entry.clientId === clientId) {
+            availabilityCache.delete(key);
+        }
+    }
+}
+
 async function fetchAvailability() {
     const clientId = getSelectedClientId();
     if (!clientId) {
@@ -722,24 +797,10 @@ async function fetchAvailability() {
     // Redesign Phase 6: no per-template filter anymore — "Your datasets"
     // always lists every template, matching the removed old filter bar's
     // "All Templates" default behavior with no way to narrow it further.
-    const params = new URLSearchParams({
-        client_id: clientId,
-        date_start: dateRange.start,
-        date_end: dateRange.end
-    });
-
     showClientDataLoading();
     
     try {
-        const [res, dbSizeRes] = await Promise.all([
-            fetchAvailabilityEndpoint(`${API_BASE}/api/data/availability?${params.toString()}`),
-            fetchAvailabilityEndpoint(`${API_BASE}/api/data/db-size?client_id=${clientId}`)
-        ]);
-        if (!res.ok) {
-            const err = await res.json();
-            throw new Error(err.detail || 'Failed to fetch availability');
-        }
-        const data = await res.json();
+        const { data, dbSizeData } = await loadAvailabilityPayload(clientId, dateRange);
         availabilityData = data;
 
                 // Update stats - use total_row_count (unfiltered) for Total Records
@@ -751,8 +812,7 @@ async function fetchAvailability() {
 
         // Database Size Visibility (Phase A2): client-level aggregate, separate
         // fetch from availability since it's not scoped to the date range.
-        if (dbSizeRes.ok) {
-            const dbSizeData = await dbSizeRes.json();
+        if (dbSizeData) {
             statsClientDbSize.textContent = dbSizeData.formatted || '—';
         } else {
             statsClientDbSize.textContent = '—';
@@ -1157,6 +1217,7 @@ async function deleteTemplateData(templateId, templateName, rowCount, triggerTar
         const result = await res.json();
         showStatus(`✅ ${result.message}`, 'success');
         // Refresh the availability table
+        invalidateDataBankCaches({ clientId, templateId });
         await fetchAvailability();
     } catch (error) {
         console.error('Delete error:', error);
@@ -1269,6 +1330,113 @@ function getPreviewSkeletonColumnCount() {
     return undefined;
 }
 
+function getPreviewCacheKey(endpoint, params) {
+    return `${endpoint}?${params.toString()}`;
+}
+
+function getCachedPreviewPage(cacheKey) {
+    const entry = previewPageCache.get(cacheKey);
+    if (!entry) return null;
+    // Map insertion order gives us a small LRU cache without another
+    // dependency: touch the entry whenever it is reused.
+    previewPageCache.delete(cacheKey);
+    previewPageCache.set(cacheKey, entry);
+    return entry.data;
+}
+
+function setCachedPreviewPage(cacheKey, data, clientId, templateId) {
+    previewPageCache.delete(cacheKey);
+    previewPageCache.set(cacheKey, { data, clientId, templateId });
+    while (previewPageCache.size > PREVIEW_CACHE_MAX_ENTRIES) {
+        previewPageCache.delete(previewPageCache.keys().next().value);
+    }
+}
+
+async function loadPreviewPage(endpoint, params, cacheKey, clientId, templateId) {
+    const cached = getCachedPreviewPage(cacheKey);
+    if (cached) return cached;
+
+    const pending = previewPageInFlight.get(cacheKey);
+    if (pending) return pending;
+
+    const cacheGeneration = previewCacheGeneration;
+    const requestParams = new URLSearchParams(params);
+    if (dataBankPerfEnabled) requestParams.set('perf', 'true');
+    const request = (async () => {
+        const res = await window.ApiUtils.apiFetch(
+            `${API_BASE}${endpoint}?${requestParams.toString()}`
+        );
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || 'Failed to fetch preview');
+        }
+        const data = await res.json();
+        if (cacheGeneration === previewCacheGeneration) {
+            setCachedPreviewPage(cacheKey, data, clientId, templateId);
+        }
+        return data;
+    })();
+
+    previewPageInFlight.set(cacheKey, request);
+    try {
+        return await request;
+    } finally {
+        if (previewPageInFlight.get(cacheKey) === request) {
+            previewPageInFlight.delete(cacheKey);
+        }
+    }
+}
+
+function buildPreviewRequestSpec(page = currentPage) {
+    const clientId = getSelectedClientId();
+    const dateRange = getDateRangeFromFilter();
+    if (!clientId || !previewTemplateId || !dateRange) return null;
+
+    const params = new URLSearchParams({
+        client_id: clientId,
+        template_id: previewTemplateId,
+        date_start: dateRange.start,
+        date_end: dateRange.end,
+        page,
+        limit: previewLimit
+    });
+    if (searchInput.value.trim()) params.append('search', searchInput.value.trim());
+    if (previewMode === 'classification') {
+        if (classificationTypeFilter.value) params.append('classification_type', classificationTypeFilter.value);
+        if (classificationAccountFilter.value.trim()) params.append('account_code', classificationAccountFilter.value.trim());
+        if (classificationCategoryFilter.value.trim()) params.append('category', classificationCategoryFilter.value.trim());
+    }
+    if (amountMin.value) params.append('amount_min', amountMin.value);
+    if (amountMax.value) params.append('amount_max', amountMax.value);
+    if (sundayOnlyCheckbox.checked) params.append('sunday_only', 'true');
+    if (dataQualityFilter.value) params.append('data_quality', dataQualityFilter.value);
+
+    const endpoint = previewMode === 'classification'
+        ? '/api/data/cashflows-classification-preview'
+        : '/api/data/preview';
+    return {
+        clientId,
+        templateId: previewTemplateId,
+        endpoint,
+        params,
+        cacheKey: getPreviewCacheKey(endpoint, params)
+    };
+}
+
+function prefetchNextPreviewPage(spec, data) {
+    const totalPages = Math.ceil((data.total_rows || 0) / previewLimit) || 1;
+    if (currentPage >= totalPages) return;
+
+    const nextParams = new URLSearchParams(spec.params);
+    nextParams.set('page', String(currentPage + 1));
+    const nextKey = getPreviewCacheKey(spec.endpoint, nextParams);
+    loadPreviewPage(spec.endpoint, nextParams, nextKey, spec.clientId, spec.templateId)
+        .catch(() => {
+            // Prefetch is an optimization; the visible page will report any
+            // real error if the auditor navigates there later.
+        });
+}
+
 // ---------- FETCH PREVIEW DATA ----------
 async function fetchPreviewData() {
     const clientId = getSelectedClientId();
@@ -1276,67 +1444,37 @@ async function fetchPreviewData() {
         showStatus('⚠️ No client selected.', 'error');
         return;
     }
-    
     // Read the shared date range fresh on every call (rather than a cached
     // copy) — this is what lets a range change made elsewhere (main sheet
     // or the in-modal popover) take effect the next time data is fetched,
     // with no separate preview-only range to keep in sync.
-    const dateRange = getDateRangeFromFilter();
-    if (!previewTemplateId || !dateRange) {
+    const requestSpec = buildPreviewRequestSpec(currentPage);
+    if (!requestSpec) {
         showStatus('⚠️ Missing preview parameters.', 'error');
         return;
     }
 
+    const requestId = ++previewRequestSequence;
+    const requestWasCached = !!getCachedPreviewPage(requestSpec.cacheKey);
     isPreviewLoading = true;
-    window.LoadingUI.showSkeleton(previewTableBody, 8, { columns: getPreviewSkeletonColumnCount() });
-    previewTableHead.innerHTML = '';
-    previewCountInfo.textContent = 'Loading...';
-
-    const params = new URLSearchParams({
-        client_id: clientId,
-        template_id: previewTemplateId,
-        date_start: dateRange.start,
-        date_end: dateRange.end,
-        page: currentPage,
-        limit: previewLimit
-    });
+    if (!requestWasCached) {
+        window.LoadingUI.showSkeleton(previewTableBody, 8, { columns: getPreviewSkeletonColumnCount() });
+        previewTableHead.innerHTML = '';
+        previewCountInfo.textContent = 'Loading...';
+    }
 
     // Add filters. Cashflows mode sends only derived-layer filters; raw preview
     // keeps its existing amount, Sunday, and data-quality behavior unchanged.
-    if (searchInput.value.trim()) {
-        params.append('search', searchInput.value.trim());
-    }
-    if (previewMode === 'classification') {
-        if (classificationTypeFilter.value) params.append('classification_type', classificationTypeFilter.value);
-        if (classificationAccountFilter.value.trim()) params.append('account_code', classificationAccountFilter.value.trim());
-        if (classificationCategoryFilter.value.trim()) params.append('category', classificationCategoryFilter.value.trim());
-    }
-    if (amountMin.value) {
-        params.append('amount_min', amountMin.value);
-    }
-    if (amountMax.value) {
-        params.append('amount_max', amountMax.value);
-    }
-    if (sundayOnlyCheckbox.checked) {
-        params.append('sunday_only', 'true');
-    }
-    if (dataQualityFilter.value) {
-        params.append('data_quality', dataQualityFilter.value);
-    }
-
     try {
         const perfStarted = dataBankPerfEnabled ? performance.now() : null;
-        const requestParams = dataBankPerfEnabled ? new URLSearchParams(params) : params;
-        if (dataBankPerfEnabled) requestParams.set('perf', 'true');
-        const endpoint = previewMode === 'classification'
-            ? '/api/data/cashflows-classification-preview'
-            : '/api/data/preview';
-        const res = await window.ApiUtils.apiFetch(`${API_BASE}${endpoint}?${requestParams.toString()}`);
-        if (!res.ok) {
-            const err = await res.json();
-            throw new Error(err.detail || 'Failed to fetch preview');
-        }
-        const data = await res.json();
+        const data = await loadPreviewPage(
+            requestSpec.endpoint,
+            requestSpec.params,
+            requestSpec.cacheKey,
+            requestSpec.clientId,
+            requestSpec.templateId
+        );
+        if (requestId !== previewRequestSequence || !isPreviewOpen) return;
         
         previewTotalRows = data.total_rows;
         previewSundayCount = data.sunday_count || 0;
@@ -1350,7 +1488,8 @@ async function fetchPreviewData() {
         
         // Render table
         const renderStarted = dataBankPerfEnabled ? performance.now() : null;
-        await renderPreviewRows(rows);
+        await renderPreviewRows(rows, requestId);
+        if (requestId !== previewRequestSequence || !isPreviewOpen) return;
         updatePagination();
         if (dataBankPerfEnabled) {
             logDataBankPerf('databank_preview', perfStarted, {
@@ -1362,6 +1501,8 @@ async function fetchPreviewData() {
                 backend: data._perf || null
             });
         }
+
+        prefetchNextPreviewPage(requestSpec, data);
         
         if (rows.length === 0 && previewTotalRows === 0) {
             previewTableBody.innerHTML = '<tr><td colspan="100" style="text-align:center; padding:40px; color:#94a3b8;">No data found for the selected criteria.</td></tr>';
@@ -1369,12 +1510,15 @@ async function fetchPreviewData() {
         }
         
     } catch (error) {
+        if (requestId !== previewRequestSequence || error.debounced) return;
         console.error('Preview fetch error:', error);
         showStatus('❌ Error loading preview: ' + error.message, 'error');
         previewTableBody.innerHTML = `<tr><td colspan="100" style="text-align:center; padding:40px; color:#dc2626;">Error loading data. Please try again.</td></tr>`;
         previewCountInfo.textContent = 'Error loading';
     } finally {
-        isPreviewLoading = false;
+        if (requestId === previewRequestSequence) {
+            isPreviewLoading = false;
+        }
     }
 }
 
@@ -1408,7 +1552,7 @@ async function fetchTemplateColumns(templateId) {
 }
 
 // ---------- RENDER PREVIEW ROWS ----------
-async function renderPreviewRows(rows) {
+async function renderPreviewRows(rows, requestId = previewRequestSequence) {
     hideRowHistoryPopover();
     // Subtotal toggle: cache the current page's rows so toggling later
     // re-renders instantly from memory, with no refetch.
@@ -1425,6 +1569,7 @@ async function renderPreviewRows(rows) {
     // a deleted/inactive template).
     const firstRow = rows[0].row_data;
     const templateHeaders = await fetchTemplateColumns(previewTemplateId);
+    if (requestId !== previewRequestSequence || !isPreviewOpen) return;
     const headers = templateHeaders.length ? templateHeaders : (firstRow ? Object.keys(firstRow) : []);
     const classificationHeaders = previewMode === 'classification' ? ['Type', 'Account', 'Assigned Category'] : [];
     previewTableHead.innerHTML = '';
@@ -1983,6 +2128,7 @@ window.onClientChange = function(clientId) {
     clearTimeout(clientChangeTimeout);
     clientChangeTimeout = setTimeout(() => {
         if (clientId) {
+            invalidateDataBankCaches();
             // Redesign Phase 6: reads the popover's own inputs, now the
             // persisted date-range state (see getDateRangeFromFilter()).
             if (sharedRangeFromInput.value && sharedRangeToInput.value) {

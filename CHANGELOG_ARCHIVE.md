@@ -1,5 +1,13 @@
 # Changelog Archive
 
+## Data Bank session cache - 2026-10-12
+
+**Scope:** Remove repeated Data Bank loading for the same client/date/template view while keeping pagination bounded.
+
+**Implementation:** `static/databank.js` now caches availability responses and preview pages by their complete scope/filter key, shares in-flight requests, keeps an LRU-style twelve-page limit, prefetches the next page, ignores stale responses, and invalidates affected client/template data after deletion or client changes. The backend pagination contract in `routers/data.py` was unchanged. `databank.html` bumped the script cache version to `v=8`.
+
+**Verification:** Added hermetic Playwright coverage in `tests/test_databank_cache.py`. The focused test passed; `node --check static/databank.js` and `git diff --check` passed. The test environment reported only its existing `.pytest_cache` permission warning. No live data or database rows were changed.
+
 ## Storage Cleanup preview diagnostics and optional evidence fallback - 2026-10-12
 
 **Scope:** Establish a safe diagnostic ground for the HTTP 503 returned by the administrator Storage Cleanup preview.

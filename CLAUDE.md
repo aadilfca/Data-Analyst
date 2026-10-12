@@ -16,7 +16,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 - routers/clients.py + static/clients.* → firm-level client management; admin-only except the paginated `GET /api/clients`. See CHANGELOG_ARCHIVE.md.
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, and database size with PostgreSQL table/index breakdown. See CHANGELOG_ARCHIVE.md.
-- routers/data.py + static/databank.* → Client Data Bank availability, calendars, overdue uploads, preview/filtering, frequency settings, and guarded mutations. See CHANGELOG_ARCHIVE.md.
+- routers/data.py + static/databank.* → Client Data Bank availability, calendars, overdue uploads, bounded cached preview pages, filtering, frequency settings, and guarded mutations. See CHANGELOG_ARCHIVE.md.
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
 - routers/import_export.py -> Excel upload, mapping, date-format detection, summary-row filtering, strict hash/identity gates, action-only delta imports, compact audit payloads, and summaries. See CHANGELOG_ARCHIVE.md.
 - routers/settings.py + static/settings.* → application settings and the firm-wide Holiday list; header/tabs rendered by `client_context.js`. See CHANGELOG_ARCHIVE.md.
@@ -288,4 +288,5 @@ Do this automatically at the end of the session without being asked.
 - 2026-10-12: Phase 3 adds optional bloat evidence, concurrent index reindexing, and post-maintenance invariants for storage optimization.
 - 2026-10-12: Controlled index-review implementation is complete: storage UI exposes index/planner/bloat/post-check evidence, Data Bank failures show unavailable instead of zero, and Playwright covers live success/failure states; live database optimization remains uncertified until a fresh preview succeeds.
 - 2026-10-12: Storage Cleanup preview now logs safe server-side failure context and degrades optional planner/bloat probes to unavailable evidence without enabling maintenance; core storage-query failures remain blocked.
+- 2026-10-12: Data Bank caches availability and bounded preview pages with in-flight deduplication, next-page prefetch, invalidation, and Playwright regression coverage.
 - 2026-10-12: Fixed the live Storage Cleanup 503: the index inventory qualified `stats.indexrelid`, resolving PostgreSQL's ambiguous-column error; Playwright now receives HTTP 200 and renders 16 index rows, while unavailable `pgstatindex` evidence safely blocks reindexing.
