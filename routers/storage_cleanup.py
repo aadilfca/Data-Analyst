@@ -34,6 +34,7 @@ class StorageIndexMaintenanceRequest(BaseModel):
     preview_hash: str
     index_name: str
     confirmation: str
+    operation: str = "drop"
 
 
 class ValidationPlanCleanupRequest(BaseModel):
@@ -137,6 +138,7 @@ def storage_cleanup_index_maintenance(
             index_name=payload.index_name,
             operator=session.get("username", "Unknown administrator"),
             confirmation=payload.confirmation,
+            operation=payload.operation,
         )
     except CleanupConfirmationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

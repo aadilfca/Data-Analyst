@@ -17,6 +17,7 @@ from database import (
     execute_query_pg,
     execute_write_pg,
     pg_transaction,
+    reindex_postgres_index_concurrently,
 )
 
 
@@ -25,6 +26,10 @@ VALIDATION_PLAN_CLEANUP_CONFIRMATION = "DELETE APPROVED VALIDATION PLANS"
 COMPACTION_CONFIRMATION_TEXT = "COMPACT APPROVED STORAGE DATA"
 FULL_COMPACTION_CONFIRMATION_TEXT = "FULL COMPACTION APPROVED"
 INDEX_MAINTENANCE_CONFIRMATION_TEXT = "REMOVE APPROVED INDEX"
+INDEX_BLOAT_REINDEX_THRESHOLDS = {
+    "avg_leaf_density_below": 70.0,
+    "leaf_fragmentation_above": 30.0,
+}
 CLEANUP_SCOPE = (
     "approved_logs,retired_client_data,deleted_upload_metadata,"
     "stale_presence,expired_sessions,obsolete_cashflow_copies,prepared_revisions"
@@ -225,13 +230,65 @@ def _client_data_query_plan_evidence() -> Dict[str, Any]:
     }
 
 
+def _client_data_index_bloat_evidence() -> Dict[str, Any]:
+    """Capture optional pgstattuple evidence without making maintenance decisions."""
+    evidence = {}
+    for index_name in POSTGRES_INDEX_MAINTENANCE_ALLOWLIST:
+        try:
+            rows = execute_query_pg(
+                "SELECT index_size, avg_leaf_density, leaf_fragmentation "
+                "FROM pgstatindex(%s)",
+                (f'public."{index_name}"',),
+            )
+            row = rows[0] if rows else {}
+            density = row.get("avg_leaf_density")
+            fragmentation = row.get("leaf_fragmentation")
+            density = float(density) if density is not None else None
+            fragmentation = float(fragmentation) if fragmentation is not None else None
+            evidence[index_name] = {
+                "available": density is not None and fragmentation is not None,
+                "index_size": int(row.get("index_size") or 0),
+                "avg_leaf_density": density,
+                "leaf_fragmentation": fragmentation,
+                "recommended_action": (
+                    "reindex"
+                    if density is not None
+                    and fragmentation is not None
+                    and (
+                        density < INDEX_BLOAT_REINDEX_THRESHOLDS["avg_leaf_density_below"]
+                        or fragmentation > INDEX_BLOAT_REINDEX_THRESHOLDS["leaf_fragmentation_above"]
+                    )
+                    else None
+                ),
+            }
+        except Exception as exc:
+            return {
+                "available": False,
+                "extension": "pgstattuple",
+                "reason": f"pgstatindex failed for {index_name}: {exc}",
+                "indexes": evidence,
+                "thresholds": INDEX_BLOAT_REINDEX_THRESHOLDS,
+            }
+
+    return {
+        "available": len(evidence) == len(POSTGRES_INDEX_MAINTENANCE_ALLOWLIST),
+        "extension": "pgstattuple",
+        "thresholds": INDEX_BLOAT_REINDEX_THRESHOLDS,
+        "indexes": evidence,
+        "probe": "Read-only pgstatindex measurements; no index rebuild was performed.",
+    }
+
+
 def _index_maintenance_candidates(
     indexes: List[Dict[str, Any]],
     plan_evidence: Dict[str, Any],
+    bloat_evidence: Dict[str, Any] | None = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Return evidence-gated candidates; never infer permission from size alone."""
+    bloat_evidence = bloat_evidence or {"available": False, "indexes": {}}
     by_name = {row["index_name"]: row for row in indexes}
     planned_indexes = set(plan_evidence.get("index_names") or [])
+    measured_bloat = bloat_evidence.get("indexes") or {}
     candidates = {}
     for index_name in POSTGRES_INDEX_MAINTENANCE_ALLOWLIST:
         row = by_name.get(index_name)
@@ -239,6 +296,8 @@ def _index_maintenance_candidates(
             "index_name": index_name,
             "table_name": POSTGRES_INDEX_MAINTENANCE_ALLOWLIST[index_name],
             "eligible_for_manual_approval": False,
+            "reindex_eligible_for_manual_approval": False,
+            "optimization_actions": [],
             "reason": "index is not present",
         }
         if row:
@@ -255,7 +314,18 @@ def _index_maintenance_candidates(
                 candidate["reason"] = "a representative query plan uses this index"
             else:
                 candidate["eligible_for_manual_approval"] = True
+                candidate["optimization_actions"].append("drop")
                 candidate["reason"] = "zero scans and no representative plan use"
+
+            measured = measured_bloat.get(index_name) or {}
+            if (
+                not row.get("protected")
+                and bloat_evidence.get("available")
+                and measured.get("recommended_action") == "reindex"
+            ):
+                candidate["reindex_eligible_for_manual_approval"] = True
+                candidate["optimization_actions"].append("reindex")
+                candidate["bloat_evidence"] = measured
         candidates[index_name] = candidate
     return candidates
 
@@ -303,7 +373,10 @@ def _table_sizes() -> List[Dict[str, Any]]:
     return result
 
 
-def _client_data_index_review(include_query_plans: bool = False) -> Dict[str, Any]:
+def _client_data_index_review(
+    include_query_plans: bool = False,
+    include_bloat_evidence: bool = False,
+) -> Dict[str, Any]:
     """Report index cost and usage without making index decisions automatically."""
     rows = execute_query_pg(
         """
@@ -371,6 +444,11 @@ def _client_data_index_review(include_query_plans: bool = False) -> Dict[str, An
         if include_query_plans
         else {"available": False, "reason": "query-plan capture not requested", "plans": []}
     )
+    bloat_evidence = (
+        _client_data_index_bloat_evidence()
+        if include_bloat_evidence
+        else {"available": False, "reason": "bloat capture not requested", "indexes": {}}
+    )
     return {
         "table_name": "client_data",
         "index_bytes_total": sum(row["index_bytes"] for row in indexes),
@@ -392,7 +470,12 @@ def _client_data_index_review(include_query_plans: bool = False) -> Dict[str, An
         "active_identity_duplicate_group_count": identity_duplicate_groups,
         "possible_overlap_pairs": _possible_index_overlaps(indexes),
         "plan_evidence": plan_evidence,
-        "maintenance_candidates": _index_maintenance_candidates(indexes, plan_evidence),
+        "bloat_evidence": bloat_evidence,
+        "maintenance_candidates": _index_maintenance_candidates(
+            indexes,
+            plan_evidence,
+            bloat_evidence,
+        ),
         "indexes": indexes,
         "policy": (
             "Indexes are never dropped automatically; primary, unique, and "
@@ -981,7 +1064,10 @@ def get_storage_cleanup_preview() -> Dict[str, Any]:
             "formatted": _format_bytes(database_bytes),
         },
         "table_sizes": sizes,
-        "index_review": _client_data_index_review(include_query_plans=True),
+        "index_review": _client_data_index_review(
+            include_query_plans=True,
+            include_bloat_evidence=True,
+        ),
         "protected": _protected_counts(),
         "removable": {
             "logs": logs,
@@ -1011,11 +1097,67 @@ def get_storage_cleanup_preview() -> Dict[str, Any]:
             "This preview performs no INSERT, UPDATE, DELETE, TRUNCATE, or VACUUM operation.",
             "Current Data Bank rows, Verification details, Trial Balance data, and linked evidence are protected.",
             "Apply requires this fresh preview hash and the exact typed confirmation phrase.",
-            "VACUUM/compaction is intentionally deferred to a separate maintenance phase.",
+            "VACUUM, reindex, and index removal are separate explicit maintenance actions with post-checks.",
         ],
     }
     preview["preview_hash"] = _preview_hash(preview)
     return preview
+
+
+def _optimization_invariants(preview: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract values that must not change during physical optimization."""
+    protected = preview.get("protected") or {}
+    review = preview.get("index_review") or {}
+    protected_definitions = {
+        row.get("index_name"): row.get("index_definition")
+        for row in review.get("indexes", [])
+        if row.get("protected")
+    }
+    return {
+        "client_data_total": protected.get("client_data_total"),
+        "client_data_current": protected.get("client_data_current"),
+        "client_data_retained_for_verification": protected.get(
+            "client_data_retained_for_verification"
+        ),
+        "verification_details": protected.get("verification_details"),
+        "trial_balance_accounts": protected.get("trial_balance_accounts"),
+        "trial_balance_uploads": protected.get("trial_balance_uploads"),
+        "active_identity_duplicate_group_count": review.get(
+            "active_identity_duplicate_group_count"
+        ),
+        "missing_required_indexes": tuple(review.get("missing_required_indexes") or []),
+        "protected_indexes": tuple(review.get("protected_indexes") or []),
+        "protected_index_definitions": protected_definitions,
+    }
+
+
+def _post_optimization_verification(
+    before: Dict[str, Any],
+    after: Dict[str, Any] | None,
+) -> Dict[str, Any]:
+    """Compare post-maintenance invariants without pretending DDL is reversible."""
+    if not after:
+        return {
+            "status": "unavailable",
+            "message": "Post-maintenance preview was unavailable; stop before another optimization action.",
+        }
+    before_values = _optimization_invariants(before)
+    after_values = _optimization_invariants(after)
+    mismatches = {
+        key: {"before": before_values[key], "after": after_values[key]}
+        for key in before_values
+        if before_values[key] != after_values[key]
+    }
+    return {
+        "status": "passed" if not mismatches else "failed",
+        "invariants": list(before_values),
+        "mismatches": mismatches,
+        "message": (
+            "Canonical row counts, protected references, duplicate blockers, and protected index definitions were unchanged."
+            if not mismatches
+            else "An optimization invariant changed; stop and review the database before any further maintenance."
+        ),
+    }
 
 
 def apply_index_maintenance(
@@ -1023,8 +1165,9 @@ def apply_index_maintenance(
     index_name: str,
     operator: str,
     confirmation: str,
+    operation: str = "drop",
 ) -> Dict[str, Any]:
-    """Remove one evidence-approved non-integrity index outside a transaction."""
+    """Run one evidence-approved index optimization outside a transaction."""
     if not os.environ.get("DATABASE_URL"):
         raise RuntimeError("PostgreSQL is not configured")
     if confirmation != INDEX_MAINTENANCE_CONFIRMATION_TEXT:
@@ -1035,6 +1178,10 @@ def apply_index_maintenance(
         raise IndexMaintenanceBlockedError(
             f"Index {index_name} is not an approved maintenance candidate."
         )
+    if operation not in {"drop", "reindex"}:
+        raise IndexMaintenanceBlockedError(
+            f"Index operation {operation} is not allow-listed."
+        )
 
     before = get_storage_cleanup_preview()
     if preview_hash != before["preview_hash"]:
@@ -1043,30 +1190,45 @@ def apply_index_maintenance(
         )
 
     candidate = before["index_review"]["maintenance_candidates"].get(index_name)
-    if not candidate or not candidate["eligible_for_manual_approval"]:
+    eligible_key = (
+        "eligible_for_manual_approval"
+        if operation == "drop"
+        else "reindex_eligible_for_manual_approval"
+    )
+    if not candidate or not candidate.get(eligible_key):
         reason = candidate["reason"] if candidate else "candidate was not found"
+        if operation == "reindex" and candidate and candidate.get("bloat_evidence"):
+            reason = "measured bloat did not meet the reindex threshold"
         raise IndexMaintenanceBlockedError(
             f"Index {index_name} did not pass the evidence gate: {reason}."
         )
 
-    dropped = drop_postgres_index_concurrently(index_name)
+    maintained = (
+        drop_postgres_index_concurrently(index_name)
+        if operation == "drop"
+        else reindex_postgres_index_concurrently(index_name)
+    )
     try:
         after = get_storage_cleanup_preview()
     except Exception:
         after = None
+    post_verification = _post_optimization_verification(before, after)
     return {
         "mode": "index_maintenance_applied",
         "operator": (operator or "Unknown administrator")[:200],
-        "index_name": dropped,
+        "operation": operation,
+        "index_name": maintained,
         "table_name": candidate["table_name"],
         "index_definition_before": candidate.get("index_definition"),
         "before": before,
         "after": after,
+        "post_verification": post_verification,
+        "requires_review": post_verification["status"] != "passed",
         "safety": [
-            "Only the evidence-approved non-integrity index was targeted.",
+            f"Only the evidence-approved non-integrity index was targeted for {operation}.",
             "No client_data rows or canonical transaction values were changed.",
             "The original index definition is returned for controlled recreation if required.",
-            "The operation used PostgreSQL DROP INDEX CONCURRENTLY outside the application transaction.",
+            "The operation used a PostgreSQL CONCURRENTLY command outside the application transaction.",
         ],
     }
 
@@ -1102,6 +1264,7 @@ def compact_storage(
         after = get_storage_cleanup_preview()
     except Exception:
         after = None
+    post_verification = _post_optimization_verification(before, after)
     return {
         "mode": "compacted",
         "operator": (operator or "Unknown administrator")[:200],
@@ -1109,6 +1272,8 @@ def compact_storage(
         "tables": compacted_tables,
         "before": before,
         "after": after,
+        "post_verification": post_verification,
+        "requires_review": post_verification["status"] != "passed",
         "safety": [
             "Only the allow-listed client_data, data_audit_log, and upload_validation_plans tables were compacted.",
             "No rows were deleted by this operation.",

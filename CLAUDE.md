@@ -22,11 +22,11 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/settings.py + static/settings.* → application settings and the firm-wide Holiday list; header/tabs rendered by `client_context.js`. See CHANGELOG_ARCHIVE.md.
 - routers/templates.py + static/templates.*, static/columns.* → master-column and template CRUD, mapping/reordering, rate rules, backup/restore, and setup loading feedback. See CHANGELOG_ARCHIVE.md.
 - static/client_settings.html, static/client_settings.js -> retired direct-bookmark information page; all Verification account routing is configured centrally in Account Control Centre. See CHANGELOG_ARCHIVE.md.
-- database.py, main.py → SQLite/PostgreSQL schema, compact audit/validation-plan storage, explicit PostgreSQL compaction helper, Account Set migrations, router registration, and versioned Rulebook snapshot storage. See CHANGELOG_ARCHIVE.md.
+- database.py, main.py → SQLite/PostgreSQL schema, compact audit/validation-plan storage, allow-listed VACUUM/REINDEX/DROP helpers, Account Set migrations, router registration, and versioned Rulebook snapshot storage. See CHANGELOG_ARCHIVE.md.
 - database.py (users/sessions) → authenticated users and session records for Login → Client Cards → Dashboard; bcrypt, session-stored selected client, seeded placeholder admin. See CHANGELOG_ARCHIVE.md.
 - routers/auth.py → login/logout, current-session lookup, client selection, `get_current_user()`/`require_admin()` guards; timezone-aware session expiry. See CHANGELOG_ARCHIVE.md.
 - routers/users.py → Admin user management (list/create/edit/deactivate/reactivate/reset password); every endpoint `require_admin`, mutations SQLite-audited. See CHANGELOG_ARCHIVE.md.
-- routers/storage_cleanup.py + services/storage_cleanup.py + static/storage_cleanup.* → Admin-only preview, targeted validation-plan cleanup, typed-confirmation cleanup, and separate allow-listed PostgreSQL compaction; canonical `client_data` remains protected. See CHANGELOG_ARCHIVE.md.
+- routers/storage_cleanup.py + services/storage_cleanup.py + static/storage_cleanup.* → Admin-only preview, evidence-gated index optimization, typed-confirmation cleanup, and allow-listed PostgreSQL compaction with post-checks. See CHANGELOG_ARCHIVE.md.
 - static/users.html, static/users.js → firm-level Manage Users UI (sortable/searchable rows, add/edit, deactivate, password reset); shared Admin header/tab strip. See CHANGELOG_ARCHIVE.md.
 - static/login.html, static/login.js → standalone login page posting to `/api/auth/login`, generic auth error; does not load `client_context.js`.
 - static/client_select.html, static/client_select.js → standalone Client Cards page with guarded selection, admin entry, and loading feedback. See CHANGELOG_ARCHIVE.md.
@@ -285,3 +285,4 @@ Do this automatically at the end of the session without being asked.
 - 2026-10-11: Deferred gaps are explicit: quota-stop enforcement, production backup/export gating, stable source line IDs for reorder-safe corrections, and Data Bank wiring to permanent purge.
 - 2026-10-12: Phase 1 adds read-only PostgreSQL index inventory, overlap signals, and duplicate blockers in audit and storage review tools.
 - 2026-10-12: Phase 2 adds planner-only evidence gates and allow-listed concurrent index maintenance without changing canonical transaction rows.
+- 2026-10-12: Phase 3 adds optional bloat evidence, concurrent index reindexing, and post-maintenance invariants for storage optimization.

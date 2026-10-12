@@ -297,6 +297,72 @@ class StorageCleanupPreviewTests(unittest.TestCase):
         self.assertFalse(candidate["eligible_for_manual_approval"])
         self.assertEqual(candidate["reason"], "a representative query plan uses this index")
 
+    def test_index_review_allows_reindex_only_when_measured_bloat_exceeds_threshold(self):
+        rows = [{
+            "index_name": "idx_client_data_active_derived_date",
+            "index_bytes": 50,
+            "idx_scan": 4,
+            "idx_tup_read": 20,
+            "idx_tup_fetch": 20,
+            "is_unique": False,
+            "is_primary": False,
+            "key_columns": ["client_id", "is_deleted", "derived_transaction_date"],
+        }]
+        evidence = {
+            "available": True,
+            "indexes": {
+                "idx_client_data_active_derived_date": {
+                    "recommended_action": "reindex",
+                    "avg_leaf_density": 55.0,
+                    "leaf_fragmentation": 42.0,
+                }
+            },
+        }
+        with patch.object(cleanup_service, "execute_query_pg", return_value=rows), \
+                patch.object(cleanup_service, "_count", return_value=0), \
+                patch.object(cleanup_service, "_client_data_query_plan_evidence", return_value={"available": True, "index_names": []}), \
+                patch.object(cleanup_service, "_client_data_index_bloat_evidence", return_value=evidence):
+            result = cleanup_service._client_data_index_review(
+                include_query_plans=True,
+                include_bloat_evidence=True,
+            )
+
+        candidate = result["maintenance_candidates"]["idx_client_data_active_derived_date"]
+        self.assertTrue(candidate["reindex_eligible_for_manual_approval"])
+        self.assertIn("reindex", candidate["optimization_actions"])
+
+    def test_index_maintenance_reindex_requires_measured_bloat_evidence(self):
+        before = {
+            "preview_hash": "fresh-hash",
+            "index_review": {
+                "maintenance_candidates": {
+                    "idx_client_data_active_derived_date": {
+                        "reindex_eligible_for_manual_approval": True,
+                        "reason": "index has observed scans",
+                        "table_name": "client_data",
+                        "index_definition": "CREATE INDEX idx_client_data_active_derived_date ON client_data ...",
+                        "bloat_evidence": {"recommended_action": "reindex"},
+                    }
+                }
+            },
+        }
+        after = {"preview_hash": "after-hash", "index_review": {}}
+        with patch.dict(os.environ, {"DATABASE_URL": "postgresql://test"}), \
+                patch.object(cleanup_service, "get_storage_cleanup_preview", side_effect=[before, after]), \
+                patch.object(cleanup_service, "reindex_postgres_index_concurrently", return_value="idx_client_data_active_derived_date") as reindex, \
+                patch.object(cleanup_service, "drop_postgres_index_concurrently") as drop:
+            result = cleanup_service.apply_index_maintenance(
+                "fresh-hash",
+                "idx_client_data_active_derived_date",
+                "admin",
+                cleanup_service.INDEX_MAINTENANCE_CONFIRMATION_TEXT,
+                operation="reindex",
+            )
+
+        reindex.assert_called_once_with("idx_client_data_active_derived_date")
+        drop.assert_not_called()
+        self.assertEqual(result["operation"], "reindex")
+
     def test_index_maintenance_requires_exact_confirmation_before_preview_or_drop(self):
         with patch.dict(os.environ, {"DATABASE_URL": "postgresql://test"}), \
                 patch.object(cleanup_service, "get_storage_cleanup_preview") as preview, \
@@ -400,6 +466,7 @@ class StorageCleanupPreviewTests(unittest.TestCase):
             index_name="idx_client_data_active_derived_date",
             operator="admin",
             confirmation=cleanup_service.INDEX_MAINTENANCE_CONFIRMATION_TEXT,
+            operation="drop",
         )
 
     def test_standalone_index_review_is_read_only_and_reports_overlap_blockers(self):
@@ -494,6 +561,25 @@ class StorageCleanupPreviewTests(unittest.TestCase):
         self.assertEqual(cursor.execute.call_count, 6)
         cursor.connection.commit.assert_not_called()
 
+    def test_standalone_index_review_can_capture_optional_bloat_evidence(self):
+        cursor = MagicMock()
+        cursor.fetchall.side_effect = [[], [], []]
+        bloat = {
+            "available": True,
+            "extension": "pgstattuple",
+            "indexes": {
+                "idx_client_data_active_derived_date": {
+                    "recommended_action": "reindex",
+                }
+            },
+        }
+        with patch.object(audit_postgres_indexes, "_client_data_index_bloat_evidence", return_value=bloat):
+            result = audit_postgres_indexes.build_review(cursor, include_bloat=True)
+
+        self.assertEqual(result["bloat_evidence"], bloat)
+        self.assertEqual(cursor.execute.call_count, 3)
+        cursor.connection.commit.assert_not_called()
+
     def test_compaction_requires_exact_confirmation_before_preview(self):
         with patch.dict(os.environ, {"DATABASE_URL": "postgresql://test"}), \
                 patch.object(cleanup_service, "get_storage_cleanup_preview") as preview, \
@@ -558,6 +644,31 @@ class StorageCleanupPreviewTests(unittest.TestCase):
         connection.commit.assert_called_once_with()
         cursor.execute.assert_called_once_with(
             'DROP INDEX CONCURRENTLY IF EXISTS public."idx_client_data_active_derived_date"'
+        )
+        release.assert_called_once_with(connection)
+
+    def test_database_index_reindex_is_allow_listed_and_concurrent(self):
+        with patch.object(database, "get_raw_conn_pg") as get_conn:
+            with self.assertRaises(ValueError):
+                database.reindex_postgres_index_concurrently("client_data_pkey")
+        get_conn.assert_not_called()
+
+        cursor = MagicMock()
+        connection = MagicMock()
+        connection.autocommit = False
+        connection.cursor.return_value.__enter__.return_value = cursor
+        connection.cursor.return_value.__exit__.return_value = False
+        cursor.execute.side_effect = lambda sql: self.assertTrue(connection.autocommit)
+        with patch.object(database, "get_raw_conn_pg", return_value=connection), \
+                patch.object(database, "release_raw_conn_pg") as release:
+            result = database.reindex_postgres_index_concurrently(
+                "idx_client_data_active_derived_date"
+            )
+
+        self.assertEqual(result, "idx_client_data_active_derived_date")
+        connection.commit.assert_called_once_with()
+        cursor.execute.assert_called_once_with(
+            'REINDEX INDEX CONCURRENTLY public."idx_client_data_active_derived_date"'
         )
         release.assert_called_once_with(connection)
 

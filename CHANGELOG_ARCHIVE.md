@@ -7980,3 +7980,11 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Implementation:** Added optional planner-only `EXPLAIN (FORMAT JSON)` probes to the standalone audit and Storage Cleanup preview. Manual index maintenance is limited to the allow-listed `idx_client_data_active_derived_date`, requires fresh preview-hash and exact-confirmation gates, rejects observed scans or representative plan use, and uses `DROP INDEX CONCURRENTLY` outside the application transaction. The original definition is returned for controlled recreation; no startup DDL or automatic removal was added.
 
 **Verification:** Python compilation passed. Focused storage, verification-index, and duplicate-gate tests passed 41/41, with one pytest cache-path warning unrelated to application behavior. No live planner review or PostgreSQL index change was executed; commit and push remain pending explicit approval after local testing.
+
+## Full optimization - Phase 3 - 2026-10-12
+
+**Scope:** Extend controlled index review into evidence-gated physical optimization without changing canonical transaction data or protected integrity indexes.
+
+**Implementation:** Added optional `pgstatindex` bloat evidence with conservative thresholds, allow-listed `REINDEX INDEX CONCURRENTLY`, explicit drop/reindex action selection, and post-maintenance invariant checks. Storage compaction now reports whether canonical row counts, protected references, duplicate blockers, required indexes, and protected definitions remained unchanged. Missing `pgstattuple` support blocks reindexing rather than inferring bloat.
+
+**Verification:** Python compilation passed. Focused storage, verification-index, and duplicate-gate tests passed 44/44, with one pytest cache-path warning unrelated to application behavior. No live bloat measurement, reindex, drop, vacuum, commit, or push was performed in this phase.

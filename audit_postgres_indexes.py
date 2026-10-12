@@ -19,7 +19,11 @@ import json
 from psycopg2.extras import RealDictCursor
 
 from database import get_raw_conn_pg, release_raw_conn_pg
-from services.storage_cleanup import INDEX_REVIEW_PLAN_QUERIES, _plan_index_names
+from services.storage_cleanup import (
+    INDEX_REVIEW_PLAN_QUERIES,
+    _client_data_index_bloat_evidence,
+    _plan_index_names,
+)
 
 
 # Each entry: (index_name, table, CREATE INDEX statement). Add future additive
@@ -209,7 +213,7 @@ def get_query_plan_evidence(cur) -> dict:
     }
 
 
-def build_review(cur, include_plans: bool = False) -> dict:
+def build_review(cur, include_plans: bool = False, include_bloat: bool = False) -> dict:
     existing = get_existing_index_names(cur)
     inventory = get_client_data_index_inventory(cur)
     duplicate_groups = get_active_identity_duplicate_groups(cur)
@@ -233,6 +237,8 @@ def build_review(cur, include_plans: bool = False) -> dict:
     }
     if include_plans:
         review["plan_evidence"] = get_query_plan_evidence(cur)
+    if include_bloat:
+        review["bloat_evidence"] = _client_data_index_bloat_evidence()
     return review
 
 
@@ -253,12 +259,17 @@ def main():
         action="store_true",
         help="Also capture planner-only EXPLAIN evidence for fixed review probes.",
     )
+    parser.add_argument(
+        "--bloat",
+        action="store_true",
+        help="Also capture optional pgstattuple index-bloat evidence.",
+    )
     args = parser.parse_args()
 
     conn = get_raw_conn_pg()
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        review = build_review(cur, include_plans=args.plans)
+        review = build_review(cur, include_plans=args.plans, include_bloat=args.bloat)
         existing = get_existing_index_names(cur)
         missing_candidates = [
             candidate for candidate in CANDIDATE_INDEXES if candidate[0] not in existing

@@ -7091,6 +7091,27 @@ def drop_postgres_index_concurrently(index_name):
             release_raw_conn_pg(conn)
 
 
+def reindex_postgres_index_concurrently(index_name):
+    """Rebuild one explicitly allow-listed index without blocking table writes."""
+    if index_name not in POSTGRES_INDEX_MAINTENANCE_ALLOWLIST:
+        raise ValueError(f"Unsupported PostgreSQL index maintenance target: {index_name}")
+
+    conn = get_raw_conn_pg()
+    previous_autocommit = conn.autocommit
+    try:
+        conn.commit()
+        conn.autocommit = True
+        # The allow-list above is the complete source of the identifier.
+        with conn.cursor() as cur:
+            cur.execute(f'REINDEX INDEX CONCURRENTLY public."{index_name}"')
+        return index_name
+    finally:
+        try:
+            conn.autocommit = previous_autocommit
+        finally:
+            release_raw_conn_pg(conn)
+
+
 def compact_postgres_tables(table_names, full=False):
     """Run explicitly approved PostgreSQL compaction outside a transaction.
 

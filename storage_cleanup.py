@@ -18,6 +18,12 @@ if __name__ == "__main__":
     parser.add_argument("--preview-hash", help="hash returned by the fresh preview")
     parser.add_argument("--confirm", help=f"must equal: {CONFIRMATION_TEXT}")
     parser.add_argument("--remove-index", help="evidence-approved index name to remove")
+    parser.add_argument(
+        "--index-action",
+        choices=("drop", "reindex"),
+        default="drop",
+        help="allow-listed index optimization action",
+    )
     parser.add_argument("--index-preview-hash", help="fresh storage preview hash for index maintenance")
     parser.add_argument(
         "--index-confirm",
@@ -38,6 +44,7 @@ if __name__ == "__main__":
                 index_name=args.remove_index,
                 operator=args.operator,
                 confirmation=args.index_confirm,
+                operation=args.index_action,
             ),
             default=str,
             indent=2,
