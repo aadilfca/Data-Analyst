@@ -1,5 +1,15 @@
 # Changelog Archive
 
+## Locked upload and deletion contract - 2026-10-11
+
+**Decision:** `client_data` is the only durable canonical transaction set. Raw values and report-required derived columns stay together; reports and analysis do not receive a second transaction copy. Upload validation must count exact duplicate lines, retain only the first copy, stop an unchanged previously imported file as a no-op, apply corrections in place, insert new/backdated rows once, and block conflicting identities before a write.
+
+**Deletion boundary:** The guarded administrator preview/apply flow is the only source-data deletion path. It permanently removes canonical rows, derived classifications, occurrence metadata, audit payloads, upload metadata, validation plans, and staged files. Soft-delete and restore are blocked. A successful logical purge may leave PostgreSQL table/index pages and bloat; that physical compaction is a separate approved maintenance operation, not retained client data.
+
+**Live evidence:** Playwright testing used the Leather Crop Jan-26 workbook: the first import produced 3,514 canonical rows; an unchanged re-upload reported 3,514 existing, 0 new, and no-op; a changed copy reported 1 changed, 0 new, and 3,513 unchanged; guarded purge removed 3,514 source rows plus related occurrence/audit/upload metadata and returned zero logical rows. The final physical database reading was about 79.1 MB because PostgreSQL pages/indexes were not vacuumed.
+
+**Deferred controls:** Import-path 300/400 MB enforcement, production backup/export gating, stable source line identifiers for reorder-safe corrections, and Data Bank UI wiring to permanent purge remain separate work. Two protected external backups and quarterly restore tests remain mandatory policy.
+
 ## Guarded permanent source-data deletion - Phase 1 - 2026-10-11
 
 **Scope:** Stop accumulating soft-deleted source rows and provide an exact, administrator-approved deletion path for one client or client/template scope without mutating live data during development.
@@ -7932,3 +7942,41 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Implementation:** Added the exact SheetJS 0.18.5 browser bundle under `static/vendor/` and changed `static/upload.html` to load it locally. Upload, mapping, preview, and duplicate-data gates remain unchanged.
 
 **Verification:** Playwright reproduced `XLSX is not defined` with the CDN blocked, then confirmed the local bundle loads and exposes `window.XLSX`; the Jan-26 workbook proceeds past file reading.
+
+## Large workbook upload gates - 2026-10-11
+
+**Scope:** Allow valid large workbooks with a different date delimiter while preventing footer totals from entering canonical `client_data`.
+
+**Implementation:** Backend validation/import now samples mapped text dates when the requested format fails, detects common delimiter/order combinations, detects `TOTAL`/`SUBTOTAL` footer rows before mapped-column filtering, excludes them from counts and writes, and returns detection/summary counts. Upload UI mirrors date detection, pre-excludes marked summary rows, and reports the counts. Exact repeated lines remain counted and skipped; whole-file unchanged uploads remain no-ops.
+
+**Verification:** The actual 64,880-row workbook resolved to `DD-MM-YYYY` and row 64,881 was detected as its footer; 26 focused upload/duplicate tests passed, Python/JavaScript syntax and `git diff --check` passed, and Playwright verified the browser helpers without importing data. Large-file streaming/read-once optimization remains deferred.
+
+## Strict storage retention and compaction controls - 2026-10-11
+
+**Policy:** `client_data` remains the only durable transaction set. Audit events no longer copy complete INSERT rows: updates retain changed fields only and deletes retain a fingerprint only. Validation plans are temporary, one-ready-plan-per-client/template, and are deleted immediately after a successful import.
+
+**Implementation:** Cleanup preview/apply now sizes and removes applied, expired, superseded, or past-expiry validation plans. The administrator-only compaction endpoint allow-lists `client_data`, `data_audit_log`, and `upload_validation_plans`; normal `VACUUM (ANALYZE)` is available for reuse and explicit `VACUUM FULL` is reserved for an approved maintenance window. Indexes are inventoried for evidence and are never dropped automatically.
+
+**Verification:** Focused audit-retention and storage-cleanup regression tests were added. No live cleanup, compaction, deletion, commit, or push was performed.
+
+## Targeted validation-plan cleanup - 2026-10-12
+
+**Implementation:** Added an administrator-only, preview-hash-protected route that removes only applied, expired, superseded, or past-expiry validation plans. It preserves canonical `client_data`, audit logs, derived occurrence metadata, upload metadata, and protected counts; broad storage cleanup remains a separate action.
+
+**Verification:** Added service and route tests for exact confirmation, stale previews, protected-count checks, and the validation-plan-only SQL boundary. Live cleanup and compaction remain pending explicit action-time confirmation.
+
+## Controlled index review - Phase 1 - 2026-10-12
+
+**Scope:** Make PostgreSQL `client_data` index review evidence-based without changing canonical rows, indexes, or physical storage.
+
+**Implementation:** Extended `audit_postgres_indexes.py` with read-only index definitions, key columns, predicates, size, usage, protected-index classification, possible overlap signals, and aggregate active-identity duplicate blockers. Extended the Storage Cleanup preview's index review with the same evidence and protected/zero-scan separation. Primary, unique, and active-identity indexes remain protected; overlap and zero-scan results never trigger automatic removal.
+
+**Verification:** Python compilation passed. Focused storage, verification-index, duplicate-gate, and review tests passed 32/32. The full suite completed 555 passed, 16 skipped, and 49 unrelated failures in existing Verification, Cashflows, reconciliation, schema-fixture, and UI areas. `git diff --check` passed. No live PostgreSQL index change, deletion, vacuum, compaction, commit, or push was performed.
+
+## Controlled index review - Phase 2 - 2026-10-12
+
+**Scope:** Convert the Phase 1 review into an evidence-first maintenance path while keeping canonical `client_data` rows, primary/unique indexes, and active-identity protection intact.
+
+**Implementation:** Added optional planner-only `EXPLAIN (FORMAT JSON)` probes to the standalone audit and Storage Cleanup preview. Manual index maintenance is limited to the allow-listed `idx_client_data_active_derived_date`, requires fresh preview-hash and exact-confirmation gates, rejects observed scans or representative plan use, and uses `DROP INDEX CONCURRENTLY` outside the application transaction. The original definition is returned for controlled recreation; no startup DDL or automatic removal was added.
+
+**Verification:** Python compilation passed. Focused storage, verification-index, and duplicate-gate tests passed 41/41, with one pytest cache-path warning unrelated to application behavior. No live planner review or PostgreSQL index change was executed; commit and push remain pending explicit approval after local testing.

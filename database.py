@@ -2,6 +2,8 @@ import sqlite3
 import time
 import contextvars
 from contextlib import contextmanager
+import hashlib
+import json
 import os
 import sys
 import shutil
@@ -152,17 +154,54 @@ def log_audit(user, action, module, details=""):
         pass
 
 
+def compact_audit_payloads(action, old_data=None, new_data=None):
+    """Return compact audit values without copying a complete transaction row.
+
+    ``client_data`` remains the only durable source row.  Audit history keeps
+    the event and, for corrections, only fields that changed.  Initial INSERT
+    events keep no row payload because the inserted row is already in
+    ``client_data``.  DELETE events retain only a fingerprint so the event is
+    traceable without preserving deleted source data.
+    """
+    action = str(action or "").upper()
+    if action == "INSERT":
+        return None, None
+    if action == "DELETE":
+        if not old_data:
+            return None, None
+        fingerprint = hashlib.sha256(
+            json.dumps(old_data, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        return {"_row_fingerprint": fingerprint}, None
+    if action == "UPDATE":
+        old_data = old_data or {}
+        new_data = new_data or {}
+        changed_fields = [
+            field
+            for field in sorted(set(old_data) | set(new_data))
+            if field not in old_data
+            or field not in new_data
+            or old_data[field] != new_data[field]
+        ]
+        return (
+            {field: old_data.get(field) for field in changed_fields},
+            {field: new_data.get(field) for field in changed_fields},
+        )
+    # Unknown audit actions must not silently reintroduce full-row retention.
+    return None, None
+
+
 def log_data_audit(client_data_id, user, action, old_data=None, new_data=None):
     try:
-        import json
+        compact_old, compact_new = compact_audit_payloads(action, old_data, new_data)
         execute_write(
             "INSERT INTO data_audit_log (client_data_id, user, action, old_row_data, new_row_data) VALUES (?, ?, ?, ?, ?)",
             (
                 client_data_id,
                 user,
                 action,
-                json.dumps(old_data) if old_data else None,
-                json.dumps(new_data) if new_data else None,
+                json.dumps(compact_old) if compact_old else None,
+                json.dumps(compact_new) if compact_new else None,
             )
         )
     except Exception as e:
@@ -7025,6 +7064,69 @@ def release_raw_conn_pg(conn):
         get_pg_pool().putconn(conn, close=bool(conn.closed))
 
 
+POSTGRES_INDEX_MAINTENANCE_ALLOWLIST = {
+    "idx_client_data_active_derived_date": "client_data",
+}
+
+
+def drop_postgres_index_concurrently(index_name):
+    """Drop one explicitly allow-listed non-integrity index outside a transaction."""
+    if index_name not in POSTGRES_INDEX_MAINTENANCE_ALLOWLIST:
+        raise ValueError(f"Unsupported PostgreSQL index maintenance target: {index_name}")
+
+    conn = get_raw_conn_pg()
+    previous_autocommit = conn.autocommit
+    try:
+        conn.commit()
+        conn.autocommit = True
+        # The allow-list above is the complete source of the identifier, so this
+        # statement cannot receive an operator-supplied table or index name.
+        with conn.cursor() as cur:
+            cur.execute(f'DROP INDEX CONCURRENTLY IF EXISTS public."{index_name}"')
+        return index_name
+    finally:
+        try:
+            conn.autocommit = previous_autocommit
+        finally:
+            release_raw_conn_pg(conn)
+
+
+def compact_postgres_tables(table_names, full=False):
+    """Run explicitly approved PostgreSQL compaction outside a transaction.
+
+    PostgreSQL VACUUM cannot run inside the application's normal transaction
+    wrapper.  Keep the allow-list narrow and require callers to perform their
+    own administrator/preview/confirmation checks before invoking this helper.
+    """
+    allowed = {
+        "client_data",
+        "data_audit_log",
+        "upload_validation_plans",
+    }
+    names = tuple(dict.fromkeys(table_names or ()))
+    invalid = [name for name in names if name not in allowed]
+    if invalid:
+        raise ValueError(f"Unsupported PostgreSQL compaction table(s): {', '.join(invalid)}")
+    if not names:
+        return []
+
+    conn = get_raw_conn_pg()
+    previous_autocommit = conn.autocommit
+    try:
+        conn.commit()
+        conn.autocommit = True
+        vacuum_clause = "VACUUM (FULL, ANALYZE)" if full else "VACUUM (ANALYZE)"
+        with conn.cursor() as cur:
+            for table_name in names:
+                cur.execute(f"{vacuum_clause} public.{table_name}")
+        return list(names)
+    finally:
+        try:
+            conn.autocommit = previous_autocommit
+        finally:
+            release_raw_conn_pg(conn)
+
+
 def close_pg_pool():
     """
     Closes every pooled connection. Only meant for process shutdown - not
@@ -7173,19 +7275,20 @@ def estimate_client_data_size_pg(client_id: int = None, template_id: int = None)
 
 def log_data_audit_pg(client_data_id, user, action, old_data=None, new_data=None):
     """
-    Postgres equivalent of log_data_audit() - old_row_data/new_row_data are
-    JSONB here, so they're passed via psycopg2.extras.Json(...) rather than
-    json.dumps() (letting psycopg2/Postgres own the actual encoding).
+    Postgres equivalent of log_data_audit() using the compact audit policy.
+    JSONB values are passed through psycopg2.extras.Json(...) rather than
+    encoded to strings by the caller.
     """
     try:
+        compact_old, compact_new = compact_audit_payloads(action, old_data, new_data)
         execute_write_pg(
             "INSERT INTO data_audit_log (client_data_id, \"user\", action, old_row_data, new_row_data) VALUES (%s, %s, %s, %s, %s)",
             (
                 client_data_id,
                 user,
                 action,
-                psycopg2.extras.Json(old_data) if old_data else None,
-                psycopg2.extras.Json(new_data) if new_data else None,
+                psycopg2.extras.Json(compact_old) if compact_old else None,
+                psycopg2.extras.Json(compact_new) if compact_new else None,
             )
         )
     except Exception as e:

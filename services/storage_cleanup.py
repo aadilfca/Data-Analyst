@@ -10,10 +10,21 @@ import json
 import os
 from typing import Any, Dict, List
 
-from database import execute_query_pg, execute_write_pg, pg_transaction
+from database import (
+    POSTGRES_INDEX_MAINTENANCE_ALLOWLIST,
+    compact_postgres_tables,
+    drop_postgres_index_concurrently,
+    execute_query_pg,
+    execute_write_pg,
+    pg_transaction,
+)
 
 
 CONFIRMATION_TEXT = "DELETE APPROVED STORAGE DATA"
+VALIDATION_PLAN_CLEANUP_CONFIRMATION = "DELETE APPROVED VALIDATION PLANS"
+COMPACTION_CONFIRMATION_TEXT = "COMPACT APPROVED STORAGE DATA"
+FULL_COMPACTION_CONFIRMATION_TEXT = "FULL COMPACTION APPROVED"
+INDEX_MAINTENANCE_CONFIRMATION_TEXT = "REMOVE APPROVED INDEX"
 CLEANUP_SCOPE = (
     "approved_logs,retired_client_data,deleted_upload_metadata,"
     "stale_presence,expired_sessions,obsolete_cashflow_copies,prepared_revisions"
@@ -23,6 +34,11 @@ REMOVABLE_LOG_TABLES = (
     "audit_log",
     "error_log",
     "audit_rules_config_changes",
+)
+TEMPORARY_PLAN_TABLES = ("upload_validation_plans",)
+REQUIRED_CLIENT_DATA_INDEXES = (
+    "client_data_pkey",
+    "idx_client_data_active_identity_unique",
 )
 PROTECTED_DATA_TABLES = (
     "client_data",
@@ -45,7 +61,7 @@ SIZING_TABLES = REMOVABLE_LOG_TABLES + PROTECTED_DATA_TABLES + (
 ) + CASHFLOW_DERIVED_TABLES + (
     "cashflow_report_revisions",
     "cashflow_preparation_state",
-)
+) + TEMPORARY_PLAN_TABLES
 
 
 class CleanupConfirmationError(ValueError):
@@ -67,6 +83,10 @@ class DataPurgePreviewStaleError(ValueError):
     """The permanent-data-delete preview no longer matches PostgreSQL."""
 
 
+class IndexMaintenanceBlockedError(ValueError):
+    """The requested index has not passed the evidence and safety gates."""
+
+
 def _first(query: str, params=None) -> Dict[str, Any]:
     rows = execute_query_pg(query, params)
     return rows[0] if rows else {}
@@ -83,6 +103,161 @@ def _format_bytes(value: int) -> str:
             return f"{amount:.1f} {unit}" if unit != "B" else f"{int(amount)} B"
         amount /= 1024
     return "0 B"
+
+
+def _possible_index_overlaps(indexes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Flag same-predicate duplicate/prefix keys for human review only."""
+    overlaps = []
+    for position, left in enumerate(indexes):
+        left_keys = tuple(left.get("key_columns") or ())
+        left_predicate = left.get("predicate") or ""
+        if not left_keys:
+            continue
+        for right in indexes[position + 1:]:
+            right_keys = tuple(right.get("key_columns") or ())
+            if not right_keys or left_predicate != (right.get("predicate") or ""):
+                continue
+            same_keys = left_keys == right_keys
+            prefix = (
+                left_keys[: min(len(left_keys), len(right_keys))] ==
+                right_keys[: min(len(left_keys), len(right_keys))]
+            )
+            if same_keys or (prefix and len(left_keys) != len(right_keys)):
+                overlaps.append(
+                    {
+                        "indexes": [left["index_name"], right["index_name"]],
+                        "reason": "same key definition" if same_keys else "same leading key columns",
+                        "protected_indexes": [
+                            item["index_name"]
+                            for item in (left, right)
+                            if item.get("protected")
+                        ],
+                    }
+                )
+    return overlaps
+
+
+INDEX_REVIEW_PLAN_QUERIES = (
+    (
+        "active_identity_lookup",
+        """
+        EXPLAIN (FORMAT JSON)
+        SELECT id
+        FROM public.client_data
+        WHERE client_id = 1
+          AND template_id = 1
+          AND is_deleted = FALSE
+          AND change_detection_status <> 'deleted'
+          AND source_identity = 'phase2-review-probe'
+        """,
+    ),
+    (
+        "derived_date_lookup",
+        """
+        EXPLAIN (FORMAT JSON)
+        SELECT id
+        FROM public.client_data
+        WHERE client_id = 1
+          AND is_deleted = FALSE
+          AND derived_transaction_date >= DATE '2000-01-01'
+          AND derived_transaction_date < DATE '2000-01-02'
+        ORDER BY derived_transaction_date
+        """,
+    ),
+    (
+        "client_template_deleted_lookup",
+        """
+        EXPLAIN (FORMAT JSON)
+        SELECT id
+        FROM public.client_data
+        WHERE client_id = 1
+          AND template_id = 1
+          AND is_deleted = FALSE
+        """,
+    ),
+)
+
+
+def _plan_index_names(plan_node: Any) -> List[str]:
+    """Collect index names from a PostgreSQL JSON plan tree."""
+    names = []
+    if isinstance(plan_node, dict):
+        index_name = plan_node.get("Index Name")
+        if index_name:
+            names.append(str(index_name))
+        for value in plan_node.values():
+            names.extend(_plan_index_names(value))
+    elif isinstance(plan_node, list):
+        for value in plan_node:
+            names.extend(_plan_index_names(value))
+    return sorted(set(names))
+
+
+def _client_data_query_plan_evidence() -> Dict[str, Any]:
+    """Capture planner-only evidence; EXPLAIN does not execute the queries."""
+    plans = []
+    for query_name, query in INDEX_REVIEW_PLAN_QUERIES:
+        try:
+            rows = execute_query_pg(query)
+            raw_plan = rows[0].get("QUERY PLAN") if rows else None
+            if raw_plan is None and rows:
+                raw_plan = rows[0].get("query plan")
+            plan_tree = raw_plan[0] if isinstance(raw_plan, list) and raw_plan else raw_plan
+            plans.append(
+                {
+                    "query_name": query_name,
+                    "available": bool(plan_tree),
+                    "index_names": _plan_index_names(plan_tree),
+                }
+            )
+        except Exception as exc:
+            return {
+                "available": False,
+                "reason": f"EXPLAIN failed for {query_name}: {exc}",
+                "plans": plans,
+            }
+
+    return {
+        "available": len(plans) == len(INDEX_REVIEW_PLAN_QUERIES),
+        "probe": "Planner-only fixed-shape probes; no query execution or row reads.",
+        "plans": plans,
+        "index_names": sorted({name for plan in plans for name in plan["index_names"]}),
+    }
+
+
+def _index_maintenance_candidates(
+    indexes: List[Dict[str, Any]],
+    plan_evidence: Dict[str, Any],
+) -> Dict[str, Dict[str, Any]]:
+    """Return evidence-gated candidates; never infer permission from size alone."""
+    by_name = {row["index_name"]: row for row in indexes}
+    planned_indexes = set(plan_evidence.get("index_names") or [])
+    candidates = {}
+    for index_name in POSTGRES_INDEX_MAINTENANCE_ALLOWLIST:
+        row = by_name.get(index_name)
+        candidate = {
+            "index_name": index_name,
+            "table_name": POSTGRES_INDEX_MAINTENANCE_ALLOWLIST[index_name],
+            "eligible_for_manual_approval": False,
+            "reason": "index is not present",
+        }
+        if row:
+            candidate["index_definition"] = row.get("index_definition")
+            candidate["index_bytes"] = row.get("index_bytes", 0)
+            candidate["idx_scan"] = row.get("idx_scan", 0)
+            if row.get("protected"):
+                candidate["reason"] = "protected index"
+            elif row.get("idx_scan", 0) != 0:
+                candidate["reason"] = "index has observed scans"
+            elif not plan_evidence.get("available"):
+                candidate["reason"] = "query-plan evidence is unavailable"
+            elif index_name in planned_indexes:
+                candidate["reason"] = "a representative query plan uses this index"
+            else:
+                candidate["eligible_for_manual_approval"] = True
+                candidate["reason"] = "zero scans and no representative plan use"
+        candidates[index_name] = candidate
+    return candidates
 
 
 def _table_sizes() -> List[Dict[str, Any]]:
@@ -102,6 +277,7 @@ def _table_sizes() -> List[Dict[str, Any]]:
         (list(SIZING_TABLES),),
     )
     removable = set(REMOVABLE_LOG_TABLES)
+    temporary = set(TEMPORARY_PLAN_TABLES)
     protected = set(PROTECTED_DATA_TABLES)
     derived = set(CASHFLOW_DERIVED_TABLES)
     result = []
@@ -113,6 +289,7 @@ def _table_sizes() -> List[Dict[str, Any]]:
                 "table_name": table_name,
                 "classification": (
                     "removable log" if table_name in removable
+                    else "temporary validation data" if table_name in temporary
                     else "protected data" if table_name in protected
                     else "derived current data" if table_name in derived
                     else "operational metadata"
@@ -124,6 +301,105 @@ def _table_sizes() -> List[Dict[str, Any]]:
             }
         )
     return result
+
+
+def _client_data_index_review(include_query_plans: bool = False) -> Dict[str, Any]:
+    """Report index cost and usage without making index decisions automatically."""
+    rows = execute_query_pg(
+        """
+        SELECT indexrelname AS index_name,
+               pg_relation_size(indexrelid) AS index_bytes,
+               COALESCE(idx_scan, 0) AS idx_scan,
+               COALESCE(idx_tup_read, 0) AS idx_tup_read,
+               COALESCE(idx_tup_fetch, 0) AS idx_tup_fetch,
+               ix.indisunique AS is_unique,
+               ix.indisprimary AS is_primary,
+               pg_get_expr(ix.indpred, ix.indrelid) AS predicate,
+               pg_get_indexdef(stats.indexrelid) AS index_definition,
+               ARRAY(
+                   SELECT COALESCE(att.attname, '<expression>')
+                   FROM unnest(ix.indkey) WITH ORDINALITY AS keys(attnum, ord)
+                   LEFT JOIN pg_attribute att
+                     ON att.attrelid = ix.indrelid
+                    AND att.attnum = keys.attnum
+                   ORDER BY keys.ord
+               ) AS key_columns
+        FROM pg_stat_user_indexes stats
+        JOIN pg_index ix ON ix.indexrelid = stats.indexrelid
+        WHERE stats.schemaname = 'public' AND stats.relname = 'client_data'
+        ORDER BY pg_relation_size(stats.indexrelid) DESC, stats.indexrelname
+        """
+    )
+    indexes = [
+        {
+            "index_name": row["index_name"],
+            "index_bytes": int(row.get("index_bytes") or 0),
+            "idx_scan": int(row.get("idx_scan") or 0),
+            "idx_tup_read": int(row.get("idx_tup_read") or 0),
+            "idx_tup_fetch": int(row.get("idx_tup_fetch") or 0),
+            "is_unique": bool(row.get("is_unique")),
+            "is_primary": bool(row.get("is_primary")),
+            "protected": bool(
+                row.get("is_primary")
+                or row.get("is_unique")
+                or row["index_name"] in REQUIRED_CLIENT_DATA_INDEXES
+            ),
+            "key_columns": [str(value) for value in (row.get("key_columns") or [])],
+            "predicate": row.get("predicate"),
+            "index_definition": row.get("index_definition"),
+        }
+        for row in rows
+    ]
+    names = {row["index_name"] for row in indexes}
+    identity_duplicate_groups = _count(
+        """
+        SELECT COUNT(*) AS count
+        FROM (
+            SELECT client_id, template_id, source_identity
+            FROM public.client_data
+            WHERE is_deleted = FALSE
+              AND change_detection_status <> 'deleted'
+              AND source_identity IS NOT NULL
+              AND source_identity <> ''
+            GROUP BY client_id, template_id, source_identity
+            HAVING COUNT(*) > 1
+        ) duplicate_groups
+        """
+    )
+    plan_evidence = (
+        _client_data_query_plan_evidence()
+        if include_query_plans
+        else {"available": False, "reason": "query-plan capture not requested", "plans": []}
+    )
+    return {
+        "table_name": "client_data",
+        "index_bytes_total": sum(row["index_bytes"] for row in indexes),
+        "required_indexes": list(REQUIRED_CLIENT_DATA_INDEXES),
+        "missing_required_indexes": [
+            name for name in REQUIRED_CLIENT_DATA_INDEXES if name not in names
+        ],
+        "zero_scan_indexes": [
+            row["index_name"] for row in indexes if row["idx_scan"] == 0
+        ],
+        "zero_scan_non_protected_indexes": [
+            row["index_name"]
+            for row in indexes
+            if row["idx_scan"] == 0 and not row["protected"]
+        ],
+        "protected_indexes": [
+            row["index_name"] for row in indexes if row["protected"]
+        ],
+        "active_identity_duplicate_group_count": identity_duplicate_groups,
+        "possible_overlap_pairs": _possible_index_overlaps(indexes),
+        "plan_evidence": plan_evidence,
+        "maintenance_candidates": _index_maintenance_candidates(indexes, plan_evidence),
+        "indexes": indexes,
+        "policy": (
+            "Indexes are never dropped automatically; primary, unique, and "
+            "active-identity indexes are protected, and zero-scan or overlapping "
+            "indexes require EXPLAIN and workload evidence."
+        ),
+    }
 
 
 def _protected_counts() -> Dict[str, int]:
@@ -277,6 +553,7 @@ def _preview_fingerprint_payload(preview: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "database": preview["database"],
         "table_sizes": preview["table_sizes"],
+        "index_review": preview["index_review"],
         "protected": preview["protected"],
         "removable": preview["removable"],
     }
@@ -668,6 +945,20 @@ def get_storage_cleanup_preview() -> Dict[str, Any]:
             }
         )
 
+    validation_plans = []
+    for table_name in TEMPORARY_PLAN_TABLES:
+        validation_plans.append(
+            {
+                "table_name": table_name,
+                "row_count": _count(
+                    f"SELECT COUNT(*) AS count FROM public.{table_name}"
+                ),
+                "physical_bytes": size_map.get(table_name, {}).get("total_bytes", 0),
+                "formatted": size_map.get(table_name, {}).get("formatted", "0 B"),
+                "rule": "temporary validation payload; applied/expired/superseded plans are removable",
+            }
+        )
+
     retired_candidate = _first(
         """
         SELECT COUNT(*) AS count,
@@ -690,9 +981,11 @@ def get_storage_cleanup_preview() -> Dict[str, Any]:
             "formatted": _format_bytes(database_bytes),
         },
         "table_sizes": sizes,
+        "index_review": _client_data_index_review(include_query_plans=True),
         "protected": _protected_counts(),
         "removable": {
             "logs": logs,
+            "validation_plans": validation_plans,
             "retired_client_data": {
                 "row_count": int(retired_candidate.get("count") or 0),
                 "payload_bytes": int(retired_candidate.get("payload_bytes") or 0),
@@ -723,6 +1016,105 @@ def get_storage_cleanup_preview() -> Dict[str, Any]:
     }
     preview["preview_hash"] = _preview_hash(preview)
     return preview
+
+
+def apply_index_maintenance(
+    preview_hash: str,
+    index_name: str,
+    operator: str,
+    confirmation: str,
+) -> Dict[str, Any]:
+    """Remove one evidence-approved non-integrity index outside a transaction."""
+    if not os.environ.get("DATABASE_URL"):
+        raise RuntimeError("PostgreSQL is not configured")
+    if confirmation != INDEX_MAINTENANCE_CONFIRMATION_TEXT:
+        raise CleanupConfirmationError(
+            f"Type exactly: {INDEX_MAINTENANCE_CONFIRMATION_TEXT}"
+        )
+    if index_name not in POSTGRES_INDEX_MAINTENANCE_ALLOWLIST:
+        raise IndexMaintenanceBlockedError(
+            f"Index {index_name} is not an approved maintenance candidate."
+        )
+
+    before = get_storage_cleanup_preview()
+    if preview_hash != before["preview_hash"]:
+        raise CleanupPreviewStaleError(
+            "The preview is stale. Refresh the preview before index maintenance."
+        )
+
+    candidate = before["index_review"]["maintenance_candidates"].get(index_name)
+    if not candidate or not candidate["eligible_for_manual_approval"]:
+        reason = candidate["reason"] if candidate else "candidate was not found"
+        raise IndexMaintenanceBlockedError(
+            f"Index {index_name} did not pass the evidence gate: {reason}."
+        )
+
+    dropped = drop_postgres_index_concurrently(index_name)
+    try:
+        after = get_storage_cleanup_preview()
+    except Exception:
+        after = None
+    return {
+        "mode": "index_maintenance_applied",
+        "operator": (operator or "Unknown administrator")[:200],
+        "index_name": dropped,
+        "table_name": candidate["table_name"],
+        "index_definition_before": candidate.get("index_definition"),
+        "before": before,
+        "after": after,
+        "safety": [
+            "Only the evidence-approved non-integrity index was targeted.",
+            "No client_data rows or canonical transaction values were changed.",
+            "The original index definition is returned for controlled recreation if required.",
+            "The operation used PostgreSQL DROP INDEX CONCURRENTLY outside the application transaction.",
+        ],
+    }
+
+
+def compact_storage(
+    preview_hash: str,
+    operator: str,
+    confirmation: str,
+    full: bool = False,
+) -> Dict[str, Any]:
+    """Compact the approved storage tables outside the cleanup transaction."""
+    if not os.environ.get("DATABASE_URL"):
+        raise RuntimeError("PostgreSQL is not configured")
+    required_confirmation = (
+        FULL_COMPACTION_CONFIRMATION_TEXT if full else COMPACTION_CONFIRMATION_TEXT
+    )
+    if confirmation != required_confirmation:
+        raise CleanupConfirmationError(
+            f"Type exactly: {required_confirmation}"
+        )
+
+    before = get_storage_cleanup_preview()
+    if preview_hash != before["preview_hash"]:
+        raise CleanupPreviewStaleError(
+            "The preview is stale. Refresh the preview before compaction."
+        )
+
+    compacted_tables = compact_postgres_tables(
+        ("client_data", "data_audit_log", "upload_validation_plans"),
+        full=bool(full),
+    )
+    try:
+        after = get_storage_cleanup_preview()
+    except Exception:
+        after = None
+    return {
+        "mode": "compacted",
+        "operator": (operator or "Unknown administrator")[:200],
+        "full": bool(full),
+        "tables": compacted_tables,
+        "before": before,
+        "after": after,
+        "safety": [
+            "Only the allow-listed client_data, data_audit_log, and upload_validation_plans tables were compacted.",
+            "No rows were deleted by this operation.",
+            "VACUUM FULL may lock and rewrite tables; run it only during an approved maintenance window.",
+        ],
+    }
 
 
 def _delete_count(query: str) -> int:
@@ -772,6 +1164,14 @@ def apply_storage_cleanup(
             deleted_counts[table_name] = _delete_count(
                 f"DELETE FROM public.{table_name}"
             )
+
+        deleted_counts["upload_validation_plans"] = _delete_count(
+            """
+            DELETE FROM public.upload_validation_plans
+            WHERE status IN ('applied', 'expired', 'superseded')
+               OR expires_at < CURRENT_TIMESTAMP
+            """
+        )
 
         # These are all rebuildable transaction/report copies. Delete them
         # before retired client_data so their foreign-key references do not
@@ -852,7 +1252,89 @@ def apply_storage_cleanup(
         "safety": [
             "Protected Verification details, Trial Balance data, current Data Bank rows, and linked evidence were not deleted.",
             "The cleanup was committed as one transaction after protected-data checks passed.",
-            "VACUUM/compaction was not run; it remains a separate maintenance phase.",
+            "Validation plans that were applied, expired, superseded, or past expiry were removed.",
+            "VACUUM/compaction was not run; use the separate administrator compaction action to reclaim physical pages.",
+        ],
+        "preview": final_preview,
+    }
+
+
+def apply_validation_plan_cleanup(
+    preview_hash: str,
+    operator: str,
+    confirmation: str,
+) -> Dict[str, Any]:
+    """Remove only completed or expired validation plans; preserve all logs and data."""
+    if not os.environ.get("DATABASE_URL"):
+        raise RuntimeError("PostgreSQL is not configured")
+    if confirmation != VALIDATION_PLAN_CLEANUP_CONFIRMATION:
+        raise CleanupConfirmationError(
+            f"Type exactly: {VALIDATION_PLAN_CLEANUP_CONFIRMATION}"
+        )
+
+    fresh_preview = get_storage_cleanup_preview()
+    if preview_hash != fresh_preview["preview_hash"]:
+        raise CleanupPreviewStaleError(
+            "The preview is stale. Refresh the preview and submit the new confirmation."
+        )
+
+    protected_before = fresh_preview["protected"]
+    clean_operator = (operator or "Unknown administrator")[:200]
+    deleted_counts: Dict[str, int] = {}
+
+    with pg_transaction():
+        execute_write_pg("SET LOCAL statement_timeout = '120s'")
+        execute_write_pg(
+            """
+            INSERT INTO storage_cleanup_runs
+                (operator, scope, status, deleted_counts, preview_hash)
+            VALUES (%s, %s, 'started', %s, %s)
+            """,
+            (clean_operator, "validation_plans_only", "{}", preview_hash),
+        )
+        deleted_counts["upload_validation_plans"] = _delete_count(
+            """
+            DELETE FROM public.upload_validation_plans
+            WHERE status IN ('applied', 'expired', 'superseded')
+               OR expires_at < CURRENT_TIMESTAMP
+            """
+        )
+
+        protected_after = _protected_counts()
+        for key in (
+            "client_data_current",
+            "client_data_retained_for_verification",
+            "verification_details",
+            "trial_balance_accounts",
+            "trial_balance_uploads",
+        ):
+            if protected_after[key] != protected_before[key]:
+                raise RuntimeError(
+                    f"Protected-data safety check failed for {key}; transaction rolled back"
+                )
+
+        execute_write_pg(
+            """
+            UPDATE storage_cleanup_runs
+            SET status = 'completed', deleted_counts = %s, completed_at = CURRENT_TIMESTAMP
+            WHERE preview_hash = %s AND status = 'started'
+            """,
+            (json.dumps(deleted_counts, sort_keys=True), preview_hash),
+        )
+
+    try:
+        final_preview = get_storage_cleanup_preview()
+    except Exception:
+        final_preview = None
+
+    return {
+        "mode": "validation_plans_only",
+        "deleted_counts": deleted_counts,
+        "protected": protected_after,
+        "safety": [
+            "Only applied, expired, superseded, or past-expiry validation plans were removed.",
+            "Canonical client_data, audit logs, derived occurrences, and upload metadata were not deleted.",
+            "VACUUM/compaction was not run; use the separate administrator compaction action.",
         ],
         "preview": final_preview,
     }
