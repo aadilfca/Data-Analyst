@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Storage Cleanup</title>
-    <link rel="stylesheet" href="/static/style.css?v=70">
+    <link rel="stylesheet" href="/static/style.css?v=71">
     <style>
         .cleanup-note, .cleanup-card { background: white; border-radius: 16px; padding: 20px 25px; box-shadow: 0 2px 8px rgba(0,0,0,.06); margin-bottom: 20px; }
         .cleanup-note { border-left: 5px solid #2563eb; color: #334155; }
@@ -30,6 +30,14 @@
         .cleanup-confirm-row label { display: flex; flex-direction: column; gap: 6px; color: #475569; font-size: 13px; font-weight: 600; }
         .cleanup-confirm-row input { min-width: 310px; border: 1px solid #cbd5e1; border-radius: 7px; padding: 10px 12px; font: inherit; }
         .cleanup-delete-button { background: #b91c1c; }
+        .cleanup-maintenance-button { background: #7c3aed; padding: 7px 10px; font-size: 12px; margin: 2px 0; }
+        .cleanup-maintenance-button:disabled { cursor: not-allowed; }
+        .cleanup-evidence { color: #475569; font-size: 13px; line-height: 1.5; }
+        .cleanup-evidence-ok { color: #166534; font-weight: 600; }
+        .cleanup-evidence-warning { color: #92400e; font-weight: 600; }
+        .cleanup-evidence-blocked { color: #991b1b; font-weight: 600; }
+        .cleanup-maintenance-result { color: #166534; background: #f0fdf4; border: 1px solid #bbf7d0; padding: 12px; border-radius: 8px; display: none; margin-top: 14px; }
+        .cleanup-maintenance-result.review-required { color: #92400e; background: #fffbeb; border-color: #fde68a; }
         .cleanup-complete { color: #166534; background: #f0fdf4; border: 1px solid #bbf7d0; padding: 12px; border-radius: 8px; display: none; margin-top: 14px; }
     </style>
 </head>
@@ -41,8 +49,8 @@
             <h1>🧹 Storage Cleanup</h1>
             <p>Review database storage before any administrator-approved cleanup.</p>
         </header>
-        <div class='cleanup-note cleanup-danger'><strong>Cleanup temporarily locked:</strong> destructive cleanup is disabled until a verified database backup and the current-only Cashflows storage redesign are complete.</div>
-        <div class="cleanup-note"><strong>Protected data:</strong> current Data Bank rows, Verification details, Trial Balance data, and linked evidence are never deleted. Cleanup removes only the approved candidates shown in a fresh preview. VACUUM/compaction remains separate.</div>
+        <div class='cleanup-note cleanup-danger'><strong>Development mode:</strong> backup-before-cleanup is not enforced yet. Use the fresh preview and exact confirmation only while testing deletion behavior.</div>
+        <div class="cleanup-note"><strong>Protected data:</strong> current Data Bank rows, Verification details, Trial Balance data, linked evidence, and in-app Audit Rules configuration are not cleanup candidates. Cleanup removes only the approved candidates shown in a fresh preview. Index review, reindexing, dropping, and VACUUM/compaction remain separate explicit actions.</div>
         <div id="cleanupError" class="cleanup-error"></div>
         <section class="cleanup-card">
             <div class="cleanup-toolbar">
@@ -73,9 +81,34 @@
                 <tbody id="candidateBody"></tbody>
             </table>
         </section>
+        <section class="cleanup-card">
+            <h2>Index optimization evidence</h2>
+            <p class="cleanup-evidence">This is a read-only review of <code>client_data</code> indexes. A candidate is actionable only when the server reports that it is allow-listed, non-integrity, unused by representative plans, and eligible in the fresh preview. Missing bloat evidence blocks reindexing rather than being treated as proof that an index is healthy.</p>
+            <div class="cleanup-stats">
+                <div class="cleanup-stat"><span>client_data indexes</span><strong id="indexReviewTotal">—</strong></div>
+                <div class="cleanup-stat"><span>Index storage</span><strong id="indexReviewBytes">—</strong></div>
+                <div class="cleanup-stat"><span>Duplicate identity groups</span><strong id="duplicateIdentityGroups">—</strong></div>
+            </div>
+            <p id="indexPlanEvidenceStatus" class="cleanup-evidence">Planner evidence: waiting for a fresh preview.</p>
+            <p id="indexBloatEvidenceStatus" class="cleanup-evidence">Bloat evidence: waiting for a fresh preview.</p>
+            <div style="overflow-x:auto;"><table class="cleanup-table">
+                <thead><tr><th>Index</th><th>Size</th><th>Observed scans</th><th>Classification</th><th>Evidence / gate</th><th>Server-approved action</th></tr></thead>
+                <tbody id="indexReviewBody"></tbody>
+            </table></div>
+        </section>
+        <section class="cleanup-card cleanup-danger">
+            <h2>Apply one approved index action</h2>
+            <p>Use only an action button enabled by the fresh server preview. No index name or operation is accepted from free text. This confirmation is separate from row cleanup.</p>
+            <div class="cleanup-confirm-row">
+                <label for="indexMaintenanceConfirmation">Type exactly: REMOVE APPROVED INDEX
+                    <input id="indexMaintenanceConfirmation" type="text" autocomplete="off" spellcheck="false" placeholder="REMOVE APPROVED INDEX">
+                </label>
+            </div>
+            <div id="indexMaintenanceResult" class="cleanup-maintenance-result"></div>
+        </section>
         <section class="cleanup-card cleanup-danger">
             <h2>Apply approved cleanup</h2>
-            <p>Cleanup is currently locked. The preview remains available for review, but no deletion request can be submitted.</p>
+            <p>Cleanup is available for development testing after reviewing the fresh preview and confirming the exact deletion phrase.</p>
             <div class="cleanup-confirm-row">
                 <label for="cleanupConfirmation">Type exactly: DELETE APPROVED STORAGE DATA
                     <input id="cleanupConfirmation" type="text" autocomplete="off" spellcheck="false" placeholder="DELETE APPROVED STORAGE DATA">
@@ -86,7 +119,7 @@
         </section>
     </div>
     <script src="/static/client_context.js?v=18"></script>
-    <script src="/static/storage_cleanup.js?v=2"></script>
+    <script src="/static/storage_cleanup.js?v=4"></script>
 </body>
 
 </html>

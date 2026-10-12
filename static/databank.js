@@ -693,6 +693,18 @@ function resetDatasetTables(message) {
 }
 
 // ---------- FETCH AVAILABILITY DATA ----------
+const AVAILABILITY_REQUEST_TIMEOUT_MS = 15000;
+
+async function fetchAvailabilityEndpoint(url) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), AVAILABILITY_REQUEST_TIMEOUT_MS);
+    try {
+        return await fetch(url, { signal: controller.signal });
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
+
 async function fetchAvailability() {
     const clientId = getSelectedClientId();
     if (!clientId) {
@@ -720,8 +732,8 @@ async function fetchAvailability() {
     
     try {
         const [res, dbSizeRes] = await Promise.all([
-            fetch(`${API_BASE}/api/data/availability?${params.toString()}`),
-            fetch(`${API_BASE}/api/data/db-size?client_id=${clientId}`)
+            fetchAvailabilityEndpoint(`${API_BASE}/api/data/availability?${params.toString()}`),
+            fetchAvailabilityEndpoint(`${API_BASE}/api/data/db-size?client_id=${clientId}`)
         ]);
         if (!res.ok) {
             const err = await res.json();
@@ -741,9 +753,9 @@ async function fetchAvailability() {
         // fetch from availability since it's not scoped to the date range.
         if (dbSizeRes.ok) {
             const dbSizeData = await dbSizeRes.json();
-            statsClientDbSize.textContent = dbSizeData.formatted || '0 B';
+            statsClientDbSize.textContent = dbSizeData.formatted || '—';
         } else {
-            statsClientDbSize.textContent = '0 B';
+            statsClientDbSize.textContent = '—';
         }
 
         // Overdue Uploads (Phase D2, FINAL): not date-range-scoped (it's a
@@ -782,11 +794,14 @@ async function fetchAvailability() {
     } catch (error) {
         await hideClientDataLoading();
         console.error('Fetch availability error:', error);
-        showStatus('❌ Error: ' + error.message, 'error');
-        resetDatasetTables('❌ Error loading data. Please try again.');
-        statsTotalRecords.textContent = '0';
-        statsTotalTemplates.textContent = '0';
-        statsClientDbSize.textContent = '0 B';
+        const reason = error.name === 'AbortError'
+            ? 'The data service did not respond within 15 seconds.'
+            : (error.message || 'The data service returned an error.');
+        showStatus('❌ Data Bank unavailable: ' + reason, 'error');
+        resetDatasetTables('❌ Uploaded data could not be loaded. No zero-record result was assumed; retry or check the data service.');
+        statsTotalRecords.textContent = '—';
+        statsTotalTemplates.textContent = '—';
+        statsClientDbSize.textContent = '—';
     }
 }
 

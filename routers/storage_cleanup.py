@@ -52,7 +52,7 @@ def storage_cleanup_preview(session=Depends(require_admin)):
     except Exception as exc:
         raise HTTPException(
             status_code=503,
-            detail="Storage preview is temporarily unavailable; no cleanup was performed.",
+            detail="Storage preview is temporarily unavailable because database evidence could not be read; no cleanup or optimization action was performed.",
         ) from exc
 
 

@@ -1,5 +1,13 @@
 # Changelog Archive
 
+## Controlled index review visibility and Data Bank failure state - 2026-10-12
+
+**Scope:** Make the existing three-phase index-review safeguards visible in the admin UI and prevent an unavailable Data Bank request from being presented as zero records.
+
+**Implementation:** Storage Cleanup now renders index sizes, scan counts, duplicate-identity blockers, planner evidence, optional bloat evidence, server-approved action buttons, exact index confirmation, and post-maintenance verification. Buttons remain disabled until a fresh server candidate and `REMOVE APPROVED INDEX` confirmation are present; canonical rows are never edited by the browser. The preview route returns a safe database-evidence-unavailable message without exposing connection details. Data Bank availability/database-size requests now time out after 15 seconds and show em-dash metrics plus an explicit unavailable message rather than resetting to zero.
+
+**Verification:** The focused storage/index/upload suite passed 46 tests; both changed JavaScript files passed `node --check`. Playwright login with `codex` and Leather Crop confirmed live Data Bank values of 105,471 records, 58.4 MB, and 6 templates. A read-only mocked preview confirmed the Storage Cleanup evidence table and confirmation gate; a read-only aborted availability request confirmed the explicit unavailable state. The running dev server still returned its older generic 503 text until restarted/reloaded. No cleanup, index maintenance, or database mutation was performed; the database is not certified fully optimized until a fresh live preview succeeds.
+
 ## Locked upload and deletion contract - 2026-10-11
 
 **Decision:** `client_data` is the only durable canonical transaction set. Raw values and report-required derived columns stay together; reports and analysis do not receive a second transaction copy. Upload validation must count exact duplicate lines, retain only the first copy, stop an unchanged previously imported file as a no-op, apply corrections in place, insert new/backdated rows once, and block conflicting identities before a write.

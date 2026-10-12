@@ -23,6 +23,19 @@ class StorageCleanupPreviewTests(unittest.TestCase):
             storage_cleanup.storage_cleanup_preview({"role": "admin"})
         preview.assert_called_once_with()
 
+    def test_preview_route_reports_safe_evidence_unavailable_message(self):
+        with patch.object(
+            storage_cleanup,
+            "get_storage_cleanup_preview",
+            side_effect=ConnectionError("database connection detail must not be exposed"),
+        ):
+            with self.assertRaises(HTTPException) as error:
+                storage_cleanup.storage_cleanup_preview({"role": "admin"})
+
+        self.assertEqual(error.exception.status_code, 503)
+        self.assertIn("database evidence could not be read", error.exception.detail)
+        self.assertNotIn("database connection detail", error.exception.detail)
+
     def test_admin_guard_rejects_non_admin(self):
         with self.assertRaises(HTTPException) as error:
             require_admin({"role": "analyst"})
