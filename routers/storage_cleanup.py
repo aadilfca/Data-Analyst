@@ -1,5 +1,7 @@
 """Administrator-only storage cleanup preview and apply API."""
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -17,6 +19,7 @@ from services.storage_cleanup import (
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class StorageCleanupApplyRequest(BaseModel):
@@ -48,8 +51,10 @@ def storage_cleanup_preview(session=Depends(require_admin)):
     try:
         return get_storage_cleanup_preview()
     except RuntimeError as exc:
+        logger.exception("storage_cleanup_preview_failed error_type=%s", type(exc).__name__)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
+        logger.exception("storage_cleanup_preview_failed error_type=%s", type(exc).__name__)
         raise HTTPException(
             status_code=503,
             detail="Storage preview is temporarily unavailable because database evidence could not be read; no cleanup or optimization action was performed.",

@@ -287,3 +287,5 @@ Do this automatically at the end of the session without being asked.
 - 2026-10-12: Phase 2 adds planner-only evidence gates and allow-listed concurrent index maintenance without changing canonical transaction rows.
 - 2026-10-12: Phase 3 adds optional bloat evidence, concurrent index reindexing, and post-maintenance invariants for storage optimization.
 - 2026-10-12: Controlled index-review implementation is complete: storage UI exposes index/planner/bloat/post-check evidence, Data Bank failures show unavailable instead of zero, and Playwright covers live success/failure states; live database optimization remains uncertified until a fresh preview succeeds.
+- 2026-10-12: Storage Cleanup preview now logs safe server-side failure context and degrades optional planner/bloat probes to unavailable evidence without enabling maintenance; core storage-query failures remain blocked.
+- 2026-10-12: Fixed the live Storage Cleanup 503: the index inventory qualified `stats.indexrelid`, resolving PostgreSQL's ambiguous-column error; Playwright now receives HTTP 200 and renders 16 index rows, while unavailable `pgstatindex` evidence safely blocks reindexing.

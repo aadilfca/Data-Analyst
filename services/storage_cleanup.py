@@ -7,6 +7,7 @@ silently broaden the protected-data boundaries shown to the administrator.
 from datetime import datetime, timezone
 import hashlib
 import json
+import logging
 import os
 from typing import Any, Dict, List
 
@@ -19,6 +20,9 @@ from database import (
     pg_transaction,
     reindex_postgres_index_concurrently,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 CONFIRMATION_TEXT = "DELETE APPROVED STORAGE DATA"
@@ -216,9 +220,14 @@ def _client_data_query_plan_evidence() -> Dict[str, Any]:
                 }
             )
         except Exception as exc:
+            logger.exception(
+                "storage_cleanup_planner_evidence_failed query_name=%s error_type=%s",
+                query_name,
+                type(exc).__name__,
+            )
             return {
                 "available": False,
-                "reason": f"EXPLAIN failed for {query_name}: {exc}",
+                "reason": f"Planner evidence unavailable for {query_name}; maintenance actions remain blocked.",
                 "plans": plans,
             }
 
@@ -262,10 +271,15 @@ def _client_data_index_bloat_evidence() -> Dict[str, Any]:
                 ),
             }
         except Exception as exc:
+            logger.exception(
+                "storage_cleanup_bloat_evidence_failed index_name=%s error_type=%s",
+                index_name,
+                type(exc).__name__,
+            )
             return {
                 "available": False,
                 "extension": "pgstattuple",
-                "reason": f"pgstatindex failed for {index_name}: {exc}",
+                "reason": "Bloat evidence unavailable; reindexing remains blocked.",
                 "indexes": evidence,
                 "thresholds": INDEX_BLOAT_REINDEX_THRESHOLDS,
             }
@@ -381,7 +395,7 @@ def _client_data_index_review(
     rows = execute_query_pg(
         """
         SELECT indexrelname AS index_name,
-               pg_relation_size(indexrelid) AS index_bytes,
+               pg_relation_size(stats.indexrelid) AS index_bytes,
                COALESCE(idx_scan, 0) AS idx_scan,
                COALESCE(idx_tup_read, 0) AS idx_tup_read,
                COALESCE(idx_tup_fetch, 0) AS idx_tup_fetch,

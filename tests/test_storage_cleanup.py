@@ -36,6 +36,19 @@ class StorageCleanupPreviewTests(unittest.TestCase):
         self.assertIn("database evidence could not be read", error.exception.detail)
         self.assertNotIn("database connection detail", error.exception.detail)
 
+    def test_preview_route_logs_failure_without_changing_safe_response(self):
+        with patch.object(
+            storage_cleanup,
+            "get_storage_cleanup_preview",
+            side_effect=ConnectionError("database connection detail must not be exposed"),
+        ), patch.object(storage_cleanup.logger, "exception") as log:
+            with self.assertRaises(HTTPException) as error:
+                storage_cleanup.storage_cleanup_preview({"role": "admin"})
+
+        log.assert_called_once()
+        self.assertEqual(error.exception.status_code, 503)
+        self.assertNotIn("database connection detail", error.exception.detail)
+
     def test_admin_guard_rejects_non_admin(self):
         with self.assertRaises(HTTPException) as error:
             require_admin({"role": "analyst"})
@@ -239,8 +252,12 @@ class StorageCleanupPreviewTests(unittest.TestCase):
                 "is_primary": False,
                 "key_columns": ["client_id", "is_deleted"],
             },
-        ]):
+        ]) as query_mock:
             result = cleanup_service._client_data_index_review()
+
+        query = query_mock.call_args_list[0].args[0]
+        self.assertIn("pg_relation_size(stats.indexrelid)", query)
+        self.assertNotIn("pg_relation_size(indexrelid)", query)
 
         self.assertEqual(result["missing_required_indexes"], [])
         self.assertEqual(result["index_bytes_total"], 410)
@@ -262,6 +279,32 @@ class StorageCleanupPreviewTests(unittest.TestCase):
             }],
         )
         self.assertIn("never dropped automatically", result["policy"])
+
+    def test_planner_evidence_failure_is_optional_and_does_not_expose_database_error(self):
+        with patch.object(
+            cleanup_service,
+            "execute_query_pg",
+            side_effect=RuntimeError("database detail must not reach the response"),
+        ), patch.object(cleanup_service.logger, "exception") as log:
+            result = cleanup_service._client_data_query_plan_evidence()
+
+        self.assertFalse(result["available"])
+        self.assertIn("maintenance actions remain blocked", result["reason"])
+        self.assertNotIn("database detail", result["reason"])
+        log.assert_called_once()
+
+    def test_bloat_evidence_failure_is_optional_and_blocks_reindex(self):
+        with patch.object(
+            cleanup_service,
+            "execute_query_pg",
+            side_effect=RuntimeError("database detail must not reach the response"),
+        ), patch.object(cleanup_service.logger, "exception") as log:
+            result = cleanup_service._client_data_index_bloat_evidence()
+
+        self.assertFalse(result["available"])
+        self.assertIn("reindexing remains blocked", result["reason"])
+        self.assertNotIn("database detail", result["reason"])
+        log.assert_called_once()
 
     def test_index_review_requires_planner_evidence_before_manual_candidate(self):
         rows = [{

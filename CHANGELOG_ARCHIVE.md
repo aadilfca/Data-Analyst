@@ -1,5 +1,19 @@
 # Changelog Archive
 
+## Storage Cleanup preview diagnostics and optional evidence fallback - 2026-10-12
+
+**Scope:** Establish a safe diagnostic ground for the HTTP 503 returned by the administrator Storage Cleanup preview.
+
+**Implementation:** The preview route now records server-side traceback context with an error type while keeping credentials and database details out of the response. Planner and `pgstattuple` bloat probes log their failures and return controlled unavailable evidence; those failures cannot authorize reindexing or index removal. Required storage/count query failures remain a safe 503 so incomplete measurements are never presented as valid.
+
+**Verification:** Storage Cleanup tests passed 39 tests; Python compilation and `storage_cleanup.js` syntax checks passed. No cleanup, index maintenance, vacuum, reindex, database mutation, commit, or push was performed.
+
+## Storage Cleanup 503 fix - 2026-10-12
+
+**Root cause:** The `client_data` index inventory query called `pg_relation_size(indexrelid)` while joining `pg_stat_user_indexes` and `pg_index`; PostgreSQL rejected the unqualified column as ambiguous.
+
+**Fix and verification:** Qualified the expression as `pg_relation_size(stats.indexrelid)` and added a regression assertion. A fresh database-connected server returned HTTP 200 from `/api/storage-cleanup/preview`; Playwright confirmed the Storage Cleanup page displayed a fresh preview and 16 index rows. The optional `pgstatindex` function is unavailable in the current database, so the UI correctly reports bloat evidence unavailable and blocks reindexing. No data or indexes were changed.
+
 ## Controlled index review visibility and Data Bank failure state - 2026-10-12
 
 **Scope:** Make the existing three-phase index-review safeguards visible in the admin UI and prevent an unavailable Data Bank request from being presented as zero records.
