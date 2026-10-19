@@ -1,5 +1,13 @@
 # Changelog Archive
 
+## Cashflows transaction-window canonical source repair - 2026-10-19
+
+**Cause/fix:** The account transaction window still read retired prepared/classification copies while the summary read canonical `client_data`. `routers/data.py` now calls `services/cash_bank_classification.py` directly; preview SQL reads active canonical derivations and current category assignments, with report-aligned voucher eligibility, account/category/date/Treasury/search filters and pagination. Invalid filters return HTTP 400. No source/schema changes or transaction copies.
+
+**Verification:** Classification-preview and reconciliation-report suites: 72 passed, one migration-only skip. In-memory SQL and HTTP regressions require no retired tables, preserve repeated/correction-upload lines and exact derived amounts, exclude ineligible rows/treasury legs, compare report population/totals, and confirm source rows remain unchanged. Python syntax and whitespace checks passed. Wider UI run: 77 passed, one skipped, three failures in unchanged summary-column-contract, defaults and pane-width checks. PostgreSQL/live-browser behavior remains unverified; no packages installed.
+
+**Acceptance:** Aadil accepted the phase and explicitly requested commit/push.
+
 ## Cashflows canonical Client Data report source - Phase 1 - 2026-10-12
 
 **Scope:** Make the active Cashflows summary, drilldown, export, and revision paths use the upload-gated `client_data` rows and their `derived_*` columns without report-time duplicate selection or read-model lookup.

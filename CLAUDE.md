@@ -16,7 +16,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 - routers/clients.py + static/clients.* → firm-level client management; admin-only except the paginated `GET /api/clients`. See CHANGELOG_ARCHIVE.md.
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, and database size with PostgreSQL table/index breakdown. See CHANGELOG_ARCHIVE.md.
-- routers/data.py + static/databank.* → Client Data Bank availability, calendars, overdue uploads, bounded cached preview pages, filtering, frequency settings, and guarded mutations. See CHANGELOG_ARCHIVE.md.
+- routers/data.py + static/databank.* → Data Bank availability, calendars, cached previews, canonical Cashflows transaction previews, filtering, frequency settings, and guarded mutations. See CHANGELOG_ARCHIVE.md.
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
 - routers/import_export.py → Excel uploads, snapshot-batched comparisons, stable identities, compact audits, temporary plans, storage guards, and protected replacements. See CHANGELOG_ARCHIVE.md.
 - routers/settings.py + static/settings.* → application settings and the firm-wide Holiday list; header/tabs rendered by `client_context.js`. See CHANGELOG_ARCHIVE.md.
@@ -46,7 +46,7 @@ One line per file group: what it is now. Full build history for every entry live
 - static/loading_ui.js → shared `window.LoadingUI` primitives, including token-based target-aware global progress-cursor ownership. See CHANGELOG_ARCHIVE.md.
 - static/api_utils.js → shared `apiFetch()` (GET debounce/retry) and `apiFetchMutate()` (non-retried writes, optional Loading UI); warning-only direct-`/api/` fetch guard; partial rollout. See CHANGELOG_ARCHIVE.md.
 - services/ledger_group_summary.py + ledger_report_source.py → Accounting summaries, canonical voucher retrieval and period-scoped database coverage counts; legacy loaders remain migration-only. See CHANGELOG_ARCHIVE.md.
-- services/cash_bank_classification.py + scripts/backfill_cash_bank_transaction_classifications.py → canonical PostgreSQL classifications, exact amount repair, configuration reclassification and controlled backfills. See CHANGELOG_ARCHIVE.md.
+- services/cash_bank_classification.py + scripts/backfill_cash_bank_transaction_classifications.py → canonical PostgreSQL classifications/previews, exact amount repair, configuration reclassification and controlled backfills. See CHANGELOG_ARCHIVE.md.
 - services/cashflow_voucher_canonicalization.py + cashflow_voucher_occurrence_store.py + scripts/backfill_cashflow_voucher_occurrences.py -> compact audit-preserving occurrence decisions and controlled maintenance; transaction rows remain in `client_data`. See CHANGELOG_ARCHIVE.md.
 - services/cashflow_preparation.py + scripts/backfill_cashflow_prepared_read_model.py -> metadata-only preparation/job recovery boundary; prepared transaction copies and rollups are no longer rebuilt. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_xlsx.py → static Bank/Cash workbook exporter for summaries, schedules, reviews, cross-checks, and reconciliation proofs. See CHANGELOG_ARCHIVE.md.
@@ -241,6 +241,8 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+
+- 2026-10-19: Fixed Cashflows transaction windows to read canonical Client Data; removed retired preview fallbacks and added source/filter regression coverage.
 
 - 2026-10-19: Added scoped database row/voucher totals to Cashflows drilldown headers; preserved accounting and source data. See CHANGELOG_ARCHIVE.md.
 

@@ -15,7 +15,6 @@ from typing import Any, Callable, Mapping
 
 from psycopg2.extras import RealDictCursor, execute_values
 from database import execute_query_pg
-from services.ledger_report_source import cashflow_report_voucher_selection_cte
 
 
 _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
@@ -529,27 +528,23 @@ def load_cashflow_classification_preview(
 ) -> dict[str, Any]:
     """Return one read-only, paginated Client Data/classification view.
 
-    Raw ``client_data.row_data`` is selected but never updated. The three
-    Cashflows fields are resolved in SQL from the current derived row and the
-    active Account Control Centre category assignment.
+    Read canonical ``client_data`` derivations and current category assignments,
+    matching the report's active, non-zero voucher population. Raw source values
+    stay unchanged; retired transaction-copy tables are never consulted.
     """
     if page < 1 or limit < 1 or limit > 200:
         raise ValueError("Invalid classification preview pagination")
 
-    selection_cte = cashflow_report_voucher_selection_cte()
-    selection_params = (
-        client_id, template_id,
-        client_id, client_id, template_id,
-        client_id, template_id,
-    )
     where = [
         "cd.client_id = %s",
         "cd.template_id = %s",
         "cd.is_deleted = FALSE",
-        "cd.change_detection_status != 'deleted'",
-        "c.is_current = TRUE",
-        "c.transaction_date >= %s",
-        "c.transaction_date <= %s",
+        "COALESCE(cd.change_detection_status, 'active') <> 'deleted'",
+        "cd.derived_transaction_date >= %s",
+        "cd.derived_transaction_date <= %s",
+        "NULLIF(BTRIM(cd.derived_voucher_id), '') IS NOT NULL",
+        "NULLIF(BTRIM(cd.derived_account_code), '') IS NOT NULL",
+        "(COALESCE(cd.derived_debit, 0) <> 0 OR COALESCE(cd.derived_credit, 0) <> 0)",
     ]
     params: list[Any] = [client_id, template_id, period_start, period_end]
 
@@ -557,21 +552,21 @@ def load_cashflow_classification_preview(
         like = f"%{search.strip()}%"
         where.append(
             "("
-            "LOWER(COALESCE(c.voucher_id, '')) LIKE LOWER(%s) "
-            "OR LOWER(COALESCE(c.account_code, '')) LIKE LOWER(%s) "
+            "LOWER(COALESCE(cd.derived_voucher_id, '')) LIKE LOWER(%s) "
+            "OR LOWER(COALESCE(cd.derived_account_code, '')) LIKE LOWER(%s) "
             "OR LOWER(COALESCE(category.label, '')) LIKE LOWER(%s) "
-            "OR LOWER(COALESCE(c.treasury_account_code, '')) LIKE LOWER(%s) "
+            "OR LOWER(COALESCE(cd.derived_treasury_account_code, '')) LIKE LOWER(%s) "
             "OR LOWER(COALESCE("
-            "cd.row_data ->> 'Account Name', "
+            "NULLIF(BTRIM(cd.derived_account_name), ''), cd.row_data ->> 'Account Name', "
             "cd.row_data ->> 'Account Title', "
             "cd.row_data ->> 'Ledger Name', "
             "cd.row_data ->> 'Particulars', "
             "''"
             ")) LIKE LOWER(%s) "
             "OR LOWER(CASE "
-            "WHEN c.treasury_type = 'cash' THEN 'Cash' "
-            "WHEN c.treasury_type = 'bank' THEN 'Bank' "
-            "WHEN c.classification_status = 'non_treasury' THEN 'Counter-account' "
+            "WHEN cd.derived_treasury_type = 'cash' THEN 'Cash' "
+            "WHEN cd.derived_treasury_type = 'bank' THEN 'Bank' "
+            "WHEN cd.derived_classification_status = 'non_treasury' THEN 'Counter-account' "
             "ELSE 'Needs review' "
             "END) LIKE LOWER(%s) "
             "OR EXISTS (SELECT 1 FROM jsonb_each_text(cd.row_data) pair "
@@ -581,13 +576,13 @@ def load_cashflow_classification_preview(
         params.extend([like] * 7)
 
     if classification_type == "cash":
-        where.append("c.treasury_type = 'cash'")
+        where.append("cd.derived_treasury_type = 'cash'")
     elif classification_type == "bank":
-        where.append("c.treasury_type = 'bank'")
+        where.append("cd.derived_treasury_type = 'bank'")
     elif classification_type == "counter":
-        where.append("c.classification_status = 'non_treasury'")
+        where.append("cd.derived_classification_status = 'non_treasury'")
     elif classification_type == "review":
-        where.append("c.classification_status = 'unmapped'")
+        where.append("cd.derived_classification_status = 'unmapped'")
     elif classification_type not in (None, ""):
         raise ValueError("Invalid classification type")
 
@@ -600,67 +595,53 @@ def load_cashflow_classification_preview(
         where.append(
             'EXISTS ('
             ' SELECT 1'
-            ' FROM cash_bank_transaction_classifications treasury'
-            ' JOIN selected_report_vouchers treasury_voucher'
-            ' ON treasury_voucher.upload_id = treasury.upload_id'
-            " AND treasury_voucher.voucher_identity = UPPER(REGEXP_REPLACE(COALESCE(treasury.voucher_id, ''), '\\s+', '', 'g'))"
-            ' WHERE treasury.client_id = c.client_id'
-            ' AND treasury.template_id = c.template_id'
-            ' AND treasury.voucher_id = c.voucher_id'
-            ' AND treasury.is_current = TRUE'
-            ' AND treasury.treasury_type IN (' + treasury_placeholders + ')'
+            ' FROM client_data treasury'
+            ' WHERE treasury.client_id = cd.client_id'
+            ' AND treasury.template_id = cd.template_id'
+            ' AND treasury.derived_voucher_id = cd.derived_voucher_id'
+            ' AND treasury.is_deleted = FALSE'
+            " AND COALESCE(treasury.change_detection_status, 'active') <> 'deleted'"
+            ' AND treasury.derived_transaction_date >= %s'
+            ' AND treasury.derived_transaction_date <= %s'
+            " AND NULLIF(BTRIM(treasury.derived_account_code), '') IS NOT NULL"
+            ' AND (COALESCE(treasury.derived_debit, 0) <> 0 OR COALESCE(treasury.derived_credit, 0) <> 0)'
+            ' AND treasury.derived_treasury_type IN (' + treasury_placeholders + ')'
             ')'
         )
-        params.extend(sorted(treasury_types))
+        params.extend([period_start, period_end, *sorted(treasury_types)])
 
     if account_code:
-        where.append("LOWER(c.account_code) = LOWER(%s)")
+        where.append("LOWER(cd.derived_account_code) = LOWER(%s)")
         params.append(account_code.strip())
-    if category and category.strip().casefold() != '__unassigned__':
+    if category and category.strip().casefold() == '__unassigned__':
+        where.append("NULLIF(BTRIM(COALESCE(category.label, '')), '') IS NULL")
+    elif category and category.strip():
+        # The summary falls back to the derived account name for unmapped heads.
         where.append(
-            'LOWER(COALESCE(NULLIF(BTRIM(category.label), \'\'), '
-            'NULLIF(BTRIM(COALESCE('
-            'cd.row_data ->> \'Account Name\', '
-            'cd.row_data ->> \'Account Title\', '
-            'cd.row_data ->> \'Ledger Name\', '
-            'cd.row_data ->> \'Particulars\', '
-            '\'\')), \'\'))) LIKE LOWER(%s)'
+            "LOWER(COALESCE(NULLIF(BTRIM(category.label), ''), "
+            "NULLIF(BTRIM(cd.derived_account_name), ''), 'Unmapped account')) LIKE LOWER(%s)"
         )
-        params.append(f'%{category.strip()}%')
-        category = None
-    if category:
-        category_filter = category.strip().casefold()
-        if category_filter == "__unassigned__":
-            where.append("NULLIF(BTRIM(COALESCE(category.label, '')), '') IS NULL")
-        else:
-            where.append("LOWER(COALESCE(category.label, '')) LIKE LOWER(%s)")
-            params.append(f"%{category.strip()}%")
+        params.append(f"%{category.strip()}%")
 
     where_sql = " AND ".join(where)
     from_sql = """
         FROM client_data cd
-        JOIN cash_bank_transaction_classifications c
-          ON c.client_data_id = cd.id
-        JOIN selected_report_vouchers selected_report_voucher
-          ON selected_report_voucher.upload_id = cd.upload_id
-         AND selected_report_voucher.voucher_identity = UPPER(REGEXP_REPLACE(COALESCE(c.voucher_id, ''), '\\s+', '', 'g'))
         LEFT JOIN account_control_cashflow_category_assignments category_assignment
-          ON category_assignment.client_id = c.client_id
-         AND category_assignment.account_code = c.account_code
+          ON category_assignment.client_id = cd.client_id
+         AND category_assignment.account_code = cd.derived_account_code
         LEFT JOIN account_control_cashflow_categories category
           ON category.id = category_assignment.category_id
-         AND category.client_id = c.client_id
+         AND category.client_id = cd.client_id
          AND category.is_active = TRUE
     """
     count_rows = query_fn(
-        f"{selection_cte} SELECT COUNT(*) AS total {from_sql} WHERE {where_sql}",
-        tuple([*selection_params, *params]),
+        f"SELECT COUNT(*) AS total {from_sql} WHERE {where_sql}",
+        tuple(params),
     )
     total = int(count_rows[0].get("total") or 0) if count_rows else 0
 
     offset = (page - 1) * limit
     data_sql = f"""
-        {selection_cte}
         SELECT
             cd.id,
             cd.row_data,
@@ -668,29 +649,23 @@ def load_cashflow_classification_preview(
             cd.extract_date,
             cd.data_quality_flag,
             cd.rate_source,
-            c.voucher_id,
-            c.account_code,
-            c.transaction_date,
-            c.debit,
-            c.credit,
-            c.treasury_type,
-            c.treasury_account_code,
-            c.configuration_version,
-            c.classification_status,
+            cd.derived_voucher_id AS voucher_id,
+            cd.derived_account_code AS account_code,
+            cd.derived_transaction_date AS transaction_date,
+            cd.derived_debit AS debit,
+            cd.derived_credit AS credit,
+            cd.derived_treasury_type AS treasury_type,
+            cd.derived_treasury_account_code AS treasury_account_code,
+            cd.derived_version AS configuration_version,
+            cd.derived_classification_status AS classification_status,
             COALESCE(category.label, '') AS assigned_category,
-            COALESCE(
-                cd.row_data ->> 'Account Name',
-                cd.row_data ->> 'Account Title',
-                cd.row_data ->> 'Ledger Name',
-                cd.row_data ->> 'Particulars',
-                ''
-            ) AS source_account_name
+            COALESCE(NULLIF(BTRIM(cd.derived_account_name), ''), '') AS source_account_name
         {from_sql}
         WHERE {where_sql}
-        ORDER BY c.transaction_date DESC NULLS LAST, c.voucher_id, c.account_code, cd.id
+        ORDER BY cd.derived_transaction_date DESC NULLS LAST, cd.derived_voucher_id, cd.derived_account_code, cd.id
         LIMIT %s OFFSET %s
     """
-    rows = query_fn(data_sql, tuple([*selection_params, *params, limit, offset]))
+    rows = query_fn(data_sql, tuple([*params, limit, offset]))
     formatted: list[dict[str, Any]] = []
     for row in rows:
         status = row.get("classification_status") or "unmapped"
@@ -726,8 +701,9 @@ def load_cashflow_classification_preview(
         "page": page,
         "limit": limit,
         "rows": formatted,
-        "duplicate_upload_suppression": True,
-        "source_upload_selection": "canonical current with filename fallback",
+        "duplicate_upload_suppression": False,
+        "source_upload_selection": "active client_data rows; upload gate is authoritative",
+        "source_mode": "client_data_derived",
     }
 
 def _record_classification_counts(summary: BackfillSummary, row: Mapping[str, Any]) -> None:
