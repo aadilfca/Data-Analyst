@@ -2,6 +2,8 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from contextlib import contextmanager
+from copy import deepcopy
 from unittest.mock import patch
 
 import database
@@ -15,6 +17,10 @@ class AppSmokeTests(unittest.TestCase):
     test_verification_indexes.py / test_upload_validation_counts.py."""
 
     def setUp(self):
+        pool_guard = patch.object(database, "get_pg_pool", side_effect=AssertionError(
+            "Smoke tests must not access live PostgreSQL"))
+        pool_guard.start()
+        self.addCleanup(pool_guard.stop)
         self.tmpdir = tempfile.TemporaryDirectory()
         self.original_db_name = database.DB_NAME
         database.DB_NAME = os.path.join(self.tmpdir.name, "test.db")
@@ -29,6 +35,20 @@ class AppSmokeTests(unittest.TestCase):
         self.client.close()
         database.DB_NAME = self.original_db_name
         self.tmpdir.cleanup()
+
+    @contextmanager
+    def _persisted_status_fixture(self, profile):
+        """Supply the stored snapshot boundary while running the real status gates."""
+        from routers import verification
+
+        ruleset = deepcopy(profile)
+        for category in ruleset["categories"]:
+            category["matrix_version"] = 1
+        ruleset["applied_ruleset_hash"] = "fixture-status-ruleset-v1"
+        with patch.object(verification, "get_audit_rules_config_version", return_value=1), \
+             patch.object(verification, "load_persisted_category_status_ruleset", return_value=ruleset) as loader:
+            yield ruleset
+        loader.assert_called_with(1, 3, profile, expected_version=1)
 
     def test_dashboard_page_serves(self):
         response = self.client.get("/static/index.html")
@@ -156,7 +176,12 @@ class AppSmokeTests(unittest.TestCase):
                     if "SELECT id, template_id" in sql:
                         return [{"id": 44, "template_id": 2}]
                     if "FROM voucher_line_form_entries" in sql:
-                        return [{"document_id": 44}] if state["form"] else []
+                        # Form completion consumes typed values, not an entry marker.
+                        return [{"voucher_line_id": 7, "document_id": 44,
+                                 "bill_group_index": 0, "row_scope": "header", "sort_order": 0,
+                                 "entry_updated_at": None, "field_id": 4401, "field_type": "text",
+                                 "value_text": "Fixture evidence", "value_date": None,
+                                 "value_numeric": None}] if state["form"] else []
                     if "FROM voucher_check_status" in sql:
                         return [{"check_id": 1}] if state["check"] else []
                     if "COUNT(*) as cnt" in sql:
@@ -166,6 +191,7 @@ class AppSmokeTests(unittest.TestCase):
                     raise AssertionError(f"Unexpected fixture read: {sql}")
 
                 stack.enter_context(patch.object(verification, "execute_query_pg", side_effect=query))
+                ruleset = stack.enter_context(self._persisted_status_fixture(profile))
                 stack.enter_context(patch.object(verification, "get_document_auth_roles_batch", return_value={}))
                 stack.enter_context(patch.object(verification, "evaluate_cross_checks_for_line", return_value={
                     "results": [{"status": state["cross"], "name": "Fixture rule", "message": "Fixture result"}]}))
@@ -179,7 +205,7 @@ class AppSmokeTests(unittest.TestCase):
                 shortfalls.assert_not_called()
                 saved = verification.compute_and_persist_cleared_status(7, sibling_ids=[7], rulebook=profile)
                 self.assertEqual(saved["cleared_status"], expected)
-                self.assertEqual(write.call_args.args[1], (expected, 1, 7))
+                self.assertEqual(write.call_args.args[1], (expected, 1, ruleset["applied_ruleset_hash"], 7))
 
     def test_account_head_recommendation_marker_rolls_up_as_review_finding(self):
         from routers import verification
@@ -235,8 +261,10 @@ class AppSmokeTests(unittest.TestCase):
             raise AssertionError(f"Unexpected fixture read: {sql}")
 
         with patch.object(verification, "execute_query_pg", side_effect=query), \
+             self._persisted_status_fixture(profile), \
              patch.object(verification, "get_document_auth_roles_batch", return_value={}), \
              patch.object(verification, "evaluate_cross_checks_for_line", return_value={"results": []}), \
+             patch.object(verification, "_has_voucher_line_correct_confirmation", return_value=True), \
              patch.object(verification, "_has_pending_account_head_note", return_value=False):
             result = verification.compute_and_persist_cleared_status(
                 7, detail=True, persist=False, sibling_ids=[7], rulebook=profile
@@ -278,8 +306,10 @@ class AppSmokeTests(unittest.TestCase):
             raise AssertionError(f"Unexpected fixture read: {sql}")
 
         with patch.object(verification, "execute_query_pg", side_effect=query), \
+             self._persisted_status_fixture(profile), \
              patch.object(verification, "get_document_auth_roles_batch", return_value={}), \
              patch.object(verification, "evaluate_cross_checks_for_line", return_value={"results": []}), \
+             patch.object(verification, "_has_voucher_line_correct_confirmation", return_value=True), \
              patch.object(verification, "_has_pending_account_head_note", return_value=False):
             result = verification.compute_and_persist_cleared_status(
                 7, detail=True, persist=False, sibling_ids=[7], rulebook=profile
@@ -290,6 +320,24 @@ class AppSmokeTests(unittest.TestCase):
                 7, detail=True, persist=False, sibling_ids=[7], rulebook=profile
             )
         self.assertEqual(result["cleared_status"], "Cleared")
+
+    def test_missing_status_snapshot_blocks_without_writing_verification(self):
+        from fastapi import HTTPException
+        from routers import verification
+
+        profile = {"categories": [{"category_id": 3}], "voucher_checks": []}
+        with patch.object(verification, "execute_query_pg", return_value=[{
+            "id": 7, "session_id": 10, "transaction_ref": "FIXTURE-1",
+            "row_data": {"Account Code": "100"}, "extract_amount": 100,
+            "client_id": 1, "category_id_applied": 3, "category_name_applied": "Fixture",
+        }]), patch.object(verification, "get_audit_rules_config_version", return_value=1), \
+             patch.object(verification, "load_persisted_category_status_ruleset", return_value=None), \
+             patch.object(verification, "execute_write_pg") as write:
+            with self.assertRaises(HTTPException) as blocked:
+                verification.compute_and_persist_cleared_status(
+                    7, detail=True, sibling_ids=[7], rulebook=profile)
+        self.assertEqual(blocked.exception.status_code, 503)
+        write.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -748,6 +748,19 @@
         context.textContent = 'Period: ' + formatRange(cashflowSelection.start, cashflowSelection.end)
             + ' | View: ' + cashflowTreasuryViewLabel(result && result.treasury_view || cashflowTreasuryView)
             + ' | Grouping: ' + grouping;
+        const totals = result && result.database_totals;
+        // Cached parent reports may cover a broader period. Counts must carry
+        // their own matching client/source/date scope before they are displayed.
+        const templateId = lastCashflowsResult && lastCashflowsResult.configuration && lastCashflowsResult.configuration.source_template_id;
+        const matches = totals && Number(totals.client_id) === Number(clientId)
+            && totals.period_start === cashflowSelection.start && totals.period_end === cashflowSelection.end
+            && (templateId == null || Number(totals.template_id) === Number(templateId));
+        const rowCount = element('cashflowsDatabaseRowCount');
+        const voucherCount = element('cashflowsDatabaseVoucherCount');
+        if (rowCount) rowCount.textContent = matches && Number.isSafeInteger(totals.row_count) && totals.row_count >= 0
+            ? totals.row_count.toLocaleString('en-PK') : '—';
+        if (voucherCount) voucherCount.textContent = matches && Number.isSafeInteger(totals.voucher_count) && totals.voucher_count >= 0
+            ? totals.voucher_count.toLocaleString('en-PK') : '—';
     }
     function renderCashflowDrilldownCategoryOptions(values) {
         const datalist = element('cashflowsDrilldownCategoryOptions');
@@ -1852,6 +1865,7 @@
         if (treasuryType) params.set('treasury_type', treasuryType);
         if (periodKey) params.set('period_key', periodKey);
         showCashflowProcessing('Loading Cashflows ledger details', 'Preparing ledger details.');
+        renderCashflowDrilldownContext(null);
         setCashflowProcessingStep('load', 'Loading ledger details.');
         element('cashflowsLedgerDrilldownTable').innerHTML = '<tbody><tr><td class=cashflows-empty colspan=7>Loading ledger details...</td></tr></tbody>';
         return api('/api/reconciliation/cashflows/drilldown?' + params.toString(), { signal: controller.signal })
@@ -2446,6 +2460,7 @@
             periodSelect.appendChild(option);
         });
         setCashflowDrilldownMode(true);
+        renderCashflowDrilldownContext(lastCashflowsResult);
         button.disabled = true;
         await loadCashflowDrilldown(true);
         button.disabled = false;

@@ -1,7 +1,7 @@
 # Project: Internal Audit App
 
 ## Stack
-FastAPI (Python) backend, HTML+CSS+JS frontend, SQLite
+FastAPI (Python) backend, HTML+CSS+JS frontend; production PostgreSQL (Supabase) and legacy SQLite.
 
 ## About me
 CA, non-CS developer. Explain tradeoffs in plain terms.
@@ -12,21 +12,22 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- routers/reconciliation.py -> client-scoped account groups, report categories, standardized opening/month-end balance inputs, and Cashflows reports sourced from canonical `client_data`; prepared/read-model report paths are retired or gated. See CHANGELOG_ARCHIVE.md.
+- routers/reconciliation.py → Client mappings, balance inputs, canonical Cashflows reports and database coverage totals; prepared/read-model paths remain retired or gated. See CHANGELOG_ARCHIVE.md.
 
 - routers/clients.py + static/clients.* → firm-level client management; admin-only except the paginated `GET /api/clients`. See CHANGELOG_ARCHIVE.md.
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, and database size with PostgreSQL table/index breakdown. See CHANGELOG_ARCHIVE.md.
 - routers/data.py + static/databank.* → Client Data Bank availability, calendars, overdue uploads, bounded cached preview pages, filtering, frequency settings, and guarded mutations. See CHANGELOG_ARCHIVE.md.
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
-- routers/import_export.py -> Excel upload, mapping, date-format detection, summary-row filtering, strict hash/identity gates, action-only delta imports, compact audit payloads, and summaries. See CHANGELOG_ARCHIVE.md.
+- routers/import_export.py → Excel uploads, snapshot-batched comparisons, stable identities, compact audits, temporary plans, storage guards, and protected replacements. See CHANGELOG_ARCHIVE.md.
 - routers/settings.py + static/settings.* → application settings and the firm-wide Holiday list; header/tabs rendered by `client_context.js`. See CHANGELOG_ARCHIVE.md.
 - routers/templates.py + static/templates.*, static/columns.* → master-column and template CRUD, mapping/reordering, rate rules, backup/restore, and setup loading feedback. See CHANGELOG_ARCHIVE.md.
 - static/client_settings.html, static/client_settings.js -> retired direct-bookmark information page; all Verification account routing is configured centrally in Account Control Centre. See CHANGELOG_ARCHIVE.md.
-- database.py, main.py → SQLite/PostgreSQL schema, compact audit/validation-plan storage, allow-listed VACUUM/REINDEX/DROP helpers, Account Set migrations, router registration, and versioned Rulebook snapshot storage. See CHANGELOG_ARCHIVE.md.
+- database.py, main.py → Schemas, compact audits, storage guards, snapshots, connection recovery, local maintenance transactions, routing and Rulebook snapshots. See CHANGELOG_ARCHIVE.md.
+- backfill_extract_amount.py → SQLite backfill, PostgreSQL assessment, portable repair plans and isolated local repair rehearsals; live apply remains disabled. See CHANGELOG_ARCHIVE.md.
 - database.py (users/sessions) → authenticated users and session records for Login → Client Cards → Dashboard; bcrypt, session-stored selected client, seeded placeholder admin. See CHANGELOG_ARCHIVE.md.
 - routers/auth.py → login/logout, current-session lookup, client selection, `get_current_user()`/`require_admin()` guards; timezone-aware session expiry. See CHANGELOG_ARCHIVE.md.
 - routers/users.py → Admin user management (list/create/edit/deactivate/reactivate/reset password); every endpoint `require_admin`, mutations SQLite-audited. See CHANGELOG_ARCHIVE.md.
-- routers/storage_cleanup.py + services/storage_cleanup.py + static/storage_cleanup.* → Admin-only preview, evidence-gated index optimization, typed-confirmation cleanup, and allow-listed PostgreSQL compaction with post-checks. See CHANGELOG_ARCHIVE.md.
+- routers/storage_cleanup.py + services/storage_cleanup.py + static/storage_cleanup.* → Protected deletion, replacement cleanup, storage previews, and controlled PostgreSQL maintenance. See CHANGELOG_ARCHIVE.md.
 - static/users.html, static/users.js → firm-level Manage Users UI (sortable/searchable rows, add/edit, deactivate, password reset); shared Admin header/tab strip. See CHANGELOG_ARCHIVE.md.
 - static/login.html, static/login.js → standalone login page posting to `/api/auth/login`, generic auth error; does not load `client_context.js`.
 - static/client_select.html, static/client_select.js → standalone Client Cards page with guarded selection, admin entry, and loading feedback. See CHANGELOG_ARCHIVE.md.
@@ -34,18 +35,18 @@ One line per file group: what it is now. Full build history for every entry live
 - static/audit_workbook.js, static/audit_workbook.html → Audit Workbook: session rows, filtering, totals, shared Procedure Modal, and cached evidence/Form completion badges. See CHANGELOG_ARCHIVE.md.
 - routers/trial_balance.py → Trial Balance upload, hierarchy, categories, deletion, and shared latest parsed-upload lookup. See CHANGELOG_ARCHIVE.md.
 - routers/account_control_center.py → client/account mappings, Cash Flow categories, treasury setup, historical-orphan assignments, and incremental prepared-model gateways. See CHANGELOG_ARCHIVE.md.
-- static/trial_balance.html, static/trial_balance.js → Trial Balance upload/review UI with scoped loading feedback; Period End supplies backend `as_of_date` (no separate input). See CHANGELOG_ARCHIVE.md and the period-input Convention below.
+- static/trial_balance.html, static/trial_balance.js → Trial Balance upload/review with loading feedback; Period End supplies `as_of_date` without a separate input. See CHANGELOG_ARCHIVE.md.
 - static/account_control_center.html, static/account_control_center.js → central mappings, Cash/Bank setup, and historical-orphan Cash Flow category assignment. See CHANGELOG_ARCHIVE.md.
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Two-pane Audit Rules editor for Documents, Cross-checks, Categories, Voucher Checks and Assertions, plus Assign Categories. See CHANGELOG_ARCHIVE.md.
 - category_control_center_prototype.html → standalone review-only prototype for the Category Control Center redesign; sample data only, no backend connection.
-- routers/verification.py + static/verification.* → Cash/Bank Verification routes only Account Control Centre assignments; Local/Import Vendor, Export Customer, Payroll, and Contractor JV workstreams retain their configured routing, Treasury priority, debit/credit presentation, evidence, checks, statuses, and workflow loading feedback. See CHANGELOG_ARCHIVE.md.
+- routers/verification.py + static/verification.* → Configured verification workstreams, Treasury routing, signed movements, evidence, checks, statuses and loading feedback. See CHANGELOG_ARCHIVE.md.
 - static/template-viewer.html, static/template-viewer.js → reusable `?template=N` Data Bank viewer reached from Verification's Client Data Links. See CHANGELOG_ARCHIVE.md.
 - static/search_index.js → deleted; feature registry merged into `NAV_MANIFEST` in `client_context.js` — do not recreate. See CHANGELOG_ARCHIVE.md.
 - static/loading_ui.js → shared `window.LoadingUI` primitives, including token-based target-aware global progress-cursor ownership. See CHANGELOG_ARCHIVE.md.
 - static/api_utils.js → shared `apiFetch()` (GET debounce/retry) and `apiFetchMutate()` (non-retried writes, optional Loading UI); warning-only direct-`/api/` fetch guard; partial rollout. See CHANGELOG_ARCHIVE.md.
-- services/ledger_group_summary.py + ledger_report_source.py -> summary engine and canonical `client_data` Cashflows report source; legacy prepared/read-model loaders remain migration-only. See CHANGELOG_ARCHIVE.md.
-- services/cash_bank_classification.py + scripts/backfill_cash_bank_transaction_classifications.py -> derived Cash/Bank columns on `client_data`, affected-account reporting, category resolution, upload/backfill application, and audited reclassification without raw-row mutation; legacy classification copies are no longer written. See CHANGELOG_ARCHIVE.md.
+- services/ledger_group_summary.py + ledger_report_source.py → Accounting summaries, canonical voucher retrieval and period-scoped database coverage counts; legacy loaders remain migration-only. See CHANGELOG_ARCHIVE.md.
+- services/cash_bank_classification.py + scripts/backfill_cash_bank_transaction_classifications.py → canonical PostgreSQL classifications, exact amount repair, configuration reclassification and controlled backfills. See CHANGELOG_ARCHIVE.md.
 - services/cashflow_voucher_canonicalization.py + cashflow_voucher_occurrence_store.py + scripts/backfill_cashflow_voucher_occurrences.py -> compact audit-preserving occurrence decisions and controlled maintenance; transaction rows remain in `client_data`. See CHANGELOG_ARCHIVE.md.
 - services/cashflow_preparation.py + scripts/backfill_cashflow_prepared_read_model.py -> metadata-only preparation/job recovery boundary; prepared transaction copies and rollups are no longer rebuilt. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_xlsx.py → static Bank/Cash workbook exporter for summaries, schedules, reviews, cross-checks, and reconciliation proofs. See CHANGELOG_ARCHIVE.md.
@@ -54,7 +55,7 @@ One line per file group: what it is now. Full build history for every entry live
 - tests/test_data_deletion.py + tests/test_import_duplicate_gates.py → focused deletion and upload identity-gate regression tests.
 
 
-- static/reconciliation.html, static/reconciliation.js -> client-context Reports, Cashflows summary, customer-payment reconciliation, classified transactions, Ledger Summary categories, and balance setup. See CHANGELOG_ARCHIVE.md.
+- static/reconciliation.html, static/reconciliation.js -> Client-context Reports, Cashflows summaries/drilldowns with database counts, classified transactions and balance setup. See CHANGELOG_ARCHIVE.md.
 
 ## Commands
 - Run app: [your actual run command]
@@ -67,12 +68,12 @@ One line per file group: what it is now. Full build history for every entry live
 ## Database management and backup rules
 - **Locked upload contract (2026-10-11):** `client_data` is the sole canonical transaction store. Keep one active row per client/template/transaction identity, with raw values and report-required derived columns together and indexed; all reports and analysis read this set.
 - Supabase is a working store, not an archive: retain one current canonical set per client/template and no second durable transaction copy in reports, read models, occurrences, revisions, caches, or audit payloads. Audit events may retain only changed fields or fingerprints; initial INSERT events retain no row payload. Compact configuration, counts, fingerprints, checksums, and run metadata are allowed.
-- Every upload is validated before writing: source-file SHA-256 identifies an unchanged prior file as an informational no-op; exact repeated lines are counted and only the first is retained; conflicting same-identity lines block; changed rows update in place; new/backdated rows insert once; removals require explicit replacement scope.
+- Validate every upload before writing: unchanged source files are no-ops; preserve source-line multiplicity, including identical-looking lines without explicit line IDs. Explicit identity conflicts and ambiguous corrections block; updates stay in place; removals require explicit replacement scope.
 - Active identities are database-unique where existing data is clean. Until duplicate legacy groups are resolved, application gates remain authoritative and migrations must report blockers rather than delete or merge rows.
 - Source workbooks, SQL dumps, reports, and workpapers stay in controlled external/offline storage. Supabase may hold temporary staging metadata only; rejected, ignored, or fully deleted upload files and metadata must be removed.
 - **Locked deletion contract:** guarded preview/apply permanently removes source rows, derived classifications, occurrence metadata, audit payloads, upload metadata, validation plans, and staged files. Soft-delete and restore are not valid source-data lifecycle operations; protected verification/evidence references block the purge.
 - Development deletion may use the approved app flow without an export gate. Before production deletion, reinstate an approved scoped CSV/XLSX export; whole-database/schema destruction still requires a logical SQL dump.
-- Keep two protected external backup copies and test restoration quarterly. The 300 MB warning and 400 MB import-stop thresholds are policy targets; enforcement in the import path remains a deferred phase. Never intentionally approach Supabase Free's 500 MB quota.
+- Keep two protected external backup copies and test restoration quarterly. Uploads warn at 300 MB and block projected allocation at 400 MB, reserving payload/index overhead. Never approach Supabase Free's 500 MB quota.
 - Validation plans are temporary: only one ready plan may exist per client/template, successful imports delete the plan immediately, and expired/applied/superseded plans are removable through the targeted plan-only cleanup route without deleting audit history.
 - Retain primary/unique and measured query indexes. The active-identity uniqueness index is mandatory; index removal requires usage evidence and query-plan review. After large deletes, inspect bloat; physical reclamation requires the separate administrator compaction action, with `VACUUM FULL` reserved for an approved maintenance window.
 - Retain audit-procedure definitions and compact run metadata, not full transaction rows. Future import, deletion, report, cleanup, or backup changes must preserve this contract and update `CHANGELOG_ARCHIVE.md`.
@@ -107,6 +108,8 @@ One line per file group: what it is now. Full build history for every entry live
 ### Data & Performance Engineering Standard
  - **Prepare once, report fast, verify always:** interns/processors classify categories, Cash/Bank, and derived periods during controlled upload preparation—the practical “desi” preparation layer—while executives receive fast reports from validated read models.
  - Keep raw source rows unchanged; prepared results and browser caches are never the accounting source. Scope read models by client, uploads, configuration, and revision, with canonical SQL fallback when preparation is missing or stale.
+- Financial reports preserve uploaded amounts and round presentation; use validated source/canonical debit-credit fields, not the approximate search helper.
+- Database coverage counts active source lines and distinct vouchers before cashflow filtering; bind totals to client/template/dates and reject broader-period cache totals.
  - Prefer one compact server request, server-side filtering/pagination, bounded payloads, indexed queries, bulk operations, and limited retries for safe reads; keep each Treasury view, period grain, and grouping configuration explicit.
  - Key caches by complete report context and revision; invalidate after source or configuration changes, abort obsolete requests, reject stale responses, and preserve a hard-refresh path when freshness is uncertain.
  - Design for slow or intermittent Sialkot connectivity: show progress, use bounded timeouts/retries, preserve usable UI, and avoid blocking alerts.
@@ -189,7 +192,11 @@ One line per file group: what it is now. Full build history for every entry live
 - **When multiple independent triggers can all save the same row (e.g. a per-line save reachable from several UI actions), guard the single chokepoint function itself with an in-flight promise map keyed by the row's id, rather than trying to serialize/disable every individual trigger.** Confirmed fix: `save_line_items` calls for the same `detail_id` fired from overlapping "check all"/per-check/Prev-Next triggers were queuing behind each other on the same-row DB lock — total save duration climbed with every stacked call (11.1s → 34.8s → 35.1s → 35.7s → 30.1s across 5 overlapping calls, confirmed via [timing] instrumentation; pool sizing and network latency were ruled out first). `saveLineItems()` (static/verification.js) now checks an `inFlightLineSaves` Map before starting a new POST — a second call for a `detail_id` already in flight awaits/reuses that same promise. Effective because every caller (`saveAllVoucherLines()`, `toggleAllVoucherChecks()` via `hostAdapter`, etc.) already funneled through this one function — guarding there covered all current and future callers without touching each trigger site.
 - **A fan-out endpoint that calls several read sub-functions which each independently re-resolve the same thing gets an opt-in per-request memo, not a TTL cache.** `routers/verification.py`'s `_resolve_sibling_voucher_line_ids()` is memoised via a module-level `contextvars.ContextVar` (`_sibling_ids_request_memo`, default `None`): `get_procedure_modal_data()` sets a fresh `{}` on it as its first `try` line and `reset()`s in `finally`; the function reads/populates the memo (caching `None` too) only when it's non-`None`, so every other caller is byte-for-byte unchanged. Cut `get_procedure_modal_data`'s DB calls 17→11 (Phase 3c). Deliberately per-request, not the `audit_rules.py` TTL `cache_get/cache_set`: the `client_data_id → sibling ids` mapping changes on new-session creation, which can't happen mid-request but can between requests. Reuse this pattern (same ContextVar, opt in from the handler) before adding a param threaded through every sub-function. See "Verification Speed Optimization — Phase 3" in CHANGELOG_ARCHIVE.md.
 - **A new table added only to `init_db_postgres()`'s full-bootstrap CREATE TABLE section will never be created on an already-bootstrapped database** (one where `audit_rules_config_state` already exists — real production, including this app's own Supabase) — that whole section is skipped on every subsequent startup, only a short whitelist of `_ensure_postgres_*(conn)` migration functions runs on the fast path. Confirmed live (2026-09-20): `audit_rule_assertions` returned `UndefinedTable` until a companion `_ensure_postgres_audit_rule_assertions(conn)` was added — same idempotent `to_regclass()`-check-then-`CREATE TABLE IF NOT EXISTS` pattern as the existing `_ensure_postgres_form_tables()` — and wired into the fast-path branch alongside the others. Any new Postgres table needs both: the declarative CREATE TABLE in the full-bootstrap section (for a genuinely fresh database) AND this companion function (for every database that already has the marker). See "Assertions Master Entity" in CHANGELOG_ARCHIVE.md.
-- **Every pooled-Postgres borrow in `database.py` goes through one of two helpers — never `get_pg_pool().getconn()` directly.** `execute_query_pg()`/`execute_write_pg()` outside an active `pg_transaction()` route through `_run_pooled_pg(operation)`, which retries the operation once on a dead connection — `_is_stale_pg_connection_error()` matches only a psycopg2 `InterfaceError`/`OperationalError` whose message hits a known stale marker (server-drop, "connection already closed", "could not connect", server-restart, SSL drop); deadlock / "too many clients" / bad SQL / constraint violations are *not* matched and propagate. A dead connection is discarded with `putconn(close=True)` so the pool rebuilds it. `pg_transaction()` / `get_raw_conn_pg()` can't retry mid-unit-of-work, so they borrow via `_getconn_pg_checked()` (free client-side `conn.closed` skip, no round trip) and their cleanup uses `putconn(close=bool(conn.closed))`. Recovery prints `[postgres] discarded a stale pooled connection (...), retried OK`. `_PooledConnection` / `get_db_pg()` / `_ExistingConnection` were removed. Residual gap (`KNOWN_ISSUES.md` 2026-09-02): a first-hit silent drop *inside* a bare `pg_transaction()` / `get_raw_conn_pg()` block still fails that one request. See "Postgres Pool Stale-Connection Retry" in CHANGELOG_ARCHIVE.md.
+- **PostgreSQL connection discipline:** use `_run_pooled_pg` or `_getconn_pg_checked`, never direct pool borrowing. Paged reads and `run_read_snapshot_pg` share an enforced read-only repeatable snapshot with one whole-read retry and discarded partial results. Snapshot callbacks use their supplied connection or ordinary read helpers; never borrow another connection. Expanded SSL EOF recovery never enables write replays. Imports retain one outer `pg_transaction()`; lost commit acknowledgements require status reconciliation. Transaction/raw-connection paths skip visibly closed connections but cannot retry mid-transaction. Non-paged retry behaviour is unchanged. See "Large repeat-upload read recovery", "Amount-helper precision preparation" and "Postgres Pool Stale-Connection Retry" in CHANGELOG_ARCHIVE.md.
+
+- **Maintenance rehearsal boundary:** accept only named local PostgreSQL test databases, never production pools. Simulated tests cannot certify restoration, cashflow parity or physical storage peaks. See CHANGELOG_ARCHIVE.md.
+- Restore comparisons must match source collation/session formatting and preserve data/security checks; exclude only environment labels such as database names from portable fingerprints.
+- Report application restoration separately from managed Supabase services. Project repair growth from live allocation; compact restored size alone cannot establish live headroom.
 
 ## Workflow rules
 - Before editing, list files to be touched and wait for my confirmation. This is TWO separate hard stops, not one — even if my brief already includes a "files likely affected" list: (1) reply with the candidate file list only, no Read/Edit/Write on those files yet, and wait for me to confirm/adjust it in a separate reply; (2) only after that, enter Plan Mode, propose the approach for the current phase only, and wait for my explicit approval before implementing. A file list inside my own brief is a draft for you to restate back, never an implicit go-ahead.
@@ -235,7 +242,11 @@ One line per file group: what it is now. Full build history for every entry live
 
 ## Status log
 
+- 2026-10-19: Added scoped database row/voucher totals to Cashflows drilldown headers; preserved accounting and source data. See CHANGELOG_ARCHIVE.md.
+
 - Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; performance findings reference the investigation documents.
+- 2026-10-12: Cashflows Phase 1 now reads active `client_data` derived rows directly; report caches, prepared lines, and targeted prepared drilldowns are inactive.
+- 2026-10-12: Cashflows canonical debit/credit fields now use PostgreSQL double precision; canonical-only repair restores exact amounts without legacy classification inserts.
 - 2026-10-10: Phase 1 documented single-source policies; Phase 2 added canonical identities, derived columns, indexes, and active-row state.
 - 2026-10-09: Phase 3 verified current-only upload comparison and idempotent unchanged imports; targeted regression coverage passes 10/10.
 - 2026-10-09: Fixed maiden-upload Cash/Bank DATE casting; added regression coverage and documented failed-import index-bloat monitoring.
@@ -275,18 +286,18 @@ Do this automatically at the end of the session without being asked.
 - 2026-10-09: Phase 5 adds table-level Cashflows sizing, stale-revision candidates, and reference-guarded cleanup preview/apply.
 - 2026-10-10: Storage Cleanup is unlocked for development testing; uploaded-data deletion remains available while Audit Rules and current operational data stay protected.
 - 2026-10-11: Phase 3 makes `client_data` the enforced Cashflows source, stops legacy transaction-copy writes, and adds guarded cleanup preview/apply for obsolete copies.
-- 2026-10-11: Strict data gates add upload SHA-256 tracking, count and skip exact repeated lines, block conflicting active-identity collisions, and defer uniqueness activation safely when existing duplicates require review.
+- 2026-10-11: Strict upload gates track file hashes, block identity conflicts and defer uniqueness activation for unresolved legacy duplicates. See CHANGELOG_ARCHIVE.md.
 - 2026-10-11: Phase 1 adds guarded permanent-data deletion preview/apply, blocks new soft-delete/restore calls, protects verification references, and verifies staged-file cleanup after commit.
 - 2026-10-11: Phase 2 hardens upload identity preservation, hash lookup indexing, duplicate-line messaging, and row-level validation errors.
 - 2026-10-11: Upload now uses a local SheetJS bundle, removing the blocked CDN dependency that prevented Excel files from being read.
 - 2026-10-11: Upload validation now detects workbook date formats and excludes marked summary rows while preserving strict delta and duplicate gates.
-- 2026-10-11: Locked the one-set upload/deletion contract after live testing: 3,514 canonical rows imported, an unchanged repeat stopped as a no-op, a changed copy applied 1 in-place change, and guarded purge reduced logical data and upload metadata to zero; PostgreSQL physical pages remained for separate maintenance.
-- 2026-10-11: Storage policy now compacts audit payloads, removes completed validation plans through a targeted route, and exposes separately approved PostgreSQL compaction with protected index review.
+- 2026-10-11: Verified single-set imports, unchanged no-ops, in-place corrections and guarded permanent deletion; physical reclamation remains separate. See CHANGELOG_ARCHIVE.md.
+- 2026-10-11: Storage policy compacts audit payloads, removes completed validation plans and separately gates PostgreSQL maintenance. See CHANGELOG_ARCHIVE.md.
 - 2026-10-11: Deferred gaps are explicit: quota-stop enforcement, production backup/export gating, stable source line IDs for reorder-safe corrections, and Data Bank wiring to permanent purge.
 - 2026-10-12: Phase 1 adds read-only PostgreSQL index inventory, overlap signals, and duplicate blockers in audit and storage review tools.
 - 2026-10-12: Phase 2 adds planner-only evidence gates and allow-listed concurrent index maintenance without changing canonical transaction rows.
 - 2026-10-12: Phase 3 adds optional bloat evidence, concurrent index reindexing, and post-maintenance invariants for storage optimization.
-- 2026-10-12: Controlled index-review implementation is complete: storage UI exposes index/planner/bloat/post-check evidence, Data Bank failures show unavailable instead of zero, and Playwright covers live success/failure states; live database optimization remains uncertified until a fresh preview succeeds.
-- 2026-10-12: Storage Cleanup preview now logs safe server-side failure context and degrades optional planner/bloat probes to unavailable evidence without enabling maintenance; core storage-query failures remain blocked.
+- 2026-10-12: Index review exposes planner, bloat and invariant evidence; unavailable measurements block unsafe maintenance. Live optimization remains uncertified. See CHANGELOG_ARCHIVE.md.
+- 2026-10-12: Storage previews log safe failure context; unavailable optional probes never enable maintenance, and core failures remain blocked. See CHANGELOG_ARCHIVE.md.
 - 2026-10-12: Data Bank caches availability and bounded preview pages with in-flight deduplication, next-page prefetch, invalidation, and Playwright regression coverage.
-- 2026-10-12: Fixed the live Storage Cleanup 503: the index inventory qualified `stats.indexrelid`, resolving PostgreSQL's ambiguous-column error; Playwright now receives HTTP 200 and renders 16 index rows, while unavailable `pgstatindex` evidence safely blocks reindexing.
+- 2026-10-12: Qualified the index inventory's ambiguous column; live Storage Cleanup renders successfully while unavailable bloat evidence blocks reindexing. See CHANGELOG_ARCHIVE.md.

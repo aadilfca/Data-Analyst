@@ -1,4 +1,7 @@
+import sqlite3
+
 import pandas as pd
+import pytest
 
 from services.ledger_report_source import (
     advance_cashflow_report_revision,
@@ -62,42 +65,42 @@ def _journal_rows():
     ]
 
 
-def test_report_source_prefers_active_prepared_cashflow_revision():
+def test_report_source_reads_active_client_data_derived_rows():
     calls = []
 
     def query(sql, params=None):
         calls.append((sql, params))
-        if "cashflow_preparation_state" in sql:
-            return [{"active_preparation_revision": 17, "status": "ready"}]
-        assert "FROM cashflow_prepared_lines" in sql
+        assert "FROM client_data cd" in sql
         return [
             {
                 "voucher_id": "V1",
-                "transaction_date": "2026-01-05",
+                "date": "2026-01-05",
                 "account_code": "BANK",
                 "account_name": "Bank",
+                "voucher_detail": "Receipt",
                 "debit": 100,
                 "credit": 0,
                 "treasury_type": "bank",
-                "category_label_snapshot": "",
+                "category": "",
                 "transaction_month": "2026-01",
                 "transaction_fortnight": "2026-01-F1",
                 "upload_id": 12,
-                "source_client_data_id": 101,
+                "source_line_count": 1,
             },
             {
                 "voucher_id": "V1",
-                "transaction_date": "2026-01-05",
+                "date": "2026-01-05",
                 "account_code": "EXP",
                 "account_name": "Expense",
+                "voucher_detail": "Receipt",
                 "debit": 0,
                 "credit": 100,
                 "treasury_type": "",
-                "category_label_snapshot": "Operating",
+                "category": "Operating",
                 "transaction_month": "2026-01",
                 "transaction_fortnight": "2026-01-F1",
                 "upload_id": 12,
-                "source_client_data_id": 102,
+                "source_line_count": 1,
             },
         ]
 
@@ -111,11 +114,99 @@ def test_report_source_prefers_active_prepared_cashflow_revision():
     )
 
     assert source.ready
-    assert source.metadata["preparation_revision"] == 17
-    assert source.metadata["cashflow_report_source_mode"] == "prepared_revision"
+    assert source.metadata["cashflow_report_source_mode"] == "client_data_derived"
     assert source.journal["voucher_id"].tolist() == ["V1", "V1"]
     assert source.journal["transaction_fortnight"].tolist() == ["2026-01-F1", "2026-01-F1"]
-    assert len(calls) == 2
+    assert len(calls) == 1
+
+
+@pytest.fixture
+def database_count_source():
+    """Execute the source SELECT against disposable rows, not a SQL-shaped mock."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.create_function("BTRIM", 1, lambda value: value.strip() if value is not None else None)
+    conn.executescript("""
+        CREATE TABLE client_data (
+            id INTEGER, client_id INTEGER, template_id INTEGER, upload_id INTEGER,
+            is_deleted INTEGER, change_detection_status TEXT, derived_voucher_id TEXT,
+            derived_transaction_date TEXT, derived_account_code TEXT, derived_account_name TEXT,
+            derived_transaction_month TEXT, derived_transaction_fortnight TEXT, row_data TEXT,
+            derived_debit REAL, derived_credit REAL, derived_treasury_type TEXT,
+            derived_classification_status TEXT);
+        CREATE TABLE account_control_cashflow_category_assignments
+            (client_id INTEGER, account_code TEXT, category_id INTEGER);
+        CREATE TABLE account_control_cashflow_categories
+            (id INTEGER, client_id INTEGER, label TEXT, is_active INTEGER);
+    """)
+    rows = [
+        # Three source lines form one balanced voucher across correction uploads.
+        (1, 7, 9, 12, 0, 'active', 'V1', '2026-01-01', 'BANK', 100, 0, 'bank'),
+        (2, 7, 9, 13, 0, 'active', 'V1', '2026-01-01', 'EXP', 0, 50, ''),
+        (3, 7, 9, 13, 0, 'active', 'V1', '2026-01-01', 'EXP', 0, 50, ''),
+        (4, 7, 9, 12, 0, 'active', 'ZERO', '2026-01-31', 'EXP', 0, 0, ''),
+        (5, 7, 9, 12, 0, 'active', 'JV1', '2026-01-15', 'EXP', 10, 0, ''),
+        (6, 7, 9, 12, 0, 'active', 'JV1', '2026-01-15', 'OTHER', 0, 10, ''),
+        (7, 7, 9, 12, 0, 'active', '   ', '2026-01-15', 'EXP', 0, 0, ''),
+        (8, 8, 9, 12, 0, 'active', 'OTHER-CLIENT', '2026-01-01', 'BANK', 1, 0, 'bank'),
+        (9, 7, 10, 99, 0, 'active', 'OTHER-TEMPLATE', '2026-01-01', 'BANK', 1, 0, 'bank'),
+        (10, 7, 9, 12, 0, 'active', 'BEFORE', '2025-12-31', 'BANK', 1, 0, 'bank'),
+        (11, 7, 9, 12, 0, 'active', 'AFTER', '2026-02-01', 'BANK', 1, 0, 'bank'),
+        (12, 7, 9, 12, 1, 'active', 'REMOVED', '2026-01-01', 'BANK', 1, 0, 'bank'),
+        (13, 7, 9, 12, 0, 'deleted', 'RETIRED', '2026-01-01', 'BANK', 1, 0, 'bank'),
+    ]
+    conn.executemany("""INSERT INTO client_data
+        (id,client_id,template_id,upload_id,is_deleted,change_detection_status,
+         derived_voucher_id,derived_transaction_date,derived_account_code,
+         derived_debit,derived_credit,derived_treasury_type)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""", rows)
+    calls = []
+
+    def query(sql, params=None):
+        calls.append((sql, params))
+        # The production statement is PostgreSQL; only its cast/driver syntax differs.
+        statement = sql.replace("%s", "?").replace("::double precision", "")
+        return [dict(row) for row in conn.execute(statement, params or ())]
+
+    yield conn, query, calls
+    conn.close()
+
+
+def test_database_totals_count_source_multiplicity_zeros_and_non_cash_vouchers(database_count_source):
+    _conn, query, calls = database_count_source
+    source = load_ledger_report_source(7, journal_template_id=9, period_start="2026-01-01",
+        period_end="2026-01-31", account_category_source="cashflow", query_fn=query)
+
+    assert source.metadata["database_totals"] == {
+        "client_id": 7, "template_id": 9, "upload_id": None,
+        "period_start": "2026-01-01", "period_end": "2026-01-31",
+        "row_count": 7, "voucher_count": 3,
+    }
+    assert source.ready
+    assert len(source.journal) == 2  # Bank + aggregated expense, not seven source rows.
+    assert source.metadata["source_row_count"] == 3
+    assert source.journal["debit"].sum() == source.journal["credit"].sum() == 100
+    assert len(calls) == 1
+
+
+def test_database_totals_survive_when_period_contains_no_cashflow_vouchers(database_count_source):
+    conn, query, _calls = database_count_source
+    conn.execute("DELETE FROM client_data WHERE derived_voucher_id='V1'")
+    source = load_ledger_report_source(7, journal_template_id=9, period_start="2026-01-01",
+        period_end="2026-01-31", account_category_source="cashflow", query_fn=query)
+    assert source.metadata["database_totals"]["row_count"] == 4
+    assert source.metadata["database_totals"]["voucher_count"] == 2
+    assert source.journal.empty
+    assert not source.ready
+
+
+def test_database_totals_distinguish_empty_period_from_unavailable_counts(database_count_source):
+    _conn, query, _calls = database_count_source
+    source = load_ledger_report_source(7, journal_template_id=9, period_start="2026-03-01",
+        period_end="2026-03-31", account_category_source="cashflow", query_fn=query)
+    assert source.metadata["database_totals"]["row_count"] == 0
+    assert source.metadata["database_totals"]["voucher_count"] == 0
+    assert source.journal.empty
 
 
 def test_prepared_rollup_summary_reads_active_revision():
@@ -456,35 +547,26 @@ def test_build_report_source_prefers_explicit_cashflow_column_mapping():
     assert source.journal.loc[0, "debit"] == 100
 
 
-def test_load_cashflow_source_applies_saved_template_mapping():
+def test_load_cashflow_source_requires_derived_client_data_rows():
     rows = [{
-        "template_id": 1,
+        "voucher_id": "V1",
+        "date": "2026-01-05",
+        "account_code": "B1",
+        "account_name": "Bank A",
+        "voucher_detail": "Receipt",
+        "debit": 100,
+        "credit": 0,
+        "treasury_type": "bank",
+        "category": "",
+        "transaction_month": "2026-01",
+        "transaction_fortnight": "2026-01-F1",
         "upload_id": 12,
-        "row_data": {
-            "Reference column": "V1",
-            "Date column": "2026-01-05",
-            "Code column": "B1",
-            "Debit column": 100,
-            "Credit column": 0,
-        },
+        "source_line_count": 1,
     }]
-    mapping_rows = [
-        {"role": "voucher_id", "column_name": "Reference column"},
-        {"role": "date", "column_name": "Date column"},
-        {"role": "account_code", "column_name": "Code column"},
-        {"role": "debit", "column_name": "Debit column"},
-        {"role": "credit", "column_name": "Credit column"},
-    ]
 
     def query(sql, params=None):
-        if "FROM client_data" in sql:
+        if "FROM client_data cd" in sql:
             return rows
-        if "FROM account_control_cashflow_source_mappings" in sql:
-            return mapping_rows
-        if "FROM trial_balance_accounts" in sql:
-            return [{"account_code": "B1", "account_name": "Bank A", "source_account_type": "Bank"}]
-        if "FROM account_control_cashflow_category_assignments" in sql:
-            return []
         raise AssertionError(f"Unexpected query: {sql}")
 
     source = load_ledger_report_source(
@@ -497,40 +579,46 @@ def test_load_cashflow_source_applies_saved_template_mapping():
     )
 
     assert source.ready
-    assert source.metadata["cashflow_mapping_ready"] is True
+    assert source.metadata["cashflow_report_source_mode"] == "client_data_derived"
     assert source.journal.loc[0, "account_code"] == "B1"
 
 
-def test_cashflow_template_query_filters_period_and_treasury_vouchers():
-    rows = _journal_rows()
-    mapping_rows = [
-        {"role": "voucher_id", "column_name": "Voucher ID"},
-        {"role": "date", "column_name": "Date"},
-        {"role": "account_code", "column_name": "Account Code"},
-        {"role": "debit", "column_name": "Debit"},
-        {"role": "credit", "column_name": "Credit"},
-    ]
+def test_cashflow_template_query_filters_period_and_uses_active_client_data():
+    rows = [{
+        "voucher_id": "V1",
+        "date": "2026-01-05",
+        "account_code": "B1",
+        "account_name": "Bank A",
+        "voucher_detail": "Receipt",
+        "debit": 100,
+        "credit": 0,
+        "treasury_type": "bank",
+        "category": "",
+        "transaction_month": "2026-01",
+        "transaction_fortnight": "2026-01-F1",
+        "upload_id": 12,
+        "source_line_count": 1,
+    }, {
+        "voucher_id": "V1",
+        "date": "2026-01-05",
+        "account_code": "EXP",
+        "account_name": "Expense",
+        "voucher_detail": "Receipt",
+        "debit": 0,
+        "credit": 100,
+        "treasury_type": "",
+        "category": "Operating",
+        "transaction_month": "2026-01",
+        "transaction_fortnight": "2026-01-F1",
+        "upload_id": 12,
+        "source_line_count": 1,
+    }]
     calls = []
 
     def query(sql, params=None):
         calls.append((sql, params))
-        if "SELECT canonical_occurrence_id, upload_id" in sql:
-            return []
-        if "FROM cashflow_preparation_state" in sql:
-            return []
-        if "FROM selected_report_vouchers" in sql:
-            return []
-        if "FROM account_control_cashflow_source_mappings" in sql:
-            return mapping_rows
-        if "FROM uploaded_files" in sql:
-            return [
-                {"upload_id": 12, "file_name": "month.xlsx", "upload_date": "2026-01-01"},
-                {"upload_id": 13, "file_name": "month.xlsx", "upload_date": "2026-01-02"},
-            ]
-        if "FROM client_data" in sql:
+        if "FROM client_data cd" in sql:
             return rows
-        if "FROM trial_balance_accounts" in sql or "FROM account_control_cashflow_category_assignments" in sql:
-            return []
         raise AssertionError(f"Unexpected query: {sql}")
 
     source = load_ledger_report_source(
@@ -543,19 +631,17 @@ def test_cashflow_template_query_filters_period_and_treasury_vouchers():
         treasury_account_codes=["B1"],
     )
 
-    source_query, source_params = next((sql, params) for sql, params in calls if "SELECT cd.id AS client_data_id" in sql)
+    source_query, source_params = calls[0]
     assert source.ready
     assert source.metadata["date_prefilter_applied"] is True
-    assert source.metadata["duplicate_upload_suppression"] is True
-    assert source.metadata["treasury_prefilter_applied"] is False
-    assert source.metadata["treasury_filter_stage"] == "cashflow_summary"
-    assert "cd.extract_date >= %s" in source_query
-    assert "cd.extract_date <= %s" in source_query
-    assert "cd.upload_id = ANY(%s)" in source_query
-    assert any("FROM uploaded_files" in sql for sql, _ in calls)
-    assert "selected_vouchers" not in source_query
-    assert "ANY(%s)" in source_query
-    assert source_params == (7, 9, "2026-01-01", "2026-01-31", [12])
+    assert source.metadata["duplicate_upload_suppression"] is False
+    assert source.metadata["treasury_filter_stage"] == "client_data_derived"
+    assert "cd.derived_transaction_date >= %s" in source_query
+    assert "cd.derived_transaction_date <= %s" in source_query
+    assert source_query.index("cd.template_id = %s") < source_query.index("cd.derived_transaction_date >= %s")
+    assert "cash_bank_transaction_classifications" not in source_query
+    assert "cashflow_voucher_occurrences" not in source_query
+    assert source_params == (7, 9, "2026-01-01", "2026-01-31") * 2
 
 def test_build_report_source_forward_fills_dates_and_parses_excel_dates_and_amounts():
     excel_serial = int((pd.Timestamp("2026-01-05") - pd.Timestamp("1899-12-30")).days)
@@ -715,3 +801,36 @@ def test_prepared_rollup_summary_projects_bank_view_from_prepared_lines():
     assert row["bank_amount"] == 100.0
     assert row["cash_amount"] == 0.0
     assert result["summary"]["treasury_reconciliation"]["status"] == "Matched"
+
+
+def test_corrected_voucher_sql_retains_counterpart_from_previous_upload():
+    """Execute the generated query against two uploads, rather than mock its rows."""
+    import sqlite3
+    from services.ledger_report_source import load_cashflow_client_data_source
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.create_function("BTRIM", 1, lambda value: value.strip() if value else value)
+    conn.executescript("""
+        CREATE TABLE client_data (
+            id INTEGER, client_id INTEGER, template_id INTEGER, upload_id INTEGER,
+            is_deleted INTEGER, change_detection_status TEXT, derived_voucher_id TEXT,
+            derived_transaction_date TEXT, derived_account_code TEXT, derived_account_name TEXT,
+            derived_transaction_month TEXT, derived_transaction_fortnight TEXT,
+            row_data TEXT, derived_debit REAL, derived_credit REAL,
+            derived_treasury_type TEXT, derived_classification_status TEXT
+        );
+        CREATE TABLE account_control_cashflow_category_assignments (client_id INTEGER, account_code TEXT, category_id INTEGER);
+        CREATE TABLE account_control_cashflow_categories (id INTEGER, client_id INTEGER, is_active INTEGER, label TEXT);
+    """)
+    conn.executemany("INSERT INTO client_data VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+        (1, 5, 1, 20, 0, "active", "V1", "2026-01-05", "B", "Bank", "2026-01", "", "{}", 100, 0, "bank", "classified"),
+        (2, 5, 1, 10, 0, "active", "V1", "2026-01-05", "C", "Customer", "2026-01", "", "{}", 0, 100, "", "classified"),
+        # A separate client's same voucher number must remain outside the scope.
+        (3, 6, 1, 20, 0, "active", "V1", "2026-01-05", "X", "Other", "2026-01", "", "{}", 999, 0, "bank", "classified"),
+    ])
+    def query(sql, params=None):
+        return [dict(row) for row in conn.execute(sql.replace("::double precision", "").replace("%s", "?"), params or ())]
+    source = load_cashflow_client_data_source(5, journal_template_id=1, period_start="2026-01-01", period_end="2026-01-31", query_fn=query)
+    assert set(source.journal["account_code"]) == {"B", "C"}
+    assert source.journal["debit"].sum() == source.journal["credit"].sum() == 100
+    conn.close()

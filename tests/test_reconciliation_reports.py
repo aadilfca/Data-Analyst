@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pandas as pd
 from openpyxl import load_workbook
+import pytest
 
 from routers import reconciliation
 from services.ledger_group_summary import build_cashflow_summary, build_financial_statement_summary
@@ -677,7 +678,7 @@ def test_cashflow_preview_exposes_customer_wise_rows_and_selected_customer_filte
     assert response["customer_payment_selected_account_code"] == "CUST-2"
 
 
-def test_cashflows_preview_uses_summary_read_model_without_loading_detail_source():
+def test_cashflows_preview_uses_client_data_source_without_read_model_lookup():
     configuration = {
         "source_template_id": 9,
         "cash_account_codes": [],
@@ -685,20 +686,17 @@ def test_cashflows_preview_uses_summary_read_model_without_loading_detail_source
         "match_internal_transfers": False,
         "receipt_presentation": "net",
     }
-    cached = {
-        "metadata": {
-            "source_upload_ids": [21],
-            "selected_template_upload_ids": [21],
-            "source_row_count": 4,
-            "valid_row_count": 4,
-        },
-        "summary": _cashflow_summary(),
+    source = _source()
+    source.metadata["database_totals"] = {
+        "client_id": 7, "template_id": 9, "upload_id": None,
+        "period_start": "2026-02-10", "period_end": "2026-04-18",
+        "row_count": 17, "voucher_count": 6,
     }
     with (
         patch.object(reconciliation, "_require_active_client"),
         patch.object(reconciliation, "_cashflow_configuration", return_value=configuration),
-        patch.object(reconciliation, "load_cashflow_summary_read_model", return_value=cached),
-        patch.object(reconciliation, "load_ledger_report_source") as loader,
+        patch.object(reconciliation, "load_ledger_report_source", return_value=source) as loader,
+        patch.object(reconciliation, "build_cashflow_summary", return_value=_cashflow_summary()),
     ):
         response = reconciliation.preview_cashflows(
             7,
@@ -709,12 +707,13 @@ def test_cashflows_preview_uses_summary_read_model_without_loading_detail_source
             session=None,
         )
 
-    loader.assert_not_called()
+    loader.assert_called_once()
     assert response["preview"]["group_by"] == "quarter"
     assert response["preview"]["category_totals"][0]["2026-Q1"] == 125.0
+    assert response["database_totals"] == source.metadata["database_totals"]
 
 
-def test_cashflows_preview_uses_prepared_details_for_combined_child_sections():
+def test_cashflows_preview_builds_child_sections_from_client_data_source():
     configuration = {
         "source_template_id": 9,
         "cash_account_codes": [],
@@ -743,23 +742,11 @@ def test_cashflows_preview_uses_prepared_details_for_combined_child_sections():
         "account_name": "Other",
         "fallback_category": "Review",
     }])
-    cached = {
-        "metadata": {
-            "source_upload_ids": [21],
-            "selected_template_upload_ids": [21],
-            "source_row_count": 4,
-            "valid_row_count": 4,
-            "child_details_prepared": True,
-            "child_details_version": CASHFLOW_CHILD_DETAILS_VERSION,
-            "summary_read_model": "hit",
-        },
-        "summary": summary,
-    }
     with (
         patch.object(reconciliation, "_require_active_client"),
         patch.object(reconciliation, "_cashflow_configuration", return_value=configuration),
-        patch.object(reconciliation, "load_cashflow_summary_read_model", return_value=cached),
-        patch.object(reconciliation, "load_ledger_report_source") as loader,
+        patch.object(reconciliation, "load_ledger_report_source", return_value=_source()) as loader,
+        patch.object(reconciliation, "build_cashflow_summary", return_value=summary),
     ):
         response = reconciliation.preview_cashflows(
             7,
@@ -770,7 +757,7 @@ def test_cashflows_preview_uses_prepared_details_for_combined_child_sections():
             session=None,
         )
 
-    loader.assert_not_called()
+    loader.assert_called_once()
     assert len(response["preview"]["transfer_details"]) == 1
     assert len(response["preview"]["deduction_details"]) == 1
     assert len(response["preview"]["categories_needing_review"]) == 1
@@ -829,6 +816,7 @@ def test_cashflows_preview_rejects_previous_child_details_version():
     assert reconciliation._cashflow_cache_can_serve_details(cached, {"customer_payments"}) is False
 
 
+@pytest.mark.skip(reason="Cashflow summary read models are migration-only after the client_data source cutover")
 def test_cashflow_summary_read_model_round_trip_preserves_period_totals():
     from services import ledger_report_source
 
@@ -1010,7 +998,7 @@ def test_prepared_daily_snapshot_rolls_up_to_requested_months():
     assert summary["categories_needing_review"].loc[0, "period_key"] == "2026-02"
 
 
-def test_cashflows_preview_uses_prepared_snapshot_when_exact_cache_misses():
+def test_cashflows_preview_does_not_use_prepared_snapshot_when_cache_misses():
     configuration = {
         "source_template_id": 9,
         "cash_account_codes": [],
@@ -1019,22 +1007,11 @@ def test_cashflows_preview_uses_prepared_snapshot_when_exact_cache_misses():
         "receipt_presentation": "net",
         "cashflow_report_revision": 7,
     }
-    cached = {
-        "metadata": {
-            "source_upload_ids": [21],
-            "selected_template_upload_ids": [21],
-            "source_row_count": 4,
-            "valid_row_count": 4,
-            "summary_read_model": "prepared_snapshot",
-        },
-        "summary": _cashflow_summary(),
-    }
     with (
         patch.object(reconciliation, "_require_active_client"),
         patch.object(reconciliation, "_cashflow_configuration", return_value=configuration),
-        patch.object(reconciliation, "load_cashflow_summary_read_model", return_value=None) as exact_read_model,
-        patch.object(reconciliation, "load_cashflow_prepared_summary", return_value=cached) as prepared_snapshot,
-        patch.object(reconciliation, "load_ledger_report_source") as loader,
+        patch.object(reconciliation, "load_ledger_report_source", return_value=_source()) as loader,
+        patch.object(reconciliation, "build_cashflow_summary", return_value=_cashflow_summary()),
     ):
         response = reconciliation.preview_cashflows(
             7,
@@ -1045,9 +1022,7 @@ def test_cashflows_preview_uses_prepared_snapshot_when_exact_cache_misses():
             session=None,
         )
 
-    loader.assert_not_called()
-    assert exact_read_model.call_args.kwargs["include_drilldown"] is False
-    assert prepared_snapshot.call_args.kwargs["include_drilldown"] is False
+    loader.assert_called_once()
     assert response["preview"]["category_totals"][0]["2026-Q1"] == 125.0
     assert response["cashflow_report_revision"] == 7
 
@@ -1169,7 +1144,7 @@ def test_cashflows_preview_logs_performance_stages(caplog):
     assert "format_seconds=" in message
     assert "total_seconds=" in message
     assert "source_rows=4" in message
-    assert "cache_mode=source_rebuild" in message
+    assert "cache_mode=client_data_source" in message
     assert "cache_hit=False" in message
     assert "read_model=none" in message
     assert "report_revision=1" in message
@@ -1230,10 +1205,16 @@ def test_prepared_drilldown_reads_active_prepared_lines_and_filters_bank():
         "line_count": 2,
     }]
 
-def test_cashflow_drilldown_uses_targeted_projection_for_category(caplog):
-    targeted = {
-        "rows": [
-            {
+def test_cashflow_drilldown_uses_client_data_report_for_category(caplog):
+    full_result = {
+        "period_start": "2026-01-01",
+        "period_end": "2026-01-31",
+        "group_by": "month",
+        "treasury_view": "combined",
+        "cashflow_report_revision": 4,
+        "freshness": {"mode": "client_data_source", "report_revision": 4, "authoritative": True},
+        "preview": {
+            "ledger_rollups": [{
                 "category": "Customers",
                 "period_key": "2026-01",
                 "period_label": "Jan-26",
@@ -1242,21 +1223,27 @@ def test_cashflow_drilldown_uses_targeted_projection_for_category(caplog):
                 "treasury_type": "Bank",
                 "amount": 125.0,
                 "line_count": 2,
-            }
-        ],
-        "controls": {"cash_bank_split": {"status": "Matched"}},
-        "metadata": {
-            "targeted_drilldown_projection": True,
-            "cashflow_report_revision": 4,
-            "source_row_count": 2,
+            }],
+            "drilldown_controls": {},
+        },
+        "source": {
+            "ready": True,
+            "metadata": {"cashflow_report_source_mode": "client_data_derived"},
+            "quality": {"source_row_count": 2},
+        },
+        "blocking_reasons": [],
+        "database_totals": {
+            "client_id": 7, "template_id": 9, "upload_id": None,
+            "period_start": "2026-01-01", "period_end": "2026-01-31",
+            "row_count": 17, "voucher_count": 6,
         },
     }
     configuration = {"source_template_id": 9, "cashflow_report_revision": 4}
     with (
         caplog.at_level(logging.INFO, logger="routers.reconciliation"),
         patch.object(reconciliation, "_cashflow_configuration", return_value=configuration),
-        patch.object(reconciliation, "load_cashflow_prepared_drilldown", return_value=targeted) as targeted_loader,
-        patch.object(reconciliation, "_build_cashflow_result") as full_report,
+        patch.object(reconciliation, "load_cashflow_prepared_drilldown") as targeted_loader,
+        patch.object(reconciliation, "_build_cashflow_result", return_value=full_result) as full_report,
     ):
         response = reconciliation.cashflow_drilldown(
             7,
@@ -1270,13 +1257,15 @@ def test_cashflow_drilldown_uses_targeted_projection_for_category(caplog):
             session=None,
         )
 
-    full_report.assert_not_called()
-    targeted_loader.assert_called_once()
+    full_report.assert_called_once()
+    targeted_loader.assert_not_called()
     assert response["rows"][0]["account_code"] == "AR1"
-    assert response["source"]["metadata"]["targeted_drilldown_projection"] is True
+    assert response["source"]["metadata"]["cashflow_report_source_mode"] == "client_data_derived"
+    assert response["database_totals"] == full_result["database_totals"]
+    assert response["database_totals"]["row_count"] != len(response["rows"])
     record = next(record for record in caplog.records if record.getMessage().startswith("cashflows_drilldown_performance "))
-    assert "projection_mode=targeted_projection" in record.getMessage()
-    assert "cache_mode=targeted_drilldown_projection" in record.getMessage()
+    assert "projection_mode=full_report" in record.getMessage()
+    assert "cache_mode=client_data_source" in record.getMessage()
 
 
 def test_cashflow_drilldown_logs_endpoint_timing(caplog):
@@ -1330,11 +1319,11 @@ def test_cashflow_drilldown_logs_endpoint_timing(caplog):
     assert "filter_count=1" in message
     assert "total_rows=1" in message
     assert "returned_rows=1" in message
-    assert "cache_mode=source_rebuild" in message
+    assert "cache_mode=client_data_source" in message
     assert "cache_hit=False" in message
     assert "report_revision=1" in message
-    assert exact_read_model.call_args.kwargs["include_drilldown"] is True
-    assert prepared_snapshot.call_args.kwargs["include_drilldown"] is True
+    exact_read_model.assert_not_called()
+    prepared_snapshot.assert_not_called()
     assert response["page_count"] == 1
 
 def test_cashflows_preview_accepts_combined_child_sections(caplog):
@@ -1614,7 +1603,7 @@ def test_cashflow_export_uses_canonical_drilldown_and_active_filters():
     assert export_preview["export_filters"]["hide_zero_rows"] is True
     assert export_preview["export_filters"]["account_head"] == "Main customer"
 
-def test_cashflow_export_uses_prepared_category_drilldown_when_available():
+def test_cashflow_export_keeps_client_data_drilldown_rows():
     result = {
         "period_start": "2026-01-01",
         "period_end": "2026-01-31",
@@ -1628,21 +1617,8 @@ def test_cashflow_export_uses_prepared_category_drilldown_when_available():
         "source": {"ready": True, "metadata": {"journal_template_id": 9}},
         "blocking_reasons": [],
     }
-    prepared = {
-        "rows": [{
-            "category": "Customers",
-            "period_key": "2026-01",
-            "period_label": "Jan-26",
-            "account_code": "AR",
-            "account_name": "Prepared customer",
-            "treasury_type": "Bank",
-            "amount": 100,
-            "line_count": 2,
-        }]
-    }
     with (
         patch.object(reconciliation, "_build_cashflow_result", return_value=result),
-        patch.object(reconciliation, "load_cashflow_prepared_drilldown", return_value=prepared) as loader,
         patch.object(reconciliation, "export_cashflow_xlsx", return_value=b"xlsx") as exporter,
     ):
         response = reconciliation.export_cashflows_report(
@@ -1653,12 +1629,10 @@ def test_cashflow_export_uses_prepared_category_drilldown_when_available():
             category="Customers",
             treasury_view="bank",
             session=None,
-        )
+    )
 
     assert response.media_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    assert loader.call_args.kwargs["journal_template_id"] == 9
-    assert loader.call_args.kwargs["treasury_view"] == "bank"
-    assert exporter.call_args.args[0]["ledger_rollups"][0]["account_name"] == "Prepared customer"
+    assert exporter.call_args.args[0]["ledger_rollups"] == []
 
 def test_reports_view_and_dashboard_entry_are_wired():
     root = Path(__file__).resolve().parents[1]
@@ -1698,7 +1672,7 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "setActiveCashflowWindow" in javascript
     assert "const CASHFLOW_DEFAULT_START = '2026-01-01';" in javascript
     assert "const CASHFLOW_DEFAULT_END = '2026-06-30';" in javascript
-    assert "<script src='/static/reconciliation.js?v=33'></script>" in html
+    assert "<script src='/static/reconciliation.js?v=34'></script>" in html
     assert "cashflows-table-number" in javascript
     assert "grid-template-columns: minmax(0, 1fr)" in stylesheet
     assert ".cashflows-table td.cashflows-table-text" in stylesheet
@@ -1731,7 +1705,7 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "cashflowSummaryPaneRowParts" in javascript
     assert "cashflows-summary-sticky-header { position: sticky; top: 72.5px;" in stylesheet
     assert ".cashflows-summary-scroll-pane { min-width: 0; overflow-x: auto; overflow-y: clip; }" in stylesheet
-    assert "style.css?v=69" in html
+    assert "style.css?v=71" in html
     assert "table.style.width = fillAvailable ? 'max(100%, ' + totalWidth + 'px)' : totalWidth + 'px';" in javascript
 
     assert "color: #7E350E" in stylesheet
@@ -1880,7 +1854,7 @@ def test_cashflows_preview_force_refresh_bypasses_cached_snapshots_and_reports_f
     read_model.assert_not_called()
     prepared.assert_not_called()
     loader.assert_called_once()
-    assert response["freshness"]["mode"] == "forced_source_rebuild"
+    assert response["freshness"]["mode"] == "client_data_source"
     assert response["freshness"]["authoritative"] is True
     assert response["freshness"]["report_revision"] == 7
 
@@ -1888,14 +1862,12 @@ def test_cashflows_preview_force_refresh_bypasses_cached_snapshots_and_reports_f
 def test_cashflow_revision_endpoint_returns_lightweight_revision_and_source_key():
     with (
         patch.object(reconciliation, "_require_active_client"),
-        patch.object(reconciliation, "_cashflow_configuration", return_value={"source_template_id": 9}),
-        patch.object(reconciliation, "get_cashflow_report_revision", return_value=12),
-        patch.object(reconciliation, "select_cashflow_report_source_identity", return_value=SimpleNamespace(source_key="canonical-v1")),
+        patch.object(reconciliation, "_cashflow_configuration", return_value={"source_template_id": 9, "cashflow_report_revision": 12}),
     ):
         response = reconciliation.cashflow_revision(7, session=None)
 
     assert response == {
         "client_id": 7,
         "cashflow_report_revision": 12,
-        "cashflow_report_source_key": "canonical-v1",
+        "cashflow_report_source_key": "client-data-v1:7:9",
     }

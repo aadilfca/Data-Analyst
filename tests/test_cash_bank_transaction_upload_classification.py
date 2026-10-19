@@ -1,4 +1,4 @@
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import json
 import unittest
 from unittest.mock import patch
@@ -11,7 +11,8 @@ from services.cash_bank_classification import upsert_classification_rows_postgre
 
 
 class _Cursor:
-    def __init__(self):
+    def __init__(self, connection):
+        self.connection = connection
         self.rows = []
 
     def __enter__(self):
@@ -21,6 +22,7 @@ class _Cursor:
         return False
 
     def execute(self, statement, params=None):
+        self.connection.statements.append(statement)
         self.rows = []
 
     def fetchall(self):
@@ -31,9 +33,10 @@ class _Connection:
     def __init__(self):
         self.commit_count = 0
         self.rollback_count = 0
+        self.statements = []
 
     def cursor(self, *args, **kwargs):
-        return _Cursor()
+        return _Cursor(self)
 
     def commit(self):
         self.commit_count += 1
@@ -143,11 +146,17 @@ class UploadClassificationTests(unittest.TestCase):
             )
 
         sql_statements = [call.args[1] for call in execute_values.call_args_list]
-        self.assertIn("UPDATE cash_bank_transaction_classifications", sql_statements[0])
-        self.assertTrue(
-            any("UPDATE client_data AS target" in statement for statement in sql_statements),
-            "canonical client_data derived fields must be refreshed",
-        )
+        execute_values.assert_called_once()
+        self.assertIn("UPDATE client_data AS target", sql_statements[0])
+        for statement in [*sql_statements, *connection.statements]:
+            self.assertNotIn("cash_bank_transaction_classifications", statement)
+        assignments = sql_statements[0].split("SET", 1)[1].split("FROM (VALUES", 1)[0]
+        for protected in ("row_data", "source_identity", "source_fingerprint", "upload_id"):
+            self.assertNotIn(protected, assignments)
+        values = execute_values.call_args.args[2]
+        self.assertEqual(len(values), 1)
+        self.assertEqual(values[0][0], source_row["id"])
+        self.assertEqual(values[0][7:9], (25.5, 0.0))
         self.assertEqual(derived[0]["classification_status"], "cash")
         self.assertEqual(derived[0]["account_name"], "Cash in hand")
         self.assertEqual(source_row["row_data"], original_payload)
@@ -222,9 +231,12 @@ class UploadClassificationTests(unittest.TestCase):
         connection = _Connection()
         self.last_connection = connection
         captured_sources = []
+        in_transaction = False
 
         @contextmanager
         def transaction():
+            nonlocal in_transaction
+            in_transaction = True
             try:
                 yield connection
             except Exception:
@@ -232,6 +244,8 @@ class UploadClassificationTests(unittest.TestCase):
                 raise
             else:
                 connection.commit()
+            finally:
+                in_transaction = False
 
         def capture_upsert(
             conn,
@@ -239,6 +253,8 @@ class UploadClassificationTests(unittest.TestCase):
             treasury_mapping,
             configuration_version=1,
         ):
+            self.assertIs(conn, connection)
+            self.assertTrue(in_transaction, "Classification must precede the import commit")
             captured_sources.extend(source_rows)
             if upsert_side_effect:
                 raise upsert_side_effect
@@ -276,8 +292,17 @@ class UploadClassificationTests(unittest.TestCase):
             patch.object(import_export, "log_audit"),
             patch.object(import_export.pd, "read_excel", return_value=dataframe),
             patch.object(import_export, "pg_transaction", side_effect=lambda: transaction()),
+            # Stub only the external size measurement; run the actual quota gate.
+            patch.object(import_export, "get_database_storage_budget_pg", return_value={
+                "database_bytes": 1_000_000, "projected_bytes": 3_000_000,
+                "warning_bytes": 300_000_000, "stop_bytes": 400_000_000,
+                "warning": False, "blocked": False,
+            }),
+            patch.object(database, "get_pg_pool", side_effect=AssertionError("Live database access forbidden")),
         ]
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9], patches[10], patches[11]:
+        with ExitStack() as stack:
+            for mocked in patches:
+                stack.enter_context(mocked)
             result = import_export.validate_and_import(request)
 
         return result, connection, captured_sources

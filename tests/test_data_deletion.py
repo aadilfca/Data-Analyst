@@ -124,5 +124,39 @@ class PermanentDataDeletionTests(unittest.TestCase):
         self.assertEqual(error.exception.status_code, 409)
 
 
+def test_replacement_purge_blocks_evidence_before_any_delete():
+    from contextlib import nullcontext
+    import pytest
+    with patch.object(storage_cleanup, "pg_transaction", return_value=nullcontext()), \
+            patch.object(storage_cleanup, "execute_query_pg", return_value=[{"id": 9, "upload_id": 4, "derived_voucher_id": "V1"}]), \
+            patch.object(storage_cleanup, "_count", return_value=1), \
+            patch.object(storage_cleanup, "execute_write_pg") as write, \
+            pytest.raises(storage_cleanup.DataPurgeProtectedError):
+        storage_cleanup.purge_replaced_transaction_rows(5, 1, [9], "test")
+    write.assert_not_called()
+
+
+def test_purge_preview_detects_corrected_content_with_unchanged_counts():
+    preview = {"scope": {"client_id": 5, "template_id": 1}, "upload_ids": [4],
+               "counts": {"client_data": 2}, "protected": {}, "source_fingerprint": "before"}
+    original = storage_cleanup._purge_preview_hash(preview)
+    preview["source_fingerprint"] = "after"
+    assert storage_cleanup._purge_preview_hash(preview) != original
+
+
+def test_replacement_purge_permanently_removes_exact_rows_and_old_payloads():
+    from contextlib import nullcontext
+    writes = []
+    with patch.object(storage_cleanup, "pg_transaction", return_value=nullcontext()), \
+            patch.object(storage_cleanup, "execute_query_pg", side_effect=[[{"id": 9, "upload_id": 4, "derived_voucher_id": "V1"}], []]), \
+            patch.object(storage_cleanup, "_count", return_value=0), \
+            patch.object(storage_cleanup, "execute_write_pg", side_effect=lambda sql, params=None: writes.append((sql, params))):
+        result = storage_cleanup.purge_replaced_transaction_rows(5, 1, [9], "test")
+    assert result["deleted_count"] == 1
+    assert any("DELETE FROM public.client_data WHERE id = ANY(%s)" in sql and params == ([9],) for sql, params in writes)
+    assert any("DELETE FROM public.data_audit_log" in sql for sql, _ in writes)
+    assert not any("is_deleted = TRUE" in sql for sql, _ in writes)
+
+
 if __name__ == "__main__":
     unittest.main()

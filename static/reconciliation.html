@@ -4,7 +4,7 @@
     <meta charset='UTF-8'>
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
     <title>Reports | Internal Audit App</title>
-    <link rel='stylesheet' href='/static/style.css?v=70'>
+    <link rel='stylesheet' href='/static/style.css?v=71'>
 </head>
 <body class='reconciliation-page' data-nav-module='Reports' data-nav-parent='index.html'>
     <nav class='navbar'>
@@ -161,6 +161,12 @@
                 <div>
                     <h3>Cashflows ledger drill-down</h3>
                     <div id='cashflowsDrilldownContext' class='cashflows-drilldown-context' aria-live='polite'></div>
+                    <div id='cashflowsDrilldownDatabaseTotals' class='cashflows-database-totals' aria-live='polite'
+                         title='Active Transaction Report source rows and distinct nonblank voucher IDs for this client and date range, including non-cash and zero-value rows. Search and pagination do not change these totals.'>
+                        <span class='cashflows-database-totals-label'>Database totals</span>
+                        <span>No. of rows <strong id='cashflowsDatabaseRowCount'>—</strong></span>
+                        <span>No. of vouchers <strong id='cashflowsDatabaseVoucherCount'>—</strong></span>
+                    </div>
                 </div>
                 <button type='button' id='cashflowsLedgerDrilldownBack' class='cashflows-secondary'>Back to summary</button>
             </div>
@@ -217,6 +223,6 @@
         </footer>
     </main>
     <script src='/static/client_context.js?v=18'></script>
-    <script src='/static/reconciliation.js?v=33'></script>
+    <script src='/static/reconciliation.js?v=34'></script>
 </body>
 </html>

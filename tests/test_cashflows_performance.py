@@ -15,9 +15,31 @@ from services.ledger_report_source import (
     load_cashflow_prepared_drilldown,
     load_cashflow_prepared_summary,
     load_cashflow_sql_source,
+    load_cashflow_client_data_source,
     load_cashflow_summary_read_model,
     store_cashflow_summary_read_model,
 )
+
+
+def test_database_coverage_uses_the_existing_source_round_trip_and_snapshot():
+    calls = []
+
+    def query(sql, params=None):
+        calls.append((sql, params))
+        return [{"database_row_count": 23, "database_voucher_count": 7,
+                 "database_totals_only": True}]
+
+    source = load_cashflow_client_data_source(7, journal_template_id=9,
+        period_start="2026-01-01", period_end="2026-06-30", query_fn=query)
+    assert source.metadata["database_totals"]["row_count"] == 23
+    assert source.metadata["database_totals"]["voucher_count"] == 7
+    assert len(calls) == 1
+    sql, params = calls[0]
+    assert "COUNT(*) AS database_row_count" in sql
+    assert "COUNT(DISTINCT NULLIF(BTRIM(cd.derived_voucher_id), ''))" in sql
+    assert "LEFT JOIN report_lines l ON TRUE" in sql
+    assert params == (7, 9, "2026-01-01", "2026-06-30") * 2
+    assert not any(word in sql.upper() for word in ("INSERT INTO", "UPDATE CLIENT_DATA", "CREATE TABLE"))
 
 
 def test_cashflow_sqlite_and_postgres_schema_contracts_stay_aligned():

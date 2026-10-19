@@ -391,11 +391,10 @@ def upsert_classification_rows_postgres(
     treasury_mapping: Mapping[str, set[str]],
     configuration_version: int = 1,
 ) -> list[dict[str, Any]]:
-    """Upsert current derived rows without creating a version per source line.
+    """Update derivations on canonical source rows without transaction copies.
 
-    Existing current rows are updated in place. A row is inserted only when a
-    source line has no current classification yet. Historical non-current rows
-    are deliberately left untouched for the later cleanup phase.
+    The caller owns the transaction. Raw row values and source identities are
+    unchanged; legacy classification tables are not a write target.
     """
     derived_rows = [
         build_classification_row(row, treasury_mapping, configuration_version)
@@ -404,110 +403,8 @@ def upsert_classification_rows_postgres(
     if not derived_rows:
         return []
 
-    values = [
-        (
-            row["client_data_id"],
-            row["client_id"],
-            row["template_id"],
-            row["upload_id"],
-            row["voucher_id"],
-            row["account_code"],
-            row["account_name"],
-            row["transaction_date"],
-            row["transaction_month"],
-            row["transaction_fortnight"],
-            row["debit"],
-            row["credit"],
-            row["treasury_type"],
-            row["treasury_account_code"],
-            row["configuration_version"],
-            row["classification_status"],
-            True,
-        )
-        for row in derived_rows
-    ]
     with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        execute_values(
-            cursor,
-            """
-            UPDATE cash_bank_transaction_classifications AS target
-            SET client_id = incoming.client_id,
-                template_id = incoming.template_id,
-                upload_id = incoming.upload_id,
-                voucher_id = incoming.voucher_id,
-                account_code = incoming.account_code,
-                account_name = incoming.account_name,
-                transaction_date = incoming.transaction_date,
-                transaction_month = incoming.transaction_month,
-                transaction_fortnight = incoming.transaction_fortnight,
-                debit = incoming.debit,
-                credit = incoming.credit,
-                treasury_type = incoming.treasury_type,
-                treasury_account_code = incoming.treasury_account_code,
-                configuration_version = incoming.configuration_version,
-                classification_status = incoming.classification_status,
-                is_current = TRUE,
-                classified_at = CURRENT_TIMESTAMP
-            FROM (VALUES %s) AS incoming(
-                client_data_id, client_id, template_id, upload_id,
-                voucher_id, account_code, account_name, transaction_date,
-                transaction_month, transaction_fortnight, debit, credit,
-                treasury_type, treasury_account_code, configuration_version,
-                classification_status, is_current
-            )
-            WHERE target.client_data_id = incoming.client_data_id
-              AND target.is_current = TRUE
-            """,
-            values,
-            page_size=500,
-        )
-        cursor.execute(
-            """
-            SELECT client_data_id
-            FROM cash_bank_transaction_classifications
-            WHERE is_current = TRUE AND client_data_id = ANY(%s)
-            """,
-            ([int(row["client_data_id"]) for row in derived_rows],),
-        )
-        current_ids = {int(row["client_data_id"]) for row in cursor.fetchall()}
-        insert_rows = [
-            row for row in values if int(row[0]) not in current_ids
-        ]
-        if insert_rows:
-            execute_values(
-                cursor,
-                """
-                INSERT INTO cash_bank_transaction_classifications (
-                    client_data_id, client_id, template_id, upload_id,
-                    voucher_id, account_code, account_name, transaction_date,
-                    transaction_month, transaction_fortnight, debit, credit,
-                    treasury_type, treasury_account_code, configuration_version,
-                    classification_status, is_current
-                ) VALUES %s
-                ON CONFLICT (client_data_id, configuration_version)
-                DO UPDATE SET
-                    client_id = EXCLUDED.client_id,
-                    template_id = EXCLUDED.template_id,
-                    upload_id = EXCLUDED.upload_id,
-                    voucher_id = EXCLUDED.voucher_id,
-                    account_code = EXCLUDED.account_code,
-                    account_name = EXCLUDED.account_name,
-                    transaction_date = EXCLUDED.transaction_date,
-                    transaction_month = EXCLUDED.transaction_month,
-                    transaction_fortnight = EXCLUDED.transaction_fortnight,
-                    debit = EXCLUDED.debit,
-                    credit = EXCLUDED.credit,
-                    treasury_type = EXCLUDED.treasury_type,
-                    treasury_account_code = EXCLUDED.treasury_account_code,
-                    classification_status = EXCLUDED.classification_status,
-                    is_current = TRUE,
-                    classified_at = CURRENT_TIMESTAMP
-                """,
-                insert_rows,
-                page_size=500,
-            )
-        # Phase 2 canonical store: keep report-required derivations on the
-        # source client_data row. row_data is never changed here.
+        # Keep report-required derivations on the original source row only.
         canonical_values = [
             (
                 row["client_data_id"],
@@ -574,6 +471,19 @@ class BackfillSummary:
     bank_rows: int = 0
     non_treasury_rows: int = 0
     unmapped_rows: int = 0
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class CanonicalAmountRepairSummary:
+    backend: str
+    dry_run: bool
+    client_ids: list[int]
+    source_rows: int = 0
+    updated_rows: int = 0
+    unchanged_rows: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -1082,6 +992,76 @@ def backfill_postgres(
                         )
                         summary.inserted_rows += len(
                             [row for row in source_dicts if int(row["id"]) not in existing_ids]
+                        )
+                        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+    return summary
+
+
+def repair_client_data_derived_amounts_postgres(
+    conn: Any,
+    *,
+    client_id: int | None = None,
+    batch_size: int = 500,
+    dry_run: bool = False,
+) -> CanonicalAmountRepairSummary:
+    """Repair only canonical Client Data debit/credit derivations.
+
+    This deliberately does not touch the legacy classification table. The
+    upload gate remains authoritative for row identity, while the existing
+    ``client_data`` row is updated from its exact raw debit/credit values.
+    """
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    client_ids = _client_ids_postgres(conn, client_id)
+    summary = CanonicalAmountRepairSummary("postgres", dry_run, client_ids)
+
+    try:
+        for current_client_id in client_ids:
+            with (
+                conn.cursor(cursor_factory=RealDictCursor) as source_cursor,
+                conn.cursor() as update_cursor,
+            ):
+                source_cursor.execute(
+                    """
+                    SELECT id, client_id, template_id, upload_id, row_data,
+                           extract_date, derived_debit, derived_credit
+                    FROM client_data
+                    WHERE client_id = %s AND is_deleted = FALSE
+                      AND change_detection_status != 'deleted'
+                    ORDER BY id
+                    """,
+                    (current_client_id,),
+                )
+                while True:
+                    source_rows = source_cursor.fetchmany(batch_size)
+                    if not source_rows:
+                        break
+                    updates: list[tuple[float, float, int]] = []
+                    for source_row in source_rows:
+                        summary.source_rows += 1
+                        exact = build_classification_row(source_row, {}, configuration_version=1)
+                        current_debit = float(source_row.get("derived_debit") or 0)
+                        current_credit = float(source_row.get("derived_credit") or 0)
+                        if current_debit == exact["debit"] and current_credit == exact["credit"]:
+                            summary.unchanged_rows += 1
+                        else:
+                            summary.updated_rows += 1
+                            updates.append(
+                                (exact["debit"], exact["credit"], int(source_row["id"]))
+                            )
+                    if not dry_run and updates:
+                        update_cursor.executemany(
+                            """
+                            UPDATE client_data
+                            SET derived_debit = %s,
+                                derived_credit = %s
+                            WHERE id = %s
+                            """,
+                            updates,
                         )
                         conn.commit()
     except Exception:

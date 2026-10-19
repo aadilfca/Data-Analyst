@@ -61,7 +61,7 @@ def test_cashflows_classification_preview_uses_current_derived_rows_and_formats_
     assert result["duplicate_upload_suppression"] is True
     assert result["source_upload_selection"] == "canonical current with filename fallback"
     assert all("c.is_current = TRUE" in sql for sql, _ in calls)
-    assert all("selected_template_uploads" in sql for sql, _ in calls)
+    assert all("selected_report_vouchers" in sql for sql, _ in calls)
     assert "cd.row_data" in calls[1][0]
     assert calls[0][1][:7] == (5, 9, 5, 5, 9, 5, 9)
     assert calls[0][1][7:11] == (5, 9, date(2026, 1, 1), date(2026, 1, 31))
@@ -150,8 +150,8 @@ def test_cashflows_classification_preview_uses_latest_upload_per_filename_cte():
     assert result["total_rows"] == 0
     assert len(calls) == 2
     assert all("ROW_NUMBER() OVER" in sql for sql, _ in calls)
-    assert all("PARTITION BY COALESCE" in sql for sql, _ in calls)
-    assert all("JOIN selected_template_uploads" in sql for sql, _ in calls)
+    assert all("PARTITION BY voucher_identity" in sql for sql, _ in calls)
+    assert all("JOIN selected_report_vouchers" in sql for sql, _ in calls)
     assert calls[0][1][:7] == (5, 9, 5, 5, 9, 5, 9)
     assert calls[1][1][-2:] == (50, 50)
 

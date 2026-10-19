@@ -1457,7 +1457,21 @@ def _build_cashflow_result(
     configuration_started = perf_counter()
     configuration = _cashflow_configuration(client_id)
     configuration_seconds = perf_counter() - configuration_started
-    preparation_status = get_cashflow_preparation_status(execute_query_pg, client_id=client_id)
+    # Phase 1: Cashflows are sourced directly from active client_data rows and
+    # their derived_* columns. Preparation/read-model tables are no longer part
+    # of the active report path.
+    preparation_status = {
+        "client_id": client_id,
+        "status": "not_required",
+        "ready": True,
+        "updating": False,
+        "failed": False,
+        "fallback_active": False,
+        "active_preparation_revision": 0,
+        "requested_preparation_revision": 0,
+        "affected_row_count": 0,
+        "latest_job": None,
+    }
     configured_template_id = configuration.get("source_template_id")
     report_revision = max(int(configuration.get("cashflow_report_revision") or 1), 1)
     diagnostics: list[dict[str, Any]] = []
@@ -1467,98 +1481,27 @@ def _build_cashflow_result(
     prepared_snapshot_lookup_seconds = 0.0
     prepared_rollup_lookup_seconds = 0.0
     source_build_seconds = 0.0
-    cache_mode = "not_requested"
+    cache_mode = "client_data_source"
     cached_summary = None
-    if detail_sections == set() and configured_template_id is not None and not force_refresh:
-        prepared_rollup_started = perf_counter()
-        try:
-            cached_summary = load_cashflow_prepared_rollup_summary(
-                client_id,
-                journal_template_id=configured_template_id,
-                period_start=start,
-                period_end=end,
-                group_by=grouping,
-                receipt_presentation=configuration["receipt_presentation"],
-                treasury_view=treasury_view,
-                query_fn=execute_query_pg,
-            )
-        except Exception as error:
-            logger.warning("cashflows_prepared_rollup_lookup_failed client_id=%s error=%s", client_id, error)
-        finally:
-            prepared_rollup_lookup_seconds = perf_counter() - prepared_rollup_started
-
-    if cached_summary is None and detail_sections is not None and configured_template_id is not None and not force_refresh:
-        cache_mode = "source_rebuild"
-        cache_lookup_started = perf_counter()
-        try:
-            cached_summary = load_cashflow_summary_read_model(
-                client_id,
-                journal_template_id=configured_template_id,
-                period_start=start,
-                period_end=end,
-                group_by=grouping,
-                receipt_presentation=configuration["receipt_presentation"],
-                report_revision=report_revision,
-                query_fn=execute_query_pg,
-                include_drilldown=include_drilldown,
-            )
-            if not _cashflow_cache_can_serve_details(cached_summary, detail_sections, treasury_view):
-                cached_summary = None
-        except Exception as error:
-            logger.warning("cashflows_summary_read_model_lookup_failed client_id=%s error=%s", client_id, error)
-        finally:
-            summary_read_model_lookup_seconds = perf_counter() - cache_lookup_started
-    if cached_summary is None and detail_sections is not None and configured_template_id is not None and not force_refresh:
-        prepared_lookup_started = perf_counter()
-        try:
-            cached_summary = load_cashflow_prepared_summary(
-                client_id,
-                journal_template_id=configured_template_id,
-                period_start=start,
-                period_end=end,
-                group_by=grouping,
-                receipt_presentation=configuration["receipt_presentation"],
-                report_revision=report_revision,
-                query_fn=execute_query_pg,
-                include_drilldown=include_drilldown,
-            )
-            if not _cashflow_cache_can_serve_details(cached_summary, detail_sections, treasury_view):
-                cached_summary = None
-        except Exception as error:
-            logger.warning("cashflows_prepared_snapshot_lookup_failed client_id=%s error=%s", client_id, error)
-        finally:
-            prepared_snapshot_lookup_seconds = perf_counter() - prepared_lookup_started
-    if cached_summary is not None:
-        cache_mode = str((cached_summary.get("metadata") or {}).get("summary_read_model") or "cache_hit")
-        source = LedgerReportSource(
-            pd.DataFrame(),
-            pd.DataFrame(),
-            (),
-            cached_summary["metadata"],
-            (),
+    source_build_started = perf_counter()
+    try:
+        source = load_ledger_report_source(
+            client_id,
+            journal_template_id=configured_template_id,
+            period_start=start,
+            period_end=end,
+            cashflow_group_by=grouping,
+            query_fn=execute_query_pg,
+            account_category_source="cashflow",
+            treasury_account_codes=[
+                *configuration["cash_account_codes"],
+                *configuration["bank_account_codes"],
+            ],
         )
-    else:
-        if force_refresh:
-            cache_mode = "forced_source_rebuild"
-        source_build_started = perf_counter()
-        try:
-            source = load_ledger_report_source(
-                client_id,
-                journal_template_id=configured_template_id,
-                period_start=start,
-                period_end=end,
-                cashflow_group_by=grouping,
-                query_fn=execute_query_pg,
-                account_category_source="cashflow",
-                treasury_account_codes=[
-                    *configuration["cash_account_codes"],
-                    *configuration["bank_account_codes"],
-                ],
-            )
-        except ValueError as error:
-                raise HTTPException(400, str(error)) from error
-        finally:
-            source_build_seconds = perf_counter() - source_build_started
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    finally:
+        source_build_seconds = perf_counter() - source_build_started
     source_seconds = perf_counter() - source_started
     source_metadata_timings = source.metadata
     canonical_selection_seconds = float(source_metadata_timings.get("cashflow_source_identity_seconds") or 0.0)
@@ -1600,24 +1543,6 @@ def _build_cashflow_result(
             diagnostics.append(_report_diagnostic("cashflow_input_error", "error", str(error)))
         finally:
             summary_seconds = perf_counter() - summary_started
-    if summary is not None and detail_sections is not None and configured_template_id is not None and (cached_summary is None or cached_summary["metadata"].get("summary_read_model") == "prepared_snapshot"):
-        try:
-            source_metadata_for_cache = source.metadata
-            store_cashflow_summary_read_model(
-                client_id,
-                journal_template_id=configured_template_id,
-                source_upload_ids=source_metadata_for_cache.get("selected_template_upload_ids") or source_metadata_for_cache.get("source_upload_ids") or [],
-                source_key=source_metadata_for_cache.get("cashflow_report_source_key"),
-                configuration_version=source_metadata_for_cache.get("classification_configuration_version"),
-                report_revision=report_revision,
-                period_start=start,
-                period_end=end,
-                group_by=grouping,
-                summary=summary,
-            )
-        except Exception as error:
-            logger.warning("cashflows_summary_read_model_store_failed client_id=%s error=%s", client_id, error)
-
     review_count = int(summary.get("category_review_count", 0)) if summary else 0
     transfer_count = int(summary.get("internal_transfer_count", 0)) if summary else 0
     controls = {
@@ -1647,7 +1572,7 @@ def _build_cashflow_result(
     total_seconds = perf_counter() - request_started
     cache_hit = cached_summary is not None
     read_model = str((cached_summary.get("metadata") or {}).get("summary_read_model") or "none") if cached_summary else "none"
-    authoritative = bool(force_refresh or cache_mode in {"forced_source_rebuild", "source_rebuild", "completed", "prepared_rollups", "prepared_snapshot"})
+    authoritative = bool(cache_mode == "client_data_source" or force_refresh)
     logger.info(
         "cashflows_performance client_id=%s period_start=%s period_end=%s group_by=%s details=%s "
         "validation_seconds=%.3f configuration_seconds=%.3f source_seconds=%.3f "
@@ -1711,6 +1636,7 @@ def _build_cashflow_result(
             "receipt_presentation": configuration["receipt_presentation"],
         },
         "source": {"metadata": source_metadata, "quality": source_quality, "diagnostics": diagnostics, "ready": source.ready and not any(item.get("severity") == "error" for item in diagnostics)},
+        "database_totals": source_metadata.get("database_totals"),
         "controls": controls,
         "blocking_reasons": blocking_reasons,
         "preview": preview,
@@ -1826,13 +1752,7 @@ def cashflow_revision(
     source_key = None
     source_identity_seconds = 0.0
     if template_id is not None:
-        source_identity_started = perf_counter()
-        source_key = select_cashflow_report_source_identity(
-            client_id,
-            int(template_id),
-            execute_query_pg,
-        ).source_key
-        source_identity_seconds = perf_counter() - source_identity_started
+        source_key = f"client-data-v1:{client_id}:{int(template_id)}"
     report_revision = max(int(configuration.get("cashflow_report_revision") or 1), 1)
     logger.info(
         "cashflows_revision_performance",
@@ -2058,58 +1978,15 @@ def cashflow_drilldown(
     '''Return server-filtered, paginated compact Cashflows ledger roll-ups.'''
     request_started = perf_counter()
     build_started = perf_counter()
-    targeted_projection = None
     projection_mode = "full_report"
-    if isinstance(category, str) and category.strip():
-        try:
-            configuration = _cashflow_configuration(client_id)
-            targeted_projection = load_cashflow_prepared_drilldown(
-                client_id,
-                journal_template_id=configuration.get("source_template_id"),
-                period_start=period_start,
-                period_end=period_end,
-                group_by=group_by,
-                category=category,
-                report_revision=configuration.get("cashflow_report_revision"),
-                treasury_view=treasury_view,
-                query_fn=execute_query_pg,
-            )
-        except Exception as error:
-            logger.warning("cashflows_targeted_drilldown_lookup_failed client_id=%s error=%s", client_id, error)
-    if targeted_projection is not None:
-        projection_mode = "targeted_projection"
-        targeted_metadata = targeted_projection.get("metadata") or {}
-        result = {
-            "period_start": str(period_start),
-            "period_end": str(period_end),
-            "group_by": normalize_cashflow_grouping(group_by),
-            "treasury_view": normalize_cashflow_treasury_view(treasury_view),
-            "cashflow_report_revision": int(targeted_metadata.get("cashflow_report_revision") or 1),
-            "freshness": {
-                "mode": "targeted_drilldown_projection",
-                "report_revision": int(targeted_metadata.get("cashflow_report_revision") or 1),
-                "authoritative": False,
-            },
-            "preview": {
-                "ledger_rollups": targeted_projection.get("rows") or [],
-                "drilldown_controls": targeted_projection.get("controls") or {},
-            },
-            "source": {
-                "ready": True,
-                "metadata": targeted_metadata,
-                "quality": {"source_row_count": int(targeted_metadata.get("source_row_count") or 0)},
-            },
-            "blocking_reasons": [],
-        }
-    else:
-        result = _build_cashflow_result(
-            client_id,
-            period_start,
-            period_end,
-            detail_sections={'drilldown'},
-            group_by=group_by,
-            treasury_view=treasury_view,
-        )
+    result = _build_cashflow_result(
+        client_id,
+        period_start,
+        period_end,
+        detail_sections={'drilldown'},
+        group_by=group_by,
+        treasury_view=treasury_view,
+    )
     build_seconds = perf_counter() - build_started
     filter_started = perf_counter()
     preview = result.get('preview') or {}
@@ -2184,6 +2061,7 @@ def cashflow_drilldown(
         'page_count': page_count,
         'controls': preview.get('drilldown_controls') or {},
         'source': result.get('source') or {},
+        'database_totals': result.get('database_totals'),
         'blocking_reasons': result.get('blocking_reasons') or [],
     }
 
@@ -2229,24 +2107,6 @@ def export_cashflows_report(
     export_preview = dict(result["preview"])
     treasury_view = result.get("treasury_view") or normalize_cashflow_treasury_view(treasury_view)
     source_metadata = (result.get("source") or {}).get("metadata") or {}
-    prepared_export_drilldown = None
-    if category and source_metadata.get("journal_template_id") is not None:
-        try:
-            prepared_export_drilldown = load_cashflow_prepared_drilldown(
-                client_id,
-                journal_template_id=source_metadata.get("journal_template_id"),
-                period_start=period_start,
-                period_end=period_end,
-                group_by=group_by,
-                category=category,
-                report_revision=result.get("cashflow_report_revision"),
-                treasury_view=treasury_view,
-                query_fn=execute_query_pg,
-            )
-        except Exception as error:
-            logger.warning("cashflows_prepared_export_drilldown_lookup_failed client_id=%s error=%s", client_id, error)
-        if prepared_export_drilldown is not None:
-            export_preview["ledger_rollups"] = prepared_export_drilldown.get("rows") or []
     if not treasury_type and treasury_view in {'bank', 'cash'}:
         treasury_type = treasury_view
     period_keys = [

@@ -268,7 +268,7 @@ def test_cashflows_summary_contains_inline_category_ledger_contract():
     assert 'cashflows-inline-ledger-link' in inline_styles
     assert 'cashflows-inline-expand-icon' not in inline_script
     assert 'cashflows-inline-expand-icon' not in inline_styles
-    assert 'style.css?v=68' in inline_html
+    assert 'style.css?v=71' in inline_html
     assert 'cashflows-summary-table-host' in inline_html
     assert 'renderCashflowSummaryPaneLayout' in inline_script
     assert 'syncCashflowSummaryPaneRows' in inline_script
@@ -447,3 +447,91 @@ def test_cashflows_summary_panes_contain_full_year_horizontal_overflow():
     assert metrics["frozenRowBackground"] == "rgb(248, 251, 253)"
     assert metrics["firstPeriodBackground"] == "rgb(248, 251, 253)"
     assert metrics["lastPeriodBackground"] == "rgb(248, 251, 253)"
+
+
+@pytest.fixture
+def cashflow_database_totals_page():
+    """Run the real report script/header against test data with no network access."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    html = (ROOT / "static" / "reconciliation.html").read_text(encoding="utf-8")
+    css = (ROOT / "static" / "style.css").read_text(encoding="utf-8")
+    script = (ROOT / "static" / "reconciliation.js").read_text(encoding="utf-8")
+    header = html[html.index("<section id='cashflowsLedgerDrilldownSection'"):]
+    header = header.split("<div class='cashflows-transactions-toolbar", 1)[0] + "</section>"
+    header = header.replace(" hidden aria-label", " aria-label", 1)
+    hook = """window.countsFixture = {
+        render: renderCashflowDrilldownContext,
+        localResult: cashflowDrilldownLocalResult,
+        scope: function (value) {
+            clientId = value.client_id;
+            cashflowSelection = {start: value.period_start, end: value.period_end, groupBy: 'month'};
+            lastCashflowsResult = {configuration: {source_template_id: value.template_id}};
+        }
+    };"""
+    assert script.count("document.addEventListener('DOMContentLoaded', initialise);") == 1
+    script = script.replace("document.addEventListener('DOMContentLoaded', initialise);", hook)
+    with playwright.sync_playwright() as instance:
+        browser = instance.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width": 1200, "height": 260})
+        page.route("**/*", lambda route: route.abort())
+        page.set_content("<style>" + css + "</style><body class='reconciliation-page'><main style='padding:20px'>" + header + "</main></body>")
+        page.add_script_tag(content=script)
+        yield page
+        browser.close()
+
+
+def _render_database_totals(page, totals):
+    page.evaluate("""totals => {
+        window.countsFixture.scope({client_id: 7, template_id: 9,
+            period_start: '2026-01-01', period_end: '2026-06-30'});
+        window.countsFixture.render({treasury_view: 'combined', database_totals: totals});
+    }""", totals)
+
+
+def test_database_totals_render_formatted_counts_and_preserve_them_when_filtering(cashflow_database_totals_page):
+    page = cashflow_database_totals_page
+    totals = {"client_id": 7, "template_id": 9, "period_start": "2026-01-01",
+              "period_end": "2026-06-30", "row_count": 12345, "voucher_count": 6789}
+    _render_database_totals(page, totals)
+    assert page.locator("#cashflowsDatabaseRowCount").inner_text() == "12,345"
+    assert page.locator("#cashflowsDatabaseVoucherCount").inner_text() == "6,789"
+    assert "Monthly" in page.locator("#cashflowsDrilldownContext").inner_text()
+    assert "Cash and Bank Total" in page.locator("#cashflowsDrilldownContext").inner_text()
+    assert "non-cash and zero-value rows" in page.locator("#cashflowsDrilldownDatabaseTotals").get_attribute("title")
+    local = page.evaluate("""totals => window.countsFixture.localResult({
+        rows: [{category: 'Operating', amount: 10}],
+        result: {database_totals: totals}
+    }, {search: 'no-match', category: '', accountHead: '', treasuryType: '', periodKey: ''}, 2)""", totals)
+    assert local["total_rows"] == 0
+    assert local["database_totals"] == totals
+
+
+def test_database_totals_hide_stale_scopes_and_distinguish_zero_from_loading(cashflow_database_totals_page):
+    page = cashflow_database_totals_page
+    valid = {"client_id": 7, "template_id": 9, "period_start": "2026-01-01",
+             "period_end": "2026-06-30", "row_count": 0, "voucher_count": 0}
+    _render_database_totals(page, valid)
+    assert page.locator("#cashflowsDatabaseRowCount").inner_text() == "0"
+    assert page.locator("#cashflowsDatabaseVoucherCount").inner_text() == "0"
+    for change in ({"client_id": 8}, {"template_id": 10}, {"period_start": "2026-02-01"},
+                   {"period_end": "2026-12-31"}, {"row_count": -1, "voucher_count": 1.5}):
+        _render_database_totals(page, {**valid, **change})
+        assert page.locator("#cashflowsDatabaseRowCount").inner_text() == "—"
+        assert page.locator("#cashflowsDatabaseVoucherCount").inner_text() == "—"
+    _render_database_totals(page, None)
+    assert page.locator("#cashflowsDatabaseRowCount").inner_text() == "—"
+
+
+def test_database_totals_header_fits_desktop_and_narrow_screens(cashflow_database_totals_page):
+    page = cashflow_database_totals_page
+    for width in (1200, 390):
+        page.set_viewport_size({"width": width, "height": 340})
+        _render_database_totals(page, {"client_id": 7, "template_id": 9,
+            "period_start": "2026-01-01", "period_end": "2026-06-30",
+            "row_count": 12345, "voucher_count": 6789})
+        metrics = page.evaluate("""() => ({
+            documentWidth: document.documentElement.scrollWidth,
+            right: document.querySelector('#cashflowsDrilldownDatabaseTotals').getBoundingClientRect().right
+        })""")
+        assert metrics["documentWidth"] <= width
+        assert metrics["right"] <= width

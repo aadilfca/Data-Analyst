@@ -11,6 +11,7 @@ from services.cash_bank_classification import (
     backfill_postgres,
     backfill_sqlite,
     build_classification_row,
+    repair_client_data_derived_amounts_postgres,
 )
 
 
@@ -78,6 +79,54 @@ class _PostgresBackfillConnection:
 
     def rollback(self):
         self.rollback_count += 1
+
+
+class _CanonicalAmountRepairCursor:
+    def __init__(self, source_rows, connection, source):
+        self.source_rows = source_rows
+        self.connection = connection
+        self.source = source
+        self.source_index = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return False
+
+    def execute(self, statement, params=None):
+        if not self.source or "FROM client_data" not in statement:
+            raise AssertionError(f"Unexpected canonical amount statement: {statement}")
+
+    def fetchmany(self, size):
+        batch = self.source_rows[self.source_index:self.source_index + size]
+        self.source_index += len(batch)
+        return batch
+
+    def executemany(self, statement, values):
+        if "UPDATE client_data" not in statement:
+            raise AssertionError(f"Unexpected canonical amount write: {statement}")
+        self.connection.update_rows.extend(values)
+
+
+class _CanonicalAmountRepairConnection:
+    def __init__(self, source_rows):
+        self.source_rows = source_rows
+        self.update_rows = []
+        self.inserted_legacy_rows = 0
+
+    def cursor(self, *args, **kwargs):
+        return _CanonicalAmountRepairCursor(
+            self.source_rows,
+            self,
+            source="cursor_factory" in kwargs,
+        )
+
+    def commit(self):
+        pass
+
+    def rollback(self):
+        pass
 
 
 class CashBankTransactionBackfillTests(unittest.TestCase):
@@ -232,6 +281,58 @@ class CashBankTransactionBackfillTests(unittest.TestCase):
             "SELECT id, row_data FROM client_data ORDER BY id"
         ).fetchall()
         self.assertEqual([tuple(row) for row in before], [tuple(row) for row in after])
+
+    def test_backfill_repairs_existing_rounded_amounts_without_duplicates(self):
+        backfill_sqlite(
+            self.connection,
+            client_id=self.client_id,
+            configuration_version=1,
+        )
+        self.connection.execute(
+            """
+            UPDATE cash_bank_transaction_classifications
+            SET debit = 100, credit = 0
+            WHERE client_data_id = 1
+            """
+        )
+        self.connection.execute(
+            """
+            UPDATE client_data
+            SET derived_debit = 100, derived_credit = 0
+            WHERE id = 1
+            """
+        )
+        self.connection.commit()
+        classification_count = self.connection.execute(
+            "SELECT COUNT(*) FROM cash_bank_transaction_classifications"
+        ).fetchone()[0]
+
+        summary = backfill_sqlite(
+            self.connection,
+            client_id=self.client_id,
+            configuration_version=1,
+        )
+
+        self.assertEqual(summary.inserted_rows, 0)
+        self.assertEqual(summary.skipped_existing_rows, 4)
+        self.assertEqual(
+            self.connection.execute(
+                "SELECT debit FROM cash_bank_transaction_classifications WHERE client_data_id = 1"
+            ).fetchone()[0],
+            100.5,
+        )
+        self.assertEqual(
+            self.connection.execute(
+                "SELECT derived_debit FROM client_data WHERE id = 1"
+            ).fetchone()[0],
+            100.5,
+        )
+        self.assertEqual(
+            self.connection.execute(
+                "SELECT COUNT(*) FROM cash_bank_transaction_classifications"
+            ).fetchone()[0],
+            classification_count,
+        )
 
     def test_account_name_backfill_updates_only_blank_labels(self):
         backfill_sqlite(
@@ -495,5 +596,47 @@ class CashBankTransactionBackfillTests(unittest.TestCase):
         self.assertEqual(summary.cash_rows, 4)
         self.assertEqual(connection.commit_count, 0)
         self.assertEqual(connection.rollback_count, 0)
+
+    def test_postgres_canonical_amount_repair_does_not_insert_legacy_rows(self):
+        source_rows = [
+            {
+                "id": 1,
+                "client_id": 7,
+                "template_id": 9,
+                "upload_id": 11,
+                "row_data": {
+                    "Voucher ID": "V-1",
+                    "Account Detail": "1000",
+                    "Date": "2026-01-01",
+                    "Debit Amount": "100.50",
+                    "Credit Amount": "0",
+                },
+                "extract_date": "2026-01-01",
+                "derived_debit": 100,
+                "derived_credit": 0,
+            }
+        ]
+        connection = _CanonicalAmountRepairConnection(source_rows)
+
+        dry_run = repair_client_data_derived_amounts_postgres(
+            connection,
+            client_id=7,
+            batch_size=1,
+            dry_run=True,
+        )
+
+        self.assertEqual(dry_run.source_rows, 1)
+        self.assertEqual(dry_run.updated_rows, 1)
+        self.assertEqual(connection.update_rows, [])
+
+        summary = repair_client_data_derived_amounts_postgres(
+            connection,
+            client_id=7,
+            batch_size=1,
+        )
+
+        self.assertEqual(summary.updated_rows, 1)
+        self.assertEqual(connection.update_rows, [(100.5, 0.0, 1)])
+        self.assertEqual(connection.inserted_legacy_rows, 0)
 if __name__ == "__main__":
     unittest.main()

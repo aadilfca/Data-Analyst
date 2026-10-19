@@ -3270,6 +3270,236 @@ def load_cashflow_prepared_drilldown(
         },
     }
 
+def load_cashflow_client_data_source(
+    client_id: int,
+    *,
+    journal_upload_id: int | None = None,
+    journal_template_id: int | None = None,
+    period_start: Any = None,
+    period_end: Any = None,
+    cashflow_group_by: str | None = None,
+    query_fn: Callable[..., list[dict[str, Any]]] = execute_query_pg,
+) -> LedgerReportSource:
+    """Load Cashflows from active Client Data and its derived columns.
+
+    The upload gate owns duplicate prevention.  The report therefore reads the
+    active ``client_data`` set directly and does not select latest uploads,
+    resolve voucher occurrences, or consult a transaction-copy table.
+    """
+    if journal_upload_id is not None and journal_template_id is not None:
+        raise ValueError("Specify journal_upload_id or journal_template_id, not both")
+    if period_start is None or period_end is None:
+        return LedgerReportSource(
+            _empty_journal(),
+            _empty_coa(),
+            (_diagnostic("cashflow_period_required", "error", "Cashflows requires a report period."),),
+            {"client_id": client_id, "cashflow_report_source_mode": "client_data_derived"},
+        )
+
+    filters = [
+        "cd.client_id = %s",
+        "cd.is_deleted = FALSE",
+        "COALESCE(cd.change_detection_status, 'active') <> 'deleted'",
+    ]
+    params: list[Any] = [client_id]
+    if journal_upload_id is not None:
+        filters.append("cd.upload_id = %s")
+        params.append(int(journal_upload_id))
+    elif journal_template_id is not None:
+        filters.append("cd.template_id = %s")
+        params.append(int(journal_template_id))
+    else:
+        return LedgerReportSource(
+            _empty_journal(),
+            _empty_coa(),
+            (_diagnostic("cashflow_template_not_configured", "error", "Configure a Cashflows source template before generating the report."),),
+            {"client_id": client_id, "cashflow_report_source_mode": "client_data_derived"},
+        )
+    filters.extend([
+        "cd.derived_transaction_date >= %s",
+        "cd.derived_transaction_date <= %s",
+    ])
+    params.extend([period_start, period_end])
+    # Count all source rows independently of cashflow eligibility, but in the
+    # same statement/snapshot. No extra round trip or persisted copy is needed.
+    database_filters = list(filters)
+    filters.extend([
+        "NULLIF(BTRIM(cd.derived_voucher_id), '') IS NOT NULL",
+        "NULLIF(BTRIM(cd.derived_account_code), '') IS NOT NULL",
+        "(COALESCE(cd.derived_debit, 0) <> 0 OR COALESCE(cd.derived_credit, 0) <> 0)",
+    ])
+
+    query = f"""
+        WITH database_totals AS (
+            SELECT COUNT(*) AS database_row_count,
+                   COUNT(DISTINCT NULLIF(BTRIM(cd.derived_voucher_id), '')) AS database_voucher_count
+            FROM client_data cd
+            WHERE {' AND '.join(database_filters)}
+        ), derived_lines AS (
+            SELECT
+                cd.id AS client_data_id,
+                cd.upload_id,
+                cd.derived_voucher_id AS voucher_id,
+                cd.derived_transaction_date AS date,
+                cd.derived_account_code AS account_code,
+                COALESCE(NULLIF(BTRIM(cd.derived_account_name), ''), '') AS account_name,
+                cd.derived_transaction_month AS transaction_month,
+                cd.derived_transaction_fortnight AS transaction_fortnight,
+                COALESCE(
+                    cd.row_data ->> 'Voucher Detail',
+                    cd.row_data ->> 'Detail',
+                    cd.row_data ->> 'Description',
+                    cd.row_data ->> 'Narration',
+                    cd.row_data ->> 'Remarks',
+                    ''
+                ) AS voucher_detail,
+                COALESCE(cd.derived_debit, 0)::double precision AS debit,
+                COALESCE(cd.derived_credit, 0)::double precision AS credit,
+                LOWER(COALESCE(cd.derived_treasury_type, '')) AS treasury_type,
+                COALESCE(cd.derived_classification_status, 'unmapped') AS classification_status,
+                COALESCE(category.label, '') AS category
+            FROM client_data cd
+            LEFT JOIN account_control_cashflow_category_assignments category_assignment
+              ON category_assignment.client_id = cd.client_id
+             AND category_assignment.account_code = cd.derived_account_code
+            LEFT JOIN account_control_cashflow_categories category
+              ON category.id = category_assignment.category_id
+             AND category.client_id = cd.client_id
+             AND category.is_active = TRUE
+            WHERE {' AND '.join(filters)}
+        ), selected_vouchers AS (
+            SELECT DISTINCT voucher_id
+            FROM derived_lines
+            WHERE treasury_type IN ('cash', 'bank')
+        ), report_lines AS (
+        SELECT
+            l.voucher_id,
+            l.date,
+            l.account_code,
+            MAX(l.account_name) AS account_name,
+            MAX(l.voucher_detail) AS voucher_detail,
+            SUM(l.debit) AS debit,
+            SUM(l.credit) AS credit,
+            MAX(l.treasury_type) AS treasury_type,
+            MAX(l.category) AS category,
+            MAX(l.transaction_month) AS transaction_month,
+            MAX(l.transaction_fortnight) AS transaction_fortnight,
+            COUNT(*) AS source_line_count,
+            MAX(l.classification_status) AS classification_status
+        FROM derived_lines l
+        JOIN selected_vouchers v
+          ON v.voucher_id = l.voucher_id
+        GROUP BY l.voucher_id, l.date, l.account_code
+        )
+        SELECT l.*, totals.database_row_count, totals.database_voucher_count,
+               l.voucher_id IS NULL AS database_totals_only
+        FROM database_totals totals
+        LEFT JOIN report_lines l ON TRUE
+        ORDER BY l.date, l.voucher_id, l.account_code
+    """
+    query_started = perf_counter()
+    rows = query_fn(query, tuple(params + params))
+    query_seconds = perf_counter() - query_started
+    totals_row = dict(rows[0]) if rows else {}
+    database_totals = None
+    if totals_row.get("database_row_count") is not None and totals_row.get("database_voucher_count") is not None:
+        database_totals = {
+            "client_id": client_id, "template_id": journal_template_id, "upload_id": journal_upload_id,
+            "period_start": pd.Timestamp(period_start).date().isoformat(),
+            "period_end": pd.Timestamp(period_end).date().isoformat(),
+            "row_count": int(totals_row["database_row_count"]),
+            "voucher_count": int(totals_row["database_voucher_count"]),
+        }
+    # A totals-only LEFT JOIN row is metadata, never an accounting entry.
+    records = [dict(row) for row in rows if not row.get("database_totals_only", False)]
+    journal = pd.DataFrame(records).reindex(columns=[*JOURNAL_COLUMNS, "treasury_type", "category", *CASHFLOW_PREPARED_PERIOD_COLUMNS])
+    for column in ("treasury_type", "category", *CASHFLOW_PREPARED_PERIOD_COLUMNS):
+        if column not in journal:
+            journal[column] = ""
+    if journal.empty:
+        diagnostics = (_diagnostic(
+            "cashflow_derived_data_unavailable",
+            "error",
+            "No active Cashflows rows with derived columns were found in Client Data for the selected period.",
+        ),)
+        metadata = {
+            "client_id": client_id,
+            "journal_template_id": journal_template_id,
+            "source_upload_ids": [],
+            "cashflow_report_source_mode": "client_data_derived",
+            "cashflow_classification_query_seconds": query_seconds,
+            "database_totals": database_totals,
+            "sql_aggregated": True,
+            "raw_json_parsing": False,
+        }
+        return LedgerReportSource(_empty_journal(), _empty_coa(), diagnostics, metadata)
+
+    journal["date"] = pd.to_datetime(journal["date"], errors="coerce")
+    for column in ("debit", "credit"):
+        journal[column] = pd.to_numeric(journal[column], errors="coerce").fillna(0.0)
+    journal["voucher_id"] = journal["voucher_id"].map(_text)
+    journal["account_code"] = journal["account_code"].map(_canonical_code)
+    for column in ("account_name", "voucher_detail", "treasury_type", "category", *CASHFLOW_PREPARED_PERIOD_COLUMNS):
+        journal[column] = journal[column].map(_text)
+    journal = journal.loc[
+        journal["voucher_id"].ne("")
+        & journal["account_code"].ne("")
+        & journal["date"].notna()
+    ].reset_index(drop=True)
+    if journal.empty:
+        diagnostics = (_diagnostic(
+            "cashflow_derived_data_invalid",
+            "error",
+            "The selected Client Data rows do not contain usable derived Cashflows values.",
+        ),)
+        return LedgerReportSource(_empty_journal(), _empty_coa(), diagnostics, {
+            "client_id": client_id,
+            "journal_template_id": journal_template_id,
+            "cashflow_report_source_mode": "client_data_derived",
+            "cashflow_classification_query_seconds": query_seconds,
+            "database_totals": database_totals,
+            "sql_aggregated": True,
+            "raw_json_parsing": False,
+        })
+
+    coa = (
+        journal[["account_code", "account_name", "treasury_type", "category"]]
+        .drop_duplicates("account_code", keep="last")
+        .rename(columns={"account_name": "account_title", "treasury_type": "account_type"})
+        .reset_index(drop=True)
+    )
+    upload_ids = sorted({int(row["upload_id"]) for row in records if row.get("upload_id") is not None})
+    metadata = {
+        "client_id": client_id,
+        "journal_template_id": journal_template_id,
+        "source_template_ids": [journal_template_id] if journal_template_id is not None else [],
+        "source_upload_ids": upload_ids,
+        "selected_template_upload_ids": upload_ids,
+        "source_row_count": int(sum(int(row.get("source_line_count") or 0) for row in records)),
+        "valid_row_count": int(sum(int(row.get("source_line_count") or 0) for row in records)),
+        "database_totals": database_totals,
+        "rejected_row_count": 0,
+        "layout_row_count": 0,
+        "duplicate_upload_suppression": False,
+        "duplicate_uploads_suppressed": 0,
+        "cashflow_report_source_key": f"client-data-v1:{client_id}:{journal_template_id or 'upload'}",
+        "cashflow_report_source_mode": "client_data_derived",
+        "source_upload_selection": "active client_data rows; upload gate is authoritative",
+        "canonical_source_pending_activation": False,
+        "date_prefilter_applied": True,
+        "source_period_start": str(period_start),
+        "source_period_end": str(period_end),
+        "treasury_filter_stage": "client_data_derived",
+        "sql_aggregated": True,
+        "raw_json_parsing": False,
+        "prepared_periods_requested": str(cashflow_group_by or "").casefold() in {"month", "fortnight"},
+        "cashflow_source_identity_seconds": 0.0,
+        "cashflow_classification_query_seconds": query_seconds,
+        "cashflow_source_transform_seconds": 0.0,
+    }
+    return LedgerReportSource(journal, coa, (), metadata, ())
+
+
 def load_cashflow_sql_source(
     client_id: int,
     *,
@@ -3507,16 +3737,7 @@ def load_ledger_report_source(
     """Load one explicit Client Data Bank dataset and its client categories."""
 
     if account_category_source == "cashflow":
-        prepared = load_cashflow_prepared_line_source(
-            client_id,
-            journal_template_id=journal_template_id,
-            period_start=period_start,
-            period_end=period_end,
-            query_fn=query_fn,
-        )
-        if prepared is not None:
-            return prepared
-        optimized = load_cashflow_sql_source(
+        return load_cashflow_client_data_source(
             client_id,
             journal_upload_id=journal_upload_id,
             journal_template_id=journal_template_id,
@@ -3525,8 +3746,6 @@ def load_ledger_report_source(
             cashflow_group_by=cashflow_group_by,
             query_fn=query_fn,
         )
-        if optimized is not None:
-            return optimized
 
     if journal_upload_id is not None and journal_template_id is not None:
         raise ValueError("Specify journal_upload_id or journal_template_id, not both")

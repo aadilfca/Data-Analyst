@@ -9,6 +9,7 @@ from database import (
     execute_query_pg, execute_write_pg, log_audit, pg_transaction,
     log_data_audit_pg, execute_batch_pg, execute_batch_insert_with_ids_pg,
     start_db_metrics, get_db_metrics, get_db_query_details, stop_db_metrics, log_error,
+    compact_audit_payloads, get_database_storage_budget_pg,
 )
 from psycopg2.extras import Json
 from services.cash_bank_classification import load_treasury_mapping_postgres, upsert_classification_rows_postgres
@@ -22,10 +23,37 @@ from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime, time
 from routers.auth import get_current_user
+from services.storage_cleanup import purge_replaced_transaction_rows, DataPurgeProtectedError, _remove_staged_upload_files
 
 # ⭐ MUST HAVE THIS LINE
 router = APIRouter()
 logger = logging.getLogger(__name__)
+UPLOAD_COMPARISON_PAGE_SIZE = 2000
+
+
+def _check_upload_storage_budget(additional_bytes=0):
+    """Leave room for transaction/index growth and temporary validation payloads."""
+    budget = get_database_storage_budget_pg(additional_bytes)
+    if budget["blocked"]:
+        raise HTTPException(507, detail={
+            "message": "Upload stopped to keep the database below the 400 MB safety limit. Archive approved data before retrying.",
+            **budget,
+        })
+    return budget
+
+
+def _with_storage_status(result):
+    """Expose the warning through the existing upload message/response contract."""
+    if isinstance(result, dict):
+        try:
+            budget = get_database_storage_budget_pg()
+            result["storage_budget"] = budget
+            if budget["warning"]:
+                result["message"] = (result.get("message", "") + " Database storage is above the 300 MB warning threshold.").strip()
+        except Exception:
+            # A post-commit measurement must not turn a saved import into a 500.
+            logger.warning("Upload storage measurement unavailable")
+    return result
 
 
 def _build_upload_storage_path(original_filename: str) -> str:
@@ -40,11 +68,11 @@ def _log_upload_timing(stage):
         def timed(*args, **kwargs):
             perf_enabled = kwargs.pop("perf", False)
             if not perf_enabled:
-                return function(*args, **kwargs)
+                return _with_storage_status(function(*args, **kwargs))
             token = start_db_metrics()
             started = perf_counter()
             try:
-                return function(*args, **kwargs)
+                return _with_storage_status(function(*args, **kwargs))
             finally:
                 metrics = get_db_metrics()
                 query_details = get_db_query_details()
@@ -682,7 +710,12 @@ def _row_fingerprint_token(row_data: dict) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _canonical_source_identity(template_cols: list, row_data: dict, template_id: int) -> str:
+def _canonical_source_identity(
+    template_cols: list,
+    row_data: dict,
+    template_id: int,
+    occurrence_index: int = 1,
+) -> str:
     """Return a compact identity for the one canonical client_data row.
 
     A configured line identifier gives a stable identity across corrections and
@@ -692,7 +725,33 @@ def _canonical_source_identity(template_cols: list, row_data: dict, template_id:
     line_key = _comparison_line_key(template_cols, row_data, template_id)
     if not get_line_key_column(template_cols):
         line_key = f"{line_key}|fingerprint:{_row_fingerprint_token(row_data)}"
+        if occurrence_index > 1:
+            line_key = f"{line_key}|occurrence:{occurrence_index}"
     return hashlib.sha256(line_key.encode("utf-8")).hexdigest()
+
+
+def _canonical_source_identities(
+    template_cols: list,
+    row_datas: list,
+    template_id: int,
+) -> list[str]:
+    """Return stable identities for rows, including repeated no-line-key rows."""
+    occurrences = {}
+    identities = []
+    for row_data in row_datas:
+        document_group_id = get_document_group_id(template_cols, row_data, template_id)
+        fingerprint = _row_fingerprint_token(row_data)
+        occurrence_key = (document_group_id, fingerprint)
+        occurrences[occurrence_key] = occurrences.get(occurrence_key, 0) + 1
+        identities.append(
+            _canonical_source_identity(
+                template_cols,
+                row_data,
+                template_id,
+                occurrence_index=occurrences[occurrence_key],
+            )
+        )
+    return identities
 
 
 def _validation_file_sha256(file_path: str) -> str:
@@ -788,11 +847,21 @@ def _build_validation_plan_payload(
         })
 
     new_rows = []
-    for row_data in change_detection.get("new", []):
+    new_source_identities = change_detection.get("new_source_identities", [])
+    if len(new_source_identities) != len(change_detection.get("new", [])):
+        new_source_identities = _canonical_source_identities(
+            template_cols,
+            change_detection.get("new", []),
+            template_id,
+        )
+    for row_data, source_identity in zip(
+        change_detection.get("new", []), new_source_identities
+    ):
         new_rows.append({
             "row_data": row_data,
             "document_group_id": get_document_group_id(template_cols, row_data, template_id),
             "line_key": _comparison_line_key(template_cols, row_data, template_id),
+            "source_identity": source_identity,
         })
 
     missing = []
@@ -842,39 +911,32 @@ def _create_validation_plan(
     plan_id = uuid4().hex
     file_hash = _validation_file_sha256(file_path)
     request_signature = _validation_request_signature(request)
-    execute_write_pg(
-        """
-        DELETE FROM upload_validation_plans
-        WHERE expires_at < now()
-           OR status IN ('applied', 'expired', 'superseded')
-        """
-    )
-    execute_write_pg(
-        """
-        UPDATE upload_validation_plans
-        SET status = 'superseded'
-        WHERE file_id = %s AND status = 'ready'
-        """,
-        (request.file_id,),
-    )
-    execute_write_pg(
-        """
-        INSERT INTO upload_validation_plans
-            (plan_id, file_id, client_id, template_id, file_sha256,
-             request_signature, plan_json, status, expires_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, 'ready',
-                now() + INTERVAL '30 minutes')
-        """,
-        (
-            plan_id,
-            request.file_id,
-            request.client_id,
-            request.template_id,
-            file_hash,
-            request_signature,
-            Json(plan_payload, dumps=lambda value: json.dumps(value, default=str)),
-        ),
-    )
+    # Include the action payload, source/index growth and allocation overhead.
+    with pg_transaction():
+        execute_query_pg("SELECT pg_advisory_xact_lock(hashtext('upload-storage-budget'))")
+        execute_query_pg("SELECT pg_advisory_xact_lock(hashtext(%s))",
+                         (f"upload-validation:{request.client_id}:{request.template_id}",))
+        _check_upload_storage_budget(len(json.dumps(plan_payload, default=str).encode("utf-8")) * 4 + 1_048_576)
+        execute_write_pg(
+            """DELETE FROM upload_validation_plans
+               WHERE (client_id = %s AND template_id = %s)
+                  OR expires_at < now() OR status IN ('applied', 'expired', 'superseded')""",
+            (request.client_id, request.template_id),
+        )
+        execute_write_pg(
+            """
+            INSERT INTO upload_validation_plans
+                (plan_id, file_id, client_id, template_id, file_sha256,
+                 request_signature, plan_json, status, expires_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 'ready',
+                    now() + INTERVAL '30 minutes')
+            """,
+            (
+                plan_id, request.file_id, request.client_id, request.template_id,
+                file_hash, request_signature,
+                Json(plan_payload, dumps=lambda value: json.dumps(value, default=str)),
+            ),
+        )
     return plan_id
 
 
@@ -1078,6 +1140,7 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
         "unchanged": [],
         "changed": [],
         "new": [],
+        "new_source_identities": [],
         "missing": [],
         "comparison_mode": comparison_mode,
         "date_range": None,
@@ -1086,6 +1149,7 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
     incoming_records = []
     incoming_dates = []
     incoming_groups = {}
+    incoming_occurrences = {}
     for raw_row in incoming_rows:
         row_data = {}
         for template_column, excel_column in col_mapping.items():
@@ -1099,7 +1163,19 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
         date_text = _date_text_for_row(row_data, template_cols, date_delimiter, date_order)
         if date_text:
             incoming_dates.append(date_text)
-        record = {"row_data": row_data, "date_text": date_text, "document_group_id": document_group_id}
+        occurrence_key = (document_group_id, _row_fingerprint_token(row_data))
+        incoming_occurrences[occurrence_key] = incoming_occurrences.get(occurrence_key, 0) + 1
+        record = {
+            "row_data": row_data,
+            "date_text": date_text,
+            "document_group_id": document_group_id,
+            "source_identity": _canonical_source_identity(
+                template_cols,
+                row_data,
+                template_id,
+                occurrence_index=incoming_occurrences[occurrence_key],
+            ),
+        }
         incoming_records.append(record)
         incoming_groups.setdefault(document_group_id, []).append(record)
 
@@ -1110,6 +1186,8 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
             raise HTTPException(400, "A complete replacement cannot include a line with a blank or invalid Date.")
         result["date_range"] = {"start": min(incoming_dates), "end": max(incoming_dates)}
 
+    # Fetch bounded wire payloads in one read-only snapshot. A failed read must
+    # finish or fail completely before comparison can produce import actions.
     existing_rows = execute_query_pg(
         """
         SELECT cd.id, cd.row_data, cd.version, cd.document_group_id,
@@ -1124,8 +1202,10 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
             LIMIT 1
         ) vd ON TRUE
         WHERE cd.client_id = %s AND cd.template_id = %s AND cd.is_deleted = FALSE
+        ORDER BY cd.id
         """,
         (client_id, template_id),
+        page_size=UPLOAD_COMPARISON_PAGE_SIZE,
     )
     result["total_existing_before_import"] = len(existing_rows)
 
@@ -1172,9 +1252,8 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
             result["unchanged"].append(old["client_data_id"])
             result["unchanged_count"] += 1
 
-        # Where a stable line identifier exists, use it to pair changed lines.
-        # Otherwise, deterministic fingerprint ordering pairs the remaining
-        # lines; unmatched extras become Added or Removed, never duplicate rows.
+        # Explicit line IDs are authoritative. Unmatched IDs must remain new or
+        # removed lines and must never inherit another transaction's history.
         if line_column:
             remaining_incoming = list(unmatched_incoming)
             unmatched_incoming = []
@@ -1200,12 +1279,35 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
                 })
                 result["changed_count"] += 1
 
-        unmatched_incoming.sort(key=lambda item: _row_comparison_fingerprint(item["row_data"]))
-        unmatched_existing.sort(key=lambda item: _row_comparison_fingerprint(item["old_row_data"]))
-        pair_count = min(len(unmatched_incoming), len(unmatched_existing))
-        for index in range(pair_count):
-            old = unmatched_existing[index]
-            new = unmatched_incoming[index]
+        pairs = []
+        if not line_column and unmatched_incoming and unmatched_existing:
+            account_column = next((column["column_name"] for column in template_cols
+                                   if str(column["column_name"]).strip().casefold()
+                                   in {"account code", "account_code", "account detail", "ledger code"}), None)
+            if account_column:
+                # Account and movement side can identify a unique correction;
+                # sorting mutable amounts/descriptions cannot establish identity.
+                def anchor(data):
+                    debit = data.get("Debit", data.get("Debit Amount", 0))
+                    credit = data.get("Credit", data.get("Credit Amount", 0))
+                    return (_normalized_key_value(data.get(account_column)),
+                            bool(float(debit or 0)), bool(float(credit or 0)))
+                for new in list(unmatched_incoming):
+                    key = anchor(new["row_data"])
+                    incoming_matches = [item for item in unmatched_incoming if anchor(item["row_data"]) == key]
+                    existing_matches = [item for item in unmatched_existing if anchor(item["old_row_data"]) == key]
+                    if len(incoming_matches) == len(existing_matches) == 1:
+                        old = existing_matches[0]
+                        pairs.append((old, new))
+                        unmatched_existing.remove(old)
+                        unmatched_incoming.remove(new)
+                    elif existing_matches:
+                        raise HTTPException(409, "Ambiguous transaction correction: provide stable source Line IDs before changing repeated lines.")
+            elif len(unmatched_incoming) == len(unmatched_existing) == 1:
+                pairs.append((unmatched_existing.pop(), unmatched_incoming.pop()))
+            else:
+                raise HTTPException(409, "Ambiguous transaction correction: provide stable source Line IDs before changing multiple lines.")
+        for old, new in pairs:
             result["changed"].append({
                 "client_data_id": old["client_data_id"],
                 "old_row_data": old["old_row_data"],
@@ -1216,13 +1318,14 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
                 "source_identity": old.get("source_identity"),
             })
             result["changed_count"] += 1
-        for new in unmatched_incoming[pair_count:]:
+        for new in unmatched_incoming:
             result["new"].append(new["row_data"])
+            result["new_source_identities"].append(new["source_identity"])
             result["new_count"] += 1
         if comparison_mode == "replace_range":
             start_date = result["date_range"]["start"]
             end_date = result["date_range"]["end"]
-            for old in unmatched_existing[pair_count:]:
+            for old in unmatched_existing:
                 if old.get("extract_date") and start_date <= old["extract_date"] <= end_date:
                     result["missing"].append({
                         "client_data_id": old["client_data_id"],
@@ -1459,21 +1562,20 @@ def _deduplicate_exact_rows(
     rate_precision: int,
     row_numbers: Optional[list] = None,
 ) -> dict:
-    """Keep one occurrence of each exact canonical line and report skipped copies.
+    """Retain every source row while reporting repeated canonical lines.
 
-    Exact canonical duplicates are safe to collapse because they carry the same
-    raw and derived values. Rows with the same stable line identity but different
-    content remain in the unique list so the strict identity gate can reject them.
+    Identical-looking ledger lines can be legitimate accounting lines. They are
+    counted for visibility, but none are removed before comparison or import.
     """
-    unique_rows = []
+    retained_rows = list(rows)
     seen = {}
     groups = []
     affected_row_numbers = []
-    skipped_row_numbers = []
-    unique_row_numbers = []
+    retained_row_numbers = []
 
     for position, row in enumerate(rows):
         row_number = row_numbers[position] if row_numbers else position + 2
+        retained_row_numbers.append(row_number)
         row_data = _canonical_import_row_data(
             row, col_mapping, template_cols, rate_source, rate_precision
         )
@@ -1484,12 +1586,9 @@ def _deduplicate_exact_rows(
                 "row_numbers": [row_number],
                 "row": row,
             }
-            unique_rows.append(row)
-            unique_row_numbers.append(row_number)
             continue
 
         occurrence["row_numbers"].append(row_number)
-        skipped_row_numbers.append(row_number)
 
     for occurrence in seen.values():
         if len(occurrence["row_numbers"]) < 2:
@@ -1498,13 +1597,13 @@ def _deduplicate_exact_rows(
         affected_row_numbers.extend(occurrence["row_numbers"])
 
     return {
-        "rows": unique_rows,
-        "row_numbers": unique_row_numbers,
+        "rows": retained_rows,
+        "row_numbers": retained_row_numbers,
         "duplicate_group_count": len(groups),
         "duplicate_row_count": len(affected_row_numbers),
-        "duplicate_skipped_count": len(skipped_row_numbers),
+        "duplicate_skipped_count": 0,
         "duplicate_row_numbers": sorted(affected_row_numbers),
-        "duplicate_skipped_row_numbers": sorted(skipped_row_numbers),
+        "duplicate_skipped_row_numbers": [],
     }
 
 
@@ -1517,12 +1616,14 @@ def _strict_duplicate_row_errors(
     rate_precision: int,
     row_numbers: Optional[list] = None,
 ) -> list:
-    """Return blocking errors for repeated canonical transaction lines in one upload.
+    """Return blocking errors for repeated explicit line keys in one upload.
 
-    A repeated normalized source identity is never silently deduplicated. Templates
-    with a line key reject repeated line keys; templates without one reject exact
-    repeated rows inside the same document group.
+    Templates without a line-key column may legitimately contain repeated exact
+    ledger rows, so those rows are retained and are not blocking errors.
     """
+    if not get_line_key_column(template_cols):
+        return []
+
     grouped = {}
     for position, row in enumerate(rows):
         row_number = row_numbers[position] if row_numbers else position + 2
@@ -2506,6 +2607,7 @@ def _audit_row_params(client_data_id, action, old_data=None, new_data=None, user
     the same default=str fallback json.dumps() used, rather than double
     -encoding to a JSON string ourselves.
     """
+    old_data, new_data = compact_audit_payloads(action, old_data, new_data)
     return (
         client_data_id,
         user,
@@ -2627,30 +2729,30 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
         })
 
     new_rows = [item["row_data"] for item in plan_payload.get("new", [])]
+    new_row_identities = [
+        item.get("source_identity") or _canonical_source_identity(
+            template_cols, item["row_data"], request.template_id
+        )
+        for item in plan_payload.get("new", [])
+    ]
     if new_rows:
-        new_groups = list(dict.fromkeys(
-            item.get("document_group_id")
+        new_source_identities = [
+            item.get("source_identity")
             for item in plan_payload.get("new", [])
-            if item.get("document_group_id")
-        ))
-        if new_groups:
-            existing_new_groups = execute_query_pg(
+            if item.get("source_identity")
+        ]
+        if new_source_identities:
+            existing_new_identities = execute_query_pg(
                 """
-                SELECT row_data
+                SELECT source_identity
                 FROM client_data
                 WHERE client_id = %s AND template_id = %s
                   AND is_deleted = FALSE
-                  AND document_group_id = ANY(%s)
+                  AND source_identity = ANY(%s)
                 """,
-                (request.client_id, request.template_id, new_groups),
+                (request.client_id, request.template_id, new_source_identities),
             )
-            existing_fingerprints = {
-                _row_fingerprint_token(
-                    json.loads(row["row_data"]) if isinstance(row["row_data"], str) else row["row_data"]
-                )
-                for row in existing_new_groups
-            }
-            if any(_row_fingerprint_token(row) in existing_fingerprints for row in new_rows):
+            if existing_new_identities:
                 raise HTTPException(409, "New data was added after validation. Validate the file again.")
 
     planned_identities = [
@@ -2658,10 +2760,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
             template_cols, item["new_row_data"], request.template_id
         )
         for item in changed
-    ] + [
-        _canonical_source_identity(template_cols, row_data, request.template_id)
-        for row_data in new_rows
-    ]
+    ] + new_row_identities
     if len(planned_identities) != len(set(planned_identities)):
         raise HTTPException(
             409,
@@ -2711,6 +2810,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
     inserted_count = 0
     updated_count = 0
     deleted_count = 0
+    replacement_cleanup = {"staged_paths": []}
     cashflow_voucher_resolution = None
     IMPORT_PROGRESS[request.file_id] = {
         "current": 0,
@@ -2719,6 +2819,8 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
     }
 
     with pg_transaction() as conn:
+        execute_query_pg("SELECT pg_advisory_xact_lock(hashtext('upload-storage-budget'))")
+        _check_upload_storage_budget(len(json.dumps(plan_payload, default=str).encode("utf-8")) * 4 + 1_048_576)
         execute_query_pg(
             "SELECT pg_advisory_xact_lock(hashtext(%s))",
             (f"upload-validation:{request.client_id}:{request.template_id}",),
@@ -2834,12 +2936,9 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
         new_client_data_params = []
         new_classification_rows = []
         new_audit_params = []
-        for new_row_data in new_rows:
+        for new_row_data, source_identity in zip(new_rows, new_row_identities):
             amount, date_str = extract_columns_from_row(
                 new_row_data, template_cols, effective_delimiter, effective_order
-            )
-            source_identity = _canonical_source_identity(
-                template_cols, new_row_data, request.template_id
             )
             source_fingerprint = _row_fingerprint_token(new_row_data)
             new_client_data_params.append((
@@ -2892,19 +2991,15 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
             )
             execute_batch_pg(conn, DATA_AUDIT_LOG_INSERT_SQL, new_audit_params)
 
-        missing_params = [(item["client_data_id"],) for item in missing]
-        missing_audit_params = [
-            _audit_row_params(item["client_data_id"], "DELETE", item["old_row_data"], None)
-            for item in missing
-        ]
-        deleted_count = len(missing)
-        if missing_params:
-            execute_batch_pg(
-                conn,
-                "UPDATE client_data SET change_detection_status = 'deleted', is_deleted = TRUE WHERE id = %s",
-                missing_params,
-            )
-            execute_batch_pg(conn, DATA_AUDIT_LOG_INSERT_SQL, missing_audit_params)
+        if missing:
+            try:
+                replacement_cleanup = purge_replaced_transaction_rows(
+                    request.client_id, request.template_id,
+                    [item["client_data_id"] for item in missing], "Analyst",
+                )
+                deleted_count = replacement_cleanup["deleted_count"]
+            except DataPurgeProtectedError as error:
+                raise HTTPException(409, str(error)) from error
             IMPORT_PROGRESS[request.file_id]["current"] += len(missing)
 
         cashflow_voucher_resolution = resolve_upload_occurrences_postgres(
@@ -2916,13 +3011,16 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
         )
         execute_write_pg(
             """
-            UPDATE upload_validation_plans
-            SET status = 'applied', applied_at = now()
+            DELETE FROM upload_validation_plans
             WHERE plan_id = %s AND status = 'ready'
             """,
             (request.validation_plan_id,),
         )
 
+    if replacement_cleanup["staged_paths"]:
+        failures = _remove_staged_upload_files(replacement_cleanup["staged_paths"])
+        if failures:
+            logger.warning("Replacement staged-file cleanup requires retry (%s files)", len(failures))
     legacy_snapshot_required = (
         cashflow_voucher_resolution is None
         or not cashflow_voucher_resolution.get("eligible")
@@ -3311,10 +3409,16 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
             template_cols, item.get("new_row_data") or {}, request.template_id
         )
         for item in change_detection.get("changed", [])
-    ] + [
-        _canonical_source_identity(template_cols, row_data, request.template_id)
-        for row_data in change_detection.get("new", [])
-    ]
+    ] + (
+        change_detection.get("new_source_identities", [])
+        if len(change_detection.get("new_source_identities", []))
+        == len(change_detection.get("new", []))
+        else _canonical_source_identities(
+            template_cols,
+            change_detection.get("new", []),
+            request.template_id,
+        )
+    )
     _assert_active_identity_collisions(
         request.client_id,
         request.template_id,
@@ -3362,15 +3466,10 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
         }
 
     # ---- IMPORT: Use change_detection result to decide per-row action ----
-    # Update uploaded_files status and set client_id
-    execute_write_pg(
-        "UPDATE uploaded_files SET status = 'Imported', client_id = %s WHERE id = %s",
-        (request.client_id, request.file_id)
-    )
-
     inserted_count = 0
     updated_count = 0
     deleted_count = 0
+    replacement_cleanup = {"staged_paths": []}
 
     # Row-write progress tracking (Import progress requirement, phase 1 of 3) --
     # total reflects rows about to actually be written, not the earlier validation pass.
@@ -3389,10 +3488,15 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
     # both raw client_data and derived classification writes succeed.
     cashflow_voucher_resolution = None
     with pg_transaction() as conn:
+        execute_query_pg("SELECT pg_advisory_xact_lock(hashtext('upload-storage-budget'))")
         execute_query_pg(
             "SELECT pg_advisory_xact_lock(hashtext(%s))",
-            (f"upload-data:{request.client_id}:{request.template_id}",),
+            (f"upload-validation:{request.client_id}:{request.template_id}",),
         )
+        growth_rows = change_detection.get("new", []) + [item["new_row_data"] for item in change_detection.get("changed", [])]
+        _check_upload_storage_budget(len(json.dumps(growth_rows, default=str).encode("utf-8")) * 4 + 1_048_576)
+        execute_write_pg("UPDATE uploaded_files SET status = 'Imported', client_id = %s WHERE id = %s",
+                         (request.client_id, request.file_id))
         _assert_active_identity_collisions(
             request.client_id,
             request.template_id,
@@ -3478,12 +3582,18 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
             new_client_data_params = []
             new_row_data_list = []
             new_extract_dates = []
-            for new_row_data in change_detection["new"]:
+            new_row_identities = change_detection.get("new_source_identities", [])
+            if len(new_row_identities) != len(change_detection["new"]):
+                new_row_identities = _canonical_source_identities(
+                    template_cols,
+                    change_detection["new"],
+                    request.template_id,
+                )
+            for new_row_data, source_identity in zip(
+                change_detection["new"], new_row_identities
+            ):
                 amount, date_str = extract_columns_from_row(new_row_data, template_cols, effective_delimiter, effective_order)
                 doc_group_id = get_document_group_id(template_cols, new_row_data, request.template_id)
-                source_identity = _canonical_source_identity(
-                    template_cols, new_row_data, request.template_id
-                )
                 source_fingerprint = _row_fingerprint_token(new_row_data)
                 # data_quality_flag (Phase 4 of the blank-field-rejection requirement) --
                 # 'incomplete' for a force-included row still carrying a blank critical field.
@@ -3532,30 +3642,25 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
                 ]
                 execute_batch_pg(conn, DATA_AUDIT_LOG_INSERT_SQL, new_audit_params)
 
-            # 4. Missing: flag existing rows as 'deleted' for auditor review (soft flag)
-            missing_client_data_params = []
-            missing_audit_params = []
-            for item in change_detection["missing"]:
-                cid = item["client_data_id"]
-                missing_client_data_params.append((cid,))
-                missing_audit_params.append(_audit_row_params(cid, "DELETE", item["old_row_data"], None))
-                deleted_count += 1
-                IMPORT_PROGRESS[request.file_id]["current"] += 1
-
-            if missing_client_data_params:
-                execute_batch_pg(
-                    conn,
-                    "UPDATE client_data SET change_detection_status = 'deleted', is_deleted = TRUE WHERE id = %s",
-                    missing_client_data_params
-                )
-            if missing_audit_params:
-                execute_batch_pg(conn, DATA_AUDIT_LOG_INSERT_SQL, missing_audit_params)
+            # Replacement scope is explicit; protected references block the
+            # whole import rather than leaving retained soft-deleted copies.
+            if change_detection["missing"]:
+                try:
+                    replacement_cleanup = purge_replaced_transaction_rows(
+                        request.client_id, request.template_id,
+                        [item["client_data_id"] for item in change_detection["missing"]], "Analyst",
+                    )
+                    deleted_count = replacement_cleanup["deleted_count"]
+                except DataPurgeProtectedError as error:
+                    raise HTTPException(409, str(error)) from error
+                IMPORT_PROGRESS[request.file_id]["current"] += deleted_count
 
         else:
             # --- First-time upload (no existing data with valid composite key): insert all rows as new ---
             first_upload_client_data_params = []
             first_upload_row_data_list = []
             first_upload_extract_dates = []
+            first_upload_occurrences = {}
             for row in rows:
                 # Build JSON row_data
                 row_data = {}
@@ -3574,8 +3679,15 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
 
                 # Compute document_group_id from the first column value
                 doc_group_id = get_document_group_id(template_cols, row_data, request.template_id)
+                occurrence_key = (doc_group_id, _row_fingerprint_token(row_data))
+                first_upload_occurrences[occurrence_key] = (
+                    first_upload_occurrences.get(occurrence_key, 0) + 1
+                )
                 source_identity = _canonical_source_identity(
-                    template_cols, row_data, request.template_id
+                    template_cols,
+                    row_data,
+                    request.template_id,
+                    occurrence_index=first_upload_occurrences[occurrence_key],
                 )
                 source_fingerprint = _row_fingerprint_token(row_data)
 
@@ -3640,6 +3752,10 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
             upload_id=request.file_id,
             row_data=cashflow_occurrence_rows,
         )
+    if replacement_cleanup["staged_paths"]:
+        failures = _remove_staged_upload_files(replacement_cleanup["staged_paths"])
+        if failures:
+            logger.warning("Replacement staged-file cleanup requires retry (%s files)", len(failures))
     legacy_snapshot_required = (
         cashflow_voucher_resolution is None
         or not cashflow_voucher_resolution.get("eligible")

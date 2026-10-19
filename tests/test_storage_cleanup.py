@@ -816,3 +816,23 @@ class StorageCleanupPreviewTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_replacement_returns_orphan_paths_for_post_commit_cleanup_only():
+    from contextlib import nullcontext
+    queries = []
+    results = iter([[{"id": 9, "upload_id": 4, "derived_voucher_id": "V1"}], [{"id": 4, "file_path": "uploads/old.xlsx"}]])
+    def query(sql, params=None):
+        queries.append((sql, params))
+        return next(results)
+    with patch.object(cleanup_service, "pg_transaction", return_value=nullcontext()), \
+            patch.object(cleanup_service, "execute_query_pg", side_effect=query), \
+            patch.object(cleanup_service, "_count", return_value=0), \
+            patch.object(cleanup_service, "execute_write_pg") as write, \
+            patch.object(cleanup_service, "_remove_staged_upload_files") as remove:
+        result = cleanup_service.purge_replaced_transaction_rows(5, 1, [9], "test")
+    remove.assert_not_called()
+    assert result == {"deleted_count": 1, "staged_paths": ["uploads/old.xlsx"]}
+    assert queries[0][1] == (5, 1, [9])
+    assert "NOT EXISTS (SELECT 1 FROM public.client_data" in queries[1][0]
+    assert any("DELETE FROM public.uploaded_files" in call.args[0] for call in write.call_args_list)

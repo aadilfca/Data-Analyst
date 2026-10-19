@@ -27,6 +27,7 @@ from services.cash_bank_classification import (
     backfill_account_names_sqlite,
     backfill_postgres,
     backfill_sqlite,
+    repair_client_data_derived_amounts_postgres,
 )
 
 
@@ -38,10 +39,16 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--configuration-version", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=500)
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument(
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
         "--account-name-only",
         action="store_true",
         help="Fill blank derived account labels without reclassifying transaction rows.",
+    )
+    mode_group.add_argument(
+        "--canonical-amounts-only",
+        action="store_true",
+        help="Repair exact Client Data debit/credit derivations without inserting legacy rows.",
     )
     parser.add_argument(
         "--backend",
@@ -58,13 +65,22 @@ def main() -> int:
         raise SystemExit("--batch-size must be positive")
     if args.configuration_version < 1:
         raise SystemExit("--configuration-version must be positive")
+    if args.canonical_amounts_only and args.backend != "postgres":
+        raise SystemExit("--canonical-amounts-only requires --backend postgres")
 
     if args.backend == "postgres":
         if not os.environ.get("DATABASE_URL"):
             raise SystemExit("--backend postgres requires DATABASE_URL")
         conn = database.get_raw_conn_pg()
         try:
-            if args.account_name_only:
+            if args.canonical_amounts_only:
+                summary = repair_client_data_derived_amounts_postgres(
+                    conn,
+                    client_id=args.client_id,
+                    batch_size=args.batch_size,
+                    dry_run=args.dry_run,
+                )
+            elif args.account_name_only:
                 summary = backfill_account_names_postgres(
                     conn,
                     client_id=args.client_id,

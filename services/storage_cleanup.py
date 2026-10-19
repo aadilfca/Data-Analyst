@@ -753,12 +753,67 @@ def _purge_protected_counts(client_id: int, template_id: int | None = None) -> D
     return protected
 
 
+def purge_replaced_transaction_rows(client_id, template_id, row_ids, operator):
+    """Purge explicitly missing import rows in the caller's transaction.
+
+    Lock and validate the exact row scope, then protect the same references as
+    full dataset deletion. File removal is returned for post-commit execution.
+    """
+    ids = sorted(set(int(value) for value in row_ids))
+    if not ids:
+        return {"deleted_count": 0, "staged_paths": []}
+    with pg_transaction():
+        rows = execute_query_pg(
+            """SELECT id, upload_id, derived_voucher_id FROM public.client_data
+               WHERE client_id = %s AND template_id = %s AND id = ANY(%s)
+               ORDER BY id FOR UPDATE""", (client_id, template_id, ids),
+        )
+        if {int(row["id"]) for row in rows} != set(ids):
+            raise DataPurgeProtectedError("Replacement scope changed; validate the upload again.")
+        for table, column in (
+            ("verification_details", "client_data_id"),
+            ("voucher_line_documents", "client_data_id"),
+            ("voucher_line_physical_bill_items", "source_document_row_id"),
+            ("cashflow_prepared_lines", "source_client_data_id"),
+        ):
+            if _count(f"SELECT COUNT(*) AS count FROM public.{table} WHERE {column} = ANY(%s)", (ids,)):
+                raise DataPurgeProtectedError("Replacement blocked by protected verification or evidence references.")
+        for table in ("cash_bank_transaction_classifications", "data_audit_log"):
+            execute_write_pg(f"DELETE FROM public.{table} WHERE client_data_id = ANY(%s)", (ids,))
+        vouchers = list({row["derived_voucher_id"] for row in rows if row.get("derived_voucher_id")})
+        execute_write_pg(
+            """DELETE FROM public.cashflow_voucher_occurrences
+               WHERE client_id = %s AND template_id = %s AND voucher_id = ANY(%s)""",
+            (client_id, template_id, vouchers),
+        )
+        # Retired report copies cannot retain rows that have just been removed.
+        for table in ("cashflow_prepared_rollups", "cash_bank_summary_read_models", "cashflow_ledger_rollup_read_models", "upload_validation_plans"):
+            execute_write_pg(f"DELETE FROM public.{table} WHERE client_id = %s AND template_id = %s", (client_id, template_id))
+        execute_write_pg("DELETE FROM public.client_data WHERE id = ANY(%s)", (ids,))
+        upload_ids = list({row["upload_id"] for row in rows if row.get("upload_id") is not None})
+        orphans = execute_query_pg(
+            """SELECT uf.id, uf.file_path FROM public.uploaded_files uf
+               WHERE uf.id = ANY(%s) AND uf.client_id = %s AND uf.template_id = %s
+                 AND NOT EXISTS (SELECT 1 FROM public.client_data cd WHERE cd.upload_id = uf.id)
+                 AND NOT EXISTS (SELECT 1 FROM public.verifications v WHERE v.file_id = uf.id)
+               FOR UPDATE""", (upload_ids, client_id, template_id),
+        )
+        if orphans:
+            execute_write_pg("DELETE FROM public.uploaded_files WHERE id = ANY(%s)", ([row["id"] for row in orphans],))
+        execute_write_pg(
+            'INSERT INTO audit_log ("user", action, module, details) VALUES (%s, %s, %s, %s)',
+            (operator, "Replacement data purge", "Upload", json.dumps({"client_id": client_id, "template_id": template_id, "deleted_count": len(ids)})),
+        )
+    return {"deleted_count": len(ids), "staged_paths": [row["file_path"] for row in orphans]}
+
+
 def _purge_preview_hash(preview: Dict[str, Any]) -> str:
     payload = {
         "scope": preview["scope"],
         "upload_ids": preview["upload_ids"],
         "counts": preview["counts"],
         "protected": preview["protected"],
+        "source_fingerprint": preview.get("source_fingerprint"),
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -846,6 +901,11 @@ def get_client_data_purge_preview(
         })
 
     protected = _purge_protected_counts(client_id, template_id)
+    # Counts alone cannot detect a correction made after backup/preview.
+    source_fingerprint = _first(
+        "SELECT md5(string_agg(cd.id::text || '|' || COALESCE(cd.source_fingerprint, '') || '|' || COALESCE(cd.source_identity, ''), ',' ORDER BY cd.id)) AS fingerprint FROM public.client_data cd WHERE " + predicate,
+        params,
+    ).get("fingerprint")
     preview = {
         "mode": "permanent_data_delete_dry_run",
         "scope": {"client_id": client_id, "template_id": template_id},
@@ -858,6 +918,7 @@ def get_client_data_purge_preview(
         "staged_file_names": [row["file_name"] for row in uploads],
         "counts": counts,
         "protected": protected,
+        "source_fingerprint": source_fingerprint,
         "can_apply": not any(protected.values()),
         "safety": [
             "This preview performs no INSERT, UPDATE, DELETE, or VACUUM operation.",
@@ -931,10 +992,14 @@ def apply_client_data_purge(
 
     with pg_transaction():
         execute_write_pg("SET LOCAL statement_timeout = '120s'")
+        execute_query_pg("SELECT pg_advisory_xact_lock(hashtext('upload-storage-budget'))")
         execute_query_pg(
             "SELECT pg_advisory_xact_lock(hashtext(%s))",
             (f"permanent-data-delete:{client_id}:{template_id or 'all'}",),
         )
+        # Protect the preview through deletion, including concurrent FK checks.
+        _count("SELECT COUNT(*) AS count FROM (SELECT cd.id FROM public.client_data cd WHERE "
+               + predicate + " ORDER BY cd.id FOR UPDATE) locked_source", params)
         locked_preview = get_client_data_purge_preview(client_id, template_id)
         if preview_hash != locked_preview["preview_hash"]:
             raise DataPurgePreviewStaleError(

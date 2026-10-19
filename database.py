@@ -154,6 +154,40 @@ def log_audit(user, action, module, details=""):
         pass
 
 
+def get_database_storage_budget_pg(additional_bytes=0):
+    """Measure allocated database bytes; reserve estimated growth below quota.
+
+    Decimal MB match the conservative 300/400 MB project policy. Allocation
+    includes indexes and dead pages, so the guard never assumes DELETE shrinks it.
+    """
+    rows = execute_query_pg("SELECT pg_database_size(current_database()) AS database_bytes")
+    current = int(rows[0]["database_bytes"])
+    projected = current + max(int(additional_bytes), 0)
+    return {
+        "database_bytes": current,
+        "projected_bytes": projected,
+        "warning_bytes": 300_000_000,
+        "stop_bytes": 400_000_000,
+        "warning": projected >= 300_000_000,
+        "blocked": projected >= 400_000_000,
+    }
+
+
+def maintenance_storage_budget(database_bytes, next_batch_bytes, recovery_reserve_bytes):
+    """Reserve measured allocation, one bounded batch and recovery headroom.
+
+    This is a refusal gate, not a guarantee about PostgreSQL's physical growth.
+    Callers must measure again after a batch; rolled-back pages may remain.
+    """
+    for value in (database_bytes, next_batch_bytes, recovery_reserve_bytes):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError("Maintenance storage values must be non-negative integers")
+    projected = database_bytes + next_batch_bytes + recovery_reserve_bytes
+    return {"database_bytes": database_bytes, "projected_bytes": projected,
+            "batch_allowance_bytes": next_batch_bytes, "recovery_reserve_bytes": recovery_reserve_bytes,
+            "stop_bytes": 400_000_000, "blocked": projected >= 400_000_000}
+
+
 def compact_audit_payloads(action, old_data=None, new_data=None):
     """Return compact audit values without copying a complete transaction row.
 
@@ -4854,8 +4888,8 @@ def _ensure_postgres_client_data_canonical_columns(conn):
             "derived_transaction_date": "DATE DEFAULT NULL",
             "derived_transaction_month": "TEXT DEFAULT NULL",
             "derived_transaction_fortnight": "TEXT DEFAULT NULL",
-            "derived_debit": "REAL DEFAULT 0",
-            "derived_credit": "REAL DEFAULT 0",
+            "derived_debit": "DOUBLE PRECISION DEFAULT 0",
+            "derived_credit": "DOUBLE PRECISION DEFAULT 0",
             "derived_treasury_type": "TEXT DEFAULT NULL",
             "derived_treasury_account_code": "TEXT DEFAULT NULL",
             "derived_classification_status": "TEXT DEFAULT NULL",
@@ -4863,6 +4897,13 @@ def _ensure_postgres_client_data_canonical_columns(conn):
         }
         for name, definition in columns.items():
             cur.execute(f"ALTER TABLE client_data ADD COLUMN IF NOT EXISTS {name} {definition}")
+        # Cashflow amounts must retain accounting precision. PostgreSQL REAL
+        # rounds large values and loses cents before the report reads them.
+        for name in ("derived_debit", "derived_credit"):
+            cur.execute(
+                f"ALTER TABLE client_data ALTER COLUMN {name} TYPE DOUBLE PRECISION "
+                f"USING {name}::double precision"
+            )
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_client_data_active_identity "
             "ON client_data (client_id, template_id, is_deleted, source_identity)"
@@ -5182,8 +5223,8 @@ def init_db_postgres(conn):
             derived_transaction_date DATE DEFAULT NULL,
             derived_transaction_month TEXT DEFAULT NULL,
             derived_transaction_fortnight TEXT DEFAULT NULL,
-            derived_debit REAL DEFAULT 0,
-            derived_credit REAL DEFAULT 0,
+            derived_debit DOUBLE PRECISION DEFAULT 0,
+            derived_credit DOUBLE PRECISION DEFAULT 0,
             derived_treasury_type TEXT DEFAULT NULL,
             derived_treasury_account_code TEXT DEFAULT NULL,
             derived_classification_status TEXT DEFAULT NULL,
@@ -6677,17 +6718,20 @@ _STALE_PG_CONNECTION_MARKERS = (
 )
 
 
-def _is_stale_pg_connection_error(exc) -> bool:
+def _is_stale_pg_connection_error(exc, *, read_only=False) -> bool:
     """
     True only for a psycopg2 error meaning "this pooled connection is dead,
     throw it away" - never for deadlocks, pool exhaustion, constraint
     violations, bad SQL, or a non-psycopg2 exception, all of which propagate
-    unchanged.
+    unchanged. The observed large-read SSL EOF is opt-in for enforced read-only
+    operations so it cannot introduce automatic write replays.
     """
     if not isinstance(exc, (psycopg2.InterfaceError, psycopg2.OperationalError)):
         return False
     text = str(exc).lower()
-    return any(marker in text for marker in _STALE_PG_CONNECTION_MARKERS)
+    return any(marker in text for marker in _STALE_PG_CONNECTION_MARKERS) or (
+        read_only and "ssl error: unexpected eof while reading" in text
+    )
 
 
 def _safe_pg_rollback(conn):
@@ -6701,12 +6745,13 @@ def _safe_pg_rollback(conn):
         pass
 
 
-def _run_pooled_pg(operation):
+def _run_pooled_pg(operation, *, read_only=False):
     """
     Borrow a pooled connection, run operation(conn), return the connection to
     the pool, and return operation's result. This is the retry-once-on-stale
     layer for the no-active-transaction path of execute_query_pg /
-    execute_write_pg.
+    execute_write_pg. read_only is reserved for operations that enforce a
+    database read-only transaction and can safely discard their entire result.
 
     If the borrowed connection turns out to be dead (see
     _is_stale_pg_connection_error) it is discarded with putconn(close=True) -
@@ -6733,14 +6778,14 @@ def _run_pooled_pg(operation):
         except Exception as exc:
             # The pool opening a brand-new physical connection can transiently
             # fail ("could not connect"); give that one retry too.
-            if attempt == 1 and _is_stale_pg_connection_error(exc):
+            if attempt == 1 and _is_stale_pg_connection_error(exc, read_only=read_only):
                 stale_reason = exc
                 continue
             raise
         try:
             result = operation(conn)
         except Exception as exc:
-            if _is_stale_pg_connection_error(exc):
+            if _is_stale_pg_connection_error(exc, read_only=read_only):
                 pool.putconn(conn, close=True)
                 if attempt == 1:
                     stale_reason = exc
@@ -6903,13 +6948,90 @@ def _instrument_db_call(kind):
 # === END OPT-IN PERFORMANCE DIAGNOSTICS ====================================
 
 
+def run_isolated_pg_transaction(conn, operation):
+    """Rehearse maintenance on a caller-owned local test connection only.
+
+    Never borrows the application pool or retries writes/commit acknowledgements.
+    Both client destination and server identity must describe a loopback-only
+    database named precision_rehearsal_*. The caller closes the connection.
+    """
+    import ipaddress
+    import re
+    from psycopg2.extensions import TRANSACTION_STATUS_IDLE
+
+    if _pg_transaction.get() is not None:
+        raise RuntimeError("Isolated maintenance cannot join an application transaction")
+    if conn.closed or conn.autocommit or conn.get_transaction_status() != TRANSACTION_STATUS_IDLE:
+        raise RuntimeError("Rehearsal requires an idle, non-autocommit connection")
+    destination = conn.get_dsn_parameters()
+    name = destination.get("dbname", "")
+    if destination.get("host") not in {"localhost", "127.0.0.1", "::1"} or not re.fullmatch(
+            r"precision_rehearsal_[a-z0-9_]+", name):
+        raise RuntimeError("Maintenance is restricted to a local precision_rehearsal_* database")
+    token = None
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT current_database(), inet_server_addr()::text")
+            server_name, address = cursor.fetchone()
+            # PostgreSQL renders inet values with a host mask (/32 or /128).
+            # Parse that representation without accepting a remote interface.
+            if server_name != name or not address or not ipaddress.ip_interface(address).ip.is_loopback:
+                raise RuntimeError("Rehearsal server identity is not the expected local database")
+        # Discard the guard's snapshot: the maintenance callback must acquire
+        # its table locks before its first data read establishes a new snapshot.
+        conn.rollback()
+        with conn.cursor() as cursor:
+            cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            cursor.execute("SET LOCAL lock_timeout = '5s'")
+            cursor.execute("SET LOCAL statement_timeout = '120s'")
+            cursor.execute("SET LOCAL search_path = pg_catalog, public, pg_temp")
+        token = _pg_transaction.set(conn)
+        result = operation(conn)
+        conn.commit()
+        return result
+    except Exception:
+        _safe_pg_rollback(conn)
+        raise
+    finally:
+        if token is not None:
+            _pg_transaction.reset(token)
+
+
+def run_read_snapshot_pg(operation):
+    """Run a callback on one enforced read-only repeatable snapshot.
+
+    The callback uses the supplied connection (or ordinary read helpers), never
+    another pool borrow. A failed attempt discards its whole result; transaction
+    context and connection defaults are restored before returning to the pool.
+    """
+    if _pg_transaction.get() is not None:
+        raise RuntimeError("A read snapshot must run outside the import write transaction")
+
+    def _read(conn):
+        with conn.cursor() as setup:
+            setup.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        token = _pg_transaction.set(conn)
+        try:
+            result = operation(conn)
+        finally:
+            _pg_transaction.reset(token)
+        conn.rollback()
+        return result
+
+    return _run_pooled_pg(_read, read_only=True)
+
+
 @_instrument_db_call("reads")
-def execute_query_pg(query, params=None):
+def execute_query_pg(query, params=None, *, page_size=None):
     """
     Postgres equivalent of execute_query(): runs a SELECT with a RealDictCursor
     and returns a list of dicts. Uses %s placeholders (psycopg2 native), not
     SQLite's ?. Outside an active pg_transaction() the pooled connection is
     borrowed via _run_pooled_pg(), which retries once on a stale connection.
+
+    A page_size opts into a read-only, repeatable-read snapshot and bounded
+    server-cursor fetches. The complete read may restart once after a disconnect;
+    partial results are discarded. It cannot join an existing write transaction.
     """
     def _run(conn):
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -6917,6 +7039,21 @@ def execute_query_pg(query, params=None):
             return [dict(row) for row in cur.fetchall()]
 
     active = _pg_transaction.get()
+    if page_size is not None:
+        if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 10000:
+            raise ValueError("page_size must be an integer between 1 and 10000")
+        def _read_pages(conn):
+            rows = []
+            with conn.cursor(name="paged_read", cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(query, params or ())
+                while True:
+                    page = cur.fetchmany(page_size)
+                    if not page:
+                        break
+                    rows.extend(dict(row) for row in page)
+            return rows
+
+        return run_read_snapshot_pg(_read_pages)
     if active is not None:
         return _run(active)
     return _run_pooled_pg(_run)

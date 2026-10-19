@@ -13,6 +13,7 @@ end-to-end through execute_query_pg.
 
 import unittest
 from collections import deque
+from contextlib import ExitStack
 from unittest.mock import patch
 
 import psycopg2
@@ -25,6 +26,7 @@ import database
 class FakeCursor:
     def __init__(self, conn):
         self._conn = conn
+        self._position = 0
 
     def __enter__(self):
         return self
@@ -41,6 +43,15 @@ class FakeCursor:
     def fetchall(self):
         return list(self._conn.rows)
 
+    def fetchmany(self, size):
+        self._conn.fetch_sizes.append(size)
+        error = self._conn.fetch_errors.pop(0) if self._conn.fetch_errors else None
+        if error is not None:
+            raise error
+        rows = self._conn.rows[self._position:self._position + size]
+        self._position += len(rows)
+        return rows
+
     def fetchone(self):
         if self._conn.fetchone_rows is not None:
             return self._conn.fetchone_rows.pop(0) if self._conn.fetchone_rows else None
@@ -55,7 +66,8 @@ class FakeCursor:
 
 
 class FakeConn:
-    def __init__(self, rows=None, execute_errors=None, closed=0, description=None, fetchone_rows=None):
+    def __init__(self, rows=None, execute_errors=None, closed=0, description=None, fetchone_rows=None,
+                 fetch_errors=None, commit_error=None):
         self.rows = [("ok",)] if rows is None else rows
         self.fetchone_rows = list(fetchone_rows) if fetchone_rows is not None else None
         self._execute_errors = list(execute_errors or [])
@@ -64,15 +76,22 @@ class FakeConn:
         self.executed = []
         self.commits = 0
         self.rollbacks = 0
+        self.fetch_errors = list(fetch_errors or [])
+        self.fetch_sizes = []
+        self.cursor_names = []
+        self.commit_error = commit_error
 
     def pop_execute_error(self):
         return self._execute_errors.pop(0) if self._execute_errors else None
 
-    def cursor(self, cursor_factory=None):
+    def cursor(self, cursor_factory=None, name=None):
+        self.cursor_names.append(name)
         return FakeCursor(self)
 
     def commit(self):
         self.commits += 1
+        if self.commit_error:
+            raise self.commit_error
 
     def rollback(self):
         self.rollbacks += 1
@@ -234,6 +253,142 @@ class ExecuteQueryPgWiringTests(unittest.TestCase):
         self.assertIn((dead, True), pool.putconn_calls)
 
 
+class PagedReadSnapshotTests(unittest.TestCase):
+    def test_actual_comparison_keeps_repeated_and_zero_lines_across_pages(self):
+        from routers import import_export as uploads
+
+        columns = [{"id": 1, "column_name": "Voucher", "data_type": "Text"},
+                   {"id": 2, "column_name": "Amount", "data_type": "Numeric"}]
+        incoming = [{"Voucher": "V1", "Amount": 100}, {"Voucher": "V1", "Amount": 100},
+                    {"Voucher": "V2", "Amount": 0}]
+        conn = FakeConn(rows=[{"id": n, "row_data": row, "source_identity": f"source-{n}",
+                               "version": 4, "validation_status": "Verified"}
+                              for n, row in enumerate(incoming, 10)])
+        with patch.object(database, "get_pg_pool", return_value=FakePool([conn])), \
+                patch.object(uploads, "UPLOAD_COMPARISON_PAGE_SIZE", 2):
+            result = uploads.compare_transactions(5, 1, columns, incoming,
+                                                   {"Voucher": "Voucher", "Amount": "Amount"}, {})
+        self.assertEqual(sorted(result["unchanged"]), [10, 11, 12])
+        self.assertEqual(result["total_existing_before_import"], 3)
+        self.assertEqual(result["new"] + result["changed"] + result["missing"], [])
+        self.assertEqual(conn.fetch_sizes, [2, 2, 2])
+        self.assertEqual(conn.executed[1][1], (5, 1))
+
+    def test_reads_every_page_in_one_read_only_snapshot(self):
+        conn = FakeConn(rows=[{"id": n} for n in range(5)])
+        pool = FakePool([conn])
+        with patch.object(database, "get_pg_pool", return_value=pool):
+            rows = database.execute_query_pg("SELECT id FROM example ORDER BY id", page_size=2)
+        self.assertEqual(rows, [{"id": n} for n in range(5)])
+        self.assertEqual(conn.fetch_sizes, [2, 2, 2, 2])
+        self.assertEqual(conn.cursor_names, [None, "paged_read"])
+        self.assertEqual(conn.executed[0][0], "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        self.assertEqual((conn.commits, conn.rollbacks), (0, 1))
+        self.assertEqual(pool.putconn_calls, [(conn, False)])
+
+    def test_later_page_disconnect_restarts_without_reusing_partial_rows(self):
+        dead = FakeConn(rows=[{"id": 999}, {"id": 998}], fetch_errors=[
+            None, psycopg2.OperationalError("SSL error: unexpected eof while reading"),
+        ])
+        good = FakeConn(rows=[{"id": n} for n in range(5)])
+        pool = FakePool([dead, good])
+        with patch.object(database, "get_pg_pool", return_value=pool):
+            rows = database.execute_query_pg("SELECT id FROM example ORDER BY id", page_size=2)
+        self.assertEqual(rows, [{"id": n} for n in range(5)])
+        self.assertEqual(pool.getconn_calls, 2)
+        self.assertEqual(pool.putconn_calls, [(dead, True), (good, False)])
+        self.assertEqual(good.executed[0][0], dead.executed[0][0])
+        self.assertEqual((dead.commits, good.commits), (0, 0))
+
+    def test_second_disconnect_fails_without_returning_partial_data(self):
+        conns = [FakeConn(fetch_errors=[psycopg2.OperationalError(
+            "SSL error: unexpected eof while reading")]) for _ in range(2)]
+        pool = FakePool(conns)
+        with patch.object(database, "get_pg_pool", return_value=pool):
+            with self.assertRaises(psycopg2.OperationalError):
+                database.execute_query_pg("SELECT id FROM example", page_size=2)
+        self.assertEqual(pool.getconn_calls, 2)
+        self.assertEqual(pool.putconn_calls, [(conn, True) for conn in conns])
+
+    def test_non_connection_error_is_not_retried(self):
+        conn = FakeConn(fetch_errors=[psycopg2.OperationalError("canceling statement due to statement timeout")])
+        pool = FakePool([conn])
+        with patch.object(database, "get_pg_pool", return_value=pool):
+            with self.assertRaises(psycopg2.OperationalError):
+                database.execute_query_pg("SELECT id FROM example", page_size=2)
+        self.assertEqual(pool.getconn_calls, 1)
+        self.assertEqual(conn.rollbacks, 1)
+
+    def test_empty_and_exact_page_boundary_results(self):
+        for count in (0, 2, 4):
+            with self.subTest(count=count):
+                conn = FakeConn(rows=[{"id": n} for n in range(count)])
+                with patch.object(database, "get_pg_pool", return_value=FakePool([conn])):
+                    result = database.execute_query_pg("SELECT id FROM example", page_size=2)
+                self.assertEqual(len(result), count)
+                self.assertEqual(len(conn.fetch_sizes), count // 2 + 1)
+
+    def test_paged_read_rejects_an_active_write_transaction(self):
+        token = database._pg_transaction.set(FakeConn())
+        try:
+            with patch.object(database, "get_pg_pool") as pool:
+                with self.assertRaises(RuntimeError):
+                    database.execute_query_pg("SELECT 1", page_size=2)
+                pool.assert_not_called()
+        finally:
+            database._pg_transaction.reset(token)
+
+    def test_invalid_page_sizes_do_not_borrow_a_connection(self):
+        for size in (0, -1, True, 1.5, "2000", 10001):
+            with self.subTest(size=size), patch.object(database, "get_pg_pool") as pool:
+                with self.assertRaises(ValueError):
+                    database.execute_query_pg("SELECT 1", page_size=size)
+                pool.assert_not_called()
+
+    def test_new_eof_retry_is_not_enabled_for_writes(self):
+        conn = FakeConn(execute_errors=[psycopg2.OperationalError(
+            "SSL error: unexpected eof while reading")])
+        pool = FakePool([conn])
+        with patch.object(database, "get_pg_pool", return_value=pool):
+            with self.assertRaises(psycopg2.OperationalError):
+                database.execute_write_pg("INSERT INTO example VALUES (1)")
+        self.assertEqual(pool.getconn_calls, 1)
+        self.assertEqual(conn.commits, 0)
+
+
+class AtomicImportTransactionTests(unittest.TestCase):
+    def test_failure_after_an_earlier_batch_rolls_back_without_any_commit(self):
+        for helper in (database.execute_batch_pg, database.execute_batch_insert_with_ids_pg):
+            with self.subTest(helper=helper.__name__):
+                conn = FakeConn()
+                pool = FakePool([conn])
+                target = "execute_batch" if helper is database.execute_batch_pg else "execute_values"
+                first_result = None if target == "execute_batch" else [(1,), (2,)]
+                with patch.object(database, "get_pg_pool", return_value=pool), patch(
+                    "database.psycopg2.extras." + target,
+                    side_effect=[first_result, psycopg2.OperationalError("SSL error: unexpected eof while reading")],
+                ) as batch:
+                    with self.assertRaises(psycopg2.OperationalError):
+                        with database.pg_transaction() as active:
+                            helper(active, "INSERT", [(1,), (2,), (3,)], chunk_size=2)
+                self.assertEqual(batch.call_count, 2)
+                self.assertEqual((conn.commits, conn.rollbacks), (0, 1))
+                self.assertEqual(pool.getconn_calls, 1)
+                self.assertIsNone(database._pg_transaction.get())
+
+    def test_lost_commit_acknowledgement_never_replays_the_import(self):
+        conn = FakeConn(commit_error=psycopg2.OperationalError(
+            "SSL error: unexpected eof while reading"))
+        pool = FakePool([conn])
+        with patch.object(database, "get_pg_pool", return_value=pool):
+            with self.assertRaises(psycopg2.OperationalError):
+                with database.pg_transaction():
+                    database.execute_write_pg("INSERT INTO example VALUES (1)")
+        self.assertEqual(len(conn.executed), 1)
+        self.assertEqual((conn.commits, conn.rollbacks), (1, 1))
+        self.assertEqual(pool.getconn_calls, 1)
+
+
 class PostgresSchemaBootstrapTests(unittest.TestCase):
     def test_form_field_column_migration_adds_missing_columns(self):
         conn = FakeConn(rows=[("id",), ("document_id",), ("field_name",)])
@@ -272,17 +427,24 @@ class PostgresSchemaBootstrapTests(unittest.TestCase):
         )
         self.assertIn(
             "CREATE TABLE IF NOT EXISTS voucher_line_form_values",
-            conn.executed[3][0],
+            next(sql for sql, _ in conn.executed if "CREATE TABLE IF NOT EXISTS voucher_line_form_values" in sql),
         )
+        self.assertTrue(any("ADD COLUMN IF NOT EXISTS bill_group_index" in sql for sql, _ in conn.executed))
+        self.assertTrue(any("idx_voucher_line_form_entries_group" in sql for sql, _ in conn.executed))
         self.assertEqual(conn.rollbacks, 0)
 
-    def test_form_table_migration_is_noop_when_tables_exist(self):
+    def test_form_table_migration_rechecks_columns_and_indexes_when_tables_exist(self):
         conn = FakeConn(fetchone_rows=[
             ("voucher_line_form_entries", "voucher_line_form_values"),
         ])
 
         self.assertEqual(database._ensure_postgres_form_tables(conn), [])
-        self.assertEqual(len(conn.executed), 1)
+        # Existing tables still need idempotent column/index checks after upgrades.
+        statements = [sql for sql, _ in conn.executed]
+        self.assertEqual(sum("CREATE TABLE IF NOT EXISTS" in sql for sql in statements), 2)
+        self.assertTrue(any("ADD COLUMN IF NOT EXISTS bill_group_index" in sql for sql in statements))
+        self.assertTrue(any("idx_voucher_line_form_entries_group" in sql for sql in statements))
+        self.assertFalse(any("DROP " in sql or "INSERT " in sql for sql in statements))
         self.assertEqual(conn.rollbacks, 0)
 
     def test_completed_schema_marker_skips_repeated_bootstrap(self):
@@ -295,9 +457,37 @@ class PostgresSchemaBootstrapTests(unittest.TestCase):
             ],
         )
 
-        with patch.object(database, "_POSTGRES_SCHEMA_READY", False):
-            with patch("builtins.print") as printed:
-                database.init_db_postgres(conn)
+        # Keep the original Form/report/account migrations real; stub unrelated
+        # additive migrations and assert their fast-path wiring separately below.
+        # A FIFO fake need not impersonate every newer database catalog.
+        unrelated_migrations = (
+            "_ensure_postgres_storage_cleanup_runs",
+            "_ensure_postgres_upload_validation_plans",
+            "_ensure_postgres_upload_summary_columns",
+            "_ensure_postgres_cash_bank_transaction_classifications",
+            "_ensure_postgres_cashflow_voucher_occurrences",
+            "_ensure_postgres_cashflow_prepared_tables",
+            "_ensure_postgres_cashflow_report_source_policy",
+            "_ensure_postgres_audit_rule_assertions",
+            "_ensure_postgres_category_compiled_rulebooks",
+            "_ensure_postgres_category_document_assertions",
+            "_ensure_postgres_category_cross_check_assertions",
+            "_ensure_postgres_voucher_check_assertions",
+            "_ensure_postgres_applied_ruleset_hash",
+            "_ensure_postgres_local_vendor_discovery_indexes",
+            "_ensure_postgres_client_data_canonical_columns",
+        )
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(database, "_POSTGRES_SCHEMA_READY", False))
+            migrations = [stack.enter_context(patch.object(database, name, return_value=[]))
+                          for name in unrelated_migrations]
+            seed = stack.enter_context(patch.object(database, "_seed_postgres_data"))
+            printed = stack.enter_context(patch("builtins.print"))
+            database.init_db_postgres(conn)
+            self.assertTrue(database._POSTGRES_SCHEMA_READY)
+            seed.assert_not_called()
+            for migration in migrations:
+                migration.assert_called_once_with(conn)
 
         self.assertEqual(conn.executed[:4], [
             ("SELECT to_regclass('public.audit_rules_config_state')", None),
@@ -305,7 +495,7 @@ class PostgresSchemaBootstrapTests(unittest.TestCase):
             ("\n            SELECT column_name\n            FROM information_schema.columns\n            WHERE table_schema = 'public'\n              AND table_name = 'audit_rule_document_fields'\n        ", None),
             ("SELECT to_regclass('public.voucher_line_form_entries'), to_regclass('public.voucher_line_form_values')", None),
         ])
-        self.assertEqual(len(conn.executed), 11)
+        self.assertFalse(any("CREATE TABLE IF NOT EXISTS clients" in sql for sql, _ in conn.executed))
         self.assertTrue(any("CREATE TABLE IF NOT EXISTS report_category_sets" in sql for sql, _ in conn.executed))
         self.assertTrue(any("CREATE TABLE IF NOT EXISTS report_categories" in sql for sql, _ in conn.executed))
         self.assertTrue(any("CREATE TABLE IF NOT EXISTS report_account_category_assignments" in sql for sql, _ in conn.executed))
@@ -316,6 +506,85 @@ class PostgresSchemaBootstrapTests(unittest.TestCase):
         printed.assert_called_once_with(
             "[postgres] existing schema verified; skipped bootstrap"
         )
+
+
+class IsolatedMaintenanceTests(unittest.TestCase):
+    class Connection(FakeConn):
+        autocommit = False
+
+        def __init__(self, **kwargs):
+            super().__init__(fetchone_rows=[("precision_rehearsal_test", "127.0.0.1")], **kwargs)
+            self.destination = {"host": "localhost", "dbname": "precision_rehearsal_test"}
+            self.transaction_status = 0
+
+        def get_dsn_parameters(self):
+            return self.destination
+
+        def get_transaction_status(self):
+            return self.transaction_status
+
+    def test_uses_only_caller_connection_and_discards_guard_snapshot_before_callback(self):
+        conn = self.Connection()
+        def operation(active):
+            self.assertIs(active, conn)
+            self.assertIs(database._pg_transaction.get(), conn)
+            self.assertEqual(conn.rollbacks, 1)
+            database.execute_write_pg("UPDATE rehearsal SET amount=1")
+            return "checked"
+        with patch.object(database, "get_pg_pool", side_effect=AssertionError("Must never borrow production pool")):
+            self.assertEqual(database.run_isolated_pg_transaction(conn, operation), "checked")
+        self.assertEqual(conn.executed[0][0], "SELECT current_database(), inet_server_addr()::text")
+        self.assertEqual(conn.executed[1][0], "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        self.assertEqual(conn.commits, 1)
+        self.assertIsNone(database._pg_transaction.get())
+
+    def test_rejects_remote_or_production_database_before_any_sql(self):
+        for host, name in (("db.example.com", "precision_rehearsal_test"), ("localhost", "postgres"),
+                           ("localhost", "precision_rehearsal_"), ("localhost", "precision_rehearsal_a;DROP")):
+            with self.subTest(host=host, name=name):
+                conn = self.Connection()
+                conn.destination = {"host": host, "dbname": name}
+                with self.assertRaisesRegex(RuntimeError, "restricted"):
+                    database.run_isolated_pg_transaction(conn, lambda active: self.fail("Callback ran"))
+                self.assertEqual(conn.executed, [])
+
+    def test_checks_actual_server_identity_and_connection_state(self):
+        for identity in (("postgres", "127.0.0.1"), ("precision_rehearsal_test", "10.0.0.1"),
+                         ("precision_rehearsal_test", "10.0.0.1/32"),
+                         ("precision_rehearsal_test", None)):
+            conn = self.Connection()
+            conn.fetchone_rows = [identity]
+            with self.subTest(identity=identity), self.assertRaisesRegex(RuntimeError, "server identity"):
+                database.run_isolated_pg_transaction(conn, lambda active: self.fail("Callback ran"))
+            self.assertEqual(conn.commits, 0)
+        for attribute, value in (("closed", 1), ("autocommit", True), ("transaction_status", 2)):
+            conn = self.Connection()
+            setattr(conn, attribute, value)
+            with self.subTest(attribute=attribute), self.assertRaisesRegex(RuntimeError, "idle"):
+                database.run_isolated_pg_transaction(conn, lambda active: self.fail("Callback ran"))
+            self.assertEqual(conn.executed, [])
+
+    def test_accepts_postgresql_loopback_inet_host_masks(self):
+        for address in ("127.0.0.1/32", "::1/128"):
+            conn = self.Connection()
+            conn.fetchone_rows = [("precision_rehearsal_test", address)]
+            with self.subTest(address=address):
+                self.assertEqual(database.run_isolated_pg_transaction(conn, lambda active: "local"), "local")
+                self.assertEqual(conn.commits, 1)
+
+    def test_never_replays_callback_after_write_or_commit_failure(self):
+        from unittest.mock import Mock
+        for lost_ack in (False, True):
+            with self.subTest(lost_ack=lost_ack):
+                error = psycopg2.OperationalError("SSL error: unexpected eof while reading")
+                conn = self.Connection(commit_error=error if lost_ack else None)
+                operation = Mock(return_value="done", side_effect=None if lost_ack else error)
+                with self.assertRaises(psycopg2.OperationalError):
+                    database.run_isolated_pg_transaction(conn, operation)
+                operation.assert_called_once_with(conn)
+                self.assertEqual(conn.commits, int(lost_ack))
+                self.assertEqual(conn.rollbacks, 2)
+                self.assertIsNone(database._pg_transaction.get())
 
 
 if __name__ == "__main__":
