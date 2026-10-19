@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- routers/reconciliation.py → Client mappings, balance inputs, canonical Cashflows reports and database coverage totals; prepared/read-model paths remain retired or gated. See CHANGELOG_ARCHIVE.md.
+- routers/reconciliation.py → Client mappings, balance inputs, canonical Cashflows reports, database coverage totals, and bounded browser ledger warm-up. See CHANGELOG_ARCHIVE.md.
 
 - routers/clients.py + static/clients.* → firm-level client management; admin-only except the paginated `GET /api/clients`. See CHANGELOG_ARCHIVE.md.
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, and database size with PostgreSQL table/index breakdown. See CHANGELOG_ARCHIVE.md.
@@ -55,7 +55,7 @@ One line per file group: what it is now. Full build history for every entry live
 - tests/test_data_deletion.py + tests/test_import_duplicate_gates.py → focused deletion and upload identity-gate regression tests.
 
 
-- static/reconciliation.html, static/reconciliation.js -> Client-context Reports, Cashflows summaries/drilldowns with database counts, classified transactions and balance setup. See CHANGELOG_ARCHIVE.md.
+- static/reconciliation.html, static/reconciliation.js -> Reports, Cashflows summaries, shared bounded ledger cache, classified transactions, and balance setup. See CHANGELOG_ARCHIVE.md.
 
 ## Commands
 - Run app: [your actual run command]
@@ -101,7 +101,7 @@ One line per file group: what it is now. Full build history for every entry live
 - **Cashflows presentation convention:** Summary, drawer, and export numeric amount columns align right with tabular numerals; category and inline ledger labels share the same left text baseline without decorative icon offsets.
 - **Cashflows sticky-header convention:** Use a non-scrolling page wrapper, shared 72.5px sticky top, opaque 2.5px navbar gutter, fixed frozen/scrolling panes with one shared column contract, stable-ID-synchronized row states, and no nested vertical scrolling or legacy pane-local overrides.
 - **Cashflows drill-down toolbar convention:** Keep Search, Category, Account head, Cash/Bank, Period, Apply, Clear, and Export in one horizontal grid row; place its override after shared flex-toolbar rules.
-- **Cashflows drill-down performance convention:** Cache the initial unfiltered roll-up baseline by report context; apply repeat filters, pagination, and Clear locally, invalidating when the summary context reloads.
+- **Cashflows drill-down performance convention:** Share complete initial report roll-ups; cap combined browser retention at 5,000 rows/2 MiB serialized, evict older contexts, and paginate oversized results.
  - **Cashflows data-freshness convention:** SQL/read-model results are authoritative; the bounded browser cache is a disposable speed layer only. Scope it by revision and complete report context, validate before reuse, safely aggregate only finer-grain parent periods into fully covered coarser child periods, reject stale or misaligned responses, and provide both soft reuse and explicit hard source refresh.
 - **Cashflows split-view convention:** Hide zero-only Mixed / unresolved columns and redundant reconciliation UI, but preserve mixed calculations, backend fields, and XLSX export data.
 
@@ -241,6 +241,8 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+
+- 2026-10-19: Cashflows preloads bounded ledger roll-ups, shares revision/configuration-scoped browser caches, and paginates oversized categories; regression and export-parity checks added.
 
 - 2026-10-19: Fixed Cashflows transaction windows to read canonical Client Data; removed retired preview fallbacks and added source/filter regression coverage.
 

@@ -31,12 +31,18 @@
     let lastCashflowDrilldownResult = null;
     let cashflowReportRevision = 0;
     let cashflowReportSourceKey = "";
+    let cashflowConfigurationKey = '';
+    let cashflowSummaryGeneration = 0;
+    let cashflowSummaryController = null;
     let cashflowRevisionCheckPromise = null;
     let cashflowRevisionCheckedAt = 0;
     const CASHFLOW_REVISION_CHECK_TTL_MS = 15000;
     const cashflowSummaryCacheLimit = 5;
     const cashflowSummaryCache = new Map();
     const cashflowDrilldownBaseCache = new Map();
+    const cashflowLedgerCacheOrder = new Map();
+    const CASHFLOW_LEDGER_CACHE_MAX_ROWS = 5000;
+    const CASHFLOW_LEDGER_CACHE_MAX_BYTES = 2 * 1024 * 1024;
     const cashflowDrilldownLimit = 50;
     let cashflowInlineLedgerCache = new Map();
     let cashflowInlineLedgerControllers = new Map();
@@ -797,10 +803,10 @@
         if (selected && accounts.has(selected.toLowerCase())) select.value = selected;
     }
     function cashflowDrilldownContextKey(start, end) {
-        return [clientId, start, end, cashflowSelection.groupBy || 'month', cashflowTreasuryView || 'combined', cashflowReportRevision, cashflowReportSourceKey || 'unresolved'].join('|');
+        return cashflowLedgerContextKey(cashflowLedgerContext(start, end));
     }
     function cashflowSummaryContextKey(start, end, groupBy, treasuryView, revision) {
-        return [clientId, start, end, groupBy || 'month', treasuryView || 'combined', Number(revision || cashflowReportRevision || 0), cashflowReportSourceKey || 'unresolved'].join('|');
+        return [clientId, start, end, groupBy || 'month', treasuryView || 'combined', Number(revision || cashflowReportRevision || 0), cashflowReportSourceKey || 'unresolved', cashflowConfigurationKey].join('|');
     }
     const cashflowGroupingRank = { day: 0, fortnight: 1, month: 2, quarter: 3, half_year: 4, year: 5 };
     function cashflowGroupingCanAggregate(parentGroup, childGroup) {
@@ -970,6 +976,10 @@
         derivedPreview.category_review_count = metrics.totals.category_review_count;
         derivedPreview.deduction_count = metrics.totals.deduction_count;
         derivedPreview.detail_sections_loaded = [];
+        delete derivedPreview.ledger_cache;
+        derivedPreview.ledger_rollups = [];
+        derivedPreview.drilldown_details_prepared = false;
+        derivedPreview.drilldown_controls = {};
         derivedPreview.transfer_details = [];
         derivedPreview.customer_payment_details = [];
         derivedPreview.deduction_details = [];
@@ -1056,6 +1066,7 @@
     function clearCashflowReportCaches() {
         cashflowSummaryCache.clear();
         cashflowDrilldownBaseCache.clear();
+        cashflowLedgerCacheOrder.clear();
         resetCashflowInlineLedgerState();
         cashflowChildPreviews = {};
     }
@@ -1065,9 +1076,12 @@
         if (incoming && cashflowReportRevision && incoming < cashflowReportRevision) return false;
         const revisionChanged = Boolean(incoming && cashflowReportRevision && incoming !== cashflowReportRevision);
         const sourceChanged = Boolean(incomingSourceKey && cashflowReportSourceKey && incomingSourceKey !== cashflowReportSourceKey);
-        if (revisionChanged || sourceChanged) clearCashflowReportCaches();
+        const incomingConfiguration = String(result && result.cashflow_configuration_key || '');
+        const configurationChanged = Boolean(incomingConfiguration && cashflowConfigurationKey && incomingConfiguration !== cashflowConfigurationKey);
+        if (revisionChanged || sourceChanged || configurationChanged) clearCashflowReportCaches();
         if (incoming) cashflowReportRevision = incoming;
         if (incomingSourceKey) cashflowReportSourceKey = incomingSourceKey;
+        if (incomingConfiguration) cashflowConfigurationKey = incomingConfiguration;
         cashflowRevisionCheckedAt = Date.now();
         return true;
     }
@@ -1076,20 +1090,28 @@
         const now = Date.now();
         if (!force && cashflowRevisionCheckedAt && now - cashflowRevisionCheckedAt < CASHFLOW_REVISION_CHECK_TTL_MS) return Promise.resolve(true);
         if (cashflowRevisionCheckPromise) return cashflowRevisionCheckPromise;
+        const checkedClient = clientId;
+        const checkedGeneration = cashflowSummaryGeneration;
         cashflowRevisionCheckPromise = api("/api/reconciliation/cashflows/revision?client_id=" + encodeURIComponent(clientId))
             .then(function (result) {
+                if (checkedClient !== clientId || checkedGeneration !== cashflowSummaryGeneration) return false;
                 const incoming = Number(result && result.cashflow_report_revision || 0);
+                if (!incoming || incoming < cashflowReportRevision) return false;
                 const incomingSourceKey = String(result && result.cashflow_report_source_key || '').trim();
                 const revisionChanged = Boolean(incoming && cashflowReportRevision && incoming !== cashflowReportRevision);
                 const sourceChanged = Boolean(incomingSourceKey && cashflowReportSourceKey && incomingSourceKey !== cashflowReportSourceKey);
-                if (revisionChanged || sourceChanged) {
+                const incomingConfiguration = String(result && result.cashflow_configuration_key || '');
+                const configurationChanged = Boolean(incomingConfiguration && cashflowConfigurationKey && incomingConfiguration !== cashflowConfigurationKey);
+                if (revisionChanged || sourceChanged || configurationChanged) {
                     clearCashflowReportCaches();
                     if (incoming) cashflowReportRevision = incoming;
                     if (incomingSourceKey) cashflowReportSourceKey = incomingSourceKey;
+                    if (incomingConfiguration) cashflowConfigurationKey = incomingConfiguration;
                     return false;
                 }
                 if (incoming) cashflowReportRevision = incoming;
                 if (incomingSourceKey) cashflowReportSourceKey = incomingSourceKey;
+                if (incomingConfiguration) cashflowConfigurationKey = incomingConfiguration;
                 cashflowRevisionCheckedAt = Date.now();
                 return true;
             })
@@ -1184,16 +1206,111 @@
             page_count: pageCount,
         });
     }
+    // Only compact account/period data lives here. Raw transactions stay on demand.
+    function cashflowLedgerContext(start, end) {
+        return {
+            client_id: clientId,
+            template_id: ((lastCashflowsResult || {}).configuration || {}).source_template_id,
+            period_start: start, period_end: end,
+            group_by: cashflowSelection.groupBy || 'month', treasury_view: cashflowTreasuryView || 'combined',
+            report_revision: cashflowReportRevision, source_key: cashflowReportSourceKey,
+            configuration_key: cashflowConfigurationKey
+        };
+    }
+    function cashflowLedgerContextKey(context) {
+        const value = context || {};
+        return JSON.stringify(['client_id', 'template_id', 'period_start', 'period_end', 'group_by',
+            'treasury_view', 'report_revision', 'source_key', 'configuration_key'].map(function (field) {
+            return String(value[field] == null ? '' : value[field]);
+        }));
+    }
+    function cashflowLedgerMap(kind) {
+        return kind === 'baseline' ? cashflowDrilldownBaseCache : cashflowInlineLedgerCache;
+    }
+    function clearCashflowInlineCache() {
+        cashflowInlineLedgerCache.clear();
+        cashflowLedgerCacheOrder.forEach(function (entry, key) {
+            if (entry.kind === 'inline') cashflowLedgerCacheOrder.delete(key);
+        });
+    }
+    function rememberCashflowLedger(kind, key, value) {
+        const map = cashflowLedgerMap(kind);
+        const orderKey = kind + '|' + key;
+        map.delete(key);
+        cashflowLedgerCacheOrder.delete(orderKey);
+        const rows = (value.rows || []).length;
+        const bytes = new TextEncoder().encode(JSON.stringify(value)).byteLength;
+        if (rows > CASHFLOW_LEDGER_CACHE_MAX_ROWS || bytes > CASHFLOW_LEDGER_CACHE_MAX_BYTES) return false;
+        map.set(key, value);
+        cashflowLedgerCacheOrder.set(orderKey, { kind: kind, key: key, rows: rows, bytes: bytes });
+        let totalRows = 0;
+        let totalBytes = 0;
+        cashflowLedgerCacheOrder.forEach(function (entry) { totalRows += entry.rows; totalBytes += entry.bytes; });
+        while (totalRows > CASHFLOW_LEDGER_CACHE_MAX_ROWS || totalBytes > CASHFLOW_LEDGER_CACHE_MAX_BYTES
+                || cashflowLedgerCacheOrder.size > 25) {
+            const oldestKey = cashflowLedgerCacheOrder.keys().next().value;
+            const oldest = cashflowLedgerCacheOrder.get(oldestKey);
+            cashflowLedgerMap(oldest.kind).delete(oldest.key);
+            cashflowLedgerCacheOrder.delete(oldestKey);
+            totalRows -= oldest.rows;
+            totalBytes -= oldest.bytes;
+        }
+        return map.has(key);
+    }
+    function takeCashflowLedger(kind, key) {
+        const value = cashflowLedgerMap(kind).get(key);
+        const orderKey = kind + '|' + key;
+        const entry = cashflowLedgerCacheOrder.get(orderKey);
+        if (value && entry) {
+            cashflowLedgerCacheOrder.delete(orderKey);
+            cashflowLedgerCacheOrder.set(orderKey, entry);
+        }
+        return value;
+    }
+    function cashflowLedgerResponseMatches(payload, context) {
+        return payload && payload.ledger_context
+            && cashflowLedgerContextKey(payload.ledger_context) === cashflowLedgerContextKey(context);
+    }
+    function cashflowLoadedLedgerContextMatches(context) {
+        const result = lastCashflowsResult || {};
+        const loaded = {client_id: result.client_id,
+            template_id: (result.ledger_context || {}).template_id || (result.configuration || {}).source_template_id,
+            period_start: result.period_start, period_end: result.period_end,
+            group_by: result.group_by, treasury_view: result.treasury_view,
+            report_revision: cashflowReportRevisionFromResult(result),
+            source_key: cashflowReportSourceKeyFromResult(result),
+            configuration_key: result.cashflow_configuration_key};
+        return cashflowLedgerContextKey(loaded) === cashflowLedgerContextKey(context);
+    }
+    function seedCashflowReportLedgers(result) {
+        const descriptor = (result.preview || {}).ledger_cache;
+        if (!descriptor || !descriptor.complete || !Array.isArray(descriptor.rows)
+                || descriptor.row_count !== descriptor.rows.length) return false;
+        const context = cashflowLedgerContext(result.period_start, result.period_end);
+        if (cashflowLedgerContextKey(descriptor.context) !== cashflowLedgerContextKey(context)) return false;
+        return rememberCashflowLedger('baseline', cashflowLedgerContextKey(context), {
+            rows: descriptor.rows,
+            result: {client_id: clientId, period_start: result.period_start, period_end: result.period_end,
+                group_by: result.group_by, treasury_view: result.treasury_view,
+                ledger_context: context, database_totals: result.database_totals,
+                source: {ready: (result.source || {}).ready}, blocking_reasons: result.blocking_reasons || []}
+        });
+    }
+    function cashflowSummaryWithoutLedgers(result) {
+        const preview = Object.assign({}, result.preview || {});
+        delete preview.ledger_cache;
+        preview.ledger_rollups = [];
+        preview.drilldown_controls = {};
+        preview.drilldown_details_prepared = false;
+        return Object.assign({}, result, {preview: preview});
+    }
     function cacheCashflowDrilldownBaseline(result) {
         if (!result || !Array.isArray(result.base_rows)) return;
-        if (!syncCashflowReportRevision(result)) return;
-        const baseResult = Object.assign({}, result);
+        const context = cashflowLedgerContext(result.period_start, result.period_end);
+        if (!cashflowLedgerResponseMatches(result, context)) return;
+        const baseResult = Object.assign({}, result, {rows: [], account_head_options: []});
         delete baseResult.base_rows;
-        cashflowDrilldownBaseCache.set(cashflowDrilldownContextKey(result.period_start, result.period_end), {
-            rows: result.base_rows,
-            result: baseResult,
-            revision: cashflowReportRevision,
-        });
+        rememberCashflowLedger('baseline', cashflowLedgerContextKey(context), {rows: result.base_rows, result: baseResult});
     }
     function syncCashflowDrilldownPagination(result) {
         const payload = result || lastCashflowDrilldownResult || {};
@@ -1221,13 +1338,13 @@
         syncCashflowDrilldownPagination(result);
     }
     function cashflowInlineLedgerKey(section, category) {
-        return [cashflowSelection.start, cashflowSelection.end, cashflowSelection.groupBy || 'month', cashflowTreasuryView, section, category, cashflowReportRevision].join('|');
+        return [cashflowDrilldownContextKey(cashflowSelection.start, cashflowSelection.end), section, category].join('|');
     }
     function resetCashflowInlineLedgerState() {
         cashflowInlineLedgerGeneration += 1;
         cashflowInlineLedgerControllers.forEach(function (controller) { controller.abort(); });
         cashflowInlineLedgerControllers = new Map();
-        cashflowInlineLedgerCache = new Map();
+        clearCashflowInlineCache();
         cashflowInlineTransactionCache = new Map();
         cashflowInlineTransactionRequestSerial += 1;
         if (cashflowInlineTransactionActiveController) cashflowInlineTransactionActiveController.abort();
@@ -1340,9 +1457,24 @@
         }
         const group = leftHost.dataset.cashflowInlineLedgerGroup || cashflowInlineLedgerGroupValue(section, category);
         if (!leftHost.isConnected || (rightHost && !rightHost.isConnected)) return;
-        const html = rows.map(function (row, index) {
+        let html = rows.map(function (row, index) {
             return cashflowInlineLedgerRowMarkup(row, category, section, periodKeys, isSplit, group, index, rows.length);
         }).join('');
+        if (Number(payload.page_count) > 1) {
+            const page = Number(payload.page) || 1;
+            const pageButton = function (label, target, disabled) {
+                return '<button type=button data-cashflow-inline-page=' + target
+                    + ' data-cashflow-inline-category=' + encodeURIComponent(category)
+                    + ' data-cashflow-inline-section=' + encodeURIComponent(section)
+                    + (disabled ? ' disabled' : '') + '>' + label + '</button>';
+            };
+            html += '<tr class=cashflows-inline-ledger-host-row data-cashflow-inline-ledger-group="' + escapeHtml(group)
+                + '"><td>Page ' + page + ' of ' + payload.page_count + ' '
+                + pageButton('Previous', page - 1, page <= 1) + ' '
+                + pageButton('Next', page + 1, page >= payload.page_count)
+                + '</td><td colspan="' + String((isSplit ? (periods.length + 1) * 4 + 2 : periods.length + 3))
+                + '">Amounts reflect this page. Use ledger drill-down to filter or export the full category.</td></tr>';
+        }
         if (!rightHost) {
             leftHost.insertAdjacentHTML('afterend', html);
             leftHost.remove();
@@ -1733,50 +1865,91 @@
     function cashflowInlineCategoryCell(category, section) {
         return cashflowInlineCategoryButton(category, section);
     }
-    function loadCashflowInlineLedgers(button, host, category, section, periods, isSplit) {
-        const key = cashflowInlineLedgerKey(section, category);
-        const cached = cashflowInlineLedgerCache.get(key);
-        if (cached) {
-            renderCashflowInlineLedgerHost(host, cached, category, section, periods, isSplit);
-            button.disabled = false;
-            return Promise.resolve(cached);
-        }
+    async function loadCashflowInlineLedgers(button, host, category, section, periods, isSplit, requestedPage) {
+        const page = Math.max(1, Number(requestedPage) || 1);
+        const context = cashflowLedgerContext(cashflowSelection.start, cashflowSelection.end);
+        const contextKey = cashflowLedgerContextKey(context);
+        const key = cashflowInlineLedgerKey(section, category) + '|page=' + page;
         const controller = new AbortController();
         const generation = cashflowInlineLedgerGeneration;
         cashflowInlineLedgerControllers.set(key, controller);
-        const params = new URLSearchParams({
-            client_id: String(clientId),
-            period_start: cashflowSelection.start,
-            period_end: cashflowSelection.end,
-            group_by: cashflowSelection.groupBy || 'month',
-            treasury_view: cashflowTreasuryView,
-            category: category,
-            page: '1',
-            limit: String(cashflowInlineLedgerLimit),
-        });
-        return api('/api/reconciliation/cashflows/drilldown?' + params.toString(), { signal: controller.signal })
-            .then(function (payload) {
-                if (generation !== cashflowInlineLedgerGeneration) return null;
-                if (!syncCashflowReportRevision(payload)) return null;
-                cashflowInlineLedgerCache.set(cashflowInlineLedgerKey(section, category), payload);
-                renderCashflowInlineLedgerHost(host, payload, category, section, periods, isSplit);
-                return payload;
-            })
-            .catch(function (error) {
-                if (error.name === 'AbortError') return null;
-                const hostPair = host && host.left ? host : { left: host, right: null };
-                if (generation === cashflowInlineLedgerGeneration && hostPair.left && hostPair.left.isConnected) {
-                    hostPair.left.querySelector('.cashflows-inline-ledger-host').innerHTML = '<span class=cashflows-inline-ledger-error>Unable to load ledgers: ' + escapeHtml(error.message) + '</span>';
-                    if (hostPair.right && hostPair.right.isConnected) hostPair.right.querySelector('.cashflows-inline-ledger-host').innerHTML = '';
+        try {
+            const fresh = await ensureCashflowRevisionFresh(false, true);
+            if (!fresh) throw new Error('Report data changed or could not be checked. Reload Cashflows to continue.');
+            if (!cashflowLoadedLedgerContextMatches(context)) throw new Error('Report scope changed. Reload Cashflows to continue.');
+            if (generation !== cashflowInlineLedgerGeneration
+                    || contextKey !== cashflowDrilldownContextKey(cashflowSelection.start, cashflowSelection.end)) return null;
+            const baseline = takeCashflowLedger('baseline', contextKey);
+            let payload;
+            if (baseline) {
+                // One complete baseline is shared by every category and the full ledger view.
+                const filters = {search: '', category: category.toLowerCase(), accountHead: '', periodKey: '',
+                    treasuryType: context.treasury_view === 'cash' ? 'cash' : (context.treasury_view === 'bank' ? 'bank' : '')};
+                const rows = baseline.rows.filter(function (row) { return cashflowDrilldownRowMatches(row, filters); });
+                payload = {rows: rows, total_rows: rows.length, page: 1, page_count: 1};
+            } else {
+                payload = takeCashflowLedger('inline', key);
+                if (!payload) {
+                    const params = new URLSearchParams({client_id: String(clientId), period_start: context.period_start,
+                        period_end: context.period_end, group_by: context.group_by, treasury_view: context.treasury_view,
+                        category: category, page: String(page), limit: String(cashflowInlineLedgerLimit)});
+                    payload = await api('/api/reconciliation/cashflows/drilldown?' + params.toString(), {signal: controller.signal});
+                    if (generation !== cashflowInlineLedgerGeneration) return null;
+                    if (!cashflowLedgerResponseMatches(payload, context)) {
+                        throw new Error('Report data changed. Reload Cashflows to continue.');
+                    }
+                    if (!Number.isInteger(payload.total_rows) || !Number.isInteger(payload.page_count)
+                            || payload.page !== page || !Array.isArray(payload.rows)
+                            || payload.rows.length !== Math.min(cashflowInlineLedgerLimit, Math.max(0,
+                                payload.total_rows - (page - 1) * cashflowInlineLedgerLimit))) {
+                        throw new Error('Incomplete account details. Reload Cashflows and try again.');
+                    }
+                    const compact = Object.assign({}, payload);
+                    delete compact.base_rows;
+                    rememberCashflowLedger('inline', key, compact);
                 }
-                return null;
-            })
-            .finally(function () {
-                if (cashflowInlineLedgerControllers.get(key) === controller) cashflowInlineLedgerControllers.delete(key);
-                if (button.isConnected) button.disabled = false;
-            });
+            }
+            if (generation !== cashflowInlineLedgerGeneration || controller.signal.aborted) return null;
+            renderCashflowInlineLedgerHost(host, payload, category, section, periods, isSplit);
+            return payload;
+        } catch (error) {
+            if (error.name === 'AbortError') return null;
+            const pair = host && host.left ? host : {left: host, right: null};
+            if (pair.left && pair.left.isConnected) {
+                pair.left.querySelector('.cashflows-inline-ledger-host').innerHTML = '<span class=cashflows-inline-ledger-error>Unable to load ledgers: ' + escapeHtml(error.message) + '</span>';
+                if (pair.right && pair.right.isConnected) pair.right.querySelector('.cashflows-inline-ledger-host').innerHTML = '';
+            }
+            return null;
+        } finally {
+            if (cashflowInlineLedgerControllers.get(key) === controller) cashflowInlineLedgerControllers.delete(key);
+            if (button.isConnected) button.disabled = false;
+        }
     }
-    function toggleCashflowInlineCategory(button) {
+    function handleCashflowSummaryClick(event) {
+        const pageButton = event.target.closest('[data-cashflow-inline-page]');
+        if (pageButton) { changeCashflowInlineLedgerPage(pageButton); return; }
+        const ledgerButton = event.target.closest('[data-cashflow-inline-ledger]');
+        if (ledgerButton) { toggleCashflowInlineLedger(ledgerButton); return; }
+        const button = event.target.closest('[data-cashflow-inline-category]');
+        if (button) toggleCashflowInlineCategory(button);
+    }
+    function changeCashflowInlineLedgerPage(button) {
+        const category = decodeURIComponent(button.dataset.cashflowInlineCategory || '');
+        const section = decodeURIComponent(button.dataset.cashflowInlineSection || 'Receipts');
+        const table = element('cashflowsSummaryTable');
+        const categoryButton = Array.from(table.querySelectorAll('[data-cashflow-inline-category]:not([data-cashflow-inline-ledger]):not([data-cashflow-inline-page])')).find(function (candidate) {
+            return decodeURIComponent(candidate.dataset.cashflowInlineCategory || '') === category
+                && candidate.dataset.cashflowInlineSection === section;
+        });
+        if (!categoryButton) return;
+        const group = cashflowInlineLedgerGroupValue(section, category);
+        table.querySelectorAll('[data-cashflow-inline-ledger-group]').forEach(function (row) {
+            if (row.dataset.cashflowInlineLedgerGroup === group) row.remove();
+        });
+        categoryButton.setAttribute('aria-expanded', 'false');
+        toggleCashflowInlineCategory(categoryButton, Number(button.dataset.cashflowInlinePage));
+    }
+    function toggleCashflowInlineCategory(button, requestedPage) {
         const category = decodeURIComponent(button.dataset.cashflowInlineCategory || '');
         const section = button.dataset.cashflowInlineSection || 'Receipts';
         const row = button.closest('tr');
@@ -1812,7 +1985,7 @@
             rightRow.parentNode.insertBefore(rightHost, rightRow.nextSibling);
             button.setAttribute('aria-expanded', 'true');
             button.disabled = true;
-            loadCashflowInlineLedgers(button, { left: leftHost, right: rightHost }, category, section, periods, isSplit);
+            loadCashflowInlineLedgers(button, { left: leftHost, right: rightHost }, category, section, periods, isSplit, requestedPage);
             return;
         }
         const template = document.createElement('tbody');
@@ -1821,19 +1994,27 @@
         row.parentNode.insertBefore(host, row.nextSibling);
         button.setAttribute('aria-expanded', 'true');
         button.disabled = true;
-        loadCashflowInlineLedgers(button, host, category, section, periods, isSplit);
+        loadCashflowInlineLedgers(button, host, category, section, periods, isSplit, requestedPage);
     }
     function loadCashflowDrilldown(resetPage) {
         const start = element('cashflowsPeriodStart').value;
         const end = element('cashflowsPeriodEnd').value;
         if (!clientId || !start || !end) return Promise.resolve(null);
         if (resetPage) cashflowDrilldownPage = 1;
+        const expectedContext = cashflowLedgerContext(start, end);
+        if (!cashflowLoadedLedgerContextMatches(expectedContext)) {
+            showCashflowToast('Report scope changed. Reload Cashflows to continue.', true);
+            return Promise.resolve(null);
+        }
+        const expectedKey = cashflowLedgerContextKey(expectedContext);
         const filters = cashflowDrilldownFilterState();
-        const baseline = cashflowDrilldownBaseCache.get(cashflowDrilldownContextKey(start, end));
+        const baseline = takeCashflowLedger('baseline', cashflowDrilldownContextKey(start, end));
         if (baseline) {
-            return ensureCashflowRevisionFresh(false).then(function (isFresh) {
+            return ensureCashflowRevisionFresh(false, true).then(function (isFresh) {
                 const currentBaseline = cashflowDrilldownBaseCache.get(cashflowDrilldownContextKey(start, end));
-                if (!isFresh || !currentBaseline) return loadCashflowDrilldown(resetPage);
+                if (!isFresh) { showCashflowToast('Report data changed or could not be checked. Reload Cashflows to continue.', true); return null; }
+                if (expectedKey !== cashflowDrilldownContextKey(start, end)) return null;
+                if (!currentBaseline) return loadCashflowDrilldown(resetPage);
                 const localResult = cashflowDrilldownLocalResult(currentBaseline, filters, cashflowDrilldownPage);
                 cashflowDrilldownPage = localResult.page;
                 lastCashflowDrilldownResult = localResult;
@@ -1849,8 +2030,8 @@
             client_id: String(clientId),
             period_start: start,
             period_end: end,
-            group_by: cashflowSelection.groupBy || 'month',
-            treasury_view: cashflowTreasuryView,
+            group_by: expectedContext.group_by,
+            treasury_view: expectedContext.treasury_view,
             page: String(cashflowDrilldownPage),
             limit: String(cashflowDrilldownLimit),
         });
@@ -1871,7 +2052,10 @@
         return api('/api/reconciliation/cashflows/drilldown?' + params.toString(), { signal: controller.signal })
             .then(function (result) {
                 if (generation !== cashflowDrilldownGeneration) return null;
-                if (!syncCashflowReportRevision(result)) return null;
+                if (expectedKey !== cashflowDrilldownContextKey(start, end)) return null;
+                if (!cashflowLedgerResponseMatches(result, expectedContext)) {
+                    throw new Error('Report data changed. Reload Cashflows to continue.');
+                }
                 setCashflowProcessingStep('render', 'Rendering ledger drill-down details.');
                 cacheCashflowDrilldownBaseline(result);
                 lastCashflowDrilldownResult = result;
@@ -2477,15 +2661,16 @@
     }
     function renderResult(result) {
         if (!syncCashflowReportRevision(result)) return;
-        rememberCashflowSummary(result);
-        lastCashflowsResult = result;
+        const summaryResult = cashflowSummaryWithoutLedgers(result);
+        rememberCashflowSummary(summaryResult);
+        lastCashflowsResult = summaryResult;
         renderCashflowFreshness(result);
-        cashflowDrilldownBaseCache.clear();
-        const preview = result.preview || {};
+        const preview = summaryResult.preview || {};
         resetCashflowInlineLedgerState();
         closeCashflowDrilldown();
         cashflowTreasuryView = String(preview.treasury_view || cashflowTreasuryView || 'combined');
         syncCashflowTreasuryView();
+        seedCashflowReportLedgers(result);
         renderCashflowSummary(preview);
         const summaryRows = cashflowSummaryRows(preview);
         renderCategoryOptions(summaryRows.map(function (row) { return row.category; }), true);
@@ -2580,6 +2765,9 @@
     async function generateCashflows(event, options) {
         if (event) event.preventDefault();
         const forceRefresh = !!(options && options.forceRefresh);
+        const generation = ++cashflowSummaryGeneration;
+        if (cashflowSummaryController) cashflowSummaryController.abort();
+        if (forceRefresh) clearCashflowReportCaches();
         resetCashflowInlineLedgerState();
         resetCashflowDrilldownFilters();
         setCashflowSummaryFilterVisibility(false);
@@ -2596,11 +2784,20 @@
         showCashflowProcessing();
         const start = element('cashflowsPeriodStart').value;
         const end = element('cashflowsPeriodEnd').value;
+        const requestedClient = clientId;
+        const requestedGrouping = cashflowSelection.groupBy;
+        const requestedView = cashflowTreasuryView;
+        const stillCurrent = function () {
+            return generation === cashflowSummaryGeneration && requestedClient === clientId
+                && start === cashflowSelection.start && end === cashflowSelection.end
+                && requestedGrouping === cashflowSelection.groupBy && requestedView === cashflowTreasuryView;
+        };
         const cachedSummary = !forceRefresh
             ? (takeCashflowSummary(start, end, cashflowSelection.groupBy, cashflowTreasuryView)
                 || findCashflowParentSummary(start, end, cashflowSelection.groupBy, cashflowTreasuryView))
             : null;
         const controller = new AbortController();
+        cashflowSummaryController = controller;
         const timeout = window.setTimeout(function () { controller.abort(); }, CASHFLOW_REQUEST_TIMEOUT_MS);
         try {
             if (cachedSummary) {
@@ -2610,6 +2807,7 @@
                     ? (takeCashflowSummary(start, end, cashflowSelection.groupBy, cashflowTreasuryView)
                         || findCashflowParentSummary(start, end, cashflowSelection.groupBy, cashflowTreasuryView))
                     : null;
+                if (!stillCurrent()) return;
                 if (freshSummary) {
                     setCashflowProcessingStep('render', 'Rendering the cached Cashflows summary.');
                     renderResult(freshSummary);
@@ -2618,20 +2816,25 @@
                 }
             }
             setCashflowProcessingStep('load', 'Loading Cashflows data for the selected period.');
-            const query = new URLSearchParams({ client_id: clientId, period_start: start, period_end: end, group_by: cashflowSelection.groupBy, treasury_view: cashflowTreasuryView, details: 'summary' });
+            const query = new URLSearchParams({ client_id: requestedClient, period_start: start, period_end: end, group_by: requestedGrouping, treasury_view: requestedView, details: 'summary', warm_ledger_cache: 'true' });
             if (forceRefresh) query.set('refresh', 'true');
             const result = await api('/api/reconciliation/cashflows/preview?' + query.toString(), { signal: controller.signal });
+            if (!stillCurrent() || Number(result.client_id) !== Number(requestedClient)
+                    || result.period_start !== start || result.period_end !== end
+                    || result.group_by !== requestedGrouping || result.treasury_view !== requestedView) return;
             setCashflowProcessingStep('render', 'Rendering the grouped Cashflows summary.');
             renderResult(result);
             if (!element('cashflowsTransactionsSection').hidden) await loadClassifiedTransactions(true);
             showCashflowResultNotice(result);
         } catch (error) {
+            if (!stillCurrent()) return;
             showCashflowToast(error.name === 'AbortError'
                 ? 'Cashflows is taking longer than expected. Please try again or review the configured Transaction Report template.'
                 : error.message, true);
         } finally {
             window.clearTimeout(timeout);
-            hideCashflowProcessing();
+            if (cashflowSummaryController === controller) cashflowSummaryController = null;
+            if (generation === cashflowSummaryGeneration) hideCashflowProcessing();
         }
     }
     function classifiedTransactionLayout(result) {
@@ -2996,15 +3199,7 @@
             element('cashflowsSummaryClear').hidden = true;
             if (lastCashflowsResult) renderCashflowSummary(lastCashflowsResult.preview || {});
         });
-        element('cashflowsSummaryTable').addEventListener('click', function (event) {
-            const ledgerButton = event.target.closest('[data-cashflow-inline-ledger]');
-            if (ledgerButton) {
-                toggleCashflowInlineLedger(ledgerButton);
-                return;
-            }
-            const button = event.target.closest('[data-cashflow-inline-category]');
-            if (button) toggleCashflowInlineCategory(button);
-        });
+        element('cashflowsSummaryTable').addEventListener('click', handleCashflowSummaryClick);
         element('cashflowsViewTransactionsButton').addEventListener('click', toggleClassifiedTransactions);
         element('cashflowsHideZeroRowsButton').addEventListener('click', toggleCashflowZeroRows);
         element('cashflowsRefreshMenuButton').addEventListener('click', function (event) {

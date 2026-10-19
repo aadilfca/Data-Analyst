@@ -5,6 +5,8 @@ from __future__ import annotations
 from contextlib import nullcontext
 from datetime import date, datetime
 from io import BytesIO
+import hashlib
+import json
 import logging
 import math
 import re
@@ -52,6 +54,28 @@ from services.reconciliation_xlsx import export_cashflow_xlsx, export_reconcilia
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# Browser roll-ups are disposable; never persist another transaction/report copy.
+CASHFLOW_BROWSER_LEDGER_MAX_ROWS = 5000
+CASHFLOW_BROWSER_LEDGER_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _cashflow_configuration_key(configuration: dict[str, Any]) -> str:
+    relevant = {key: configuration.get(key) for key in (
+        'source_template_id', 'cash_account_codes', 'bank_account_codes',
+        'match_internal_transfers', 'receipt_presentation', 'customer_payment_roles', 'category_mappings',
+    )}
+    return hashlib.sha256(json.dumps(relevant, sort_keys=True, default=str).encode('utf-8')).hexdigest()
+
+
+def _cashflow_browser_ledger_payload(rows: list[dict[str, Any]], context: dict[str, Any]) -> dict[str, Any]:
+    """All or nothing: oversized data must use the paginated endpoint."""
+    payload = {'context': context, 'complete': False, 'row_count': len(rows), 'rows': []}
+    if len(rows) > CASHFLOW_BROWSER_LEDGER_MAX_ROWS:
+        return payload
+    candidate = dict(payload, complete=True, rows=rows)
+    size = len(json.dumps(candidate, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8'))
+    return candidate if size <= CASHFLOW_BROWSER_LEDGER_MAX_BYTES else payload
 
 
 class AccountGroupUpdate(BaseModel):
@@ -1443,6 +1467,7 @@ def _build_cashflow_result(
     treasury_view: str = "combined",
     force_refresh: bool = False,
     customer_account_code: str = "",
+    warm_ledger_cache: bool = False,
 ) -> dict[str, Any]:
     request_started = perf_counter()
     validation_started = perf_counter()
@@ -1533,7 +1558,7 @@ def _build_cashflow_result(
                 receipt_presentation=configuration["receipt_presentation"],
                 cashflow_role_categories=configuration.get("customer_payment_roles"),
                 group_by=grouping,
-                include_drilldown=bool(detail_sections and 'drilldown' in detail_sections),
+                include_drilldown=warm_ledger_cache or bool(detail_sections and 'drilldown' in detail_sections),
             )
         except LedgerBalanceError as error:
             summary_status = "failed"
@@ -1568,6 +1593,22 @@ def _build_cashflow_result(
     }
     preview_started = perf_counter()
     preview = _cashflow_preview(summary, detail_sections, treasury_view, customer_account_code)
+    configuration_key = _cashflow_configuration_key(configuration)
+    ledger_context = {
+        'client_id': client_id, 'template_id': configured_template_id,
+        'period_start': start.date().isoformat(), 'period_end': end.date().isoformat(),
+        'group_by': grouping, 'treasury_view': treasury_view,
+        'report_revision': report_revision,
+        'source_key': source_metadata.get('cashflow_report_source_key') or '',
+        'configuration_key': configuration_key,
+    }
+    if warm_ledger_cache:
+        frame = summary.get('cashflow_ledger_rollups') if summary else None
+        count = len(frame) if isinstance(frame, pd.DataFrame) else 0
+        if summary is None or count > CASHFLOW_BROWSER_LEDGER_MAX_ROWS:
+            preview['ledger_cache'] = {'context': ledger_context, 'complete': False, 'row_count': count, 'rows': []}
+        else:
+            preview['ledger_cache'] = _cashflow_browser_ledger_payload(_frame_records_all(frame), ledger_context)
     format_seconds = perf_counter() - preview_started
     total_seconds = perf_counter() - request_started
     cache_hit = cached_summary is not None
@@ -1621,6 +1662,8 @@ def _build_cashflow_result(
         "group_by": grouping,
         "treasury_view": treasury_view,
         "cashflow_report_revision": report_revision,
+        "cashflow_configuration_key": configuration_key,
+        "ledger_context": ledger_context,
         "preparation": preparation_status,
         "freshness": {
             "mode": cache_mode,
@@ -1769,6 +1812,7 @@ def cashflow_revision(
         "client_id": client_id,
         "cashflow_report_revision": report_revision,
         "cashflow_report_source_key": source_key,
+        "cashflow_configuration_key": _cashflow_configuration_key(configuration),
     }
 
 
@@ -1824,6 +1868,7 @@ def preview_cashflows(
     customer_account_code: str = Query(""),
     details: Optional[str] = Query(None, description="summary or comma-separated child sections"),
     refresh_from_source: bool = Query(False, alias="refresh"),
+    warm_ledger_cache: bool = Query(False, description="Include bounded account roll-ups from this calculation"),
     session=Depends(require_admin),
 ):
     """Return Cashflows using the Transaction Report template configured in Account Control Centre."""
@@ -1843,6 +1888,7 @@ def preview_cashflows(
         treasury_view=treasury_view,
         force_refresh=refresh_from_source,
         customer_account_code=customer_account_code,
+        warm_ledger_cache=warm_ledger_cache if isinstance(warm_ledger_cache, bool) else False,
     )
 
 def _filter_cashflow_ledger_rows(
@@ -2046,6 +2092,7 @@ def cashflow_drilldown(
         projection_mode,
         int(freshness.get("report_revision") or result.get("cashflow_report_revision") or 1),
     ),
+    baseline = _cashflow_browser_ledger_payload(rows, result.get('ledger_context') or {}) if base_request else None
     return {
         'client_id': client_id,
         'period_start': result['period_start'],
@@ -2053,7 +2100,10 @@ def cashflow_drilldown(
         'group_by': result['group_by'],
         'treasury_view': treasury_view,
         'rows': page_rows,
-        'base_rows': rows if base_request else None,
+        'base_rows': baseline['rows'] if baseline and baseline['complete'] else None,
+        'ledger_context': result.get('ledger_context'),
+        'cashflow_report_revision': result.get('cashflow_report_revision'),
+        'cashflow_configuration_key': result.get('cashflow_configuration_key'),
         'account_head_options': account_head_options,
         'total_rows': total_rows,
         'page': current_page,

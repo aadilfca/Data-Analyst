@@ -1672,7 +1672,7 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "setActiveCashflowWindow" in javascript
     assert "const CASHFLOW_DEFAULT_START = '2026-01-01';" in javascript
     assert "const CASHFLOW_DEFAULT_END = '2026-06-30';" in javascript
-    assert "<script src='/static/reconciliation.js?v=34'></script>" in html
+    assert "<script src='/static/reconciliation.js?v=35'></script>" in html
     assert "cashflows-table-number" in javascript
     assert "grid-template-columns: minmax(0, 1fr)" in stylesheet
     assert ".cashflows-table td.cashflows-table-text" in stylesheet
@@ -1870,4 +1870,107 @@ def test_cashflow_revision_endpoint_returns_lightweight_revision_and_source_key(
         "client_id": 7,
         "cashflow_report_revision": 12,
         "cashflow_report_source_key": "client-data-v1:7:9",
+        "cashflow_configuration_key": reconciliation._cashflow_configuration_key({"source_template_id": 9, "cashflow_report_revision": 12}),
     }
+
+
+@pytest.mark.parametrize('view', ['combined', 'bank', 'cash', 'split'])
+@pytest.mark.parametrize('presentation', ['net', 'gross'])
+def test_warm_ledger_preview_uses_one_source_load_and_preserves_accounting(view, presentation):
+    configuration = dict(source_template_id=9, cash_account_codes=[], bank_account_codes=['B1'],
+                         match_internal_transfers=False, receipt_presentation=presentation, cashflow_report_revision=7)
+    journal = pd.DataFrame([
+        dict(voucher_id='V1', date='2026-01-05', account_code='B1', account_name='Bank', debit=125.25, credit=0),
+        dict(voucher_id='V1', date='2026-01-05', account_code='AR', account_name='Customer', debit=0, credit=125.25),
+    ])
+    journal['voucher_detail'] = 'Receipt'
+    coa = pd.DataFrame([
+        dict(account_code='B1', account_title='Bank', account_type='Bank', category=''),
+        dict(account_code='AR', account_title='Customer', account_type='Customer', category='Customers'),
+    ])
+    source = SimpleNamespace(journal=journal, coa=coa, diagnostics=(), ready=True,
+                             metadata={'cashflow_report_source_key': 'client-data-v1:7:9'})
+    with (
+        patch.object(reconciliation, '_require_active_client'),
+        patch.object(reconciliation, '_cashflow_configuration', return_value=configuration),
+        patch.object(reconciliation, 'load_ledger_report_source', return_value=source) as loader,
+        patch.object(reconciliation, 'build_cashflow_summary', wraps=build_cashflow_summary) as builder,
+    ):
+        cold = reconciliation.preview_cashflows(7, '2026-01-01', '2026-01-31',
+            details='summary', group_by='month', treasury_view=view, warm_ledger_cache=False, session=None)
+        loader.reset_mock()
+        builder.reset_mock()
+        warm = reconciliation.preview_cashflows(7, '2026-01-01', '2026-01-31',
+            details='summary', group_by='month', treasury_view=view, warm_ledger_cache=True, session=None)
+    assert loader.call_count == builder.call_count == 1
+    assert builder.call_args.kwargs['include_drilldown'] is True
+    descriptor = warm['preview']['ledger_cache']
+    assert descriptor['complete'] is True
+    assert descriptor['row_count'] == 1
+    assert descriptor['rows'][0]['amount'] == 125.25
+    assert descriptor['context'] == warm['ledger_context']
+    assert descriptor['context']['template_id'] == 9
+    assert warm['preview']['category_totals'] == cold['preview']['category_totals']
+    assert warm['preview']['treasury_category_totals'] == cold['preview']['treasury_category_totals']
+    assert warm['preview']['treasury_reconciliation'] == cold['preview']['treasury_reconciliation']
+    assert warm['preview']['ledger_rollups'] == []
+    # Export calculations remain independent of this disposable transport/cache.
+    warm_without_cache = dict(warm['preview'])
+    warm_without_cache.pop('ledger_cache')
+    assert warm_without_cache == cold['preview']
+
+
+def test_browser_rollup_budget_is_all_or_nothing(monkeypatch):
+    rows = [dict(category='Operating', amount=1, account_name='账簿') for _ in range(3)]
+    monkeypatch.setattr(reconciliation, 'CASHFLOW_BROWSER_LEDGER_MAX_ROWS', 2)
+    result = reconciliation._cashflow_browser_ledger_payload(rows, {'client_id': 7})
+    assert result == dict(context={'client_id': 7}, complete=False, row_count=3, rows=[])
+    monkeypatch.setattr(reconciliation, 'CASHFLOW_BROWSER_LEDGER_MAX_ROWS', 3)
+    monkeypatch.setattr(reconciliation, 'CASHFLOW_BROWSER_LEDGER_MAX_BYTES', 10)
+    assert reconciliation._cashflow_browser_ledger_payload(rows, {})['complete'] is False
+    monkeypatch.setattr(reconciliation, 'CASHFLOW_BROWSER_LEDGER_MAX_BYTES', 2048)
+    assert reconciliation._cashflow_browser_ledger_payload(rows, {})['rows'] == rows
+    assert reconciliation._cashflow_browser_ledger_payload([], {})['complete'] is True
+
+
+def test_oversized_drilldown_omits_baseline_but_keeps_all_pages():
+    rows = [dict(category='Operating', account_code=f'A{i}', amount=i) for i in range(5001)]
+    result = dict(period_start='2026-01-01', period_end='2026-01-31', group_by='month',
+                  treasury_view='combined', preview={'ledger_rollups': rows})
+    with patch.object(reconciliation, '_build_cashflow_result', return_value=result):
+        response = reconciliation.cashflow_drilldown(7, '2026-01-01', '2026-01-31',
+            group_by='month', search='', category='', account_head='', treasury_type='', period_key='',
+            treasury_view='combined', page=26, limit=200, session=None)
+    assert response['base_rows'] is None
+    assert response['total_rows'] == 5001
+    assert response['page_count'] == 26
+    assert response['rows'] == rows[5000:]
+
+
+def test_configuration_identity_includes_categories_treasury_and_receipt_rules():
+    base = dict(source_template_id=9, cash_account_codes=['C1'], receipt_presentation='net',
+                category_mappings={'AR': 'Customers'})
+    key = reconciliation._cashflow_configuration_key(base)
+    for change in ({'category_mappings': {'AR': 'Other'}}, {'cash_account_codes': ['C2']},
+                   {'receipt_presentation': 'gross'}, {'source_template_id': 10}):
+        assert reconciliation._cashflow_configuration_key(base | change) != key
+
+
+def test_disposable_ledger_cache_does_not_change_export_cells_or_formats():
+    summary = _cashflow_summary()
+    summary['cashflow_ledger_rollups'] = pd.DataFrame([
+        dict(category='Customers', period_key=key, period_label=key, account_code='AR',
+             account_name='Customers', treasury_type='Bank', amount=amount, line_count=1)
+        for key, amount in [('2026-Q1', 125), ('2026-Q2', 50)]
+    ])
+    preview = reconciliation._cashflow_preview(summary, {'drilldown'})
+    cached = preview | {'ledger_cache': reconciliation._cashflow_browser_ledger_payload(
+        preview['ledger_rollups'], {'client_id': 7})}
+    workbooks = [load_workbook(BytesIO(export_cashflow_xlsx(payload,
+        period_start='2026-02-10', period_end='2026-04-18', group_by='quarter')))
+        for payload in (preview, cached)]
+    assert workbooks[0].sheetnames == workbooks[1].sheetnames
+    for name in workbooks[0].sheetnames:
+        cells = [list((cell.coordinate, cell.value, cell.number_format)
+                      for row in workbook[name] for cell in row) for workbook in workbooks]
+        assert cells[0] == cells[1]

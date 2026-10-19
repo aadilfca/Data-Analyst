@@ -1,4 +1,6 @@
 from pathlib import Path
+import re
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -61,7 +63,7 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert "syncCashflowReportRevision" in script
     assert "resetCashflowDrilldownFilters" in script
     assert "cashflowsDrilldownAccountHead" in script
-    assert "cashflowReportRevision].join" in script
+    assert "cashflowLedgerContextKey" in script
     assert "resetCashflowDrilldownFilters();" in script
     assert "revision: cashflowReportRevision" in script
     assert "cashflowDrilldownLocalResult" in script
@@ -535,3 +537,264 @@ def test_database_totals_header_fits_desktop_and_narrow_screens(cashflow_databas
         })""")
         assert metrics["documentWidth"] <= width
         assert metrics["right"] <= width
+
+
+def _ledger_report(row_count=2, complete=True, month='2026-01', view='combined'):
+    context = dict(client_id=7, template_id=9, period_start=month + '-01',
+        period_end=month + '-28', group_by='month', treasury_view=view,
+        report_revision=12, source_key='client-data-v1:7:9', configuration_key='config-1')
+    rows = [dict(category='Operating' if i % 2 == 0 else 'Other', period_key=month,
+        period_label=month, account_code=f'A{i}', account_name=f'Account {i}',
+        treasury_type='Cash' if view == 'cash' else 'Bank', amount=i + 0.25, line_count=1)
+        for i in range(row_count)]
+    # Use one category for the large-category completeness fixtures.
+    if row_count > 2:
+        for row in rows:
+            row['category'] = 'Operating'
+    categories = []
+    for category in dict.fromkeys(row['category'] for row in rows):
+        total = sum(row['amount'] for row in rows if row['category'] == category)
+        categories.append({'category': category, month: total, 'Total': total})
+    return dict(client_id=7, period_start=context['period_start'], period_end=context['period_end'],
+        group_by='month', treasury_view=view, cashflow_report_revision=12,
+        cashflow_configuration_key='config-1', ledger_context=context,
+        configuration={'source_template_id': 9}, source={'ready': True, 'metadata': {
+            'cashflow_report_source_key': context['source_key']}}, blocking_reasons=[],
+        preview=dict(group_by='month', treasury_view=view, periods=[dict(key=month,
+            start=context['period_start'], end=context['period_end'], label=month)],
+            months=[month], category_totals=categories, treasury_view_totals=(categories if view != 'split' else [
+                dict(category=row['category'], period_key=month, bank_amount=row['Total'],
+                     cash_amount=0, mixed_amount=0, total_amount=row['Total']) for row in categories]),
+            ledger_cache=dict(context=context, complete=complete, row_count=row_count,
+                              rows=rows if complete else [])))
+
+
+@pytest.fixture
+def ledger_cache_page():
+    """Real report DOM/script; every HTTP request is intercepted locally."""
+    playwright = pytest.importorskip('playwright.sync_api')
+    html = (ROOT / 'static/reconciliation.html').read_text(encoding='utf-8')
+    html = re.sub(r'<script\b[^>]*>.*?</script>', '', html, flags=re.S)
+    html = re.sub(r'<link\b[^>]*>', '', html)
+    html = html.replace('<head>', '<head><base href="https://cashflows.test/">')
+    script = (ROOT / 'static/reconciliation.js').read_text(encoding='utf-8')
+    css = (ROOT / 'static/style.css').read_text(encoding='utf-8')
+    hook = '''window.ledgerFixture = {
+        load: function (result) {
+            clientId = result.client_id;
+            cashflowSelection = {start: result.period_start, end: result.period_end, groupBy: result.group_by};
+            cashflowTreasuryView = result.treasury_view;
+            element('cashflowsPeriodStart').value = result.period_start;
+            element('cashflowsPeriodEnd').value = result.period_end;
+            element('cashflowsView').hidden = false;
+            element('reportsView').hidden = true;
+            renderResult(result);
+        },
+        expire: function () {cashflowRevisionCheckedAt = 0;},
+        generate: function (hard) {return generateCashflows(null, {forceRefresh: hard});},
+        ledger: function () {return loadCashflowDrilldown(true);},
+        stripped: function () {return lastCashflowsResult;},
+        stats: function () {return Array.from(cashflowLedgerCacheOrder.values());},
+        parent: deriveCashflowSummaryFromParent,
+        remember: function (key, rows) {return rememberCashflowLedger('baseline', key, {rows: rows, result: {}});},
+        mutateScope: function (change) {
+            if (change.client_id) clientId = change.client_id;
+            if (change.template_id) lastCashflowsResult.configuration.source_template_id = change.template_id;
+            if (change.group_by) cashflowSelection.groupBy = change.group_by;
+            if (change.treasury_view) cashflowTreasuryView = change.treasury_view;
+            if (change.period_start) cashflowSelection.start = change.period_start;
+        }
+    };
+    element('cashflowsSummaryTable').addEventListener('click', handleCashflowSummaryClick);'''
+    script = script.replace("document.addEventListener('DOMContentLoaded', initialise);", hook)
+    with playwright.sync_playwright() as instance:
+        browser = instance.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.route('**/*', lambda route: route.abort())
+        page.set_content(html)
+        page.add_style_tag(content=css)
+        page.add_script_tag(content=script)
+        yield page
+        browser.close()
+
+
+def _category_button(page, category='Operating'):
+    return page.locator('.cashflows-inline-expand').filter(has_text=category).first
+
+
+@pytest.mark.parametrize('view', ['combined', 'bank', 'cash', 'split'])
+def test_category_and_full_ledger_share_initial_report_cache(ledger_cache_page, view):
+    page = ledger_cache_page
+    requests = []
+    page.on('request', lambda request: requests.append(request.url))
+    page.evaluate('result => window.ledgerFixture.load(result)', _ledger_report(view=view))
+    _category_button(page).click()
+    page.wait_for_selector('.cashflows-inline-ledger-link')
+    assert page.locator('.cashflows-inline-ledger-link').count() == 1
+    _category_button(page, 'Other').click()
+    assert page.locator('.cashflows-inline-ledger-link').count() == 2
+    _category_button(page).click()
+    _category_button(page).click()
+    result = page.evaluate('() => window.ledgerFixture.ledger()')
+    assert result['total_rows'] == 2
+    assert requests == []
+    stripped = page.evaluate('() => window.ledgerFixture.stripped()')
+    assert 'ledger_cache' not in stripped['preview']
+    assert stripped['preview']['ledger_rollups'] == []
+
+
+def test_complete_category_over_200_rows_is_not_truncated(ledger_cache_page):
+    page = ledger_cache_page
+    page.evaluate('result => window.ledgerFixture.load(result)', _ledger_report(201))
+    _category_button(page).click()
+    page.wait_for_function("document.querySelectorAll('.cashflows-inline-ledger-link').length === 201")
+    assert page.locator('[data-cashflow-inline-page]').count() == 0
+
+
+def test_oversized_category_pages_are_explicit_and_reachable(ledger_cache_page):
+    page = ledger_cache_page
+    report = _ledger_report(201, complete=False)
+    all_rows = _ledger_report(201)['preview']['ledger_cache']['rows']
+    requested_pages = []
+
+    def respond(route):
+        number = int(parse_qs(urlparse(route.request.url).query)['page'][0])
+        requested_pages.append(number)
+        payload = dict(client_id=7, period_start=report['period_start'], period_end=report['period_end'],
+            group_by='month', treasury_view='combined', ledger_context=report['ledger_context'],
+            cashflow_report_revision=12, cashflow_configuration_key='config-1', page=number,
+            page_count=2, total_rows=201, limit=200, rows=all_rows[(number-1)*200:number*200])
+        route.fulfill(json=payload)
+
+    page.route('**/api/reconciliation/cashflows/drilldown?*', respond)
+    page.evaluate('result => window.ledgerFixture.load(result)', report)
+    _category_button(page).click()
+    page.wait_for_function("document.querySelectorAll('.cashflows-inline-ledger-link').length === 200")
+    assert 'Amounts reflect this page' in page.locator('#cashflowsSummaryTable').inner_text()
+    page.locator('[data-cashflow-inline-page="2"]').click()
+    page.wait_for_function("document.querySelectorAll('.cashflows-inline-ledger-link').length === 1")
+    assert page.locator('.cashflows-inline-ledger-link').inner_text() == 'Account 200'
+    page.locator('[data-cashflow-inline-page="1"]').click()
+    page.wait_for_function("document.querySelectorAll('.cashflows-inline-ledger-link').length === 200")
+    assert requested_pages == [1, 2]
+
+
+@pytest.mark.parametrize('failure', ['unavailable', 'changed'])
+def test_expired_cache_never_displays_when_revision_check_fails(ledger_cache_page, failure):
+    page = ledger_cache_page
+    report = _ledger_report()
+    page.evaluate('result => window.ledgerFixture.load(result)', report)
+    if failure == 'unavailable':
+        page.route('**/api/reconciliation/cashflows/revision?*', lambda route: route.fulfill(status=503, json={}))
+    else:
+        page.route('**/api/reconciliation/cashflows/revision?*', lambda route: route.fulfill(json={
+            'cashflow_report_revision': 13, 'cashflow_report_source_key': 'client-data-v1:7:9',
+            'cashflow_configuration_key': 'config-1'}))
+    page.evaluate('() => window.ledgerFixture.expire()')
+    _category_button(page).click()
+    page.wait_for_selector('.cashflows-inline-ledger-error')
+    assert 'Reload Cashflows' in page.locator('.cashflows-inline-ledger-error').inner_text()
+    assert page.locator('.cashflows-inline-ledger-link').count() == 0
+
+
+@pytest.mark.parametrize('change', [dict(client_id=8), dict(template_id=10), dict(group_by='quarter'),
+                                  dict(treasury_view='cash'), dict(period_start='2026-02-01')])
+def test_cache_is_scoped_to_complete_report_context(ledger_cache_page, change):
+    page = ledger_cache_page
+    requests = []
+    page.route('**/api/reconciliation/cashflows/drilldown?*', lambda route: (
+        requests.append(route.request.url), route.fulfill(status=503, json={})))
+    page.evaluate('result => window.ledgerFixture.load(result)', _ledger_report())
+    page.evaluate('change => window.ledgerFixture.mutateScope(change)', change)
+    _category_button(page).click()
+    page.wait_for_selector('.cashflows-inline-ledger-error')
+    assert page.locator('.cashflows-inline-ledger-link').count() == 0
+    assert requests == []
+
+
+def test_ledger_cache_evicts_by_combined_rows_and_utf8_bytes(ledger_cache_page):
+    page = ledger_cache_page
+    outcome = page.evaluate('''() => {
+        const rows = Array.from({length: 3000}, (_, i) => ({account_code: String(i), amount: i}));
+        ledgerFixture.remember('one', rows);
+        ledgerFixture.remember('two', rows);
+        const afterRows = ledgerFixture.stats();
+        const oversized = ledgerFixture.remember('huge', [{account_name: '账'.repeat(800000)}]);
+        return {afterRows, oversized, final: ledgerFixture.stats()};
+    }''')
+    assert [entry['key'] for entry in outcome['afterRows']] == ['two']
+    assert outcome['oversized'] is False
+    assert sum(entry['rows'] for entry in outcome['final']) <= 5000
+    assert sum(entry['bytes'] for entry in outcome['final']) <= 2 * 1024 * 1024
+    entries = page.evaluate('''() => {
+        ledgerFixture.remember('bytes-one', [{account_name: 'a'.repeat(1100000)}]);
+        ledgerFixture.remember('bytes-two', [{account_name: 'b'.repeat(1100000)}]);
+        return ledgerFixture.stats();
+    }''')
+    assert [entry['key'] for entry in entries] == ['bytes-two']
+
+
+def test_hard_refresh_reloads_source_and_reseeds_rollups(ledger_cache_page):
+    page = ledger_cache_page
+    report = _ledger_report()
+    requests = []
+
+    def respond(route):
+        requests.append(parse_qs(urlparse(route.request.url).query))
+        route.fulfill(json=report)
+
+    page.route('**/api/reconciliation/cashflows/preview?*', respond)
+    page.evaluate('result => window.ledgerFixture.load(result)', report)
+    page.evaluate('() => window.ledgerFixture.generate(true)')
+    assert requests[0]['refresh'] == ['true']
+    assert requests[0]['warm_ledger_cache'] == ['true']
+    assert sum(entry['rows'] for entry in page.evaluate('() => window.ledgerFixture.stats()')) == 2
+
+
+def test_late_summary_response_cannot_replace_new_period(ledger_cache_page):
+    page = ledger_cache_page
+    january, february = _ledger_report(), _ledger_report(month='2026-02')
+    page.evaluate('result => ledgerFixture.load(result)', january)
+    page.evaluate('''() => {
+        window.pendingReports = [];
+        // Deliberately ignore abort to prove generation/context rejection too.
+        window.fetch = () => new Promise(resolve => pendingReports.push(resolve));
+        window.firstReport = ledgerFixture.generate(true);
+    }''')
+    page.evaluate('result => ledgerFixture.load(result)', february)
+    page.evaluate('() => {window.secondReport = ledgerFixture.generate(true);}')
+    assert page.evaluate('() => pendingReports.length') == 2
+    page.evaluate('''async result => {
+        pendingReports[1](new Response(JSON.stringify(result)));
+        await secondReport;
+    }''', february)
+    page.evaluate('''async result => {
+        pendingReports[0](new Response(JSON.stringify(result)));
+        await firstReport;
+    }''', january)
+    assert page.evaluate('() => ledgerFixture.stripped().period_start') == '2026-02-01'
+    assert sum(entry['rows'] for entry in page.evaluate('() => ledgerFixture.stats()')) == 2
+
+
+def test_parent_summary_reuse_drops_incompatible_ledger_data(ledger_cache_page):
+    report = _ledger_report()
+    report['preview']['period_metrics'] = {'2026-01': dict(source_line_count=2,
+        selected_voucher_count=1, internal_transfer_count=0, category_review_count=0, deduction_count=0)}
+    derived = ledger_cache_page.evaluate('''result => ledgerFixture.parent(result,
+        result.period_start, result.period_end, 'quarter', 'combined')''', report)
+    assert derived is not None
+    assert derived['preview']['ledger_rollups'] == []
+    assert 'ledger_cache' not in derived['preview']
+
+
+def test_incomplete_fallback_response_is_not_cached_or_displayed(ledger_cache_page):
+    page = ledger_cache_page
+    report = _ledger_report(201, complete=False)
+    page.route('**/api/reconciliation/cashflows/drilldown?*', lambda route: route.fulfill(json=dict(
+        ledger_context=report['ledger_context'], rows=[], total_rows=201, page=1, page_count=2)))
+    page.evaluate('result => ledgerFixture.load(result)', report)
+    _category_button(page).click()
+    page.wait_for_selector('.cashflows-inline-ledger-error')
+    assert 'Incomplete account details' in page.locator('.cashflows-inline-ledger-error').inner_text()
+    assert page.locator('.cashflows-inline-ledger-link').count() == 0
+    assert page.evaluate('() => ledgerFixture.stats()') == []

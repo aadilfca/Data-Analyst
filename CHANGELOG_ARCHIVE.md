@@ -1,5 +1,15 @@
 # Changelog Archive
 
+## Cashflows bounded browser ledger warm-up - 2026-10-19
+
+**Implementation:** Opt-in summary warm-up computes account/period roll-ups during the same source load and accounting build. Category expansion and ledger drill-down share an LRU cache capped across contexts/pages at 5,000 rows and 2 MiB serialized data; summary caches retain no roll-up arrays. Oversized categories expose explicit paging and page-only amounts. Context keys include client/template, exact dates, grouping, Treasury view, revision and configuration fingerprint. Freshness failure blocks reuse; hard refresh clears caches; obsolete responses and incompatible parent-period details are rejected. No new tables, transaction copies, dependencies or accounting changes.
+
+**Verification:** 121 relevant checks passed, one migration-only skip; three previously documented layout/default UI failures excluded. New SQL-build/browser coverage includes one source load, four Treasury views, net/gross totals, 201-row completeness, fallback paging, byte/row eviction, failed/changed freshness, changed contexts, delayed responses and hard refresh. All exported worksheet cells/formats match with/without cache metadata. JavaScript/Python syntax and whitespace checks passed.
+
+**Measurement/limits:** Isolated synthetic 2,400-row/1,200-voucher calculation, three alternating rounds: summary 164.49/134.73/130.93 ms; warm 211.94/186.02/197.53 ms. Median added work 62.8 ms; 600 compact rows serialize to 102,215 bytes. This excludes production SQL/network/render latency; actual browser heap exceeds serialized size. Large reports retain slower on-demand reads. No live database access or package installation.
+
+**Acceptance/Git:** Aadil tested locally, confirmed faster category expansion, and authorized commit/push; unrelated benchmark work is excluded.
+
 ## Cashflows transaction-window canonical source repair - 2026-10-19
 
 **Cause/fix:** The account transaction window still read retired prepared/classification copies while the summary read canonical `client_data`. `routers/data.py` now calls `services/cash_bank_classification.py` directly; preview SQL reads active canonical derivations and current category assignments, with report-aligned voucher eligibility, account/category/date/Treasury/search filters and pagination. Invalid filters return HTTP 400. No source/schema changes or transaction copies.

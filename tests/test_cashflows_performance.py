@@ -1,10 +1,14 @@
 """Phase 6 coverage for SQL-first Cashflows source preparation."""
 
 import inspect
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pandas as pd
 
 import database
+from routers import reconciliation
+from services.ledger_group_summary import build_cashflow_summary
 from services.ledger_report_source import (
     CASHFLOW_DRILLDOWN_DETAILS_VERSION,
     CASHFLOW_DRILLDOWN_PROJECTION_VERSION,
@@ -606,3 +610,34 @@ def test_cashflow_daily_rollup_preserves_treasury_totals_for_larger_periods():
     assert split.loc[("Operating", "2026-01"), "cash_amount"] == 40
     assert split.loc[("Operating", "2026-02"), "total_amount"] == 25
     assert summary["treasury_reconciliation"]["status"] == "Matched"
+
+
+def test_browser_warmup_reuses_one_canonical_read_without_persistent_copies():
+    """Warm-up changes grouping work, never the source read/write contract."""
+    journal = pd.DataFrame([
+        dict(voucher_id=f'V{i}', date='2026-01-05', account_code=code,
+             account_name=code, debit=100 if code == 'B1' else 0,
+             credit=0 if code == 'B1' else 100, voucher_detail='Synthetic receipt')
+        for i in range(100) for code in ('B1', f'AR{i % 10}')
+    ])
+    coa = pd.DataFrame([dict(account_code=code, account_title=code, account_type='',
+                            category='' if code == 'B1' else 'Receipts')
+                        for code in journal['account_code'].unique()])
+    configuration = dict(source_template_id=9, cash_account_codes=[], bank_account_codes=['B1'],
+                         match_internal_transfers=False, receipt_presentation='net')
+    source = SimpleNamespace(journal=journal, coa=coa, diagnostics=(), ready=True,
+                             metadata={'cashflow_report_source_key': 'client-data-v1:7:9'})
+    with (
+        patch.object(reconciliation, '_require_active_client'),
+        patch.object(reconciliation, '_cashflow_configuration', return_value=configuration),
+        patch.object(reconciliation, 'load_ledger_report_source', return_value=source) as loader,
+        patch.object(reconciliation, 'build_cashflow_summary', wraps=build_cashflow_summary) as builder,
+        patch.object(reconciliation, 'execute_write_pg', side_effect=AssertionError('No writes')),
+        patch.object(reconciliation, 'store_cashflow_summary_read_model', side_effect=AssertionError('No copies')),
+    ):
+        result = reconciliation.preview_cashflows(7, '2026-01-01', '2026-01-31',
+            group_by='month', treasury_view='combined', details='summary', warm_ledger_cache=True, session=None)
+    assert loader.call_count == builder.call_count == 1
+    assert result['preview']['ledger_cache']['complete'] is True
+    assert result['preview']['ledger_cache']['row_count'] == 10
+    assert sum(row['amount'] for row in result['preview']['ledger_cache']['rows']) == 10000
