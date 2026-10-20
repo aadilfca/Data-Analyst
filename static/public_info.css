@@ -1,0 +1,161 @@
+/* Public information pages stay independent of authenticated app navigation. */
+.public-page {
+    margin: 0;
+    background: #f6f8fa;
+    color: #1a1a2e;
+    font: 16px/1.65 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.public-page * { box-sizing: border-box; }
+.public-page a { color: #166534; text-underline-offset: 4px; }
+.public-page a:hover { color: #14532d; }
+.public-page a:focus-visible,
+.public-login-links a:focus-visible {
+    outline: 3px solid #166534;
+    outline-offset: 4px;
+    border-radius: 3px;
+}
+
+.public-skip-link {
+    position: absolute;
+    top: -100px;
+    left: 20px;
+    padding: 10px 16px;
+    background: white;
+    z-index: 2;
+}
+.public-skip-link:focus { top: 12px; }
+.public-header { background: white; border-bottom: 1px solid #e2e8f0; }
+.public-header-inner,
+.public-main,
+.public-footer-inner { width: min(1080px, calc(100% - 48px)); margin: 0 auto; }
+.public-header-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    min-height: 84px;
+}
+.public-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    color: #1a1a2e !important;
+    font-size: 17px;
+    font-weight: 650;
+    text-decoration: none;
+}
+.public-brand-mark {
+    display: grid;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    border-radius: 9px;
+    background: #166534;
+    color: white;
+    font-size: 14px;
+    letter-spacing: 1px;
+}
+.public-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: 24px; }
+.public-navigation a { font-size: 14px; text-decoration: none; color: #475569; }
+.public-navigation a[aria-current="page"] { color: #166534; font-weight: 650; text-decoration: underline; }
+.public-navigation .public-sign-in {
+    padding: 7px 16px;
+    border: 1px solid #d0d9d3;
+    border-radius: 6px;
+    color: #166534;
+    font-weight: 600;
+}
+.public-main { padding: 56px 0 64px; }
+.public-eyebrow {
+    margin: 0 0 12px;
+    font-size: 12px;
+    font-weight: 700;
+    color: #166534;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+}
+.public-page h1 { margin: 0 0 20px; font-size: clamp(30px, 4vw, 44px); line-height: 1.18; letter-spacing: -1px; }
+.public-page h2 { margin: 0 0 12px; font-size: 22px; line-height: 1.35; letter-spacing: -0.3px; }
+.public-page p { margin: 0 0 16px; }
+.public-page p:last-child { margin-bottom: 0; }
+.public-lead { font-size: 18px; color: #475569; }
+.public-hero { display: grid; grid-template-columns: 1.7fr 1fr; gap: 56px; align-items: start; }
+.public-note {
+    padding: 26px;
+    border: 1px solid #d5e2d5;
+    border-radius: 10px;
+    background: #edf4ea;
+}
+.public-note h2 { font-size: 17px; }
+.public-note p { font-size: 14px; color: #36513e; }
+.public-features {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    margin: 44px 0;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    background: white;
+}
+.public-feature { padding: 26px; }
+.public-feature + .public-feature { border-left: 1px solid #e2e8f0; }
+.public-feature h2 { font-size: 17px; }
+.public-feature p { color: #475569; font-size: 15px; }
+.public-section { max-width: 760px; margin-top: 32px; }
+.public-document { max-width: 820px; }
+.public-updated { color: #64748b; font-size: 14px; }
+.public-document-index {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 22px;
+    padding: 18px 22px;
+    margin: 28px 0 36px;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background: white;
+}
+.public-document-index a { font-size: 14px; }
+.public-document section { margin-top: 32px; scroll-margin-top: 20px; }
+.public-document ul { margin: 12px 0 16px; padding-left: 22px; }
+.public-document li + li { margin-top: 8px; }
+.public-document code { overflow-wrap: anywhere; font-size: 0.9em; }
+.public-contact { overflow-wrap: anywhere; }
+.public-footer { border-top: 1px solid #e2e8f0; background: white; }
+.public-footer-inner {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 10px 28px;
+    padding: 22px 0;
+    color: #64748b;
+    font-size: 13px;
+}
+.public-footer-links { display: flex; flex-wrap: wrap; gap: 20px; }
+.public-footer-links a { color: #475569; }
+
+/* Only this small footer is shared with the existing login screen. */
+.public-login-links {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px 18px;
+    margin-top: 22px;
+    padding-top: 16px;
+    border-top: 1px solid #e2e8f0;
+}
+.public-login-links a { color: #475569; font-size: 12px; text-underline-offset: 3px; }
+
+@media (max-width: 720px) {
+    .public-header-inner,
+    .public-main,
+    .public-footer-inner { width: calc(100% - 36px); }
+    .public-header-inner { flex-direction: column; align-items: flex-start; gap: 16px; padding: 20px 0; }
+    .public-navigation { gap: 16px; }
+    .public-main { padding: 34px 0 44px; }
+    .public-hero { grid-template-columns: 1fr; gap: 24px; }
+    .public-features { grid-template-columns: 1fr; margin: 30px 0; }
+    .public-feature + .public-feature { border-left: 0; border-top: 1px solid #e2e8f0; }
+    .public-feature, .public-note { padding: 22px; }
+    .public-lead { font-size: 17px; }
+    .public-footer-inner { flex-direction: column; }
+}

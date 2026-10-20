@@ -148,10 +148,11 @@ def test_replacement_purge_permanently_removes_exact_rows_and_old_payloads():
     from contextlib import nullcontext
     writes = []
     with patch.object(storage_cleanup, "pg_transaction", return_value=nullcontext()), \
-            patch.object(storage_cleanup, "execute_query_pg", side_effect=[[{"id": 9, "upload_id": 4, "derived_voucher_id": "V1"}], []]), \
+            patch.object(storage_cleanup, "execute_query_pg", side_effect=[[{'status': 'verified', 'drive_file_id': 'remote', 'archive_sha256': 'checksum'}], [{"id": 9, "upload_id": 4, "derived_voucher_id": "V1"}], []]), \
             patch.object(storage_cleanup, "_count", return_value=0), \
             patch.object(storage_cleanup, "execute_write_pg", side_effect=lambda sql, params=None: writes.append((sql, params))):
-        result = storage_cleanup.purge_replaced_transaction_rows(5, 1, [9], "test")
+        result = storage_cleanup.purge_replaced_transaction_rows(5, 1, [9], "test",
+            archive_proof={'operation_id': 'operation', 'ids': [9], 'archive': {'drive_file_id': 'remote', 'sha256': 'checksum'}})
     assert result["deleted_count"] == 1
     assert any("DELETE FROM public.client_data WHERE id = ANY(%s)" in sql and params == ([9],) for sql, params in writes)
     assert any("DELETE FROM public.data_audit_log" in sql for sql, _ in writes)

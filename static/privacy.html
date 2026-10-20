@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="How Internal Audit App handles uploaded records, account information and Google Drive archive access.">
+    <meta name="referrer" content="same-origin">
+    <title>Privacy policy | Internal Audit App</title>
+    <link rel="stylesheet" href="/static/public_info.css?v=1">
+</head>
+<body class="public-page">
+    <a class="public-skip-link" href="#main-content">Skip to content</a>
+    <header class="public-header">
+        <div class="public-header-inner">
+            <a class="public-brand" href="/static/app_info.html"><span class="public-brand-mark" aria-hidden="true">IA</span>Internal Audit App</a>
+            <nav class="public-navigation" aria-label="Public information">
+                <a href="/static/app_info.html">Information</a><a href="/static/privacy.html" aria-current="page">Privacy</a><a href="/static/terms.html">Terms</a><a class="public-sign-in" href="/static/login.html">Sign in</a>
+            </nav>
+        </div>
+    </header>
+    <main class="public-main public-document" id="main-content">
+        <p class="public-eyebrow">Your information</p>
+        <h1>Privacy policy</h1>
+        <p class="public-updated">Last updated: <time datetime="2026-10-20">20 October 2026</time></p>
+        <p class="public-lead">This policy explains how Internal Audit App processes information for authorised audit work and its Google Drive archive connection.</p>
+        <nav class="public-document-index" aria-label="On this page">
+            <a href="#records">Records and use</a><a href="#storage">Storage and access</a><a href="#google-drive">Google Drive</a><a href="#retention">Retention</a><a href="#choices">Your choices</a><a href="#contact">Contact</a>
+        </nav>
+        <section id="records">
+            <h2>Records we process and why</h2>
+            <p>The app processes the records users upload or enter, including account details, vouchers, dates, amounts, descriptions, supporting evidence and audit observations. It also processes user account details, access roles and session information.</p>
+            <p>This information is used to validate and maintain source records, support audit reviews, prepare reports, control access and preserve recovery evidence when records change. A necessary session cookie keeps signed-in users authenticated.</p>
+        </section>
+        <section id="storage">
+            <h2>Storage and access</h2>
+            <p>The hosted app runs on Render and uses Supabase for its configured operational database. Uploaded files and supporting evidence may also be held in the app's configured file storage. Hosting and database providers process information to operate these services and may process technical service logs.</p>
+            <p>Client records are intended for authorised users with access assigned by the administrator. Administrators responsible for hosting, storage and connected services may also have access needed to operate and support the app. Public information pages do not display client records.</p>
+        </section>
+        <section id="google-drive">
+            <h2>Google Drive archive connection</h2>
+            <p>An administrator may connect a Google account to store recovery archives. The app requests <code>https://www.googleapis.com/auth/drive.file</code>: permission to see, create, edit and delete only the specific Drive files used with the app, including files explicitly shared with it. This permission does not provide access to every file in the account.</p>
+            <p>The archive feature creates a designated folder and ZIP files, reads their metadata and downloads the files to verify their contents. Archives can contain complete previous vouchers, related audit history, upload metadata and an Excel observation report. A second copy is kept in storage configured by the administrator.</p>
+            <p>OAuth credentials and refresh tokens are held in private server configuration to maintain the authorised connection. Google data accessed through this connection is used for archive storage, verification and recovery review. It is not used for advertising, sold to data brokers or used to train general-purpose AI models.</p>
+            <p>The app's use of information received from Google APIs follows the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including its Limited Use requirements.</p>
+        </section>
+        <section id="retention">
+            <h2>Retention and removal</h2>
+            <p>The administrator manages retention according to the organisation's audit, business and applicable legal requirements. This policy does not set a fixed retention period.</p>
+            <p>Replacing or removing operational records may leave previous versions in recovery archives. Removing records from the app does not automatically remove the separate Drive or storage copies. Archive removal and retention requests must be reviewed by the administrator.</p>
+        </section>
+        <section id="choices">
+            <h2>Your choices and requests</h2>
+            <p>You can revoke the app's Google access through your <a href="https://myaccount.google.com/connections">Google Account connections</a>. Revocation stops the app's future authorised Drive access; it does not delete existing records or archives. Upload replacements requiring a verified archive cannot proceed while that archive connection is unavailable.</p>
+            <p>Contact the administrator to request access, correction or deletion of information. Requests are reviewed against access permissions, audit obligations and retention requirements. Only upload information you are authorised to provide.</p>
+        </section>
+        <section id="contact">
+            <h2>Contact and policy updates</h2>
+            <p>The application administrator can be contacted at <a class="public-contact" href="mailto:aadil.aca@gmail.com">aadil.aca@gmail.com</a>. Updates are published on this page with a revised date. A change requiring broader Google access will require a new authorisation.</p>
+        </section>
+    </main>
+    <footer class="public-footer">
+        <div class="public-footer-inner">
+            <span>Internal Audit App &middot; Privacy policy</span>
+            <nav class="public-footer-links" aria-label="Policy links"><a href="/static/app_info.html">App information</a><a href="/static/terms.html">Terms of use</a></nav>
+        </div>
+    </footer>
+</body>
+</html>

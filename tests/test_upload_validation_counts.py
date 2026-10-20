@@ -23,6 +23,271 @@ from routers.import_export import (
 )
 
 
+@pytest.mark.parametrize('action', ['new', 'changed'])
+@pytest.mark.parametrize('date_kind', ['native', 'text', 'serial'])
+def test_validated_calendar_date_survives_json_plan_and_actual_import_batches(action, date_kind):
+    """Native Excel dates must not be reinterpreted by the text-date picker."""
+    import json
+    from contextlib import ExitStack, nullcontext
+    from datetime import datetime
+    from routers import import_export as uploads
+
+    columns = [{'id': i, 'column_name': name, 'data_type': kind} for i, (name, kind) in enumerate([
+        ('Voucher ID', 'Text'), ('Transaction Date', 'Date'), ('Account Detail', 'Text'),
+        ('Voucher Detail', 'Text'), ('Debit Amount', 'Numeric'), ('Credit Amount', 'Numeric'),
+    ], 1)]
+    source_date = {'native': datetime(2026, 4, 1), 'text': '04-01-2026', 'serial': 46113}[date_kind]
+    source = {'Voucher ID': 'V1', 'Transaction Date': source_date, 'Account Detail': 'A',
+              'Voucher Detail': 'Corrected supplies', 'Debit Amount': 100.0, 'Credit Amount': 0.0}
+    old = {**source, 'Transaction Date': '01-04-2026', 'Voucher Detail': 'Old supplies'}
+    existing = [{'id': 8, 'row_data': old, 'version': 1, 'source_identity': 'original-8',
+                 'extract_date': '2026-04-01'}] if action == 'changed' else []
+    mapping = {c['column_name']: c['column_name'] for c in columns}
+    with patch.object(uploads, 'execute_query_pg', return_value=existing):
+        changes = uploads.compare_transactions(5, 1, columns, [source], mapping, {},
+                                               date_delimiter='-', date_order='MDY')
+    payload = uploads._build_validation_plan_payload(changes, columns, 1, 1, [], 0, None, '-', 'MDY')
+    plan = json.loads(json.dumps(payload, default=str))
+    assert plan[action][0]['validated_date'] == '2026-04-01'
+    request = ImportRequest(client_id=5, template_id=1, file_id=99, mappings=[], validation_plan_id='date-plan')
+    captured, classifications = [], []
+
+    def query(sql, params=None, **kwargs):
+        if 'FROM templates' in sql:
+            return [{'id': 1, 'template_name': 'Transactions', 'rate_source': None}]
+        if 'FROM uploaded_files' in sql:
+            return [{'file_path': 'unused.xlsx', 'file_name': 'unused.xlsx', 'status': 'Validated'}]
+        if 'FROM clients' in sql:
+            return [{'id': 5}]
+        if 'FROM template_column_mappings' in sql:
+            return columns
+        if ('FROM client_data' in sql and 'cd.id = ANY' in sql) or 'FOR UPDATE' in sql:
+            return existing
+        return []
+
+    def insert(conn, sql, rows, **kwargs):
+        captured.append(('insert', rows))
+        return [101]
+
+    def batch(conn, sql, rows):
+        if 'UPDATE client_data' in sql:
+            captured.append(('update', rows))
+
+    with ExitStack() as stack:
+        for name, replacement in {
+            'execute_query_pg': query, 'execute_write_pg': lambda *a: None,
+            '_load_validation_plan': lambda *a: {'plan_json': plan},
+            'pg_transaction': lambda: nullcontext(object()),
+            '_check_upload_storage_budget': lambda *a: None,
+            '_assert_active_identity_collisions': lambda *a: None,
+            'load_treasury_mapping_postgres': lambda *a: {},
+            'execute_batch_insert_with_ids_pg': insert, 'execute_batch_pg': batch,
+            'prepare_lifecycle': lambda *a: None,  # Archive transport is covered by lifecycle integration tests.
+            'upsert_classification_rows_postgres': lambda conn, rows, *a, **kw: classifications.extend(rows),
+            'resolve_upload_occurrences_postgres': lambda *a, **kw: {'eligible': True},
+            '_persist_upload_summary': lambda *a, **kw: None, 'log_audit': lambda *a: None,
+        }.items():
+            stack.enter_context(patch.object(uploads, name, replacement))
+        try:
+            result = uploads._import_validation_plan(request)
+        finally:
+            uploads.IMPORT_PROGRESS.pop(99, None)
+    assert result['status'] == 'success'
+    assert len(captured) == len(classifications) == 1
+    operation, rows = captured[0]
+    assert rows[0][5 if operation == 'insert' else 6] == '2026-04-01'
+    assert classifications[0]['extract_date'] == '2026-04-01'
+    if date_kind == 'native':
+        assert classifications[0]['row_data']['Transaction Date'] == '01/04/2026'
+    if action == 'changed':
+        assert result['change_detection']['report'][0]['changed_fields'] == ['Voucher Detail']
+
+
+@pytest.fixture
+def upload_formatting_page():
+    """Real upload scripts with local assets and intercepted APIs; no server or DB."""
+    from pathlib import Path
+    from urllib.parse import urlparse
+    from playwright.sync_api import sync_playwright
+    root = Path(__file__).resolve().parents[1]
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        errors = []
+        page.on('pageerror', lambda error: errors.append(str(error)))
+
+        def route(request):
+            path = urlparse(request.request.url).path
+            if path == '/static/client_context.js':
+                request.fulfill(content_type='application/javascript', body='''
+                    const API_BASE = '';
+                    window.isClientSelected = () => true;
+                    window.getSelectedClientId = () => 5;
+                    window.getSelectedClientName = () => 'Test client';
+                    window.getSelectedClientCode = () => 'TEST';
+                ''')
+            elif path in ['/static/upload.html', '/static/upload.js', '/static/style.css', '/static/vendor/xlsx.full.min.js', '/static/loading_ui.js']:
+                request.fulfill(path=str(root / path.lstrip('/')))
+            elif path == '/api/templates':
+                request.fulfill(json=[])
+            elif path in ['/api/upload/validate', '/api/upload/import']:
+                request.fulfill(status=409, json={'detail': "Voucher '<b>V1</b>', account 'A': ambiguous repeated lines"})
+            else:
+                request.fulfill(body='', content_type='text/css' if path.endswith('.css') else 'text/plain')
+
+        page.route('**/*', route)
+        page.goto('http://upload.test/static/upload.html', wait_until='load')
+        page.wait_for_function("typeof formatUploadPreviewCell === 'function'")
+        yield page
+        assert errors == []
+        browser.close()
+
+
+def test_upload_grids_show_serial_dates_and_preserve_raw_values_and_text_order(upload_formatting_page):
+    page = upload_formatting_page
+    result = page.evaluate('''() => {
+        currentMappings = [
+            {column_id: 1, column_name: 'Voucher', data_type: 'Text', excel_column: 'Voucher'},
+            {column_id: 2, column_name: 'Transaction Date', data_type: 'Date', excel_column: 'Date'},
+            {column_id: 3, column_name: 'Amount', data_type: 'Numeric', excel_column: 'Amount'}
+        ];
+        const sheet = XLSX.utils.aoa_to_sheet([
+            ['Voucher', 'Date', 'Amount'], ['V1', 46113, 46113], ['V2', '01/04/2026', 0], ['V3', '', 10]
+        ]);
+        sheet.B2.z = 'mm-dd-yy';
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, sheet, 'Transactions');
+        workbookData = XLSX.write(workbook, {bookType: 'xlsx', type: 'array'});
+        currentSheet = 'Transactions';
+        renderRowExclusionGrid();
+        showPreview();
+        return {raw: rowExclusionAllRows[0][1], date: formatUploadPreviewCell(46113, 'Date'),
+            amount: formatUploadPreviewCell(46113, 'Amount'), text: formatUploadPreviewCell('01/04/2026', 'Date')};
+    }''')
+    assert result == {'raw': 46113, 'date': '01/04/2026', 'amount': 46113, 'text': '01/04/2026'}
+    assert page.locator('#rowExclusionBody tr').first.locator('td').nth(3).inner_text() == '01/04/2026'
+    assert page.locator('#previewSheetBody tr').first.locator('td').nth(2).inner_text() == '01/04/2026'
+    assert page.locator('#previewSheetBody tr').nth(1).locator('td').nth(2).inner_text() == '01/04/2026'
+    # A different workbook epoch must use Excel's own decoding, independent of timezone.
+    assert page.evaluate("() => { uploadWorkbookDate1904 = true; return formatUploadPreviewCell(44651, 'Date'); }") == '01/04/2026'
+
+
+def test_validation_conflict_is_visible_as_text_and_discards_stale_plan(upload_formatting_page):
+    page = upload_formatting_page
+    page.evaluate('''() => {
+        fileId = 99; selectedTemplateId = 1; currentSheet = 'Transactions';
+        comparisonModeDropdown.value = 'correction';
+        excelHeaders = ['Voucher'];
+        currentMappings = [{column_id: 1, column_name: 'Voucher', data_type: 'Text', excel_column: 'Voucher', is_matched: true}];
+        renderMapping(currentMappings);
+        leftPanel.style.display = 'block'; mappingPanel.style.display = 'block';
+        modeActions.style.display = 'block';
+        validationPlanId = 'stale-plan'; validationStatus = 'idle';
+        importBtn.disabled = false;
+    }''')
+    page.locator('#importBtn').click()
+    page.wait_for_function("validationStatus === 'invalid'")
+    assert "Voucher '<b>V1</b>', account 'A'" in page.locator('#statusMessage').inner_text()
+    assert page.locator('#statusMessage b').count() == 0
+    assert page.evaluate('validationPlanId') is None
+    assert page.locator('#importBtn').inner_text() == 'Validate'
+    # The Import handler must surface the same ordinary FastAPI detail safely.
+    page.evaluate("async () => { validationPlanId = 'stale-plan'; await performImport({file_id: 99}); }")
+    assert "Import error: Voucher '<b>V1</b>'" in page.locator('#statusMessage').inner_text()
+    assert page.locator('#statusMessage b').count() == 0
+    assert page.evaluate('validationPlanId') is None
+    assert page.evaluate("uploadFailureMessage({error: {http_detail: 'Legacy conflict'}}, 'Fallback')") == 'Legacy conflict'
+    assert page.evaluate("uploadFailureMessage({detail: [{msg: 'Required mapping'}]}, 'Fallback')") == 'Required mapping'
+
+
+def test_complete_report_requires_coverage_and_sends_exact_dates(upload_formatting_page):
+    page = upload_formatting_page
+    sent = []
+    page.route('**/api/upload/validate', lambda route: (
+        sent.append(route.request.post_data_json),
+        route.fulfill(json={'total_rows': 1, 'can_import': True, 'validation_plan_id': 'ready-plan',
+                            'change_detection': {'new_count': 1, 'missing_count': 1}}),
+    ))
+    page.evaluate('''() => {
+        fileId = 99; selectedTemplateId = 1; currentSheet = 'Transactions';
+        excelHeaders = ['Voucher'];
+        currentMappings = [{column_id: 1, column_name: 'Voucher', data_type: 'Text', excel_column: 'Voucher', is_matched: true}];
+        renderMapping(currentMappings);
+        leftPanel.style.display = 'block'; mappingPanel.style.display = 'block';
+        modeActions.style.display = 'block'; importBtn.disabled = false;
+    }''')
+    page.locator('#importBtn').click()
+    assert 'coverage start/end' in page.locator('#statusMessage').inner_text()
+    assert sent == []
+    page.locator('#validationErrorCloseBtn').click()
+    page.locator('#uploadCoverageStart').fill('2026-01-01')
+    page.locator('#uploadCoverageEnd').fill('2026-10-25')
+    page.locator('#uploadConfirmEmpty').check()
+    page.locator('#importBtn').click()
+    page.wait_for_function("validationStatus === 'valid'")
+    assert len(sent) == 1
+    assert {k: sent[0][k] for k in ['comparison_mode', 'coverage_start', 'coverage_end', 'confirm_empty_period']} == {
+        'comparison_mode': 'replace_range', 'coverage_start': '2026-01-01', 'coverage_end': '2026-10-25', 'confirm_empty_period': True,
+    }
+    page.locator('#uploadCoverageEnd').fill('2026-10-26')
+    page.locator('#uploadCoverageEnd').dispatch_event('change')
+    assert page.evaluate('validationPlanId') is None
+    page.locator('#comparisonModeDropdown').select_option('correction')
+    assert page.locator('#uploadCoverageFields').is_hidden()
+    page.locator('#comparisonModeDropdown').select_option('replace_range')
+    assert page.locator('#uploadCoverageFields').is_visible()
+
+
+def test_replacement_popup_cancel_escape_and_confirm_only_send_on_approval(upload_formatting_page):
+    page = upload_formatting_page
+    imports = []
+    page.route('**/api/upload/import', lambda route: (
+        imports.append(route.request.post_data_json), route.fulfill(status=503, json={'detail': 'Archive unavailable'}),
+    ))
+    page.route('**/api/upload/progress/99', lambda route: route.fulfill(json={'status': 'archiving'}))
+    for choice in ['cancel', 'escape', 'confirm']:
+        page.evaluate('''() => {
+            lastChangePreview = {unchanged_count: 10, new_count: 2, changed_count: 0, missing_count: 3};
+            validationPlanId = 'ready-plan'; validationStatus = 'valid';
+            window.reviewFinished = false;
+            performImport({file_id: 99, comparison_mode: 'replace_range', coverage_start: '2026-04-01',
+                coverage_end: '2026-04-30', validation_plan_id: 'ready-plan'}).then(() => window.reviewFinished = true);
+        }''')
+        assert page.locator('#uploadReplacementReview').is_visible()
+        assert '2026-04-01 through 2026-04-30' in page.locator('#uploadReplacementScope').inner_text()
+        assert '3 superseded/removed' in page.locator('#uploadReplacementCounts').inner_text()
+        assert imports == []
+        if choice == 'escape':
+            page.keyboard.press('Escape')
+        else:
+            page.locator('#uploadReplacement' + choice.title()).click()
+        page.wait_for_function('window.reviewFinished')
+        assert page.locator('#uploadReplacementReview').is_hidden()
+    assert len(imports) == 1
+    assert imports[0]['validation_plan_id'] == 'ready-plan'
+    assert 'Archive unavailable' in page.locator('#statusMessage').inner_text()
+    assert page.evaluate('validationPlanId') == 'ready-plan'
+
+
+def test_review_identifies_date_corrections_safely_and_explains_empty_checkbox(upload_formatting_page):
+    page = upload_formatting_page
+    assert 'This report contains no transactions—clear the declared period' in page.locator('#uploadConfirmEmpty').locator('..').text_content()
+    page.evaluate('''() => {
+        lastChangePreview = {unchanged_count: 0, new_count: 2, missing_count: 2,
+            changed_voucher_count: 1, removed_voucher_count: 0,
+            date_moves: [{voucher_id: '<b>V1</b>', previous_dates: ['2026-03-31'], incoming_dates: ['2026-04-15']}]};
+        window.dateReviewClosed = false;
+        reviewUploadReplacement({coverage_start: '2026-04-01', coverage_end: '2026-04-30'})
+            .then(() => window.dateReviewClosed = true);
+    }''')
+    assert page.locator('#uploadReplacementDateMoves').is_visible()
+    assert '<b>V1</b>: 2026-03-31 → 2026-04-15' in page.locator('#uploadReplacementDateMoves').inner_text()
+    assert page.locator('#uploadReplacementDateMoves b').count() == 0
+    assert '1 changed vouchers' in page.locator('#uploadReplacementCounts').inner_text()
+    page.locator('#uploadReplacementCancel').click()
+    page.wait_for_function('window.dateReviewClosed')
+
+
 class UploadValidationCountTests(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
@@ -336,7 +601,8 @@ class UploadValidationCountTests(unittest.TestCase):
              "version": 1, "extract_date": "2026-01-03", "validation_status": "Pending", "verification_detail_id": None},
         ]
 
-        with patch("routers.import_export.execute_query_pg", return_value=existing):
+        # The scoped SQL returns the first two rows; OUTSIDE remains excluded.
+        with patch("routers.import_export.execute_query_pg", side_effect=lambda sql, *a, **kw: existing[1:2] if 'SELECT cd.id FROM' in sql else existing[:2]):
             result = compare_transactions(
                 1, 1, template_cols,
                 [
@@ -346,6 +612,7 @@ class UploadValidationCountTests(unittest.TestCase):
                 {"Voucher": "Voucher", "Amount": "Amount", "Date": "Date"},
                 mapping_dict,
                 comparison_mode="replace_range",
+                coverage_start="2026-01-01", coverage_end="2026-01-02",
                 date_delimiter="/",
                 date_order="DMY",
             )
@@ -1409,3 +1676,259 @@ def test_maintenance_storage_budget_reserves_recovery_below_locked_ceiling():
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@pytest.fixture
+def source_upload_metadata():
+    """Client-neutral voucher export, with cheque columns deliberately unmapped."""
+    from routers import import_export as uploads
+    columns = [{'id': i, 'column_name': name, 'data_type': kind} for i, (name, kind) in enumerate([
+        ('Voucher ID', 'Text'), ('Transaction Date', 'Date'), ('Account Detail', 'Text'),
+        ('Account Name', 'Text'), ('Voucher Detail', 'Text'),
+        ('Debit Amount', 'Numeric'), ('Credit Amount', 'Numeric'),
+    ], 1)]
+    mapping = dict(zip([c['column_name'] for c in columns],
+                       ['Voucher ID', 'Date', 'Account Code', 'Account Name', 'Voucher Detail', 'Debit', 'Credit']))
+    request = ImportRequest(client_id=5, template_id=1, file_id=99, sheet_name='Vouchers',
+        comparison_mode='replace_range', coverage_start='2026-01-01', coverage_end='2026-10-31',
+        date_delimiter='-', date_order='DMY', mappings=[
+            ColumnMapping(template_column_id=c['id'], template_column_name=c['column_name'],
+                          excel_column_name=mapping[c['column_name']]) for c in columns])
+    row = {'Voucher ID': 'V1', 'Date': '01-04-2026', 'Account Code': 'A', 'Account Name': 'Bank',
+           'Voucher Detail': 'Goods', 'Cheque #': '', 'Cheque Date': '', 'Debit': 10.01, 'Credit': 0}
+    return uploads, columns, mapping, request, row
+
+
+def test_unmapped_footer_blank_rows_multiplicity_and_original_positions(source_upload_metadata):
+    import pandas as pd
+    uploads, columns, mapping, request, row = source_upload_metadata
+    footer = {'Cheque Date': 'TOTAL', 'Debit': 20.01, 'Credit': 0}
+    token = uploads._source_row_numbers.set({})
+    try:
+        rows, controls = uploads._prepare_source_rows(pd.DataFrame([row, {}, row, footer]), request, columns, mapping)
+        assert len(rows) == 2 and rows[0] == rows[1]  # Legitimate identical lines survive.
+        assert [uploads._ledger_row_number(r, 0) for r in rows] == [2, 4]
+        assert all('Cheque Date' not in r for r in rows)
+        assert [(r['row_number'], r['kind']) for r in controls['excluded_rows']] == [(3, 'blank'), (5, 'total')]
+        assert len(controls['warnings']) == 1
+        assert '20.02' in controls['warnings'][0]['message'] and '0.01' in controls['warnings'][0]['message']
+        assert uploads.filter_excluded_rows(rows, [4]) == [rows[0]]
+        assert uploads.filter_excluded_rows(rows, [3, 5]) == rows
+    finally:
+        uploads._source_row_numbers.reset(token)
+    assert uploads._source_row_numbers.get() is None
+
+
+@pytest.mark.parametrize('change', [
+    {'Voucher ID': 'TOTAL'}, {'Voucher Detail': 'Grand Total'},
+    {'Voucher ID': 'TOTAL-SUPPLIES-1'},
+    {'Voucher ID': '', 'Cheque Date': 'TOTAL'},  # Still carries date/account evidence.
+    {'Voucher ID': '', 'Date': '', 'Account Code': '', 'Account Name': '',
+     'Voucher Detail': 'Actual incomplete entry', 'Cheque Date': 'TOTAL'},
+])
+def test_total_word_never_hides_transaction_evidence(source_upload_metadata, change):
+    import pandas as pd
+    uploads, columns, mapping, request, row = source_upload_metadata
+    actual = {**row, **change}
+    rows, controls = uploads._prepare_source_rows(pd.DataFrame([actual]), request, columns, mapping)
+    assert len(rows) == 1 and controls['excluded_count'] == 0
+
+
+@pytest.mark.parametrize('endpoint', ['validate_only', 'validate_and_import'])
+@pytest.mark.parametrize('invalid', [False, True])
+def test_source_controls_shared_by_validation_and_direct_import(source_upload_metadata, endpoint, invalid):
+    from contextlib import ExitStack
+    from unittest.mock import MagicMock
+    import pandas as pd
+    uploads, columns, mapping, request, row = source_upload_metadata
+    if endpoint == 'validate_and_import':
+        request.comparison_mode = 'correction'
+    source = [row, {}, {**row, 'Debit': 'bad' if invalid else 10.01},
+              {'Cheque Date': 'TOTAL', 'Debit': 20.02, 'Credit': 0}]
+    def read(sql, params=None):
+        if 'FROM templates' in sql:
+            return [{'id': 1, 'template_name': 'Transactions', 'rate_source': None}]
+        if 'FROM uploaded_files' in sql:
+            return [{'file_path': 'isolated.xlsx', 'file_name': 'isolated.xlsx', 'status': 'Pending'}]
+        if 'FROM clients' in sql:
+            return [{'id': 5}]
+        if 'FROM template_column_mappings' in sql:
+            return columns
+        return []
+    compare = MagicMock(side_effect=RuntimeError('comparison reached'))
+    guards = {name: MagicMock() for name in ['_create_validation_plan', 'execute_write_pg',
+        'execute_batch_pg', 'execute_batch_insert_with_ids_pg', '_persist_upload_summary', 'pg_transaction']}
+    with ExitStack() as stack:
+        replacements = {**guards, 'execute_query_pg': read, '_ensure_uploaded_file_hash': lambda *a: 'hash',
+            '_find_prior_import_with_same_hash': lambda *a: None, 'get_rate_precision': lambda: 0,
+            'get_database_storage_budget_pg': lambda *a: {'warning': False, 'blocked': False},
+            'compare_transactions': compare}
+        for name, value in replacements.items():
+            stack.enter_context(patch.object(uploads, name, value))
+        stack.enter_context(patch.object(uploads.pd, 'read_excel', return_value=pd.DataFrame(source)))
+        if invalid:
+            result = getattr(uploads, endpoint)(request)
+            assert result['status'] == 'validation_failed'
+            assert result['errors'][0]['row_number'] == 4
+            assert result['source_diagnostics']['excluded_count'] == 2
+            compare.assert_not_called()
+        else:
+            with pytest.raises(RuntimeError, match='comparison reached'):
+                getattr(uploads, endpoint)(request)
+            assert len(compare.call_args.kwargs['incoming_rows']) == 2
+    for guard in guards.values():
+        guard.assert_not_called()
+    assert uploads._source_row_numbers.get() is None
+
+
+def test_complete_missing_voucher_is_rejected_with_exact_row_and_no_plan(source_upload_metadata):
+    from contextlib import ExitStack
+    from unittest.mock import MagicMock
+    import pandas as pd
+    uploads, columns, mapping, request, row = source_upload_metadata
+    source = pd.DataFrame([row, {}, {**row, 'Voucher ID': ''}, {'Cheque Date': 'TOTAL', 'Debit': 20.02}])
+    def read(sql, params=None):
+        if 'FROM templates' in sql: return [{'id': 1, 'rate_source': None}]
+        if 'FROM uploaded_files' in sql: return [{'file_path': 'isolated.xlsx', 'status': 'Pending'}]
+        if 'FROM clients' in sql: return [{'id': 5}]
+        if 'FROM template_column_mappings' in sql: return columns
+        return []
+    blocked = {name: MagicMock() for name in ['compare_transactions', '_create_validation_plan', 'execute_write_pg', '_persist_upload_summary']}
+    with ExitStack() as stack:
+        for name, value in {**blocked, 'execute_query_pg': read, '_ensure_uploaded_file_hash': lambda *a: 'hash',
+                '_find_prior_import_with_same_hash': lambda *a: None, 'get_rate_precision': lambda: 0, 'get_database_storage_budget_pg': lambda *a: {'warning': False, 'blocked': False}}.items():
+            stack.enter_context(patch.object(uploads, name, value))
+        stack.enter_context(patch.object(uploads.pd, 'read_excel', return_value=source))
+        result = uploads.validate_only(request)
+    assert result['has_errors'] is True and result['can_import'] is False
+    assert result['rejected_rows'][0]['row_number'] == 4
+    assert result['rejected_rows'][0]['reasons'][0]['role'] == 'document_id'
+    for guard in blocked.values(): guard.assert_not_called()
+
+
+def test_issue_popup_safe_text_paging_focus_and_rejections(upload_formatting_page):
+    page = upload_formatting_page
+    page.evaluate("""() => showValidationErrors({error_count: 0, rejected_count: 102, total_rows: 102,
+        rejected_rows: Array.from({length: 102}, (_, i) => ({row_number: i + 2,
+            row_data: {'Voucher': '<img src=x onerror=alert(1)>'},
+            reasons: [{column: '<b>Date</b>', message: 'Required <script>source</script>'}]}))})""")
+    overlay = page.locator('#validationErrorOverlay')
+    assert overlay.locator('[role="dialog"]').is_visible()
+    assert overlay.locator('tbody tr').count() == 50
+    assert overlay.locator('img, script, b').count() == 0
+    assert '<b>Date</b>' in overlay.inner_text()
+    overlay.get_by_role('button', name='Next').click()
+    overlay.get_by_role('button', name='Next').click()
+    assert overlay.locator('tbody tr').count() == 2
+    assert '101–102 of 102' in overlay.inner_text()
+    page.keyboard.press('Escape')
+    assert overlay.count() == 0
+
+
+@pytest.mark.parametrize('kind', ['network', 'html', 'incomplete', 'expired', 'archive', 'structured'])
+def test_import_failures_explain_stage_and_preserve_safe_retry(upload_formatting_page, kind):
+    page = upload_formatting_page
+    def respond(route):
+        if kind == 'network': route.abort('connectionfailed')
+        elif kind == 'html': route.fulfill(status=502, body='<html>Proxy failure</html>', content_type='text/html')
+        elif kind == 'incomplete': route.fulfill(json={})
+        elif kind == 'expired': route.fulfill(status=401, json={'detail': 'Not authenticated'})
+        elif kind == 'archive': route.fulfill(status=400, json={'detail': 'Drive archive verification failed; no data was changed.'})
+        else: route.fulfill(status=400, json={'detail': {'message': 'Source row rejected', 'rejected_rows': [
+            {'row_number': 64881, 'reasons': [{'column': 'Voucher ID', 'message': 'Missing voucher'}]}]}})
+    page.route('**/api/upload/import', respond)
+    page.evaluate("""async () => { validationPlanId = 'ready-plan'; validationStatus = 'valid';
+        await performImport({file_id: 99, validation_plan_id: 'ready-plan'}); }""")
+    overlay = page.locator('#validationErrorOverlay')
+    assert 'Stage: Import' in overlay.inner_text()
+    assert page.evaluate('validationPlanId') == 'ready-plan'
+    if kind in ['network', 'html', 'incomplete']:
+        assert 'Import outcome unconfirmed' in overlay.inner_text()
+        assert 'receipt' in overlay.inner_text()
+        assert 'No data was changed' not in overlay.inner_text()
+    elif kind == 'expired':
+        assert 'Sign in again' in overlay.inner_text()
+    elif kind == 'archive':
+        assert 'Drive archive verification failed' in overlay.inner_text()
+    else:
+        assert '64881' in overlay.inner_text() and 'Missing voucher' in overlay.inner_text()
+
+
+def test_source_warning_separates_controls_and_discrepancy(upload_formatting_page):
+    page = upload_formatting_page
+    page.evaluate("""() => showSourceDiagnostics({source_diagnostics: {excluded_count: 1,
+        excluded_rows: [{row_number: 64881, kind: 'total', label: 'TOTAL'}],
+        warnings: [{row_number: 64881, column: 'Debit Amount', message: 'Difference 0.01. Amounts were not altered.'}]}})""")
+    assert page.locator('#validationErrorOverlay [data-severity="warning"]').count() == 1
+    assert '64881' in page.locator('#validationErrorOverlay').inner_text()
+    assert 'Amounts were not altered' in page.locator('#validationErrorOverlay').inner_text()
+
+
+@pytest.mark.parametrize('stage', ['templates', 'columns', 'mapping', 'dates', 'upload', 'saved'])
+def test_each_setup_stage_surfaces_server_detail(upload_formatting_page, stage):
+    page = upload_formatting_page
+    endpoint = {'templates': '/api/templates', 'columns': '/api/templates/1/upload-columns',
+        'mapping': '/api/upload/auto-map', 'dates': '/api/upload/date-preview',
+        'upload': '/api/import-excel', 'saved': '/api/upload/saved-mapping?client_id=5&template_id=1'}[stage]
+    page.route('**' + endpoint, lambda route: route.fulfill(status=400, json={'detail': 'Specific source issue <b>keep text</b>'}))
+    page.evaluate("""() => {
+        fileId = 99; selectedTemplateId = 1; currentSheet = 'Transactions';
+        currentMappings = [{column_id: 1, column_name: 'Transaction Date', data_type: 'Date', excel_column: 'Date'}];
+    }""")
+    actions = {'templates': 'loadTemplates()', 'columns': 'selectTemplate(1)',
+        'mapping': 'autoMapColumns()', 'dates': 'refreshDateFormatPreview()',
+        'upload': "(async () => { selectedFile = new File(['test'], 'test.xlsx'); await uploadFileToServer(selectedFile); })()",
+        'saved': 'applySavedMapping()'}
+    page.evaluate('async () => { await ' + actions[stage] + '; }')
+    overlay = page.locator('#validationErrorOverlay')
+    assert 'Specific source issue <b>keep text</b>' in overlay.inner_text()
+    assert overlay.locator('b').count() == 0
+
+
+def test_corrupt_local_workbook_uses_file_reading_popup_and_clears_old_plan(upload_formatting_page):
+    page = upload_formatting_page
+    page.evaluate("""async () => {
+        fileId = 88; validationPlanId = 'old-plan'; validationStatus = 'valid';
+        await handleFile(new File([new Uint8Array([0x50, 0x4b, 3, 4, 0])], 'damaged.xlsx',
+            {type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+    }""")
+    page.locator('#validationErrorOverlay').wait_for()
+    assert 'File reading' in page.locator('#validationErrorOverlay').inner_text()
+    assert page.evaluate('fileId') is None
+    assert page.evaluate('validationPlanId') is None
+
+
+def test_progress_failure_is_advisory_once_and_does_not_cancel_import(upload_formatting_page):
+    page = upload_formatting_page
+    page.route('**/api/upload/import-status/99', lambda route: route.fulfill(status=503, json={'detail': 'Progress unavailable'}))
+    page.evaluate('() => pollImportProgress(99)')
+    overlay = page.locator('#validationErrorOverlay')
+    overlay.wait_for()
+    assert 'Stage: Import progress' in overlay.inner_text()
+    assert 'still running' in overlay.inner_text()
+    page.locator('#validationErrorCloseBtn').click()
+    # Let two more real polling cycles run; the advisory dialog must stay closed.
+    page.wait_for_timeout(2200)
+    assert overlay.count() == 0
+    page.evaluate('() => { clearInterval(importProgressPollInterval); importProgressPollInterval = null; }')
+
+
+@pytest.mark.parametrize('label_header', ['Cheque Date', 'Voucher ID', 'Date', 'Account Code', 'Voucher Detail'])
+def test_structurally_empty_total_can_be_labelled_in_any_source_column(source_upload_metadata, label_header):
+    import pandas as pd
+    uploads, columns, mapping, request, row = source_upload_metadata
+    token = uploads._source_row_numbers.set({})
+    try:
+        rows, controls = uploads._prepare_source_rows(pd.DataFrame([row, {label_header: 'Grand Total:', 'Debit': 10.01, 'Credit': 0}]), request, columns, mapping)
+        assert len(rows) == 1 and controls['excluded_count'] == 1
+        assert controls['warnings'] == []
+    finally:
+        uploads._source_row_numbers.reset(token)
+
+
+def test_import_summary_explains_line_preservation_correctly(upload_formatting_page):
+    page = upload_formatting_page
+    page.evaluate("() => showImportSummary({status: 'success', total_rows: 685, imported_count: 685})")
+    summary = page.locator('#importSummaryOverlay').inner_text()
+    assert 'Every valid line is preserved' in summary
+    assert 'one transaction per voucher ID' not in summary

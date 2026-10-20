@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Body, Query, Response
-from database import execute_query_pg, execute_write_pg, log_audit, get_raw_conn_pg, release_raw_conn_pg
+from database import execute_query_pg, execute_write_pg, log_audit, get_raw_conn_pg, release_raw_conn_pg, pg_transaction
 from psycopg2.extras import Json
 import json
 from typing import List, Optional
@@ -220,12 +220,55 @@ class TemplateCreate(BaseModel):
     created_by: str = "Admin"
     rate_source: str | None = None
     has_subtotals_by_default: bool = False
+    data_purpose: str = "standard"
+    ledger_columns: dict[str, int] = {}
 
 class TemplateUpdate(BaseModel):
     template_name: str
     selected_columns: List[int]
     rate_source: str | None = None
     has_subtotals_by_default: bool = False
+    # Older template editors must preserve ledger configuration when omitted.
+    data_purpose: Optional[str] = None
+    ledger_columns: Optional[dict[str, int]] = None
+
+
+def validate_ledger_template_configuration(purpose, roles, selected_columns):
+    """Bind accounting roles to existing column IDs, not client/header names."""
+    if purpose not in {"standard", "account_ledger"}:
+        raise HTTPException(400, "Invalid template data purpose")
+    if purpose == "standard":
+        if roles:
+            raise HTTPException(400, "Ledger column roles require an Account Ledger template")
+        return {}
+    required = {"voucher", "date", "description", "debit", "credit", "balance"}
+    if set(roles) != required or len(set(roles.values())) != len(required):
+        raise HTTPException(400, "Configure distinct Voucher, Date, Description, Debit, Credit and Balance columns")
+    if not selected_columns or selected_columns[0] != roles["voucher"]:
+        raise HTTPException(400, "The ledger Voucher column must remain the first template column")
+    if not set(roles.values()).issubset(set(selected_columns)):
+        raise HTTPException(400, "Ledger column roles must belong to the selected template columns")
+    columns = execute_query_pg(
+        "SELECT id, data_type FROM master_columns WHERE id = ANY(%s) AND is_active = TRUE",
+        (list(roles.values()),),
+    )
+    types = {row["id"]: row["data_type"] for row in columns}
+    allowed = {"voucher": {"Text"}, "date": {"Date"}, "description": {"Text"},
+               "debit": {"Numeric"}, "credit": {"Numeric"}, "balance": {"Text", "Numeric"}}
+    if any(types.get(column) not in allowed[role] for role, column in roles.items()):
+        raise HTTPException(400, "Ledger column data types are incompatible; do not change shared master columns")
+    return dict(roles)
+
+
+def _guard_ledger_column_change(template_id, selected_columns):
+    rows = execute_query_pg(
+        "SELECT data_purpose, ledger_columns FROM templates WHERE id = %s FOR UPDATE", (template_id,)
+    )
+    if rows and rows[0].get("data_purpose") == "account_ledger":
+        roles = rows[0].get("ledger_columns") or "{}"
+        validate_ledger_template_configuration(
+            "account_ledger", json.loads(roles) if isinstance(roles, str) else roles, selected_columns
+        )
 
 @router.get("/api/templates")
 def get_templates(
@@ -246,7 +289,7 @@ def get_templates(
             return cached[0]
         return cached
 
-    base_query = "SELECT id, template_name, created_by, created_date, is_active, rate_source, has_subtotals_by_default FROM templates WHERE is_active = TRUE"
+    base_query = "SELECT id, template_name, created_by, created_date, is_active, rate_source, has_subtotals_by_default, data_purpose, ledger_columns FROM templates WHERE is_active = TRUE"
     if limit is not None:
         total = execute_query_pg("SELECT COUNT(*) as cnt FROM templates WHERE is_active = TRUE")[0]["cnt"]
         response.headers["X-Total-Count"] = str(total)
@@ -254,6 +297,7 @@ def get_templates(
     else:
         templates = execute_query_pg(base_query + " ORDER BY template_name")
     for t in templates:
+        t['ledger_columns'] = json.loads(t['ledger_columns']) if isinstance(t.get('ledger_columns'), str) else t.get('ledger_columns') or {}
         mappings = execute_query_pg(
             """
             SELECT m.id, m.column_name, m.data_type, p.sort_order
@@ -278,12 +322,13 @@ def get_template(template_id: int):
     if cached is not None:
         return cached
     result = execute_query_pg(
-        "SELECT id, template_name, has_subtotals_by_default FROM templates WHERE id = %s AND is_active = TRUE",
+        "SELECT id, template_name, has_subtotals_by_default, data_purpose, ledger_columns FROM templates WHERE id = %s AND is_active = TRUE",
         (template_id,)
     )
     if not result:
         raise HTTPException(404, "Template not found")
     template = result[0]
+    template['ledger_columns'] = json.loads(template['ledger_columns']) if isinstance(template.get('ledger_columns'), str) else template.get('ledger_columns') or {}
     mappings = execute_query_pg(
         """
         SELECT m.column_name, m.data_type
@@ -322,10 +367,12 @@ def create_template(template: TemplateCreate):
     if not template.selected_columns:
         raise HTTPException(400, "Select at least one column")
 
+    roles = validate_ledger_template_configuration(template.data_purpose, template.ledger_columns, template.selected_columns)
+
     resolved_rate_source = resolve_rate_source(template.template_name, template.rate_source)
     template_id = execute_write_pg(
-        "INSERT INTO templates (template_name, created_by, rate_source, has_subtotals_by_default) VALUES (%s, %s, %s, %s) RETURNING id",
-        (template.template_name, template.created_by, resolved_rate_source, template.has_subtotals_by_default)
+        "INSERT INTO templates (template_name, created_by, rate_source, has_subtotals_by_default, data_purpose, ledger_columns) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+        (template.template_name, template.created_by, resolved_rate_source, template.has_subtotals_by_default, template.data_purpose, json.dumps(roles))
     )
 
     for idx, col_id in enumerate(template.selected_columns):
@@ -340,28 +387,41 @@ def create_template(template: TemplateCreate):
 
 @router.put("/api/templates/{template_id}")
 def update_template(template_id: int, template: TemplateUpdate):
-    existing = execute_query_pg("SELECT id FROM templates WHERE id = %s AND is_active = TRUE", (template_id,))
-    if not existing:
-        raise HTTPException(404, "Template not found")
-    duplicate = execute_query_pg("SELECT id FROM templates WHERE template_name = %s AND id != %s", (template.template_name, template_id))
-    if duplicate:
-        raise HTTPException(400, "Template name already exists")
+    with pg_transaction():
+        existing = execute_query_pg("SELECT id, data_purpose, ledger_columns FROM templates WHERE id = %s AND is_active = TRUE FOR UPDATE", (template_id,))
+        if not existing:
+            raise HTTPException(404, "Template not found")
+        duplicate = execute_query_pg("SELECT id FROM templates WHERE template_name = %s AND id != %s", (template.template_name, template_id))
+        if duplicate:
+            raise HTTPException(400, "Template name already exists")
 
-    resolved_rate_source = resolve_rate_source(template.template_name, template.rate_source)
-    execute_write_pg(
-        "UPDATE templates SET template_name = %s, rate_source = %s, has_subtotals_by_default = %s WHERE id = %s",
-        (template.template_name, resolved_rate_source, template.has_subtotals_by_default, template_id)
-    )
-    execute_write_pg("DELETE FROM template_column_mappings WHERE template_id = %s", (template_id,))
-    for idx, col_id in enumerate(template.selected_columns):
+        old_purpose = existing[0].get("data_purpose", "standard")
+        old_roles = existing[0].get("ledger_columns") or {}
+        if isinstance(old_roles, str):
+            old_roles = json.loads(old_roles)
+        purpose = template.data_purpose if template.data_purpose is not None else old_purpose
+        roles = template.ledger_columns if template.ledger_columns is not None else old_roles
+        roles = validate_ledger_template_configuration(purpose, roles, template.selected_columns)
+        if purpose != old_purpose or roles != old_roles:
+            if (execute_query_pg("SELECT id FROM client_data WHERE template_id = %s LIMIT 1", (template_id,))
+                    or execute_query_pg("SELECT id FROM uploaded_files WHERE template_id = %s AND status = 'Imported' AND ledger_account_code IS NOT NULL LIMIT 1", (template_id,))):
+                raise HTTPException(409, "A template with imported data cannot change its ledger purpose or column roles")
+
+        resolved_rate_source = resolve_rate_source(template.template_name, template.rate_source)
         execute_write_pg(
-            "INSERT INTO template_column_mappings (template_id, column_id, sort_order) VALUES (%s, %s, %s)",
-            (template_id, col_id, idx)
+            "UPDATE templates SET template_name = %s, rate_source = %s, has_subtotals_by_default = %s, data_purpose = %s, ledger_columns = %s WHERE id = %s",
+            (template.template_name, resolved_rate_source, template.has_subtotals_by_default, purpose, json.dumps(roles), template_id)
         )
+        execute_write_pg("DELETE FROM template_column_mappings WHERE template_id = %s", (template_id,))
+        for idx, col_id in enumerate(template.selected_columns):
+            execute_write_pg(
+                "INSERT INTO template_column_mappings (template_id, column_id, sort_order) VALUES (%s, %s, %s)",
+                (template_id, col_id, idx)
+            )
 
-    log_audit("Admin", "Update", "Templates", f"Updated template: {template.template_name}")
-    invalidate_template_cache(template_id)
-    return {"message": f"Template '{template.template_name}' updated successfully"}
+        log_audit("Admin", "Update", "Templates", f"Updated template: {template.template_name}")
+        invalidate_template_cache(template_id)
+        return {"message": f"Template '{template.template_name}' updated successfully"}
 
 @router.delete("/api/templates/{template_id}")
 def delete_template(template_id: int):
@@ -416,45 +476,56 @@ def get_template_upload_columns(template_id: int):
         """,
         (template_id,)
     )
-    result = {"template_id": template_id, "columns": mappings, "total_columns": len(mappings)}
+    metadata = execute_query_pg("SELECT data_purpose, ledger_columns FROM templates WHERE id = %s", (template_id,))
+    result = {"template_id": template_id, "columns": mappings, "total_columns": len(mappings),
+              "data_purpose": metadata[0].get("data_purpose", "standard"),
+              "ledger_columns": metadata[0].get("ledger_columns") or "{}"}
+    if isinstance(result["ledger_columns"], str):
+        result["ledger_columns"] = json.loads(result["ledger_columns"])
     _set_cached_template_response(cache_key, result)
     return result
 
 @router.post("/api/templates/{template_id}/reorder")
 def reorder_template_columns(template_id: int, column_ids: List[int] = Body(...)):
     """Update sort_order for all columns of a template."""
-    existing = execute_query_pg("SELECT id FROM templates WHERE id = %s AND is_active = TRUE", (template_id,))
-    if not existing:
-        raise HTTPException(404, "Template not found")
-    for idx, col_id in enumerate(column_ids):
-        execute_write_pg(
-            "UPDATE template_column_mappings SET sort_order = %s WHERE template_id = %s AND column_id = %s",
-            (idx, template_id, col_id)
-        )
-    log_audit("Admin", "Reorder", "Templates", f"Reordered columns for template ID {template_id}")
-    invalidate_template_cache(template_id)
-    return {"message": "Order updated successfully"}
+    with pg_transaction():
+        existing = execute_query_pg("SELECT id FROM templates WHERE id = %s AND is_active = TRUE", (template_id,))
+        if not existing:
+            raise HTTPException(404, "Template not found")
+        _guard_ledger_column_change(template_id, column_ids)
+        for idx, col_id in enumerate(column_ids):
+            execute_write_pg(
+                "UPDATE template_column_mappings SET sort_order = %s WHERE template_id = %s AND column_id = %s",
+                (idx, template_id, col_id)
+            )
+        log_audit("Admin", "Reorder", "Templates", f"Reordered columns for template ID {template_id}")
+        invalidate_template_cache(template_id)
+        return {"message": "Order updated successfully"}
 
 @router.delete("/api/templates/{template_id}/columns/{column_id}")
 def remove_template_column(template_id: int, column_id: int):
     """Remove a specific column mapping from a template."""
-    existing = execute_query_pg("SELECT id FROM templates WHERE id = %s AND is_active = TRUE", (template_id,))
-    if not existing:
-        raise HTTPException(404, "Template not found")
-    # RETURNING id (Postgres cutover fix): execute_write_pg only returns a value when
-    # the query has RETURNING - SQLite's version relied on cursor.lastrowid after a
-    # DELETE, which is meaningless (leftover from the last INSERT, unrelated to this
-    # delete), so the old "if deleted == 0" check was already latent-broken. Checking
-    # "is None" against a real RETURNING id makes this check correct for the first time.
-    deleted_id = execute_write_pg(
-        "DELETE FROM template_column_mappings WHERE template_id = %s AND column_id = %s RETURNING id",
-        (template_id, column_id)
-    )
-    if deleted_id is None:
-        raise HTTPException(404, "Column mapping not found")
-    log_audit("Admin", "RemoveColumn", "Templates", f"Removed column {column_id} from template {template_id}")
-    invalidate_template_cache(template_id)
-    return {"message": "Column removed from template"}
+    with pg_transaction():
+        existing = execute_query_pg("SELECT id FROM templates WHERE id = %s AND is_active = TRUE", (template_id,))
+        if not existing:
+            raise HTTPException(404, "Template not found")
+        current_columns = get_cached_template_columns(template_id)
+        _guard_ledger_column_change(template_id, [row['column_id'] for row in current_columns if row['column_id'] != column_id])
+        # RETURNING id (Postgres cutover fix): execute_write_pg only returns a value when
+        # the query has RETURNING - SQLite's version relied on cursor.lastrowid after a
+        # DELETE, which is meaningless (leftover from the last INSERT, unrelated to this
+        # delete), so the old "if deleted == 0" check was already latent-broken. Checking
+        # "is None" against a real RETURNING id makes this check correct for the first time.
+        deleted_id = execute_write_pg(
+            "DELETE FROM template_column_mappings WHERE template_id = %s AND column_id = %s RETURNING id",
+            (template_id, column_id)
+        )
+        if deleted_id is None:
+            raise HTTPException(404, "Column mapping not found")
+        log_audit("Admin", "RemoveColumn", "Templates", f"Removed column {column_id} from template {template_id}")
+        invalidate_template_cache(template_id)
+        return {"message": "Column removed from template"}
+
 @router.get("/api/templates/by-name/{template_name}")
 def get_template_by_name(template_name: str):
     """
@@ -561,9 +632,10 @@ def import_backup(data: BackupData = Body(...)):
         # Restore templates
         for tpl in data.templates:
             cur.execute(
-                "INSERT INTO templates (id, template_name, created_by, created_date, is_active) "
-                "OVERRIDING SYSTEM VALUE VALUES (%s, %s, %s, %s, %s)",
-                (tpl['id'], tpl['template_name'], tpl.get('created_by', 'Admin'), tpl.get('created_date'), bool(tpl.get('is_active', True)))
+                "INSERT INTO templates (id, template_name, created_by, created_date, is_active, data_purpose, ledger_columns) "
+                "OVERRIDING SYSTEM VALUE VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (tpl['id'], tpl['template_name'], tpl.get('created_by', 'Admin'), tpl.get('created_date'), bool(tpl.get('is_active', True)),
+                 tpl.get('data_purpose', 'standard'), tpl.get('ledger_columns') if isinstance(tpl.get('ledger_columns'), str) else json.dumps(tpl.get('ledger_columns') or {}))
             )
         if data.templates:
             cur.execute("SELECT setval(pg_get_serial_sequence('templates', 'id'), (SELECT MAX(id) FROM templates), true)")
@@ -601,8 +673,9 @@ def import_backup(data: BackupData = Body(...)):
         # Restore uploaded_files (must come before client_data - its FK target)
         for uf in data.uploaded_files:
             cur.execute(
-                "INSERT INTO uploaded_files (id, file_name, file_path, file_type, record_count, status, upload_date, client_id) "
-                "OVERRIDING SYSTEM VALUE VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                "INSERT INTO uploaded_files (id, file_name, file_path, file_type, record_count, status, upload_date, client_id, template_id, "
+                "ledger_account_code, ledger_account_name, ledger_period_start, ledger_period_end, ledger_opening_balance, ledger_closing_balance, ledger_evidence) "
+                "OVERRIDING SYSTEM VALUE VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     uf['id'],
                     uf['file_name'],
@@ -612,6 +685,10 @@ def import_backup(data: BackupData = Body(...)):
                     uf.get('status', 'Pending'),
                     uf.get('upload_date'),
                     uf.get('client_id'),
+                    uf.get('template_id'),
+                    uf.get('ledger_account_code'), uf.get('ledger_account_name'),
+                    uf.get('ledger_period_start'), uf.get('ledger_period_end'),
+                    uf.get('ledger_opening_balance'), uf.get('ledger_closing_balance'), uf.get('ledger_evidence'),
                 )
             )
         if data.uploaded_files:
@@ -629,8 +706,8 @@ def import_backup(data: BackupData = Body(...)):
         for row in data.client_data:
             cur.execute(
                 """
-                INSERT INTO client_data (id, client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_at, created_by, is_deleted, version)
-                OVERRIDING SYSTEM VALUE VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO client_data (id, client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_at, created_by, is_deleted, version, source_identity, source_fingerprint, document_group_id)
+                OVERRIDING SYSTEM VALUE VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     row['id'],
@@ -643,7 +720,7 @@ def import_backup(data: BackupData = Body(...)):
                     row.get('created_at'),
                     row.get('created_by', 'Analyst'),
                     bool(row.get('is_deleted', False)),
-                    row.get('version', 1)
+                    row.get('version', 1), row.get('source_identity'), row.get('source_fingerprint'), row.get('document_group_id')
                 )
             )
         if data.client_data:

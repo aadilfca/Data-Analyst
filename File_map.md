@@ -9,8 +9,8 @@ This document lists all source files in the project, grouped by directory, with 
 | `CHANGELOG_ARCHIVE.md` | Detailed forensic write-ups of past phases (verification steps, test output) — only consulted when a phase touches an already-logged file/pattern. |
 | `KNOWN_ISSUES.md` | Findings log for the Code Health Review protocol defined in `CLAUDE.md` — one row per finding (`Date \| Module \| Finding \| Severity`, severity being Fix / Feature / Defer). Append-only; kept out of `CLAUDE.md` because it grows on every review, same reasoning as `CHANGELOG_ARCHIVE.md`. Starts empty. |
 | `CLINE.md` | Rules file for a separate AI tool, Cline (FIND/REPLACE code format, file-access/communication style) — not read by Claude Code. Appears to predate the current CLAUDE.md-driven workflow: it tells the agent to auto-determine affected files without asking, which conflicts with this project's current two-hard-stops rule in CLAUDE.md's Workflow rules. Kept only for whichever sessions still use Cline directly. |
-| `database.py` | SQLite/PostgreSQL schema, migrations, audit logging, pooled Postgres helpers, and prepared Cashflows read-model tables. |
-| `.env.example` | Committed template documenting the `DATABASE_URL` (Supabase connection string) and optional `PG_POOL_MIN`/`PG_POOL_MAX` env vars the Postgres connection layer reads (defaults 3 / 15). Copy to `.env` (git-ignored) and fill in real values. |
+| `database.py` | SQLite/PostgreSQL schemas and migrations, compact ledger/upload receipts, audit logging and pooled PostgreSQL helpers. |
+| `.env.example` | Database/pool settings, app Google OAuth/archive folder credentials and protected external recovery-directory configuration; real values remain untracked. |
 | `main.py` | FastAPI entry point: static mount, domain-router registration, global error logging, and direct Uvicorn launch. |
 | `storage_cleanup.py` | Command-line entry point for Storage Cleanup preview; apply requires an explicit fresh hash and exact confirmation phrase. VACUUM/compaction remains deferred. |
 | `requirements.txt` | Python dependencies: FastAPI, Uvicorn, Pandas, Pydantic, OpenPyXL, python-multipart, xlrd (legacy `.xls` reads for Trial Balance), bcrypt (password hashing), psycopg2-binary + python-dotenv (Supabase/Render migration, Phase 2 of 8 — Postgres driver + local `.env` loading). |
@@ -34,7 +34,7 @@ This document lists all source files in the project, grouped by directory, with 
 | `services/cashflow_voucher_canonicalization.py`, `services/cashflow_voucher_occurrence_store.py`, `services/cashflow_preparation.py` | Audit-preserving voucher decisions, occurrence persistence, and full/incremental upload, category, and treasury revisioned prepared Cashflows lines/rollups. |
 | `services/reconciliation_balance_source.py` | Normalizes stored opening/month-end balance inputs and reports missing, duplicate, invalid, or out-of-period reconciliation evidence. |
 | `services/reconciliation_xlsx.py` | OpenPyXL exporter for professional Bank/Cash monthly summaries, schedules, review controls, cross-checks, and reconciliation proofs. |
-| `services/storage_cleanup.py` | PostgreSQL storage preview plus one-transaction, protected-data cleanup for approved logs, retired unlinked rows, deleted upload metadata, stale presence, and expired sessions. |
+| `services/storage_cleanup.py`, `services/upload_lifecycle.py`, `services/drive_archive.py`, `services/upload_observation_report.py` | Protected cleanup, scoped voucher/date comparisons, complete-voucher Excel observations, deterministic recovery ZIPs, verified Drive archives and compact receipts. |
 | `services/cash_bank_classification.py` | Versioned Cash/Bank derived transaction-line builder, affected-account reporting, and controlled SQLite/PostgreSQL backfill service; never mutates raw Client Data. |
 
 ## Operations Scripts (`scripts/`)
@@ -60,7 +60,7 @@ This document lists all source files in the project, grouped by directory, with 
 ### HTML Pages
 | File | Purpose |
 |------|---------|
-| `login.html` | Login page (Auth module, Phase 4 of 7) — username/password form, no navbar/`client_context.js` (runs before any session exists). On success redirects to `client_select.html`; on 401/403 shows one generic error message. Loads `loading_ui.js` before `login.js` (Shared Loading UI, Phase 2 of 6). |
+| `login.html`, `app_info.html`, `privacy.html`, `terms.html` | Login and public app/policy pages; login links expose application, privacy, archive and contact information without a session. |
 | `client_select.html` | Client Cards landing page (Auth module, Phase 5 of 7) — reached after login. Search bar + card grid (reusing `.module-card`/`.module-grid` styling) of every active client, no navbar/`client_context.js` (no client selected yet). Carries a lightweight header (`#clientSelectNav`, shared `.firm-nav-*` classes, filled by its own script — see `client_select.js`) plus an admin-only `⚙️` gear icon linking to `settings.html` (Admin area, Phase 7 of 8). |
 | `index.html` | Main dashboard — module cards grouped into Audit work / Client data / Administration sections, plus quick stats; Client Settings is not an active dashboard module. |
 | `clients.html` | Manage Clients — sortable/searchable table, add/edit modal, deactivate/restore, and a ⚙️ cogwheel link to each client's Client Settings page. Firm-level page: carries the firm-level header (`#firmNav`, rendered by `client_context.js`'s `renderFirmLevelNav()`) and the shared Admin tab strip (`#firmTabs`), not the client-scoped navbar. |
@@ -121,14 +121,14 @@ This document lists all source files in the project, grouped by directory, with 
 
 | File | Purpose |
 |------|---------|
-| `style.css` | All application styling — navbar (incl. quick-navigation menu, plus the separate `.firm-navbar`/`.firm-nav-brand`/`.firm-nav-area` firm-level header and its `.firm-tabs`/`.firm-tab` Admin tab strip), module grid, tables, modals (each modal's `.modal-content`/`.modal-header` scoped per-id, not shared base classes), the Upload page's grids/popovers, the Data Bank's datasets table/calendar/preview, and the Verification module's voucher-line grid, Supporting-Document modal, and popovers. |
+| `style.css`, `public_info.css` | Shared application styling and independently scoped public-page/login-link styling. |
 
 ## Tests (`tests/`)
 
 | File | Purpose |
 |------|---------|
 | `test_app_smoke.py` | Boots the real app via FastAPI's `TestClient` against a temp SQLite DB and proves routers respond (dashboard page + `/api/clients`). |
-| `test_upload_validation_counts.py`, `test_import_duplicate_gates.py` | Verifies upload delta counts, stable identity gates, duplicate-line rejection, and repeated-upload behavior. |
+| `test_upload_validation_counts.py`, `test_import_duplicate_gates.py`, `test_account_ledger_foundation.py`, `test_upload_lifecycle.py`, `test_upload_observation_report.py` | Upload/ledger isolation, complete vouchers, date corrections, Excel evidence, identities, coverage/review UI, archives, concurrency, rollback and retries. |
 | `test_data_deletion.py` | Verifies guarded permanent source-data deletion scope, preview freshness, protected references, deletion order, and route error handling. |
 | `test_cash_bank_transaction_classification.py`, `test_cash_bank_transaction_backfill.py`, `test_cash_bank_transaction_upload_classification.py` | Verifies the versioned Cash/Bank derived layer, controlled backfill, upload-time classification, idempotence, rollback, and raw-data preservation. |
 | `test_verification_indexes.py`, `test_verification_account_sets.py` | Verifies cashbook lookup indexing, simplified and legacy routing, JV Treasury legs, transfers, prefix fallback, Cash movement signs, explicit debit/credit rules for all non-Treasury workstreams, signed preview/session presentation, imbalance detection, and Treasury exclusion. |

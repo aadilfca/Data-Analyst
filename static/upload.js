@@ -41,6 +41,9 @@ const clearMappingBtn = getElement('clearMappingBtn');
 
 const modeActions = getElement('modeActions');
 const comparisonModeDropdown = getElement('comparisonModeDropdown');
+const uploadCoverageStart = getElement('uploadCoverageStart');
+const uploadCoverageEnd = getElement('uploadCoverageEnd');
+const uploadConfirmEmpty = getElement('uploadConfirmEmpty');
 
 const downloadBtn = getElement('downloadBtn');
 const importBtn = getElement('importBtn');
@@ -76,6 +79,7 @@ let templateColumns = [];
 let sheetNames = [];
 let currentSheet = null;
 let workbookData = null;
+let uploadWorkbookDate1904 = false;
 let isProcessing = false;
 // Phase 3B: one Upload action (validation or import) owns the button and shared cursor for its
 // complete async sequence while the rest of the page remains usable.
@@ -180,6 +184,8 @@ function saveUploadSessionState() {
         dateDelimiter: selectedDateDelimiter,
         dateOrder: selectedDateOrder,
         comparisonMode: comparisonModeDropdown ? comparisonModeDropdown.value : 'correction',
+        coverageStart: uploadCoverageStart?.value || '',
+        coverageEnd: uploadCoverageEnd?.value || '',
         excludedRowNumbers: Array.from(excludedRowNumbers),
         // Lightweight snapshot for the read-only "locked preview" a restored session shows
         // before the file is re-selected (renderRestorePreview()) -- just the column-name/type/
@@ -244,6 +250,9 @@ async function restoreUploadSessionState() {
     if (comparisonModeDropdown && (state.comparisonMode === 'correction' || state.comparisonMode === 'replace_range')) {
         comparisonModeDropdown.value = state.comparisonMode;
     }
+    if (uploadCoverageStart) uploadCoverageStart.value = state.coverageStart || '';
+    if (uploadCoverageEnd) uploadCoverageEnd.value = state.coverageEnd || '';
+    updateUploadCoverageVisibility();
 
     // Stash Sheet/row-exclusion targets for when the user re-selects a file.
     pendingRestoreSheetName = state.sheetName || null;
@@ -426,17 +435,28 @@ function updateImportProgressBar(current, total) {
 }
 
 function pollImportProgress(fileId) {
-    importProgressPollInterval = setInterval(async () => {
+    let warned = false;
+    clearInterval(importProgressPollInterval);
+    const pollId = setInterval(async () => {
         try {
-            const res = await fetch(API_BASE + '/api/upload/import-status/' + fileId);
+            const res = await fetchUpload(API_BASE + '/api/upload/import-status/' + fileId);
             if (!res.ok) return;
             const status = await res.json();
+            if (importProgressPollInterval !== pollId) return;
             updateImportProgressBar(status.current || 0, status.total || 0);
+            if (status.status === 'archiving') {
+                const label = document.getElementById('importProgressLabel');
+                if (label) label.textContent = 'Saving and verifying the external archive before replacement…';
+            }
         } catch (e) {
-            // Silently skip a failed poll tick -- the next tick (or the final import
-            // response itself) will resolve the UI either way.
+            if (!warned && importProgressPollInterval === pollId) {
+                warned = true;
+                showUploadIssue({stage: 'Import progress', severity: 'warning', message: e.message,
+                    action: 'Live progress is temporarily unavailable. The import request is still running; wait for its final result before retrying.'});
+            }
         }
     }, 1000);
+    importProgressPollInterval = pollId;
 }
 
 function showStatus(msg, type = 'info', extra = '') {
@@ -450,6 +470,108 @@ function showStatus(msg, type = 'info', extra = '') {
     if (statusExtra) statusExtra.textContent = '';
     statusBar.className = 'status-bar ' + type;
     statusBar.style.display = 'flex';
+}
+
+// All upload API failures carry a stage and a safe explanation, including
+// non-JSON proxy responses. Mutations are never automatically replayed here.
+function uploadRequestStage(url) {
+    const path = String(url).split('?')[0];
+    if (path.includes('import-status')) return 'Import progress';
+    if (path.endsWith('/import')) return 'Import';
+    if (path.includes('import-excel')) return 'File upload';
+    if (path.includes('date-preview')) return 'Date preview';
+    if (path.includes('validate')) return 'Validation';
+    if (path.includes('mapping') || path.includes('auto-map')) return 'Column mapping';
+    return 'Template selection';
+}
+
+async function fetchUpload(url, options) {
+    const stage = uploadRequestStage(url);
+    let response;
+    try {
+        response = await fetch(url, options);
+        let result;
+        try { result = await response.json(); } catch (_) {
+            throw new Error(response.status === 401 || response.redirected
+                ? 'Your session has expired. Sign in again.'
+                : `The server returned an unreadable response (HTTP ${response.status}).`);
+        }
+        if (!response.ok || result === null || typeof result !== 'object' || result.status === 'error' || result.success === false) {
+            const error = new Error(response.status === 401
+                ? 'Your session has expired. Sign in again.'
+                : uploadFailureMessage(result, `Request failed (HTTP ${response.status}).`));
+            error.result = result;
+            throw error;
+        }
+        const path = String(url).split('?')[0];
+        const invalidShape = (stage === 'Import' && !['success', 'validation_failed'].includes(result.status))
+            || (stage === 'Validation' && typeof result.can_import !== 'boolean' && typeof result.has_errors !== 'boolean')
+            || (stage === 'Date preview' && !Array.isArray(result.samples))
+            || (path.endsWith('/templates') && !Array.isArray(result))
+            || (path.endsWith('/upload-columns') && !Array.isArray(result.columns))
+            || (path.endsWith('/auto-map') && (!Array.isArray(result.mappings) || !Array.isArray(result.excel_headers)));
+        if (invalidShape) throw new Error('The server response is incomplete. Retry this stage or retain the message for support.');
+        return {ok: response.ok, status: response.status, json: async () => result};
+    } catch (error) {
+        error.stage = stage;
+        error.httpStatus = response?.status;
+        error.outcomeUnknown = stage === 'Import' && (!response || response.status >= 500 || response.ok);
+        if (!response) error.message = 'The connection to the server was lost or unavailable.';
+        throw error;
+    }
+}
+
+function uploadFailureMessage(result, fallback) {
+    const candidates = [result?.detail?.message, result?.detail, result?.error?.http_detail,
+        result?.error?.user_message, result?.message];
+    const message = candidates.find(value => typeof value === 'string' && value.trim());
+    if (message) return message;
+    if (Array.isArray(result?.detail)) {
+        return result.detail.map(item => item.msg).filter(Boolean).join('; ') || fallback;
+    }
+    return fallback;
+}
+
+function showUploadFailure(message, stage = 'Upload', error = null) {
+    const unknown = Boolean(error?.outcomeUnknown);
+    const action = unknown
+        ? 'The import may have completed. Keep this file, settings and validation plan unchanged. Retry Import after reconnecting so the existing receipt can reconcile the result safely. Check Data Bank if the result remains uncertain.'
+        : error?.httpStatus === 401
+            ? 'Sign in again, then reopen Data Upload and validate the source before importing.'
+            : 'Review the details below, correct the source or settings where needed, then retry this stage. If the issue continues, retain this message for support.';
+    showStatus('', unknown ? 'warning' : 'error');
+    // Voucher/account identifiers and server messages are source text, never HTML.
+    if (statusMessage) statusMessage.textContent = unknown ? 'Import outcome unconfirmed. ' + message : message;
+    showUploadIssue({stage: error?.stage || stage, severity: unknown ? 'unconfirmed' : 'error',
+        message, action, result: error?.result?.detail || error?.result});
+}
+
+function showSourceDiagnostics(result) {
+    const controls = result.source_diagnostics;
+    if (!controls || (!controls.excluded_count && !controls.warnings?.length)) return;
+    showUploadIssue({stage: 'Source review', severity: controls.warnings?.length ? 'warning' : 'info',
+        message: `${controls.excluded_count || 0} blank/total source row(s) recognised and excluded from transactions.`,
+        action: controls.warnings?.length
+            ? 'Review the source control-total differences before importing. Transaction amounts remain unchanged.'
+            : 'Only transaction rows proceed to comparison. Review these source row numbers if needed.',
+        rows: [...(controls.warnings || []), ...(controls.excluded_rows || []).map(row => ({
+            row_number: row.row_number, message: `Excluded ${row.kind} row${row.label ? ': ' + row.label : ''}`
+        }))]});
+}
+
+function formatUploadPreviewCell(value, header) {
+    const dateColumn = currentMappings.some(mapping =>
+        mapping.excel_column === header && mapping.data_type === 'Date');
+    if (dateColumn && typeof value === 'number' && Number.isFinite(value)) {
+        const date = XLSX.SSF.parse_date_code(value, { date1904: uploadWorkbookDate1904 });
+        if (date && date.y >= 1 && date.y <= 9999) {
+            return String(date.d).padStart(2, '0') + '/' + String(date.m).padStart(2, '0')
+                + '/' + String(date.y).padStart(4, '0');
+        }
+    }
+    // Text dates retain their source order; the date-format preview explains
+    // their interpretation. Never infer MDY from a day <= 12.
+    return value == null ? '' : value;
 }
 
 function setBadge(text, type = '') {
@@ -565,8 +687,58 @@ if (dateOrderDropdown) {
 
 if (comparisonModeDropdown) {
     comparisonModeDropdown.addEventListener('change', function() {
+        updateUploadCoverageVisibility();
         resetValidationState();
         saveUploadSessionState();
+    });
+}
+
+function updateUploadCoverageVisibility() {
+    const container = document.getElementById('uploadCoverageFields');
+    if (container) container.style.display = comparisonModeDropdown?.value === 'replace_range' ? 'flex' : 'none';
+}
+
+[uploadCoverageStart, uploadCoverageEnd, uploadConfirmEmpty].forEach(control => {
+    if (control) control.addEventListener('change', () => {
+        resetValidationState();
+        saveUploadSessionState();
+    });
+});
+
+function reviewUploadReplacement(payload) {
+    const dialog = document.getElementById('uploadReplacementReview');
+    const summary = lastChangePreview || {};
+    const count = key => Number(summary[key] || 0).toLocaleString();
+    document.getElementById('uploadReplacementScope').textContent =
+        `${window.getSelectedClientName ? window.getSelectedClientName() : 'Selected client'} · ${templateDropdown?.selectedOptions[0]?.textContent || 'Selected template'} · ${payload.coverage_start} through ${payload.coverage_end}`;
+    document.getElementById('uploadReplacementCounts').textContent =
+        `${count('unchanged_count')} unchanged · ${count('new_count')} incoming new/revised lines · ${count('changed_count')} identifiable corrections · ${count('missing_count')} superseded/removed old lines`;
+    if (summary.changed_voucher_count !== undefined) {
+        document.getElementById('uploadReplacementCounts').textContent +=
+            ` (${count('changed_voucher_count')} changed vouchers, ${count('removed_voucher_count')} removed vouchers)`;
+    }
+    const dateMoves = document.getElementById('uploadReplacementDateMoves');
+    const moves = summary.date_moves || [];
+    dateMoves.hidden = moves.length === 0;
+    dateMoves.textContent = moves.length ? 'Voucher dates corrected beyond the declared period:\n' + moves.map(move =>
+        `${move.voucher_id}: ${move.previous_dates.join(', ')} → ${move.incoming_dates.join(', ')}`).join('\n') : '';
+    return new Promise(resolve => {
+        const confirm = document.getElementById('uploadReplacementConfirm');
+        const cancel = document.getElementById('uploadReplacementCancel');
+        function finish(approved) {
+            confirm.removeEventListener('click', accept);
+            cancel.removeEventListener('click', reject);
+            dialog.removeEventListener('cancel', escape);
+            dialog.close();
+            resolve(approved);
+        }
+        function accept() { finish(true); }
+        function reject() { finish(false); }
+        function escape(event) { event.preventDefault(); finish(false); }
+        confirm.addEventListener('click', accept);
+        cancel.addEventListener('click', reject);
+        dialog.addEventListener('cancel', escape);
+        dialog.showModal();
     });
 }
 
@@ -649,7 +821,7 @@ async function refreshDateFormatPreview() {
     }
 
     try {
-        const res = await fetch(API_BASE + '/api/upload/date-preview', {
+        const res = await fetchUpload(API_BASE + '/api/upload/date-preview', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -665,6 +837,7 @@ async function refreshDateFormatPreview() {
         renderDateFormatPreview(data.samples || []);
     } catch (error) {
         console.error('Date preview error:', error);
+        showUploadFailure('Date preview failed: ' + error.message, 'Date preview', error);
         container.style.display = 'none';
         container.innerHTML = '';
     }
@@ -682,16 +855,14 @@ function renderDateFormatPreview(samples) {
         return;
     }
 
-    const shown = samples.slice(0, 3);
-    let html = '<label>Preview</label>';
-    shown.forEach(s => {
-        if (s.valid) {
-            html += `<span class="date-preview-line">${s.raw} → ${s.parsed}</span>`;
-        } else {
-            html += `<span class="date-preview-line error">Could not parse "${s.raw}" as ${selectedDateOrder}</span>`;
-        }
+    container.replaceChildren();
+    const label = document.createElement('label'); label.textContent = 'Preview'; container.appendChild(label);
+    samples.slice(0, 3).forEach(sample => {
+        const line = document.createElement('span');
+        line.className = sample.valid ? 'date-preview-line' : 'date-preview-line error';
+        line.textContent = sample.valid ? `${sample.raw} → ${sample.parsed}` : `Could not parse "${sample.raw}" as ${selectedDateOrder}`;
+        container.appendChild(line);
     });
-    container.innerHTML = html;
     container.style.display = 'flex';
 }
 
@@ -699,7 +870,7 @@ function renderDateFormatPreview(samples) {
 async function loadTemplates() {
     if (templateDropdown) window.LoadingUI.showFieldLoading(templateDropdown);
     try {
-        const res = await fetch(API_BASE + '/api/templates');
+        const res = await fetchUpload(API_BASE + '/api/templates');
         if (!res.ok) throw new Error('Failed to load templates');
         const templates = await res.json();
         if (templateDropdown) {
@@ -715,7 +886,7 @@ async function loadTemplates() {
     } catch (error) {
         console.error('Error loading templates:', error);
         setBadge('❌ Failed to load templates', 'error');
-        showStatus('❌ Failed to load templates: ' + error.message, 'error');
+        showUploadFailure('Failed to load templates: ' + error.message, 'Template selection', error);
     } finally {
         if (templateDropdown) window.LoadingUI.hideFieldLoading(templateDropdown);
     }
@@ -726,7 +897,7 @@ if (templateDropdown) {
     templateDropdown.addEventListener('change', async function() {
         // Check if client is selected
         if (!window.isClientSelected || !window.isClientSelected()) {
-            showStatus('⚠️ Please select a client first from the Dashboard.', 'error');
+            showUploadFailure('⚠️ Please select a client first from the Dashboard.');
             this.value = '';
             setBadge('⛔ No client selected');
             if (importBtn) importBtn.disabled = true;
@@ -777,7 +948,7 @@ async function selectTemplate(id) {
     setBadge('⏳ Loading template...', 'loading');
 
     try {
-        const res = await fetch(API_BASE + `/api/templates/${id}/upload-columns`);
+        const res = await fetchUpload(API_BASE + `/api/templates/${id}/upload-columns`);
         if (!res.ok) throw new Error('Failed to fetch template columns');
         const data = await res.json();
         templateColumns = data.columns;
@@ -797,7 +968,7 @@ async function selectTemplate(id) {
     } catch (error) {
         console.error('Error loading template columns:', error);
         setBadge('❌ Failed to load columns', 'error');
-        showStatus('❌ Failed to load template columns: ' + error.message, 'error');
+        showUploadFailure('Failed to load template columns: ' + error.message, 'Template columns', error);
     }
     updatePreviewButtonState();
     resetValidationState(); // New template means new data – reset validation
@@ -833,11 +1004,14 @@ if (fileInput) {
 async function handleFile(file) {
     const validTypes = ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel'];
     if (!validTypes.includes(file.type) && !file.name.endsWith('.xlsx') && !file.name.endsWith('.xls')) {
-        showStatus('⚠️ Please select a valid Excel file (.xlsx or .xls)', 'error');
+        showUploadFailure('⚠️ Please select a valid Excel file (.xlsx or .xls)');
         return;
     }
 
     selectedFile = file;
+    fileId = null;
+    resetValidationState();
+    if (importBtn) importBtn.disabled = true;
     if (fileName) fileName.textContent = file.name;
     if (fileSize) fileSize.textContent = formatFileSize(file.size);
     if (fileInfo) fileInfo.style.display = 'flex';
@@ -845,7 +1019,8 @@ async function handleFile(file) {
     if (footerFile) footerFile.textContent = '📄 ' + file.name;
 
     const reader = new FileReader();
-    reader.onload = function(e) {
+    reader.onload = async function(e) {
+        if (selectedFile !== file) return;
         try {
             const data = new Uint8Array(e.target.result);
             workbookData = data;
@@ -853,7 +1028,7 @@ async function handleFile(file) {
             sheetNames = workbook.SheetNames;
 
             if (sheetNames.length === 0) {
-                showStatus('❌ No sheets found in the file.', 'error');
+                showUploadFailure('❌ No sheets found in the file.');
                 return;
             }
 
@@ -869,18 +1044,18 @@ async function handleFile(file) {
             pendingRestoreSheetName = null;
             if (sheetSelector) sheetSelector.value = currentSheet;
             if (sheetField) sheetField.style.display = 'block';
-            uploadFileToServer(file);
-
-                        showStatus('📄 File loaded. Sheet "' + currentSheet + '" selected.', 'info');
-            resetValidationState(); // Reset validation for new file
-                    updatePreviewButtonState();
-        resetValidationState(); // New mapping – reset validation
-        saveUploadSessionState(); // File selected -- remember its name and the resolved sheet
+            await uploadFileToServer(file);
+            if (selectedFile !== file) return;
+            updatePreviewButtonState();
+            saveUploadSessionState(); // Remember the successfully staged file and sheet.
         } catch (err) {
-            showStatus('❌ Error reading file: ' + err.message, 'error');
+            showUploadFailure('Error reading file: ' + err.message, 'File reading', err);
         }
     };
-    reader.readAsArrayBuffer(file);
+    reader.onerror = () => { if (selectedFile === file) showUploadFailure('The file could not be read. Check access and select it again.', 'File reading'); };
+    reader.onabort = () => { if (selectedFile === file) showUploadFailure('File reading was interrupted. Select the file again.', 'File reading'); };
+    try { reader.readAsArrayBuffer(file); }
+    catch (error) { showUploadFailure(error.message, 'File reading', error); }
 }
 
 // ---------- SHEET SELECTOR ----------
@@ -918,12 +1093,14 @@ async function uploadFileToServer(file) {
     const formData = new FormData();
     formData.append('file', file);
     try {
-        const res = await fetch('/api/import-excel', {
+        const res = await fetchUpload('/api/import-excel', {
             method: 'POST',
             body: formData
         });
         const result = await res.json();
         if (!res.ok) throw new Error(result.message || 'Upload failed');
+        if (selectedFile !== file) return;
+        if (!result.file_id) throw new Error('The server did not return an uploaded file reference. Select the file again.');
         fileId = result.file_id;
         if (footerRows) footerRows.textContent = '📊 ' + result.record_count + ' rows';
         if (footerDate) footerDate.textContent = '📁 Uploaded: ' + formatDate(new Date());
@@ -938,8 +1115,9 @@ async function uploadFileToServer(file) {
             showStatus('✅ File uploaded. Please select a template.', 'info');
         }
     } catch (error) {
-        showStatus('❌ Upload error: ' + error.message, 'error');
+        if (selectedFile !== file) return;
         resetUpload();
+        showUploadFailure('Upload error: ' + error.message, 'File upload', error);
     }
 }
 
@@ -951,7 +1129,11 @@ if (clearBtn) {
 function resetUpload() {
     selectedFile = null;
     fileId = null;
-    if (comparisonModeDropdown) comparisonModeDropdown.value = 'correction';
+    if (comparisonModeDropdown) comparisonModeDropdown.value = 'replace_range';
+    if (uploadCoverageStart) uploadCoverageStart.value = '';
+    if (uploadCoverageEnd) uploadCoverageEnd.value = '';
+    if (uploadConfirmEmpty) uploadConfirmEmpty.checked = false;
+    updateUploadCoverageVisibility();
     if (fileInfo) fileInfo.style.display = 'none';
     if (fileInput) fileInput.value = '';
     if (mappingPanel) mappingPanel.style.display = 'none';
@@ -1031,11 +1213,11 @@ if (saveMappingBtn) {
     saveMappingBtn.addEventListener('click', async function() {
         const clientId = getCurrentClientId();
         if (!clientId) {
-            showStatus('⚠️ Please select a client first from the Dashboard.', 'error');
+            showUploadFailure('⚠️ Please select a client first from the Dashboard.');
             return;
         }
         if (!selectedTemplateId || !currentMappings || currentMappings.length === 0) {
-            showStatus('⚠️ Map at least one column before saving.', 'error');
+            showUploadFailure('⚠️ Map at least one column before saving.');
             return;
         }
 
@@ -1047,7 +1229,7 @@ if (saveMappingBtn) {
             .map(m => ({ template_column_id: m.column_id, excel_column: m.excel_column }));
 
         if (mappingsToSave.length === 0) {
-            showStatus('⚠️ Map at least one column before saving.', 'error');
+            showUploadFailure('⚠️ Map at least one column before saving.');
             return;
         }
 
@@ -1056,7 +1238,7 @@ if (saveMappingBtn) {
             ? window.LoadingUI.startGlobalLoading(this)
             : null;
         try {
-            const res = await fetch(API_BASE + '/api/upload/save-mapping', {
+            const res = await fetchUpload(API_BASE + '/api/upload/save-mapping', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1070,7 +1252,7 @@ if (saveMappingBtn) {
             showStatus(`💾 Mapping saved (${result.saved_count} column${result.saved_count === 1 ? '' : 's'}) — it will auto-fill next time you upload this template for this client.`, 'success');
         } catch (error) {
             console.error('Save mapping error:', error);
-            showStatus('❌ Failed to save mapping: ' + error.message, 'error');
+            showUploadFailure('Failed to save mapping: ' + error.message, 'Save mapping', error);
         } finally {
             saveMappingBtn.disabled = false;
             if (globalLoadingToken) window.LoadingUI.stopGlobalLoading(globalLoadingToken);
@@ -1088,11 +1270,11 @@ if (clearMappingBtn) {
     clearMappingBtn.addEventListener('click', async function() {
         const clientId = getCurrentClientId();
         if (!clientId) {
-            showStatus('⚠️ Please select a client first from the Dashboard.', 'error');
+            showUploadFailure('⚠️ Please select a client first from the Dashboard.');
             return;
         }
         if (!selectedTemplateId) {
-            showStatus('⚠️ Select a template first.', 'error');
+            showUploadFailure('⚠️ Select a template first.');
             return;
         }
 
@@ -1104,7 +1286,7 @@ if (clearMappingBtn) {
             ? window.LoadingUI.startGlobalLoading(this)
             : null;
         try {
-            const res = await fetch(API_BASE + `/api/upload/saved-mapping?client_id=${clientId}&template_id=${selectedTemplateId}`, {
+            const res = await fetchUpload(API_BASE + `/api/upload/saved-mapping?client_id=${clientId}&template_id=${selectedTemplateId}`, {
                 method: 'DELETE'
             });
             const result = await res.json();
@@ -1116,7 +1298,7 @@ if (clearMappingBtn) {
             }
         } catch (error) {
             console.error('Clear saved mapping error:', error);
-            showStatus('❌ Failed to clear saved mapping: ' + error.message, 'error');
+            showUploadFailure('Failed to clear saved mapping: ' + error.message, 'Clear mapping', error);
         } finally {
             clearMappingBtn.disabled = false;
             if (globalLoadingToken) window.LoadingUI.stopGlobalLoading(globalLoadingToken);
@@ -1136,11 +1318,13 @@ async function applySavedMapping() {
 
     let data;
     try {
-        const res = await fetch(API_BASE + `/api/upload/saved-mapping?client_id=${clientId}&template_id=${selectedTemplateId}`);
+        const res = await fetchUpload(API_BASE + `/api/upload/saved-mapping?client_id=${clientId}&template_id=${selectedTemplateId}`);
         if (!res.ok) return 0;
         data = await res.json();
     } catch (error) {
         console.warn('⚠️ Could not check for a saved column mapping:', error);
+        showUploadIssue({stage: 'Saved mapping', severity: 'warning', message: error.message,
+            action: 'Auto-mapping is available. Check every selected column before validation; retry the saved mapping after reconnecting.'});
         return 0;
     }
 
@@ -1163,7 +1347,7 @@ async function applySavedMapping() {
 // ---------- AUTO-MAP ----------
 async function autoMapColumns() {
     if (!selectedTemplateId || !currentSheet || !fileId) {
-        showStatus('⚠️ Please select a template, a sheet, and upload a file.', 'error');
+        showUploadFailure('⚠️ Please select a template, a sheet, and upload a file.');
         return;
     }
 
@@ -1171,7 +1355,7 @@ async function autoMapColumns() {
         showStatus('⏳ Auto‑mapping columns...', 'loading');
         setBadge('⏳ Mapping...', 'loading');
 
-        const res = await fetch(API_BASE + '/api/upload/auto-map', {
+        const res = await fetchUpload(API_BASE + '/api/upload/auto-map', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1234,7 +1418,7 @@ async function autoMapColumns() {
     } catch (error) {
         console.error('Auto-map error:', error);
         setBadge('❌ Mapping failed', 'error');
-        showStatus('❌ Auto‑mapping failed: ' + error.message, 'error');
+        showUploadFailure('Auto-mapping failed: ' + error.message, 'Column mapping', error);
     }
 }
 
@@ -1372,7 +1556,7 @@ if (downloadBtn) {
     downloadBtn.addEventListener('click', function() {
         const templateId = this.dataset.templateId;
         if (!templateId) {
-            showStatus('⚠️ Please select a template first', 'error');
+            showUploadFailure('⚠️ Please select a template first');
             return;
         }
         window.open(API_BASE + `/api/upload/download-template/${templateId}`, '_blank');
@@ -1579,8 +1763,8 @@ function showImportSummary(result) {
 
     // Explanatory note about debit/credit lines, styled as a plain muted info box.
     const note = `<div style="font-size:12px; color:#64748b; background:#f8fafc; padding:10px 12px; border-radius:6px; margin-top:16px;">
-        <strong style="color:#475569;">Note:</strong> Each voucher may appear twice in the file (debit and credit).
-        The system stores one transaction per voucher ID. Total records in the Data Bank reflect distinct vouchers.
+        <strong style="color:#475569;">Note:</strong> A voucher can contain several accounting lines.
+        Every valid line is preserved. Re-uploading unchanged data does not create duplicate records.
     </div>`;
 
     modal.innerHTML = `
@@ -1652,67 +1836,89 @@ function showImportSummary(result) {
     });
 }
 // ---------- SHOW VALIDATION ERRORS ----------
-function showValidationErrors(result) {
+// Reuse the existing issue dialog for every stage; page row details to keep
+// even a large rejected workbook responsive. All source text uses textContent.
+function showUploadIssue({stage = 'Validation', severity = 'error', message, action, result, rows = []}) {
+    document.getElementById('validationErrorOverlay')?.remove();
+    const previousFocus = document.activeElement;
     const overlay = document.createElement('div');
     overlay.id = 'validationErrorOverlay';
-    overlay.style.cssText = `
-        position: fixed; top:0; left:0; width:100%; height:100%;
-        background: rgba(0,0,0,0.5); z-index:2000;
-        display: flex; justify-content:center; align-items:center;
-        font-family: 'Segoe UI', sans-serif;
-    `;
+    const modal = document.createElement('section');
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', 'uploadIssueTitle');
+    modal.dataset.severity = severity;
+    overlay.dataset.stage = stage;
+    const add = (tag, text, parent = modal) => {
+        const node = document.createElement(tag);
+        node.textContent = text;
+        parent.appendChild(node);
+        return node;
+    };
+    const title = severity === 'unconfirmed' ? 'Import outcome unconfirmed'
+        : severity === 'warning' ? 'Upload warning' : severity === 'info' ? 'Source rows recognised' : 'Upload issue';
+    add('h2', title).id = 'uploadIssueTitle';
+    add('p', 'Stage: ' + stage).className = 'upload-issue-stage';
+    add('p', message || result?.message || 'Review the upload details.');
+    add('p', action || 'Correct the listed source rows, then validate again.').className = 'upload-issue-action';
+    const details = [...rows];
+    for (const item of [...(result?.errors || []), ...(result?.rejected_rows || [])]) {
+        const reasons = item.errors || item.reasons || [];
+        details.push({row_number: item.row_number,
+            message: reasons.map(reason => `${reason.column || reason.excel_column || reason.role || 'Row'}: ${reason.message}`).join('; '),
+            voucher: item.row_data ? Object.values(item.row_data)[0] : ''});
+    }
+    if (details.length) {
+        const tableBox = add('div', ''); tableBox.className = 'upload-issue-details';
+        const table = add('table', '', tableBox);
+        const head = add('tr', '', add('thead', '', table));
+        ['Excel row', 'Voucher / column', 'Details'].forEach(label => add('th', label, head));
+        const body = add('tbody', '', table);
+        const nav = add('div', ''); nav.className = 'upload-issue-navigation';
+        const prev = add('button', 'Previous', nav), label = add('span', '', nav), next = add('button', 'Next', nav);
+        let page = 0;
+        const render = () => {
+            body.replaceChildren();
+            details.slice(page * 50, page * 50 + 50).forEach(item => {
+                const row = add('tr', '', body);
+                add('td', item.row_number ?? '—', row);
+                add('td', item.voucher || item.column || '—', row);
+                add('td', item.message || '', row);
+            });
+            label.textContent = `${page * 50 + 1}–${Math.min(details.length, page * 50 + 50)} of ${details.length} details`;
+            prev.disabled = page === 0; next.disabled = (page + 1) * 50 >= details.length;
+        };
+        prev.addEventListener('click', () => { page--; render(); });
+        next.addEventListener('click', () => { page++; render(); });
+        render();
+    }
+    const close = add('button', 'Close'); close.id = 'validationErrorCloseBtn';
+    const dismiss = () => { overlay.remove(); previousFocus?.focus(); };
+    close.addEventListener('click', dismiss);
+    overlay.addEventListener('click', event => { if (event.target === overlay) dismiss(); });
+    overlay.appendChild(modal); document.body.appendChild(overlay); close.focus();
+}
 
-    const modal = document.createElement('div');
-    modal.style.cssText = `
-        background: white; border-radius: 12px; padding: 24px 30px;
-        max-width: 700px; width: 95%; max-height: 80vh; overflow: auto;
-        box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-    `;
+// Document-level handling also covers focus lost when a paging button becomes
+// disabled on the final page. The dialog remains dismissible and traps Tab.
+document.addEventListener('keydown', event => {
+    const overlay = document.getElementById('validationErrorOverlay');
+    if (!overlay) return;
+    if (event.key === 'Escape') overlay.querySelector('#validationErrorCloseBtn').click();
+    if (event.key === 'Tab') {
+        const buttons = [...overlay.querySelectorAll('button:not(:disabled)')];
+        const first = buttons[0], last = buttons[buttons.length - 1];
+        if (!overlay.contains(document.activeElement)) {
+            event.preventDefault(); (event.shiftKey ? last : first).focus();
+        } else if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    }
+});
 
-    let errorRows = '';
-    const errors = result.errors || [];
-    errors.forEach(err => {
-        const rowNum = err.row_number;
-        const errMsgs = err.errors.map(e => `${e.column || 'Row-level'}: ${e.message}`).join('; ');
-        errorRows += `<tr style="border-bottom:1px solid #f0f2f5;">
-            <td style="padding:6px 10px; font-weight:600;">${rowNum}</td>
-            <td style="padding:6px 10px; color:#dc2626;">${errMsgs}</td>
-        </tr>`;
-    });
-
-    modal.innerHTML = `
-        <h2 style="margin:0 0 4px; color:#dc2626;">❌ Validation Errors</h2>
-        <p style="color:#64748b; margin-bottom:12px;">
-            <strong>${result.error_count}</strong> error(s) found in <strong>${result.total_rows}</strong> rows.
-            Please fix the errors in your Excel file and try again.
-        </p>
-        <div style="overflow:auto; max-height:300px; border:1px solid #e2e8f0; border-radius:6px; margin-bottom:12px;">
-            <table style="width:100%; border-collapse:collapse; font-size:13px;">
-                <thead style="position:sticky; top:0; background:#f1f5f9;">
-                    <tr>
-                        <th style="padding:6px 10px; text-align:left; border-bottom:2px solid #e2e8f0;">Row</th>
-                        <th style="padding:6px 10px; text-align:left; border-bottom:2px solid #e2e8f0;">Error</th>
-                    </tr>
-                </thead>
-                <tbody>${errorRows}</tbody>
-            </table>
-        </div>
-        <div style="display:flex; gap:10px; justify-content:flex-end;">
-            <button id="validationErrorCloseBtn" style="padding:8px 24px; background:#3b82f6; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer;">Close</button>
-        </div>
-    `;
-
-    overlay.appendChild(modal);
-    document.body.appendChild(overlay);
-
-    overlay.querySelector('#validationErrorCloseBtn').addEventListener('click', function() {
-        document.body.removeChild(overlay);
-    });
-    overlay.addEventListener('click', function(e) {
-        if (e.target === overlay) {
-            document.body.removeChild(overlay);
-        }
-    });
+function showValidationErrors(result) {
+    showUploadIssue({stage: 'Validation', result,
+        message: result.message || `${result.error_count || 0} row(s) with format errors; ${result.rejected_count || 0} rejected row(s), in ${result.total_rows || 0} transaction rows.`,
+        action: 'Correct the listed source rows and validate again. Complete reports cannot import rejected transaction rows.'});
 }
 // ---------- OVERWRITE CONFIRMATION DIALOG (Enhanced) ----------
 function showOverwriteConfirmation(duplicates, count) {
@@ -1881,11 +2087,11 @@ if (importBtn) {
             clientId = localStorage.getItem('selectedClientId');
         }
         if (!clientId) {
-            showStatus('⚠️ Please select a client first from the Dashboard.', 'error');
+            showUploadFailure('⚠️ Please select a client first from the Dashboard.');
             return;
         }
         if (!fileId || !selectedTemplateId) {
-            showStatus('⚠️ Please upload a file and select a template.', 'error');
+            showUploadFailure('⚠️ Please upload a file and select a template.');
             return;
         }
 
@@ -1914,6 +2120,9 @@ if (importBtn) {
             mappings: finalMappings,
             mode: 'create',
             comparison_mode: comparisonModeDropdown ? comparisonModeDropdown.value : 'correction',
+            coverage_start: comparisonModeDropdown?.value === 'replace_range' ? uploadCoverageStart?.value || null : null,
+            coverage_end: comparisonModeDropdown?.value === 'replace_range' ? uploadCoverageEnd?.value || null : null,
+            confirm_empty_period: Boolean(uploadConfirmEmpty?.checked),
             validation_plan_id: validationPlanId,
             unique_column_id: null,
             sheet_name: currentSheet || 'Sheet1',
@@ -1928,6 +2137,10 @@ if (importBtn) {
             // click, so overrides ticked before or after the Validate call are both picked up.
             force_include_rows: Array.from(rejectedRowOverrides)
         };
+        if (payload.comparison_mode === 'replace_range' && (!payload.coverage_start || !payload.coverage_end || payload.coverage_start > payload.coverage_end)) {
+            showUploadFailure('Select the complete report coverage start/end before validation.');
+            return;
+        }
 
         // ---- NEW LOGIC: Validation Flow ----
         // If validation status is already 'valid', proceed with import
@@ -1949,13 +2162,16 @@ if (importBtn) {
             showStatus('⏳ Validating data...', 'loading');
             setBadge('⏳ Validating...', 'loading');
 
-            const res = await fetch(API_BASE + '/api/upload/validate', {
+            const res = await fetchUpload(API_BASE + '/api/upload/validate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
             const result = await res.json();
-            if (!res.ok) throw new Error(result.message || 'Validation failed');
+            if (!res.ok) {
+                resetValidationState();
+                throw new Error(uploadFailureMessage(result, 'Validation failed (' + res.status + ')'));
+            }
 
             // Rejected-rows exceptions list (Phase 3 of the row-level blank-field-rejection
             // requirement) -- populated regardless of has_errors, since a row can be rejected
@@ -1980,12 +2196,12 @@ if (importBtn) {
                 ? `<br><span style="color: #92400e; font-weight: 600;">${duplicateRowCount} duplicate row(s) found in ${duplicateGroupCount} group(s); ${duplicateSkippedCount} repeated copy/copies will be skipped.</span>`
                 : '';
 
-            if (result.has_errors) {
+            if (result.has_errors || result.status === 'validation_failed') {
                 // Show validation errors
                 showValidationErrors(result);
                 // Mark the failing rows in the row selection grid (Phase 4) -- distinct from
                 // user-excluded rows, and does not auto-exclude them.
-                setValidationFailedRows(result.errors);
+                setValidationFailedRows([...(result.errors || []), ...(result.rejected_rows || []).map(row => ({...row, errors: row.reasons}))]);
                 validationStatus = 'invalid';
                 validationPlanId = null;
                 // Reset button state
@@ -2000,6 +2216,7 @@ if (importBtn) {
                                     // Validation passed – clear any stale failed-row markers from a
             // prior attempt (Phase 4), then show simple success message
             setValidationFailedRows([]);
+            showSourceDiagnostics(result);
             // Pre-import Rate mode visibility (Phase D) -- reflects this Validate call's
             // resolved Auto/Forced Imported/Derived decision until the next mapping change.
             lastRateModeInfo = result.rate_mode || null;
@@ -2039,7 +2256,8 @@ if (importBtn) {
             updateStepIndicator(4);
 
         } catch (error) {
-            showStatus('❌ Validation error: ' + error.message, 'error');
+            resetValidationState();
+            showUploadFailure('❌ Validation error: ' + error.message, 'Validation', error);
             setBadge('❌ Validation failed', 'error');
             importBtn.innerHTML = 'Validate';
             importBtn.disabled = false;
@@ -2054,12 +2272,7 @@ if (importBtn) {
 async function performImport(payload) {
     try {
         if (payload.comparison_mode === 'replace_range') {
-            const rangeText = lastChangePreview && lastChangePreview.date_range
-                ? ` (${lastChangePreview.date_range.start} to ${lastChangePreview.date_range.end})`
-                : '';
-            const confirmed = window.confirm(
-                `This will remove current lines missing from the complete uploaded date range${rangeText}. Continue?`
-            );
+            const confirmed = await reviewUploadReplacement(payload);
             if (!confirmed) {
                 showStatus('Upload cancelled. No data was changed.', 'info');
                 return;
@@ -2082,23 +2295,23 @@ async function performImport(payload) {
         if (!proceed) return;
 
         // Perform the actual import
-        const res = await fetch(API_BASE + '/api/upload/import', {
+        const res = await fetchUpload(API_BASE + '/api/upload/import', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
         const result = await res.json();
         if (!res.ok) {
-            const serverMessage = result?.error?.http_detail
-                || result?.error?.user_message
-                || result?.message
-                || ('Import failed (' + res.status + ')');
+            const serverMessage = uploadFailureMessage(result, 'Import failed (' + res.status + ')');
             if (res.status === 409) {
                 resetValidationState();
             }
             throw new Error(serverMessage);
         }
 
+        if (document.getElementById('validationErrorOverlay')?.dataset.stage === 'Import progress') {
+            document.getElementById('validationErrorOverlay').remove();
+        }
         // --- Handle overwrite progress (if modal is open) ---
         const modalRef = window._overwriteModal;
         if (modalRef && !modalRef.isResolved) {
@@ -2134,7 +2347,7 @@ async function performImport(payload) {
             showValidationErrors(result);
             // Mark the failing rows in the row selection grid (Phase 4), same as the
             // pre-import validate path -- does not auto-exclude them.
-            setValidationFailedRows(result.errors);
+            setValidationFailedRows([...(result.errors || []), ...(result.rejected_rows || []).map(row => ({...row, errors: row.reasons}))]);
             showStatus('❌ Import validation errors found.', 'error');
             setBadge('❌ Import failed', 'error');
         } else {
@@ -2146,10 +2359,12 @@ async function performImport(payload) {
             validationStatus = 'idle';
         }
     } catch (error) {
-        showStatus('❌ Import error: ' + error.message, 'error');
-        setBadge('❌ Import failed', 'error');
+        if (error.httpStatus === 409) resetValidationState();
+        showUploadFailure('❌ Import error: ' + error.message, 'Import', error);
+        setBadge(error.outcomeUnknown ? 'Import outcome unconfirmed' : '❌ Import failed', error.outcomeUnknown ? 'warning' : 'error');
     } finally {
         clearInterval(importProgressPollInterval);
+        importProgressPollInterval = null;
         hideImportProgressBar();
         window.LoadingUI.hideSpinner(importBtn);
     }
@@ -2223,34 +2438,7 @@ function renderPreviewPage() {
 
         row.forEach((cell, idx) => {
             const td = document.createElement('td');
-            let displayValue = cell;
-            const headerName = (headers[idx] || '').toLowerCase();
-            if (typeof cell === 'number' && cell > 30000 && 
-                (headerName.includes('date') || headerName.includes('day') || headerName.includes('month'))) {
-                const date = new Date((cell - 25569) * 86400 * 1000);
-                if (!isNaN(date)) {
-                    const d = String(date.getDate()).padStart(2, '0');
-                    const m = String(date.getMonth() + 1).padStart(2, '0');
-                    const y = date.getFullYear();
-                    displayValue = d + '/' + m + '/' + y;
-                }
-            } else if (typeof cell === 'string' && /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(cell)) {
-                const parts = cell.split('/');
-                if (parts.length === 3) {
-                    let day, month, year;
-                    if (parseInt(parts[0]) > 12) {
-                        day = parts[0];
-                        month = parts[1];
-                    } else {
-                        month = parts[0];
-                        day = parts[1];
-                    }
-                    year = parts[2];
-                    if (year.length === 2) year = '20' + year;
-                    displayValue = day.padStart(2, '0') + '/' + month.padStart(2, '0') + '/' + year;
-                }
-            }
-            td.textContent = displayValue !== undefined ? displayValue : '';
+            td.textContent = formatUploadPreviewCell(cell, headers[idx]);
             tr.appendChild(td);
         });
         previewBody.appendChild(tr);
@@ -2299,6 +2487,7 @@ function renderRowExclusionGrid() {
 
     try {
         const workbook = XLSX.read(workbookData, { type: 'array' });
+        uploadWorkbookDate1904 = !!workbook.Workbook?.WBProps?.date1904;
         const sheetName = currentSheet || workbook.SheetNames[0];
         const sheet = workbook.Sheets[sheetName];
         // defval: '' -- same fix as showPreview(): avoids holes in the row array so
@@ -2329,6 +2518,7 @@ function renderRowExclusionGrid() {
         renderRowExclusionPage();
     } catch (error) {
         console.error('Row selection grid error:', error);
+        showUploadFailure('Row selection could not be displayed: ' + error.message, 'Row selection', error);
         container.style.display = 'none';
     }
 }
@@ -2610,7 +2800,7 @@ function renderRowExclusionPage() {
 
         row.forEach((cell, idx) => {
             const td = document.createElement('td');
-            td.textContent = cell !== undefined ? cell : '';
+            td.textContent = formatUploadPreviewCell(cell, headers[idx]);
             tr.appendChild(td);
         });
 
@@ -2638,12 +2828,13 @@ function showPreview() {
     const mainUploadPage = document.getElementById('mainUploadPage');
 
     if (!workbookData) {
-        showStatus('⚠️ No file loaded to preview.', 'error');
+        showUploadFailure('⚠️ No file loaded to preview.');
         return;
     }
 
     try {
         const workbook = XLSX.read(workbookData, { type: 'array' });
+        uploadWorkbookDate1904 = !!workbook.Workbook?.WBProps?.date1904;
         const sheetName = currentSheet || workbook.SheetNames[0];
         const sheet = workbook.Sheets[sheetName];
         // defval: '' forces every column slot to exist even when a cell is blank --
@@ -2687,7 +2878,7 @@ function showPreview() {
         if (container) container.classList.add('preview-active');
 
     } catch (error) {
-        showStatus('❌ Error previewing file: ' + error.message, 'error');
+        showUploadFailure('Error previewing file: ' + error.message, 'Workbook preview', error);
     }
 }
 
@@ -2711,24 +2902,24 @@ const previewBtn = document.getElementById('previewBtn');
 if (previewBtn) {
     previewBtn.addEventListener('click', function() {
         if (!workbookData) {
-            showStatus('⚠️ Please upload a file first.', 'error');
+            showUploadFailure('⚠️ Please upload a file first.');
             return;
         }
         if (!currentSheet) {
-            showStatus('⚠️ Please select a sheet.', 'error');
+            showUploadFailure('⚠️ Please select a sheet.');
             return;
         }
         if (!selectedTemplateId) {
-            showStatus('⚠️ Please select a template.', 'error');
+            showUploadFailure('⚠️ Please select a template.');
             return;
         }
         if (currentMappings.length === 0) {
-            showStatus('⚠️ Please wait for auto-mapping to complete.', 'error');
+            showUploadFailure('⚠️ Please wait for auto-mapping to complete.');
             return;
         }
         // --- NEW: Check validation ---
         if (validationStatus !== 'valid') {
-            showStatus('⚠️ Please validate the data first (click "Validate" button).', 'error');
+            showUploadFailure('⚠️ Please validate the data first (click "Validate" button).');
             return;
         }
         // All conditions satisfied
@@ -2741,6 +2932,7 @@ window.onload = async function() {
     // Await so the Template dropdown's <option>s exist before restoreUploadSessionState()
     // (session-restore) tries to set the dropdown's value.
     await loadTemplates();
+    updateUploadCoverageVisibility();
     populateDateOrderDropdown(selectedDateDelimiter);
     // No initial placeholder status message on page load -- redundant hand-holding text; the
     // status bar stays hidden by default (#statusBar) and only appears once something actually

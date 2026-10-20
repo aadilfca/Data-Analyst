@@ -674,6 +674,25 @@
             background: #cbd5e1;
         }
 
+        #uploadReplacementReview::backdrop {
+            background: rgba(15, 23, 42, 0.35);
+        }
+
+        #uploadReplacementReview button {
+            padding: 9px 16px;
+            border: none;
+            border-radius: 6px;
+            font: inherit;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        #uploadReplacementReview button:focus-visible {
+            outline: 2px solid #2563eb;
+            outline-offset: 3px;
+        }
+
         /* ---------- UPLOAD AREA (restyled for consistency with the Phase 2 action bar/mapping table) ---------- */
         .upload-area {
             border: 2px dashed #cbd5e1;
@@ -1338,7 +1357,24 @@
             height: 14px;
             cursor: pointer;
         }
-    </style>
+    /* Upload-stage issues share one bounded, keyboard-accessible dialog. */
+#validationErrorOverlay { position:fixed; inset:0; z-index:3100; background:rgba(15,23,42,.5); display:flex; align-items:center; justify-content:center; padding:16px; }
+#validationErrorOverlay section { background:white; border-radius:12px; border-top:5px solid #dc2626; padding:24px; width:min(860px,100%); max-height:85vh; overflow:auto; box-shadow:0 20px 60px #0004; color:#1a1a2e; }
+#validationErrorOverlay section[data-severity="warning"], #validationErrorOverlay section[data-severity="unconfirmed"] { border-color:#b45309; }
+#validationErrorOverlay section[data-severity="info"] { border-color:#0f766e; }
+#validationErrorOverlay h2 { margin:0 0 8px; font-size:21px; }
+#validationErrorOverlay p { overflow-wrap:anywhere; margin:10px 0; }
+#validationErrorOverlay .upload-issue-stage { color:#64748b; font-weight:600; }
+#validationErrorOverlay .upload-issue-action { background:#f1f5f9; padding:12px; border-radius:6px; }
+#validationErrorOverlay .upload-issue-details { overflow:auto; max-height:40vh; border:1px solid #e2e8f0; border-radius:6px; }
+#validationErrorOverlay table { width:100%; border-collapse:collapse; font-size:13px; }
+#validationErrorOverlay th, #validationErrorOverlay td { padding:8px; text-align:left; border-bottom:1px solid #e2e8f0; vertical-align:top; overflow-wrap:anywhere; }
+#validationErrorOverlay th { position:sticky; top:0; background:#f1f5f9; }
+#validationErrorOverlay .upload-issue-navigation { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin:12px 0; }
+#validationErrorOverlay button { padding:8px 16px; border:1px solid #cbd5e1; border-radius:6px; background:#f8fafc; cursor:pointer; }
+#validationErrorOverlay button:disabled { opacity:.5; cursor:default; }
+#validationErrorOverlay #validationErrorCloseBtn { display:block; margin:16px 0 0 auto; background:#2563eb; color:white; border-color:#2563eb; }
+</style>
 </head>
 
 <body data-nav-module="Upload Data" data-nav-parent="index.html">
@@ -1507,12 +1543,17 @@
                         <div class="action-note">
                             <label for="comparisonModeDropdown" style="display:block; font-weight:600; margin-bottom:4px; color:#475569;">Upload treatment</label>
                             <select id="comparisonModeDropdown" style="padding:5px 8px; border:1px solid #cbd5e1; border-radius:5px; font-size:12px; color:#334155;">
-                                <option value="correction">Correction / additions and changes only</option>
-                                <option value="replace_range">Complete replacement / remove missing lines</option>
+                                <option value="replace_range">Complete report / replace declared coverage</option>
+                                <option value="correction">Partial extract / identifiable corrections only</option>
                             </select>
-                            <div style="margin-top:4px;">Unchanged lines are ignored. Removal applies only to a complete replacement.</div>
+                            <div id="uploadCoverageFields" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+                                <label>Coverage from <input type="date" id="uploadCoverageStart"></label>
+                                <label>through <input type="date" id="uploadCoverageEnd"></label>
+                                <label style="flex-basis:100%;"><input type="checkbox" id="uploadConfirmEmpty"> This report contains no transactions—clear the declared period</label>
+                            </div>
+                            <div style="margin-top:4px;">Use the full ERP report period, including days with deleted vouchers. Leave the checkbox unticked for reports containing transactions.</div>
                         </div>
-                        <span class="action-note">📄 Changed documents will be overwritten. New documents will be added.</span>
+                        <span class="action-note">📄 Review additions, revisions, and removals before import.</span>
                         <div class="action-buttons">
                             <button class="btn-primary" id="importBtn" disabled>🚀 Upload</button>
                             <button class="btn-neutral" id="resetBtn">🔄 Reset</button>
@@ -1657,7 +1698,18 @@
 
     <script src="/static/loading_ui.js?v=2"></script>
     <script src="/static/client_context.js?v=18"></script>
-    <script src="/static/upload.js?v=10"></script>
+    <dialog id="uploadReplacementReview" aria-label="Review complete report replacement" style="margin:auto;padding:24px;border:1px solid #cbd5e1;border-radius:12px;max-width:560px;color:#1a1a2e;">
+        <h2 style="margin-bottom:12px;">Review complete report</h2>
+        <p id="uploadReplacementScope" style="margin-bottom:12px;"></p>
+        <p id="uploadReplacementCounts" style="margin-bottom:12px;"></p>
+        <p id="uploadReplacementDateMoves" hidden style="margin-bottom:12px;max-height:140px;overflow:auto;white-space:pre-line;"></p>
+        <p style="margin-bottom:16px;">Complete previous vouchers and an Excel observation report will be archived and verified in Google Drive before replacement. A corrected voucher date may replace that same voucher outside this period; other vouchers outside it remain intact.</p>
+        <div style="display:flex;justify-content:flex-end;gap:12px;">
+            <button type="button" class="btn-neutral" id="uploadReplacementCancel">Cancel</button>
+            <button type="button" class="btn-primary" id="uploadReplacementConfirm">Archive and apply report</button>
+        </div>
+    </dialog>
+    <script src="/static/upload.js?v=14"></script>
 </body>
 
 </html>

@@ -18,18 +18,18 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, and database size with PostgreSQL table/index breakdown. See CHANGELOG_ARCHIVE.md.
 - routers/data.py + static/databank.* → Data Bank availability, calendars, cached previews, canonical Cashflows transaction previews, filtering, frequency settings, and guarded mutations. See CHANGELOG_ARCHIVE.md.
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
-- routers/import_export.py → Excel uploads, snapshot-batched comparisons, stable identities, compact audits, temporary plans, storage guards, and protected replacements. See CHANGELOG_ARCHIVE.md.
+- routers/import_export.py + static/upload.* → Declared-coverage uploads, source controls, ledger evidence, comparisons, guarded imports and stage-specific issue dialogs. See CHANGELOG_ARCHIVE.md.
 - routers/settings.py + static/settings.* → application settings and the firm-wide Holiday list; header/tabs rendered by `client_context.js`. See CHANGELOG_ARCHIVE.md.
-- routers/templates.py + static/templates.*, static/columns.* → master-column and template CRUD, mapping/reordering, rate rules, backup/restore, and setup loading feedback. See CHANGELOG_ARCHIVE.md.
+- routers/templates.py + static/templates.*, static/columns.* → Master columns, templates, ledger roles, mapping/reordering, rate rules, backup/restore, and setup loading feedback. See CHANGELOG_ARCHIVE.md.
 - static/client_settings.html, static/client_settings.js -> retired direct-bookmark information page; all Verification account routing is configured centrally in Account Control Centre. See CHANGELOG_ARCHIVE.md.
-- database.py, main.py → Schemas, compact audits, storage guards, snapshots, connection recovery, local maintenance transactions, routing and Rulebook snapshots. See CHANGELOG_ARCHIVE.md.
+- database.py, main.py → Schemas, ledger metadata, upload receipts, audits, storage guards, connection recovery, maintenance transactions, routing and Rulebook snapshots. See CHANGELOG_ARCHIVE.md.
 - backfill_extract_amount.py → SQLite backfill, PostgreSQL assessment, portable repair plans and isolated local repair rehearsals; live apply remains disabled. See CHANGELOG_ARCHIVE.md.
 - database.py (users/sessions) → authenticated users and session records for Login → Client Cards → Dashboard; bcrypt, session-stored selected client, seeded placeholder admin. See CHANGELOG_ARCHIVE.md.
 - routers/auth.py → login/logout, current-session lookup, client selection, `get_current_user()`/`require_admin()` guards; timezone-aware session expiry. See CHANGELOG_ARCHIVE.md.
 - routers/users.py → Admin user management (list/create/edit/deactivate/reactivate/reset password); every endpoint `require_admin`, mutations SQLite-audited. See CHANGELOG_ARCHIVE.md.
 - routers/storage_cleanup.py + services/storage_cleanup.py + static/storage_cleanup.* → Protected deletion, replacement cleanup, storage previews, and controlled PostgreSQL maintenance. See CHANGELOG_ARCHIVE.md.
 - static/users.html, static/users.js → firm-level Manage Users UI (sortable/searchable rows, add/edit, deactivate, password reset); shared Admin header/tab strip. See CHANGELOG_ARCHIVE.md.
-- static/login.html, static/login.js → standalone login page posting to `/api/auth/login`, generic auth error; does not load `client_context.js`.
+- static/login.html, static/login.js, static/app_info.html, static/privacy.html, static/terms.html, static/public_info.css → Login and public application/policy pages. See CHANGELOG_ARCHIVE.md.
 - static/client_select.html, static/client_select.js → standalone Client Cards page with guarded selection, admin entry, and loading feedback. See CHANGELOG_ARCHIVE.md.
 - static/procedure_modal.js → shared Verification/Audit Workbook Procedure modal for grouped Data Table search, evidence/Forms, procedures, and observations. See CHANGELOG_ARCHIVE.md.
 - static/audit_workbook.js, static/audit_workbook.html → Audit Workbook: session rows, filtering, totals, shared Procedure Modal, and cached evidence/Form completion badges. See CHANGELOG_ARCHIVE.md.
@@ -51,8 +51,9 @@ One line per file group: what it is now. Full build history for every entry live
 - services/cashflow_preparation.py + scripts/backfill_cashflow_prepared_read_model.py -> metadata-only preparation/job recovery boundary; prepared transaction copies and rollups are no longer rebuilt. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_xlsx.py → static Bank/Cash workbook exporter for summaries, schedules, reviews, cross-checks, and reconciliation proofs. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_balance_source.py → validates stored opening/month-end balances and converts them to reconciliation-engine inputs. See CHANGELOG_ARCHIVE.md.
+- services/upload_lifecycle.py + drive_archive.py + upload_observation_report.py → Scope proofs, complete-voucher Excel evidence, verified external archives and compact receipts. See CHANGELOG_ARCHIVE.md.
 - tests/test_account_control_center*.py + tests/test_cash_bank_configuration_sync.py + tests/test_cashflows*.py → regression coverage for setup, orphan assignment, derived classification, and Cashflows Reports UI.
-- tests/test_data_deletion.py + tests/test_import_duplicate_gates.py → focused deletion and upload identity-gate regression tests.
+- tests/test_upload_lifecycle.py + test_data_deletion.py + test_import_duplicate_gates.py → Upload/archive lifecycle, rollback, retry, deletion and identity regression tests.
 
 
 - static/reconciliation.html, static/reconciliation.js -> Reports, Cashflows summaries, shared bounded ledger cache, classified transactions, and balance setup. See CHANGELOG_ARCHIVE.md.
@@ -68,7 +69,8 @@ One line per file group: what it is now. Full build history for every entry live
 ## Database management and backup rules
 - **Locked upload contract (2026-10-11):** `client_data` is the sole canonical transaction store. Keep one active row per client/template/transaction identity, with raw values and report-required derived columns together and indexed; all reports and analysis read this set.
 - Supabase is a working store, not an archive: retain one current canonical set per client/template and no second durable transaction copy in reports, read models, occurrences, revisions, caches, or audit payloads. Audit events may retain only changed fields or fingerprints; initial INSERT events retain no row payload. Compact configuration, counts, fingerprints, checksums, and run metadata are allowed.
-- Validate every upload before writing: unchanged source files are no-ops; preserve source-line multiplicity, including identical-looking lines without explicit line IDs. Explicit identity conflicts and ambiguous corrections block; updates stay in place; removals require explicit replacement scope.
+- Validate every upload before writing; unchanged reports are no-ops and legitimate line multiplicity survives. Complete reports replace explicitly declared coverage: retain unchanged occurrences, archive unmatched old lines, insert unmatched incoming lines. Line IDs are optional; never invent correction pairings. Partial extracts retain absent rows and block ambiguous corrections.
+- Upload changes/removals require a protected external ZIP and downloaded/checksummed Google Drive copy before committing. Archive failure, stale source/configuration/plan or protected references block replacement; compact operation receipts reconcile lost acknowledgements. App OAuth settings are independent of Codex's Drive connector. See CHANGELOG_ARCHIVE.md, Declared-coverage upload lifecycle.
 - Active identities are database-unique where existing data is clean. Until duplicate legacy groups are resolved, application gates remain authoritative and migrations must report blockers rather than delete or merge rows.
 - Source workbooks, SQL dumps, reports, and workpapers stay in controlled external/offline storage. Supabase may hold temporary staging metadata only; rejected, ignored, or fully deleted upload files and metadata must be removed.
 - **Locked deletion contract:** guarded preview/apply permanently removes source rows, derived classifications, occurrence metadata, audit payloads, upload metadata, validation plans, and staged files. Soft-delete and restore are not valid source-data lifecycle operations; protected verification/evidence references block the purge.
@@ -79,6 +81,8 @@ One line per file group: what it is now. Full build history for every entry live
 - Retain audit-procedure definitions and compact run metadata, not full transaction rows. Future import, deletion, report, cleanup, or backup changes must preserve this contract and update `CHANGELOG_ARCHIVE.md`.
 
 ## Conventions
+- Account Ledger templates use explicit purpose/column roles and upload-level account/coverage; balance controls remain metadata, and ledger imports never feed voucher movements.
+- Upload formatting comparisons preserve raw identity/concurrency fingerprints; temporary validation plans retain calendar dates, and only description spacing is normalized.
 - No inline event handlers (onclick, onload, onchange, etc.) in HTML
 - No <script> inside HTML containers
 - Meaningful comments on new/changed code
@@ -110,6 +114,7 @@ One line per file group: what it is now. Full build history for every entry live
  - Keep raw source rows unchanged; prepared results and browser caches are never the accounting source. Scope read models by client, uploads, configuration, and revision, with canonical SQL fallback when preparation is missing or stale.
 - Financial reports preserve uploaded amounts and round presentation; use validated source/canonical debit-credit fields, not the approximate search helper.
 - Database coverage counts active source lines and distinct vouchers before cashflow filtering; bind totals to client/template/dates and reject broader-period cache totals.
+- Performance experiments require explicit standalone opt-in, PostgreSQL READ ONLY and exact source/report/export comparisons; production integration needs separate approval.
  - Prefer one compact server request, server-side filtering/pagination, bounded payloads, indexed queries, bulk operations, and limited retries for safe reads; keep each Treasury view, period grain, and grouping configuration explicit.
  - Key caches by complete report context and revision; invalidate after source or configuration changes, abort obsolete requests, reject stale responses, and preserve a hard-refresh path when freshness is uncertain.
  - Design for slow or intermittent Sialkot connectivity: show progress, use bounded timeouts/retries, preserve usable UI, and avoid blocking alerts.
@@ -242,11 +247,22 @@ One line per file group: what it is now. Full build history for every entry live
 
 ## Status log
 
+- 2026-10-20: Upload recognises raw-source totals, preserves Excel row numbers and shows stage-specific issue dialogs. See CHANGELOG_ARCHIVE.md, Upload source controls and issue diagnostics.
+
+- 2026-10-20: Added public app, privacy and terms pages with shared styling and login links. See CHANGELOG_ARCHIVE.md.
+
+- 2026-10-19: Complete-voucher observations and scoped date corrections; local Drive archives verified, production branding pending. See CHANGELOG_ARCHIVE.md.
+
+- 2026-10-19: Complete uploads replace declared coverage after verified external archiving; compact receipts protect retries and concurrent changes. See CHANGELOG_ARCHIVE.md.
+
+- 2026-10-19: Upload compares calendar dates and description spacing, preserves planned dates, displays readable previews, and identifies genuine voucher conflicts.
+
+- 2026-10-19: Added ledger template roles, account-scoped upload safeguards and balance evidence with isolated regression coverage; actual uploads remain user-controlled.
+
 - 2026-10-19: Cashflows preloads bounded ledger roll-ups, shares revision/configuration-scoped browser caches, and paginates oversized categories; regression and export-parity checks added.
 
 - 2026-10-19: Fixed Cashflows transaction windows to read canonical Client Data; removed retired preview fallbacks and added source/filter regression coverage.
 
-- 2026-10-19: Added scoped database row/voucher totals to Cashflows drilldown headers; preserved accounting and source data. See CHANGELOG_ARCHIVE.md.
 
 - Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; performance findings reference the investigation documents.
 - 2026-10-12: Cashflows Phase 1 now reads active `client_data` derived rows directly; report caches, prepared lines, and targeted prepared drilldowns are inactive.

@@ -198,5 +198,121 @@ def test_repeat_comparison_requests_a_bounded_snapshot_and_preserves_occurrences
     assert result["new"] == result["changed"] == result["missing"] == []
 
 
+def test_ledger_account_context_cannot_leak_into_ordinary_document_identity():
+    from routers.import_export import _ledger_context, get_document_group_id
+    columns = [{"id": 1, "column_name": "Voucher", "data_type": "Text"}]
+    token = _ledger_context.set({"account_code": "ACCOUNT-A"})
+    try:
+        assert get_document_group_id(columns, {"Voucher": "V1"}, 7) == "7-ledger:ACCOUNT-A:V1"
+    finally:
+        _ledger_context.reset(token)
+    assert get_document_group_id(columns, {"Voucher": "V1"}, 7) == "7-V1"
+
+
+def _formatting_columns():
+    return [{"id": i, "column_name": name, "data_type": kind} for i, (name, kind) in enumerate([
+        ("Voucher ID", "Text"), ("Transaction Date", "Date"), ("Account Detail", "Text"),
+        ("Voucher Detail", "Text"), ("Debit Amount", "Numeric"), ("Credit Amount", "Numeric"),
+    ], 1)]
+
+
+def _formatting_row(**changes):
+    return {"Voucher ID": "V-APR", "Transaction Date": "01-04-2026", "Account Detail": "ACCOUNT-A",
+            "Voucher Detail": "Office  supplies", "Debit Amount": 100.0, "Credit Amount": 0.0, **changes}
+
+
+def _compare_formatting(existing, incoming, **options):
+    from routers.import_export import compare_transactions
+    columns = _formatting_columns()
+    with patch("routers.import_export.execute_query_pg", return_value=existing) as read:
+        result = compare_transactions(5, 1, columns, incoming,
+                                      {c['column_name']: c['column_name'] for c in columns}, {}, **options)
+    read.assert_called_once()
+    return result
+
+
+def test_native_text_and_serial_dates_match_without_rewriting_repeated_source_lines():
+    import copy
+    from datetime import datetime
+    from routers.import_export import _row_fingerprint_token
+    for new_date, delimiter, order in [(datetime(2026, 4, 1), '/', 'MDY'),
+                                       (46113, '/', 'DMY'), ('04/01/2026', '/', 'MDY'),
+                                       ('01-04-2026', '-', 'DMY')]:
+        old_row = _formatting_row()
+        existing = [{"id": i, "row_data": copy.deepcopy(old_row), "extract_date": "2026-04-01",
+                     "version": 7, "source_identity": f"original-{i}",
+                     "validation_status": "Verified", "verification_detail_id": 100 + i} for i in [1, 2]]
+        before = copy.deepcopy(existing)
+        fingerprint = _row_fingerprint_token(old_row)
+        incoming = [_formatting_row(**{"Transaction Date": new_date, "Voucher Detail": "Office supplies"})] * 2
+        result = _compare_formatting(existing, incoming, date_delimiter=delimiter, date_order=order)
+        assert result['unchanged_count'] == 2
+        assert result['changed_count'] == result['new_count'] == result['missing_count'] == 0
+        assert result['unchanged'] == [1, 2]
+        assert existing == before
+        assert _row_fingerprint_token(old_row) == fingerprint
+
+
+def test_exact_description_match_keeps_priority_over_formatting_equivalent_line():
+    existing = [{"id": i, "row_data": _formatting_row(**{"Voucher Detail": text}),
+                 "extract_date": "2026-04-01"} for i, text in [(1, "Office  supplies"), (2, "Office supplies")]]
+    incoming = [_formatting_row(**{"Voucher Detail": text}) for text in ["Office   supplies", "Office supplies"]]
+    result = _compare_formatting(existing, incoming, date_delimiter='-')
+    assert result['unchanged'] == [2, 1]
+    assert result['new_count'] == result['changed_count'] == 0
+
+
+def test_real_description_change_reports_only_meaningful_fields_and_preserves_identity():
+    from datetime import datetime
+    from routers.import_export import build_change_report
+    existing = [{"id": 1, "row_data": _formatting_row(**{"Voucher Detail": "Office supplies\nTag: A"}),
+                 "extract_date": "2026-04-01", "source_identity": "original-1"}]
+    incoming = [_formatting_row(**{"Transaction Date": datetime(2026, 4, 1), "Voucher Detail": "Office supplies"})]
+    result = _compare_formatting(existing, incoming)
+    assert result['changed_count'] == 1
+    assert result['changed'][0]['source_identity'] == 'original-1'
+    assert build_change_report(result, _formatting_columns(), 1)[0]['changed_fields'] == ['Voucher Detail']
+
+
+def test_genuine_repeated_tag_changes_still_block_with_voucher_account_and_fields():
+    import pytest
+    from datetime import datetime
+    existing = [{"id": i, "row_data": _formatting_row(**{"Voucher Detail": f"Office supplies\nTag: {i}"}),
+                 "extract_date": "2026-04-01"} for i in [1, 2]]
+    incoming = [_formatting_row(**{"Transaction Date": datetime(2026, 4, 1), "Voucher Detail": "Office supplies"})] * 2
+    with pytest.raises(HTTPException) as error:
+        _compare_formatting(existing, incoming)
+    assert error.value.status_code == 409
+    detail = error.value.detail
+    assert all(text in detail for text in ['V-APR', 'ACCOUNT-A', '2 uploaded and 2 existing', 'Voucher Detail', 'Line IDs'])
+    assert 'Transaction Date' not in detail
+
+
+def test_identical_date_text_with_different_calendar_meaning_is_a_real_change():
+    old = _formatting_row(**{"Transaction Date": '01/04/2026'})
+    result = _compare_formatting([{"id": 1, "row_data": old, "extract_date": '2026-01-04'}], [dict(old)])
+    assert result['unchanged_count'] == 0
+    assert result['changed_count'] == 1
+    assert result['changed'][0]['changed_fields'] == ['Transaction Date']
+
+
+def test_unknown_ambiguous_stored_date_order_is_not_guessed():
+    from datetime import datetime
+    from routers.import_export import _comparison_calendar_date
+    assert _comparison_calendar_date('04/05/2026', '/', 'MDY', stored=True) is None
+    assert _comparison_calendar_date('13-04-2026', '/', 'MDY', stored=True) == '2026-04-13'
+    assert _comparison_calendar_date('2026-04-01', '/', 'DMY', stored=True) == '2026-04-01'
+    assert _comparison_calendar_date(datetime(2026, 4, 1), '-', 'MDY') == '2026-04-01'
+
+
+def test_spacing_normalization_is_limited_to_descriptions_and_retains_line_breaks():
+    from routers.import_export import _formatting_comparison_values
+    old = _formatting_row(**{"Voucher Detail": "Office\t supplies\r\nTag: A", "Account Detail": "A  B"})
+    values = _formatting_comparison_values(old, _formatting_columns(), '-', 'DMY')
+    assert values['Voucher Detail'] == 'Office supplies\nTag: A'
+    assert values['Account Detail'] == 'A  B'
+    assert values['Voucher Detail'] != 'Office supplies Tag: A'
+
+
 if __name__ == "__main__":
     unittest.main()

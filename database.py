@@ -1455,6 +1455,8 @@ def init_db():
             print("⚠️ Could not add upload summary columns:", e)
         
         # Create indexes on client_data for performance
+        _ensure_account_ledger_schema(conn)
+        _ensure_upload_lifecycle_schema(conn)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_client_data_client ON client_data (client_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_client_data_template ON client_data (template_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_client_data_upload ON client_data (upload_id)")
@@ -4390,6 +4392,58 @@ def _ensure_postgres_upload_validation_plans(conn):
         )
 
 
+def _ensure_upload_lifecycle_schema(conn):
+    """Compact archive/commit receipts; transaction payloads remain external."""
+    cursor = conn.cursor()
+    try:
+        cursor.execute('''CREATE TABLE IF NOT EXISTS upload_lifecycle_runs (
+            operation_id TEXT PRIMARY KEY, file_id INTEGER NOT NULL,
+            client_id INTEGER NOT NULL, template_id INTEGER NOT NULL,
+            request_signature TEXT NOT NULL, status TEXT NOT NULL,
+            scope_json TEXT NOT NULL, drive_file_id TEXT, archive_sha256 TEXT,
+            archive_path TEXT, archive_state_hash TEXT, result_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_upload_lifecycle_file ON upload_lifecycle_runs (client_id, template_id, file_id)')
+    finally:
+        cursor.close()
+
+
+def _ensure_account_ledger_schema(conn, postgres=False):
+    """Add compact ledger context to uploads, never a second transaction store."""
+    definitions = {
+        "templates": {
+            "data_purpose": "TEXT NOT NULL DEFAULT 'standard'",
+            "ledger_columns": "TEXT NOT NULL DEFAULT '{}'",
+        },
+        "uploaded_files": {
+            "ledger_account_code": "TEXT",
+            "ledger_account_name": "TEXT",
+            "ledger_period_start": "TEXT",
+            "ledger_period_end": "TEXT",
+            "ledger_opening_balance": "NUMERIC",
+            "ledger_closing_balance": "NUMERIC",
+            "ledger_evidence": "TEXT",
+        },
+    }
+    cur = conn.cursor()
+    try:
+        for table, columns in definitions.items():
+            existing = set()
+            if not postgres:
+                existing = {row[1] for row in cur.execute(f"PRAGMA table_info({table})")}
+            for name, definition in columns.items():
+                if postgres:
+                    cur.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {name} {definition}")
+                elif name not in existing:
+                    cur.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_uploaded_files_ledger_scope "
+            "ON uploaded_files (client_id, template_id, ledger_account_code, status)"
+        )
+    finally:
+        cur.close()
+
+
 def _ensure_postgres_upload_summary_columns(conn):
     """Add compact upload-summary metadata to existing Postgres schemas."""
     with conn.cursor() as cur:
@@ -4998,6 +5052,8 @@ def init_db_postgres(conn):
         migrated_document_type = _ensure_postgres_audit_rule_document_type_constraint(conn)
         migrated_form_columns = _ensure_postgres_form_field_columns(conn)
         migrated_form_tables = _ensure_postgres_form_tables(conn)
+        _ensure_account_ledger_schema(conn, postgres=True)
+        _ensure_upload_lifecycle_schema(conn)
         _ensure_postgres_report_category_tables(conn)
         _ensure_postgres_account_set_tables(conn)
         _ensure_postgres_cash_bank_transaction_classifications(conn)
@@ -6276,6 +6332,8 @@ def init_db_postgres(conn):
     run("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id)")
 
     _ensure_postgres_cashflow_report_source_policy(conn)
+    _ensure_account_ledger_schema(conn, postgres=True)
+    _ensure_upload_lifecycle_schema(conn)
     conn.commit()
     print("[postgres] all tables/indexes created")
 

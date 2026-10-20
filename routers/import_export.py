@@ -3,6 +3,9 @@ from fastapi.responses import StreamingResponse
 import hashlib, os, json, logging, openpyxl, pandas as pd
 from io import BytesIO
 from functools import wraps
+from contextvars import ContextVar
+from decimal import Decimal, InvalidOperation
+import re
 from time import perf_counter
 from uuid import uuid4
 from database import (
@@ -24,11 +27,321 @@ from pydantic import BaseModel
 from datetime import datetime, time
 from routers.auth import get_current_user
 from services.storage_cleanup import purge_replaced_transaction_rows, DataPurgeProtectedError, _remove_staged_upload_files
+from services.upload_lifecycle import (
+    declared_coverage, scope_sql, source_fingerprint, match_unchanged, digest,
+    get_receipt, prepare_lifecycle, guard_lifecycle, finish_lifecycle,
+    SOURCE_ROW_HASH_SQL,
+)
 
 # ⭐ MUST HAVE THIS LINE
 router = APIRouter()
 logger = logging.getLogger(__name__)
 UPLOAD_COMPARISON_PAGE_SIZE = 2000
+# Opt-in, request-local context; normal uploads never inherit ledger behaviour.
+_ledger_context = ContextVar("account_ledger_upload_context", default=None)
+_source_row_numbers = ContextVar("upload_source_row_numbers", default=None)
+
+
+def _ledger_decimal(value, *, balance=False):
+    """Parse financial controls exactly, preserving zero and debit/credit signs."""
+    if value is None or (not isinstance(value, str) and pd.isna(value)) or str(value).strip() == "":
+        return None
+    # Native Excel numbers may stringify in scientific notation; text exports
+    # still require an unambiguous decimal/thousands layout.
+    text = (format(Decimal(str(value)), "f") if isinstance(value, (int, float, Decimal)) and not isinstance(value, bool)
+            else str(value).strip().upper())
+    match = re.fullmatch(r"([+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?:\s*(DR|CR))?", text)
+    if not match or (match[2] and not balance):
+        raise HTTPException(400, "Ledger amounts must be finite numbers; only balances may carry DR/CR")
+    try:
+        number = Decimal(match[1].replace(",", ""))
+    except InvalidOperation as error:
+        raise HTTPException(400, "Invalid ledger amount") from error
+    if not number.is_finite() or (not balance and number < 0):
+        raise HTTPException(400, "Ledger debit/credit amounts must be finite and non-negative")
+    if match[2]:
+        if match[2] == "DR" and number < 0:
+            raise HTTPException(400, "Conflicting ledger balance sign and DR designation")
+        number = abs(number) * (-1 if match[2] == "CR" else 1)
+    return number
+
+
+def _resolve_ledger_context(request, template, *, lock=False):
+    """Validate upload-level identity against the same central account sources."""
+    if template.get("data_purpose", "standard") != "account_ledger":
+        if request.ledger_account_code or request.ledger_period_start or request.ledger_period_end:
+            raise HTTPException(400, "Account context requires an Account Ledger template")
+        return None
+    code = (request.ledger_account_code or "").strip()
+    if not code or len(code) > 120:
+        raise HTTPException(400, "Select a ledger account")
+    try:
+        start = datetime.strptime(request.ledger_period_start or "", "%Y-%m-%d").date().isoformat()
+        end = datetime.strptime(request.ledger_period_end or "", "%Y-%m-%d").date().isoformat()
+    except ValueError as error:
+        raise HTTPException(400, "Supply the ledger coverage dates as YYYY-MM-DD") from error
+    if start > end:
+        raise HTTPException(400, "Ledger coverage start must not follow its end")
+    if request.edited_cells or request.force_include_rows:
+        raise HTTPException(400, "Correct ledger source errors in Excel; ledger imports cannot override rejected or blank cells")
+    accounts = execute_query_pg(
+        """SELECT a.account_name, a.classification, t.treasury_type
+           FROM trial_balance_accounts a
+           JOIN account_control_cashflow_treasury_accounts t
+             ON t.client_id = %s AND t.account_code = a.account_code AND t.is_active = TRUE
+           WHERE a.account_code = %s AND a.classification = 'leaf'
+             AND a.upload_id = (
+                 SELECT id FROM trial_balance_uploads WHERE client_id = %s AND status = 'parsed'
+                 ORDER BY (period_end IS NULL), period_end DESC, uploaded_at DESC LIMIT 1)""",
+        (request.client_id, code, request.client_id),
+    )
+    if len(accounts) != 1 or accounts[0].get("treasury_type") not in {"cash", "bank"}:
+        raise HTTPException(400, "Select one posting account from the latest Trial Balance configured as Cash/Bank")
+    roles = template.get("ledger_columns") or {}
+    if isinstance(roles, str):
+        roles = json.loads(roles)
+    required = {"voucher", "date", "description", "debit", "credit", "balance"}
+    if set(roles) != required or len(set(roles.values())) != len(required):
+        raise HTTPException(400, "Configure the ledger template's six column roles before uploading")
+    column_lock = " FOR SHARE OF m, p" if lock else ""
+    columns = execute_query_pg(
+        """SELECT m.id, m.column_name, m.data_type FROM template_column_mappings p
+           JOIN master_columns m ON m.id = p.column_id AND m.is_active = TRUE
+           WHERE p.template_id = %s ORDER BY p.sort_order""" + column_lock, (request.template_id,),
+    )
+    by_id = {row["id"]: row for row in columns}
+    mapped = {item.template_column_id: item.excel_column_name for item in request.mappings}
+    if not columns or columns[0]["id"] != roles["voucher"] or any(
+        column not in by_id or not mapped.get(column) for column in roles.values()
+    ):
+        raise HTTPException(400, "Map all six ledger columns and keep Voucher first")
+    allowed = {"voucher": {"Text"}, "date": {"Date"}, "description": {"Text"},
+               "debit": {"Numeric"}, "credit": {"Numeric"}, "balance": {"Text", "Numeric"}}
+    if any(by_id[column]["data_type"] not in allowed[role] for role, column in roles.items()):
+        raise HTTPException(400, "The ledger template has incompatible shared column types")
+    # Configuration participates in the plan guard, including shared column types.
+    configuration = hashlib.sha256(json.dumps([roles, columns], sort_keys=True).encode()).hexdigest()
+    return {"account_code": code, "account_name": accounts[0]["account_name"],
+            "start": start, "end": end, "configuration": configuration,
+            "roles": {role: by_id[column]["column_name"] for role, column in roles.items()},
+            "excel_roles": {role: mapped[column] for role, column in roles.items()},
+            "row_numbers": {}, "evidence": {"opening": None, "closing": None, "control_rows": []}}
+
+
+def _with_ledger_context(function):
+    """Reset context even on failed validation/import or a concurrent request."""
+    @wraps(function)
+    def wrapped(request, *args, **kwargs):
+        templates = execute_query_pg(
+            "SELECT id, data_purpose, ledger_columns FROM templates WHERE id = %s AND is_active = TRUE",
+            (request.template_id,),
+        )
+        context = _resolve_ledger_context(request, templates[0]) if templates else None
+        token = _ledger_context.set(context)
+        source_token = _source_row_numbers.set({})
+        try:
+            if context:
+                files = execute_query_pg("SELECT status, client_id FROM uploaded_files WHERE id = %s", (request.file_id,))
+                if files and files[0].get('status') == 'Imported' and request.validation_plan_id and function.__name__ == 'validate_and_import':
+                    completed = get_receipt(request, execute_query_pg, _validation_request_signature(request))
+                    if completed:
+                        return completed
+                if not files or files[0].get("status") == "Imported":
+                    raise HTTPException(409, "Upload a fresh ledger file; an imported source cannot be reassigned")
+                if files[0].get("client_id") not in (None, request.client_id):
+                    raise HTTPException(409, "The staged ledger belongs to a different client")
+            if context and function.__name__ == "validate_and_import" and not request.validation_plan_id:
+                raise HTTPException(400, "Validate the account ledger first and import using its validation plan")
+            if context and function.__name__ == "check_duplicates":
+                raise HTTPException(400, "Use Validate for the account-specific ledger duplicate check")
+            if request.comparison_mode == 'replace_range':
+                selected = declared_coverage(request.coverage_start or (context or {}).get('start'),
+                                             request.coverage_end or (context or {}).get('end'))
+                if context and selected != {'start': context['start'], 'end': context['end']}:
+                    raise HTTPException(400, 'Complete ledger coverage must match the declared ledger source period.')
+                if function.__name__ == 'validate_and_import' and not request.validation_plan_id:
+                    raise HTTPException(400, 'Validate the complete report before importing its replacement plan.')
+            return function(request, *args, **kwargs)
+        finally:
+            _source_row_numbers.reset(source_token)
+            _ledger_context.reset(token)
+    return wrapped
+
+
+def _ledger_row_number(row, fallback):
+    context = _ledger_context.get()
+    source_number = (_source_row_numbers.get() or {}).get(id(row), fallback)
+    return context["row_numbers"].get(id(row), source_number) if context else source_number
+
+
+def _prepare_source_rows(frame, request, template_cols, col_mapping):
+    """Recognise controls from every source cell before projecting mapped columns.
+
+    A total word alone is insufficient: document/date/account evidence always
+    wins. Keep source positions request-local, never in stored transaction data.
+    """
+    pattern = re.compile(r'(?:grand\s*)?(?:sub\s*)?total\s*:?$', re.I)
+    def blank(value):
+        return value is None or pd.isna(value) or str(value).strip() == ''
+
+    def marker(value):
+        return isinstance(value, str) and bool(pattern.fullmatch(value.strip()))
+
+    roles = (_ledger_context.get() or {}).get('excel_roles', {})
+    key = roles.get('voucher') or col_mapping.get(template_cols[0]['column_name'])
+    protected = {col_mapping.get(c['column_name']) for c in template_cols
+                 if c['data_type'] == 'Date' or 'account' in c['column_name'].casefold()}
+    protected.discard(None)
+    rows, controls = [], []
+    positions = _source_row_numbers.get()
+    for number, raw in enumerate(frame.to_dict('records'), 2):
+        nonblank = [value for value in raw.values() if not blank(value)]
+        summary = (any(marker(value) for value in nonblank)
+                   and (blank(raw.get(key)) or marker(raw.get(key)))
+                   and all(blank(raw.get(column)) or marker(raw.get(column)) for column in protected))
+        # Extra source text/dates are evidence of an ambiguous or genuine row.
+        if summary:
+            for value in nonblank:
+                if marker(value):
+                    continue
+                try:
+                    if isinstance(value, bool) or not Decimal(str(value).replace(',', '')).is_finite():
+                        summary = False
+                except (InvalidOperation, ValueError, TypeError):
+                    summary = False
+        if not nonblank or summary:
+            controls.append({'row_number': number, 'kind': 'total' if summary else 'blank',
+                             'label': next((v.strip() for v in nonblank if marker(v)), ''),
+                             'amounts': {name: str(raw.get(col_mapping.get(name)))
+                                         for name in ('Debit Amount', 'Credit Amount')
+                                         if col_mapping.get(name) and not blank(raw.get(col_mapping[name]))}})
+            continue
+        row = {header: raw[header] for header in dict.fromkeys(col_mapping.values()) if header in raw}
+        rows.append(row)
+        if positions is not None:
+            positions[id(row)] = number
+
+    diagnostics = {'excluded_count': len(controls), 'excluded_rows': controls, 'warnings': []}
+    # Compare only a single trailing report total, never subtotals or rates.
+    totals = [c for c in controls if c['kind'] == 'total']
+    if len(totals) == 1 and not _ledger_context.get():
+        total = totals[0]
+        last_transaction = max((positions or {}).values(), default=1)
+        if total['row_number'] > last_transaction and 'sub' not in total['label'].casefold():
+            for name, reported in total['amounts'].items():
+                try:
+                    actual = sum((Decimal(str(r[col_mapping[name]]).replace(',', ''))
+                                  for r in rows if not blank(r.get(col_mapping[name]))), Decimal(0))
+                    expected = Decimal(reported.replace(',', ''))
+                    if actual.is_finite() and expected.is_finite() and actual != expected:
+                        diagnostics['warnings'].append({'row_number': total['row_number'], 'column': name,
+                            'message': f'Source footer {expected} differs from transaction total {actual} by {actual - expected}. Amounts were not altered.'})
+                except (InvalidOperation, ValueError, TypeError):
+                    pass  # Invalid transaction amounts are reported by normal validation.
+    return rows, diagnostics
+
+
+def _prepare_ledger_rows(rows, request):
+    """Extract controls before user exclusions; retain original transaction values."""
+    context = _ledger_context.get()
+    if not context:
+        return rows
+    roles = context["excel_roles"]
+    transactions = []
+    for number, row in enumerate(rows, 2):
+        number = _ledger_row_number(row, number)
+        voucher = row.get(roles["voucher"])
+        blank_voucher = voucher is None or pd.isna(voucher) or not str(voucher).strip()
+        label = re.sub(r"[^a-z]", "", str(row.get(roles["description"]) or "").casefold())
+        kind = ("opening" if label in {"openingbalance", "balanceforward", "balancebroughtforward"}
+                else "closing" if label == "closingbalance" else None)
+        if blank_voucher and kind:
+            value = _ledger_decimal(row.get(roles["balance"]), balance=True)
+            if context["evidence"][kind] is not None or any(
+                item["kind"] == kind for item in context["evidence"]["control_rows"]
+            ):
+                raise HTTPException(400, f"More than one ledger {kind} control row")
+            context["evidence"][kind] = str(value) if value is not None else None
+            context["evidence"]["control_rows"].append({"row_number": number, "kind": kind})
+            continue
+        # A voucher-bearing description saying 'Closing balance' is a real line.
+        context["row_numbers"][id(row)] = number
+        if number not in set(request.excluded_rows or []):
+            for role in ("debit", "credit", "balance"):
+                _ledger_decimal(row.get(roles[role]), balance=role == "balance")
+            value = row.get(roles["date"])
+            if classify_date_cell(value) != "empty":
+                if classify_date_cell(value) == "native":
+                    day = value.date().isoformat()
+                elif classify_date_cell(value) == "excel_serial":
+                    day = excel_serial_to_datetime(value).date().isoformat()
+                else:
+                    try:
+                        day = parse_date_flexible(value, request.date_delimiter if request.date_delimiter is not None else DEFAULT_DATE_DELIMITER,
+                                                  request.date_order or DEFAULT_DATE_ORDER).date().isoformat()
+                    except (ValueError, TypeError) as error:
+                        raise HTTPException(400, f"Invalid ledger transaction date at Excel row {number}") from error
+                if not context["start"] <= day <= context["end"]:
+                    raise HTTPException(400, "A ledger transaction is outside the declared coverage period")
+        transactions.append(row)
+    return transactions
+
+
+def _ledger_scope_fingerprint(client_id, template_id, locked=False):
+    """Guard the entire account population, including concurrent balance-only imports."""
+    context = _ledger_context.get()
+    records = execute_query_pg(
+        """SELECT cd.id, cd.version, cd.row_data FROM client_data cd
+           JOIN uploaded_files u ON u.id = cd.upload_id
+           WHERE cd.client_id = %s AND cd.template_id = %s AND cd.is_deleted = FALSE
+             AND u.ledger_account_code = %s ORDER BY cd.id""",
+        (client_id, template_id, context["account_code"]), **({} if locked else {'page_size': UPLOAD_COMPARISON_PAGE_SIZE}),
+    )
+    uploads = execute_query_pg(
+        """SELECT id, ledger_period_start, ledger_period_end, ledger_evidence FROM uploaded_files
+           WHERE client_id = %s AND template_id = %s AND ledger_account_code = %s
+             AND status = 'Imported' ORDER BY id""", (client_id, template_id, context["account_code"]),
+    )
+    return hashlib.sha256(json.dumps([records, uploads], sort_keys=True, default=str).encode()).hexdigest()
+
+
+def _persist_ledger_evidence(request, evidence):
+    context = _ledger_context.get()
+    execute_write_pg(
+        """UPDATE uploaded_files SET template_id = %s, ledger_account_code = %s, ledger_account_name = %s,
+           ledger_period_start = %s, ledger_period_end = %s, ledger_opening_balance = %s,
+           ledger_closing_balance = %s, ledger_evidence = %s WHERE id = %s""",
+        (request.template_id, context["account_code"], context["account_name"], context["start"], context["end"],
+         evidence["opening"], evidence["closing"], json.dumps(evidence), request.file_id),
+    )
+
+
+def _guard_ledger_plan(request, payload):
+    """Check account/configuration and full-source freshness under the import lock."""
+    context = _ledger_context.get()
+    expected = payload.get("ledger")
+    if not context:
+        if expected:
+            raise HTTPException(409, "The ledger template changed after validation")
+        return
+    if not expected or any(expected.get(key) != context[key] for key in
+                           ("account_code", "start", "end", "configuration")):
+        raise HTTPException(409, "Ledger account, coverage or configuration changed; validate again")
+    templates = execute_query_pg(
+        "SELECT data_purpose, ledger_columns FROM templates WHERE id = %s AND is_active = TRUE FOR SHARE", (request.template_id,)
+    )
+    fresh = _resolve_ledger_context(request, templates[0], lock=True) if templates else None
+    if not fresh or fresh["configuration"] != context["configuration"]:
+        raise HTTPException(409, "Ledger configuration changed after validation; validate again")
+    if _ledger_scope_fingerprint(request.client_id, request.template_id, locked=True) != expected.get("scope_fingerprint"):
+        raise HTTPException(409, "The account ledger changed after validation; validate again")
+    files = execute_query_pg(
+        "SELECT status, client_id, template_id FROM uploaded_files WHERE id = %s FOR UPDATE", (request.file_id,)
+    )
+    if (not files or files[0].get("status") != "Validated"
+            or files[0].get("client_id") != request.client_id
+            or files[0].get("template_id") != request.template_id):
+        raise HTTPException(409, "The staged ledger changed after validation; validate again")
 
 
 def _check_upload_storage_budget(additional_bytes=0):
@@ -329,9 +642,8 @@ def apply_edited_cell_values(rows: list, edited_cells) -> list:
     (static/upload.js's editedCellValues, Phase 3) before the row is validated/imported.
     row_number matches the same scheme as filter_excluded_rows()/validation_errors[].row_number
     (header=1, first data row=2), so this MUST run before filter_excluded_rows() -- that
-    function returns a plain filtered list with no memory of original position, and anything
-    enumerating rows after it renumbers from scratch, which would misalign edited_cells against
-    the wrong rows once any row is excluded.
+    request-local source positions preserve the original Excel numbers even after
+    automatic control-row recognition or manual exclusion.
 
     Only overwrites a cell that is CURRENTLY blank -- a stray/stale edit can never clobber real
     data, even though the frontend already restricts editing to blank, non-key-column cells.
@@ -344,7 +656,7 @@ def apply_edited_cell_values(rows: list, edited_cells) -> list:
     for edit in edited_cells:
         edits_by_row.setdefault(edit.row_number, {})[edit.excel_column] = edit.value
     for row_idx, row in enumerate(rows, start=2):
-        row_edits = edits_by_row.get(row_idx)
+        row_edits = edits_by_row.get(_ledger_row_number(row, row_idx))
         if not row_edits:
             continue
         for excel_column, value in row_edits.items():
@@ -370,7 +682,7 @@ def filter_excluded_rows(rows: list, excluded_rows: Optional[List[int]]) -> list
     if not excluded_rows:
         return rows
     excluded_set = set(excluded_rows)
-    return [row for idx, row in enumerate(rows, start=2) if idx not in excluded_set]
+    return [row for idx, row in enumerate(rows, start=2) if _ledger_row_number(row, idx) not in excluded_set]
 
 
 def _count_new_and_existing_rows_legacy(client_id: int, template_id: int, rows: list, template_cols: list, mapping_dict: dict):
@@ -490,6 +802,64 @@ def _row_comparison_fingerprint(row_data: dict) -> tuple:
     return tuple(sorted(normalized))
 
 
+def _comparison_calendar_date(value, delimiter, order, *, stored=False):
+    """Resolve comparison-only dates; never guess an old ambiguous text order."""
+    try:
+        kind = classify_date_cell(value)
+        if kind == 'native':
+            return value.strftime('%Y-%m-%d')
+        if kind == 'excel_serial':
+            return excel_serial_to_datetime(value).strftime('%Y-%m-%d')
+        if kind != 'text':
+            return None
+        if not stored:
+            return parse_date_flexible(value, delimiter, order).strftime('%Y-%m-%d')
+        # Old uploads need not use today's picker settings. The primary Date
+        # uses its stored extract_date; other dates require an unambiguous parse.
+        candidates = set()
+        for separator in ('/', '-', ''):
+            for component_order in ('DMY', 'MDY', 'YMD'):
+                try:
+                    candidates.add(parse_date_flexible(value, separator, component_order).strftime('%Y-%m-%d'))
+                except (ValueError, TypeError):
+                    pass
+        return next(iter(candidates)) if len(candidates) == 1 else None
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def _formatting_comparison_values(row_data, template_cols, delimiter, order,
+                                 *, primary_date=None, stored=False):
+    """Comparable views only: identities, concurrency guards and raw rows stay exact."""
+    values = dict(_row_comparison_fingerprint(row_data))
+    date_columns = [c['column_name'] for c in template_cols if c.get('data_type') == 'Date']
+    context = _ledger_context.get()
+    primary_column = (context['roles']['date'] if context else
+                      (date_columns[0] if date_columns else None))
+    description_columns = {
+        c['column_name'] for c in template_cols
+        if str(c['column_name']).strip().casefold() in {
+            'description', 'voucher detail', 'voucher description', 'transaction description',
+            'particulars', 'narration',
+        }
+    }
+    if context:
+        description_columns.add(context['roles']['description'])
+    for name in date_columns:
+        if name not in values:
+            continue
+        day = primary_date if name == primary_column else None
+        day = day or _comparison_calendar_date(row_data.get(name), delimiter, order, stored=stored)
+        if day:
+            values[name] = ('calendar_date', day)
+    for name in description_columns & values.keys():
+        # Normalize horizontal spacing and line endings, keeping wording,
+        # punctuation, case and paragraph boundaries (including tags) intact.
+        text = values[name].replace('\r\n', '\n').replace('\r', '\n')
+        values[name] = re.sub(r'[ \t]+', ' ', text).strip()
+    return values
+
+
 LINE_KEY_ALIASES = {
     "line id", "line_id", "line no", "line_no", "line number",
     "line_number", "line item", "line_item", "item no", "item_no",
@@ -556,19 +926,20 @@ def build_change_report(change_detection: dict, template_cols: list, template_id
     for item in change_detection.get("changed", []):
         old_row = item.get("old_row_data") or {}
         new_row = item.get("new_row_data") or {}
+        changed_fields = item.get("changed_fields", _changed_field_names(old_row, new_row))
         report.append({
             "action": "Changed",
             "client_data_id": item.get("client_data_id"),
             "document_id": old_row.get(template_cols[0]["column_name"]) if template_cols else None,
             "line_key": _comparison_line_key(template_cols, new_row, template_id),
-            "changed_fields": _changed_field_names(old_row, new_row),
+            "changed_fields": changed_fields,
             "old_values": {
                 field: old_row.get(field)
-                for field in _changed_field_names(old_row, new_row)
+                for field in changed_fields
             },
             "new_values": {
                 field: new_row.get(field)
-                for field in _changed_field_names(old_row, new_row)
+                for field in changed_fields
             },
         })
     for row_data in change_detection.get("new", []):
@@ -593,7 +964,16 @@ def build_change_report(change_detection: dict, template_cols: list, template_id
 
 def public_change_detection(change_detection: dict, template_cols: list, template_id: int) -> dict:
     """Strip raw row payloads before a comparison result leaves the backend."""
+    observations = change_detection.get('voucher_observations', [])
+    period = change_detection.get('date_range') or {}
+    moves = [{'voucher_id': item['voucher_id'], 'previous_dates': item['previous_dates'] or ['Unknown'],
+              'incoming_dates': item.get('incoming_dates', [])} for item in observations
+             if item.get('incoming_rows') and period.get('start') and
+             (not item.get('previous_dates') or any(not period['start'] <= day <= period['end'] for day in item['previous_dates']))]
     return {
+        'changed_voucher_count': sum(item['status'] == 'Changed' for item in observations),
+        'removed_voucher_count': sum(item['status'] == 'Removed' for item in observations),
+        'date_moves': moves,
         "unchanged_count": change_detection.get("unchanged_count", 0),
         "changed_count": change_detection.get("changed_count", 0),
         "new_count": change_detection.get("new_count", 0),
@@ -785,8 +1165,14 @@ def _find_prior_import_with_same_hash(
     """Find a prior imported source file with identical bytes for audit messaging."""
     if not file_hash:
         return None
+    context = _ledger_context.get()
+    scope = ""
+    params = (file_id, client_id, template_id, file_hash)
+    if context:
+        scope = " AND ledger_account_code = %s AND ledger_period_start = %s AND ledger_period_end = %s"
+        params += (context["account_code"], context["start"], context["end"])
     rows = execute_query_pg(
-        """
+        f"""
         SELECT id, file_name, upload_date
         FROM uploaded_files
         WHERE id <> %s
@@ -794,10 +1180,11 @@ def _find_prior_import_with_same_hash(
           AND template_id = %s
           AND status = 'Imported'
           AND file_sha256 = %s
+          {scope}
         ORDER BY id DESC
         LIMIT 1
         """,
-        (file_id, client_id, template_id, file_hash),
+        params,
     )
     return rows[0] if rows else None
 
@@ -836,6 +1223,7 @@ def _build_validation_plan_payload(
         changed.append({
             "client_data_id": item["client_data_id"],
             "new_row_data": new_row,
+            "changed_fields": item.get("changed_fields", _changed_field_names(old_row, new_row)),
             "expected_old_fingerprint": _row_fingerprint_token(old_row),
             "expected_old_version": item.get("old_version", 1),
             "verification_detail_id": item.get("verification_detail_id"),
@@ -876,7 +1264,7 @@ def _build_validation_plan_payload(
             "line_key": _comparison_line_key(template_cols, old_row, template_id),
         })
 
-    return {
+    payload = {
         "total_rows": total_rows,
         "rejected_rows": [
             {"row_number": item.get("row_number"), "reasons": item.get("reasons", [])}
@@ -901,6 +1289,22 @@ def _build_validation_plan_payload(
         "new": new_rows,
         "missing": missing,
     }
+    context = _ledger_context.get()
+    # JSON plans stringify native Excel dates in DD/MM/YYYY. Retain the
+    # validated day so Import never reparses it using a text-date picker.
+    for kind, key in (("new", "row_data"), ("changed", "new_row_data")):
+        for item in payload[kind]:
+            item['validated_date'] = _date_text_for_row(item[key], template_cols, date_delimiter, date_order)
+            if context:
+                item['ledger_date'] = item['validated_date']
+    if context:
+        payload["ledger"] = {key: context[key] for key in ("account_code", "start", "end", "configuration", "scope_fingerprint", "evidence")}
+    if change_detection.get('lifecycle'):
+        payload['lifecycle'] = change_detection['lifecycle']
+        payload['voucher_observations'] = change_detection.get('voucher_observations', [])
+        payload['template_columns'] = template_cols
+        payload['template_fingerprint'] = digest([template_cols, rate_source])
+    return payload
 
 
 def _create_validation_plan(
@@ -1126,10 +1530,21 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
                          rate_source: Optional[str] = None, rate_precision: int = 0,
                          comparison_mode: str = "correction",
                          date_delimiter: str = DEFAULT_DATE_DELIMITER,
-                         date_order: str = DEFAULT_DATE_ORDER) -> dict:
+                         date_order: str = DEFAULT_DATE_ORDER,
+                         coverage_start: Optional[str] = None,
+                         coverage_end: Optional[str] = None) -> dict:
     """Compare exact lines first, then classify unmatched lines within each document."""
     if comparison_mode not in {"correction", "replace_range"}:
         raise HTTPException(400, "Invalid upload comparison mode")
+    context = _ledger_context.get()
+    coverage = None
+    if comparison_mode == 'replace_range':
+        coverage = declared_coverage(coverage_start or (context or {}).get('start'),
+                                     coverage_end or (context or {}).get('end'))
+    scope_context = {'client_id': client_id, 'template_id': template_id,
+                     'account_code': (context or {}).get('account_code'),
+                     'start': (coverage or context or {}).get('start'),
+                     'end': (coverage or context or {}).get('end')}
 
     result = {
         "unchanged_count": 0,
@@ -1161,6 +1576,8 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
         row_data = reorder_row_data_by_template(row_data, template_cols)
         document_group_id = get_document_group_id(template_cols, row_data, template_id)
         date_text = _date_text_for_row(row_data, template_cols, date_delimiter, date_order)
+        if coverage and (not date_text or not coverage['start'] <= date_text <= coverage['end']):
+            raise HTTPException(400, 'Every transaction must have a valid date inside the declared complete-report coverage.')
         if date_text:
             incoming_dates.append(date_text)
         occurrence_key = (document_group_id, _row_fingerprint_token(row_data))
@@ -1179,20 +1596,50 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
         incoming_records.append(record)
         incoming_groups.setdefault(document_group_id, []).append(record)
 
-    if comparison_mode == "replace_range":
-        if not incoming_dates:
-            raise HTTPException(400, "A complete replacement requires a valid Date column and date range.")
-        if any(record["date_text"] is None for record in incoming_records):
-            raise HTTPException(400, "A complete replacement cannot include a line with a blank or invalid Date.")
-        result["date_range"] = {"start": min(incoming_dates), "end": max(incoming_dates)}
+    if coverage:
+        if not any(column.get('data_type') == 'Date' for column in template_cols):
+            raise HTTPException(400, 'Complete reports require a mapped Date column.')
+        result['date_range'] = coverage
+        # Only these same document IDs may follow a corrected date outside the
+        # declared period. Other vouchers outside it remain untouched.
+        if not context:
+            scope_context['document_groups'] = sorted(incoming_groups)
+    result['voucher_observations'] = []
 
     # Fetch bounded wire payloads in one read-only snapshot. A failed read must
     # finish or fail completely before comparison can produce import actions.
+    scope = ""
+    params = (client_id, template_id)
+    if context:
+        scope = (" AND EXISTS (SELECT 1 FROM uploaded_files lu WHERE lu.id = cd.upload_id AND lu.ledger_account_code = %s)"
+                 " AND (cd.extract_date BETWEEN %s::date AND %s::date")
+        params += (context["account_code"], context["start"], context["end"])
+    elif coverage:
+        scope = ' AND (cd.extract_date BETWEEN %s::date AND %s::date'
+        params += (coverage['start'], coverage['end'])
+    if context and coverage and incoming_groups:
+        # Ledger opening/closing evidence belongs to its declared account
+        # period; moving old ledger coverage needs a wider ledger export.
+        boundary = execute_query_pg('''SELECT cd.id, cd.extract_date FROM client_data cd
+            WHERE cd.client_id = %s AND cd.template_id = %s AND cd.is_deleted = FALSE
+              AND cd.document_group_id = ANY(%s)
+              AND (cd.extract_date IS NULL OR cd.extract_date < %s::date OR cd.extract_date > %s::date)
+              AND EXISTS (SELECT 1 FROM uploaded_files lu WHERE lu.id = cd.upload_id AND lu.ledger_account_code = %s)''',
+            (client_id, template_id, sorted(incoming_groups), coverage['start'], coverage['end'], context['account_code']))
+        if any(not row.get('extract_date') or not coverage['start'] <= str(row['extract_date'])[:10] <= coverage['end'] for row in boundary):
+            raise HTTPException(409, 'An uploaded ledger voucher already has lines outside this coverage. Include both dates in a wider ledger report.')
+    if context or coverage:
+        if coverage and incoming_groups and not context:
+            scope += ' OR cd.document_group_id = ANY(%s)'
+            params += (sorted(incoming_groups),)
+        scope += ')'
+
     existing_rows = execute_query_pg(
-        """
+        f"""
         SELECT cd.id, cd.row_data, cd.version, cd.document_group_id,
                cd.source_identity,
-               cd.extract_date, vd.validation_status, vd.id AS verification_detail_id
+               cd.extract_date, vd.validation_status, vd.id AS verification_detail_id,
+               {SOURCE_ROW_HASH_SQL} AS scope_row_hash
         FROM client_data cd
         LEFT JOIN LATERAL (
             SELECT id, validation_status
@@ -1202,9 +1649,10 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
             LIMIT 1
         ) vd ON TRUE
         WHERE cd.client_id = %s AND cd.template_id = %s AND cd.is_deleted = FALSE
+          {scope}
         ORDER BY cd.id
         """,
-        (client_id, template_id),
+        params,
         page_size=UPLOAD_COMPARISON_PAGE_SIZE,
     )
     result["total_existing_before_import"] = len(existing_rows)
@@ -1223,34 +1671,73 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
             "old_validation_status": row.get("validation_status") or "Pending",
             "verification_detail_id": row.get("verification_detail_id"),
             "source_identity": row.get("source_identity"),
+            "comparison_date": _date_text(row.get("extract_date")),
             "extract_date": _date_text(row.get("extract_date")) or _date_text_for_row(
                 row_data, template_cols, date_delimiter, date_order
             ),
         })
 
     line_column = get_line_key_column(template_cols)
-    all_document_ids = set(existing_groups) | set(incoming_groups)
+    all_document_ids = sorted(set(existing_groups) | set(incoming_groups))
     for document_group_id in all_document_ids:
+        changed_before = result['changed_count']
         incoming = list(incoming_groups.get(document_group_id, []))
         existing = list(existing_groups.get(document_group_id, []))
         unmatched_incoming = []
         unmatched_existing = list(existing)
+        new_values = {id(r): _formatting_comparison_values(
+            r['row_data'], template_cols, date_delimiter, date_order, primary_date=r['date_text']
+        ) for r in incoming}
+        old_values = {id(r): _formatting_comparison_values(
+            r['old_row_data'], template_cols, date_delimiter, date_order,
+            primary_date=r['comparison_date'], stored=True
+        ) for r in existing}
 
-        # Exact matches are always unchanged, including repeated lines within a
-        # document. Each existing row can be consumed only once.
-        for incoming_record in incoming:
-            fingerprint = _row_comparison_fingerprint(incoming_record["row_data"])
-            match_index = next(
-                (index for index, old in enumerate(unmatched_existing)
-                 if _row_comparison_fingerprint(old["old_row_data"]) == fingerprint),
-                None,
-            )
-            if match_index is None:
-                unmatched_incoming.append(incoming_record)
-                continue
-            old = unmatched_existing.pop(match_index)
-            result["unchanged"].append(old["client_data_id"])
-            result["unchanged_count"] += 1
+        def changed_item(old, new):
+            before, after = old_values[id(old)], new_values[id(new)]
+            return {
+                "client_data_id": old["client_data_id"],
+                "old_row_data": old["old_row_data"],
+                "new_row_data": new["row_data"],
+                "old_validation_status": old["old_validation_status"],
+                "old_version": old["old_version"],
+                "verification_detail_id": old["verification_detail_id"],
+                "source_identity": old.get("source_identity"),
+                "changed_fields": sorted(k for k in before.keys() | after.keys()
+                                         if before.get(k, '') != after.get(k, '')),
+            }
+
+        def ambiguous_correction(uploaded, current, account=None):
+            voucher = (incoming or [{}])[0].get('row_data', {}).get(
+                template_cols[0]['column_name'], document_group_id) if template_cols else document_group_id
+            # Compare field populations, not every possible row pairing. A
+            # matching amount population must not be labelled an amount change.
+            from collections import Counter
+            candidates = set().union(*(old_values[id(r)].keys() for r in current),
+                                     *(new_values[id(r)].keys() for r in uploaded))
+            fields = sorted(field for field in candidates if
+                Counter(str(old_values[id(r)].get(field, '')) for r in current) !=
+                Counter(str(new_values[id(r)].get(field, '')) for r in uploaded))
+            account_text = f", account '{str(account)[:80]}'" if account is not None else ''
+            raise HTTPException(409,
+                f"Ambiguous transaction correction for voucher '{str(voucher)[:80]}'{account_text}: "
+                f"{len(uploaded)} uploaded and {len(current)} existing lines cannot be paired safely. "
+                f"Fields to review: {', '.join(fields[:8]) or 'line identity'}. "
+                "Provide stable source Line IDs before changing repeated lines; review source differences before retrying.")
+
+        def equivalent(record, stored):
+            return tuple(sorted((old_values if stored else new_values)[id(record)].items()))
+
+        def exact(record, stored):
+            raw = record['old_row_data' if stored else 'row_data']
+            # Include the resolved date when known, avoiding equal text with
+            # different DMY/MDY interpretations being accepted as unchanged.
+            primary = record.get('comparison_date' if stored else 'date_text')
+            return _row_comparison_fingerprint(raw), primary
+
+        matched, unmatched_incoming, unmatched_existing = match_unchanged(incoming, existing, exact, equivalent)
+        result['unchanged'].extend(old['client_data_id'] for old in matched)
+        result['unchanged_count'] += len(matched)
 
         # Explicit line IDs are authoritative. Unmatched IDs must remain new or
         # removed lines and must never inherit another transaction's history.
@@ -1268,19 +1755,11 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
                     unmatched_incoming.append(incoming_record)
                     continue
                 old = unmatched_existing.pop(match_index)
-                result["changed"].append({
-                    "client_data_id": old["client_data_id"],
-                    "old_row_data": old["old_row_data"],
-                    "new_row_data": incoming_record["row_data"],
-                    "old_validation_status": old["old_validation_status"],
-                    "old_version": old["old_version"],
-                    "verification_detail_id": old["verification_detail_id"],
-                    "source_identity": old.get("source_identity"),
-                })
+                result["changed"].append(changed_item(old, incoming_record))
                 result["changed_count"] += 1
 
         pairs = []
-        if not line_column and unmatched_incoming and unmatched_existing:
+        if not coverage and not line_column and unmatched_incoming and unmatched_existing:
             account_column = next((column["column_name"] for column in template_cols
                                    if str(column["column_name"]).strip().casefold()
                                    in {"account code", "account_code", "account detail", "ledger code"}), None)
@@ -1302,39 +1781,64 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
                         unmatched_existing.remove(old)
                         unmatched_incoming.remove(new)
                     elif existing_matches:
-                        raise HTTPException(409, "Ambiguous transaction correction: provide stable source Line IDs before changing repeated lines.")
+                        ambiguous_correction(incoming_matches, existing_matches, new['row_data'].get(account_column))
             elif len(unmatched_incoming) == len(unmatched_existing) == 1:
                 pairs.append((unmatched_existing.pop(), unmatched_incoming.pop()))
             else:
-                raise HTTPException(409, "Ambiguous transaction correction: provide stable source Line IDs before changing multiple lines.")
+                ambiguous_correction(unmatched_incoming, unmatched_existing)
         for old, new in pairs:
-            result["changed"].append({
-                "client_data_id": old["client_data_id"],
-                "old_row_data": old["old_row_data"],
-                "new_row_data": new["row_data"],
-                "old_validation_status": old["old_validation_status"],
-                "old_version": old["old_version"],
-                "verification_detail_id": old["verification_detail_id"],
-                "source_identity": old.get("source_identity"),
-            })
+            result["changed"].append(changed_item(old, new))
             result["changed_count"] += 1
         for new in unmatched_incoming:
             result["new"].append(new["row_data"])
             result["new_source_identities"].append(new["source_identity"])
             result["new_count"] += 1
         if comparison_mode == "replace_range":
-            start_date = result["date_range"]["start"]
-            end_date = result["date_range"]["end"]
             for old in unmatched_existing:
-                if old.get("extract_date") and start_date <= old["extract_date"] <= end_date:
-                    result["missing"].append({
-                        "client_data_id": old["client_data_id"],
-                        "old_row_data": old["old_row_data"],
-                        "validation_status": old["old_validation_status"],
-                        "verification_detail_id": old["verification_detail_id"],
-                    })
-                    result["missing_count"] += 1
+                result["missing"].append({
+                    "client_data_id": old["client_data_id"],
+                    "old_row_data": old["old_row_data"],
+                    "validation_status": old["old_validation_status"],
+                    "verification_detail_id": old["verification_detail_id"],
+                })
+                result["missing_count"] += 1
 
+        # Archive the complete previous voucher even if one line changes;
+        # unchanged occurrences retain their existing IDs and evidence links.
+        if existing and ((coverage and (unmatched_incoming or unmatched_existing))
+                         or result['changed_count'] > changed_before):
+            from collections import Counter
+            fields = sorted(c['column_name'] for c in template_cols if
+                Counter(str(old_values[id(r)].get(c['column_name'], '')) for r in existing) !=
+                Counter(str(new_values[id(r)].get(c['column_name'], '')) for r in incoming))
+            result['voucher_observations'].append({
+                'document_group_id': document_group_id,
+                'voucher_id': (incoming[0]['row_data'] if incoming else existing[0]['old_row_data']).get(template_cols[0]['column_name'], document_group_id),
+                'status': 'Changed' if incoming else 'Removed',
+                'changed_fields': fields or ['Line composition'],
+                'old_ids': [r['client_data_id'] for r in existing],
+                'previous_dates': sorted({r['comparison_date'] for r in existing if r.get('comparison_date')}),
+                'incoming_dates': sorted({r['date_text'] for r in incoming if r.get('date_text')}),
+                'incoming_rows': [{'row_data': r['row_data'], 'extract_date': r['date_text']} for r in incoming],
+            })
+
+    observations = result['voucher_observations']
+    if observations and (coverage or context):
+        groups = sorted(item['document_group_id'] for item in observations)
+        old_ids = {key for item in observations for key in item['old_ids']}
+        members = execute_query_pg('''SELECT cd.id FROM client_data cd
+            WHERE cd.client_id = %s AND cd.template_id = %s AND cd.is_deleted = FALSE
+              AND cd.document_group_id = ANY(%s)'''
+            + (' AND EXISTS (SELECT 1 FROM uploaded_files lu WHERE lu.id = cd.upload_id AND lu.ledger_account_code = %s)' if context else ''),
+            (client_id, template_id, groups) + ((context['account_code'],) if context else ()),
+            page_size=UPLOAD_COMPARISON_PAGE_SIZE)
+        if {row['id'] for row in members} != old_ids:
+            raise HTTPException(409, 'A previous voucher has additional lines outside this report period. Use wider coverage so its complete previous version can be archived.')
+        if coverage and not context:
+            scope_context['document_groups'] = sorted(set(scope_context['document_groups']) | set(groups))
+    if coverage or result['changed'] or result['missing']:
+        result['lifecycle'] = {'scope': scope_context, 'source_fingerprint': source_fingerprint(existing_rows),
+                               'fingerprint_method': 'postgres' if existing_rows and 'scope_row_hash' in existing_rows[0] else 'python'}
     return result
 
 
@@ -1358,12 +1862,18 @@ class ImportRequest(BaseModel):
     template_id: int
     file_id: int
     client_id: int
+    ledger_account_code: Optional[str] = None
+    ledger_period_start: Optional[str] = None
+    ledger_period_end: Optional[str] = None
     mappings: List[ColumnMapping]
     mode: str = "create"
     # A complete replacement may remove current rows missing from the uploaded
     # date range. A correction upload is additions/changes only and never
     # interprets an absent row as a deletion.
     comparison_mode: str = "correction"
+    coverage_start: Optional[str] = None
+    coverage_end: Optional[str] = None
+    confirm_empty_period: bool = False
     # Server-issued, short-lived validation plan. Import must use the plan
     # produced by Validate rather than re-reading and re-comparing the workbook.
     validation_plan_id: Optional[str] = None
@@ -1705,13 +2215,15 @@ def get_document_group_id(template_cols: list, row_data: dict, template_id: int)
     """
     # Find the first column by sort_order (lowest sort_order = first column)
     first_col = template_cols[0] if template_cols else None
+    context = _ledger_context.get()
+    prefix = f"{template_id}-ledger:{context['account_code']}:" if context else f"{template_id}-"
     if first_col:
         doc_value = row_data.get(first_col["column_name"])
         if doc_value is not None and doc_value != '':
-            return f"{template_id}-{str(doc_value).strip()}"
+            return f"{prefix}{str(doc_value).strip()}"
     # Fallback: use a hash of all row_data
     import hashlib
-    return f"{template_id}-{hashlib.md5(str(row_data).encode()).hexdigest()[:8]}"
+    return f"{prefix}{hashlib.md5(str(row_data).encode()).hexdigest()[:8]}"
 
 
 # ---------- HELPER: Extract numeric & date columns from row data ----------
@@ -1742,6 +2254,28 @@ def extract_columns_from_row(row_data: dict, template_cols: list,
     silently resolve to Quantity there. A blank/zero named-Amount value falls through to the
     generic ordered search below, same as any other unresolved Numeric column.
     """
+    context = _ledger_context.get()
+    if context:
+        roles = context["roles"]
+        debit = _ledger_decimal(row_data.get(roles["debit"]))
+        credit = _ledger_decimal(row_data.get(roles["credit"]))
+        movement = None if debit is None and credit is None else (debit or Decimal(0)) - (credit or Decimal(0))
+        value = row_data.get(roles["date"])
+        kind = classify_date_cell(value)
+        # Native dates stringify for JSON storage. Carry the already validated
+        # ISO date in temporary plan metadata instead of guessing its format again.
+        planned_day = context.get("planned_dates", {}).get(id(row_data))
+        if planned_day is not None:
+            day = planned_day
+        elif kind == 'native':
+            day = value.strftime('%Y-%m-%d')
+        elif kind == 'excel_serial':
+            day = excel_serial_to_datetime(value).strftime('%Y-%m-%d')
+        elif kind == 'text':
+            day = parse_date_flexible(value, delimiter, order).strftime('%Y-%m-%d')
+        else:
+            day = None
+        return float(movement) if movement is not None else None, day
     amount = None
     date_str = None
     amount_found = False
@@ -1812,6 +2346,11 @@ def get_critical_field_columns(template_cols: list) -> dict:
         extract_columns_from_row()'s "take first date" rule)
     A role is None if this template has no column filling it (e.g. no Date column).
     """
+    context = _ledger_context.get()
+    if context:
+        by_name = {column["column_name"]: column for column in template_cols}
+        return {key: by_name[context["roles"][role]] for key, role in
+                (("document_id", "voucher"), ("amount", "debit"), ("date", "date"))}
     return {
         'document_id': template_cols[0] if template_cols else None,
         'amount': next((c for c in template_cols if c['data_type'] == 'Numeric'), None),
@@ -1838,6 +2377,12 @@ def find_critical_blank_reasons(row: dict, critical_cols: dict, mapping_dict: di
     """
     reasons = []
     for role, t_col in critical_cols.items():
+        if role == "amount" and _ledger_context.get():
+            fields = _ledger_context.get()["excel_roles"]
+            if all(_ledger_decimal(row.get(fields[side])) is None for side in ("debit", "credit")):
+                reasons.append({"role": "amount", "column": None, "excel_column": None,
+                                "message": "Both ledger Debit and Credit are blank"})
+            continue
         if not t_col:
             continue
         mapping = mapping_dict.get(t_col['id'])
@@ -2069,6 +2614,7 @@ def delete_saved_column_mapping(client_id: int, template_id: int):
 
 # ---------- CHECK DUPLICATES ----------
 @router.post("/api/upload/check-duplicates")
+@_with_ledger_context
 def check_duplicates(request: ImportRequest):
     """
     Check if any rows already exist for the given client, template, and unique column.
@@ -2111,12 +2657,10 @@ def check_duplicates(request: ImportRequest):
     # Read Excel data
     try:
         df = pd.read_excel(file_info[0]['file_path'], sheet_name=request.sheet_name)
-        mapped_excel_cols = [m.excel_column_name for m in request.mappings if m.excel_column_name]
-        df = df[[col for col in mapped_excel_cols if col in df.columns]]
     except Exception as e:
         raise HTTPException(400, f"Error reading Excel: {str(e)}")
 
-    rows = df.to_dict('records')
+    rows, source_diagnostics = _prepare_source_rows(df, request, template_cols, col_mapping)
 
     # Build row data for each row
     row_data_list = []
@@ -2262,6 +2806,7 @@ def preview_date_format(request: DatePreviewRequest):
 # ---------- VALIDATE ONLY (NO IMPORT) ----------
 @router.post("/api/upload/validate")
 @_log_upload_timing("validate")
+@_with_ledger_context
 def validate_only(request: ImportRequest, perf: bool = False):
     """
     Validate the Excel file without importing any data.
@@ -2347,16 +2892,25 @@ def validate_only(request: ImportRequest, perf: bool = False):
     # Read Excel data
     try:
         df = pd.read_excel(file_info[0]['file_path'], sheet_name=request.sheet_name)
-        mapped_excel_cols = [m.excel_column_name for m in request.mappings if m.excel_column_name]
-        df = df[[col for col in mapped_excel_cols if col in df.columns]]
     except Exception as e:
         raise HTTPException(400, f"Error reading Excel: {str(e)}")
 
-    rows = df.to_dict('records')
+    rows, source_diagnostics = _prepare_source_rows(df, request, template_cols, col_mapping)
     # Apply any typed blank-cell values before exclusion filtering (see
     # apply_edited_cell_values()'s docstring for why the ordering matters).
     rows = apply_edited_cell_values(rows, request.edited_cells)
     # Drop user-excluded rows before anything else sees them (validation, counts).
+    rows = _prepare_ledger_rows(rows, request)
+    if request.comparison_mode == 'replace_range':
+        if request.force_include_rows or request.edited_cells:
+            raise HTTPException(400, 'Correct complete-report errors in the source workbook; rejected rows cannot be overridden.')
+        missing_mappings = [c['column_name'] for c in template_cols if not col_mapping.get(c['column_name'])
+                            and not (c['column_name'].casefold() == 'rate' and rate_mode and rate_mode['effective_source'] == 'derived')]
+        if missing_mappings:
+            raise HTTPException(400, 'Map every complete-report column: ' + ', '.join(missing_mappings))
+        for number, row in enumerate(rows, 2):
+            if _ledger_row_number(row, number) in set(request.excluded_rows or []):
+                raise HTTPException(400, f'A complete report cannot exclude transaction rows (Excel row {_ledger_row_number(row, number)}). Correct the source or use partial correction.')
     rows = filter_excluded_rows(rows, request.excluded_rows)
 
     # Which columns fill the 3 "critical" roles (Document ID/Amount/Date) for this
@@ -2368,6 +2922,7 @@ def validate_only(request: ImportRequest, perf: bool = False):
     validation_errors = []
     rejected_rows = []
     for row_idx, row in enumerate(rows, start=2):  # row 1 = headers, row 2 = first data
+        row_idx = _ledger_row_number(row, row_idx)
         row_errors = []
         row_reasons = []
         row_data_full = {}
@@ -2399,7 +2954,11 @@ def validate_only(request: ImportRequest, perf: bool = False):
                     continue
 
                 # Data type checks (non-blank values only)
-                if t_col['data_type'] == "Numeric":
+                if _ledger_context.get() and t_col["column_name"] in {
+                    _ledger_context.get()["roles"][role] for role in ("debit", "credit", "balance")
+                }:
+                    _ledger_decimal(value, balance=t_col["column_name"] == _ledger_context.get()["roles"]["balance"])
+                elif t_col['data_type'] == "Numeric":
                     try:
                         float(value)
                     except:
@@ -2466,9 +3025,9 @@ def validate_only(request: ImportRequest, perf: bool = False):
     ]
     comparison_rows = filter_excluded_rows(rows, rows_to_exclude)
     comparison_row_numbers = [
-        row_number
-        for row_number in range(2, 2 + len(rows))
-        if row_number not in set(rows_to_exclude)
+        _ledger_row_number(row, row_number)
+        for row_number, row in enumerate(rows, 2)
+        if _ledger_row_number(row, row_number) not in set(rows_to_exclude)
     ]
     deduplication = _deduplicate_exact_rows(
         comparison_rows,
@@ -2480,6 +3039,20 @@ def validate_only(request: ImportRequest, perf: bool = False):
         row_numbers=comparison_row_numbers,
     )
     unique_comparison_rows = deduplication["rows"]
+    if request.comparison_mode == 'replace_range' and (validation_errors or rejected_rows):
+        # Return the actual diagnostics before comparing or creating any plan.
+        return {'status': 'validation_failed', 'has_errors': True, 'can_import': False,
+                'error_count': len(validation_errors), 'errors': validation_errors,
+                'has_rejections': bool(rejected_rows), 'rejected_count': len(rejected_rows),
+                'rejected_rows': rejected_rows, 'total_rows': len(rows),
+                'source_diagnostics': source_diagnostics,
+                'message': 'Complete report validation failed. Correct the listed source rows and validate again; no data was changed.'}
+    if request.comparison_mode == 'replace_range' and not unique_comparison_rows and not request.confirm_empty_period:
+        raise HTTPException(400, 'This report is empty. Explicitly confirm clearing the declared period before validating it.')
+    if request.comparison_mode == 'replace_range' and unique_comparison_rows and request.confirm_empty_period:
+        raise HTTPException(400, 'This report contains transactions. Untick the empty-report confirmation and validate again.')
+    if _ledger_context.get():
+        _ledger_context.get()["scope_fingerprint"] = _ledger_scope_fingerprint(request.client_id, request.template_id)
     change_detection = compare_transactions(
         client_id=request.client_id,
         template_id=request.template_id,
@@ -2492,6 +3065,8 @@ def validate_only(request: ImportRequest, perf: bool = False):
         comparison_mode=request.comparison_mode,
         date_delimiter=effective_delimiter,
         date_order=effective_order,
+        coverage_start=request.coverage_start,
+        coverage_end=request.coverage_end,
     )
     change_detection.update({
         key: value
@@ -2506,6 +3081,8 @@ def validate_only(request: ImportRequest, perf: bool = False):
         or change_detection["changed_count"]
         or change_detection["missing_count"]
     )
+    if _ledger_context.get() and not prior_same_file:
+        actionable = True  # New coverage or balance evidence can have no transaction changes.
     duplicate_upload_noop = _is_duplicate_upload_noop(prior_same_file, change_detection)
     duplicate_errors = []
     if not duplicate_upload_noop:
@@ -2520,6 +3097,10 @@ def validate_only(request: ImportRequest, perf: bool = False):
         )
         validation_errors.extend(duplicate_errors)
     validation_plan_id = None
+    if _ledger_context.get() and rejected_rows:
+        validation_errors.extend({"row_number": item["row_number"], "row_data": item["row_data"],
+                                  "errors": [{"error_type": "ledger_incomplete", "message": "Correct rejected ledger rows before importing"}]}
+                                 for item in rejected_rows)
     can_import = bool(actionable and not validation_errors)
     summary_status = None
     if duplicate_errors:
@@ -2536,6 +3117,7 @@ def validate_only(request: ImportRequest, perf: bool = False):
             effective_delimiter,
             effective_order,
         )
+        plan_payload["source_diagnostics"] = source_diagnostics
         validation_plan_id = _create_validation_plan(
             request,
             file_info[0]["file_path"],
@@ -2567,6 +3149,7 @@ def validate_only(request: ImportRequest, perf: bool = False):
 
     return {
         "status": "validation_complete",
+        "source_diagnostics": source_diagnostics,
         "has_errors": len(validation_errors) > 0,
         "error_count": len(validation_errors),
         "has_rejections": len(rejected_rows) > 0,
@@ -2590,6 +3173,7 @@ def validate_only(request: ImportRequest, perf: bool = False):
         "validation_plan_id": validation_plan_id,
         "rate_mode": rate_mode,
         "upload_summary": upload_summary,
+        "ledger_evidence": _ledger_context.get()["evidence"] if _ledger_context.get() else None,
     }
 
 DATA_AUDIT_LOG_INSERT_SQL = (
@@ -2618,6 +3202,22 @@ def _audit_row_params(client_data_id, action, old_data=None, new_data=None, user
 
 
 # ---------- PLAN-BASED IMPORT ----------
+def _guard_plan_configuration(request, payload):
+    if not payload.get('lifecycle'):
+        return
+    templates = execute_query_pg('SELECT rate_source FROM templates WHERE id = %s AND is_active = TRUE FOR SHARE', (request.template_id,))
+    columns = execute_query_pg('''SELECT m.id, m.column_name, m.data_type
+        FROM template_column_mappings p JOIN master_columns m ON p.column_id = m.id
+        WHERE p.template_id = %s AND m.is_active = TRUE ORDER BY p.sort_order FOR SHARE OF m, p''', (request.template_id,))
+    if not templates:
+        raise HTTPException(409, 'The upload template changed. Validate again.')
+    rate = templates[0].get('rate_source')
+    if rate == 'auto':
+        rate = resolve_upload_rate_source(columns, {m.template_column_name: m.excel_column_name for m in request.mappings})
+    if digest([columns, rate]) != payload.get('template_fingerprint'):
+        raise HTTPException(409, 'Template columns or rate configuration changed. Validate again.')
+
+
 def _import_validation_plan(request: ImportRequest, background_tasks: BackgroundTasks = None):
     """Apply only the actionable rows captured by Validate."""
     template = execute_query_pg(
@@ -2634,14 +3234,29 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
     if not file_info:
         raise HTTPException(404, "File not found")
     client = execute_query_pg(
-        "SELECT id FROM clients WHERE id = %s AND is_active = TRUE",
+        "SELECT id, client_name FROM clients WHERE id = %s AND is_active = TRUE",
         (request.client_id,),
     )
     if not client:
         raise HTTPException(404, "Client not found or inactive")
 
+    completed = (get_receipt(request, execute_query_pg, _validation_request_signature(request))
+                 if file_info[0].get('status') == 'Imported' else None)
+    if completed:
+        return completed
     plan = _load_validation_plan(request, file_info[0]["file_path"])
     plan_payload = plan["plan_json"]
+    context = _ledger_context.get()
+    if bool(context) != bool(plan_payload.get("ledger")):
+        raise HTTPException(409, "The template purpose changed after validation; validate again")
+    if context:
+        context["planned_dates"] = {}
+        for kind, key in (("new", "row_data"), ("changed", "new_row_data")):
+            for item in plan_payload.get(kind, []):
+                day = item.get("ledger_date")
+                if not day or not context["start"] <= day <= context["end"]:
+                    raise HTTPException(409, "Ledger transaction dates are missing from the validation plan; validate again")
+                context["planned_dates"][id(item[key])] = day
     template_cols = execute_query_pg(
         """
         SELECT m.id, m.column_name, m.data_type
@@ -2706,6 +3321,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
             "old_version": current.get("version", 1),
             "verification_detail_id": current.get("verification_detail_id"),
             "source_identity": item.get("source_identity") or current.get("source_identity"),
+            "changed_fields": item.get("changed_fields", _changed_field_names(current_data, item["new_row_data"])),
         })
 
     missing = []
@@ -2749,8 +3365,9 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
                 WHERE client_id = %s AND template_id = %s
                   AND is_deleted = FALSE
                   AND source_identity = ANY(%s)
+                  AND NOT (id = ANY(%s))
                 """,
-                (request.client_id, request.template_id, new_source_identities),
+                (request.client_id, request.template_id, new_source_identities, [item['client_data_id'] for item in missing]),
             )
             if existing_new_identities:
                 raise HTTPException(409, "New data was added after validation. Validate the file again.")
@@ -2771,10 +3388,11 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
         request.client_id,
         request.template_id,
         planned_identities,
-        [item["client_data_id"] for item in changed],
+        [item["client_data_id"] for item in changed + missing],
     )
 
     change_detection = {
+        'voucher_observations': plan_payload.get('voucher_observations', []),
         "unchanged_count": plan_payload.get("unchanged_count", 0),
         "changed_count": len(changed),
         "new_count": len(new_rows),
@@ -2795,6 +3413,16 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
     rate_source = plan_payload.get("rate_source")
     effective_delimiter = plan_payload.get("date_delimiter") or DEFAULT_DATE_DELIMITER
     effective_order = plan_payload.get("date_order") or DEFAULT_DATE_ORDER
+    planned_dates = {
+        id(item[key]): item['validated_date']
+        for kind, key in (("new", "row_data"), ("changed", "new_row_data"))
+        for item in plan_payload.get(kind, []) if 'validated_date' in item
+    }
+
+    def extract_planned_columns(row_data):
+        amount, day = extract_columns_from_row(row_data, template_cols, effective_delimiter, effective_order)
+        return amount, planned_dates.get(id(row_data), day)
+
     critical_cols = get_critical_field_columns(template_cols)
     rejected_rows = plan_payload.get("rejected_rows", [])
     force_included_count = plan_payload.get("force_included_count", 0)
@@ -2817,6 +3445,16 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
         "total": len(new_rows) + len(changed) + len(missing),
         "status": "processing",
     }
+    if plan_payload.get('lifecycle'):
+        if file_info[0].get('status') not in ('Pending', 'Validated'):
+            raise HTTPException(409, 'Use a fresh staged upload; an imported source cannot be reassigned.')
+        IMPORT_PROGRESS[request.file_id]['status'] = 'archiving'
+    plan_payload['archive_labels'] = {'client': client[0].get('client_name') or f'Client {request.client_id}',
+                                      'template': template[0]['template_name'],
+                                      'source': file_info[0]['file_name'],
+                                      'incoming_title': 'Incoming vouchers' if request.comparison_mode == 'replace_range' else 'Incoming extract'}
+    prepared = prepare_lifecycle(request, plan_payload, execute_query_pg, execute_write_pg,
+                                 pg_transaction, _validation_request_signature(request))
 
     with pg_transaction() as conn:
         execute_query_pg("SELECT pg_advisory_xact_lock(hashtext('upload-storage-budget'))")
@@ -2825,6 +3463,17 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
             "SELECT pg_advisory_xact_lock(hashtext(%s))",
             (f"upload-validation:{request.client_id}:{request.template_id}",),
         )
+        guard_lifecycle(prepared, execute_query_pg)
+        if prepared:
+            # A new validation or cleanup may supersede this plan during Drive I/O.
+            current_plan = execute_query_pg(
+                'SELECT status, expires_at FROM upload_validation_plans WHERE plan_id = %s FOR UPDATE',
+                (request.validation_plan_id,),
+            )
+            if (not current_plan or current_plan[0]['status'] != 'ready'
+                    or (current_plan[0].get('expires_at') and current_plan[0]['expires_at'] < datetime.now(current_plan[0]['expires_at'].tzinfo))):
+                raise HTTPException(409, 'Validation plan expired or was superseded while archiving. Validate again; no replacement was applied.')
+        _guard_plan_configuration(request, plan_payload)
         if guarded_ids:
             locked_rows = execute_query_pg(
                 """
@@ -2857,13 +3506,27 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
             request.client_id,
             request.template_id,
             planned_identities,
-            [item["client_data_id"] for item in changed],
+            [item["client_data_id"] for item in changed + missing],
         )
+        if context:
+            _guard_ledger_plan(request, plan_payload)
+            _persist_ledger_evidence(request, plan_payload["ledger"]["evidence"])
         execute_write_pg(
             "UPDATE uploaded_files SET status = 'Imported', client_id = %s WHERE id = %s",
             (request.client_id, request.file_id),
         )
-        treasury_mapping = load_treasury_mapping_postgres(conn, request.client_id)
+        treasury_mapping = {} if context else load_treasury_mapping_postgres(conn, request.client_id)
+
+        # Remove superseded identities before their replacement occurrences
+        # are inserted; the verified archive and commit receipt share this guard.
+        if missing:
+            try:
+                replacement_cleanup = purge_replaced_transaction_rows(
+                    request.client_id, request.template_id,
+                    [item['client_data_id'] for item in missing], 'Analyst', archive_proof=prepared)
+                deleted_count = replacement_cleanup['deleted_count']
+            except DataPurgeProtectedError as error:
+                raise HTTPException(409, str(error)) from error
 
         changed_client_data_params = []
         changed_classification_sources = []
@@ -2871,9 +3534,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
         changed_audit_params = []
         for item in changed:
             new_row_data = item["new_row_data"]
-            amount, date_str = extract_columns_from_row(
-                new_row_data, template_cols, effective_delimiter, effective_order
-            )
+            amount, date_str = extract_planned_columns(new_row_data)
             source_identity = item.get("source_identity") or _canonical_source_identity(
                 template_cols, new_row_data, request.template_id
             )
@@ -2928,7 +3589,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
             )
         if changed_audit_params:
             execute_batch_pg(conn, DATA_AUDIT_LOG_INSERT_SQL, changed_audit_params)
-        if changed_classification_sources:
+        if changed_classification_sources and not context:
             upsert_classification_rows_postgres(
                 conn, changed_classification_sources, treasury_mapping, configuration_version=1
             )
@@ -2937,9 +3598,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
         new_classification_rows = []
         new_audit_params = []
         for new_row_data, source_identity in zip(new_rows, new_row_identities):
-            amount, date_str = extract_columns_from_row(
-                new_row_data, template_cols, effective_delimiter, effective_order
-            )
+            amount, date_str = extract_planned_columns(new_row_data)
             source_fingerprint = _row_fingerprint_token(new_row_data)
             new_client_data_params.append((
                 request.client_id,
@@ -2974,9 +3633,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
                 template="(%s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, %s, %s, %s, %s)",
             )
             for row_id, new_row_data in zip(new_ids, new_rows):
-                amount, date_str = extract_columns_from_row(
-                    new_row_data, template_cols, effective_delimiter, effective_order
-                )
+                amount, date_str = extract_planned_columns(new_row_data)
                 new_classification_rows.append({
                     "id": row_id,
                     "client_id": request.client_id,
@@ -2986,29 +3643,23 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
                     "extract_date": date_str,
                 })
                 new_audit_params.append(_audit_row_params(row_id, "INSERT", None, new_row_data))
-            upsert_classification_rows_postgres(
-                conn, new_classification_rows, treasury_mapping, configuration_version=1
-            )
+            if not context:
+                upsert_classification_rows_postgres(
+                    conn, new_classification_rows, treasury_mapping, configuration_version=1
+                )
             execute_batch_pg(conn, DATA_AUDIT_LOG_INSERT_SQL, new_audit_params)
 
         if missing:
-            try:
-                replacement_cleanup = purge_replaced_transaction_rows(
-                    request.client_id, request.template_id,
-                    [item["client_data_id"] for item in missing], "Analyst",
-                )
-                deleted_count = replacement_cleanup["deleted_count"]
-            except DataPurgeProtectedError as error:
-                raise HTTPException(409, str(error)) from error
             IMPORT_PROGRESS[request.file_id]["current"] += len(missing)
 
-        cashflow_voucher_resolution = resolve_upload_occurrences_postgres(
-            conn,
-            client_id=request.client_id,
-            template_id=request.template_id,
-            upload_id=request.file_id,
-            row_data=cashflow_occurrence_rows,
-        )
+        if not context:
+            cashflow_voucher_resolution = resolve_upload_occurrences_postgres(
+                conn,
+                client_id=request.client_id,
+                template_id=request.template_id,
+                upload_id=request.file_id,
+                row_data=cashflow_occurrence_rows,
+            )
         execute_write_pg(
             """
             DELETE FROM upload_validation_plans
@@ -3016,6 +3667,11 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
             """,
             (request.validation_plan_id,),
         )
+        finish_lifecycle(prepared, {
+            'status': 'success', 'message': f'Successfully imported: {inserted_count} added, {updated_count} changed, {deleted_count} removed',
+            'total_rows': total_rows_attempted, 'imported_count': inserted_count,
+            'updated_count': updated_count, 'deleted_count': deleted_count,
+        }, execute_write_pg)
 
     if replacement_cleanup["staged_paths"]:
         failures = _remove_staged_upload_files(replacement_cleanup["staged_paths"])
@@ -3030,6 +3686,8 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
         cashflow_voucher_resolution
         and cashflow_voucher_resolution.get("preparation_required")
     )
+    if context:
+        legacy_snapshot_required = False
     if legacy_snapshot_required:
         invalidate_cashflow_summary_read_models(
             request.client_id,
@@ -3093,6 +3751,8 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
 
     return {
         "status": "success",
+        "source_diagnostics": plan_payload.get("source_diagnostics", {}),
+        "archive_verified": bool(prepared and prepared.get('archive')),
         "message": f"Successfully imported: {inserted_count} added, {updated_count} changed, {deleted_count} removed",
         "total_rows": total_rows_attempted,
         "imported_count": inserted_count,
@@ -3113,6 +3773,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
 # ---------- VALIDATE & IMPORT ----------
 @router.post("/api/upload/import")
 @_log_upload_timing("import")
+@_with_ledger_context
 def validate_and_import(request: ImportRequest, background_tasks: BackgroundTasks = None, perf: bool = False):
     if request.validation_plan_id:
         return _import_validation_plan(request, background_tasks)
@@ -3173,14 +3834,11 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
     # Read Excel data
     try:
         df = pd.read_excel(file_info[0]['file_path'], sheet_name=request.sheet_name)
-        # Keep only columns that are mapped
-        mapped_excel_cols = [m.excel_column_name for m in request.mappings if m.excel_column_name]
-        df = df[[col for col in mapped_excel_cols if col in df.columns]]
     except Exception as e:
         raise HTTPException(400, f"Error reading Excel: {str(e)}")
     print(f"🔍 DataFrame shape: {df.shape}")  # rows, columns
     print(f"🔍 DataFrame columns: {df.columns.tolist()}")
-    rows = df.to_dict('records')
+    rows, source_diagnostics = _prepare_source_rows(df, request, template_cols, col_mapping)
     # Apply any typed blank-cell values before exclusion filtering (see
     # apply_edited_cell_values()'s docstring for why the ordering matters).
     rows = apply_edited_cell_values(rows, request.edited_cells)
@@ -3210,6 +3868,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
     validation_errors = []
     rejected_rows = []
     for row_idx, row in enumerate(rows, start=2):
+        row_idx = _ledger_row_number(row, row_idx)
         row_errors = []
         row_reasons = []
         try:
@@ -3281,6 +3940,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
         # visibility, since a row can independently appear in both lists.
         return {
             "status": "validation_failed",
+            "source_diagnostics": source_diagnostics,
             "errors": validation_errors,
             "total_rows": len(rows),
             "error_count": len(validation_errors),
@@ -3304,7 +3964,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
     if rows_to_exclude:
         rows = filter_excluded_rows(rows, rows_to_exclude)
 
-    comparison_row_numbers = list(range(2, 2 + len(rows)))
+    comparison_row_numbers = [_ledger_row_number(row, i) for i, row in enumerate(rows, 2)]
     deduplication = _deduplicate_exact_rows(
         rows,
         col_mapping,
@@ -3338,6 +3998,8 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
         date_delimiter=effective_delimiter,
         date_order=effective_order,
     )
+    if change_detection and (change_detection['changed_count'] or change_detection['missing_count']):
+        raise HTTPException(400, 'Validate this correction first. Changed or deleted source data requires a verified archive and validation plan.')
     # Preserve the established first-upload path for callers that intentionally
     # disable comparison (for example, an isolated import worker or legacy
     # integration). In that mode every validated row is a new row.
@@ -3389,6 +4051,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
         )
         return {
             "status": "validation_failed",
+            "source_diagnostics": source_diagnostics,
             "errors": duplicate_errors,
             "total_rows": total_rows_attempted,
             "error_count": len(duplicate_errors),
@@ -3441,6 +4104,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
         )
         return {
             "status": "success",
+            "source_diagnostics": source_diagnostics,
             "message": (
                 "Upload ignored: this source file is already imported and all "
                 "validated lines are unchanged."
@@ -3827,6 +4491,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
 
     return {
         "status": "success",
+        "source_diagnostics": source_diagnostics,
         "message": f"Successfully imported: {inserted_count} added, {updated_count} changed, {deleted_count} removed",
         "total_rows": total_rows_attempted,
         "imported_count": inserted_count,

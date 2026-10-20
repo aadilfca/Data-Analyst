@@ -753,7 +753,7 @@ def _purge_protected_counts(client_id: int, template_id: int | None = None) -> D
     return protected
 
 
-def purge_replaced_transaction_rows(client_id, template_id, row_ids, operator):
+def purge_replaced_transaction_rows(client_id, template_id, row_ids, operator, archive_proof=None):
     """Purge explicitly missing import rows in the caller's transaction.
 
     Lock and validate the exact row scope, then protect the same references as
@@ -762,7 +762,18 @@ def purge_replaced_transaction_rows(client_id, template_id, row_ids, operator):
     ids = sorted(set(int(value) for value in row_ids))
     if not ids:
         return {"deleted_count": 0, "staged_paths": []}
+    if (not archive_proof or not archive_proof.get('archive')
+            or not set(ids).issubset(archive_proof.get('ids', []))):
+        raise DataPurgeProtectedError('A verified external archive is required before removing replacement source rows.')
     with pg_transaction():
+        receipt = execute_query_pg('''SELECT status, drive_file_id, archive_sha256
+            FROM upload_lifecycle_runs WHERE operation_id = %s AND client_id = %s AND template_id = %s FOR UPDATE''',
+            (archive_proof['operation_id'], client_id, template_id))
+        proof = archive_proof['archive']
+        if (not receipt or receipt[0]['status'] != 'verified'
+                or receipt[0]['drive_file_id'] != proof['drive_file_id']
+                or receipt[0]['archive_sha256'] != proof['sha256']):
+            raise DataPurgeProtectedError('The replacement archive receipt is missing or does not match this scope.')
         rows = execute_query_pg(
             """SELECT id, upload_id, derived_voucher_id FROM public.client_data
                WHERE client_id = %s AND template_id = %s AND id = ANY(%s)
