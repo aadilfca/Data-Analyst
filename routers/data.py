@@ -565,6 +565,26 @@ def get_cashflows_classification_preview(
         "classification_columns": ["Type", "Account", "Assigned Category"],
     })
     return result
+@router.get('/api/data/ledger-accounts')
+def get_preview_ledger_accounts(client_id: int, template_id: int):
+    """Offer imported accounts, including historical names absent from today's TB."""
+    if not execute_query_pg('SELECT id FROM clients WHERE id = %s AND is_active = TRUE', (client_id,)):
+        raise HTTPException(404, 'Client not found or inactive')
+    template = execute_query_pg('SELECT id, data_purpose FROM templates WHERE id = %s AND is_active = TRUE', (template_id,))
+    if not template or template[0].get('data_purpose') != 'account_ledger':
+        raise HTTPException(400, 'Select an Account Ledger template for ledger account selection.')
+    accounts = execute_query_pg("""
+        SELECT account_code, account_name FROM (
+            SELECT ledger_account_code AS account_code,
+                   COALESCE(NULLIF(ledger_account_name, ''), ledger_account_code) AS account_name,
+                   ROW_NUMBER() OVER (PARTITION BY ledger_account_code ORDER BY id DESC) AS latest
+            FROM uploaded_files WHERE client_id = %s AND template_id = %s AND status = 'Imported'
+              AND ledger_account_code IS NOT NULL AND ledger_account_code <> ''
+        ) accounts WHERE latest = 1 ORDER BY LOWER(account_name), account_code
+        """, (client_id, template_id))
+    return {'accounts': accounts}
+
+
 @router.get("/api/data/preview")
 @_preview_perf_diagnostics
 def get_preview_rows(
@@ -580,6 +600,7 @@ def get_preview_rows(
     sunday_only: bool = Query(False, description="If true, only show rows with extract_date on Sunday"),
     data_quality: Optional[str] = Query(None, description="Filter by data_quality_flag: 'complete' (flag is null) or 'incomplete'"),
     document_id: Optional[int] = Query(None, description="Optional Audit Rules Document used to limit the returned fields"),
+    ledger_account_code: Optional[str] = None,
     perf: bool = Query(False, include_in_schema=False)
 ):
     """
@@ -593,9 +614,18 @@ def get_preview_rows(
     if not client:
         raise HTTPException(404, "Client not found or inactive")
 
-    template = execute_query_pg("SELECT id, template_name FROM templates WHERE id = %s AND is_active = TRUE", (template_id,))
+    template = execute_query_pg("SELECT id, template_name, data_purpose FROM templates WHERE id = %s AND is_active = TRUE", (template_id,))
     if not template:
         raise HTTPException(404, "Template not found")
+    is_ledger = template[0].get('data_purpose') == 'account_ledger'
+    if ledger_account_code is not None:
+        if not is_ledger or not ledger_account_code.strip() or len(ledger_account_code) > 120:
+            raise HTTPException(400, 'Select a valid uploaded ledger account for an Account Ledger template.')
+        ledger_account_code = ledger_account_code.strip()
+        if not execute_query_pg("""SELECT id FROM uploaded_files
+            WHERE client_id = %s AND template_id = %s AND ledger_account_code = %s
+              AND status = 'Imported' LIMIT 1""", (client_id, template_id, ledger_account_code)):
+            raise HTTPException(400, 'This ledger account has not been uploaded for the selected client and template.')
     
     # Validate dates
     try:
@@ -662,6 +692,13 @@ def get_preview_rows(
         "cd.extract_date BETWEEN %s AND %s"
     ]
     base_params = [client_id, template_id, date_start, date_end]
+    if ledger_account_code is not None:
+        # One shared condition scopes counts, Sunday totals and every page;
+        # account identity belongs to upload metadata, never to guessed row text.
+        base_where.append("""EXISTS (SELECT 1 FROM uploaded_files lu
+            WHERE lu.id = cd.upload_id AND lu.client_id = cd.client_id AND lu.template_id = cd.template_id
+              AND lu.status = 'Imported' AND lu.ledger_account_code = %s)""")
+        base_params.append(ledger_account_code)
 
     # Search in row_data (case-insensitive) – jsonb_each_text is the Postgres
     # equivalent of SQLite's json_each for searching all values in a JSONB column.
@@ -737,7 +774,7 @@ def get_preview_rows(
             "WHERE pair.key = ANY(%s)), '{}'::jsonb)"
         )
     data_sql = f"""
-        SELECT cd.id, {row_data_sql} AS row_data, cd.extract_amount, cd.extract_date, cd.data_quality_flag, cd.rate_source
+        SELECT cd.id, {row_data_sql} AS row_data, cd.extract_amount, cd.extract_date, cd.data_quality_flag, cd.rate_source, cd.document_group_id
         FROM client_data cd
         WHERE {where_sql}
         ORDER BY cd.extract_date DESC, cd.id
@@ -762,7 +799,8 @@ def get_preview_rows(
             # template-level rate_source setting, since a historic row may have been imported
             # under a since-changed template setting.
             "rate_source": r["rate_source"],
-            "document_group_id": compute_preview_document_group_id(row_dict, r["extract_date"], doc_key_column, r["id"])
+            "document_group_id": ((r.get('document_group_id') or f"__row_{r['id']}") if is_ledger else
+                                  compute_preview_document_group_id(row_dict, r["extract_date"], doc_key_column, r["id"]))
         })
 
     # Batch-flag rows that have revision history (one query for the whole page)

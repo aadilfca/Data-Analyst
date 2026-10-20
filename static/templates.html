@@ -30,6 +30,7 @@
         <div style="display:flex; justify-content:space-between; margin-bottom:20px; flex-wrap:wrap; gap:10px;">
             <button id="addTemplateBtn" class="btn-upload" style="background:#8b5cf6; padding:10px 25px;">➕ Create New
                 Template</button>
+            <button id="prepareLedgerBtn" class="btn-upload" style="background:#0f766e;padding:10px 20px;">Prepare Account Ledger</button>
             <span style="font-size:14px; color:#64748b; align-self:center;">Total: <strong id="totalCount">0</strong>
                 templates</span>
         </div>
@@ -76,6 +77,19 @@
                 <input type="text" id="templateName" placeholder="e.g., Sales Invoice" required
                     style="width:100%; padding:10px 14px; border:2px solid #e2e8f0; border-radius:8px; font-size:14px;">
             </div>
+            <div style="margin-bottom:16px;">
+                <label for="templatePurpose" style="display:block;font-weight:600;margin-bottom:6px;">Template purpose</label>
+                <select id="templatePurpose" style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;">
+                    <option value="standard">Standard document</option>
+                    <option value="account_ledger">Account Ledger</option>
+                </select>
+            </div>
+            <section id="ledgerRoleFields" hidden style="background:#f0fdfa;border:1px solid #99d5cd;border-radius:8px;padding:14px;margin-bottom:18px;">
+                <h3 style="margin:0 0 6px;font-size:15px;">Ledger column roles</h3>
+                <p style="margin:0 0 12px;font-size:13px;">Match each role to a distinct column. Voucher must be first. Select the account once during upload.</p>
+                <div id="ledgerRoleControls" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;"></div>
+                <p id="ledgerSetupHint" style="font-size:12px;color:#64748b;margin-bottom:0;"></p>
+            </section>
             <div style="margin-bottom:20px; display:none;" id="rateSourceField">
                 <label style="font-weight:600; font-size:14px; color:#1a1a2e; display:block; margin-bottom:4px;">Rate
                     Source</label>
@@ -97,7 +111,7 @@
                 <small style="color:#94a3b8; margin-left:24px;">When enabled, this template's preview groups rows by
                     document with subtotal rows shown automatically.</small>
             </div>
-            <div style="margin-bottom:16px;">
+            <div id="templateColumnSearch" style="margin-bottom:16px;">
                 <label style="font-weight:600; font-size:14px; color:#1a1a2e; display:block; margin-bottom:4px;">🔍
                     Search & Add Columns</label>
                 <div style="position:relative;">
@@ -137,7 +151,7 @@
                         columns above to build your template.</div>
                     <div id="selectedColumnsList"></div>
                 </div>
-                <div style="margin-top:6px; font-size:12px; color:#94a3b8;">💡 Drag ☰ to reorder. Click ✕ to remove a
+                <div id="templateColumnOrderHint" style="margin-top:6px; font-size:12px; color:#94a3b8;">💡 Drag ☰ to reorder. Click ✕ to remove a
                     column.</div>
             </div>
             <input type="hidden" id="editTemplateId">
@@ -212,8 +226,8 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
     <script src="/static/utils.js?v=2"></script>
     <script src="/static/loading_ui.js?v=2"></script>
-    <script src="/static/client_context.js?v=18"></script>
-    <script src="/static/templates.js?v=4"></script>
+    <script src="/static/client_context.js?v=19"></script>
+    <script src="/static/templates.js?v=5"></script>
 </body>
 
 </html>

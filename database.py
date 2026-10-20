@@ -7090,10 +7090,14 @@ def execute_query_pg(query, params=None, *, page_size=None):
     A page_size opts into a read-only, repeatable-read snapshot and bounded
     server-cursor fetches. The complete read may restart once after a disconnect;
     partial results are discarded. It cannot join an existing write transaction.
+    Transaction commands such as upload table locks return no rows; their
+    cursor metadata must be checked before fetching, without committing them.
     """
     def _run(conn):
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(query, params or ())
+            if cur.description is None:
+                return []
             return [dict(row) for row in cur.fetchall()]
 
     active = _pg_transaction.get()
@@ -7603,7 +7607,9 @@ def log_error(
                 file_name,
                 line_number,
                 code_context[:1000] if code_context else None,
-                stack_trace[:5000] if stack_trace else None,
+                # Deep middleware stacks put the actual failing function and
+                # final exception at the end; preserve that diagnostic evidence.
+                stack_trace[-5000:] if stack_trace else None,
                 input_json,
                 suggested_fix[:500] if suggested_fix else None
             )

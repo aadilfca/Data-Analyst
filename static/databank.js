@@ -57,6 +57,14 @@ const previewPageCache = new Map();
 const previewPageInFlight = new Map();
 let previewCacheGeneration = 0;
 let previewRequestSequence = 0;
+let previewOpenSequence = 0;
+let previewAccountState = 'standard';
+let previewLedgerAccounts = [];
+let previewLedgerAccountCode = '';
+let previewLastLedgerAccountCode = '';
+let previewLedgerMatches = [];
+let previewLedgerActiveIndex = -1;
+let previewLedgerLoading = null;
 // Availability is also keyed by its client/date scope. This prevents duplicate
 // entry/date-range requests while keeping the cache limited to this page tab.
 const availabilityCache = new Map();
@@ -156,6 +164,13 @@ const sharedRangeConfirmBtn = document.getElementById('sharedRangeConfirmBtn');
 // already-open modal), where confirming just refreshes in place.
 let pendingPreviewOpen = null;
 const searchInput = document.getElementById('searchInput');
+const previewLedgerField = document.getElementById('previewLedgerField');
+const previewLedgerInput = document.getElementById('previewLedgerInput');
+const previewLedgerToggle = document.getElementById('previewLedgerToggle');
+const previewLedgerOptions = document.getElementById('previewLedgerOptions');
+const previewLedgerStatus = document.getElementById('previewLedgerStatus');
+const previewLedgerStatusText = document.getElementById('previewLedgerStatusText');
+const previewLedgerRetry = document.getElementById('previewLedgerRetry');
 const amountMin = document.getElementById('amountMin');
 const amountMax = document.getElementById('amountMax');
 const applyFiltersBtn = document.getElementById('applyFiltersBtn');
@@ -1231,6 +1246,148 @@ async function deleteTemplateData(templateId, templateName, rowCount, triggerTar
 // ==============================================
 
 // ---------- OPEN PREVIEW ----------
+function setPreviewLedgerStatus(message = '', retry = false) {
+    previewLedgerStatusText.textContent = message;
+    previewLedgerStatus.hidden = !message;
+    previewLedgerRetry.hidden = !retry;
+}
+
+function finishPreviewLedgerLoading() {
+    if (!previewLedgerLoading) return;
+    window.LoadingUI.hideFieldLoading(previewLedgerInput);
+    window.LoadingUI.stopGlobalLoading(previewLedgerLoading.token);
+    previewLedgerInput.removeAttribute('aria-busy');
+    previewLedgerField.classList.remove('is-loading');
+    previewLedgerLoading = null;
+}
+
+function closePreviewLedgerOptions() {
+    previewLedgerOptions.hidden = true;
+    previewLedgerInput.setAttribute('aria-expanded', 'false');
+    previewLedgerInput.removeAttribute('aria-activedescendant');
+    previewLedgerActiveIndex = -1;
+}
+
+function clearPreviewForAccount(message) {
+    // Immediately discard the previous account's rendered rows and any late
+    // response, while retaining the bounded, fully scoped page cache.
+    previewRequestSequence++;
+    isPreviewLoading = false;
+    previewTotalRows = 0; previewSundayCount = 0; previewCachedRows = [];
+    currentPage = 1;
+    previewTableHead.replaceChildren();
+    const row = document.createElement('tr');
+    const cell = document.createElement('td');
+    cell.colSpan = 100; cell.textContent = message;
+    cell.style.cssText = 'padding:32px; text-align:center; color:#64748b;';
+    row.appendChild(cell); previewTableBody.replaceChildren(row);
+    previewCountInfo.textContent = '0 rows';
+    sundayCountBadge.textContent = 'Sunday rows: 0';
+    updatePagination();
+}
+
+function ledgerAccountLabel(account) {
+    return `${account.account_name} — ${account.account_code}`;
+}
+
+function selectPreviewLedgerAccount(account, fetchRows = true) {
+    previewLedgerAccountCode = account.account_code;
+    previewLastLedgerAccountCode = account.account_code;
+    previewLedgerInput.value = ledgerAccountLabel(account);
+    previewLedgerInput.title = ledgerAccountLabel(account);
+    closePreviewLedgerOptions(); setPreviewLedgerStatus();
+    currentPage = 1;
+    if (fetchRows) fetchPreviewData();
+}
+
+function restorePreviewLedgerSelection() {
+    const previous = previewLedgerAccounts.find(a => a.account_code === previewLastLedgerAccountCode);
+    closePreviewLedgerOptions();
+    if (previous) {
+        const changed = !previewLedgerAccountCode;
+        selectPreviewLedgerAccount(previous, changed);
+    } else {
+        previewLedgerInput.value = '';
+    }
+}
+
+function renderPreviewLedgerOptions(query = '') {
+    if (previewAccountState !== 'ledger' || previewLedgerInput.disabled) return;
+    const term = query.trim().toLocaleLowerCase();
+    const matches = previewLedgerAccounts.filter(a => ledgerAccountLabel(a).toLocaleLowerCase().includes(term));
+    previewLedgerMatches = matches.slice(0, 100);
+    previewLedgerActiveIndex = -1;
+    previewLedgerInput.removeAttribute('aria-activedescendant');
+    previewLedgerOptions.replaceChildren();
+    previewLedgerMatches.forEach((account, index) => {
+        const option = document.createElement('button');
+        option.type = 'button'; option.tabIndex = -1; option.setAttribute('role', 'option');
+        option.id = `preview-ledger-option-${index}`;
+        option.setAttribute('aria-selected', String(account.account_code === previewLedgerAccountCode));
+        option.textContent = ledgerAccountLabel(account);
+        option.title = account.account_code;
+        option.addEventListener('mousedown', e => e.preventDefault());
+        option.addEventListener('click', () => selectPreviewLedgerAccount(account));
+        previewLedgerOptions.appendChild(option);
+    });
+    if (!matches.length || matches.length > 100) {
+        const message = document.createElement('div');
+        message.className = 'ledger-option-message';
+        message.textContent = !matches.length ? 'No matching uploaded accounts.' : 'Showing the first 100 matches. Type more to narrow the list.';
+        previewLedgerOptions.appendChild(message);
+    }
+    previewLedgerOptions.hidden = false;
+    previewLedgerInput.setAttribute('aria-expanded', 'true');
+}
+
+async function loadPreviewLedgerAccounts(opening, clientId, templateId, preferred = '') {
+    finishPreviewLedgerLoading(); closePreviewLedgerOptions();
+    previewLedgerAccounts = []; previewLedgerAccountCode = ''; previewLastLedgerAccountCode = '';
+    previewLedgerInput.value = ''; previewLedgerInput.title = '';
+    previewLedgerInput.disabled = false; previewLedgerToggle.disabled = true;
+    setPreviewLedgerStatus('Loading uploaded accounts…');
+    clearPreviewForAccount('Loading uploaded accounts…');
+    const load = {token: window.LoadingUI.startGlobalLoading(previewLedgerInput)};
+    previewLedgerLoading = load;
+    previewLedgerField.classList.add('is-loading');
+    previewLedgerInput.setAttribute('aria-busy', 'true');
+    window.LoadingUI.showFieldLoading(previewLedgerInput);
+    const current = () => previewLedgerLoading === load && opening === previewOpenSequence
+        && isPreviewOpen && Number(getSelectedClientId()) === Number(clientId) && previewTemplateId === templateId;
+    try {
+        const params = new URLSearchParams({client_id: clientId, template_id: templateId});
+        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/data/ledger-accounts?${params}`);
+        const data = await res.json();
+        if (!current()) return;
+        if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Uploaded accounts could not be loaded.');
+        if (!Array.isArray(data.accounts) || data.accounts.some(a => !a || typeof a.account_code !== 'string'
+            || !a.account_code.trim() || typeof a.account_name !== 'string')
+            || new Set(data.accounts.map(a => a.account_code)).size !== data.accounts.length) {
+            throw new Error('The uploaded account list is incomplete.');
+        }
+        previewLedgerAccounts = data.accounts;
+        finishPreviewLedgerLoading();
+        previewLedgerInput.disabled = !data.accounts.length;
+        previewLedgerToggle.disabled = !data.accounts.length;
+        const selected = data.accounts.find(a => a.account_code === preferred)
+            || (data.accounts.length === 1 ? data.accounts[0] : null);
+        if (selected) selectPreviewLedgerAccount(selected, false);
+        else {
+            const message = data.accounts.length ? 'Select an account to view its ledger.' : 'No ledgers have been uploaded for this client and template.';
+            setPreviewLedgerStatus(data.accounts.length ? 'Search by account name or code.' : message);
+            clearPreviewForAccount(message);
+        }
+    } catch (error) {
+        if (!current()) return;
+        finishPreviewLedgerLoading();
+        previewLedgerInput.disabled = true; previewLedgerToggle.disabled = true;
+        setPreviewLedgerStatus(`${error.message} Retry to load uploaded accounts.`, true);
+        clearPreviewForAccount('Account list unavailable. Retry to continue.');
+    } finally {
+        if (previewLedgerLoading === load) finishPreviewLedgerLoading();
+    }
+}
+
 async function openPreview(templateId, templateName, mode = 'raw') {
     // The shared range (already validated by whichever caller reached this
     // point — confirmSharedRangePopover()) is read fresh here as a defensive
@@ -1247,6 +1404,14 @@ async function openPreview(templateId, templateName, mode = 'raw') {
         showStatus('⚠️ No client selected. Please select a client from the Dashboard.', 'error');
         return;
     }
+    const opening = ++previewOpenSequence;
+    finishPreviewLedgerLoading(); closePreviewLedgerOptions();
+    clearTimeout(searchTimeout);
+    previewLedgerAccounts = []; previewLedgerAccountCode = ''; previewLastLedgerAccountCode = '';
+    previewLedgerInput.value = ''; previewLedgerField.hidden = true;
+    document.getElementById('previewFilterToolbar').classList.remove('ledger-preview-active');
+    setPreviewLedgerStatus();
+    previewAccountState = 'loading';
 
     previewTemplateId = templateId;
     previewTemplateName = templateName;
@@ -1274,11 +1439,28 @@ async function openPreview(templateId, templateName, mode = 'raw') {
     if (rawFilterRow) rawFilterRow.style.display = previewMode === 'classification' ? 'none' : 'flex';
     if (amountMin.parentElement) amountMin.parentElement.style.display = previewMode === 'classification' ? 'none' : 'flex';
     if (dataQualityFilter.parentElement) dataQualityFilter.parentElement.style.display = previewMode === 'classification' ? 'none' : 'flex';
+    clearPreviewForAccount('Loading preview settings…');
 
     // Subtotal toggle: re-initialise from this template's own default flag
     // every time the preview is (re)opened - no cross-open persistence.
-    previewShowSubtotals = await fetchTemplateSubtotalDefault(templateId);
-    subtotalToggleCheckbox.checked = previewShowSubtotals;
+    try {
+        const subtotals = await fetchTemplateSubtotalDefault(templateId);
+        if (opening !== previewOpenSequence || !isPreviewOpen || Number(getSelectedClientId()) !== Number(clientId)) return;
+        previewShowSubtotals = subtotals;
+        subtotalToggleCheckbox.checked = subtotals;
+        const ledger = previewMode === 'raw' && templatePurposeCache[templateId] === 'account_ledger';
+        previewAccountState = ledger ? 'ledger' : 'standard';
+        previewLedgerField.hidden = !ledger;
+        document.getElementById('previewFilterToolbar').classList.toggle('ledger-preview-active', ledger);
+        if (ledger) await loadPreviewLedgerAccounts(opening, clientId, templateId);
+        if (opening !== previewOpenSequence || !isPreviewOpen || Number(getSelectedClientId()) !== Number(clientId)) return;
+    } catch (error) {
+        if (opening !== previewOpenSequence || !isPreviewOpen) return;
+        previewAccountState = 'error';
+        setPreviewLedgerStatus('Preview settings could not be loaded. Retry to continue.', true);
+        clearPreviewForAccount('Preview settings unavailable.');
+        return;
+    }
 
     // Fetch data
     fetchPreviewData();
@@ -1293,6 +1475,7 @@ function openClassificationPreview(templateId, templateName) {
 // templateColumnsCache since that cache's shape is a plain column-name array
 // consumed elsewhere).
 let templateSubtotalDefaultCache = {};
+let templatePurposeCache = {};
 
 async function fetchTemplateSubtotalDefault(templateId) {
     if (Object.prototype.hasOwnProperty.call(templateSubtotalDefaultCache, templateId)) {
@@ -1300,18 +1483,15 @@ async function fetchTemplateSubtotalDefault(templateId) {
     }
     try {
         const res = await fetch(`${API_BASE}/api/templates/${templateId}`);
-        if (!res.ok) {
-            templateSubtotalDefaultCache[templateId] = false;
-            return false;
-        }
+        if (!res.ok) throw new Error('Preview settings could not be loaded.');
         const data = await res.json();
         const flag = !!data.has_subtotals_by_default;
         templateSubtotalDefaultCache[templateId] = flag;
+        templatePurposeCache[templateId] = data.data_purpose || 'standard';
         return flag;
     } catch (e) {
         console.error('Failed to load template subtotal default:', e);
-        templateSubtotalDefaultCache[templateId] = false;
-        return false;
+        throw e; // Do not cache a failure or load an unscoped ledger preview.
     }
 }
 
@@ -1401,6 +1581,9 @@ function buildPreviewRequestSpec(page = currentPage) {
         limit: previewLimit
     });
     if (searchInput.value.trim()) params.append('search', searchInput.value.trim());
+    if (previewMode === 'raw' && previewAccountState === 'ledger' && previewLedgerAccountCode) {
+        params.append('ledger_account_code', previewLedgerAccountCode);
+    }
     if (previewMode === 'classification') {
         if (classificationTypeFilter.value) params.append('classification_type', classificationTypeFilter.value);
         if (classificationAccountFilter.value.trim()) params.append('account_code', classificationAccountFilter.value.trim());
@@ -1439,6 +1622,8 @@ function prefetchNextPreviewPage(spec, data) {
 
 // ---------- FETCH PREVIEW DATA ----------
 async function fetchPreviewData() {
+    if (previewAccountState === 'loading' || previewAccountState === 'error'
+        || (previewAccountState === 'ledger' && !previewLedgerAccountCode)) return;
     const clientId = getSelectedClientId();
     if (!clientId) {
         showStatus('⚠️ No client selected.', 'error');
@@ -1795,6 +1980,7 @@ function applyPreviewFilters() {
 // ---------- CLEAR PREVIEW FILTERS ----------
 function clearPreviewFilters() {
     if (!isPreviewOpen) return;
+    clearTimeout(searchTimeout);
     searchInput.value = '';
     amountMin.value = '';
     amountMax.value = '';
@@ -1803,6 +1989,8 @@ function clearPreviewFilters() {
     classificationTypeFilter.value = '';
     classificationAccountFilter.value = '';
     classificationCategoryFilter.value = '';
+    // Account is the ledger being viewed, not a text-search criterion.
+    restorePreviewLedgerSelection();
     currentPage = 1;
     fetchPreviewData();
 }
@@ -1951,6 +2139,7 @@ uploadMoreBtn.addEventListener('click', () => {
 closePreviewBtn.addEventListener('click', () => {
     previewModal.style.display = 'none';
     isPreviewOpen = false;
+    finishPreviewLedgerLoading(); closePreviewLedgerOptions();
     hideRowHistoryPopover();
     closeSharedRangePopover();
 });
@@ -1958,6 +2147,7 @@ previewModal.addEventListener('click', (e) => {
     if (e.target === previewModal) {
         previewModal.style.display = 'none';
         isPreviewOpen = false;
+        finishPreviewLedgerLoading(); closePreviewLedgerOptions();
         hideRowHistoryPopover();
         closeSharedRangePopover();
     }
@@ -2001,6 +2191,57 @@ pageSizeSelect.addEventListener('change', function() {
 });
 
 // Preview filters
+previewLedgerInput.addEventListener('focus', () => {
+    renderPreviewLedgerOptions(previewLedgerAccountCode ? '' : previewLedgerInput.value);
+    previewLedgerInput.select();
+});
+previewLedgerInput.addEventListener('input', () => {
+    previewLedgerAccountCode = '';
+    previewLedgerInput.title = '';
+    clearPreviewForAccount('Select an account from the matching uploaded ledgers.');
+    renderPreviewLedgerOptions(previewLedgerInput.value);
+});
+previewLedgerToggle.addEventListener('click', () => {
+    if (!previewLedgerOptions.hidden) closePreviewLedgerOptions();
+    else {
+        previewLedgerInput.focus();
+        renderPreviewLedgerOptions();
+    }
+});
+previewLedgerField.addEventListener('focusout', e => {
+    if (!previewLedgerField.contains(e.relatedTarget)) restorePreviewLedgerSelection();
+});
+previewLedgerField.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !previewLedgerOptions.hidden) {
+        e.preventDefault(); e.stopPropagation(); restorePreviewLedgerSelection();
+    } else if (e.target === previewLedgerInput && ['ArrowDown', 'ArrowUp'].includes(e.key)) {
+        e.preventDefault();
+        if (previewLedgerOptions.hidden) renderPreviewLedgerOptions(previewLedgerAccountCode ? '' : previewLedgerInput.value);
+        if (!previewLedgerMatches.length) return;
+        previewLedgerActiveIndex = previewLedgerActiveIndex < 0
+            ? (e.key === 'ArrowDown' ? 0 : previewLedgerMatches.length - 1)
+            : (previewLedgerActiveIndex + (e.key === 'ArrowDown' ? 1 : -1)
+                + previewLedgerMatches.length) % previewLedgerMatches.length;
+        const options = [...previewLedgerOptions.querySelectorAll('[role="option"]')];
+        options.forEach((option, index) => option.classList.toggle('active', index === previewLedgerActiveIndex));
+        const active = options[previewLedgerActiveIndex];
+        previewLedgerInput.setAttribute('aria-activedescendant', active.id);
+        active.scrollIntoView({block: 'nearest'});
+    } else if (e.target === previewLedgerInput && e.key === 'Enter') {
+        e.preventDefault();
+        const account = previewLedgerMatches[previewLedgerActiveIndex] || (previewLedgerMatches.length === 1 ? previewLedgerMatches[0] : null);
+        if (!previewLedgerOptions.hidden && account) selectPreviewLedgerAccount(account);
+    }
+});
+previewLedgerRetry.addEventListener('click', async () => {
+    if (!isPreviewOpen) return;
+    if (previewAccountState === 'error') {
+        openPreview(previewTemplateId, previewTemplateName, previewMode);
+    } else {
+        await loadPreviewLedgerAccounts(previewOpenSequence, getSelectedClientId(), previewTemplateId, previewLastLedgerAccountCode);
+        if (isPreviewOpen) fetchPreviewData();
+    }
+});
 applyFiltersBtn.addEventListener('click', applyPreviewFilters);
 // Modal clear button (using the updated ID from the HTML fix)
 const modalClearBtn = document.getElementById('clearPreviewFiltersBtn');
@@ -2114,6 +2355,7 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && isPreviewOpen) {
         previewModal.style.display = 'none';
         isPreviewOpen = false;
+        finishPreviewLedgerLoading(); closePreviewLedgerOptions();
     }
     // Ctrl+Enter triggers check availability
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -2126,6 +2368,8 @@ document.addEventListener('keydown', (e) => {
 let clientChangeTimeout;
 window.onClientChange = function(clientId) {
     clearTimeout(clientChangeTimeout);
+    previewRequestSequence++; previewOpenSequence++;
+    finishPreviewLedgerLoading(); closePreviewLedgerOptions();
     clientChangeTimeout = setTimeout(() => {
         if (clientId) {
             invalidateDataBankCaches();

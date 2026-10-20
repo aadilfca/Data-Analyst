@@ -49,7 +49,7 @@ const quickAddSaveAndNewBtn = document.getElementById('quickAddSaveAndNewBtn');
 const RATE_SOURCE_ELIGIBLE_TEMPLATES = new Set(['purchase order', 'store receiving', 'vendor bill']);
 
 function updateRateSourceVisibility() {
-    const eligible = RATE_SOURCE_ELIGIBLE_TEMPLATES.has(templateName.value.trim().toLowerCase());
+    const eligible = ledgerPurposeSelect?.value !== 'account_ledger' && RATE_SOURCE_ELIGIBLE_TEMPLATES.has(templateName.value.trim().toLowerCase());
     rateSourceField.style.display = eligible ? 'block' : 'none';
 }
 
@@ -75,6 +75,91 @@ function stopTemplateLoading(token) {
         window.LoadingUI.stopGlobalLoading(token);
     }
 }
+
+// Ledger setup is a draft until Save; missing master columns are created in
+// the same server transaction as the template, never while opening the form.
+const ledgerPurposeSelect = document.getElementById('templatePurpose');
+const ledgerRoleDefinitions = [
+    ['voucher', 'Voucher', 'Voucher ID', 'Text'], ['date', 'Date', 'Transaction Date', 'Date'],
+    ['description', 'Description', 'Voucher Detail', 'Text'], ['debit', 'Debit', 'Debit Amount', 'Numeric'],
+    ['credit', 'Credit', 'Credit Amount', 'Numeric'], ['balance', 'Balance', 'Balance', 'Text']
+];
+let ledgerColumnRoles = {};
+let ledgerSetupDraft = null;
+function ledgerRoleTypeMatches(role, kind) {
+    return role === 'balance' ? ['Text', 'Numeric'].includes(kind)
+        : ledgerRoleDefinitions.find(item => item[0] === role)[3] === kind;
+}
+function syncPreparedLedgerColumns() {
+    if (!ledgerSetupDraft) return;
+    selectedColumns = ledgerRoleDefinitions.map(([role, label, name, kind], index) => {
+        const id = ledgerColumnRoles[role];
+        const existing = allMasterColumns.find(col => col.id === id);
+        return existing ? {id, name: existing.column_name, type: existing.data_type}
+            : {id: -(index + 1), name: name + ' (create on Save)', type: kind};
+    });
+}
+function renderLedgerRoleControls() {
+    const ledgerMode = ledgerPurposeSelect.value === 'account_ledger';
+    document.getElementById('ledgerRoleFields').hidden = !ledgerMode;
+    ledgerPurposeSelect.disabled = Boolean(ledgerSetupDraft);
+    document.getElementById('templateColumnSearch').hidden = Boolean(ledgerSetupDraft);
+    document.getElementById('templateColumnOrderHint').textContent = ledgerSetupDraft
+        ? 'Prepared columns follow the ledger role order. Review or change the role selections above.'
+        : 'Drag ☰ to reorder. Click ✕ to remove a column.';
+    const container = document.getElementById('ledgerRoleControls');
+    container.replaceChildren();
+    if (!ledgerMode) return;
+    ledgerRoleDefinitions.forEach(([role, label, name, kind], index) => {
+        const choices = ledgerSetupDraft
+            ? allMasterColumns.map(c => ({id: c.id, name: c.column_name, type: c.data_type})) : selectedColumns;
+        const field = document.createElement('label'); field.textContent = label;
+        const select = document.createElement('select'); select.id = 'ledgerRole-' + role;
+        select.style.cssText = 'display:block;width:100%;margin-top:4px;padding:8px;border:1px solid #cbd5e1;border-radius:6px;';
+        const empty = new Option('Select column', ''); select.appendChild(empty);
+        choices.filter(c => ledgerRoleTypeMatches(role, c.type)).forEach(c => select.appendChild(new Option(c.name, c.id)));
+        if (ledgerSetupDraft && !ledgerSetupDraft.columns[index].column_id) {
+            select.appendChild(new Option('Create ' + name + ' on Save', -(index + 1)));
+        }
+        if (!ledgerColumnRoles[role]) {
+            const match = choices.find(c => c.name.trim().toLowerCase() === name.toLowerCase() && ledgerRoleTypeMatches(role, c.type));
+            if (match) ledgerColumnRoles[role] = match.id;
+        }
+        select.value = String(ledgerColumnRoles[role] || '');
+        if (!select.value) delete ledgerColumnRoles[role];
+        select.addEventListener('change', () => {
+            ledgerColumnRoles[role] = Number(select.value) || null;
+            if (ledgerSetupDraft) { syncPreparedLedgerColumns(); renderSelectedColumns(); updateSelectedCount(); }
+        });
+        field.appendChild(select); container.appendChild(field);
+    });
+    document.getElementById('ledgerSetupHint').textContent = ledgerSetupDraft
+        ? 'Existing compatible columns will be reused. Missing columns are created only when you save this template.'
+        : 'Column roles are saved with this template. Imported ledger data protects these settings from reassignment.';
+}
+ledgerPurposeSelect.addEventListener('change', () => {
+    ledgerColumnRoles = {}; renderLedgerRoleControls(); updateRateSourceVisibility();
+});
+document.getElementById('prepareLedgerBtn').addEventListener('click', async function() {
+    if (templateActionsInFlight.has('ledger-prepare')) return;
+    templateActionsInFlight.add('ledger-prepare');
+    const token = startTemplateLoading(this);
+    try {
+        await loadTemplates();
+        const existing = (templatesCache || []).find(t => t.template_name.trim().toLowerCase() === 'account ledger' && t.data_purpose === 'account_ledger');
+        if (existing) { await openModal('Edit Account Ledger', existing, this); return; }
+        const response = await fetch(API_BASE + '/api/templates/ledger-setup');
+        const draft = await response.json();
+        if (!response.ok) throw new Error(draft.detail || 'Ledger setup could not be prepared.');
+        await openModal('Prepare Account Ledger', null, this);
+        ledgerSetupDraft = draft;
+        templateName.value = draft.template_name;
+        ledgerPurposeSelect.value = 'account_ledger';
+        ledgerColumnRoles = Object.fromEntries(draft.columns.map((c, i) => [c.role, c.column_id || -(i + 1)]));
+        syncPreparedLedgerColumns(); renderSelectedColumns(); updateSelectedCount(); renderLedgerRoleControls();
+    } catch (error) { showStatus('Ledger setup: ' + error.message, 'error'); }
+    finally { stopTemplateLoading(token); templateActionsInFlight.delete('ledger-prepare'); }
+});
 
 // ---------- LOAD TEMPLATES ----------
 // forceRefresh=true bypasses the cache after a create/edit/delete that changed server
@@ -574,7 +659,7 @@ function renderSelectedColumns() {
         div.style.cssText = 'display:flex; align-items:center; gap:10px; padding:8px 10px; border-bottom:1px solid #f0f2f5; background:white; border-radius:6px; margin-bottom:4px;';
 
         const handle = document.createElement('span');
-        handle.textContent = '☰';
+        handle.textContent = ledgerSetupDraft ? '' : '☰';
         handle.style.cssText = 'cursor:grab; color:#94a3b8; font-size:16px; user-select:none; padding:0 4px;';
         div.appendChild(handle);
 
@@ -597,12 +682,12 @@ function renderSelectedColumns() {
         removeBtn.textContent = '✕';
         removeBtn.style.cssText = 'background:none; border:none; color:#dc2626; cursor:pointer; font-size:16px; padding:0 6px;';
         removeBtn.addEventListener('click', function() { removeFromSelected(col.id); });
-        div.appendChild(removeBtn);
+        if (!ledgerSetupDraft) div.appendChild(removeBtn);
 
         selectedColumnsList.appendChild(div);
     });
 
-    if (typeof Sortable !== 'undefined' && selectedColumns.length > 1) {
+    if (!ledgerSetupDraft && typeof Sortable !== 'undefined' && selectedColumns.length > 1) {
         new Sortable(selectedColumnsList, {
             handle: '.selected-item span:first-child',
             animation: 150,
@@ -625,6 +710,7 @@ function renderSelectedColumns() {
 }
 
 function updateSelectedCount() {
+    renderLedgerRoleControls();
     const count = selectedColumns.length;
     selectedCountBadge.textContent = count + ' selected';
     selectedCountBadge.style.background = count > 0 ? '#e8f5e9' : '#f1f3f4';
@@ -633,6 +719,11 @@ function updateSelectedCount() {
 
 // ---------- MODAL OPEN / CLOSE ----------
 async function openModal(title, templateData = null, triggerBtn = null) {
+    ledgerSetupDraft = null;
+    ledgerColumnRoles = {};
+    ledgerPurposeSelect.value = templateData?.data_purpose || 'standard';
+    if (templateData?.ledger_columns) ledgerColumnRoles = typeof templateData.ledger_columns === 'string' ? JSON.parse(templateData.ledger_columns) : {...templateData.ledger_columns};
+
     selectedColumns = [];
     searchInput.value = '';
     searchResults.style.display = 'none';
@@ -681,6 +772,7 @@ async function openModal(title, templateData = null, triggerBtn = null) {
         renderSelectedColumns();
         updateSelectedCount();
     }
+    renderLedgerRoleControls();
     updateRateSourceVisibility();
 }
 
@@ -751,6 +843,11 @@ document.getElementById('templateForm').addEventListener('submit', async functio
         return;
     }
 
+    const ledgerMode = ledgerPurposeSelect.value === 'account_ledger';
+    if (ledgerMode && (ledgerRoleDefinitions.some(([role]) => !ledgerColumnRoles[role])
+        || new Set(Object.values(ledgerColumnRoles)).size !== 6 || selectedColumns[0]?.id !== ledgerColumnRoles.voucher)) {
+        showModalStatus('Select six distinct ledger column roles and keep the Voucher column first.', 'error'); return;
+    }
     const selectedIds = selectedColumns.map(c => c.id);
     const saveTemplateBtn = document.getElementById('saveTemplateBtn');
     if (templateActionsInFlight.has('template-save')) return;
@@ -764,7 +861,13 @@ document.getElementById('templateForm').addEventListener('submit', async functio
 
         let url = API_BASE + '/api/templates';
         let method = 'POST';
-        const payload = { template_name: name, selected_columns: selectedIds, rate_source: rateSourceSelect.value, has_subtotals_by_default: hasSubtotalsCheckbox.checked };
+        let payload = { template_name: name, selected_columns: selectedIds, rate_source: ledgerMode ? null : rateSourceSelect.value,
+            has_subtotals_by_default: hasSubtotalsCheckbox.checked, data_purpose: ledgerPurposeSelect.value,
+            ledger_columns: ledgerMode ? ledgerColumnRoles : {} };
+        if (ledgerSetupDraft) {
+            url += '/ledger-setup';
+            payload = {template_name: name, has_subtotals_by_default: hasSubtotalsCheckbox.checked, ledger_columns: Object.fromEntries(Object.entries(ledgerColumnRoles).map(([role, id]) => [role, id > 0 ? id : null]))};
+        }
 
         if (editingId) {
             url += '/' + editingId;
@@ -783,6 +886,7 @@ document.getElementById('templateForm').addEventListener('submit', async functio
             throw new Error(result.message || result.detail || 'Failed to save template');
         }
 
+        if (ledgerSetupDraft) masterColumnsLoaded = false; // Newly created columns must be searchable in the next editor.
         showModalStatus('✅ ' + result.message, 'success');
         await new Promise(resolve => setTimeout(resolve, 800));
         closeModal();

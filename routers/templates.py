@@ -270,6 +270,81 @@ def _guard_ledger_column_change(template_id, selected_columns):
             "account_ledger", json.loads(roles) if isinstance(roles, str) else roles, selected_columns
         )
 
+# A standard recipe is client-neutral; accounting roles still bind to column IDs.
+LEDGER_SETUP_COLUMNS = {
+    'voucher': ('Voucher ID', 'Text'), 'date': ('Transaction Date', 'Date'),
+    'description': ('Voucher Detail', 'Text'), 'debit': ('Debit Amount', 'Numeric'),
+    'credit': ('Credit Amount', 'Numeric'), 'balance': ('Balance', 'Text'),
+}
+
+
+class LedgerSetupRequest(BaseModel):
+    template_name: str = 'Account Ledger'
+    ledger_columns: dict[str, Optional[int]]
+    has_subtotals_by_default: bool = False
+
+
+def _ledger_setup_choices():
+    columns = execute_query_pg('SELECT id, column_name, data_type, is_active FROM master_columns ORDER BY id')
+    defaults = []
+    for role, (name, kind) in LEDGER_SETUP_COLUMNS.items():
+        matches = [c for c in columns if c['column_name'].strip().casefold() == name.casefold()]
+        allowed = {'Text', 'Numeric'} if role == 'balance' else {kind}
+        compatible = [c for c in matches if c.get('is_active', True) and c['data_type'] in allowed]
+        if len(matches) > 1 or (matches and not compatible):
+            raise HTTPException(409, f"Review the existing '{name}' master column: it must be active, unique and have a compatible type. Shared columns were not changed.")
+        defaults.append({'role': role, 'column_name': name, 'data_type': kind,
+                         'column_id': compatible[0]['id'] if compatible else None})
+    return columns, defaults
+
+
+@router.get('/api/templates/ledger-setup')
+def preview_ledger_setup():
+    """Preview only; missing shared columns are created together on Save."""
+    _, defaults = _ledger_setup_choices()
+    return {'template_name': 'Account Ledger', 'columns': defaults}
+
+
+@router.post('/api/templates/ledger-setup')
+def save_ledger_setup(request: LedgerSetupRequest):
+    name = request.template_name.strip()
+    if not name or len(name) > 200 or set(request.ledger_columns) != set(LEDGER_SETUP_COLUMNS):
+        raise HTTPException(400, 'Supply a template name and all six ledger column roles.')
+    with pg_transaction():
+        # Setup is rare. Serialize it against ordinary column/template writes as
+        # well as double clicks, without altering shared names/types or schema.
+        execute_write_pg('LOCK TABLE master_columns, templates IN SHARE ROW EXCLUSIVE MODE')
+        columns, defaults = _ledger_setup_choices()
+        by_id = {c['id']: c for c in columns if c.get('is_active', True)}
+        roles = {}
+        for definition in defaults:
+            role = definition['role']
+            selected = request.ledger_columns[role]
+            if selected is None:
+                selected = definition['column_id']
+                if selected is None:
+                    selected = execute_write_pg(
+                        "INSERT INTO master_columns (column_name, data_type, category) VALUES (%s, %s, %s) RETURNING id",
+                        (definition['column_name'], definition['data_type'], 'Financial'))
+            elif selected not in by_id:
+                raise HTTPException(400, 'Select active master columns for all ledger roles.')
+            roles[role] = selected
+        selected_columns = list(roles.values())
+        validate_ledger_template_configuration('account_ledger', roles, selected_columns)
+        existing = execute_query_pg('SELECT id, data_purpose, ledger_columns, is_active FROM templates WHERE LOWER(TRIM(template_name)) = LOWER(%s)', (name,))
+        if existing:
+            previous = existing[0].get('ledger_columns') or {}
+            previous = json.loads(previous) if isinstance(previous, str) else previous
+            if (len(existing) == 1 and existing[0].get('is_active', True)
+                    and existing[0].get('data_purpose') == 'account_ledger' and previous == roles):
+                return {'template_id': existing[0]['id'], 'message': 'Account Ledger template already configured.', 'reused': True}
+            raise HTTPException(409, 'This template name already exists with different settings. Open it for review or choose another name.')
+        result = create_template(TemplateCreate(template_name=name, selected_columns=selected_columns,
+            data_purpose='account_ledger', ledger_columns=roles, has_subtotals_by_default=request.has_subtotals_by_default))
+    invalidate_template_cache()
+    return result
+
+
 @router.get("/api/templates")
 def get_templates(
     response: Response,

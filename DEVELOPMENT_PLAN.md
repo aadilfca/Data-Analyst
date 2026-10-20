@@ -1,3 +1,20 @@
+## Current feature sequence — Cashflow ledger balances — 2026-10-20
+
+The current contract keeps one canonical dataset and preserves complete voucher lines, declared coverage, verified archives and safe retries. This sequence governs ledger/balance work; earlier roadmaps below retain their historical context.
+
+| Phase | Status / objective |
+|---|---|
+| 1 — Foundation | Complete: account-scoped ledger metadata, roles, source controls and import safeguards. |
+| 2 — Ledger upload | Accepted by Aadil after successful physical import. Standard mapping, account/coverage identity, source notes and existing duplicate/archive/receipt safeguards remain. |
+| 3 — Client Data | Accepted by Aadil. Existing preview has searchable uploaded-account selection, combined period/row filters and account-scoped counts, pagination and caching. |
+| 4 — Balances | Derive period-wise ledger opening/closing evidence and calculated reconciliation; expose missing coverage. |
+| 5 — Cashflow rows | Dim-green expandable opening/closing totals, account names with code hover, and distinct calculated balances. |
+| 6 — Differences | Existing-flow popup for missing/changed vouchers and their lines between ledger and voucher sources. |
+| 7 — Verification | Align exports and test period boundaries, repeated lines, zero/signed balances and accounting proofs. |
+| 8 — Drive production — final | Publish/reauthorise Google OAuth and configure hosted credentials plus persistent external archive storage after phases 2–7. Existing archive requirements remain active meanwhile. |
+
+Each implementation phase retains file/approach approval, local acceptance and separate Git approval.
+
 ## Active roadmap - Excel-style Cashflows database strategy - 2026-10-08
 
 This roadmap supersedes the earlier future-phase sequence while preserving its completed work. The design target is a simple PostgreSQL/Supabase implementation that behaves like the user's Excel model: immutable raw data, upload-time derived transaction data, and fast prepared summaries instead of repeated full recalculation.

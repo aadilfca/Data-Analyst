@@ -189,7 +189,9 @@ const NAV_MANIFEST = [
     {
         title: 'Client Data',
         items: [
-            { label: 'Upload Client Data', url: '/static/upload.html', state: 'ready', module: 'Upload Data' },
+            { label: 'Upload Client Data', url: '/static/upload.html', state: 'ready', module: 'Upload Data',
+                children: [{ label: 'Account Ledger upload', url: '/static/upload.html?feature=account-ledger', state: 'ready',
+                    keywords: ['ledger', 'cash bank ledger', 'opening closing balances'] }] },
             { label: 'Client Data Bank', url: '/static/databank.html', state: 'ready', module: 'Data Bank' },
             { label: 'Trial Balance', url: '/static/trial_balance.html', state: 'ready', module: 'Trial Balance' },
         ],

@@ -86,6 +86,7 @@ let isProcessing = false;
 let uploadActionInFlight = false;
 let validationStatus = 'idle'; // 'idle' | 'validating' | 'valid' | 'invalid'
 let validationPlanId = null;
+let uploadValidationGeneration = 0;
 let lastChangePreview = null;
 let lastUploadSummary = null;
 // Pre-import Rate mode visibility (Phase D of the Rate-derivation requirement) --
@@ -93,6 +94,92 @@ let lastUploadSummary = null;
 // or null for a non-eligible template. Only ever trustworthy alongside a 'valid'
 // validationStatus -- cleared in lockstep with it by resetValidationState().
 let lastRateModeInfo = null;
+
+// Ledger identity belongs to this client/upload, never to repeated Excel cells.
+let uploadTemplatePurpose = 'standard';
+let uploadTemplateCatalog = [];
+let uploadTemplateGeneration = 0;
+let ledgerAccountChoices = [];
+let ledgerSelectedAccountCode = '';
+let ledgerSelectionClientId = null;
+let pendingLedgerRestoreCode = '';
+let ledgerRecognisedControlRows = new Set();
+let ledgerRecognisedNoteRows = new Map();
+let ledgerAccountLoad = null;
+const ledgerAccountSelect = document.getElementById('ledgerAccountSelect');
+function isLedgerUpload() { return uploadTemplatePurpose === 'account_ledger'; }
+function ledgerUploadLabel() {
+    const account = ledgerAccountChoices.find(a => a.account_code === ledgerSelectedAccountCode);
+    return account ? `${account.account_name} (${account.account_code})` : '';
+}
+function clearLedgerUploadContext() {
+    finishLedgerAccountLoading();
+    ledgerAccountChoices = []; ledgerSelectedAccountCode = ''; ledgerSelectionClientId = null;
+    document.getElementById('ledgerUploadContext').hidden = true;
+    document.getElementById('ledgerAccountHelp').hidden = true;
+    document.getElementById('ledgerEvidenceSummary').hidden = true;
+    renderLedgerUploadAccounts();
+}
+function renderLedgerUploadAccounts() {
+    ledgerAccountSelect.replaceChildren(new Option('Select account', ''));
+    ledgerAccountChoices.forEach(account => {
+        ledgerAccountSelect.appendChild(new Option(`${account.account_name} — ${account.account_code}`, account.account_code));
+    });
+    ledgerAccountSelect.value = ledgerSelectedAccountCode;
+    ledgerAccountSelect.disabled = !!ledgerAccountLoad || !ledgerAccountChoices.length;
+}
+function finishLedgerAccountLoading() {
+    // One owner per field: an obsolete response cannot clear a newer spinner.
+    if (!ledgerAccountLoad) return;
+    window.LoadingUI.hideFieldLoading(ledgerAccountSelect);
+    window.LoadingUI.stopGlobalLoading(ledgerAccountLoad.token);
+    ledgerAccountSelect.removeAttribute('aria-busy');
+    ledgerAccountLoad = null;
+}
+async function loadLedgerUploadAccounts(preferred = '', generation = uploadTemplateGeneration) {
+    finishLedgerAccountLoading();
+    const client = Number(getCurrentClientId());
+    ledgerAccountChoices = []; ledgerSelectedAccountCode = ''; ledgerSelectionClientId = null;
+    renderLedgerUploadAccounts(); resetValidationState();
+    const help = document.getElementById('ledgerAccountHelp');
+    help.hidden = false;
+    help.textContent = 'Loading accounts…';
+    const load = {token: window.LoadingUI.startGlobalLoading(ledgerAccountSelect)};
+    ledgerAccountLoad = load;
+    ledgerAccountSelect.setAttribute('aria-busy', 'true');
+    window.LoadingUI.showFieldLoading(ledgerAccountSelect);
+    try {
+        const response = await fetchUpload(API_BASE + '/api/upload/ledger-accounts?client_id=' + client);
+        const result = await response.json();
+        if (ledgerAccountLoad !== load || !isLedgerUpload() || generation !== uploadTemplateGeneration || client !== Number(getCurrentClientId())) return;
+        if (!Array.isArray(result.accounts)) throw new Error('Account response is incomplete. Select the template again to retry.');
+        ledgerAccountChoices = result.accounts;
+        ledgerSelectionClientId = client;
+        ledgerSelectedAccountCode = result.accounts.some(a => a.account_code === preferred) ? preferred : '';
+        renderLedgerUploadAccounts();
+        help.textContent = result.accounts.length ? ''
+            : 'No posting accounts found. Upload and parse this client’s Trial Balance, then select the template again.';
+        help.hidden = result.accounts.length > 0;
+        saveUploadSessionState();
+    } catch (error) {
+        if (ledgerAccountLoad !== load || generation !== uploadTemplateGeneration || !isLedgerUpload() || client !== Number(getCurrentClientId())) return;
+        help.textContent = 'Accounts could not be loaded. Select the template again to retry.';
+        showUploadFailure(error.message, 'Ledger account selection', error);
+    } finally {
+        if (ledgerAccountLoad === load) {
+            finishLedgerAccountLoading();
+            renderLedgerUploadAccounts();
+            if (client !== Number(getCurrentClientId()) && isLedgerUpload()) {
+                help.textContent = 'Client changed. Select the template again to load its accounts.';
+                help.hidden = false;
+            }
+        }
+    }
+}
+ledgerAccountSelect.addEventListener('change', () => {
+    ledgerSelectedAccountCode = ledgerAccountSelect.value;
+    resetValidationState(); saveUploadSessionState();
+});
 
 // Pagination state variables
 let previewCurrentPage = 1;
@@ -179,6 +266,8 @@ function saveUploadSessionState() {
     if (!selectedTemplateId) return;
     const state = {
         templateId: selectedTemplateId,
+        clientId: getCurrentClientId(),
+        ledgerAccountCode: isLedgerUpload() ? ledgerSelectedAccountCode : '',
         sheetName: currentSheet,
         fileName: selectedFile ? selectedFile.name : null,
         dateDelimiter: selectedDateDelimiter,
@@ -209,6 +298,7 @@ function saveUploadSessionState() {
 }
 
 function clearUploadSessionState() {
+    pendingLedgerRestoreCode = '';
     sessionStorage.removeItem(UPLOAD_SESSION_STORAGE_KEY);
     pendingRestoreSheetName = null;
     pendingExcludedRowNumbersToRestore = null;
@@ -234,6 +324,8 @@ async function restoreUploadSessionState() {
         return;
     }
     if (!state || !state.templateId) return;
+    if (state.clientId && String(state.clientId) !== String(getCurrentClientId())) { clearUploadSessionState(); return; }
+    pendingLedgerRestoreCode = state.clientId ? state.ledgerAccountCode || '' : '';
 
     // Date format is file-independent -- restore it directly.
     if (state.dateDelimiter !== undefined && dateDelimiterDropdown) {
@@ -369,8 +461,12 @@ function clearRestorePreview() {
 
 // ---------- RESET VALIDATION STATE ----------
 function resetValidationState() {
+    uploadValidationGeneration++;
     validationStatus = 'idle';
     validationPlanId = null;
+    document.getElementById('ledgerEvidenceSummary').hidden = true;
+    ledgerRecognisedControlRows = new Set();
+    ledgerRecognisedNoteRows = new Map();
     lastChangePreview = null;
     lastUploadSummary = null;
     if (importBtn) {
@@ -480,6 +576,7 @@ function uploadRequestStage(url) {
     if (path.endsWith('/import')) return 'Import';
     if (path.includes('import-excel')) return 'File upload';
     if (path.includes('date-preview')) return 'Date preview';
+    if (path.includes('ledger-accounts')) return 'Ledger account selection';
     if (path.includes('validate')) return 'Validation';
     if (path.includes('mapping') || path.includes('auto-map')) return 'Column mapping';
     return 'Template selection';
@@ -523,12 +620,23 @@ async function fetchUpload(url, options) {
 
 function uploadFailureMessage(result, fallback) {
     const candidates = [result?.detail?.message, result?.detail, result?.error?.http_detail,
-        result?.error?.user_message, result?.message];
+        result?.message];
     const message = candidates.find(value => typeof value === 'string' && value.trim());
     if (message) return message;
     if (Array.isArray(result?.detail)) {
         return result.detail.map(item => item.msg).filter(Boolean).join('; ') || fallback;
     }
+    // Legacy global errors can hide the cause behind the registry's Unknown text.
+    // Display only the supplied reason/support reference, never its stack or code location.
+    const problem = result?.error;
+    const userMessage = problem?.user_message;
+    const reason = problem?.technical_details?.message;
+    if (typeof reason === 'string' && reason.trim()
+        && (!userMessage || problem.error_code === 'ERR-UNK-001' || /unknown|unexpected error/i.test(userMessage))) {
+        const reference = [problem.error_code, problem.error_id ? `reference ${problem.error_id}` : ''].filter(Boolean).join(', ');
+        return reason + (reference ? ` (${reference})` : '');
+    }
+    if (typeof userMessage === 'string' && userMessage.trim()) return userMessage;
     return fallback;
 }
 
@@ -550,7 +658,9 @@ function showSourceDiagnostics(result) {
     const controls = result.source_diagnostics;
     if (!controls || (!controls.excluded_count && !controls.warnings?.length)) return;
     showUploadIssue({stage: 'Source review', severity: controls.warnings?.length ? 'warning' : 'info',
-        message: `${controls.excluded_count || 0} blank/total source row(s) recognised and excluded from transactions.`,
+        message: isLedgerUpload() && controls.warnings?.length
+            ? `Ledger balance/source review: ${controls.warnings.length} item(s) need attention.`
+            : `${controls.excluded_count || 0} blank/total source row(s) recognised and excluded from transactions.`,
         action: controls.warnings?.length
             ? 'Review the source control-total differences before importing. Transaction amounts remain unchanged.'
             : 'Only transaction rows proceed to comparison. Review these source row numbers if needed.',
@@ -669,6 +779,7 @@ function populateDateOrderDropdown(delimiter) {
 if (dateDelimiterDropdown) {
     dateDelimiterDropdown.addEventListener('change', function() {
         selectedDateDelimiter = this.value;
+        resetValidationState();
         populateDateOrderDropdown(selectedDateDelimiter);
         refreshDateFormatPreview();
         updateDateFormatTriggerLabel();
@@ -679,6 +790,7 @@ if (dateDelimiterDropdown) {
 if (dateOrderDropdown) {
     dateOrderDropdown.addEventListener('change', function() {
         selectedDateOrder = this.value;
+        resetValidationState();
         refreshDateFormatPreview();
         updateDateFormatTriggerLabel();
         saveUploadSessionState();
@@ -695,7 +807,9 @@ if (comparisonModeDropdown) {
 
 function updateUploadCoverageVisibility() {
     const container = document.getElementById('uploadCoverageFields');
-    if (container) container.style.display = comparisonModeDropdown?.value === 'replace_range' ? 'flex' : 'none';
+    const complete = comparisonModeDropdown?.value === 'replace_range';
+    if (container) container.style.display = complete || isLedgerUpload() ? 'flex' : 'none';
+    document.getElementById('uploadEmptyConfirmLabel').hidden = !complete;
 }
 
 [uploadCoverageStart, uploadCoverageEnd, uploadConfirmEmpty].forEach(control => {
@@ -710,7 +824,7 @@ function reviewUploadReplacement(payload) {
     const summary = lastChangePreview || {};
     const count = key => Number(summary[key] || 0).toLocaleString();
     document.getElementById('uploadReplacementScope').textContent =
-        `${window.getSelectedClientName ? window.getSelectedClientName() : 'Selected client'} · ${templateDropdown?.selectedOptions[0]?.textContent || 'Selected template'} · ${payload.coverage_start} through ${payload.coverage_end}`;
+        `${window.getSelectedClientName ? window.getSelectedClientName() : 'Selected client'}${payload.ledger_account_code ? ' · ' + ledgerUploadLabel() : ''} · ${templateDropdown?.selectedOptions[0]?.textContent || 'Selected template'} · ${payload.coverage_start} through ${payload.coverage_end}`;
     document.getElementById('uploadReplacementCounts').textContent =
         `${count('unchanged_count')} unchanged · ${count('new_count')} incoming new/revised lines · ${count('changed_count')} identifiable corrections · ${count('missing_count')} superseded/removed old lines`;
     if (summary.changed_voucher_count !== undefined) {
@@ -873,6 +987,7 @@ async function loadTemplates() {
         const res = await fetchUpload(API_BASE + '/api/templates');
         if (!res.ok) throw new Error('Failed to load templates');
         const templates = await res.json();
+        uploadTemplateCatalog = templates;
         if (templateDropdown) {
             templateDropdown.innerHTML = '<option value="">-- Select Template --</option>';
             templates.forEach(tpl => {
@@ -906,6 +1021,7 @@ if (templateDropdown) {
         }
                 const id = this.value;
         if (!id) {
+            ++uploadTemplateGeneration; uploadTemplatePurpose = 'standard'; clearLedgerUploadContext();
             selectedTemplateId = null;
             if (mappingPanel) mappingPanel.style.display = 'none';
             if (leftPanel) leftPanel.style.display = 'none';
@@ -939,6 +1055,8 @@ if (templateDropdown) {
 // later status updates. No behavior change for the normal dropdown-click path.
 async function selectTemplate(id) {
     selectedTemplateId = parseInt(id);
+    const generation = ++uploadTemplateGeneration;
+    uploadTemplatePurpose = 'standard'; clearLedgerUploadContext();
     saveUploadSessionState(); // Template chosen -- worth remembering even if the fetch below fails
     // A template is now chosen -- reveal Sheet/Download together and advance the step
     // strip, regardless of whether the column-fetch below succeeds (Download only needs
@@ -951,7 +1069,16 @@ async function selectTemplate(id) {
         const res = await fetchUpload(API_BASE + `/api/templates/${id}/upload-columns`);
         if (!res.ok) throw new Error('Failed to fetch template columns');
         const data = await res.json();
+        if (generation !== uploadTemplateGeneration || Number(id) !== selectedTemplateId) return;
         templateColumns = data.columns;
+        uploadTemplatePurpose = data.data_purpose || 'standard';
+        if (isLedgerUpload()) {
+            document.getElementById('ledgerUploadContext').hidden = false;
+            await loadLedgerUploadAccounts(pendingLedgerRestoreCode, generation);
+            pendingLedgerRestoreCode = '';
+            if (generation !== uploadTemplateGeneration) return;
+        }
+        updateUploadCoverageVisibility();
         if (downloadBtn) {
             downloadBtn.dataset.templateId = id;
             downloadBtn.disabled = false;
@@ -1127,6 +1254,10 @@ if (clearBtn) {
 }
 
 function resetUpload() {
+    ++uploadTemplateGeneration;
+    ledgerSelectedAccountCode = ''; pendingLedgerRestoreCode = '';
+    if (isLedgerUpload()) renderLedgerUploadAccounts();
+    else clearLedgerUploadContext();
     selectedFile = null;
     fileId = null;
     if (comparisonModeDropdown) comparisonModeDropdown.value = 'replace_range';
@@ -1569,6 +1700,7 @@ if (resetBtn) {
         resetUpload();
         if (templateDropdown) templateDropdown.value = '';
         selectedTemplateId = null;
+        uploadTemplatePurpose = 'standard'; clearLedgerUploadContext(); updateUploadCoverageVisibility();
         setBadge('⏳ Select a template');
         showStatus('🔄 Reset complete. Select a template and upload a file.', 'info');
     });
@@ -1635,7 +1767,7 @@ function attachValidationReportDownload(report, summary) {
 }
 
 // ---------- IMPORT SUMMARY POPUP ----------
-function showImportSummary(result) {
+function showImportSummary(result, ledgerPresentation = null) {
     // Create overlay
     const overlay = document.createElement('div');
     overlay.id = 'importSummaryOverlay';
@@ -1809,6 +1941,11 @@ function showImportSummary(result) {
         </div>
     `;
     
+    if (ledgerPresentation || isLedgerUpload()) {
+        const context = document.createElement('p');
+        context.textContent = ledgerPresentation || `${ledgerUploadLabel()} · ${uploadCoverageStart.value} through ${uploadCoverageEnd.value}`;
+        modal.prepend(context);
+    }
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
 
@@ -1916,6 +2053,7 @@ document.addEventListener('keydown', event => {
 });
 
 function showValidationErrors(result) {
+    if (isLedgerUpload()) result = {...result, message: `${ledgerUploadLabel()} · ${uploadCoverageStart.value} through ${uploadCoverageEnd.value}. ${result.message || 'Correct the listed ledger rows before importing.'}`};
     showUploadIssue({stage: 'Validation', result,
         message: result.message || `${result.error_count || 0} row(s) with format errors; ${result.rejected_count || 0} rejected row(s), in ${result.total_rows || 0} transaction rows.`,
         action: 'Correct the listed source rows and validate again. Complete reports cannot import rejected transaction rows.'});
@@ -2096,7 +2234,17 @@ if (importBtn) {
         }
 
         if (!mappingBody) return;
-        const rows = mappingBody.querySelectorAll('tr');
+        const rows = [...mappingBody.querySelectorAll('tr')];
+        // Restored previews are text-only, and file mapping can still be in
+        // flight. Never submit a partial mapping or read a missing dropdown.
+        if (leftPanel?.classList.contains('restore-preview-locked') || !currentMappings.length
+            || rows.length !== currentMappings.length || rows.some((tr, index) => {
+                const select = tr.querySelector('select');
+                return !select || select.disabled || Number(select.dataset.columnId) !== Number(currentMappings[index].column_id);
+            })) {
+            showUploadFailure('Re-select your source file and wait for column mapping to finish before validating or importing.', 'Column mapping');
+            return;
+        }
         const finalMappings = [];
         rows.forEach(tr => {
             const select = tr.querySelector('select');
@@ -2124,6 +2272,9 @@ if (importBtn) {
             coverage_end: comparisonModeDropdown?.value === 'replace_range' ? uploadCoverageEnd?.value || null : null,
             confirm_empty_period: Boolean(uploadConfirmEmpty?.checked),
             validation_plan_id: validationPlanId,
+            ledger_account_code: isLedgerUpload() ? ledgerSelectedAccountCode || null : null,
+            ledger_period_start: isLedgerUpload() ? uploadCoverageStart?.value || null : null,
+            ledger_period_end: isLedgerUpload() ? uploadCoverageEnd?.value || null : null,
             unique_column_id: null,
             sheet_name: currentSheet || 'Sheet1',
             // Selected date format (Phase 3 dropdowns) – drives Date validation/import parsing on the backend.
@@ -2135,8 +2286,15 @@ if (importBtn) {
             // Rows explicitly ticked "Import anyway" in the Exceptions -- Rejected Rows list
             // (Phase 4 of the blank-field-rejection requirement) -- rebuilt fresh on every
             // click, so overrides ticked before or after the Validate call are both picked up.
-            force_include_rows: Array.from(rejectedRowOverrides)
+            force_include_rows: isLedgerUpload() ? [] : Array.from(rejectedRowOverrides)
         };
+        if (isLedgerUpload() && (ledgerSelectionClientId !== Number(clientId) || !ledgerSelectedAccountCode
+            || !ledgerAccountChoices.some(a => a.account_code === ledgerSelectedAccountCode))) {
+            showUploadFailure('Select a current Trial Balance posting account before validation.', 'Ledger account selection'); return;
+        }
+        if (isLedgerUpload() && (!payload.ledger_period_start || !payload.ledger_period_end || payload.ledger_period_start > payload.ledger_period_end)) {
+            showUploadFailure('Supply the ledger source coverage start and end using the existing coverage fields.', 'Ledger coverage'); return;
+        }
         if (payload.comparison_mode === 'replace_range' && (!payload.coverage_start || !payload.coverage_end || payload.coverage_start > payload.coverage_end)) {
             showUploadFailure('Select the complete report coverage start/end before validation.');
             return;
@@ -2154,6 +2312,8 @@ if (importBtn) {
             return;
         }
 
+        // Discard a response if account, coverage, mapping or source changed in flight.
+        const requestGeneration = uploadValidationGeneration;
         // Otherwise, run validation first
         try {
             // Disable button and show spinner
@@ -2168,6 +2328,9 @@ if (importBtn) {
                 body: JSON.stringify(payload)
             });
             const result = await res.json();
+            if (requestGeneration !== uploadValidationGeneration) {
+                showUploadFailure('Upload settings changed during validation. Validate the current selections again.', 'Validation'); return;
+            }
             if (!res.ok) {
                 resetValidationState();
                 throw new Error(uploadFailureMessage(result, 'Validation failed (' + res.status + ')'));
@@ -2177,6 +2340,30 @@ if (importBtn) {
             // requirement) -- populated regardless of has_errors, since a row can be rejected
             // for a blank Document ID/Amount/Date independently of other rows' validation errors.
             setRejectedRows(result.rejected_rows);
+            if (isLedgerUpload() && result.ledger_evidence) {
+                const evidence = result.ledger_evidence;
+                ledgerRecognisedControlRows = new Set((evidence.control_rows || []).map(row => row.row_number));
+                ledgerRecognisedNoteRows = new Map((evidence.continuation_rows || []).map(row => [row.row_number, row]));
+                const display = value => value === null || value === undefined ? 'Not supplied' : String(value);
+                const note = document.getElementById('ledgerEvidenceSummary');
+                note.textContent = `Opening control: ${display(evidence.opening)} · Closing control: ${display(evidence.closing)} · ${(evidence.control_rows || []).length} balance control row(s) recognised; these are not transactions.`;
+                if (ledgerRecognisedNoteRows.size) note.textContent += ` ${ledgerRecognisedNoteRows.size} continuation note(s) attached to their preceding transactions; original descriptions and amounts are preserved.`;
+                if (evidence.balance_check) {
+                    const check = evidence.balance_check;
+                    const signed = value => value === null || value === undefined ? 'Unavailable'
+                        : String(value).startsWith('-') ? `${String(value).slice(1)} Cr` : `${value} Dr`;
+                    const sources = {erp_opening: 'ERP opening', inferred_from_transaction: 'inferred from transactions',
+                        inferred_from_closing: 'inferred from closing control', previous_coverage: 'previous continuous coverage', unavailable: 'unavailable'};
+                    note.textContent += ` Calculated opening: ${signed(check.opening)} (${sources[check.opening_source] || 'unavailable'}). Calculated closing: ${signed(check.closing)}.`;
+                    note.textContent += check.opening === null || check.opening === undefined || check.closing === null || check.closing === undefined
+                        ? ' Balance comparison: unavailable.' : ` Balance differences: ${check.difference_count || 0}.`;
+                    if (check.continuity?.status === 'difference') note.textContent += ' Previous closing differs from this opening.';
+                    if (check.continuity?.status === 'gap') note.textContent += ' Previous coverage has a gap.';
+                    if (check.opening_source?.startsWith('inferred') && check.continuity?.status !== 'matched') note.textContent += ' This opening has no independent prior-balance confirmation.';
+                    if (check.status === 'partial_or_incomplete' || check.status === 'unordered') note.textContent += ' Complete balance reconciliation is unavailable for this extract.';
+                }
+                note.hidden = false;
+            }
 
             const totalRows = result.total_rows || 0;
             const newRowsCount = result.new_rows_count || 0;
@@ -2224,7 +2411,7 @@ if (importBtn) {
             const canImport = Boolean(result.can_import && result.validation_plan_id);
             validationPlanId = canImport ? result.validation_plan_id : null;
             validationStatus = canImport ? 'valid' : 'ignored';
-            importBtn.innerHTML = canImport ? '🚀 Import selected changes' : 'No changes to import';
+            importBtn.textContent = canImport ? (result.ledger_evidence_refresh ? 'Refresh balance evidence' : '🚀 Import selected changes') : 'No changes to import';
             importBtn.style.background = canImport ? '#16a34a' : '#94a3b8';
             importBtn.style.color = 'white';
             importBtn.disabled = !canImport;
@@ -2270,6 +2457,9 @@ if (importBtn) {
 // ---------- PERFORM IMPORT (after validation) ----------
 // ---------- PERFORM IMPORT (after validation) ----------
 async function performImport(payload) {
+    const submittedAccount = ledgerAccountChoices.find(a => a.account_code === payload.ledger_account_code);
+    const ledgerPresentation = payload.ledger_account_code
+        ? `${submittedAccount?.account_name || 'Ledger account'} (${payload.ledger_account_code}) · ${payload.ledger_period_start} through ${payload.ledger_period_end}` : null;
     try {
         if (payload.comparison_mode === 'replace_range') {
             const confirmed = await reviewUploadReplacement(payload);
@@ -2334,7 +2524,7 @@ async function performImport(payload) {
                     }
                     modalRef.resolve(true);
                     window._overwriteModal = null;
-                    showImportSummary(result);
+                    showImportSummary(result, ledgerPresentation);
                 };
             }
         }
@@ -2352,7 +2542,7 @@ async function performImport(payload) {
             setBadge('❌ Import failed', 'error');
         } else {
             if (!modalRef || modalRef.isResolved) {
-                showImportSummary(result);
+                showImportSummary(result, ledgerPresentation);
             }
             setBadge('✅ Import complete');
             validationPlanId = null;
@@ -2552,7 +2742,8 @@ function updateRowExclusionCounter() {
     if (!counterEl) return;
     const total = rowExclusionAllRows.length;
     const included = total - excludedRowNumbers.size;
-    counterEl.textContent = `${included} of ${total} rows will be imported`;
+    counterEl.textContent = isLedgerUpload() ? `${included} of ${total} source rows selected; balance controls are recorded separately`
+        : `${included} of ${total} rows will be imported`;
 }
 
 // ---------- SELECT ALL / DESELECT ALL (Phase 3) ----------
@@ -2683,7 +2874,7 @@ function renderRejectedRowsList() {
         labelText.textContent = `Import anyway (with blank in ${fieldNames})`;
         label.appendChild(checkbox);
         label.appendChild(labelText);
-        item.appendChild(label);
+        if (!isLedgerUpload()) item.appendChild(label);
 
         listEl.appendChild(item);
     });
@@ -2758,7 +2949,9 @@ function renderRowExclusionPage() {
 
         const tr = document.createElement('tr');
         if (excludedRowNumbers.has(excelRowNumber)) tr.classList.add('row-excluded');
-        const flagged = isRowExclusionFlagged(row, keyColIndex);
+        const ledgerControl = isLedgerUpload() && ledgerRecognisedControlRows.has(excelRowNumber);
+        const ledgerNote = isLedgerUpload() ? ledgerRecognisedNoteRows.get(excelRowNumber) : null;
+        const flagged = !ledgerControl && !ledgerNote && isRowExclusionFlagged(row, keyColIndex);
         if (flagged) tr.classList.add('row-flagged');
         const failed = validationFailedRows.has(excelRowNumber);
         if (failed) tr.classList.add('row-validation-failed');
@@ -2786,9 +2979,11 @@ function renderRowExclusionPage() {
         tdRowNum.className = 'row-exclusion-rownum-col';
         // Prefixes concatenate rather than overwrite -- a row can be both auto-flagged and
         // validation-failed at once, and both signals should stay visible (e.g. "⚠️❌ 5").
-        let prefix = (flagged ? '⚠️' : '') + (failed ? '❌' : '');
+        let prefix = (ledgerControl || ledgerNote ? '•' : '') + (flagged ? '⚠️' : '') + (failed ? '❌' : '');
         tdRowNum.textContent = (prefix ? prefix + ' ' : '') + excelRowNumber;
         const titleParts = [];
+        if (ledgerControl) titleParts.push('Ledger balance control: recorded separately, not a transaction');
+        if (ledgerNote) titleParts.push(`Ledger continuation note: attached to Excel row ${ledgerNote.parent_row_number}, voucher ${ledgerNote.voucher}; not a separate transaction`);
         if (flagged) titleParts.push('Possible junk row: blank or "total"/"subtotal" value in the key column');
         if (failed) {
             const rowErrors = validationFailedRows.get(excelRowNumber) || [];
@@ -2929,6 +3124,7 @@ if (previewBtn) {
 
 // ---------- INIT ----------
 window.onload = async function() {
+    if (window.clientContextReady) await window.clientContextReady;
     // Await so the Template dropdown's <option>s exist before restoreUploadSessionState()
     // (session-restore) tries to set the dropdown's value.
     await loadTemplates();
@@ -2944,6 +3140,11 @@ window.onload = async function() {
     // this browser tab. No-ops if nothing was saved. Overwrites the default status message
     // above with a "resuming..." message only when there's something to restore.
     await restoreUploadSessionState();
+    if (!selectedTemplateId && new URLSearchParams(window.location.search).get('feature') === 'account-ledger') {
+        const ledgers = uploadTemplateCatalog.filter(t => t.data_purpose === 'account_ledger');
+        if (ledgers.length === 1) { templateDropdown.value = String(ledgers[0].id); await selectTemplate(ledgers[0].id); }
+        else showStatus(ledgers.length ? 'Select an Account Ledger template to begin.' : 'Prepare an Account Ledger template in Manage Templates, then return here.', 'info');
+    }
 
     // Set initial button text
     if (importBtn) {

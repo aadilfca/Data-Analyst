@@ -27,6 +27,7 @@ class FakeCursor:
     def __init__(self, conn):
         self._conn = conn
         self._position = 0
+        self._returns_rows = False
 
     def __enter__(self):
         return self
@@ -36,11 +37,15 @@ class FakeCursor:
 
     def execute(self, query, params=None):
         self._conn.executed.append((query, params))
+        sql = (query.decode() if isinstance(query, bytes) else query).strip().upper()
+        self._returns_rows = sql.startswith(('SELECT', 'WITH', 'SHOW', 'EXPLAIN')) or ' RETURNING ' in sql
         err = self._conn.pop_execute_error()
         if err is not None:
             raise err
 
     def fetchall(self):
+        if self.description is None:
+            raise psycopg2.ProgrammingError('no results to fetch')
         return list(self._conn.rows)
 
     def fetchmany(self, size):
@@ -62,7 +67,7 @@ class FakeCursor:
 
     @property
     def description(self):
-        return self._conn.description
+        return (self._conn.description or [('result',)]) if self._returns_rows else None
 
 
 class FakeConn:
@@ -239,6 +244,39 @@ class GetconnPgCheckedTests(unittest.TestCase):
 
 
 class ExecuteQueryPgWiringTests(unittest.TestCase):
+    def test_upload_lifecycle_locks_do_not_fetch_results_or_release_the_outer_transaction(self):
+        from services import upload_lifecycle
+        conn = FakeConn(rows=[{'status':'archiving'}])
+        pool = FakePool([conn])
+        prepared = {'operation_id':'test-operation', 'ids':[], 'lifecycle':{'scope':'test'}}
+        with patch.object(database, 'get_pg_pool', return_value=pool), \
+                patch.object(upload_lifecycle, 'check_scope') as check:
+            with database.pg_transaction():
+                upload_lifecycle.guard_lifecycle(prepared, database.execute_query_pg)
+                self.assertEqual((conn.commits, conn.rollbacks), (0, 0))
+                self.assertEqual(pool.putconn_calls, [])
+            check.assert_called_once_with(prepared['lifecycle'], database.execute_query_pg)
+        self.assertEqual([sql for sql, _ in conn.executed[:2]], [
+            'LOCK TABLE client_data IN SHARE ROW EXCLUSIVE MODE',
+            'LOCK TABLE data_audit_log IN SHARE ROW EXCLUSIVE MODE'])
+        self.assertEqual((conn.commits, conn.rollbacks), (1, 0))
+
+    def test_lock_failure_still_propagates_and_rolls_back_without_retry(self):
+        error = psycopg2.OperationalError('canceling statement due to lock timeout')
+        conn = FakeConn(execute_errors=[error])
+        pool = FakePool([conn])
+        with patch.object(database, 'get_pg_pool', return_value=pool):
+            with self.assertRaises(psycopg2.OperationalError) as caught:
+                with database.pg_transaction():
+                    database.execute_query_pg('LOCK TABLE client_data IN SHARE ROW EXCLUSIVE MODE')
+        self.assertIs(caught.exception, error)
+        self.assertEqual((conn.commits, conn.rollbacks, pool.getconn_calls), (0, 1, 1))
+
+    def test_empty_select_has_a_result_set_and_still_fetches(self):
+        conn = FakeConn(rows=[])
+        with patch.object(database, 'get_pg_pool', return_value=FakePool([conn])):
+            self.assertEqual(database.execute_query_pg('SELECT id FROM example WHERE FALSE'), [])
+
     def test_execute_query_pg_retries_once_through_the_real_helper(self):
         dead = FakeConn(execute_errors=[psycopg2.OperationalError(
             "server closed the connection unexpectedly")])
@@ -387,6 +425,24 @@ class AtomicImportTransactionTests(unittest.TestCase):
         self.assertEqual(len(conn.executed), 1)
         self.assertEqual((conn.commits, conn.rollbacks), (1, 1))
         self.assertEqual(pool.getconn_calls, 1)
+
+
+class ErrorTraceEvidenceTests(unittest.TestCase):
+    def test_long_trace_keeps_root_function_and_exception_within_existing_limit(self):
+        trace = 'Outer middleware frame\n' * 400 + 'database.execute_query_pg -> cur.fetchall()\nProgrammingError: no results to fetch'
+        with patch.object(database, 'execute_write', return_value=864) as write:
+            result = database.log_error(error_message='no results to fetch', stack_trace=trace)
+        self.assertEqual(result, 864)
+        stored = write.call_args.args[1][13]
+        self.assertEqual(len(stored), 5000)
+        self.assertTrue(stored.endswith('ProgrammingError: no results to fetch'))
+        self.assertIn('database.execute_query_pg', stored)
+
+    def test_short_and_missing_traces_remain_unchanged(self):
+        for trace in (None, 'Short traceback\nValueError: source'):
+            with self.subTest(trace=trace), patch.object(database, 'execute_write') as write:
+                database.log_error(error_message='source', stack_trace=trace)
+                self.assertEqual(write.call_args.args[1][13], trace)
 
 
 class PostgresSchemaBootstrapTests(unittest.TestCase):

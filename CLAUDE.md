@@ -16,13 +16,13 @@ One line per file group: what it is now. Full build history for every entry live
 
 - routers/clients.py + static/clients.* → firm-level client management; admin-only except the paginated `GET /api/clients`. See CHANGELOG_ARCHIVE.md.
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, and database size with PostgreSQL table/index breakdown. See CHANGELOG_ARCHIVE.md.
-- routers/data.py + static/databank.* → Data Bank availability, calendars, cached previews, canonical Cashflows transaction previews, filtering, frequency settings, and guarded mutations. See CHANGELOG_ARCHIVE.md.
+- routers/data.py + static/databank.* → Data Bank availability, calendars, account-scoped ledger selection, cached previews, Cashflows transaction previews and guarded mutations. See CHANGELOG_ARCHIVE.md.
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
-- routers/import_export.py + static/upload.* → Declared-coverage uploads, source controls, ledger evidence, comparisons, guarded imports and stage-specific issue dialogs. See CHANGELOG_ARCHIVE.md.
+- routers/import_export.py + static/upload.* → Ledger uploads, source notes, guarded mapping submissions, coverage checks, balance continuity and canonical imports. See CHANGELOG_ARCHIVE.md.
 - routers/settings.py + static/settings.* → application settings and the firm-wide Holiday list; header/tabs rendered by `client_context.js`. See CHANGELOG_ARCHIVE.md.
-- routers/templates.py + static/templates.*, static/columns.* → Master columns, templates, ledger roles, mapping/reordering, rate rules, backup/restore, and setup loading feedback. See CHANGELOG_ARCHIVE.md.
+- routers/templates.py + static/templates.*, static/columns.* → Master columns, transactional ledger setup, role configuration, mapping/reordering, rate rules and backup/restore. See CHANGELOG_ARCHIVE.md.
 - static/client_settings.html, static/client_settings.js -> retired direct-bookmark information page; all Verification account routing is configured centrally in Account Control Centre. See CHANGELOG_ARCHIVE.md.
-- database.py, main.py → Schemas, ledger metadata, upload receipts, audits, storage guards, connection recovery, maintenance transactions, routing and Rulebook snapshots. See CHANGELOG_ARCHIVE.md.
+- database.py, main.py → Schemas, ledger metadata, upload receipts, audits, storage guards, PostgreSQL command results, connection recovery, diagnostics, routing and Rulebook snapshots. See CHANGELOG_ARCHIVE.md.
 - backfill_extract_amount.py → SQLite backfill, PostgreSQL assessment, portable repair plans and isolated local repair rehearsals; live apply remains disabled. See CHANGELOG_ARCHIVE.md.
 - database.py (users/sessions) → authenticated users and session records for Login → Client Cards → Dashboard; bcrypt, session-stored selected client, seeded placeholder admin. See CHANGELOG_ARCHIVE.md.
 - routers/auth.py → login/logout, current-session lookup, client selection, `get_current_user()`/`require_admin()` guards; timezone-aware session expiry. See CHANGELOG_ARCHIVE.md.
@@ -246,6 +246,10 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+
+- 2026-10-20: Data Bank ledger preview adds searchable imported-account selection, scoped filters and cache isolation; Phase 2 accepted. See CHANGELOG_ARCHIVE.md.
+
+- 2026-10-20: Ledger uploads preserve source notes and balances; fixed table-lock result handling, guarded mapping submissions and root traceback retention. See CHANGELOG_ARCHIVE.md.
 
 - 2026-10-20: Upload recognises raw-source totals, preserves Excel row numbers and shows stage-specific issue dialogs. See CHANGELOG_ARCHIVE.md, Upload source controls and issue diagnostics.
 

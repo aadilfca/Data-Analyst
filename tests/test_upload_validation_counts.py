@@ -1932,3 +1932,447 @@ def test_import_summary_explains_line_preservation_correctly(upload_formatting_p
     summary = page.locator('#importSummaryOverlay').inner_text()
     assert 'Every valid line is preserved' in summary
     assert 'one transaction per voucher ID' not in summary
+
+
+def _arrange_ledger_upload_page(page, accounts=None, *, show_mapping=True):
+    accounts = accounts if accounts is not None else [
+        {'account_code':'A-1','account_name':'Bank <A>'},
+        {'account_code':'B-2','account_name':'Cash B'},
+        {'account_code':'EXP-1','account_name':'Rent expense'}]
+    columns = [{'id':i+1,'column_name':name,'data_type':kind} for i,(name,kind) in enumerate([
+        ('Voucher ID','Text'),('Transaction Date','Date'),('Voucher Detail','Text'),
+        ('Debit Amount','Numeric'),('Credit Amount','Numeric'),('Balance','Text')])]
+    page.route('**/api/templates/7/upload-columns',lambda route:route.fulfill(json={
+        'columns':columns,'total_columns':6,'data_purpose':'account_ledger',
+        'ledger_columns':dict(zip(['voucher','date','description','debit','credit','balance'],range(1,7)))}))
+    page.route('**/api/upload/ledger-accounts?client_id=5',lambda route:route.fulfill(json={'accounts':accounts}))
+    page.evaluate("async () => { templateDropdown.appendChild(new Option('Account Ledger','7')); templateDropdown.value='7'; await selectTemplate(7); }")
+    if show_mapping:
+        # The field belongs to the ordinary mapping/action panel, never a header.
+        page.evaluate("() => { leftPanel.style.display='block'; mappingPanel.style.display='block'; modeActions.style.display='flex'; }")
+    return columns
+
+
+def _arrange_staged_ledger_mapping(page, columns):
+    page.evaluate("""columns => {
+        fileId=99; currentSheet='Ledger';
+        excelHeaders=columns.map(c=>c.column_name);
+        currentMappings=columns.map(c=>({column_id:c.id,column_name:c.column_name,data_type:c.data_type,excel_column:c.column_name,is_matched:true}));
+        renderMapping(currentMappings); leftPanel.style.display='block'; mappingPanel.style.display='block';
+        modeActions.style.display='block'; importBtn.disabled=false; setDateFormatGroupVisible(true);
+    }""",columns)
+
+
+def test_ledger_account_and_existing_coverage_fields_reach_validate_and_invalidate_plan(upload_formatting_page):
+    page=upload_formatting_page
+    columns=_arrange_ledger_upload_page(page)
+    assert page.locator('#ledgerUploadContext').is_visible()
+    assert page.locator('#ledgerAccountSelect option[value="A-1"]').inner_text() == 'Bank <A> — A-1'
+    assert page.locator('#ledgerUploadContext a, #ledgerUploadContext img').count()==0
+    page.locator('#ledgerAccountSelect').select_option('A-1')
+    _arrange_staged_ledger_mapping(page,columns)
+    page.locator('#uploadCoverageStart').fill('2026-01-01')
+    page.locator('#uploadCoverageEnd').fill('2026-01-31')
+    sent=[]
+    page.route('**/api/upload/validate',lambda route:(sent.append(route.request.post_data_json),route.fulfill(json={
+        'can_import':True,'validation_plan_id':'ledger-plan','total_rows':1,'has_errors':False,
+        'ledger_evidence':{'opening':'0','closing':'-10','control_rows':[{'row_number':2},{'row_number':4}]}})))
+    page.locator('#importBtn').click()
+    page.wait_for_function("validationStatus==='valid'")
+    assert sent[0]['ledger_account_code']=='A-1'
+    assert sent[0]['coverage_start']==sent[0]['ledger_period_start']=='2026-01-01'
+    assert sent[0]['coverage_end']==sent[0]['ledger_period_end']=='2026-01-31'
+    assert sent[0]['force_include_rows']==[]
+    assert 'Opening control: 0' in page.locator('#ledgerEvidenceSummary').inner_text()
+    page.locator('#ledgerAccountSelect').select_option('B-2')
+    assert page.evaluate('validationPlanId') is None
+    assert page.locator('#ledgerEvidenceSummary').is_hidden()
+    page.locator('#comparisonModeDropdown').select_option('correction')
+    assert page.locator('#uploadCoverageFields').is_visible()
+    assert page.locator('#uploadEmptyConfirmLabel').is_hidden()
+    page.locator('#importBtn').click()
+    page.wait_for_function("validationStatus==='valid'")
+    assert sent[1]['coverage_start'] is None and sent[1]['ledger_period_start']=='2026-01-01'
+    page.route('**/api/upload/date-preview',lambda route:route.fulfill(json={'samples':[]}))
+    page.locator('#dateFormatTriggerBtn').click()
+    page.locator('#dateOrderDropdown').select_option('MDY')
+    assert page.evaluate('validationPlanId') is None
+
+
+@pytest.mark.parametrize('accounts', [[],None])
+def test_missing_or_unselected_ledger_account_blocks_validate_and_offers_action(upload_formatting_page, accounts):
+    page=upload_formatting_page
+    columns=_arrange_ledger_upload_page(page,accounts)
+    _arrange_staged_ledger_mapping(page,columns)
+    sent=[]
+    page.route('**/api/upload/validate',lambda route:(sent.append(True),route.fulfill(json={})))
+    page.locator('#importBtn').click()
+    assert 'Select a current Trial Balance posting account' in page.locator('#validationErrorOverlay').inner_text()
+    assert sent==[]
+    if accounts==[]:
+        assert 'No posting accounts found' in page.locator('#ledgerAccountHelp').inner_text()
+        assert page.locator('#ledgerAccountSelect').is_disabled()
+
+
+def test_ledger_context_is_in_review_and_summary_and_rejected_rows_cannot_be_overridden(upload_formatting_page):
+    page=upload_formatting_page
+    _arrange_ledger_upload_page(page)
+    page.locator('#ledgerAccountSelect').select_option('A-1')
+    page.evaluate("""() => {
+        uploadCoverageStart.value='2026-01-01';uploadCoverageEnd.value='2026-01-31';
+        setRejectedRows([{row_number:3,reasons:[{column:'Transaction Date',message:'Date is blank'}]}]);
+        reviewUploadReplacement({ledger_account_code:'A-1',coverage_start:'2026-01-01',coverage_end:'2026-01-31'});
+    }""")
+    assert 'Bank <A> (A-1)' in page.locator('#uploadReplacementScope').inner_text()
+    page.locator('#uploadReplacementCancel').click()
+    assert page.locator('#rowRejectionList input[type="checkbox"]').count()==0
+    page.evaluate("() => showImportSummary({status:'success',total_rows:1,imported_count:1})")
+    assert 'Bank <A> (A-1)' in page.locator('#importSummaryOverlay').inner_text()
+    assert page.locator('#importSummaryOverlay b').count()==0
+
+
+def test_client_mismatch_blocks_ledger_validation_and_session_restore(upload_formatting_page):
+    page=upload_formatting_page
+    columns=_arrange_ledger_upload_page(page)
+    page.locator('#ledgerAccountSelect').select_option('A-1')
+    _arrange_staged_ledger_mapping(page,columns)
+    page.evaluate('() => { window.getSelectedClientId=()=>6; }')
+    page.locator('#importBtn').click()
+    assert 'Select a current Trial Balance posting account' in page.locator('#validationErrorOverlay').inner_text()
+    result=page.evaluate("""async () => {
+        sessionStorage.setItem(UPLOAD_SESSION_STORAGE_KEY,JSON.stringify({clientId:5,templateId:7,ledgerAccountCode:'A-1'}));
+        await restoreUploadSessionState(); return sessionStorage.getItem(UPLOAD_SESSION_STORAGE_KEY);
+    }""")
+    assert result is None
+
+
+def test_standard_template_switch_hides_ledger_context_and_sends_no_account(upload_formatting_page):
+    page=upload_formatting_page
+    _arrange_ledger_upload_page(page)
+    page.locator('#ledgerAccountSelect').select_option('A-1')
+    page.evaluate("() => { const note=document.getElementById('ledgerEvidenceSummary'); note.textContent='Old balance'; note.hidden=false; }")
+    page.route('**/api/templates/8/upload-columns',lambda route:route.fulfill(json={
+        'columns':[{'id':1,'column_name':'Voucher','data_type':'Text'}],'total_columns':1,'data_purpose':'standard'}))
+    page.evaluate("async () => { templateDropdown.appendChild(new Option('Ordinary','8')); await selectTemplate(8); }")
+    assert page.locator('#ledgerUploadContext').is_hidden()
+    assert page.locator('#ledgerEvidenceSummary').is_hidden()
+    assert page.evaluate('ledgerSelectedAccountCode')==''
+    assert page.evaluate('validationPlanId') is None
+    _arrange_staged_ledger_mapping(page,[{'id':1,'column_name':'Voucher','data_type':'Text'}])
+    page.locator('#comparisonModeDropdown').select_option('correction')
+    assert page.locator('#uploadCoverageFields').is_hidden()
+    sent=[]
+    page.route('**/api/upload/validate',lambda route:(sent.append(route.request.post_data_json),route.fulfill(json={'has_errors':False,'can_import':False})))
+    page.locator('#importBtn').click()
+    page.wait_for_function("validationStatus==='ignored'")
+    assert sent[0]['ledger_account_code'] is None and sent[0]['ledger_period_start'] is None
+
+
+def test_validation_response_for_previous_account_is_discarded(upload_formatting_page):
+    page=upload_formatting_page
+    columns=_arrange_ledger_upload_page(page)
+    page.locator('#ledgerAccountSelect').select_option('A-1')
+    _arrange_staged_ledger_mapping(page,columns)
+    page.locator('#uploadCoverageStart').fill('2026-01-01')
+    page.locator('#uploadCoverageEnd').fill('2026-01-31')
+    waiting=[]
+    page.route('**/api/upload/validate',lambda route:waiting.append(route))
+    page.locator('#importBtn').click()
+    page.wait_for_function('uploadActionInFlight')
+    page.locator('#ledgerAccountSelect').select_option('B-2')
+    assert waiting
+    waiting[0].fulfill(json={'has_errors':False,'can_import':True,'validation_plan_id':'stale-A-plan'})
+    page.locator('#validationErrorOverlay').wait_for()
+    assert 'settings changed during validation' in page.locator('#validationErrorOverlay').inner_text()
+    assert page.evaluate('validationPlanId') is None
+    assert page.evaluate('ledgerSelectedAccountCode')=='B-2'
+
+
+def test_import_summary_uses_submitted_account_even_if_selection_changes(upload_formatting_page):
+    page=upload_formatting_page
+    _arrange_ledger_upload_page(page)
+    page.locator('#ledgerAccountSelect').select_option('A-1')
+    requests=[]
+    page.route('**/api/upload/import',lambda route:requests.append(route))
+    page.evaluate("""() => {
+        performImport({file_id:99,ledger_account_code:'A-1',ledger_period_start:'2026-01-01',ledger_period_end:'2026-01-31'});
+    }""")
+    page.locator('#ledgerAccountSelect').select_option('B-2')
+    assert requests
+    requests[0].fulfill(json={'status':'success','total_rows':1,'imported_count':1})
+    page.locator('#importSummaryOverlay').wait_for()
+    text=page.locator('#importSummaryOverlay').inner_text()
+    assert 'Bank <A> (A-1)' in text and 'Cash B (B-2)' not in text
+
+
+def test_validated_ledger_controls_are_labelled_separately_from_junk_rows(upload_formatting_page):
+    page=upload_formatting_page
+    columns=_arrange_ledger_upload_page(page)
+    page.locator('#ledgerAccountSelect').select_option('A-1')
+    _arrange_staged_ledger_mapping(page,columns)
+    page.evaluate("""() => {
+        const workbook=XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook,XLSX.utils.aoa_to_sheet([excelHeaders,
+            ['','','Opening Balance',0,0,'100 DR'],['V1','15/01/2026','Payment',0,10,'90 DR'],
+            ['','','Closing Balance',0,0,'90 DR']]),'Ledger');
+        workbookData=XLSX.write(workbook,{type:'array',bookType:'xlsx'});renderRowExclusionGrid();
+    }""")
+    page.locator('#uploadCoverageStart').fill('2026-01-01')
+    page.locator('#uploadCoverageEnd').fill('2026-01-31')
+    page.route('**/api/upload/validate',lambda route:route.fulfill(json={'has_errors':False,'can_import':True,
+        'validation_plan_id':'control-plan','ledger_evidence':{'opening':'100','closing':'90','control_rows':[{'row_number':2},{'row_number':4}]}}))
+    page.locator('#importBtn').click()
+    page.wait_for_function("validationStatus==='valid'")
+    assert page.locator('#rowExclusionBody tr.row-flagged').count()==0
+    assert 'not a transaction' in page.locator('#rowExclusionBody tr').first.locator('.row-exclusion-rownum-col').get_attribute('title')
+    assert 'source rows selected; balance controls are recorded separately' in page.locator('#rowExclusionCounter').inner_text()
+
+
+def test_ledger_uses_standard_mapping_with_one_account_field_above_validate(upload_formatting_page):
+    page = upload_formatting_page
+    columns = _arrange_ledger_upload_page(page, show_mapping=False)
+    assert page.locator('#ledgerUploadContext').is_hidden()
+    _arrange_staged_ledger_mapping(page, columns)
+    assert page.locator('#mappingPanel .section-title').inner_text().lower().startswith('🔗 column mapping')
+    assert page.locator('#mappingBody tr').count() == 6
+    assert page.locator('#ledgerUploadContext select, #ledgerUploadContext input').count() == 1
+    assert page.locator('#ledgerAccountSelect').get_attribute('required') is not None
+    assert page.locator('#ledgerUploadContext h2, #ledgerAccountSearch, #reloadLedgerAccountsBtn').count() == 0
+    assert page.locator('#ledgerAccountHelp').is_hidden()
+    assert page.locator('#ledgerAccountSelect option[value="EXP-1"]').inner_text() == 'Rent expense — EXP-1'
+    assert page.evaluate("() => document.getElementById('ledgerUploadContext').nextElementSibling.contains(importBtn)")
+    assert page.locator('#ledgerAccountSelect').bounding_box()['y'] < page.locator('#importBtn').bounding_box()['y']
+
+
+def test_non_cash_bank_account_reaches_upload_validation(upload_formatting_page):
+    page = upload_formatting_page
+    columns = _arrange_ledger_upload_page(page)
+    _arrange_staged_ledger_mapping(page, columns)
+    page.locator('#ledgerAccountSelect').select_option('EXP-1')
+    page.locator('#uploadCoverageStart').fill('2026-01-01')
+    page.locator('#uploadCoverageEnd').fill('2026-01-31')
+    sent = []
+    page.route('**/api/upload/validate', lambda route: (
+        sent.append(route.request.post_data_json), route.fulfill(json={'has_errors':False, 'can_import':False})))
+    page.locator('#importBtn').click()
+    page.wait_for_function("validationStatus==='ignored'")
+    assert sent[0]['ledger_account_code'] == 'EXP-1'
+
+
+@pytest.mark.parametrize('outcome', ['success', 'server_error', 'malformed', 'network'])
+def test_account_loading_feedback_finishes_on_success_or_failure(upload_formatting_page, outcome):
+    page = upload_formatting_page
+    _arrange_ledger_upload_page(page)
+    waiting = []
+    page.route('**/api/upload/ledger-accounts?client_id=5', lambda route: waiting.append(route))
+    page.evaluate("() => { window.accountLoadPromise = loadLedgerUploadAccounts(); }")
+    page.wait_for_function("ledgerAccountSelect.getAttribute('aria-busy')==='true'")
+    assert page.locator('#ledgerAccountSelect').is_disabled()
+    assert page.locator('#ledgerUploadContext .ui-field-spinner').count() == 1
+    assert 'Loading accounts' in page.locator('#ledgerAccountHelp').inner_text()
+    assert page.evaluate("document.documentElement.style.cursor") == 'progress'
+    assert waiting
+    if outcome == 'success':
+        waiting[0].fulfill(json={'accounts':[{'account_code':'SUP-1','account_name':'Supplier'}]})
+    elif outcome == 'server_error':
+        waiting[0].fulfill(status=503, json={'detail':'Trial Balance unavailable'})
+    elif outcome == 'malformed':
+        waiting[0].fulfill(json={'accounts':None})
+    else:
+        waiting[0].abort()
+    page.evaluate('() => window.accountLoadPromise')
+    assert page.locator('#ledgerUploadContext .ui-field-spinner').count() == 0
+    assert page.locator('#ledgerAccountSelect').get_attribute('aria-busy') is None
+    assert page.evaluate('document.documentElement.style.cursor') == ''
+    if outcome == 'success':
+        assert page.locator('#ledgerAccountSelect').is_enabled()
+        assert page.locator('#ledgerAccountHelp').is_hidden()
+    else:
+        assert page.locator('#ledgerAccountSelect').is_disabled()
+        assert 'Select the template again to retry' in page.locator('#ledgerAccountHelp').inner_text()
+        assert page.locator('#validationErrorOverlay').is_visible()
+
+
+def test_template_switch_clears_busy_state_and_discards_delayed_accounts(upload_formatting_page):
+    page = upload_formatting_page
+    _arrange_ledger_upload_page(page)
+    waiting = []
+    page.route('**/api/upload/ledger-accounts?client_id=5', lambda route: waiting.append(route))
+    page.evaluate("() => { window.accountLoadPromise = loadLedgerUploadAccounts(); }")
+    page.wait_for_function("ledgerAccountSelect.getAttribute('aria-busy')==='true'")
+    page.route('**/api/templates/8/upload-columns', lambda route: route.fulfill(json={
+        'columns':[{'id':1,'column_name':'Voucher','data_type':'Text'}],'total_columns':1,'data_purpose':'standard'}))
+    page.evaluate("async () => { templateDropdown.appendChild(new Option('Ordinary','8')); await selectTemplate(8); }")
+    assert page.locator('#ledgerUploadContext').is_hidden()
+    assert page.evaluate('document.documentElement.style.cursor') == ''
+    assert page.locator('#ledgerUploadContext .ui-field-spinner').count() == 0
+    waiting[0].fulfill(json={'accounts':[{'account_code':'STALE','account_name':'Old client account'}]})
+    page.evaluate('() => window.accountLoadPromise')
+    assert page.evaluate('ledgerAccountChoices') == []
+    assert page.evaluate('ledgerSelectedAccountCode') == ''
+
+
+@pytest.mark.parametrize('contents,reason', [
+    (b'<html><frameset><frame src="ledger_files/sheet001.htm"></frameset></html>', 'separate linked files'),
+    ('<html><frameset><frame src="sheet.htm"></frameset></html>'.encode('utf-16'), 'separate linked files'),
+    (b'<html><table><tr><td>Balance</td></tr></table></html>', 'HTML web-page export'),
+    (b'', 'empty'), (b'not an excel workbook', 'could not be read'),
+])
+def test_invalid_workbook_uploads_are_actionable_and_never_staged(contents, reason):
+    import asyncio
+    from io import BytesIO
+    from fastapi import HTTPException, UploadFile
+    from routers import import_export as uploads
+    with patch.object(uploads, 'execute_write_pg') as write, patch.object(uploads, '_build_upload_storage_path') as path:
+        with pytest.raises(HTTPException) as error:
+            asyncio.run(uploads.import_excel(UploadFile(file=BytesIO(contents), filename='source.xls'), session={'username':'Tester'}))
+        assert error.value.status_code == 400 and reason in error.value.detail
+        write.assert_not_called()
+        path.assert_not_called()
+
+
+@pytest.mark.parametrize('book_type,filename', [('xlsx','SOURCE.XLSX'), ('biff8','SOURCE.XLS')])
+def test_real_excel_formats_and_text_balances_survive_staging(upload_formatting_page, tmp_path, book_type, filename):
+    import asyncio, base64
+    from concurrent.futures import ThreadPoolExecutor
+    from io import BytesIO
+    from fastapi import UploadFile
+    from routers import import_export as uploads
+    # Use the app's existing SheetJS writer solely to make isolated reader fixtures.
+    encoded = upload_formatting_page.evaluate("""bookType => {
+        const wb=XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([
+            ['Voucher','Debit','Credit','Balance','Note'],['V1',50,0,'200 Dr','<table>source text</table>']]),'Ledger');
+        return XLSX.write(wb,{type:'base64',bookType});
+    }""", book_type)
+    contents = base64.b64decode(encoded)
+    path = tmp_path / filename
+    with patch.object(uploads, '_build_upload_storage_path', return_value=str(path)), \
+         patch.object(uploads, 'execute_write_pg', return_value=99) as write, patch.object(uploads, 'log_audit'):
+        # Playwright owns the main thread's loop; run this async handler separately.
+        with ThreadPoolExecutor(max_workers=1) as worker:
+            result = worker.submit(asyncio.run, uploads.import_excel(UploadFile(file=BytesIO(contents), filename=filename), session={'username':'Tester'})).result()
+    assert result['file_id'] == 99 and result['record_count'] == 1
+    assert path.read_bytes() == contents
+    parsed = uploads._read_standalone_workbook(contents)
+    assert parsed.iloc[0]['Balance'] == '200 Dr' and parsed.iloc[0]['Debit'] == 50
+    assert write.call_count == 1
+
+
+def test_global_unknown_upload_popup_shows_reason_and_support_reference_as_text(upload_formatting_page):
+    page = upload_formatting_page
+    page.route('**/api/import-excel', lambda route: route.fulfill(status=500, json={'success':False,'error':{
+        'error_code':'ERR-UNK-001','error_id':123,
+        'user_message':"An unknown error occurred. We don't yet have specific information about this error.",
+        'technical_details':{'message':'Excel format cannot be determined <b>source</b>', 'file':'PRIVATE_PATH', 'line':100}}}))
+    page.evaluate("async () => { selectedFile = new File(['test'], 'test.xls'); await uploadFileToServer(selectedFile); }")
+    text = page.locator('#validationErrorOverlay').inner_text()
+    assert 'Excel format cannot be determined <b>source</b>' in text and 'reference 123' in text
+    assert 'PRIVATE_PATH' not in text and page.locator('#validationErrorOverlay b').count() == 0
+
+
+@pytest.mark.parametrize('opening,closing,source', [('150','200','inferred_from_transaction'), ('0','50','erp_opening'), (None,None,'unavailable')])
+def test_validation_explains_calculated_balance_provenance_without_inventing_zero(upload_formatting_page, opening, closing, source):
+    page = upload_formatting_page
+    columns = _arrange_ledger_upload_page(page)
+    _arrange_staged_ledger_mapping(page, columns)
+    page.locator('#ledgerAccountSelect').select_option('EXP-1')
+    page.locator('#uploadCoverageStart').fill('2026-01-01')
+    page.locator('#uploadCoverageEnd').fill('2026-01-31')
+    page.route('**/api/upload/validate', lambda route: route.fulfill(json={
+        'has_errors':False,'can_import':True,'validation_plan_id':'balance-plan',
+        'ledger_evidence_refresh':opening == '150',
+        'ledger_evidence':{'opening':None,'closing':None,'control_rows':[],
+            'balance_check':{'opening':opening,'closing':closing,'opening_source':source,
+                'difference_count':0,'status':'consistent' if opening is not None else 'opening_unavailable'}}}))
+    page.locator('#importBtn').click()
+    page.wait_for_function("validationStatus==='valid'")
+    text = page.locator('#ledgerEvidenceSummary').inner_text()
+    if opening is None:
+        assert 'Calculated opening: Unavailable' in text and 'Balance comparison: unavailable' in text
+        assert 'Balance differences: 0' not in text
+    else:
+        assert 'Calculated opening: ' + opening + ' Dr' in text
+        assert 'Calculated closing: ' + closing + ' Dr' in text
+        assert ('inferred from transactions' if source.startswith('inferred') else 'ERP opening') in text
+    if opening == '150':
+        assert page.locator('#importBtn').inner_text() == 'Refresh balance evidence'
+
+
+def test_ledger_continuation_review_keeps_raw_notes_and_shows_parent_without_junk_warning(upload_formatting_page):
+    page = upload_formatting_page
+    columns = _arrange_ledger_upload_page(page)
+    _arrange_staged_ledger_mapping(page, columns)
+    page.locator('#ledgerAccountSelect').select_option('A-1')
+    page.evaluate("""() => {
+        const book = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([excelHeaders,
+            ['V1','15/01/2026','Original description',50,0,'200 Dr'],
+            ['','','Bill #: <b>123</b>','','','']]), 'Ledger');
+        workbookData = XLSX.write(book,{type:'array',bookType:'xlsx'});
+        renderRowExclusionGrid();
+    }""")
+    page.locator('#uploadCoverageStart').fill('2026-01-01')
+    page.locator('#uploadCoverageEnd').fill('2026-01-31')
+    page.route('**/api/upload/validate', lambda route: route.fulfill(json={
+        'has_errors':False, 'can_import':True, 'validation_plan_id':'notes-plan',
+        'ledger_evidence':{'opening':None, 'closing':None, 'control_rows':[],
+            'continuation_rows':[{'row_number':3, 'parent_row_number':2, 'voucher':'V1 <b>source</b>'}]}}))
+    page.locator('#importBtn').click()
+    page.wait_for_function("validationStatus==='valid'")
+    assert '1 continuation note(s) attached' in page.locator('#ledgerEvidenceSummary').inner_text()
+    assert page.locator('#rowExclusionBody tr.row-flagged').count() == 0
+    detail = page.locator('#rowExclusionBody tr').nth(1)
+    assert 'Bill #: <b>123</b>' in detail.inner_text() and detail.locator('b').count() == 0
+    title = detail.locator('.row-exclusion-rownum-col').get_attribute('title')
+    assert 'attached to Excel row 2' in title and 'voucher V1 <b>source</b>' in title
+    page.evaluate('resetValidationState()')
+    assert page.evaluate('ledgerRecognisedNoteRows.size') == 0
+
+
+def test_ledger_coverage_popup_shows_specific_row_voucher_and_both_ranges(upload_formatting_page):
+    page = upload_formatting_page
+    columns = _arrange_ledger_upload_page(page)
+    _arrange_staged_ledger_mapping(page, columns)
+    page.locator('#ledgerAccountSelect').select_option('A-1')
+    page.locator('#uploadCoverageStart').fill('2026-01-01')
+    page.locator('#uploadCoverageEnd').fill('2026-10-19')
+    message = "Ledger transaction at Excel row 2, voucher 'JV-1225-100', dated 2025-12-31 is outside the declared coverage period 2026-01-01 to 2026-10-19."
+    page.route('**/api/upload/validate', lambda route: route.fulfill(status=400, json={'detail':message}))
+    page.locator('#importBtn').click()
+    assert message in page.locator('#validationErrorOverlay').inner_text()
+    assert page.evaluate('validationPlanId') is None
+
+
+@pytest.mark.parametrize('state', ['locked_preview', 'missing_select', 'empty_mapping', 'wrong_column'])
+def test_inactive_mapping_uses_issue_popup_and_never_sends_partial_validation_or_import(upload_formatting_page, state):
+    page = upload_formatting_page
+    columns = _arrange_ledger_upload_page(page)
+    _arrange_staged_ledger_mapping(page, columns)
+    page.locator('#ledgerAccountSelect').select_option('A-1')
+    requests = []
+    page.on('request', lambda r: requests.append(r.url) if '/api/upload/validate' in r.url or '/api/upload/import' in r.url else None)
+    page.evaluate("""state => {
+        validationStatus='valid'; validationPlanId='retain-receipt-plan';
+        if (state==='locked_preview') renderRestorePreview({mappings:currentMappings,sheetName:'Ledger'});
+        if (state==='missing_select') mappingBody.querySelector('select').remove();
+        if (state==='empty_mapping') mappingBody.innerHTML='';
+        if (state==='wrong_column') mappingBody.querySelector('select').dataset.columnId='9999';
+    }""", state)
+    page.locator('#importBtn').click()
+    page.wait_for_function('uploadActionInFlight === false')
+    assert 'wait for column mapping to finish' in page.locator('#validationErrorOverlay').inner_text()
+    assert 'Column mapping' in page.locator('#validationErrorOverlay').inner_text()
+    assert not requests
+    assert page.evaluate('validationPlanId') == 'retain-receipt-plan'
+    assert page.evaluate('document.documentElement.style.cursor') == ''
+    page.keyboard.press('Escape')
+    # The same action works once a real interactive mapping replaces the preview.
+    _arrange_staged_ledger_mapping(page, columns)
+    page.evaluate('clearRestorePreview();resetValidationState()')
+    page.locator('#uploadCoverageStart').fill('2026-01-01')
+    page.locator('#uploadCoverageEnd').fill('2026-01-31')
+    page.route('**/api/upload/validate', lambda route: route.fulfill(json={'has_errors':False,'can_import':False}))
+    page.locator('#importBtn').click()
+    page.wait_for_function("validationStatus === 'ignored'")
+    assert len(requests) == 1

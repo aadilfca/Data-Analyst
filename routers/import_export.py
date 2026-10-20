@@ -24,7 +24,7 @@ from services.cashflow_preparation import (
 from services.cashflow_voucher_occurrence_store import resolve_upload_occurrences_postgres
 from typing import List, Optional
 from pydantic import BaseModel
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from routers.auth import get_current_user
 from services.storage_cleanup import purge_replaced_transaction_rows, DataPurgeProtectedError, _remove_staged_upload_files
 from services.upload_lifecycle import (
@@ -40,6 +40,7 @@ UPLOAD_COMPARISON_PAGE_SIZE = 2000
 # Opt-in, request-local context; normal uploads never inherit ledger behaviour.
 _ledger_context = ContextVar("account_ledger_upload_context", default=None)
 _source_row_numbers = ContextVar("upload_source_row_numbers", default=None)
+LEDGER_SOURCE_NOTES = 'Ledger Source Notes'
 
 
 def _ledger_decimal(value, *, balance=False):
@@ -50,6 +51,14 @@ def _ledger_decimal(value, *, balance=False):
     # still require an unambiguous decimal/thousands layout.
     text = (format(Decimal(str(value)), "f") if isinstance(value, (int, float, Decimal)) and not isinstance(value, bool)
             else str(value).strip().upper())
+    if balance:
+        # ERP presentation varies; preserve raw cells and normalize only for arithmetic.
+        prefix = re.fullmatch(r'(DR|CR)\s*(.+)', text)
+        if prefix:
+            text = prefix[2].strip() + ' ' + prefix[1]
+        parentheses = re.fullmatch(r'\(([^()]+)\)(\s*(?:DR|CR))?', text)
+        if parentheses:
+            text = '-' + parentheses[1].strip() + (parentheses[2] or '')
     match = re.fullmatch(r"([+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?:\s*(DR|CR))?", text)
     if not match or (match[2] and not balance):
         raise HTTPException(400, "Ledger amounts must be finite numbers; only balances may carry DR/CR")
@@ -64,6 +73,32 @@ def _ledger_decimal(value, *, balance=False):
             raise HTTPException(400, "Conflicting ledger balance sign and DR designation")
         number = abs(number) * (-1 if match[2] == "CR" else 1)
     return number
+
+
+def _ledger_account_choices(client_id, account_code=None):
+    """Use every posting ledger in this client's latest parsed Trial Balance."""
+    account_filter = 'AND a.account_code = %s' if account_code is not None else ''
+    params = (account_code, client_id) if account_code is not None else (client_id,)
+    rows = execute_query_pg(
+        f"""SELECT a.account_code, a.account_name, a.classification
+           FROM trial_balance_accounts a
+           WHERE a.classification = 'leaf'
+             {account_filter}
+             AND a.upload_id = (
+                 SELECT id FROM trial_balance_uploads WHERE client_id = %s AND status = 'parsed'
+                 ORDER BY (period_end IS NULL), period_end DESC, uploaded_at DESC LIMIT 1)
+           ORDER BY a.account_name, a.account_code""", params)
+    return rows
+
+
+@router.get('/api/upload/ledger-accounts')
+def get_ledger_upload_accounts(client_id: int):
+    if not execute_query_pg('SELECT id FROM clients WHERE id = %s AND is_active = TRUE', (client_id,)):
+        raise HTTPException(404, 'Client not found or inactive')
+    accounts = _ledger_account_choices(client_id)
+    if len({r['account_code'] for r in accounts}) != len(accounts):
+        raise HTTPException(409, 'Duplicate posting account codes exist in the latest Trial Balance. Review the Trial Balance before uploading ledgers.')
+    return {'accounts': [{'account_code': r['account_code'], 'account_name': r['account_name']} for r in accounts]}
 
 
 def _resolve_ledger_context(request, template, *, lock=False):
@@ -84,19 +119,9 @@ def _resolve_ledger_context(request, template, *, lock=False):
         raise HTTPException(400, "Ledger coverage start must not follow its end")
     if request.edited_cells or request.force_include_rows:
         raise HTTPException(400, "Correct ledger source errors in Excel; ledger imports cannot override rejected or blank cells")
-    accounts = execute_query_pg(
-        """SELECT a.account_name, a.classification, t.treasury_type
-           FROM trial_balance_accounts a
-           JOIN account_control_cashflow_treasury_accounts t
-             ON t.client_id = %s AND t.account_code = a.account_code AND t.is_active = TRUE
-           WHERE a.account_code = %s AND a.classification = 'leaf'
-             AND a.upload_id = (
-                 SELECT id FROM trial_balance_uploads WHERE client_id = %s AND status = 'parsed'
-                 ORDER BY (period_end IS NULL), period_end DESC, uploaded_at DESC LIMIT 1)""",
-        (request.client_id, code, request.client_id),
-    )
-    if len(accounts) != 1 or accounts[0].get("treasury_type") not in {"cash", "bank"}:
-        raise HTTPException(400, "Select one posting account from the latest Trial Balance configured as Cash/Bank")
+    accounts = _ledger_account_choices(request.client_id, code)
+    if len(accounts) != 1:
+        raise HTTPException(400, "Select one posting account from the latest Trial Balance")
     roles = template.get("ledger_columns") or {}
     if isinstance(roles, str):
         roles = json.loads(roles)
@@ -115,6 +140,8 @@ def _resolve_ledger_context(request, template, *, lock=False):
         column not in by_id or not mapped.get(column) for column in roles.values()
     ):
         raise HTTPException(400, "Map all six ledger columns and keep Voucher first")
+    if any(column['column_name'].casefold() == LEDGER_SOURCE_NOTES.casefold() for column in columns):
+        raise HTTPException(400, f"Rename the template column '{LEDGER_SOURCE_NOTES}'; this name is reserved for attached ledger continuation notes.")
     allowed = {"voucher": {"Text"}, "date": {"Date"}, "description": {"Text"},
                "debit": {"Numeric"}, "credit": {"Numeric"}, "balance": {"Text", "Numeric"}}
     if any(by_id[column]["data_type"] not in allowed[role] for role, column in roles.items()):
@@ -187,7 +214,10 @@ def _prepare_source_rows(frame, request, template_cols, col_mapping):
     def marker(value):
         return isinstance(value, str) and bool(pattern.fullmatch(value.strip()))
 
-    roles = (_ledger_context.get() or {}).get('excel_roles', {})
+    context = _ledger_context.get()
+    roles = (context or {}).get('excel_roles', {})
+    if context:
+        context['note_candidates'] = {}
     key = roles.get('voucher') or col_mapping.get(template_cols[0]['column_name'])
     protected = {col_mapping.get(c['column_name']) for c in template_cols
                  if c['data_type'] == 'Date' or 'account' in c['column_name'].casefold()}
@@ -217,6 +247,10 @@ def _prepare_source_rows(frame, request, template_cols, col_mapping):
                                          if col_mapping.get(name) and not blank(raw.get(col_mapping[name]))}})
             continue
         row = {header: raw[header] for header in dict.fromkeys(col_mapping.values()) if header in raw}
+        if context:
+            # Inspect unmapped cells too: projecting away an amount/reference
+            # must never turn an ambiguous source row into a harmless note.
+            context['note_candidates'][id(row)] = _ledger_description_only(raw, roles)
         rows.append(row)
         if positions is not None:
             positions[id(row)] = number
@@ -241,6 +275,14 @@ def _prepare_source_rows(frame, request, template_cols, col_mapping):
     return rows, diagnostics
 
 
+def _ledger_description_only(row, roles):
+    description = roles['description']
+    text = row.get(description)
+    return (isinstance(text, str) and bool(text.strip())
+            and all(classify_date_cell(value) == 'empty'
+                    for key, value in row.items() if key != description))
+
+
 def _prepare_ledger_rows(rows, request):
     """Extract controls before user exclusions; retain original transaction values."""
     context = _ledger_context.get()
@@ -248,6 +290,12 @@ def _prepare_ledger_rows(rows, request):
         return rows
     roles = context["excel_roles"]
     transactions = []
+    balance_rows = []
+    incomplete = False
+    excluded = set(request.excluded_rows or [])
+    context['row_notes'] = {}
+    context['evidence']['continuation_rows'] = []
+    parent, previous_number = None, None
     for number, row in enumerate(rows, 2):
         number = _ledger_row_number(row, number)
         voucher = row.get(roles["voucher"])
@@ -263,12 +311,27 @@ def _prepare_ledger_rows(rows, request):
                 raise HTTPException(400, f"More than one ledger {kind} control row")
             context["evidence"][kind] = str(value) if value is not None else None
             context["evidence"]["control_rows"].append({"row_number": number, "kind": kind})
+            parent, previous_number = None, number
+            continue
+        note = context.get('note_candidates', {}).get(id(row), _ledger_description_only(row, roles))
+        if note:
+            if parent is None or previous_number != number - 1 or number in excluded:
+                raise HTTPException(400, f"Ledger continuation note at Excel row {number} must immediately follow an included valid transaction or its notes; notes cannot be excluded. Review the source rows.")
+            text = row[roles['description']]
+            notes = context['row_notes'].setdefault(id(parent), [])
+            notes.append(text)
+            context['evidence']['continuation_rows'].append({
+                'row_number': number, 'parent_row_number': _ledger_row_number(parent, number - 1),
+                'voucher': str(parent[roles['voucher']])})
+            previous_number = number
             continue
         # A voucher-bearing description saying 'Closing balance' is a real line.
         context["row_numbers"][id(row)] = number
-        if number not in set(request.excluded_rows or []):
+        parent, previous_number = None, number
+        if number not in excluded:
+            amounts = {}
             for role in ("debit", "credit", "balance"):
-                _ledger_decimal(row.get(roles[role]), balance=role == "balance")
+                amounts[role] = _ledger_decimal(row.get(roles[role]), balance=role == "balance")
             value = row.get(roles["date"])
             if classify_date_cell(value) != "empty":
                 if classify_date_cell(value) == "native":
@@ -282,9 +345,237 @@ def _prepare_ledger_rows(rows, request):
                     except (ValueError, TypeError) as error:
                         raise HTTPException(400, f"Invalid ledger transaction date at Excel row {number}") from error
                 if not context["start"] <= day <= context["end"]:
-                    raise HTTPException(400, "A ledger transaction is outside the declared coverage period")
+                    raise HTTPException(400, f"Ledger transaction at Excel row {number}, voucher '{voucher}', dated {day} is outside the declared coverage period {context['start']} to {context['end']}. Include its date or correct the source; the transaction was not removed.")
+                if blank_voucher or (amounts['debit'] is None and amounts['credit'] is None):
+                    incomplete = True
+                else:
+                    parent = row
+                balance_rows.append({'row_number': number, 'day': day, **amounts})
+            else:
+                incomplete = True
         transactions.append(row)
+    context['balance_rows'] = balance_rows  # Request-only; never persist transaction copies here.
+    context['balance_incomplete'] = incomplete
+    context['balance_mode'] = request.comparison_mode
+    _calculate_ledger_balances(context)
     return transactions
+
+
+def _calculate_ledger_balances(context, previous=None):
+    """Keep ERP controls intact and retain only compact derived reconciliation evidence."""
+    evidence = context['evidence']
+    rows = context.get('balance_rows', [])
+    check = {'opening': None, 'closing': None, 'opening_source': 'unavailable',
+             'checked_balances': 0, 'difference_count': 0, 'differences': [],
+             'continuity': previous or {'status': 'not_available'}}
+    evidence['balance_check'] = check
+    if context.get('balance_mode') != 'replace_range' or context.get('balance_incomplete'):
+        check['status'] = 'partial_or_incomplete'
+        return
+    # Dates establish direction; evaluate a reverse export back to front.
+    days = [r['day'] for r in rows]
+    if days != sorted(days):
+        if days == sorted(days, reverse=True):
+            rows = list(reversed(rows))
+            check['order'] = 'reverse_source'
+        else:
+            check['status'] = 'unordered'
+            return
+    else:
+        check['order'] = 'source'
+    opening = _ledger_decimal(evidence['opening'], balance=True)
+    if opening is not None:
+        check['opening_source'] = 'erp_opening'
+    else:
+        movement = Decimal(0)
+        for row in rows:
+            movement += (row['debit'] or Decimal(0)) - (row['credit'] or Decimal(0))
+            if row['balance'] is not None:
+                opening = row['balance'] - movement
+                check['opening_source'] = 'inferred_from_transaction'
+                check['anchor_row'] = row['row_number']
+                break
+        if opening is None and not rows and evidence['closing'] is not None:
+            opening = _ledger_decimal(evidence['closing'], balance=True)
+            check['opening_source'] = 'inferred_from_closing'
+        if opening is None and previous and previous.get('status') == 'available':
+            opening = Decimal(previous['expected_opening'])
+            check['opening_source'] = 'previous_coverage'
+    if opening is None:
+        check['status'] = 'opening_unavailable'
+        return
+    check['opening'] = str(opening)
+    if previous and previous.get('status') == 'available':
+        delta = opening - Decimal(previous['expected_opening'])
+        check['continuity'] = {**previous, 'status': 'matched' if delta == 0 else 'difference', 'difference': str(delta)}
+    running = opening
+    for row in rows:
+        running += (row['debit'] or Decimal(0)) - (row['credit'] or Decimal(0))
+        if row['balance'] is not None:
+            check['checked_balances'] += 1
+            delta = running - row['balance']
+            if delta:
+                check['difference_count'] += 1
+                if len(check['differences']) < 20:
+                    check['differences'].append({'row_number': row['row_number'], 'expected': str(running),
+                                                'source': str(row['balance']), 'difference': str(delta)})
+    check['closing'] = str(running)
+    closing = _ledger_decimal(evidence['closing'], balance=True)
+    if closing is not None:
+        check['closing_difference'] = str(running - closing)
+        if running != closing:
+            check['difference_count'] += 1
+    check['status'] = 'differences' if check['difference_count'] or check['continuity']['status'] == 'difference' else 'consistent'
+
+
+def _ledger_period_fingerprint(request, start, end):
+    """One compact proof of current canonical rows, without a second row dataset."""
+    result = execute_query_pg(
+        """SELECT md5(COALESCE(string_agg(cd.id::text || ':' || COALESCE(cd.version, 1)::text || ':' ||
+                      COALESCE(cd.source_fingerprint, ''), ',' ORDER BY cd.id), '')) AS fingerprint,
+                  COUNT(*) FILTER (WHERE cd.source_fingerprint IS NULL) AS incomplete
+           FROM client_data cd JOIN uploaded_files u ON u.id = cd.upload_id
+           WHERE cd.client_id = %s AND cd.template_id = %s AND cd.is_deleted = FALSE
+             AND u.ledger_account_code = %s AND cd.extract_date BETWEEN %s AND %s""",
+        (request.client_id, request.template_id, _ledger_context.get()['account_code'], start, end))
+    return result[0]['fingerprint'] if result and not result[0].get('incomplete') else None
+
+
+def _connect_ledger_balances(request):
+    """Only continuous, unchanged complete coverage can supply a previous closing."""
+    context = _ledger_context.get()
+    if request.comparison_mode != 'replace_range':
+        return
+    prior = execute_query_pg(
+        """SELECT id, ledger_period_start, ledger_period_end, ledger_evidence FROM uploaded_files
+           WHERE client_id = %s AND template_id = %s AND ledger_account_code = %s
+             AND status = 'Imported' AND ledger_period_end < %s AND id <> %s
+           ORDER BY ledger_period_end DESC, id DESC LIMIT 1""",
+        (request.client_id, request.template_id, context['account_code'], context['start'], request.file_id))
+    previous = {'status': 'not_available'}
+    if prior:
+        item = prior[0]
+        end = str(item['ledger_period_end'])[:10]
+        previous = {'status': 'requires_revalidation', 'previous_upload_id': item['id'], 'previous_end': end}
+        if (datetime.fromisoformat(context['start']).date() - timedelta(days=1)).isoformat() != end:
+            previous['status'] = 'gap'
+        else:
+            stored = item.get('ledger_evidence') or {}
+            if isinstance(stored, str):
+                stored = json.loads(stored)
+            check = stored.get('balance_check') or {}
+            if (not stored.get('continuity_stale') and check.get('source_mode') == 'replace_range'
+                    and check.get('status') == 'consistent' and check.get('closing') is not None
+                    and check.get('configuration') == context['configuration']
+                    and check.get('opening_source') in {'erp_opening', 'inferred_from_transaction', 'inferred_from_closing', 'previous_coverage'}
+                    and check.get('canonical_fingerprint')
+                    and check['canonical_fingerprint'] == _ledger_period_fingerprint(request, str(item['ledger_period_start'])[:10], end)
+                    and _ledger_ancestry_is_current(request, item, check)):
+                previous.update(status='available', expected_opening=check['closing'],
+                                proof_start=check.get('proof_start', str(item['ledger_period_start'])[:10]),
+                                root_upload_id=check.get('root_upload_id', item['id']),
+                                root_opening=check.get('root_opening', check.get('opening')))
+    _calculate_ledger_balances(context, previous)
+
+
+def _ledger_ancestry_is_current(request, item, check):
+    """A bounded history proof also catches ancestor edits/deletions outside Upload."""
+    if check['opening_source'] != 'previous_coverage':
+        return True  # An independently supplied/inferred ERP anchor starts a new chain.
+    start, root_id = check.get('proof_start'), check.get('root_upload_id')
+    if (not start or not root_id or not check.get('history_fingerprint')
+            or start > str(item['ledger_period_start'])[:10]
+            or check['history_fingerprint'] != _ledger_period_fingerprint(request, start, str(item['ledger_period_end'])[:10])):
+        return False
+    roots = execute_query_pg(
+        """SELECT id, ledger_period_start, ledger_evidence FROM uploaded_files
+           WHERE id = %s AND client_id = %s AND template_id = %s AND ledger_account_code = %s AND status = 'Imported'""",
+        (root_id, request.client_id, request.template_id, _ledger_context.get()['account_code']))
+    if not roots or str(roots[0]['ledger_period_start'])[:10] != start:
+        return False
+    evidence = roots[0].get('ledger_evidence') or {}
+    if isinstance(evidence, str):
+        evidence = json.loads(evidence)
+    root = evidence.get('balance_check') or {}
+    return bool(not evidence.get('continuity_stale') and root.get('status') == 'consistent'
+                and root.get('source_mode') == 'replace_range'
+                and root.get('opening_source') in {'erp_opening', 'inferred_from_transaction', 'inferred_from_closing'}
+                and root.get('configuration') == _ledger_context.get()['configuration']
+                and root.get('opening') == check.get('root_opening'))
+
+
+def _ledger_balance_warnings(context):
+    check = context['evidence'].get('balance_check') or {}
+    warnings = [{'row_number': item['row_number'], 'column': 'Balance',
+                 'message': f"ERP balance {item['source']} differs from calculated balance {item['expected']} by {item['difference']}. Source values were retained."}
+                for item in check.get('differences', [])]
+    if Decimal(check.get('closing_difference', '0')):
+        warnings.append({'column': 'Balance', 'message': f"The ERP closing control differs from the calculated closing by {check['closing_difference']}."})
+    continuity = check.get('continuity') or {}
+    if continuity.get('status') == 'difference':
+        warnings.append({'column': 'Balance', 'message': f"Opening {check['opening']} differs from previous closing {continuity['expected_opening']} by {continuity['difference']}. The new source was retained."})
+    elif continuity.get('status') == 'gap':
+        warnings.append({'column': 'Balance', 'message': f"Previous coverage ends {continuity['previous_end']}; intervening coverage is missing. No previous balance was carried forward."})
+    elif continuity.get('status') == 'requires_revalidation':
+        warnings.append({'column': 'Balance', 'message': 'The previous ledger balance proof is missing or stale. Revalidate that coverage before using its closing as an opening.'})
+    reason = {'opening_unavailable': 'Opening balance unavailable. Supply ERP balance evidence or continuous verified prior coverage; zero was not assumed.',
+              'unordered': 'Transaction dates are out of sequence. Balance reconciliation is unavailable; use a chronological ledger export.',
+              'partial_or_incomplete': 'A partial or incomplete extract cannot establish complete-period calculated balances.'}.get(check.get('status'))
+    if reason:
+        warnings.append({'column': 'Balance', 'message': reason})
+    return warnings
+
+
+def _prepare_ledger_balance_proof(request):
+    # A concurrent import between reading a prior anchor and sealing the plan
+    # must not make an obsolete opening appear to belong to the newer dataset.
+    before = _ledger_scope_fingerprint(request.client_id, request.template_id)
+    _connect_ledger_balances(request)
+    if before != _ledger_scope_fingerprint(request.client_id, request.template_id):
+        raise HTTPException(409, 'Ledger data changed while checking balances. Validate again; no import was applied.')
+    _ledger_context.get()['scope_fingerprint'] = before
+
+
+def _ledger_evidence_refresh_required(request, prior):
+    """Refresh a stale compact proof without re-inserting unchanged transactions."""
+    context = _ledger_context.get()
+    if (not context or not prior or request.comparison_mode != 'replace_range'
+            or context['evidence'].get('balance_check', {}).get('status') != 'consistent'):
+        return False
+    stored = prior.get('ledger_evidence') or {}
+    if isinstance(stored, str):
+        stored = json.loads(stored)
+    check = stored.get('balance_check') or {}
+    proof = check.get('canonical_fingerprint')
+    return bool(stored.get('continuity_stale') or not proof
+                or check.get('configuration') != context['configuration']
+                or not check.get('opening_source')
+                or proof != _ledger_period_fingerprint(request, context['start'], context['end']))
+
+
+def _finalize_ledger_balances(request, evidence):
+    """Invalidate later proofs after any earlier import; preserve all ERP evidence."""
+    context = _ledger_context.get()
+    evidence = json.loads(json.dumps(evidence))  # Keep the validated/archive plan immutable.
+    execute_write_pg(
+        """UPDATE uploaded_files SET ledger_evidence = jsonb_set(COALESCE(NULLIF(ledger_evidence::text, '')::jsonb, '{}'::jsonb),
+                  '{continuity_stale}', 'true'::jsonb, true)
+           WHERE client_id = %s AND template_id = %s AND ledger_account_code = %s AND status = 'Imported'
+             AND id <> %s AND ledger_period_end >= %s""",
+        (request.client_id, request.template_id, context['account_code'], request.file_id, context['start']))
+    evidence['balance_check']['canonical_fingerprint'] = _ledger_period_fingerprint(request, context['start'], context['end'])
+    evidence['balance_check']['source_mode'] = request.comparison_mode
+    evidence['balance_check']['configuration'] = context['configuration']
+    check = evidence['balance_check']
+    previous = check.get('continuity') or {}
+    carried = check.get('opening_source') == 'previous_coverage'
+    check['proof_start'] = previous['proof_start'] if carried else context['start']
+    check['root_upload_id'] = previous['root_upload_id'] if carried else request.file_id
+    check['root_opening'] = previous['root_opening'] if carried else check.get('opening')
+    check['history_fingerprint'] = (_ledger_period_fingerprint(request, check['proof_start'], context['end'])
+                                    if carried else check['canonical_fingerprint'])
+    execute_write_pg('UPDATE uploaded_files SET ledger_evidence = %s WHERE id = %s',
+                     (json.dumps(evidence), request.file_id))
 
 
 def _ledger_scope_fingerprint(client_id, template_id, locked=False):
@@ -557,15 +848,14 @@ def classify_date_cell(value) -> str:
                         handled separately from the text parser.
       'empty'        - no value to classify.
     """
-    if value is None:
+    # pandas NaT is also a datetime; missingness must win over the native-date test.
+    if value is None or pd.isna(value):
         return 'empty'
     if isinstance(value, datetime):
         return 'native'
     if isinstance(value, str):
         return 'empty' if value.strip() == '' else 'text'
     if isinstance(value, (int, float)):
-        if isinstance(value, float) and pd.isna(value):
-            return 'empty'
         return 'excel_serial'
     return 'text'
 
@@ -1173,7 +1463,7 @@ def _find_prior_import_with_same_hash(
         params += (context["account_code"], context["start"], context["end"])
     rows = execute_query_pg(
         f"""
-        SELECT id, file_name, upload_date
+        SELECT id, file_name, upload_date{', ledger_evidence' if context else ''}
         FROM uploaded_files
         WHERE id <> %s
           AND client_id = %s
@@ -1302,7 +1592,10 @@ def _build_validation_plan_payload(
     if change_detection.get('lifecycle'):
         payload['lifecycle'] = change_detection['lifecycle']
         payload['voucher_observations'] = change_detection.get('voucher_observations', [])
-        payload['template_columns'] = template_cols
+        # Export notes as an additional evidence column without changing shared
+        # template definitions or the template/configuration freshness guard.
+        payload['template_columns'] = (template_cols + [{'column_name': LEDGER_SOURCE_NOTES, 'data_type': 'Text'}]
+                                       if context else template_cols)
         payload['template_fingerprint'] = digest([template_cols, rate_source])
     return payload
 
@@ -1566,14 +1859,7 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
     incoming_groups = {}
     incoming_occurrences = {}
     for raw_row in incoming_rows:
-        row_data = {}
-        for template_column, excel_column in col_mapping.items():
-            if excel_column in raw_row:
-                row_data[template_column] = json_safe_cell_value(
-                    raw_row[excel_column], preserve_native_dates=True
-                )
-        apply_rate_derivation(row_data, template_cols, rate_source, rate_precision)
-        row_data = reorder_row_data_by_template(row_data, template_cols)
+        row_data = _canonical_import_row_data(raw_row, col_mapping, template_cols, rate_source, rate_precision)
         document_group_id = get_document_group_id(template_cols, row_data, template_id)
         date_text = _date_text_for_row(row_data, template_cols, date_delimiter, date_order)
         if coverage and (not date_text or not coverage['start'] <= date_text <= coverage['end']):
@@ -1808,9 +2094,10 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
         if existing and ((coverage and (unmatched_incoming or unmatched_existing))
                          or result['changed_count'] > changed_before):
             from collections import Counter
-            fields = sorted(c['column_name'] for c in template_cols if
-                Counter(str(old_values[id(r)].get(c['column_name'], '')) for r in existing) !=
-                Counter(str(new_values[id(r)].get(c['column_name'], '')) for r in incoming))
+            comparison_columns = [c['column_name'] for c in template_cols] + ([LEDGER_SOURCE_NOTES] if context else [])
+            fields = sorted(name for name in comparison_columns if
+                Counter(str(old_values[id(r)].get(name, '')) for r in existing) !=
+                Counter(str(new_values[id(r)].get(name, '')) for r in incoming))
             result['voucher_observations'].append({
                 'document_group_id': document_group_id,
                 'voucher_id': (incoming[0]['row_data'] if incoming else existing[0]['old_row_data']).get(template_cols[0]['column_name'], document_group_id),
@@ -2060,7 +2347,16 @@ def _canonical_import_row_data(
         if excel_column in row
     }
     apply_rate_derivation(row_data, template_cols, rate_source, rate_precision)
-    return reorder_row_data_by_template(row_data, template_cols)
+    ordered = reorder_row_data_by_template(row_data, template_cols)
+    context = _ledger_context.get()
+    notes = (context or {}).get('row_notes', {}).get(id(row))
+    if notes:
+        if any(column['column_name'].casefold() == LEDGER_SOURCE_NOTES.casefold() for column in template_cols):
+            raise HTTPException(400, f"Template column '{LEDGER_SOURCE_NOTES}' conflicts with attached ledger notes.")
+        # Store the original note text once, on its parent canonical row. Source
+        # positions remain compact evidence and do not affect row identity.
+        ordered[LEDGER_SOURCE_NOTES] = '\n'.join(notes)
+    return ordered
 
 
 def _deduplicate_exact_rows(
@@ -2425,12 +2721,40 @@ def compute_data_quality_flag(row_data: dict, critical_cols: dict) -> Optional[s
 
 
 # ---------- EXISTING UPLOAD ENDPOINT ----------
+def _read_standalone_workbook(contents):
+    """Reject web exports before staging; never fetch linked worksheet resources."""
+    if not contents:
+        raise HTTPException(400, "The selected file is empty. Export a standalone Excel workbook and try again.")
+    if contents.startswith((b'\xff\xfe', b'\xfe\xff')):
+        prefix = contents[:32768].decode('utf-16', errors='replace')
+    else:
+        prefix = contents[:32768].decode('utf-8-sig', errors='replace')
+    if prefix.lstrip().startswith('<') and re.search(r'<(?:!doctype\s+html|html|table|frameset)\b', prefix, re.I):
+        if re.search(r'<(?:frameset|frame)\b', prefix, re.I):
+            message = ("This file is an Excel web-page wrapper (frameset). Its worksheet data is in separate linked files, "
+                       "so this file alone does not contain the ledger transactions. Open the original export with its "
+                       "companion folder in Excel, then use Save As > Excel Workbook (.xlsx), or export a standalone "
+                       "Excel workbook from the ERP. Renaming the extension will not convert the file.")
+        else:
+            message = ("This is an HTML web-page export saved with an Excel extension. Save or export it as a standalone "
+                       "Excel Workbook (.xlsx) or Excel 97-2003 Workbook (.xls), then upload that workbook. "
+                       "Renaming the extension will not convert the file.")
+        raise HTTPException(400, message)
+    try:
+        return pd.read_excel(BytesIO(contents))
+    except ImportError as error:
+        raise HTTPException(400, "The server's Excel reader is unavailable. Ask the administrator to check the installed Excel-reading dependencies.") from error
+    except Exception as error:
+        logger.warning("Excel upload could not be read (%s)", type(error).__name__)
+        raise HTTPException(400, "The file could not be read as a standalone Excel workbook. Open it in Excel, check that it is not damaged or password-protected, then save a new .xlsx copy and retry.") from error
+
+
 @router.post("/api/import-excel")
 async def import_excel(file: UploadFile = File(...), session=Depends(get_current_user)):
-    if not file.filename.endswith(('.xlsx', '.xls')):
+    if not (file.filename or '').casefold().endswith(('.xlsx', '.xls')):
         raise HTTPException(400, "Only .xlsx and .xls files are supported")
     contents = await file.read()
-    df = pd.read_excel(BytesIO(contents))
+    df = _read_standalone_workbook(contents)
     upload_dir = "uploads"
     os.makedirs(upload_dir, exist_ok=True)
     file_path = _build_upload_storage_path(file.filename)
@@ -3052,7 +3376,8 @@ def validate_only(request: ImportRequest, perf: bool = False):
     if request.comparison_mode == 'replace_range' and unique_comparison_rows and request.confirm_empty_period:
         raise HTTPException(400, 'This report contains transactions. Untick the empty-report confirmation and validate again.')
     if _ledger_context.get():
-        _ledger_context.get()["scope_fingerprint"] = _ledger_scope_fingerprint(request.client_id, request.template_id)
+        _prepare_ledger_balance_proof(request)
+        source_diagnostics['warnings'].extend(_ledger_balance_warnings(_ledger_context.get()))
     change_detection = compare_transactions(
         client_id=request.client_id,
         template_id=request.template_id,
@@ -3084,6 +3409,10 @@ def validate_only(request: ImportRequest, perf: bool = False):
     if _ledger_context.get() and not prior_same_file:
         actionable = True  # New coverage or balance evidence can have no transaction changes.
     duplicate_upload_noop = _is_duplicate_upload_noop(prior_same_file, change_detection)
+    ledger_evidence_refresh = duplicate_upload_noop and _ledger_evidence_refresh_required(request, prior_same_file)
+    if ledger_evidence_refresh:
+        actionable = True
+        duplicate_upload_noop = False
     duplicate_errors = []
     if not duplicate_upload_noop:
         duplicate_errors = _strict_duplicate_row_errors(
@@ -3165,6 +3494,7 @@ def validate_only(request: ImportRequest, perf: bool = False):
         "duplicate_upload_id": prior_same_file.get("id") if prior_same_file else None,
         "duplicate_upload_detected": bool(prior_same_file),
         "duplicate_upload_noop": duplicate_upload_noop,
+        "ledger_evidence_refresh": bool(ledger_evidence_refresh),
         "duplicate_group_count": deduplication["duplicate_group_count"],
         "duplicate_row_count": deduplication["duplicate_row_count"],
         "duplicate_skipped_count": deduplication["duplicate_skipped_count"],
@@ -3651,6 +3981,9 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
 
         if missing:
             IMPORT_PROGRESS[request.file_id]["current"] += len(missing)
+
+        if context:
+            _finalize_ledger_balances(request, plan_payload['ledger']['evidence'])
 
         if not context:
             cashflow_voucher_resolution = resolve_upload_occurrences_postgres(
