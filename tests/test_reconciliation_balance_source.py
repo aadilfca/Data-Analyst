@@ -12,6 +12,94 @@ from decimal import Decimal
 import pytest
 
 
+@pytest.fixture
+def independent_year_boundary_case():
+    """Two separately transcribed books; expected amounts never use the engine."""
+    import pandas as pd
+    journal = pd.DataFrame([
+        ['BEFORE', '2025-12-14', 'B1', 20, 0], ['BEFORE', '2025-12-14', 'AR', 0, 20],
+        ['RECEIPT', '2025-12-15', 'B1', 97.25, 0], ['RECEIPT', '2025-12-15', 'AR', 0, 100],
+        ['RECEIPT', '2025-12-15', 'FEE', 2.75, 0],
+        ['TRANSFER', '2025-12-20', 'B1', 0, 40], ['TRANSFER', '2025-12-20', 'C1', 40, 0],
+        ['MIXED', '2025-12-31', 'B1', 0, 10.25], ['MIXED', '2025-12-31', 'C1', 10, 0],
+        ['MIXED', '2025-12-31', 'FEE', .25, 0],
+        ['REVERSAL', '2026-01-01', 'B1', 0, 38.90], ['REVERSAL', '2026-01-01', 'AR', 40, 0],
+        ['REVERSAL', '2026-01-01', 'FEE', 0, 1.10],
+        ['PAYMENT', '2026-01-05', 'C1', 0, 25.50], ['PAYMENT', '2026-01-05', 'AP', 25.50, 0],
+        ['REFUND', '2026-01-20', 'C1', 5.10, 0], ['REFUND', '2026-01-20', 'AP', 0, 5.10],
+        ['REPEATS', '2026-01-25', 'C1', 3.33, 0], ['REPEATS', '2026-01-25', 'C1', 3.33, 0],
+        ['REPEATS', '2026-01-25', 'AR', 0, 6.66],
+        ['NEGATIVE', '2026-01-30', 'B1', 0, -12.34], ['NEGATIVE', '2026-01-30', 'EXP', -12.34, 0],
+        ['AFTER', '2026-02-11', 'B1', 9.99, 0], ['AFTER', '2026-02-11', 'AR', 0, 9.99],
+    ], columns=['voucher_id', 'date', 'account_code', 'debit', 'credit'])
+    journal['account_name'] = journal['account_code']
+    journal['voucher_detail'] = journal['voucher_id']
+    coa = pd.DataFrame([dict(account_code=code, account_title=code, category=category)
+        for code, category in [('B1', ''), ('B0', ''), ('C1', ''), ('AR', 'Collections'),
+                               ('FEE', 'Charges'), ('AP', 'Suppliers'), ('EXP', 'Operating')]])
+    # Independent ledger transcription includes activity outside the selected dates.
+    ledger_entries = [
+        ('B1', '2025-12-14', '20', '0'), ('B1', '2025-12-15', '97.25', '0'),
+        ('B1', '2025-12-20', '0', '40'), ('C1', '2025-12-20', '40', '0'),
+        ('B1', '2025-12-31', '0', '10.25'), ('C1', '2025-12-31', '10', '0'),
+        ('B1', '2026-01-01', '0', '38.90'), ('C1', '2026-01-05', '0', '25.50'),
+        ('C1', '2026-01-20', '5.10', '0'), ('C1', '2026-01-25', '3.33', '0'),
+        ('C1', '2026-01-25', '3.33', '0'), ('B1', '2026-01-30', '12.34', '0'),
+        ('B1', '2026-02-11', '9.99', '0'),
+    ]
+    rows = [_canonical(i, day, debit, credit, code) for i, (code, day, debit, credit)
+            in enumerate(ledger_entries, 1)]
+    uploads = [_uploaded(rows, opening=opening, start='2025-12-01', end='2026-02-28',
+                         identity=i, code=code) for i, (code, opening)
+               in enumerate([('B1', '-50'), ('B0', '0'), ('C1', '0')], 1)]
+    return dict(journal=journal, coa=coa, rows=rows, uploads=uploads,
+        accounts={'B1': 'Bank', 'B0': 'Bank', 'C1': 'Cash'},
+        start='2025-12-15', end='2026-02-10',
+        roles={'customer_receipt': ['Collections'], 'bank_charge': ['Charges']},
+        # Hand calculation: -30 + 97 - 40.30 = 26.70; transfers cancel combined.
+        expected={'bank': [('47.00', '-30', '17'), ('-26.56', '17', '-9.56'), ('0', '-9.56', '-9.56')],
+                  'cash': [('50', '0', '50'), ('-13.74', '50', '36.26'), ('0', '36.26', '36.26')],
+                  'combined': [('97', '-30', '67'), ('-40.30', '67', '26.70'), ('0', '26.70', '26.70')]})
+
+
+@pytest.mark.parametrize('presentation', ['net', 'gross'])
+@pytest.mark.parametrize('grouping', ['month', 'year'])
+def test_independent_books_prove_year_boundary_carry_and_keep_allocation_review(
+        independent_year_boundary_case, presentation, grouping):
+    from services.ledger_group_summary import build_cashflow_summary
+    case = independent_year_boundary_case
+    original = copy.deepcopy([case['rows'], case['uploads']])
+    summary = build_cashflow_summary(case['journal'], case['coa'], ['C1'], ['B1', 'B0'],
+        case['start'], case['end'], group_by=grouping, receipt_presentation=presentation,
+        cashflow_role_categories=case['roles'], vendor_account_codes=['AP'])
+    flows = {kind: {r['period_key']: r['explained_movement'] for r in summary['treasury_movement_proof']
+                    if r['treasury_type'] == kind} for kind in ('bank', 'cash', 'combined')}
+    result = build_uploaded_ledger_balances(case['uploads'], case['rows'], case['accounts'],
+        summary['periods'], flows['combined'], treasury_movements={kind: flows[kind] for kind in ('bank', 'cash')})
+    assert result['status'] == 'Matched'
+    for kind in ('bank', 'cash', 'combined'):
+        evidence = result if kind == 'combined' else result['treasury_breakdown'][kind]
+        expected = case['expected'][kind]
+        if grouping == 'year':
+            expected = [expected[0], (str(Decimal(expected[1][0]) + Decimal(expected[2][0])), expected[1][1], expected[2][2])]
+        for period, (movement, opening, closing) in zip(evidence['periods'], expected, strict=True):
+            for field, amount in [('cashflow_net_movement', movement), ('ledger_movement_total', movement),
+                                  ('opening_total', opening), ('calculated_opening', opening),
+                                  ('closing_total', closing), ('calculated_closing', closing)]:
+                assert Decimal(str(period[field])).quantize(Decimal('.01')) == Decimal(amount).quantize(Decimal('.01'))
+            assert period['variance'] == pytest.approx(0, abs=1e-9)
+        assert evidence['overall']['closing_total'] == pytest.approx(float(expected[-1][2]))
+        assert evidence['overall']['opening_total'] == float(expected[0][1])
+    # An arithmetic match must never certify an ambiguous category allocation.
+    assert summary['treasury_reconciliation']['status'] == 'Review required'
+    assert summary['treasury_reconciliation']['source_status'] == 'Matched'
+    assert all(r['allocation_status'] == 'Review required' for r in summary['treasury_movement_proof']
+               if r['period_key'] == summary['periods'][0]['key'])
+    dormant = next(a for a in result['periods'][0]['accounts'] if a['account_code'] == 'B0')
+    assert dormant['opening_balance'] == dormant['closing_balance'] == dormant['ledger_movement'] == 0
+    assert [case['rows'], case['uploads']] == original
+
+
 def _rows():
     return [
         {"account_code": "B1", "period_month": "2026-01", "opening_balance": 1000, "actual_closing_balance": 1100},

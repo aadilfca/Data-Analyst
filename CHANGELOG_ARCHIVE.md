@@ -1,5 +1,15 @@
 # Changelog Archive
 
+## Independent Cashflow controls — 2026-10-21
+
+**Scope:** C5 adds 22 regression cases across six existing test files; production code is unchanged. Separately transcribed voucher/ledger fixtures and fixed Decimal expectations cover clipped December–January periods, inactive February, zero/credit openings, repeated lines, later customer returns, vendor refunds, negative-side ERP postings and continuous carry. Monthly/yearly controls retain mixed-category review independently of matched arithmetic. Explicit deduction roles remain required; configuration-only Treasury additions change context and cannot fabricate missing ledger evidence. Actual source SQL runs against an owned in-memory database, including corrected dates and removed vouchers. The real report/balance engines feed browser and XLSX checks; category filters cannot narrow full-scope proofs.
+
+**Verification:** All six scoped modules pass 299 tests, with one intentional migration-only skip and the existing Starlette/httpx deprecation. The saved live XLSX reopens with six source proofs and combined ledger boundaries matching independent evidence. Syntax and diff whitespace pass. No packages, schema, financial/configuration writes or server restart. Existing unrelated benchmark documentation, experiments and private backups remain outside this phase.
+
+**Live evidence:** One enforced read-only repeatable PostgreSQL snapshot checks 16 January–15 February, 31 January–1 February and 15–30 June. Exact raw debit/credit sums match all 15 period/type movement proofs to cents; 40 account-period opening/closing pairs match independent ledger sums from accepted January anchors. Counts/fingerprints remain unchanged for 64,879 voucher and 12,354 ledger rows. Combined balances are 2,690,786.82→86,759,910.26, 54,879,987.51→44,550,798.51 and 108,482,743.12→203,851,286.59 respectively; 1 February has zero movement. Maximum live arithmetic residue is 0.00000003. Saved local evidence: `c5-readonly-evidence.json` and `C5-Cashflow-partial-periods.xlsx` in this chat's external evidence directory. Live year-boundary coverage is not certified; deterministic fixtures cover it. No performance acceptance is claimed.
+
+**Acceptance:** Aadil accepts C5 and authorises commit/push on 2026-10-21. C6, original differences work, Trial Balance precision repair and final Drive production setup remain separate.
+
 ## Separate Treasury reconciliation — 2026-10-21
 
 **Cause:** Pure Treasury transfers appeared only in a detail schedule, leaving Bank/Cash calculated balances short of their signed source movements. Absolute-weight category allocation could preserve Combined while misrepresenting mixed vouchers; the old “Matched” control checked category agreement only.

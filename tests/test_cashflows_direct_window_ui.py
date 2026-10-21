@@ -3,6 +3,48 @@ import re
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from test_reconciliation_balance_source import independent_year_boundary_case
+from test_reconciliation_reports import independent_year_boundary_report
+
+
+@pytest.mark.parametrize('view', ['combined', 'split'])
+def test_real_report_payload_renders_independent_year_boundary_balances(
+        ledger_cache_page, independent_year_boundary_report, view):
+    page = ledger_cache_page
+    errors = []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    page.evaluate('result => ledgerFixture.load(result)', independent_year_boundary_report(view))
+    def numbers(selector):
+        values = _balance_values(page, selector)
+        result = []
+        for value in values:
+            amount = value.strip().replace(',', '').replace(' Dr', '').replace(' Cr', '')
+            if amount == '-':
+                result.append(0)
+            elif re.fullmatch(r'-?\d+(\.\d+)?', amount):
+                result.append(float(amount) * (-1 if value.strip().endswith(' Cr') else 1))
+        return result
+    opening = '.cashflows-balance-row[data-cashflow-balance-kind="opening"]'
+    closing = '.cashflows-balance-row[data-cashflow-balance-kind="closing"]'
+    if view == 'combined':
+        expected_opening, expected_closing, expected_net = [-30, 67, 26.70, -30], [67, 26.70, 26.70, 26.70], [97, -40.30, 0, 56.70]
+    else:
+        # Mixed is an attribution column and has no ledger balance.
+        expected_opening = [-30, 0, -30, 17, 50, 67, -9.56, 36.26, 26.70, -30, 0, -30]
+        expected_closing = [17, 50, 67, -9.56, 36.26, 26.70, -9.56, 36.26, 26.70, -9.56, 36.26, 26.70]
+        expected_net = [47, 50, 0, 97, -26.56, -13.74, 0, -40.30, 0, 0, 0, 0, 20.44, 36.26, 0, 56.70]
+    assert numbers(opening) == pytest.approx(expected_opening)
+    assert numbers(closing) == pytest.approx(expected_closing)
+    assert numbers('.cashflows-balance-net') == pytest.approx(expected_net)
+    assert '30 Cr' in _balance_values(page, opening)
+    _balance_toggle(page, 'closing').click()
+    assert numbers('.cashflows-balance-calculated[data-cashflow-balance-child="closing"]') == pytest.approx(expected_closing)
+    page.evaluate("() => ledgerFixture.filter('nothing matches')")
+    page.evaluate('() => ledgerFixture.zeros()')
+    assert numbers(closing) == pytest.approx(expected_closing)
+    assert numbers('.cashflows-balance-net') == pytest.approx(expected_net)
+    assert 'allocation under review' in page.locator('.cashflows-summary-frozen-table .cashflows-balance-bridge').nth(2).inner_text()
+    assert not errors
 
 
 ROOT = Path(__file__).resolve().parents[1]

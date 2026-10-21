@@ -3,6 +3,45 @@ from pathlib import Path
 import openpyxl
 import pandas as pd
 import pytest
+from test_reconciliation_balance_source import independent_year_boundary_case
+from test_reconciliation_reports import independent_year_boundary_report
+
+
+@pytest.mark.parametrize('view', ['combined', 'bank', 'cash', 'split'])
+def test_independent_books_survive_xlsx_roundtrip_with_full_scope_controls(
+        independent_year_boundary_case, independent_year_boundary_report, view):
+    from io import BytesIO
+    from services.reconciliation_xlsx import export_cashflow_xlsx
+    case = independent_year_boundary_case
+    preview = independent_year_boundary_report(view)['preview']
+    # A filtered visible category set must not narrow the accounting proof.
+    preview = dict(preview, category_totals=[], treasury_view_totals=[],
+                   export_filters={'summary_filter': 'nothing matches', 'hide_zero_rows': True})
+    workbook = openpyxl.load_workbook(BytesIO(export_cashflow_xlsx(preview,
+        period_start=case['start'], period_end=case['end'], group_by='month')))
+    proof = workbook['Treasury Movement Proof']
+    records = list(proof.iter_rows(min_row=5, values_only=True))
+    assert len(records) == 9
+    for values in records:
+        month, kind = values[:2]
+        index = ['2025-12', '2026-01', '2026-02'].index(month)
+        movement, opening, closing = map(float, case['expected'][kind][index])
+        assert values[5] == values[6] == pytest.approx(movement)
+        assert values[7] == pytest.approx(0, abs=1e-9)
+        if kind == view or view == 'split':
+            assert values[11:15] == pytest.approx([opening, opening, closing, closing])
+            assert values[15] == pytest.approx(0, abs=1e-9)
+            assert values[16] == 'Matched'
+        else:
+            assert values[11:17] == (None,) * 6
+    assert records[0][9] == 'Review required'
+    summary = workbook['Cashflows Summary']
+    row = next(r for r in summary.iter_rows() if r[0].value == 'Net cash movement')
+    expected = ([47, 50, 0, 97, -26.56, -13.74, 0, -40.30, 0, 0, 0, 0, 20.44, 36.26, 0, 56.70]
+                if view == 'split' else [float(r[0]) for r in case['expected'][view]] +
+                [{'combined': 56.70, 'bank': 20.44, 'cash': 36.26}[view]])
+    assert [cell.value for cell in row[1:1+len(expected)]] == pytest.approx(expected)
+    assert all(cell.data_type == 'n' for cell in row[1:1+len(expected)] if cell.value is not None)
 
 from services.ledger_group_summary import build_cross_group_check, build_group_summary
 from services.reconciliation_xlsx import (

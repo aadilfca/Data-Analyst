@@ -52,7 +52,7 @@ One line per file group: what it is now. Full build history for every entry live
 - services/reconciliation_xlsx.py → Bank/Cash workbook summaries, signed transfer schedules, party details and source/ledger reconciliation proofs. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_balance_source.py → Manual and uploaded-ledger balances, coverage, freshness, and shared Bank/Cash/combined reconciliation calculations. See CHANGELOG_ARCHIVE.md.
 - services/upload_lifecycle.py + drive_archive.py + upload_observation_report.py → Scope proofs, complete-voucher Excel evidence, verified external archives and compact receipts. See CHANGELOG_ARCHIVE.md.
-- tests/test_account_control_center*.py + tests/test_cash_bank_configuration_sync.py + tests/test_cashflows*.py → regression coverage for setup, orphan assignment, derived classification, and Cashflows Reports UI.
+- tests/test_account_control_center*.py + tests/test_cash_bank_configuration_sync.py + tests/test_cashflows*.py → Setup, mappings, classification, report UI and independent accounting regression checks. See CHANGELOG_ARCHIVE.md.
 - tests/test_upload_lifecycle.py + test_data_deletion.py + test_import_duplicate_gates.py → Upload/archive lifecycle, rollback, retry, deletion and identity regression tests.
 
 
@@ -247,6 +247,8 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+
+- 2026-10-21: Added independent Cashflow boundary, carry, role, source-correction and screen/export regression controls; accepted for commit/push. See CHANGELOG_ARCHIVE.md, Independent Cashflow controls.
 
 - 2026-10-21: Cashflows reconciles separate Treasury movements, aligns payment subtotal signs and exports complete deductions; locally accepted. See CHANGELOG_ARCHIVE.md.
 

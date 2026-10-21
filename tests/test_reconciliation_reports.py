@@ -14,6 +14,83 @@ from services.ledger_group_summary import build_cashflow_summary, build_financia
 from services.ledger_report_source import CASHFLOW_CHILD_DETAILS_VERSION, CASHFLOW_DRILLDOWN_DETAILS_VERSION, CASHFLOW_SUMMARY_PAYLOAD_VERSION, load_cashflow_prepared_drilldown, load_cashflow_prepared_rollup_summary
 from routers import settings as settings_router
 from services.reconciliation_xlsx import export_cashflow_xlsx
+from test_reconciliation_balance_source import independent_year_boundary_case
+
+
+@pytest.fixture
+def independent_year_boundary_report(independent_year_boundary_case):
+    """Run the real report and balance engines, isolating only external reads."""
+    from services.reconciliation_balance_source import build_uploaded_ledger_balances
+    case = independent_year_boundary_case
+    def report(view='split', presentation='net', account_codes=None):
+        accounts = account_codes or case['accounts']
+        configuration = dict(source_template_id=1, cash_account_codes=[c for c, t in accounts.items() if t == 'Cash'],
+            bank_account_codes=[c for c, t in accounts.items() if t == 'Bank'],
+            match_internal_transfers=True, receipt_presentation=presentation,
+            customer_payment_roles=case['roles'], vendor_account_codes=['AP'], cashflow_report_revision=7)
+        source = SimpleNamespace(journal=case['journal'], coa=case['coa'], ready=True,
+            diagnostics=(), metadata={'cashflow_report_source_key': 'independent-books:7:1'})
+        active = []
+        def snapshot(callback):
+            active.append(True)
+            try:
+                return callback(None)
+            finally:
+                active.pop()
+        def load_source(*args, **kwargs):
+            assert active == [True]
+            return source
+        def balances(client_id, selected, periods, movements, **kwargs):
+            assert active == [True]
+            return build_uploaded_ledger_balances(case['uploads'], case['rows'], selected, periods, movements,
+                account_names=kwargs['account_names'], treasury_movements=kwargs['treasury_movements'])
+        with patch.object(reconciliation, '_require_active_client'), \
+                patch.object(reconciliation, '_cashflow_configuration', return_value=configuration), \
+                patch.object(reconciliation, '_latest_trial_balance_accounts', return_value=[]), \
+                patch.object(reconciliation, 'load_ledger_report_source', side_effect=load_source), \
+                patch.object(reconciliation, 'load_uploaded_ledger_balances', side_effect=balances), \
+                patch.object(reconciliation, 'run_read_snapshot_pg', side_effect=snapshot):
+            return reconciliation.preview_cashflows(7, case['start'], case['end'], group_by='month',
+                treasury_view=view, details=None, include_balances=True, session=None)
+    return report
+
+
+@pytest.mark.parametrize('presentation', ['net', 'gross'])
+@pytest.mark.parametrize('view', ['combined', 'bank', 'cash', 'split'])
+def test_independent_report_response_matches_books_and_signed_party_controls(
+        independent_year_boundary_report, independent_year_boundary_case, view, presentation):
+    response = independent_year_boundary_report(view, presentation)
+    preview = response['preview']
+    expected = independent_year_boundary_case['expected']['combined' if view == 'split' else view]
+    assert [(p['start'], p['end']) for p in preview['periods']] == [
+        ('2025-12-15', '2025-12-31'), ('2026-01-01', '2026-01-31'), ('2026-02-01', '2026-02-10')]
+    assert [p['cashflow_net_movement'] for p in preview['balance_reconciliation']['periods']] == pytest.approx(
+        [float(row[0]) for row in expected])
+    assert [p['calculated_closing'] for p in preview['balance_reconciliation']['periods']] == pytest.approx(
+        [float(row[2]) for row in expected])
+    assert preview['balance_reconciliation']['status'] == 'Matched'
+    assert preview['treasury_reconciliation']['status'] == 'Review required'
+    assert preview['treasury_reconciliation']['source_status'] == 'Matched'
+    # The original settlement and its later partial return retain their own dates.
+    customers = {r['voucher_id']: r for r in preview['customer_payment_details']}
+    assert set(customers) == {'RECEIPT', 'REVERSAL', 'REPEATS'}
+    assert customers['REVERSAL']['period_key'] == '2026-01'
+    assert customers['REVERSAL']['bank_charges'] == pytest.approx(-1.10)
+    assert customers['REVERSAL']['customer_reversals'] == 40
+    assert customers['REPEATS']['net_bank_settlement'] == pytest.approx(6.66)
+    assert preview['vendor_payment_vendor_totals'][0]['net_payments'] == pytest.approx(20.40)
+
+
+def test_configuration_only_account_addition_requires_new_ledger_evidence(independent_year_boundary_report):
+    before = independent_year_boundary_report()
+    after = independent_year_boundary_report(account_codes={'B1': 'Bank', 'B0': 'Bank', 'C1': 'Cash', 'NEW': 'Cash'})
+    assert before['ledger_context']['report_revision'] == after['ledger_context']['report_revision']
+    assert before['ledger_context']['configuration_key'] != after['ledger_context']['configuration_key']
+    balances = after['preview']['balance_reconciliation']
+    assert balances['status'] == 'Unavailable'
+    assert balances['overall']['closing_total'] is None
+    assert balances['treasury_breakdown']['bank']['status'] == 'Matched'
+    assert after['preview']['treasury_movement_proof'] == before['preview']['treasury_movement_proof']
 
 
 def _source():

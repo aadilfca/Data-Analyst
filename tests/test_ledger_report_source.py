@@ -2,6 +2,7 @@ import sqlite3
 
 import pandas as pd
 import pytest
+from test_reconciliation_balance_source import independent_year_boundary_case
 
 from services.ledger_report_source import (
     advance_cashflow_report_revision,
@@ -207,6 +208,48 @@ def test_database_totals_distinguish_empty_period_from_unavailable_counts(databa
     assert source.metadata["database_totals"]["row_count"] == 0
     assert source.metadata["database_totals"]["voucher_count"] == 0
     assert source.journal.empty
+
+
+def test_real_source_sql_preserves_repeats_and_moves_corrected_dates_between_years(
+        database_count_source, independent_year_boundary_case):
+    from services.ledger_group_summary import build_cashflow_summary
+    conn, query, _ = database_count_source
+    case = independent_year_boundary_case
+    conn.execute('DELETE FROM client_data')
+    for identity, row in enumerate(case['journal'].to_dict('records'), 1):
+        conn.execute('''INSERT INTO client_data
+            (id, client_id, template_id, upload_id, is_deleted, change_detection_status,
+             derived_voucher_id, derived_transaction_date, derived_account_code, derived_account_name,
+             derived_transaction_month, derived_debit, derived_credit, derived_treasury_type, row_data)
+            VALUES (?,7,9,12,0,'active',?,?,?,?,?,?,?,?, '{}')''',
+            (identity, row['voucher_id'], row['date'], row['account_code'], row['account_name'],
+             row['date'][:7], row['debit'], row['credit'],
+             case['accounts'].get(row['account_code'], '').lower()))
+    def read():
+        source = load_ledger_report_source(7, journal_template_id=9, period_start=case['start'],
+            period_end=case['end'], account_category_source='cashflow', query_fn=query)
+        summary = build_cashflow_summary(source.journal, case['coa'], ['C1'], ['B1', 'B0'],
+            case['start'], case['end'], cashflow_role_categories=case['roles'], vendor_account_codes=['AP'])
+        return source, {(r['period_key'], r['treasury_type']): r['source_movement']
+                        for r in summary['treasury_movement_proof']}
+    source, original = read()
+    assert source.metadata['database_totals']['row_count'] == 20
+    repeats = source.journal[(source.journal.voucher_id == 'REPEATS') & (source.journal.account_code == 'C1')]
+    assert repeats['debit'].sum() == pytest.approx(6.66)
+    assert conn.execute("SELECT COUNT(*) FROM client_data WHERE derived_voucher_id='REPEATS' AND derived_account_code='C1'").fetchone()[0] == 2
+    assert source.metadata['source_row_count'] == 20
+    assert original[('2025-12', 'combined')] == pytest.approx(97)
+    assert original[('2026-01', 'combined')] == pytest.approx(-40.30)
+    # Only this owned in-memory database is changed; both ends of the corrected voucher move.
+    conn.execute("UPDATE client_data SET derived_transaction_date='2026-01-01', derived_transaction_month='2026-01' WHERE derived_voucher_id='RECEIPT'")
+    _, corrected = read()
+    assert corrected[('2025-12', 'combined')] == pytest.approx(-.25)
+    assert corrected[('2026-01', 'combined')] == pytest.approx(56.95)
+    assert sum(original.values()) == pytest.approx(sum(corrected.values()))
+    conn.execute("DELETE FROM client_data WHERE derived_voucher_id='REFUND'")
+    _, removed = read()
+    assert removed[('2026-01', 'cash')] == pytest.approx(-18.84)
+    assert removed[('2026-01', 'bank')] == corrected[('2026-01', 'bank')]
 
 
 def test_prepared_rollup_summary_reads_active_revision():

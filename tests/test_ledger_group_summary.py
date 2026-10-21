@@ -1,5 +1,6 @@
 import pandas as pd
 import pytest
+from test_reconciliation_balance_source import independent_year_boundary_case
 
 from services.ledger_group_summary import (
     LedgerBalanceError,
@@ -7,6 +8,35 @@ from services.ledger_group_summary import (
     build_cross_group_check,
     build_group_summary,
 )
+
+
+@pytest.mark.parametrize('presentation,collections,charges', [
+    ('net', [97.25, -32.24, 0], [-.25, 0, 0]),
+    ('gross', [100, -33.34, 0], [-3, 1.10, 0]),
+])
+def test_independent_category_totals_keep_explicit_roles_and_later_reversals(
+        independent_year_boundary_case, presentation, collections, charges):
+    case = independent_year_boundary_case
+    def calculate(roles):
+        return build_cashflow_summary(case['journal'], case['coa'], ['C1'], ['B1', 'B0'],
+            case['start'], case['end'], receipt_presentation=presentation,
+            cashflow_role_categories=roles, vendor_account_codes=['AP'])
+    summary = calculate(case['roles'])
+    columns = ['2025-12', '2026-01', '2026-02']
+    assert list(summary['category_totals'].loc['Collections', columns]) == pytest.approx(collections)
+    assert list(summary['category_totals'].loc['Charges', columns]) == pytest.approx(charges)
+    assert list(summary['category_totals'].loc['Suppliers', columns]) == pytest.approx([0, -20.40, 0])
+    assert list(summary['category_totals'].loc['Operating', columns]) == pytest.approx([0, 12.34, 0])
+    assert summary['category_totals']['Total'].sum() == pytest.approx(56.70)
+    unconfigured = calculate({'customer_receipt': ['Collections']})
+    receipts = unconfigured['customer_payment_details'].set_index('voucher_id')
+    assert receipts.loc['RECEIPT', 'status'] == receipts.loc['REVERSAL', 'status'] == 'Review required'
+    assert receipts['bank_charges'].sum() == receipts['other_deductions'].sum() == 0
+    assert unconfigured['category_totals']['Total'].sum() == pytest.approx(56.70)
+    assert [(r['period_key'], r['treasury_type'], r['source_movement'], r['explained_movement'])
+            for r in unconfigured['treasury_movement_proof']] == [
+                (r['period_key'], r['treasury_type'], r['source_movement'], r['explained_movement'])
+                for r in summary['treasury_movement_proof']]
 
 
 @pytest.mark.parametrize('legs,expected', [
