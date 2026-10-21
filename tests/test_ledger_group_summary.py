@@ -263,7 +263,7 @@ def test_cashflow_summary_nets_customer_receipt_and_keeps_deduction_detail():
     assert result["deduction_details"]["amount"].tolist() == [10.0]
 
 
-def test_configured_customer_roles_classify_other_categorized_lines_as_other_deduction():
+def test_configured_customer_roles_preserve_unrelated_categorized_lines():
     journal = pd.DataFrame(
         [
             ["V1", "2026-01-05", "BANK", "Export bank", "Gross receipt", 100, 7],
@@ -303,13 +303,15 @@ def test_configured_customer_roles_classify_other_categorized_lines_as_other_ded
     detail = result["customer_payment_details"].iloc[0]
     assert detail["bank_charges"] == 1
     assert detail["withholding_tax"] == 2
-    assert detail["other_deductions"] == 4
-    assert detail["expected_net_settlement"] == 93
-    assert detail["variance"] == 0
-    assert detail["status"] == "Matched"
+    assert detail["other_deductions"] == 0
+    assert detail["expected_net_settlement"] == 97
+    assert detail["variance"] == -4
+    assert detail["status"] == "Review required"
+    assert result["category_totals"].loc["Export service expense", "Total"] == -4
+    assert result["category_totals"]["Total"].sum() == 93
 
 
-def test_customer_voucher_residual_debits_are_deductions_and_credits_need_review():
+def test_customer_voucher_uncertain_lines_remain_in_their_own_categories():
     journal = pd.DataFrame(
         [
             ["V1", "2026-01-05", "BANK", "Export bank", "Customer receipt", 100, 0],
@@ -344,10 +346,10 @@ def test_customer_voucher_residual_debits_are_deductions_and_credits_need_review
     )
 
     detail = result["customer_payment_details"].iloc[0]
-    assert detail["other_deductions"] == 2
-    assert result["deduction_details"]["account_code"].tolist() == ["UNMAPPED-DEBIT"]
-    assert result["categories_needing_review"]["account_code"].tolist() == ["RESIDUAL-CREDIT"]
-    assert result["category_totals"].empty
+    assert detail["other_deductions"] == 0
+    assert result["deduction_details"].empty
+    assert set(result["categories_needing_review"]["account_code"]) == {"UNMAPPED-DEBIT", "RESIDUAL-CREDIT"}
+    assert result["category_totals"]["Total"].sum() == 100
 
 
 def test_configured_customer_role_identifies_cash_and_bank_with_client_specific_labels():
@@ -511,10 +513,10 @@ def test_customer_payment_customer_totals_group_and_reconcile_main_receipts():
     assert totals.loc["CUST-A", "deductions_total"] == 3
     assert totals.loc["CUST-A", "statement_eligible_actual_settlement"] == 147
     assert totals.loc["CUST-A", "status"] == "Matched"
-    assert totals.loc["CUST-B", "statement_eligible_actual_settlement"] == 0
+    assert totals.loc["CUST-B", "statement_eligible_actual_settlement"] == 80
     assert totals.loc["CUST-B", "status"] == "Review required"
-    assert result["customer_payment_reconciliation"]["main_received_from_customers_total"] == 147
-    assert result["customer_payment_reconciliation"]["statement_eligible_customer_total"] == 147
+    assert result["customer_payment_reconciliation"]["main_received_from_customers_total"] == 227
+    assert result["customer_payment_reconciliation"]["statement_eligible_customer_total"] == 227
     assert result["customer_payment_reconciliation"]["difference"] == 0
     assert result["customer_payment_reconciliation"]["status"] == "Matched"
 
@@ -628,7 +630,7 @@ def test_customer_payment_ordinary_bank_charges_split_from_general_charges():
     assert general_charge["amount"].tolist() == [-10.0]
 
 
-def test_unmatched_customer_payment_is_excluded_from_net_cashflow_statement():
+def test_unmatched_customer_payment_remains_in_net_cashflow_statement():
     journal = pd.DataFrame(
         [
             ["MULTI", "2026-01-05", "BANK", "Export bank", "Combined receipt", 100, 0],
@@ -662,7 +664,10 @@ def test_unmatched_customer_payment_is_excluded_from_net_cashflow_statement():
     )
 
     assert result["customer_payment_details"].iloc[0]["status"] == "Review required"
-    assert "Customer receipts" not in result["category_totals"].index
+    assert result["category_totals"].loc["Customer receipts", "Total"] == 100
+    totals = result["customer_payment_customer_totals"].set_index("customer_account_code")
+    assert totals.loc["CUSTOMER-1", "cashflow_amount"] == 60
+    assert totals.loc["CUSTOMER-2", "cashflow_amount"] == 40
     assert result["cashflow_ledger_rollups"].empty
 
 def test_explicit_other_deduction_role_reconciles_customer_payment():
@@ -881,3 +886,108 @@ def test_cross_group_check_applies_the_requested_sign():
     )
     assert check["status"].tolist() == ["Matched", "Matched"]
     assert check["variance"].abs().max() == 0
+@pytest.mark.parametrize('presentation', ['net', 'gross'])
+@pytest.mark.parametrize('grouping', ['day', 'fortnight', 'month', 'half_year'])
+@pytest.mark.parametrize('cash', [False, True])
+def test_signed_customer_vendor_periods_conserve_sources(presentation, grouping, cash):
+    rows = [
+        ['RECEIPT', '2026-01-20', 'BANK', 97, 0],
+        ['RECEIPT', '2026-01-20', 'CUSTOMER', 0, 100],
+        ['RECEIPT', '2026-01-20', 'FEE', 3, 0],
+        ['PARTIAL-RETURN', '2026-02-02', 'BANK', 0, 38.8],
+        ['PARTIAL-RETURN', '2026-02-02', 'CUSTOMER', 40, 0],
+        ['PARTIAL-RETURN', '2026-02-02', 'FEE', 0, 1.2],
+        ['PAYMENT', '2026-01-21', 'BANK', 0, 80],
+        ['PAYMENT', '2026-01-21', 'VENDOR', 80, 0],
+        ['REFUND', '2026-02-03', 'BANK', 20, 0],
+        ['REFUND', '2026-02-03', 'VENDOR', 0, 20],
+    ]
+    journal = pd.DataFrame(rows, columns=['voucher_id', 'date', 'account_code', 'debit', 'credit'])
+    original = journal.copy(deep=True)
+    coa = pd.DataFrame([['BANK', 'Treasury'], ['CUSTOMER', 'Collections'], ['FEE', 'Charges'], ['VENDOR', 'Suppliers']], columns=['account_code', 'category'])
+    result = build_cashflow_summary(journal, coa, ['BANK'] if cash else [], [] if cash else ['BANK'],
+        '2026-01-01', '2026-02-28', group_by=grouping, receipt_presentation=presentation,
+        cashflow_role_categories={'customer_receipt': ['Collections'], 'bank_charge': ['Charges']},
+        vendor_account_codes=['VENDOR'], include_drilldown=True)
+    assert result['category_totals']['Total'].sum() == pytest.approx(-1.8)
+    customers = result['customer_payment_customer_totals'].iloc[0]
+    assert customers['customer_receipts'] == 100
+    assert customers['customer_reversals'] == 40
+    assert customers['customer_gross_amount'] == 60
+    assert result['customer_payment_reconciliation']['difference'] == pytest.approx(0)
+    vendor = result['vendor_payment_vendor_totals'].iloc[0]
+    assert (vendor['payments'], vendor['reversals'], vendor['net_payments']) == (80, 20, 60)
+    assert result['vendor_payment_details']['cashflow_amount'].sum() == -60
+    pd.testing.assert_frame_equal(journal, original)
+
+
+def test_customer_same_voucher_zero_net_pair_is_visible():
+    journal = pd.DataFrame([['V', '2026-01-01', 'BANK', 50, 50],
+                            ['V', '2026-01-01', 'C', 50, 50]],
+                           columns=['voucher_id', 'date', 'account_code', 'debit', 'credit'])
+    coa = pd.DataFrame([['C', 'Collections']], columns=['account_code', 'category'])
+    result = build_cashflow_summary(journal, coa, [], ['BANK'], '2026-01-01', '2026-01-31',
+        cashflow_role_categories={'customer_receipt': ['Collections']})
+    row = result['customer_payment_customer_totals'].iloc[0]
+    assert (row['customer_receipts'], row['customer_reversals'], row['cashflow_amount']) == (50, 50, 0)
+
+
+def test_gross_reversal_reverses_technical_offset_and_keeps_signed_charges():
+    journal = pd.DataFrame([
+        ['P', '2026-01-01', 'B', 100, 3], ['P', '2026-01-01', 'C', 0, 100], ['P', '2026-01-01', 'F', 3, 0],
+        ['R', '2026-02-01', 'B', 3, 100], ['R', '2026-02-01', 'C', 100, 0], ['R', '2026-02-01', 'F', 0, 3],
+    ], columns=['voucher_id', 'date', 'account_code', 'debit', 'credit'])
+    coa = pd.DataFrame([['C', 'Customers'], ['F', 'Fees']], columns=['account_code', 'category'])
+    result = build_cashflow_summary(journal, coa, [], ['B'], '2026-01-01', '2026-02-28',
+        cashflow_role_categories={'customer_receipt': ['Customers'], 'bank_charge': ['Fees']})
+    rows = result['customer_payment_details'].set_index('voucher_id')
+    assert rows.loc['R', 'technical_bank_offset'] == -3
+    assert rows.loc['R', 'bank_charges'] == -3
+    assert rows.loc['R', 'net_bank_settlement'] == -97
+    assert rows.loc['R', 'status'] == 'Matched'
+    assert rows['technical_bank_offset'].sum() == 0
+    assert result['category_totals']['Total'].sum() == 0
+
+
+def test_negative_side_erp_reversals_have_positive_reversal_columns():
+    journal = pd.DataFrame([
+        ['R', '2026-01-01', 'B', -25, 0], ['R', '2026-01-01', 'C', 0, -25],
+        ['V', '2026-01-02', 'B', 0, -15], ['V', '2026-01-02', 'AP', -15, 0],
+    ], columns=['voucher_id', 'date', 'account_code', 'debit', 'credit'])
+    original = journal.copy(deep=True)
+    coa = pd.DataFrame([['C', 'Customers'], ['AP', 'Suppliers']], columns=['account_code', 'category'])
+    result = build_cashflow_summary(journal, coa, [], ['B'], '2026-01-01', '2026-01-31',
+        cashflow_role_categories={'customer_receipt': ['Customers']}, vendor_account_codes=['AP'])
+    customer = result['customer_payment_customer_totals'].iloc[0]
+    assert (customer['customer_receipts'], customer['customer_reversals'], customer['cashflow_amount']) == (0, 25, -25)
+    vendor = result['vendor_payment_vendor_totals'].iloc[0]
+    assert (vendor['payments'], vendor['reversals'], vendor['net_payments']) == (0, 15, -15)
+    assert result['category_totals']['Total'].sum() == -10
+    pd.testing.assert_frame_equal(journal, original)
+
+
+def test_customer_vendor_mixed_voucher_preserves_both_categories_without_allocation():
+    journal = pd.DataFrame([['M', '2026-01-01', 'B', 30, 0],
+                            ['M', '2026-01-01', 'C', 0, 50],
+                            ['M', '2026-01-01', 'AP', 20, 0]],
+                           columns=['voucher_id', 'date', 'account_code', 'debit', 'credit'])
+    coa = pd.DataFrame([['C', 'Customers'], ['AP', 'Suppliers']], columns=['account_code', 'category'])
+    result = build_cashflow_summary(journal, coa, [], ['B'], '2026-01-01', '2026-01-31',
+        cashflow_role_categories={'customer_receipt': ['Customers']}, vendor_account_codes=['AP'])
+    assert result['category_totals'].loc['Customers', 'Total'] == 50
+    assert result['category_totals'].loc['Suppliers', 'Total'] == -20
+    assert result['customer_payment_details'].iloc[0]['status'] == 'Review required'
+    assert result['vendor_payment_vendor_totals'].iloc[0]['net_payments'] == 20
+    assert result['customer_payment_reconciliation']['difference'] == 0
+
+
+def test_reused_voucher_id_across_periods_preserves_actual_dates():
+    journal = pd.DataFrame([['V', '2026-01-01', 'BANK', 100, 0], ['V', '2026-01-01', 'C', 0, 100],
+                            ['V', '2026-02-01', 'BANK', 0, 150], ['V', '2026-02-01', 'C', 150, 0]],
+                           columns=['voucher_id', 'date', 'account_code', 'debit', 'credit'])
+    coa = pd.DataFrame([['C', 'Collections']], columns=['account_code', 'category'])
+    result = build_cashflow_summary(journal, coa, [], ['BANK'], '2026-01-01', '2026-02-28',
+        cashflow_role_categories={'customer_receipt': ['Collections']})
+    assert result['category_totals'].loc['Collections', '2026-01'] == 100
+    assert result['category_totals'].loc['Collections', '2026-02'] == -150
+    assert result['customer_payment_account_period_totals']['customer_reversals'].sum() == 150

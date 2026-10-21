@@ -182,7 +182,9 @@ const NAV_MANIFEST = [
                     { label: 'Store issuance vs article manufactured', url: null, state: 'coming-soon' },
                 ]
             },
-            { label: 'Reports', url: '/static/reconciliation.html?view=reports', state: 'ready', module: 'Reports' },
+            { label: 'Reports', url: '/static/reconciliation.html?view=reports', state: 'ready', module: 'Reports',
+                children: [{ label: 'Customer and vendor reversals', url: '/static/reconciliation.html?report=cashflows', state: 'ready',
+                    keywords: ['customer receipts', 'vendor payments', 'refunds', 'reversals', 'period-wise', 'net cashflow'] }] },
             { label: 'Analysis', url: null, state: 'coming-soon' },
         ],
     },

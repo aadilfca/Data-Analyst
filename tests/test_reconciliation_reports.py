@@ -916,7 +916,7 @@ def test_cashflows_preview_rejects_previous_child_details_version():
         "summary": _cashflow_summary(),
     }
 
-    assert CASHFLOW_CHILD_DETAILS_VERSION == 7
+    assert CASHFLOW_CHILD_DETAILS_VERSION == 8
     assert reconciliation._cashflow_cache_can_serve_details(cached, {"customer_payments"}) is False
 
 
@@ -1699,7 +1699,7 @@ def test_cashflow_export_uses_canonical_drilldown_and_active_filters():
         )
 
     assert response.media_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    assert builder.call_args.kwargs["detail_sections"] == {"transfers", "customer_payments", "deductions", "review", "drilldown"}
+    assert builder.call_args.kwargs["detail_sections"] == {"transfers", "customer_payments", "vendor_payments", "deductions", "review", "drilldown"}
     export_preview = exporter.call_args.args[0]
     assert [row["category"] for row in export_preview["category_totals"]] == ["Customers"]
     assert len(export_preview["ledger_rollups"]) == 1
@@ -1754,7 +1754,7 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert 'id="reportsCard"' in dashboard
     assert "reconciliation.html?view=reports" in navigation
     assert 'onclick=' not in html
-    assert "details: 'transfers,customer_payments,deductions,review'" in javascript
+    assert "details: 'transfers,customer_payments,vendor_payments,deductions,review'" in javascript
     assert "cashflowChildRequest" in javascript
     assert "cashflowsLoadCustomerPaymentsButton" in html
     assert "cashflowsCustomerPaymentsSection" in html
@@ -1762,7 +1762,7 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "customer_payment_details" in javascript
     assert "label: 'Receiving account'" in javascript
     assert "label: 'Total deductions'" in javascript
-    assert "label: 'Technical Bank credit'" in javascript
+    assert "label: 'Technical bank offset'" in javascript
     assert "label: 'Expected settlement'" in javascript
     assert "label: 'Actual settlement'" in javascript
     assert "label: 'Difference'" in javascript
@@ -1776,7 +1776,7 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "setActiveCashflowWindow" in javascript
     assert "const CASHFLOW_DEFAULT_START = '2026-01-01';" in javascript
     assert "const CASHFLOW_DEFAULT_END = '2026-06-30';" in javascript
-    assert "<script src='/static/reconciliation.js?v=36'></script>" in html
+    assert "<script src='/static/reconciliation.js?v=37'></script>" in html
     assert "cashflows-table-number" in javascript
     assert "grid-template-columns: minmax(0, 1fr)" in stylesheet
     assert ".cashflows-table td.cashflows-table-text" in stylesheet
@@ -2078,3 +2078,14 @@ def test_disposable_ledger_cache_does_not_change_export_cells_or_formats():
         cells = [list((cell.coordinate, cell.value, cell.number_format)
                       for row in workbook[name] for cell in row) for workbook in workbooks]
         assert cells[0] == cells[1]
+
+
+def test_signed_party_preview_is_complete_and_vendor_identity_changes_context():
+    summary = _cashflow_summary()
+    summary['customer_payment_details'] = pd.DataFrame([{'voucher_id': f'V{i}'} for i in range(251)])
+    summary['vendor_payment_details'] = pd.DataFrame([{'voucher_id': f'P{i}'} for i in range(260)])
+    preview = reconciliation._cashflow_preview(summary, {'customer_payments', 'vendor_payments'})
+    assert len(preview['customer_payment_details']) == 251
+    assert len(preview['vendor_payment_details']) == 260
+    assert reconciliation._cashflow_configuration_key({'vendor_account_codes': ['AP1']}) != reconciliation._cashflow_configuration_key({'vendor_account_codes': ['AP2']})
+    assert 'vendor_payments' in reconciliation._parse_cashflow_detail_sections('vendor_payments')

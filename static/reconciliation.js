@@ -62,6 +62,7 @@
     const cashflowWindowSections = {
         transfers: 'cashflowsTransfersSection',
         customer_payments: 'cashflowsCustomerPaymentsSection',
+        vendor_payments: 'cashflowsVendorPaymentsSection',
         deductions: 'cashflowsDeductionsSection',
         review: 'cashflowsReviewSection',
         transactions: 'cashflowsTransactionsSection',
@@ -382,6 +383,7 @@
     const cashflowDetailSearchInputs = {
         cashflowsTransfersTable: 'cashflowsTransfersSearch',
         cashflowsCustomerPaymentsTable: 'cashflowsCustomerPaymentsSearch',
+        cashflowsVendorPaymentsTable: 'cashflowsVendorPaymentsSearch',
         cashflowsDeductionsTable: 'cashflowsDeductionsSearch',
         cashflowsReviewTable: 'cashflowsReviewSearch',
     };
@@ -423,7 +425,7 @@
         table.innerHTML = '<thead><tr>' + columns.map(function (column) { return '<th class="' + (column.amount ? 'cashflows-table-number' : 'cashflows-table-text') + '">' + escapeHtml(column.label) + '</th>'; }).join('') + '</tr></thead><tbody>' + visibleRows.map(function (row) {
             return '<tr>' + columns.map(function (column) {
                 const value = row[column.key];
-                return '<td class="' + (column.amount ? 'cashflows-table-number' : 'cashflows-table-text') + '">' + escapeHtml(column.amount ? formatInternationalAmount(value) : (value == null ? '' : value)) + '</td>';
+                return '<td' + (column.accountCode ? ' title="' + escapeHtml(row[column.accountCode] || '') + '"' : '') + ' class="' + (column.amount ? 'cashflows-table-number' : 'cashflows-table-text') + '">' + escapeHtml(column.amount ? (value == null ? '—' : formatInternationalAmount(value)) : (value == null ? '' : value)) + '</td>';
             }).join('') + '</tr>';
         }).join('') + '</tbody>';
     }
@@ -479,11 +481,11 @@
         cashflowChildGeneration += 1;
         cashflowChildRequest = null;
         setActiveCashflowWindow(null);
-        ['cashflowsLoadTransfersButton', 'cashflowsLoadCustomerPaymentsButton', 'cashflowsLoadDeductionsButton', 'cashflowsLoadReviewButton'].forEach(function (id) {
+        ['cashflowsLoadTransfersButton', 'cashflowsLoadCustomerPaymentsButton', 'cashflowsLoadVendorPaymentsButton', 'cashflowsLoadDeductionsButton', 'cashflowsLoadReviewButton'].forEach(function (id) {
             element(id).disabled = false;
         });
         cashflowChildPreviews = {};
-        ['cashflowsTransfersSearch', 'cashflowsCustomerPaymentsSearch', 'cashflowsDeductionsSearch', 'cashflowsReviewSearch'].forEach(function (id) {
+        ['cashflowsTransfersSearch', 'cashflowsCustomerPaymentsSearch', 'cashflowsVendorPaymentsSearch', 'cashflowsDeductionsSearch', 'cashflowsReviewSearch'].forEach(function (id) {
             const input = element(id);
             if (input) input.value = '';
         });
@@ -563,15 +565,18 @@
             : [];
         const rows = allRows.filter(function (row) { return customerWiseRowMatches(row, query); });
         renderTable(table, [
-            { key: 'customer_account_name', label: 'Customer' },
-            { key: 'customer_gross_amount', label: 'Gross receipt', amount: true },
+            { key: 'customer_account_name', label: 'Customer', accountCode: 'customer_account_code' },
+            { key: 'customer_receipts', label: 'Receipts', amount: true },
+            { key: 'customer_reversals', label: 'Reversals / refunds', amount: true },
+            { key: 'customer_gross_amount', label: 'Net receipts', amount: true },
             { key: 'bank_charges', label: 'Bank charges', amount: true },
             { key: 'withholding_tax', label: 'WHT', amount: true },
             { key: 'other_deductions', label: 'Other deductions', amount: true },
             { key: 'deductions_total', label: 'Total deductions', amount: true },
-            { key: 'technical_bank_offset', label: 'Technical Bank credit', amount: true },
+            { key: 'technical_bank_offset', label: 'Technical bank offset', amount: true },
             { key: 'expected_net_settlement', label: 'Expected settlement', amount: true },
             { key: 'net_bank_settlement', label: 'Actual settlement', amount: true },
+            { key: 'cashflow_amount', label: 'Cashflow amount', amount: true },
             { key: 'variance', label: 'Difference', amount: true },
             { key: 'status', label: 'Status' },
         ], rows, 'No customer-wise payments match the selected customer.');
@@ -607,21 +612,26 @@
         const panel = element('cashflowsCustomerPeriodWisePanel');
         const table = element('cashflowsCustomerPeriodWiseTable');
         if (!panel || !table) return;
-        const rows = Array.isArray(preview && preview.customer_payment_period_totals)
-            ? preview.customer_payment_period_totals
+        const unfiltered = Array.isArray(preview && preview.customer_payment_account_period_totals)
+            ? preview.customer_payment_account_period_totals
             : [];
+        const query = (element('cashflowsCustomerPaymentsCustomerSearch').value || '').trim().toLowerCase();
+        const rows = unfiltered.filter(function (row) { return customerWiseRowMatches(row, query); });
         renderTable(table, [
             { key: 'period_label', label: 'Period' },
-            { key: 'customer_gross_amount', label: 'Gross receipt', amount: true },
+            { key: 'customer_account_name', label: 'Customer', accountCode: 'customer_account_code' },
+            { key: 'customer_receipts', label: 'Receipts', amount: true },
+            { key: 'customer_reversals', label: 'Reversals / refunds', amount: true },
+            { key: 'customer_gross_amount', label: 'Net receipts', amount: true },
             { key: 'bank_charges', label: 'Bank charges', amount: true },
             { key: 'withholding_tax', label: 'WHT', amount: true },
             { key: 'other_deductions', label: 'Other deductions', amount: true },
             { key: 'deductions_total', label: 'Total deductions', amount: true },
-            { key: 'technical_bank_offset', label: 'Technical Bank credit', amount: true },
+            { key: 'technical_bank_offset', label: 'Technical bank offset', amount: true },
             { key: 'expected_net_settlement', label: 'Expected settlement', amount: true },
-            { key: 'statement_eligible_actual_settlement', label: 'Actual settlement', amount: true },
-            { key: 'main_received_from_customers_total', label: 'Received from customers', amount: true },
-            { key: 'difference', label: 'Difference', amount: true },
+            { key: 'net_bank_settlement', label: 'Actual settlement', amount: true },
+            { key: 'cashflow_amount', label: 'Cashflow amount', amount: true },
+            { key: 'variance', label: 'Difference', amount: true },
             { key: 'status', label: 'Status' },
         ], rows, 'No customer payments are available for the selected periods.');
         const status = rows.length && rows.every(function (row) { return row.status === 'Matched'; }) ? 'Matched' : 'Review required';
@@ -645,15 +655,39 @@
         const customerSearch = element('cashflowsCustomerPaymentsCustomerSearch');
         if (voucherPanel) voucherPanel.hidden = true;
         if (customerPanel) customerPanel.hidden = true;
-        if (customerSearch) customerSearch.hidden = true;
+        if (customerSearch) customerSearch.hidden = false;
         const heading = element('cashflowsCustomerPaymentsHeading');
         if (heading) heading.textContent = 'Period-wise customer payments';
         const count = element('cashflowsCustomerPaymentCount');
         if (count) count.textContent = String(rows.length) + ' period(s)';
         panel.hidden = false;
     }
+    function renderCashflowVendorPayments(preview) {
+        const mode = element('cashflowsVendorView').value;
+        const key = mode === 'transactions' ? 'vendor_payment_details' : (mode === 'vendor' ? 'vendor_payment_vendor_totals' : 'vendor_payment_period_totals');
+        const rows = (preview[key] || []).map(function (row) {
+            return Object.assign({}, row, { date_display: formatCashflowTransferDate(row.date) });
+        });
+        const columns = [];
+        if (mode === 'transactions') columns.push({ key: 'date_display', label: 'Date' }, { key: 'voucher_id', label: 'Voucher' });
+        if (mode === 'period') columns.push({ key: 'period_label', label: 'Period' });
+        columns.push({ key: 'account_name', label: 'Vendor', accountCode: 'account_code' },
+            { key: 'category', label: 'Cashflow category' },
+            { key: 'payments', label: 'Payments', amount: true },
+            { key: 'reversals', label: 'Reversals / refunds', amount: true },
+            { key: 'net_payments', label: 'Net payments', amount: true });
+        if (mode === 'transactions') columns.push({ key: 'voucher_detail', label: 'Description' });
+        renderTable(element('cashflowsVendorPaymentsTable'), columns, rows, 'No matching vendor movements. Check vendor account settings if accounts are missing.');
+        const options = preview.vendor_payment_vendor_totals || [];
+        element('cashflowsVendorOptions').innerHTML = options.map(function (row) {
+            return '<option value="' + escapeHtml(row.account_name) + '" label="' + escapeHtml(row.account_code) + '"></option>';
+        }).join('');
+        element('cashflowsVendorPaymentCount').textContent = formatCashflowDetailCount('cashflowsVendorPaymentsTable', rows.length, 'row(s)');
+    }
     function renderCashflowChild(section, preview) {
-        if (section === 'transfers') {
+        if (section === 'vendor_payments') {
+            renderCashflowVendorPayments(preview);
+        } else if (section === 'transfers') {
             renderCashflowTransferReconciliation(preview);
             const rows = (preview.transfer_details || []).map(function (row) {
                 return Object.assign({}, row, {
@@ -686,15 +720,17 @@
             renderTable(element('cashflowsCustomerPaymentsTable'), [
                 { key: 'date_display', label: 'Date' },
                 { key: 'voucher_id', label: 'Voucher' },
-                { key: 'customer_account_name', label: 'Customer' },
+                { key: 'customer_account_name', label: 'Customer', accountCode: 'customer_account_code' },
                 { key: 'bank_account_name', label: 'Receiving account' },
                 { key: 'method', label: 'Method' },
-                { key: 'customer_gross_amount', label: 'Gross receipt', amount: true },
+                { key: 'customer_receipts', label: 'Receipts', amount: true },
+            { key: 'customer_reversals', label: 'Reversals / refunds', amount: true },
+            { key: 'customer_gross_amount', label: 'Net receipts', amount: true },
                 { key: 'bank_charges', label: 'Bank charges', amount: true },
                 { key: 'withholding_tax', label: 'WHT', amount: true },
                 { key: 'other_deductions', label: 'Other deductions', amount: true },
                 { key: 'deductions_total', label: 'Total deductions', amount: true },
-                { key: 'technical_bank_offset', label: 'Technical Bank credit', amount: true },
+                { key: 'technical_bank_offset', label: 'Technical bank offset', amount: true },
                 { key: 'expected_net_settlement', label: 'Expected settlement', amount: true },
                 { key: 'net_bank_settlement', label: 'Actual settlement', amount: true },
                 { key: 'variance', label: 'Difference', amount: true },
@@ -728,7 +764,7 @@
         const summaryTable = element('cashflowsSummaryTable');
         const summarySection = summaryTable ? summaryTable.closest('.cashflows-report-section') : null;
         if (summarySection) summarySection.hidden = open;
-        const reportIds = ['cashflowsReportForm', 'cashflowsSummaryTable', 'cashflowsLazyActions', 'cashflowsTransfersSection', 'cashflowsCustomerPaymentsSection', 'cashflowsDeductionsSection', 'cashflowsReviewSection', 'cashflowsTransactionsSection'];
+        const reportIds = ['cashflowsReportForm', 'cashflowsSummaryTable', 'cashflowsLazyActions', 'cashflowsTransfersSection', 'cashflowsCustomerPaymentsSection', 'cashflowsVendorPaymentsSection', 'cashflowsDeductionsSection', 'cashflowsReviewSection', 'cashflowsTransactionsSection'];
         reportIds.forEach(function (id) {
             const target = element(id);
             if (target) target.hidden = open;
@@ -985,6 +1021,9 @@
         derivedPreview.drilldown_controls = {};
         derivedPreview.transfer_details = [];
         derivedPreview.customer_payment_details = [];
+        ['customer_payment_customer_totals', 'customer_payment_account_period_totals', 'customer_payment_period_totals',
+            'vendor_payment_details', 'vendor_payment_vendor_totals', 'vendor_payment_period_totals'].forEach(function (key) { derivedPreview[key] = []; });
+        derivedPreview.customer_payment_reconciliation = {};
         derivedPreview.deduction_details = [];
         derivedPreview.categories_needing_review = [];
         derivedPreview.child_details_prepared = false;
@@ -3254,8 +3293,8 @@
         const start = element('cashflowsPeriodStart').value;
         const end = element('cashflowsPeriodEnd').value;
         if (!configuration.source_template_id || !clientId || !start || !end) return Promise.resolve(null);
-        const buttonIds = { transfers: 'cashflowsLoadTransfersButton', customer_payments: 'cashflowsLoadCustomerPaymentsButton', deductions: 'cashflowsLoadDeductionsButton', review: 'cashflowsLoadReviewButton' };
-        const labels = { transfers: 'Load internal transfers', customer_payments: 'Load customer payments', deductions: 'Load customer deductions', review: 'Load review required' };
+        const buttonIds = { transfers: 'cashflowsLoadTransfersButton', customer_payments: 'cashflowsLoadCustomerPaymentsButton', vendor_payments: 'cashflowsLoadVendorPaymentsButton', deductions: 'cashflowsLoadDeductionsButton', review: 'cashflowsLoadReviewButton' };
+        const labels = { transfers: 'Load internal transfers', customer_payments: 'Load customer payments', vendor_payments: 'Load vendor payments', deductions: 'Load customer deductions', review: 'Load review required' };
         const generation = cashflowChildGeneration;
         Object.keys(buttonIds).forEach(function (name) {
             const button = element(buttonIds[name]);
@@ -3270,7 +3309,7 @@
             period_start: start,
             period_end: end,
             group_by: cashflowSelection.groupBy,
-            details: 'transfers,customer_payments,deductions,review'
+            details: 'transfers,customer_payments,vendor_payments,deductions,review'
         });
         cashflowChildRequest = api('/api/reconciliation/cashflows/preview?' + params.toString())
             .then(function (result) {
@@ -3479,10 +3518,15 @@
         element('cashflowsFreshnessAlertClose').addEventListener('click', dismissCashflowFreshnessAlert);
         element('cashflowsLoadTransfersButton').addEventListener('click', function () { loadCashflowChild('transfers'); });
         element('cashflowsLoadCustomerPaymentsButton').addEventListener('click', showCashflowVoucherPayments);
+        element('cashflowsLoadVendorPaymentsButton').addEventListener('click', function () { loadCashflowChild('vendor_payments'); });
+        element('cashflowsVendorView').addEventListener('change', function () {
+            if (cashflowChildPreviews.vendor_payments) renderCashflowVendorPayments(cashflowChildPreviews.vendor_payments);
+        });
         element('cashflowsLoadDeductionsButton').addEventListener('click', function () { loadCashflowChild('deductions'); });
         element('cashflowsLoadReviewButton').addEventListener('click', function () { loadCashflowChild('review'); });
         const cashflowDetailSearches = [
             { section: 'transfers', input: 'cashflowsTransfersSearch', clear: 'cashflowsTransfersSearchClear' },
+            { section: 'vendor_payments', input: 'cashflowsVendorPaymentsSearch', clear: 'cashflowsVendorPaymentsClear' },
             { section: 'customer_payments', input: 'cashflowsCustomerPaymentsSearch', clear: 'cashflowsCustomerPaymentsSearchClear' },
             { section: 'deductions', input: 'cashflowsDeductionsSearch', clear: 'cashflowsDeductionsSearchClear' },
             { section: 'review', input: 'cashflowsReviewSearch', clear: 'cashflowsReviewSearchClear' },
@@ -3535,6 +3579,7 @@
         const renderCustomerWisePreview = function () {
             const preview = cashflowChildPreviews.customer_payments;
             if (preview && !element('cashflowsCustomerWisePanel').hidden) renderCashflowCustomerWise(preview);
+            if (preview && !element('cashflowsCustomerPeriodWisePanel').hidden) renderCashflowCustomerPeriodWise(preview);
         };
         if (customerWiseSearch) {
             customerWiseSearch.addEventListener('input', renderCustomerWisePreview);

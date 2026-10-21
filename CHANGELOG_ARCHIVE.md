@@ -1,5 +1,15 @@
 # Changelog Archive
 
+## Signed customer/vendor reversals — 2026-10-21
+
+**Cause:** Net customer processing discarded reversal-only and unmatched vouchers. Four January–April reversals overstated June’s combined closing by 22,589,893.41 after the surcharge mapping correction.
+
+**Implementation:** Signed receipts, reversals/refunds and period net totals retain original source transactions. Report direction also supports negative-side ERP postings. Proven customer settlements retain configured gross/net presentation; uncertain vouchers keep every counter-account category, with no guessed allocation. Reversed bank offsets and charges retain their direction; unrelated expenses/assets are not inferred deductions. A source-movement conservation check guards each period. Vendor details reuse existing Local/Import Vendor assignments, preserve category splits and provide period/vendor/transaction views. Customer detail responses retain all vouchers. Browser/export totals share the engine; child-version/configuration keys and parent-cache clearing prevent stale party details. Shared navigation cache versions change on 19 existing pages.
+
+**Verification:** Read-only repeatable snapshots independently match all six combined January–June movements and continuous closings; June is 203,851,286.59. All 64,879 voucher and 12,354 ledger source rows retain their counts/fingerprints. Customer category/detail difference is zero; 292 customer vouchers, 108 customer/account periods and 564 vendor transaction groups survive. Vendor debit/credit totals independently match canonical source sums. In-memory exports and hermetic browser checks cover signed values, escaping, hover codes and cache scope. 231 backend and 52 browser checks pass; one migration-only skip and existing tooling warning remain.
+
+**Acceptance/pending:** Aadil confirms successful local testing and combined reconciliation, and authorises commit/push on 2026-10-21. No financial/configuration writes, schema changes or installations in this implementation. Customer deduction-role reviews retain their financial effects. C4 still needs equal/opposite 371,750,000 Cash/Bank transfer bridges; combined totals already cancel them. C5 boundary/carry/freshness checks and C6 acceptance precede original phases 6–8; Drive production remains last. Trial Balance precision repair is separate. Unrelated benchmark changes and private backups are excluded from this checkpoint.
+
 ## Source row order and chronological previews — 2026-10-20
 
 **Cause/evidence:** Client Data and Cashflow transaction previews sorted newest first. Import comparison grouped insert actions by voucher without preserving Excel positions; date-only sorting left 2,628 positions different. Read-only comparison of the supplied Cash in Hand workbook against canonical rows confirms all 5,741 transactions and 83 notes match, including repeated occurrences and ERP balances. Typed stored dates establish calendar equality independently of display strings.

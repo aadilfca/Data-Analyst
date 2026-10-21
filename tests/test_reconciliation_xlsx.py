@@ -219,3 +219,18 @@ def test_generated_golden_movements_match_reference_workbooks_when_source_is_pre
     expected_cash = [cash_reference["Cash Monthly Summary"].cell(37, column).value for column in range(2, 8)]
     assert net_values(bank) == pytest.approx(expected_bank)
     assert net_values(cash) == pytest.approx(expected_cash)
+
+
+def test_signed_party_export_keeps_reversals_and_negative_net_as_numbers():
+    from services.reconciliation_xlsx import build_cashflow_workbook
+    preview = dict(periods=[dict(key='2026-01', label='Jan-26')], category_totals=[],
+        customer_payment_account_period_totals=[dict(period_label='Jan-26', customer_account_name='Customer',
+            customer_account_code='AR', customer_receipts=100, customer_reversals=140,
+            customer_gross_amount=-40, cashflow_amount=-40)],
+        vendor_payment_period_totals=[dict(period_label='Jan-26', account_name='Vendor', account_code='AP',
+            category='Suppliers', payments=90, reversals=120, net_payments=-30)])
+    workbook = build_cashflow_workbook(preview)
+    customers = [r for r in workbook['Customer Period Totals'].iter_rows(values_only=True) if 'Customer' in r]
+    vendors = [r for r in workbook['Vendor Period Totals'].iter_rows(values_only=True) if 'Vendor' in r]
+    assert any(100 in r and 140 in r and -40 in r for r in customers)
+    assert any(90 in r and 120 in r and -30 in r for r in vendors)

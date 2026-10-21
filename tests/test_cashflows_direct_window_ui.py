@@ -26,7 +26,7 @@ def test_cashflows_report_contains_direct_classified_transaction_window():
     assert "showCashflowVoucherPayments" in script
     assert "renderCashflowCustomerWise" in script
     assert "renderCashflowCustomerPeriodWise" in script
-    assert "customer_payment_period_totals" in script
+    assert "customer_payment_account_period_totals" in script
     assert "customer_payment_customer_totals" in script
     assert "customer_payment_reconciliation" in script
     assert "cashflowsTransactionsTable" in html
@@ -351,7 +351,7 @@ def test_cashflows_report_preserves_current_default_period_and_monthly_grouping(
     assert "cashflowPreviewPeriods" in reconciliation_script
     assert "syncCashflowZeroRowsButton" in reconciliation_script
     assert "style.css?v=71" in reconciliation_html
-    assert "reconciliation.js?v=36" in reconciliation_html
+    assert "reconciliation.js?v=37" in reconciliation_html
     assert "cashflowsSummaryBasis" not in reconciliation_html
     assert "cashflows-transactions-note" not in reconciliation_html
     assert "renderCashflowSummary" in reconciliation_script
@@ -600,6 +600,9 @@ def ledger_cache_page():
         stripped: function () {return lastCashflowsResult;},
         stats: function () {return Array.from(cashflowLedgerCacheOrder.values());},
         parent: deriveCashflowSummaryFromParent,
+        child: function (section, preview) { setActiveCashflowWindow(section); renderCashflowChild(section, preview); },
+        customerPeriods: renderCashflowCustomerPeriodWise,
+        customerTotals: renderCashflowCustomerWise,
         filter: function (value) {cashflowSummaryFilter = value; renderCashflowSummary(lastCashflowsResult.preview);},
         zeros: toggleCashflowZeroRows,
         remember: function (key, rows) {return rememberCashflowLedger('baseline', key, {rows: rows, result: {}});},
@@ -1094,3 +1097,38 @@ def test_balance_expansion_keeps_frozen_and_numeric_rows_aligned_without_page_ov
         assert page.locator('.cashflows-summary-scroll-pane').evaluate('(e)=>e.clientWidth')>=140
     colors=page.evaluate('''() => ['.cashflows-balance-row','.cashflows-balance-calculated'].map(selector=>getComputedStyle(document.querySelector(selector+' td')).backgroundColor)''')
     assert colors==['rgb(226, 239, 218)','rgb(237, 241, 247)']
+
+
+def test_signed_vendor_and_customer_period_columns_in_real_dom(ledger_cache_page):
+    page = ledger_cache_page
+    page.evaluate('result => window.ledgerFixture.load(result)', _ledger_report())
+    vendor = dict(period_key='2026-01', period_label='Jan-26', account_code='AP-1',
+                  account_name='Vendor <One>', category='Suppliers', payments=100, reversals=140, net_payments=-40)
+    preview = dict(vendor_payment_period_totals=[vendor], vendor_payment_vendor_totals=[vendor])
+    page.evaluate("p => window.ledgerFixture.child('vendor_payments', p)", preview)
+    table = page.locator('#cashflowsVendorPaymentsTable')
+    assert 'Reversals / refunds' in table.text_content()
+    assert 'Vendor <One>' in table.inner_text()
+    assert '-40' in table.inner_text()
+    assert table.locator('td[title="AP-1"]').inner_text() == 'Vendor <One>'
+    assert table.locator('script').count() == 0
+    row = dict(period_key='2026-01', period_label='Jan-26', customer_account_code='AR-1',
+               customer_account_name='Customer One', customer_receipts=100, customer_reversals=140,
+               customer_gross_amount=-40, cashflow_amount=-40, status='Matched')
+    page.evaluate('p => window.ledgerFixture.customerPeriods(p)',
+                  dict(customer_payment_account_period_totals=[row], customer_payment_reconciliation={}))
+    table = page.locator('#cashflowsCustomerPeriodWiseTable')
+    assert 'Customer One' in table.inner_text()
+    assert 'Reversals / refunds' in table.text_content()
+    assert '-40' in table.inner_text()
+    assert table.locator('td[title="AR-1"]').count() == 1
+
+
+def test_parent_summary_discards_signed_party_details(ledger_cache_page):
+    parent = _balance_report(two_periods=True)
+    parent['preview']['vendor_payment_details'] = [{'voucher_id': 'OLD'}]
+    parent['preview']['customer_payment_account_period_totals'] = [{'customer_reversals': 55}]
+    derived = ledger_cache_page.evaluate("p => window.ledgerFixture.parent(p, '2026-01-01', '2026-01-28', 'month', 'combined')", parent)
+    assert derived is not None
+    assert derived['preview']['vendor_payment_details'] == []
+    assert derived['preview']['customer_payment_account_period_totals'] == []

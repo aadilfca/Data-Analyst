@@ -215,6 +215,31 @@ def build_cashflow_workbook(
         note="Canonical ledger roll-ups matching the selected Cashflows report and active export filters.",
     )
 
+    # Detail sheets use the same signed party totals as the browser.
+    customer_columns = [
+        ("period_label", "Period", False), ("customer_account_name", "Customer", False),
+        ("customer_account_code", "Account code", False),
+        ("customer_receipts", "Receipts", True), ("customer_reversals", "Reversals / refunds", True),
+        ("customer_gross_amount", "Net receipts", True), ("bank_charges", "Bank charges", True),
+        ("withholding_tax", "WHT", True), ("other_deductions", "Other deductions", True),
+        ("cashflow_amount", "Cashflow amount", True), ("status", "Status", False),
+    ]
+    vendor_columns = [
+        ("period_label", "Period", False), ("account_name", "Vendor", False),
+        ("account_code", "Account code", False), ("category", "Cashflow category", False),
+        ("payments", "Payments", True), ("reversals", "Reversals / refunds", True),
+        ("net_payments", "Net payments", True),
+    ]
+    for key, title, columns in (
+        ("customer_payment_account_period_totals", "Customer Period Totals", customer_columns),
+        ("customer_payment_customer_totals", "Customer Totals", customer_columns),
+        ("customer_payment_details", "Customer Transactions", [("date", "Date", False), ("voucher_id", "Voucher", False), *customer_columns]),
+        ("vendor_payment_period_totals", "Vendor Period Totals", vendor_columns),
+        ("vendor_payment_details", "Vendor Transactions", [("date", "Date", False), ("voucher_id", "Voucher", False), *vendor_columns]),
+    ):
+        if preview.get(key):
+            _write_cashflow_detail_sheet(workbook.create_sheet(title), title, preview[key], columns)
+
     controls = workbook.create_sheet("Export Controls")
     _write_title(controls, "Cashflows Export Controls", "Control totals and selection used for this workbook.", 2)
     drilldown_split = _cashflow_drilldown_export_split(preview.get("ledger_rollups") or [])

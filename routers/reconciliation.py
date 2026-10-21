@@ -65,8 +65,9 @@ CASHFLOW_BROWSER_LEDGER_MAX_BYTES = 2 * 1024 * 1024
 def _cashflow_configuration_key(configuration: dict[str, Any]) -> str:
     relevant = {key: configuration.get(key) for key in (
         'source_template_id', 'cash_account_codes', 'bank_account_codes',
-        'match_internal_transfers', 'receipt_presentation', 'customer_payment_roles', 'category_mappings',
+        'match_internal_transfers', 'receipt_presentation', 'customer_payment_roles', 'category_mappings', 'vendor_account_codes',
     )}
+    relevant['signed_party_totals_version'] = 1
     return hashlib.sha256(json.dumps(relevant, sort_keys=True, default=str).encode('utf-8')).hexdigest()
 
 
@@ -1077,6 +1078,12 @@ def _cashflow_configuration(client_id: int) -> dict[str, Any]:
                 WHERE t.client_id = (SELECT treasury_client_id FROM request) AND t.is_active = TRUE
             ), '[]'::json) AS treasury,
             COALESCE((
+                SELECT json_agg(a.account_code ORDER BY a.account_code)
+                FROM account_control_assignments a
+                WHERE a.client_id = (SELECT settings_client_id FROM request)
+                  AND a.verification_workstream IN ('local_vendor', 'import_vendor')
+            ), '[]'::json) AS vendor_accounts,
+            COALESCE((
                 SELECT json_build_object(
                     'match_internal_transfers', s.match_internal_transfers,
                     'receipt_presentation', s.receipt_presentation,
@@ -1124,6 +1131,7 @@ def _cashflow_configuration(client_id: int) -> dict[str, Any]:
             customer_payment_roles[role].append(role_row["label"])
     return {
         "category_mappings": {normalize_account_code(row["account_code"]): row.get("label") or "" for row in mappings},
+        "vendor_account_codes": [normalize_account_code(code) for code in row.get("vendor_accounts") or []],
         "cash_account_codes": [normalize_account_code(row["account_code"]) for row in treasury if row["treasury_type"] == "cash"],
         "source_upload_id": settings.get("source_upload_id"),
         "source_template_id": settings.get("source_template_id"),
@@ -1371,10 +1379,10 @@ def _cashflow_preview(
             "receipt_presentation": "net",
             "detail_sections_loaded": [],
         }
-    loaded = {"transfers", "customer_payments", "deductions", "review"} if detail_sections is None else set(detail_sections)
+    loaded = {"transfers", "customer_payments", "vendor_payments", "deductions", "review"} if detail_sections is None else set(detail_sections)
     review = summary.get("categories_needing_review")
-    customer_rows = _frame_records(summary.get("customer_payment_customer_totals")) if "customer_payments" in loaded else []
-    customer_period_rows = _frame_records(summary.get("customer_payment_period_totals")) if "customer_payments" in loaded else []
+    customer_rows = _frame_records_all(summary.get("customer_payment_customer_totals")) if "customer_payments" in loaded else []
+    customer_period_rows = _frame_records_all(summary.get("customer_payment_period_totals")) if "customer_payments" in loaded else []
     customer_options = []
     seen_customer_codes: set[str] = set()
     for row in customer_rows:
@@ -1411,9 +1419,12 @@ def _cashflow_preview(
         "treasury_view_reconciliation": treasury_projection["reconciliation"],
         "transfer_details": _frame_records(summary.get("transfer_details")) if "transfers" in loaded else [],
         "transfer_reconciliation": summary.get("transfer_reconciliation") if "transfers" in loaded else None,
-        "customer_payment_details": _frame_records(summary.get("customer_payment_details")) if "customer_payments" in loaded else [],
+        "customer_payment_details": _frame_records_all(summary.get("customer_payment_details")) if "customer_payments" in loaded else [],
         "customer_payment_customer_totals": customer_rows,
         "customer_payment_period_totals": customer_period_rows,
+        "customer_payment_account_period_totals": _frame_records_all(summary.get("customer_payment_account_period_totals")) if "customer_payments" in loaded else [],
+        **{key: _frame_records_all(summary.get(key)) if "vendor_payments" in loaded else []
+           for key in ("vendor_payment_details", "vendor_payment_vendor_totals", "vendor_payment_period_totals")},
         "customer_payment_customer_options": customer_options,
         "customer_payment_reconciliation": dict(summary.get("customer_payment_reconciliation") or {}) if "customer_payments" in loaded else {},
         "customer_payment_selected_account_code": selected_customer_code,
@@ -1560,6 +1571,7 @@ def _build_cashflow_result(
                 match_internal_transfers=configuration["match_internal_transfers"],
                 receipt_presentation=configuration["receipt_presentation"],
                 cashflow_role_categories=configuration.get("customer_payment_roles"),
+                vendor_account_codes=configuration.get("vendor_account_codes", []),
                 group_by=grouping,
                 include_drilldown=warm_ledger_cache or bool(detail_sections and 'drilldown' in detail_sections),
             )
@@ -1799,7 +1811,7 @@ def _parse_cashflow_detail_sections(value: str | None) -> set[str] | None:
     raw = value.strip().casefold()
     if raw in {"", "summary"}:
         return set()
-    allowed = {"transfers", "customer_payments", "deductions", "review"}
+    allowed = {"transfers", "customer_payments", "vendor_payments", "deductions", "review"}
     allowed = allowed | {'drilldown'}
     sections = {item.strip() for item in raw.split(",") if item.strip()}
     if sections - allowed:
@@ -2160,7 +2172,7 @@ def export_cashflows_report(
         client_id,
         period_start,
         period_end,
-        detail_sections={'transfers', 'customer_payments', 'deductions', 'review', 'drilldown'},
+        detail_sections={'transfers', 'customer_payments', 'vendor_payments', 'deductions', 'review', 'drilldown'},
         group_by=group_by,
         treasury_view=treasury_view,
     )

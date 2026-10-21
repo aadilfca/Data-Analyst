@@ -446,6 +446,9 @@ def _empty_customer_payment_details() -> pd.DataFrame:
             "method",
             "configured_presentation",
             "customer_gross_amount",
+            "customer_receipts",
+            "customer_reversals",
+            "cashflow_amount",
             "bank_statement_amount",
             "bank_charges",
             "withholding_tax",
@@ -471,6 +474,9 @@ def _empty_cashflow_customer_payment_customer_totals() -> pd.DataFrame:
             "matched_voucher_count",
             "review_voucher_count",
             "customer_gross_amount",
+            "customer_receipts",
+            "customer_reversals",
+            "cashflow_amount",
             "bank_charges",
             "withholding_tax",
             "other_deductions",
@@ -496,6 +502,9 @@ def _empty_cashflow_customer_payment_period_totals() -> pd.DataFrame:
             "matched_voucher_count",
             "review_voucher_count",
             "customer_gross_amount",
+            "customer_receipts",
+            "customer_reversals",
+            "cashflow_amount",
             "bank_charges",
             "withholding_tax",
             "other_deductions",
@@ -522,6 +531,9 @@ def _build_cashflow_customer_payment_customer_totals(
         frame[column] = frame[column].fillna("").astype(str).str.strip()
     numeric_columns = (
         "customer_gross_amount",
+        "customer_receipts",
+        "customer_reversals",
+        "cashflow_amount",
         "bank_charges",
         "withholding_tax",
         "other_deductions",
@@ -536,10 +548,7 @@ def _build_cashflow_customer_payment_customer_totals(
             frame[column] = 0.0
         frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0.0)
     frame["_matched"] = frame["status"].eq("Matched")
-    frame["_statement_eligible_actual_settlement"] = frame["net_bank_settlement"].where(
-        frame["_matched"],
-        0.0,
-    )
+    frame["_statement_eligible_actual_settlement"] = frame["cashflow_amount"]
     totals = (
         frame.groupby("customer_account_code", sort=False, dropna=False)
         .agg(
@@ -548,6 +557,9 @@ def _build_cashflow_customer_payment_customer_totals(
             voucher_count=("voucher_id", "nunique"),
             matched_voucher_count=("_matched", "sum"),
             customer_gross_amount=("customer_gross_amount", "sum"),
+            customer_receipts=("customer_receipts", "sum"),
+            customer_reversals=("customer_reversals", "sum"),
+            cashflow_amount=("cashflow_amount", "sum"),
             bank_charges=("bank_charges", "sum"),
             withholding_tax=("withholding_tax", "sum"),
             other_deductions=("other_deductions", "sum"),
@@ -575,6 +587,9 @@ def _build_cashflow_customer_payment_customer_totals(
             "matched_voucher_count",
             "review_voucher_count",
             "customer_gross_amount",
+            "customer_receipts",
+            "customer_reversals",
+            "cashflow_amount",
             "bank_charges",
             "withholding_tax",
             "other_deductions",
@@ -607,6 +622,9 @@ def _build_cashflow_customer_payment_period_totals(
         frame[column] = frame[column].fillna("").astype(str).str.strip()
     numeric_columns = (
         "customer_gross_amount",
+        "customer_receipts",
+        "customer_reversals",
+        "cashflow_amount",
         "bank_charges",
         "withholding_tax",
         "other_deductions",
@@ -633,7 +651,7 @@ def _build_cashflow_customer_payment_period_totals(
         selected = frame.loc[frame["period_key"].eq(period_key)]
         voucher_count = int(selected["voucher_id"].nunique()) if not selected.empty else 0
         matched_voucher_count = int(selected["_matched"].sum()) if not selected.empty else 0
-        eligible_settlement = float(selected.loc[selected["_matched"], "net_bank_settlement"].sum()) if not selected.empty else 0.0
+        eligible_settlement = float(selected["cashflow_amount"].sum()) if not selected.empty else 0.0
         main_total = 0.0
         if isinstance(category_totals, pd.DataFrame) and not category_totals.empty and period_key in category_totals:
             for category in category_totals.index:
@@ -649,6 +667,9 @@ def _build_cashflow_customer_payment_period_totals(
             "matched_voucher_count": matched_voucher_count,
             "review_voucher_count": voucher_count - matched_voucher_count,
             "customer_gross_amount": float(selected["customer_gross_amount"].sum()) if not selected.empty else 0.0,
+            "customer_receipts": float(selected["customer_receipts"].sum()),
+            "customer_reversals": float(selected["customer_reversals"].sum()),
+            "cashflow_amount": float(selected["cashflow_amount"].sum()),
             "bank_charges": float(selected["bank_charges"].sum()) if not selected.empty else 0.0,
             "withholding_tax": float(selected["withholding_tax"].sum()) if not selected.empty else 0.0,
             "other_deductions": float(selected["other_deductions"].sum()) if not selected.empty else 0.0,
@@ -727,8 +748,10 @@ def _build_cashflow_customer_payment_details(
     if working.empty or contra.empty:
         return _empty_customer_payment_details()
 
+    # Opposite movements and zero-net pairs are evidence, not missing receipts.
     customer = contra.loc[
-        contra["is_customer"] & contra["amount"].gt(tolerance)
+        contra["is_customer"]
+        & (contra["debit"].abs().gt(tolerance) | contra["credit"].abs().gt(tolerance))
     ].copy()
     if customer.empty:
         return _empty_customer_payment_details()
@@ -739,8 +762,14 @@ def _build_cashflow_customer_payment_details(
     if treasury.empty:
         return _empty_customer_payment_details()
 
+    # Some ERPs reverse by writing negative values on the original side.
+    # Normalize report directions only; never rewrite the source debit/credit.
+    customer['_receipts'] = customer['credit'].clip(lower=0) + (-customer['debit']).clip(lower=0)
+    customer['_reversals'] = customer['debit'].clip(lower=0) + (-customer['credit']).clip(lower=0)
+    treasury['_inflow'] = treasury['debit'].clip(lower=0) + (-treasury['credit']).clip(lower=0)
+    treasury['_outflow'] = treasury['credit'].clip(lower=0) + (-treasury['debit']).clip(lower=0)
     treasury["treasury_type"] = treasury["account_code"].map(treasury_type).fillna("Treasury")
-    treasury["technical_bank_credit"] = treasury["credit"].where(
+    treasury["technical_bank_credit"] = treasury["_outflow"].where(
         treasury["treasury_type"].eq("Bank"),
         0.0,
     )
@@ -750,8 +779,9 @@ def _build_cashflow_customer_payment_details(
             bank_account_code=("account_code", _join_unique_leg_values),
             bank_account_name=("account_name", _join_unique_leg_values),
             bank_account_type=("treasury_type", _join_unique_leg_values),
-            bank_statement_amount=("debit", "sum"),
+            bank_statement_amount=("_inflow", "sum"),
             bank_credit_amount=("technical_bank_credit", "sum"),
+            treasury_credit_amount=("_outflow", "sum"),
             bank_account_count=("account_code", "nunique"),
         )
         .reindex(voucher_order)
@@ -764,6 +794,8 @@ def _build_cashflow_customer_payment_details(
             customer_account_code=("account_code", _join_unique_leg_values),
             customer_account_name=("account_name", _join_unique_leg_values),
             customer_gross_amount=("amount", "sum"),
+            customer_receipts=("_receipts", "sum"),
+            customer_reversals=("_reversals", "sum"),
             customer_account_count=("account_code", "nunique"),
         )
         .reset_index()
@@ -814,6 +846,7 @@ def _build_cashflow_customer_payment_details(
     for column in (
         "bank_statement_amount",
         "bank_credit_amount",
+        "treasury_credit_amount",
         "bank_account_count",
         "customer_gross_amount",
         "customer_account_count",
@@ -825,9 +858,14 @@ def _build_cashflow_customer_payment_details(
     details["deductions_total"] = (
         details["bank_charges"] + details["withholding_tax"] + details["other_deductions"]
     )
-    details["technical_bank_offset"] = details["bank_credit_amount"]
+    reverse_direction = details['customer_gross_amount'].lt(-tolerance)
+    is_bank = details['bank_account_type'].eq('Bank')
+    # A reversed gross entry has the technical amount on the bank debit side.
+    # Do not mislabel its principal bank credit as a deduction/technical offset.
+    details["technical_bank_offset"] = details['bank_credit_amount'].where(
+        ~reverse_direction, -details['bank_statement_amount'].where(is_bank, 0.0))
     details["net_bank_settlement"] = (
-        details["bank_statement_amount"] - details["technical_bank_offset"]
+        details["bank_statement_amount"] - details["treasury_credit_amount"]
     )
     details["expected_net_settlement"] = (
         details["customer_gross_amount"] - details["deductions_total"]
@@ -838,11 +876,13 @@ def _build_cashflow_customer_payment_details(
     details["method"] = "Review"
     gross_pattern = (
         details["bank_account_count"].eq(1)
-        & details["bank_credit_amount"].gt(tolerance)
+        & is_bank
+        & ((~reverse_direction & details['bank_credit_amount'].gt(tolerance))
+           | (reverse_direction & details['bank_statement_amount'].gt(tolerance)))
     )
     net_pattern = (
         details["bank_account_count"].eq(1)
-        & details["bank_credit_amount"].abs().le(tolerance)
+        & ~gross_pattern
     )
     details.loc[gross_pattern, "method"] = "Gross"
     details.loc[net_pattern, "method"] = "Net"
@@ -854,7 +894,18 @@ def _build_cashflow_customer_payment_details(
         & details["bank_account_count"].eq(1)
         & details["variance"].abs().le(tolerance)
     )
+    # A voucher crossing periods cannot be collapsed into its first date.
+    one_period = working.groupby("voucher_id")["period_key"].nunique().eq(1)
+    matched = matched & details["voucher_id"].map(one_period).fillna(False)
+    unrelated = contra.loc[
+        ~contra['is_customer'] & ~contra['is_deduction']
+        & (contra['debit'].abs().gt(tolerance) | contra['credit'].abs().gt(tolerance)), 'voucher_id'
+    ]
+    matched = matched & ~details['voucher_id'].isin(unrelated)
     details.loc[matched, "status"] = "Matched"
+    details["cashflow_amount"] = details["customer_gross_amount"]
+    if receipt_presentation == "net":
+        details.loc[matched, "cashflow_amount"] = details.loc[matched, "net_bank_settlement"]
     return details[
         [
             "voucher_id",
@@ -870,6 +921,9 @@ def _build_cashflow_customer_payment_details(
             "method",
             "configured_presentation",
             "customer_gross_amount",
+            "customer_receipts",
+            "customer_reversals",
+            "cashflow_amount",
             "bank_statement_amount",
             "bank_charges",
             "withholding_tax",
@@ -883,6 +937,70 @@ def _build_cashflow_customer_payment_details(
             "voucher_detail",
         ]
     ].sort_values(["date", "voucher_id"]).reset_index(drop=True)
+
+
+def _customer_account_details(contra: pd.DataFrame, details: pd.DataFrame) -> pd.DataFrame:
+    """Attribute only proven settlements; retain separate parties on mixed vouchers."""
+    if contra.empty or details.empty:
+        return _empty_customer_payment_details()
+    customers = contra.loc[contra['is_customer']]
+    party_counts = customers.groupby('voucher_id')['account_code'].nunique()
+    period_counts = customers.groupby('voucher_id')['period_key'].nunique()
+    by_voucher = details.set_index('voucher_id').to_dict('index')
+    records = []
+    for (voucher, code, period), lines in customers.groupby(
+        ['voucher_id', 'account_code', 'period_key'], sort=False
+    ):
+        original = by_voucher.get(voucher, {})
+        row = dict(original)
+        row.update(voucher_id=voucher, customer_account_code=code,
+                   customer_account_name=_join_unique_leg_values(lines['account_name']),
+                   period_key=period, period_label=lines['period_label'].iloc[0],
+                   month=lines['month'].iloc[0], date=lines['date'].min(),
+                   customer_receipts=float((lines['credit'].clip(lower=0) + (-lines['debit']).clip(lower=0)).sum()),
+                   customer_reversals=float((lines['debit'].clip(lower=0) + (-lines['credit']).clip(lower=0)).sum()),
+                   customer_gross_amount=float(lines['amount'].sum()))
+        if original.get('status') != 'Matched':
+            row.update(status='Review required', cashflow_amount=row['customer_gross_amount'])
+            if party_counts.get(voucher, 0) != 1 or period_counts.get(voucher, 0) != 1:
+                # Shared charges/bank legs cannot be assigned to a guessed party.
+                for field in ('bank_charges', 'withholding_tax', 'other_deductions',
+                              'deductions_total', 'technical_bank_offset'):
+                    row[field] = 0.0
+                row.update(expected_net_settlement=row['customer_gross_amount'],
+                           net_bank_settlement=None, variance=None)
+        records.append(row)
+    return pd.DataFrame(records, columns=_empty_customer_payment_details().columns)
+
+
+def _build_vendor_payment_reports(working: pd.DataFrame, codes: Sequence[str]) -> dict[str, pd.DataFrame]:
+    """Vendor payments/refunds are signed source movements, without invoice pairing."""
+    columns = ['voucher_id', 'date', 'period_key', 'period_label', 'account_code',
+               'account_name', 'category', 'payments', 'reversals', 'net_payments',
+               'cashflow_amount', 'voucher_detail']
+    vendor_codes = {_canonical_code(code) for code in codes}
+    rows = working.loc[working['account_code'].isin(vendor_codes)].copy() if not working.empty else pd.DataFrame()
+    if rows.empty:
+        details = pd.DataFrame(columns=columns)
+    else:
+        rows['payments'] = rows['debit'].clip(lower=0) + (-rows['credit']).clip(lower=0)
+        rows['reversals'] = rows['credit'].clip(lower=0) + (-rows['debit']).clip(lower=0)
+        rows['net_payments'] = rows['debit'] - rows['credit']
+        rows['cashflow_amount'] = -rows['net_payments']
+        details = rows[columns].sort_values(['date', 'voucher_id', 'account_code']).reset_index(drop=True)
+    keys = ['account_code', 'category']
+    amounts = ['payments', 'reversals', 'net_payments', 'cashflow_amount']
+    def totals(group_keys):
+        if details.empty:
+            return pd.DataFrame(columns=[*group_keys, 'account_name', *amounts, 'voucher_count'])
+        return details.groupby(group_keys, sort=False, dropna=False).agg(
+            account_name=('account_name', _join_unique_leg_values),
+            **{name: (name, 'sum') for name in amounts},
+            voucher_count=('voucher_id', 'nunique'),
+        ).reset_index()
+    return {'vendor_payment_details': details,
+            'vendor_payment_vendor_totals': totals(keys),
+            'vendor_payment_period_totals': totals(['period_key', 'period_label', *keys])}
 
 
 def _build_cashflow_transfer_details(
@@ -1382,15 +1500,16 @@ def build_cashflow_summary(
     cashflow_role_categories: Mapping[str, Sequence[Any]] | None = None,
     tolerance: float = DEFAULT_TOLERANCE,
     include_drilldown: bool = False,
+    vendor_account_codes: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Summarise vouchers containing configured Cash or Bank accounts.
 
     Cash/Bank lines define the treasury leg. Counter-account lines are grouped
     by the Cash Flow category assigned in Account Control Centre. Customer
-    receipts default to net presentation: only matched configured customer
-    vouchers feed the main customer category, while charge and withholding
-    lines remain available in ``deduction_details`` and unmatched vouchers stay
-    visible for review.
+    receipts default to net presentation for proven settlements. Reversals
+    retain their signs; uncertain settlements keep every original category
+    and remain visible for review. Party summaries never require guessed
+    matching to earlier invoices or payments.
     """
     start = pd.Timestamp(period_start)
     end = pd.Timestamp(period_end)
@@ -1522,9 +1641,9 @@ def build_cashflow_summary(
                 & ~contra["has_cashflow_category"]
                 & ~contra["is_other_deduction"]
             )
-            residual_debit = residual_role & contra["amount"].lt(-tolerance)
             residual_credit = residual_role & contra["amount"].gt(tolerance)
-            contra["is_other_deduction"] = contra["is_other_deduction"] | residual_debit
+            # Other expenses/assets keep their categories; only configured
+            # deduction roles may be netted against a customer settlement.
         else:
             residual_credit = pd.Series(False, index=contra.index)
         contra["is_deduction"] = (
@@ -1560,7 +1679,9 @@ def build_cashflow_summary(
                 dtype=object,
                 name="voucher_id",
             )
-            net_special = contra["voucher_id"].isin(customer_vouchers)
+            # Uncertain settlements retain every original counter-account line.
+            # Review affects attribution, never the inclusion of cash movements.
+            net_special = contra["voucher_id"].isin(net_vouchers)
             category_lines = contra.loc[
                 ~net_special,
                 ["voucher_id", "category", "month", "period_key", "period_label", "amount"],
@@ -1683,6 +1804,12 @@ def build_cashflow_summary(
         treasury_type,
         tolerance=tolerance,
     )
+    # Presentation must conserve every source cash movement, including reviews.
+    for key in period_keys:
+        source_net = float(working.loc[working['period_key'].eq(key), 'treasury_movement'].sum()) if not working.empty else 0.0
+        displayed_net = float(category_totals[key].sum())
+        if abs(source_net - displayed_net) > tolerance:
+            raise LedgerBalanceError('Cashflow category totals do not preserve signed source movements', balance_checks)
     treasury_reconciliation = _cashflow_treasury_reconciliation(
         category_totals,
         treasury_category_totals,
@@ -1719,7 +1846,13 @@ def build_cashflow_summary(
         }
         for period in periods
     }
-    customer_payment_customer_totals = _build_cashflow_customer_payment_customer_totals(customer_payment_details)
+    account_details = _customer_account_details(contra, customer_payment_details) if not working.empty else _empty_customer_payment_details()
+    customer_payment_customer_totals = _build_cashflow_customer_payment_customer_totals(account_details)
+    account_period_totals = []
+    for (key, label), lines in account_details.groupby(['period_key', 'period_label'], sort=False):
+        totals = _build_cashflow_customer_payment_customer_totals(lines)
+        totals['period_key'], totals['period_label'] = key, label
+        account_period_totals.append(totals)
     customer_payment_reconciliation = _build_cashflow_customer_payment_reconciliation(
         customer_payment_details,
         customer_payment_customer_totals,
@@ -1728,7 +1861,7 @@ def build_cashflow_summary(
         tolerance=tolerance,
     )
     customer_payment_period_totals = _build_cashflow_customer_payment_period_totals(
-        customer_payment_details,
+        account_details,
         periods,
         category_totals,
         receipt_categories,
@@ -1749,6 +1882,7 @@ def build_cashflow_summary(
         "transfer_reconciliation": transfer_reconciliation,
         "customer_payment_details": customer_payment_details,
         "customer_payment_customer_totals": customer_payment_customer_totals,
+        "customer_payment_account_period_totals": pd.concat(account_period_totals, ignore_index=True) if account_period_totals else pd.DataFrame(),
         "customer_payment_period_totals": customer_payment_period_totals,
         "customer_payment_reconciliation": customer_payment_reconciliation,
         "customer_payment_receipt_categories": sorted(receipt_categories),
@@ -1762,6 +1896,7 @@ def build_cashflow_summary(
         "category_review_count": len(review),
         "period_metrics": period_metrics,
         "receipt_presentation": presentation,
+        **_build_vendor_payment_reports(contra if not working.empty else pd.DataFrame(), vendor_account_codes),
     }
 
 def build_group_summary(
