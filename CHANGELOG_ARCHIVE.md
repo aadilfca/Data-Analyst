@@ -1,5 +1,15 @@
 # Changelog Archive
 
+## Cashflow final reconciliation acceptance — 2026-10-21
+
+**Scope:** C6 verifies accepted code `bfa7731`; only the three approved guidance/history documents change. One enforced read-only PostgreSQL snapshot compares January–June Combined, Bank, Cash and Split with exact raw debit/credit sums and independent account-ledger roll-forwards. January anchors reuse accepted evidence only after complete source fingerprints match. All six monthly openings/closings and carries reconcile to cents. June closes Combined/Split 203,851,286.59, Bank 201,318,246.83 and Cash 2,533,039.76.
+
+**Exports/evidence:** Four saved/reopened workbooks each preserve 18 source movement proofs, corresponding available ledger boundaries, 932 deductions and 209 transfers. Unavailable opposite-view ledger evidence stays blank. Counts/fingerprints remain unchanged for 64,879 voucher and 12,354 ledger rows. Local evidence: `c6-acceptance-evidence.json` and `C6-Cashflow-Jan-Jun-2026-{combined,bank,cash,split}.xlsx` in this chat's external evidence directory. C5's 299 passing checks are reused, not rerun; code is unchanged. Category/customer settlement reviews remain distinct from arithmetic acceptance. This does not certify transactions absent from both extracts or unresolved category roles.
+
+**Local acceptance:** Both supplied screen copies match all 114 rows, 1,470 amounts and 86 percentages. The actual export matches 20,104 C6 reference cells; its 1,452 drill-down roll-ups and 527 ledger detail rows independently reconcile to categories. All 292 customer and 564 vendor transactions remain; four category reviews and 248 settlement reviews stay disclosed. No numerical/structural discrepancy; native Excel visual layout was not assessed. Evidence: `c6-user-attachment-review.json`. Aadil accepts C6 and authorises documentation commit/push.
+
+**Sequence:** Original 6 Differences → 7 Verification → separately approved account selection → final 8 Drive production. Trial Balance precision repair stays separate. No financial/configuration writes, application changes, installations or server restart; unrelated benchmark work/private backups remain excluded.
+
 ## Independent Cashflow controls — 2026-10-21
 
 **Scope:** C5 adds 22 regression cases across six existing test files; production code is unchanged. Separately transcribed voucher/ledger fixtures and fixed Decimal expectations cover clipped December–January periods, inactive February, zero/credit openings, repeated lines, later customer returns, vendor refunds, negative-side ERP postings and continuous carry. Monthly/yearly controls retain mixed-category review independently of matched arithmetic. Explicit deduction roles remain required; configuration-only Treasury additions change context and cannot fabricate missing ledger evidence. Actual source SQL runs against an owned in-memory database, including corrected dates and removed vouchers. The real report/balance engines feed browser and XLSX checks; category filters cannot narrow full-scope proofs.
