@@ -68,6 +68,8 @@ def _cashflow_configuration_key(configuration: dict[str, Any]) -> str:
         'match_internal_transfers', 'receipt_presentation', 'customer_payment_roles', 'category_mappings', 'vendor_account_codes',
     )}
     relevant['signed_party_totals_version'] = 1
+    relevant['treasury_movement_proof_version'] = 1
+    relevant['complete_deduction_details_version'] = 1
     return hashlib.sha256(json.dumps(relevant, sort_keys=True, default=str).encode('utf-8')).hexdigest()
 
 
@@ -1357,6 +1359,7 @@ def _cashflow_preview(
             "category_totals": [],
             "treasury_category_totals": [],
             "treasury_reconciliation": {},
+            "treasury_movement_proof": [],
             "treasury_view": treasury_view,
             "treasury_view_ready": treasury_view == "combined",
             "treasury_view_totals": [],
@@ -1413,11 +1416,12 @@ def _cashflow_preview(
         "category_totals": _category_total_records(summary.get("category_totals")),
         "treasury_category_totals": _frame_records_all(summary.get("treasury_category_totals")),
         "treasury_reconciliation": summary.get("treasury_reconciliation") or {},
+        "treasury_movement_proof": list(summary.get("treasury_movement_proof") or []),
         "treasury_view": treasury_projection["view"],
         "treasury_view_ready": bool(treasury_projection["ready"]),
         "treasury_view_totals": treasury_view_totals,
         "treasury_view_reconciliation": treasury_projection["reconciliation"],
-        "transfer_details": _frame_records(summary.get("transfer_details")) if "transfers" in loaded else [],
+        "transfer_details": _frame_records_all(summary.get("transfer_details")) if "transfers" in loaded else [],
         "transfer_reconciliation": summary.get("transfer_reconciliation") if "transfers" in loaded else None,
         "customer_payment_details": _frame_records_all(summary.get("customer_payment_details")) if "customer_payments" in loaded else [],
         "customer_payment_customer_totals": customer_rows,
@@ -1428,7 +1432,8 @@ def _cashflow_preview(
         "customer_payment_customer_options": customer_options,
         "customer_payment_reconciliation": dict(summary.get("customer_payment_reconciliation") or {}) if "customer_payments" in loaded else {},
         "customer_payment_selected_account_code": selected_customer_code,
-        "deduction_details": _frame_records(summary.get("deduction_details")) if "deductions" in loaded else [],
+        # The same payload supplies XLSX; a preview cap would omit audit detail.
+        "deduction_details": _frame_records_all(summary.get("deduction_details")) if "deductions" in loaded else [],
         "categories_needing_review": _frame_records(review) if "review" in loaded else [],
         "selected_voucher_count": int(summary.get("selected_voucher_count", 0)),
         "internal_transfer_count": int(summary.get("internal_transfer_count", 0)),
@@ -1615,10 +1620,13 @@ def _build_cashflow_result(
         accounts.update({code: 'Bank' for code in configuration['bank_account_codes'] if treasury_view != 'cash'})
         periods = summary.get('periods', []) if summary else []
         def view_movements(view):
-            projection = project_cashflow_treasury_view(summary or {}, view)
-            totals = projection['totals']
-            return {p['key']: (sum((Decimal(str(value)) for value in totals[p['key']]), Decimal(0))
-                              if projection['ready'] and p['key'] in totals else None) for p in periods}
+            # Category allocation and balance arithmetic have separate proofs.
+            # Missing/old proofs must never silently fall back to weighted totals.
+            proof = {row['period_key']: row for row in (summary or {}).get('treasury_movement_proof', [])
+                     if row.get('treasury_type') == view}
+            return {p['key']: (Decimal(str(proof[p['key']]['explained_movement']))
+                              if p['key'] in proof and proof[p['key']].get('status') == 'Matched' else None)
+                    for p in periods}
         movements = view_movements('combined' if treasury_view == 'split' else treasury_view)
         split_movements = {key: view_movements(key) for key in ('bank', 'cash')} if treasury_view == 'split' else None
         account_names = {item['account_code']: item['account_name'] for item in (_latest_trial_balance_accounts(client_id) if accounts and periods else [])
@@ -1626,11 +1634,11 @@ def _build_cashflow_result(
         preview['balance_reconciliation'] = load_uploaded_ledger_balances(
             client_id, accounts, periods, movements, query_fn=execute_query_pg,
             account_names=account_names, treasury_movements=split_movements)
-        if split_movements is not None:
-            preview['balance_reconciliation']['unresolved_movements'] = {
-                key: float(value - split_movements['bank'][key] - split_movements['cash'][key])
-                if value is not None and split_movements['bank'][key] is not None and split_movements['cash'][key] is not None
-                else None for key, value in movements.items()}
+        # Mixed is a category-attribution bucket, never a third Treasury balance.
+        preview['balance_reconciliation']['unresolved_movements'] = {
+            p['key']: (0.0 if movements[p['key']] is not None and (split_movements is None or
+                all(split_movements[view][p['key']] is not None for view in ('bank', 'cash'))) else None)
+            for p in periods}
     configuration_key = _cashflow_configuration_key(configuration)
     ledger_context = {
         'client_id': client_id, 'template_id': configured_template_id,
@@ -2168,14 +2176,13 @@ def export_cashflows_report(
     session=Depends(require_admin),
 ):
     """Export the same Cashflows period and grouping shown in Reports."""
-    result = _build_cashflow_result(
-        client_id,
-        period_start,
-        period_end,
+    # Export controls and independent ledger evidence use the same snapshot as
+    # the source movements, exactly as the screen's balance-enabled preview.
+    result = run_read_snapshot_pg(lambda _conn: _build_cashflow_result(
+        client_id, period_start, period_end,
         detail_sections={'transfers', 'customer_payments', 'vendor_payments', 'deductions', 'review', 'drilldown'},
-        group_by=group_by,
-        treasury_view=treasury_view,
-    )
+        group_by=group_by, treasury_view=treasury_view, include_balances=True,
+    ))
     if not result["source"]["ready"] or not result["preview"].get("periods"):
         raise HTTPException(
             409,

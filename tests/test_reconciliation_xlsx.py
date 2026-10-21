@@ -11,6 +11,38 @@ from services.reconciliation_xlsx import (
 )
 
 
+@pytest.mark.parametrize('view', ['combined', 'bank', 'cash', 'split'])
+def test_cashflow_export_proves_source_transfers_and_mixed_movements_without_weighting(view):
+    from services.ledger_group_summary import build_cashflow_summary
+    from routers.reconciliation import _cashflow_preview
+    from services.reconciliation_xlsx import build_cashflow_workbook
+    journal = pd.DataFrame([
+        ['T', '2026-01-05', 'B', 0, 100], ['T', '2026-01-05', 'C', 100, 0],
+        ['M', '2026-01-06', 'B', 0, 105], ['M', '2026-01-06', 'C', 100, 0], ['M', '2026-01-06', 'E', 5, 0],
+    ], columns=['voucher_id', 'date', 'account_code', 'debit', 'credit'])
+    coa = pd.DataFrame([dict(account_code=code, account_title=code, category='Charges' if code == 'E' else '') for code in ['B', 'C', 'E']])
+    summary = build_cashflow_summary(journal, coa, ['C'], ['B'], '2026-01-01', '2026-01-31')
+    preview = _cashflow_preview(summary, {'transfers'}, view)
+    workbook = build_cashflow_workbook(preview)
+    proof = workbook['Treasury Movement Proof']
+    assert [proof.cell(5, column).value for column in range(2, 11)] == ['bank', 0, -100, -105, -205, -205, 0, 'Matched', 'Review required']
+    assert proof.cell(6, 7).value == 200
+    assert proof.cell(7, 7).value == -5
+    assert proof.cell(5, 12).value is None  # Missing ledger evidence is never invented.
+    assert proof.cell(5, 7).number_format == '#,##0.00;[Red](#,##0.00);-'
+    sheet = workbook['Cashflows Summary']
+    rows = {sheet.cell(row, 1).value: row for row in range(1, sheet.max_row + 1)}
+    movement = rows['Net cash movement']
+    expected = {'combined': [-5], 'bank': [-205], 'cash': [200], 'split': [-205, 200, 0, -5]}[view]
+    assert [sheet.cell(movement, column).value for column in range(2, 2+len(expected))] == expected
+    if view == 'split':
+        mixed = rows['Mixed voucher Treasury bridge — allocation under review']
+        assert [sheet.cell(mixed, column).value for column in range(2, 6)] == [-105, 100, 5, 0]
+    transfers = workbook['Internal Transfers']
+    assert transfers.cell(5, 9).value == -100
+    assert transfers.cell(5, 10).value == 100
+
+
 def _fixture_data() -> tuple[pd.DataFrame, pd.DataFrame]:
     journal = pd.DataFrame(
         [

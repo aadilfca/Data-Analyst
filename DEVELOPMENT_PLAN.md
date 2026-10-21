@@ -2,7 +2,9 @@
 
 C1 accounts/mappings reviewed. Signed customer/vendor reversal summaries and January–June combined reconciliation are locally accepted; Aadil authorises commit/push on 2026-10-21. Details: CHANGELOG_ARCHIVE.md, “Signed customer/vendor reversals”.
 
-Before original phases 6–8: finish C4 internal-transfer/mixed-voucher attribution, C5 independent boundary/carry checks and C6 acceptance. Trial Balance precision repair remains separate. Drive production setup remains last.
+C4 is locally accepted; Aadil authorises commit/push on 2026-10-21. Next: C5 independent controls. Details: CHANGELOG_ARCHIVE.md, “Separate Treasury reconciliation”.
+
+Before original phases 6–8: finish C5 independent boundary/carry checks and C6 acceptance. Trial Balance precision repair remains separate. Drive production setup remains last.
 
 ## Current feature sequence — Cashflow ledger balances — 2026-10-20
 

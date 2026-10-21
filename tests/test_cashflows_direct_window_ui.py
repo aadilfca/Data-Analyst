@@ -351,7 +351,7 @@ def test_cashflows_report_preserves_current_default_period_and_monthly_grouping(
     assert "cashflowPreviewPeriods" in reconciliation_script
     assert "syncCashflowZeroRowsButton" in reconciliation_script
     assert "style.css?v=71" in reconciliation_html
-    assert "reconciliation.js?v=37" in reconciliation_html
+    assert "reconciliation.js?v=39" in reconciliation_html
     assert "cashflowsSummaryBasis" not in reconciliation_html
     assert "cashflows-transactions-note" not in reconciliation_html
     assert "renderCashflowSummary" in reconciliation_script
@@ -878,6 +878,97 @@ def _balance_report(view='combined', month='2026-01', two_periods=False):
 
 def _balance_toggle(page, kind='opening'):
     return page.locator('[data-cashflow-balance-toggle="'+kind+'"]')
+
+
+def _c4_report(view):
+    import pandas as pd
+    from services.ledger_group_summary import build_cashflow_summary
+    from routers.reconciliation import _cashflow_preview
+    report = _balance_report(view)
+    journal = pd.DataFrame([
+        ['T', '2026-01-05', 'B1', 0, 100], ['T', '2026-01-05', 'C1', 100, 0],
+        ['M', '2026-01-06', 'B1', 0, 105], ['M', '2026-01-06', 'C1', 100, 0], ['M', '2026-01-06', 'E', 5, 0],
+    ], columns=['voucher_id', 'date', 'account_code', 'debit', 'credit'])
+    coa = pd.DataFrame([dict(account_code=code, account_title=code, category='Charges' if code == 'E' else '') for code in ['B1', 'C1', 'E']])
+    summary = build_cashflow_summary(journal, coa, ['C1'], ['B1'], report['period_start'], report['period_end'])
+    report['preview'].update(_cashflow_preview(summary, {'transfers'}, view))
+    evidence = report['preview']['balance_reconciliation']
+    parts = dict(evidence.get('treasury_breakdown') or {})
+    parts['combined' if view == 'split' else view] = evidence
+    for kind, part in parts.items():
+        opening, closing, movement = {'bank': (300, 95, -205), 'cash': (100, 300, 200), 'combined': (400, 395, -5)}[kind]
+        part['periods'][0].update(opening_total=opening, closing_total=closing, calculated_opening=opening,
+            calculated_closing=closing, cashflow_net_movement=movement, variance=0)
+        part['overall'].update(opening_total=opening, closing_total=closing, cashflow_net_movement=movement)
+    return report
+
+
+@pytest.mark.parametrize('view,expected', [('bank', ['-100']), ('cash', ['100']), ('combined', ['-']), ('split', ['-100', '100', '-', '-'])])
+def test_treasury_bridge_uses_actual_source_and_keeps_mixed_allocation_review(ledger_cache_page, view, expected):
+    page = ledger_cache_page
+    report = _c4_report(view)
+    errors = []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    page.evaluate('result=>ledgerFixture.load(result)', report)
+    assert page.locator('.cashflows-summary-frozen-table .cashflows-balance-bridge').count() == 3
+    bridge = page.locator('.cashflows-summary-scroll-table .cashflows-balance-bridge').nth(1)
+    assert bridge.locator('td').all_inner_texts()[:len(expected)] == expected
+    assert 'allocation under review' in page.locator('.cashflows-summary-frozen-table .cashflows-balance-bridge').nth(2).inner_text()
+    assert _balance_values(page, '.cashflows-balance-net')[0] == ('200' if view == 'cash' else '-5' if view == 'combined' else '-205')
+    page.evaluate("() => ledgerFixture.filter('nothing matches')")
+    assert page.locator('.cashflows-summary-frozen-table .cashflows-balance-bridge').count() == 3
+    assert not errors
+    if view == 'split':
+        assert _balance_values(page, '.cashflows-balance-bridge')[:4] == ['-', '-', '-5', '-5']
+        mixed = page.locator('.cashflows-summary-scroll-table .cashflows-balance-bridge').nth(2)
+        assert mixed.locator('td').all_inner_texts()[:4] == ['-105', '100', '5', '-']
+        page.screenshot(path='C:/Users/LENOVO/.codex/visualizations/2026/10/21/01a15eeb-7a5e-7ef2-9607-b5ec5a138869/c4-mixed-bridge.png', full_page=True)
+
+
+def test_treasury_bridge_refresh_preserves_expansion_and_does_not_duplicate_rows(ledger_cache_page):
+    page = ledger_cache_page
+    report = _c4_report('split')
+    page.evaluate('result=>ledgerFixture.load(result)', report)
+    page.evaluate('''() => {
+        window.fetch = () => new Promise(resolve => {window.c4Resolver = resolve;});
+        window.c4Refresh = ledgerFixture.generate(false);
+    }''')
+    page.wait_for_function('typeof c4Resolver === "function"')
+    _balance_toggle(page, 'closing').click()
+    page.evaluate('''async report => {c4Resolver(new Response(JSON.stringify(report))); await c4Refresh;}''', report)
+    assert _balance_toggle(page, 'closing').get_attribute('aria-expanded') == 'true'
+    assert page.locator('.cashflows-summary-frozen-table .cashflows-balance-bridge').count() == 3
+    assert page.locator('.cashflows-summary-scroll-table .cashflows-balance-bridge').count() == 3
+
+
+def test_treasury_parent_cache_aggregates_proofs_to_the_selected_period_only(ledger_cache_page):
+    page = ledger_cache_page
+    report = _c4_report('split')
+    derived = page.evaluate("report => ledgerFixture.parent(report, '2026-01-01', '2026-01-28', 'quarter', 'split')", report)
+    assert derived is not None
+    proof = derived['preview']['treasury_movement_proof']
+    assert {row['period_key'] for row in proof} == {'2026-Q1'}
+    assert next(row for row in proof if row['treasury_type'] == 'bank')['source_movement'] == -205
+    assert derived['preview']['treasury_view_reconciliation']['allocation_status'] == 'Review required'
+    assert page.evaluate("report => ledgerFixture.parent(report, '2026-01-02', '2026-01-28', 'quarter', 'split')", report) is None
+
+
+@pytest.mark.parametrize('reversal', [False, True])
+def test_split_monthly_payment_subtotals_share_section_sign_and_preserve_reversals(ledger_cache_page, reversal):
+    page = ledger_cache_page
+    report = _balance_report('split', two_periods=True)
+    if reversal:
+        for row in report['preview']['treasury_view_totals']:
+            if row['category'] == 'Other':
+                row['cash_amount'] = row['total_amount'] = 40 if row['period_key'] == '2026-01' else -60
+        for row in report['preview']['category_totals']:
+            if row['category'] == 'Other':
+                row.update({'2026-01': 40, '2026-02': -60, 'Total': -20})
+    page.evaluate('result=>ledgerFixture.load(result)', report)
+    totals = page.locator('.cashflows-summary-scroll-table .cashflows-summary-total-row')
+    assert totals.nth(0).locator('td').all_inner_texts()[:9] == ['50', '-', '50', '50', '-', '50', '100', '-', '100']
+    expected = ['-', '(40)', '(40)', '-', '60', '60', '-', '20', '20'] if reversal else ['-', '20', '20', '-', '20', '20', '-', '40', '40']
+    assert totals.nth(1).locator('td').all_inner_texts()[:9] == expected
 
 
 def _balance_values(page, selector):

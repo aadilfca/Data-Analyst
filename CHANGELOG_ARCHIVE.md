@@ -1,5 +1,19 @@
 # Changelog Archive
 
+## Separate Treasury reconciliation — 2026-10-21
+
+**Cause:** Pure Treasury transfers appeared only in a detail schedule, leaving Bank/Cash calculated balances short of their signed source movements. Absolute-weight category allocation could preserve Combined while misrepresenting mixed vouchers; the old “Matched” control checked category agreement only.
+
+**Implementation:** Category attribution now requires one proven Treasury type. A period/source proof separately explains category net, pure internal transfers and actual mixed-voucher Treasury movements; uncertain categories remain unallocated and reviewed. Combined categories retain their signed totals. Balances consume the proved movement without a category fallback. The screen and XLSX share the bridge, signed Bank/Cash transfer columns and full-scope source/ledger controls. Transfer details retain all rows and actual posting periods, including reused voucher IDs. Payload/configuration/script versions reject previous calculations; parent-period reuse aggregates scoped proofs. Retired prepared roll-ups cannot claim the new proof version. No financial/configuration writes, schema changes or installations.
+
+**Evidence:** Enforced read-only PostgreSQL snapshots independently match exact raw debit/credit SQL. All six Bank and Cash monthly closings reconcile to cents with continuous carry-forward. Pure transfers total Bank −371,750,000 / Cash +371,750,000; this selection has no mixed Cash/Bank vouchers. Combined June closing remains 203,851,286.59. Counts/fingerprints preserve all 64,879 voucher and 12,354 ledger rows. Synthetic checks cover ambiguous mixed vouchers, signed reversals, multiple Treasury legs, zero-net categories, reused IDs, export parity and cache scope.
+
+**Verification:** 263 backend and 56 UI checks pass; one intentional migration-only skip and an existing tooling warning remain. Python syntax and diff whitespace checks pass. The actual XLSX retains 209 transfer rows and 18 monthly Treasury proofs; source/ledger/export differences are below one cent. June Bank closes at 201,318,246.83 and Cash at 2,533,039.76.
+
+**Copy/paste corrections:** Aadil's actual report text exposed six monthly payment-subtotal Total cells using raw negative signs. All subtotal columns now share the section formatter, preserving bracketed reversals. Deduction details retain every row instead of the 200-row cap; context/script versions invalidate previous results. Read-only live export confirms 932 deductions, 209 transfers and unchanged balances/source fingerprints. The report/UI suite passes 124 checks with one intentional migration-only skip and existing tooling warning. Repeat local copy/paste matches all 66 rows, 1,274 amounts, 43 percentages and eight accounts; 18 balance equations and 55 carry-forwards reconcile.
+
+**Acceptance:** Aadil confirms 932 deductions and 209 transfers, accepts C4 and authorises commit/push on 2026-10-21. C5/C6, later differences work, Trial Balance precision repair and final Drive production setup remain pending. Unrelated benchmark/document changes and private backups remain excluded.
+
 ## Signed customer/vendor reversals — 2026-10-21
 
 **Cause:** Net customer processing discarded reversal-only and unmatched vouchers. Four January–April reversals overstated June’s combined closing by 22,589,893.41 after the surcharge mapping correction.

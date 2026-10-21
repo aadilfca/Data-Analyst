@@ -32,11 +32,11 @@ JOURNAL_COLUMNS = (
 )
 CASHFLOW_PREPARED_PERIOD_COLUMNS = ("transaction_month", "transaction_fortnight")
 COA_COLUMNS = ("account_code", "account_title", "account_type", "category")
-CASHFLOW_CHILD_DETAILS_VERSION = 8
+CASHFLOW_CHILD_DETAILS_VERSION = 9
 CASHFLOW_DRILLDOWN_DETAILS_VERSION = 2
 CASHFLOW_DRILLDOWN_PROJECTION_VERSION = 1
-CASHFLOW_TREASURY_TOTALS_VERSION = 1
-CASHFLOW_SUMMARY_PAYLOAD_VERSION = 3
+CASHFLOW_TREASURY_TOTALS_VERSION = 2
+CASHFLOW_SUMMARY_PAYLOAD_VERSION = 4
 CASHFLOW_TREASURY_VIEWS = ("combined", "bank", "cash", "split")
 CASHFLOW_CANONICAL_SOURCE_KEY = "canonical-v1"
 
@@ -1552,7 +1552,8 @@ def load_cashflow_prepared_rollup_summary(
             period_keys,
             tolerance=DEFAULT_TOLERANCE,
         ),
-        "treasury_totals_version": CASHFLOW_TREASURY_TOTALS_VERSION,
+        # Retired prepared roll-ups cannot certify the canonical source proof.
+        "treasury_totals_version": 1,
         "transfer_details": pd.DataFrame(),
         "transfer_reconciliation": None,
         "customer_payment_details": pd.DataFrame(),
@@ -2148,7 +2149,8 @@ def _cashflow_summary_payload(summary: Mapping[str, Any]) -> dict[str, Any]:
         "categories": categories,
         "treasury_category_totals": _cashflow_detail_records(summary.get("treasury_category_totals")),
         "treasury_reconciliation": dict(summary.get("treasury_reconciliation") or {}),
-        "treasury_totals_version": CASHFLOW_TREASURY_TOTALS_VERSION if "treasury_category_totals" in summary else 0,
+        "treasury_movement_proof": list(summary.get("treasury_movement_proof") or []),
+        "treasury_totals_version": int(summary.get("treasury_totals_version", 0) or 0),
         "source_line_count": int(summary.get("source_line_count", 0) or 0),
         "selected_voucher_count": int(summary.get("selected_voucher_count", 0) or 0),
         "internal_transfer_count": int(summary.get("internal_transfer_count", 0) or 0),
@@ -2246,6 +2248,7 @@ def _cashflow_summary_from_payload(
         "drilldown_details_version": drilldown_version,
         "treasury_category_totals": treasury_category_totals,
         "treasury_reconciliation": dict(payload.get("treasury_reconciliation") or {}),
+        "treasury_movement_proof": list(payload.get("treasury_movement_proof") or []),
         "treasury_totals_version": treasury_totals_version,
         "transfer_details": transfer_details,
         "transfer_reconciliation": (
@@ -2465,6 +2468,23 @@ def _cashflow_daily_rollup(
         [str(period["key"]) for period in periods],
         tolerance=DEFAULT_TOLERANCE,
     )
+    movement_proof = []
+    source_proof = payload.get('treasury_movement_proof') or []
+    for period in periods:
+        for view in ('bank', 'cash', 'combined'):
+            selected = [row for row in source_proof if row.get('period_key') in target_days[period['key']]
+                        and row.get('treasury_type') == view]
+            if len(selected) != len(target_days[period['key']]) or not selected:
+                continue
+            record = dict(period_key=period['key'], treasury_type=view)
+            for field in ('category_movement', 'internal_transfer_movement', 'mixed_voucher_movement',
+                          'explained_movement', 'source_movement', 'variance', 'unallocated_category_movement', 'mixed_voucher_count'):
+                record[field] = sum(row[field] for row in selected)
+            record['status'] = 'Matched' if all(row['status'] == 'Matched' for row in selected) else 'Variance'
+            record['allocation_status'] = 'Review required' if any(row['allocation_status'] == 'Review required' for row in selected) else 'Proven'
+            movement_proof.append(record)
+    if any(row['allocation_status'] == 'Review required' for row in movement_proof):
+        treasury_reconciliation['status'] = 'Review required'
     totals = {
         metric: sum(values.get(metric, 0) for values in period_metrics.values())
         for metric in ("source_line_count", "selected_voucher_count", "internal_transfer_count", "category_review_count", "deduction_count")
@@ -2523,6 +2543,7 @@ def _cashflow_daily_rollup(
         "category_totals": category_totals,
         "treasury_category_totals": treasury_category_totals,
         "treasury_reconciliation": treasury_reconciliation,
+        "treasury_movement_proof": movement_proof,
         "treasury_totals_version": int(payload.get("treasury_totals_version", 0) or 0),
         "transfer_details": transfer_details,
         "transfer_reconciliation": transfer_reconciliation,

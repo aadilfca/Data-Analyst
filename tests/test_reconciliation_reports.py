@@ -108,8 +108,8 @@ def test_balance_opt_in_builds_vouchers_and_ledger_evidence_in_one_read_snapshot
 @pytest.mark.parametrize('view,expected_codes,expected_flows', [
     ('combined', {'C1': 'Cash', 'B1': 'Bank'}, [125, 50]),
     ('split', {'C1': 'Cash', 'B1': 'Bank'}, [125, 50]),
-    ('bank', {'B1': 'Bank'}, [80, 20]),
-    ('cash', {'C1': 'Cash'}, [45, 30]),
+    ('bank', {'B1': 'Bank'}, [5, 20]),
+    ('cash', {'C1': 'Cash'}, [120, 30]),
 ])
 def test_cashflow_balance_reconciliation_uses_same_report_periods_view_and_category_effect(view, expected_codes, expected_flows):
     from services.ledger_group_summary import CASHFLOW_TREASURY_TOTALS_VERSION
@@ -121,6 +121,9 @@ def test_cashflow_balance_reconciliation_uses_same_report_periods_view_and_categ
         {'category': 'Customers', 'period_key': '2026-Q1', 'bank_amount': 80, 'cash_amount': 45, 'total_amount': 125},
         {'category': 'Customers', 'period_key': '2026-Q2', 'bank_amount': 20, 'cash_amount': 30, 'total_amount': 50},
     ])
+    summary['treasury_movement_proof'] = [dict(period_key=key, treasury_type=kind, status='Matched', explained_movement=amount)
+        for kind, values in [('bank', [5, 20]), ('cash', [120, 30]), ('combined', [125, 50])]
+        for key, amount in zip(['2026-Q1', '2026-Q2'], values)]
     evidence = {'ready': False, 'status': 'Unavailable', 'periods': [], 'evidence_fingerprint': 'current-proof'}
     with patch.object(reconciliation, '_require_active_client'), \
             patch.object(reconciliation, '_cashflow_configuration', return_value=configuration), \
@@ -137,8 +140,8 @@ def test_cashflow_balance_reconciliation_uses_same_report_periods_view_and_categ
     assert kwargs['account_names'] == ({'B1': 'Bank Alpha'} if view != 'cash' else {})
     assert (kwargs['treasury_movements'] is not None) == (view == 'split')
     if view == 'split':
-        assert [float(v) for v in kwargs['treasury_movements']['bank'].values()] == [80, 20]
-        assert [float(v) for v in kwargs['treasury_movements']['cash'].values()] == [45, 30]
+        assert [float(v) for v in kwargs['treasury_movements']['bank'].values()] == [5, 20]
+        assert [float(v) for v in kwargs['treasury_movements']['cash'].values()] == [120, 30]
         assert result['preview']['balance_reconciliation']['unresolved_movements'] == {'2026-Q1': 0, '2026-Q2': 0}
     assert result['preview']['balance_reconciliation'] == evidence
     # Missing ledger evidence must not erase or block the working movement report.
@@ -916,7 +919,7 @@ def test_cashflows_preview_rejects_previous_child_details_version():
         "summary": _cashflow_summary(),
     }
 
-    assert CASHFLOW_CHILD_DETAILS_VERSION == 8
+    assert CASHFLOW_CHILD_DETAILS_VERSION == 9
     assert reconciliation._cashflow_cache_can_serve_details(cached, {"customer_payments"}) is False
 
 
@@ -1679,6 +1682,7 @@ def test_cashflow_export_uses_canonical_drilldown_and_active_filters():
         "blocking_reasons": [],
     }
     with (
+        patch.object(reconciliation, 'run_read_snapshot_pg', side_effect=lambda callback: callback(None)),
         patch.object(reconciliation, "_build_cashflow_result", return_value=result) as builder,
         patch.object(reconciliation, "export_cashflow_xlsx", return_value=b"xlsx") as exporter,
     ):
@@ -1700,6 +1704,7 @@ def test_cashflow_export_uses_canonical_drilldown_and_active_filters():
 
     assert response.media_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     assert builder.call_args.kwargs["detail_sections"] == {"transfers", "customer_payments", "vendor_payments", "deductions", "review", "drilldown"}
+    assert builder.call_args.kwargs['include_balances'] is True
     export_preview = exporter.call_args.args[0]
     assert [row["category"] for row in export_preview["category_totals"]] == ["Customers"]
     assert len(export_preview["ledger_rollups"]) == 1
@@ -1722,6 +1727,7 @@ def test_cashflow_export_keeps_client_data_drilldown_rows():
         "blocking_reasons": [],
     }
     with (
+        patch.object(reconciliation, 'run_read_snapshot_pg', side_effect=lambda callback: callback(None)),
         patch.object(reconciliation, "_build_cashflow_result", return_value=result),
         patch.object(reconciliation, "export_cashflow_xlsx", return_value=b"xlsx") as exporter,
     ):
@@ -1776,7 +1782,7 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "setActiveCashflowWindow" in javascript
     assert "const CASHFLOW_DEFAULT_START = '2026-01-01';" in javascript
     assert "const CASHFLOW_DEFAULT_END = '2026-06-30';" in javascript
-    assert "<script src='/static/reconciliation.js?v=37'></script>" in html
+    assert "<script src='/static/reconciliation.js?v=39'></script>" in html
     assert "cashflows-table-number" in javascript
     assert "grid-template-columns: minmax(0, 1fr)" in stylesheet
     assert ".cashflows-table td.cashflows-table-text" in stylesheet
@@ -2089,3 +2095,57 @@ def test_signed_party_preview_is_complete_and_vendor_identity_changes_context():
     assert len(preview['vendor_payment_details']) == 260
     assert reconciliation._cashflow_configuration_key({'vendor_account_codes': ['AP1']}) != reconciliation._cashflow_configuration_key({'vendor_account_codes': ['AP2']})
     assert 'vendor_payments' in reconciliation._parse_cashflow_detail_sections('vendor_payments')
+
+
+def test_all_deduction_details_survive_preview_and_excel_export():
+    summary = _cashflow_summary()
+    summary['deduction_details'] = pd.DataFrame([
+        dict(period_key='2026-Q1', period_label='Q1 2026', category='Charges',
+             account_name=f'Charge {index}', amount=-(index + 0.25), presentation='shown_separately')
+        for index in range(932)
+    ])
+    preview = reconciliation._cashflow_preview(summary, {'deductions'})
+    assert preview['deduction_count'] == len(preview['deduction_details']) == 932
+    assert preview['deduction_details'][-1]['account_name'] == 'Charge 931'
+    workbook = load_workbook(BytesIO(export_cashflow_xlsx(preview)), data_only=True)
+    sheet = workbook['Customer Deductions']
+    assert sheet.max_row - 4 == 932
+    assert sheet.cell(936, 3).value == 'Charge 931'
+    assert sum(sheet.cell(row, 4).value for row in range(5, 937)) == sum(summary['deduction_details']['amount'])
+    assert reconciliation._cashflow_preview(summary, set())['deduction_details'] == []
+
+
+def test_balance_proof_never_falls_back_to_categories_when_source_proof_is_missing():
+    configuration = dict(source_template_id=9, cash_account_codes=['C1'], bank_account_codes=['B1'],
+                         match_internal_transfers=True, receipt_presentation='net')
+    with patch.object(reconciliation, '_require_active_client'), \
+            patch.object(reconciliation, '_cashflow_configuration', return_value=configuration), \
+            patch.object(reconciliation, '_latest_trial_balance_accounts', return_value=[]), \
+            patch.object(reconciliation, 'load_ledger_report_source', return_value=_source()), \
+            patch.object(reconciliation, 'build_cashflow_summary', return_value=_cashflow_summary()), \
+            patch.object(reconciliation, 'load_uploaded_ledger_balances', return_value={}) as balances:
+        result = reconciliation._build_cashflow_result(7, '2026-02-10', '2026-04-18', include_balances=True)
+    assert all(value is None for value in balances.call_args.args[3].values())
+    assert all(value is None for value in result['preview']['balance_reconciliation']['unresolved_movements'].values())
+
+
+def test_treasury_proof_roundtrip_and_daily_aggregation_keep_actual_source_periods():
+    from services.ledger_report_source import _cashflow_summary_payload, _cashflow_summary_from_payload, _cashflow_daily_rollup
+    journal = pd.DataFrame([
+        ['T', '2026-01-01', 'B', 0, 100], ['T', '2026-01-01', 'C', 100, 0],
+        ['M', '2026-01-02', 'B', 0, 105], ['M', '2026-01-02', 'C', 100, 0], ['M', '2026-01-02', 'E', 5, 0],
+    ], columns=['voucher_id', 'date', 'account_code', 'debit', 'credit'])
+    coa = pd.DataFrame([dict(account_code=code, account_title=code, category='Charges' if code == 'E' else '') for code in ['B', 'C', 'E']])
+    summary = build_cashflow_summary(journal, coa, ['C'], ['B'], '2026-01-01', '2026-01-02', group_by='day')
+    payload = _cashflow_summary_payload(summary)
+    assert _cashflow_summary_from_payload(payload, 'day')['treasury_movement_proof'] == summary['treasury_movement_proof']
+    rolled = _cashflow_daily_rollup(payload, '2026-01-01', '2026-01-02', 'month')
+    proof = {r['treasury_type']: r for r in rolled['treasury_movement_proof']}
+    assert proof['bank']['source_movement'] == -205
+    assert proof['cash']['source_movement'] == 200
+    assert proof['combined']['source_movement'] == -5
+    assert rolled['treasury_reconciliation']['status'] == 'Review required'
+    subset = _cashflow_daily_rollup(payload, '2026-01-02', '2026-01-02', 'month')
+    assert next(r for r in subset['treasury_movement_proof'] if r['treasury_type'] == 'bank')['internal_transfer_movement'] == 0
+    summary['transfer_details'] = pd.DataFrame([{'voucher_id': f'T{i}'} for i in range(251)])
+    assert len(reconciliation._cashflow_preview(summary, {'transfers'})['transfer_details']) == 251

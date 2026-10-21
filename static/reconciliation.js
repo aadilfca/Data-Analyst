@@ -699,6 +699,7 @@
             });
             renderTable(element('cashflowsTransfersTable'), [
                 { key: 'date_display', label: 'Date' }, { key: 'voucher_id', label: 'Voucher' }, { key: 'transferor', label: 'Transferor' }, { key: 'transferee', label: 'Transferee' }, { key: 'amount', label: 'Amount', amount: true }, { key: 'variance', label: 'Variance', amount: true }, { key: 'status_display', label: 'Status' }, { key: 'voucher_detail', label: 'Description' },
+                { key: 'bank_movement', label: 'Signed Bank movement', amount: true }, { key: 'cash_movement', label: 'Signed Cash movement', amount: true },
             ], rows, 'No internal transfers identified.');
             element('cashflowsTransferCount').textContent = formatCashflowDetailCount('cashflowsTransfersTable', preview.internal_transfer_count || rows.length || 0, 'voucher(s)');
             if (activeCashflowWindow === section) element('cashflowsTransfersSection').hidden = false;
@@ -1032,6 +1033,37 @@
             ? cashflowAggregateTreasuryRows(parentPreview.treasury_category_totals, parentGroups, periods)
             : [];
         derivedPreview.treasury_category_totals = treasuryRows;
+        // Aggregate only complete finer-period proofs; never carry a parent's
+        // full-period bridge into a smaller date selection.
+        const proofFields = ['category_movement', 'internal_transfer_movement', 'mixed_voucher_movement',
+            'explained_movement', 'source_movement', 'variance', 'unallocated_category_movement', 'mixed_voucher_count'];
+        derivedPreview.treasury_movement_proof = [];
+        periods.forEach(function (child) {
+            ['bank', 'cash', 'combined'].forEach(function (view) {
+                const rows = (parentGroups[child.key] || []).map(function (parentPeriod) {
+                    return (parentPreview.treasury_movement_proof || []).find(function (row) {
+                        return row.period_key === parentPeriod.key && row.treasury_type === view;
+                    });
+                });
+                if (!rows.length || rows.some(function (row) { return !row; })) return;
+                const row = {period_key: child.key, treasury_type: view};
+                proofFields.forEach(function (field) { row[field] = rows.reduce(function (sum, value) { return sum + Number(value[field]); }, 0); });
+                row.status = rows.every(function (value) { return value.status === 'Matched'; }) ? 'Matched' : 'Variance';
+                row.allocation_status = rows.some(function (value) { return value.allocation_status === 'Review required'; }) ? 'Review required' : 'Proven';
+                derivedPreview.treasury_movement_proof.push(row);
+            });
+        });
+        if (derivedPreview.treasury_movement_proof.length === periods.length * 3) {
+            const review = derivedPreview.treasury_movement_proof.some(function (row) { return row.allocation_status === 'Review required'; });
+            const matched = derivedPreview.treasury_movement_proof.every(function (row) { return row.status === 'Matched'; });
+            derivedPreview.treasury_reconciliation = Object.assign({}, parentPreview.treasury_reconciliation || {}, {
+                status: !matched ? 'Variance' : review ? 'Review required' : 'Matched',
+                source_status: matched ? 'Matched' : 'Variance', allocation_status: review ? 'Review required' : 'Proven',
+                mixed_amount: treasuryRows.reduce(function (sum, row) { return sum + Number(row.mixed_amount); }, 0),
+                mixed_row_count: treasuryRows.filter(function (row) { return Math.abs(row.mixed_amount) > 0.005; }).length
+            });
+            derivedPreview.treasury_view_reconciliation = derivedPreview.treasury_reconciliation;
+        }
         const visibleRows = cashflowSummaryRows(parentPreview);
         if (String(treasuryView || 'combined') === 'split') {
             derivedPreview.treasury_view_totals = cashflowAggregateTreasuryRows(visibleRows, parentGroups, periods);
@@ -2272,6 +2304,38 @@
         });
         return html + '<td></td><td class="cashflows-table-number">' + amount(evidence && evidence.overall && evidence.overall.cashflow_net_movement, true) + '</td></tr>';
     }
+    function cashflowMovementBridgeRows(preview, periods, splitFields) {
+        const proof = preview.treasury_movement_proof || [];
+        if (!proof.length) return '';
+        const fields = splitFields || ['total'];
+        const view = String(preview.treasury_view || 'combined');
+        const explanation = 'Full report scope. Category net + pure internal transfers + mixed-voucher Treasury bridge = net cash movement. Mixed categories remain unallocated; the bridge uses actual Treasury legs and removes their already displayed Mixed category net. It does not allocate categories or confirm mixed transfers.';
+        function value(period, field, kind) {
+            const type = field === 'total' ? (view === 'bank' || view === 'cash' ? view : 'combined') : field;
+            const row = proof.find(function (item) { return item.period_key === period.key && item.treasury_type === (type === 'mixed' ? 'combined' : type); });
+            if (!row) return null;
+            if (field === 'mixed') return kind === 'category_movement' ? row.unallocated_category_movement
+                : kind === 'mixed_voucher_movement' ? -row.unallocated_category_movement : 0;
+            return row[kind];
+        }
+        return [['category_movement', 'Category net movement'], ['internal_transfer_movement', 'Pure internal transfers'],
+            ['mixed_voucher_movement', 'Mixed voucher Treasury bridge — allocation under review']].map(function (item) {
+            const kind = item[0];
+            if (kind === 'mixed_voucher_movement' && !proof.some(function (row) { return row.mixed_voucher_count > 0; })) return '';
+            function cell(amount, local) {
+                return '<td class="cashflows-table-number">' + (typeof amount === 'number' && Number.isFinite(amount)
+                    ? '<span class="cashflows-balance-number">' + escapeHtml(local ? formatLocalAmount(amount) : formatInternationalAmount(amount)) + '</span>' : 'Unavailable') + '</td>';
+            }
+            let html = '<tr class="cashflows-balance-bridge"><td title="' + escapeHtml(explanation) + '">' + escapeHtml(item[1]) + '</td>';
+            periods.forEach(function (period) { fields.forEach(function (field) { html += cell(value(period, field, kind)); }); });
+            fields.forEach(function (field) {
+                const values = periods.map(function (period) { return value(period, field, kind); });
+                html += cell(values.every(function (amount) { return typeof amount === 'number'; }) ? values.reduce(function (sum, amount) { return sum + amount; }, 0) : null);
+            });
+            const local = periods.map(function (period) { return value(period, 'total', kind); });
+            return html + '<td></td>' + cell(local.every(function (amount) { return typeof amount === 'number'; }) ? local.reduce(function (sum, amount) { return sum + amount; }, 0) : null, true) + '</tr>';
+        }).join('');
+    }
     function cashflowBalanceSplitFields(preview) {
         const allRows = cashflowSplitRows(preview);
         const periodKeys = cashflowPreviewPeriods(preview).map(function (period) { return String(period.key); });
@@ -2304,7 +2368,8 @@
         const fields = isSplit ? cashflowBalanceSplitFields(preview) : null;
         const table = document.createElement('table');
         table.innerHTML = '<tbody>' + cashflowBalanceRows(preview, periods, 'opening', fields)
-            + cashflowNetMovementRow(preview, periods, fields) + cashflowBalanceRows(preview, periods, 'closing', fields) + '</tbody>';
+            + cashflowMovementBridgeRows(preview, periods, fields) + cashflowNetMovementRow(preview, periods, fields)
+            + cashflowBalanceRows(preview, periods, 'closing', fields) + '</tbody>';
         const moneyColumns = (periods.length + 1) * (fields ? fields.length : 1) + 2;
         const existingColumns = host.querySelectorAll('.cashflows-summary-scroll-table colgroup col').length;
         if (moneyColumns !== existingColumns) return false;
@@ -2316,7 +2381,7 @@
             (opening ? openingLeft : closingLeft).appendChild(parts.left);
             (opening ? openingRight : closingRight).appendChild(parts.right);
         });
-        host.querySelectorAll('.cashflows-balance-row, .cashflows-balance-account, .cashflows-balance-calculated, .cashflows-balance-net').forEach(function (row) { row.remove(); });
+        host.querySelectorAll('.cashflows-balance-row, .cashflows-balance-account, .cashflows-balance-calculated, .cashflows-balance-net, .cashflows-balance-bridge').forEach(function (row) { row.remove(); });
         leftBody.insertBefore(openingLeft, leftBody.firstChild); rightBody.insertBefore(openingRight, rightBody.firstChild);
         leftBody.appendChild(closingLeft); rightBody.appendChild(closingRight);
         const widths = cashflowBalanceColumnWidths(host, moneyColumns, isSplit);
@@ -2810,7 +2875,9 @@
                 });
                 visibleFields.forEach(function (field) {
                     const className = 'cashflows-table-number' + (field === 'total' ? ' cashflows-summary-total-value' : '');
-                    html += '<td class="' + className + '">' + escapeHtml(field === 'total' ? formatInternationalAmount(values[field]) : formatCashflowSectionAmount(values[field], section)) + '</td>';
+                    // Every monthly subtotal follows its section's direction,
+                    // including Total; reversals keep the opposite sign.
+                    html += '<td class="' + className + '">' + escapeHtml(formatCashflowSectionAmount(values[field], section)) + '</td>';
                 });
             });
             visibleFields.forEach(function (field) {
@@ -2819,6 +2886,7 @@
             });
             html += '<td class="cashflows-table-number cashflows-summary-percentage-value">100.00%</td><td class="cashflows-table-number cashflows-summary-local-total-value">' + escapeHtml(formatLocalAmount(basis)) + '</td></tr>';
         });
+        html += cashflowMovementBridgeRows(preview, periods, visibleFields);
         html += cashflowNetMovementRow(preview, periods, visibleFields);
         html += cashflowBalanceRows(preview, periods, 'closing', visibleFields);
         renderCashflowSummaryPaneLayout(table, html + '</tbody>', true);
@@ -2891,6 +2959,7 @@
             periodTotals.forEach(function (value) { html += '<td>' + escapeHtml(formatCashflowSectionAmount(value, section)) + '</td>'; });
             html += '<td class="cashflows-summary-total-value">' + escapeHtml(formatInternationalAmount(basis)) + '</td><td class="cashflows-summary-percentage-value">100.00%</td><td class="cashflows-summary-local-total-value">' + escapeHtml(formatLocalAmount(basis)) + '</td></tr>';
         });
+        html += cashflowMovementBridgeRows(preview, periods);
         html += cashflowNetMovementRow(preview, periods);
         html += cashflowBalanceRows(preview, periods, 'closing');
         renderCashflowSummaryPaneLayout(table, html + '</tbody>', false);

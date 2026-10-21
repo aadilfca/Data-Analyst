@@ -9,6 +9,82 @@ from services.ledger_group_summary import (
 )
 
 
+@pytest.mark.parametrize('legs,expected', [
+    ([('B', 0, 100), ('C', 100, 0)], (-100, 100)),
+    ([('B', 0, -100), ('C', -100, 0)], (100, -100)),
+    ([('B', 0, 100), ('C', 40, 0), ('C2', 60, 0)], (-100, 100)),
+    ([('B', 0, 100), ('B2', 100, 0)], (0, 0)),
+])
+def test_treasury_source_proof_preserves_pure_transfer_legs_without_pairing(legs, expected):
+    journal = pd.DataFrame([dict(voucher_id='T', date='2026-01-05', account_code=code, debit=debit, credit=credit)
+                            for code, debit, credit in legs])
+    original = journal.copy(deep=True)
+    coa = pd.DataFrame([dict(account_code=code, account_title=code, category='') for code in ['B', 'B2', 'C', 'C2']])
+    result = build_cashflow_summary(journal, coa, ['C', 'C2'], ['B', 'B2'], '2026-01-01', '2026-02-28')
+    proof = {(row['period_key'], row['treasury_type']): row for row in result['treasury_movement_proof']}
+    for view, amount in zip(('bank', 'cash'), expected):
+        row = proof[('2026-01', view)]
+        assert row['category_movement'] == 0
+        assert row['internal_transfer_movement'] == row['source_movement'] == row['explained_movement'] == amount
+        assert row['mixed_voucher_movement'] == row['variance'] == 0
+        assert proof[('2026-02', view)]['source_movement'] == 0
+    assert proof[('2026-01', 'combined')]['explained_movement'] == 0
+    pd.testing.assert_frame_equal(journal, original)
+
+
+@pytest.mark.parametrize('sign', [1, -1])
+def test_mixed_treasury_source_proof_preserves_actual_legs_and_unallocated_categories(sign):
+    journal = pd.DataFrame([dict(voucher_id='M', date='2026-01-05', account_code=code, debit=debit*sign, credit=credit*sign)
+                            for code, debit, credit in [('B', 0, 105), ('C', 100, 0), ('E', 5, 0)]])
+    coa = pd.DataFrame([dict(account_code=code, account_title=code, category='Charges' if code == 'E' else '')
+                        for code in ['B', 'C', 'E']])
+    result = build_cashflow_summary(journal, coa, ['C'], ['B'], '2026-01-01', '2026-01-31')
+    allocation = result['treasury_category_totals'].iloc[0]
+    assert allocation.bank_amount == allocation.cash_amount == 0
+    assert allocation.mixed_amount == -5*sign
+    proof = {row['treasury_type']: row for row in result['treasury_movement_proof']}
+    for view, amount in [('bank', -105*sign), ('cash', 100*sign)]:
+        assert proof[view]['mixed_voucher_movement'] == proof[view]['source_movement'] == amount
+        assert proof[view]['internal_transfer_movement'] == proof[view]['category_movement'] == 0
+        assert proof[view]['status'] == 'Matched'
+        assert proof[view]['allocation_status'] == 'Review required'
+    assert proof['combined']['source_movement'] == proof['combined']['category_movement'] == -5*sign
+    assert proof['combined']['mixed_voucher_movement'] == 0
+    assert result['treasury_reconciliation']['status'] == 'Review required'
+    assert result['treasury_reconciliation']['source_status'] == 'Matched'
+
+
+def test_treasury_proof_checks_single_type_categories_and_zero_net_mixed_vouchers():
+    journal = pd.DataFrame([
+        ['R', '2025-12-31', 'B', 100, 0], ['R', '2025-12-31', 'AR', 0, 100],
+        ['M', '2026-01-01', 'B', 0, 50], ['M', '2026-01-01', 'C', 50, 0],
+        ['M', '2026-01-01', 'AR', 0, 100], ['M', '2026-01-01', 'E', 100, 0],
+    ], columns=['voucher_id', 'date', 'account_code', 'debit', 'credit'])
+    coa = pd.DataFrame([dict(account_code=code, account_title=code, category=code) for code in ['B', 'C', 'AR', 'E']])
+    result = build_cashflow_summary(journal, coa, ['C'], ['B'], '2025-12-31', '2026-01-01', group_by='year')
+    proof = {(r['period_key'], r['treasury_type']): r for r in result['treasury_movement_proof']}
+    assert proof[('2025', 'bank')]['category_movement'] == 100
+    assert proof[('2026', 'bank')]['mixed_voucher_movement'] == -50
+    assert proof[('2026', 'cash')]['mixed_voucher_movement'] == 50
+    assert proof[('2026', 'combined')]['unallocated_category_movement'] == 0
+    assert proof[('2026', 'combined')]['mixed_voucher_count'] == 1
+
+
+def test_transfer_schedule_keeps_reused_voucher_id_in_its_actual_posting_period():
+    journal = pd.DataFrame([
+        ['T', '2026-01-05', 'B', 0, 100], ['T', '2026-01-05', 'C', 100, 0],
+        ['T', '2026-02-05', 'B', 40, 0], ['T', '2026-02-05', 'C', 0, 40],
+    ], columns=['voucher_id', 'date', 'account_code', 'debit', 'credit'])
+    coa = pd.DataFrame([dict(account_code=code, account_title=code, category='') for code in ['B', 'C']])
+    result = build_cashflow_summary(journal, coa, ['C'], ['B'], '2026-01-01', '2026-02-28')
+    details = result['transfer_details'].set_index('period_key')
+    assert len(details) == 2
+    assert details.loc['2026-01', 'bank_movement'] == -100
+    assert details.loc['2026-02', 'bank_movement'] == 40
+    assert details.loc['2026-02', 'transferor_type'] == 'Cash'
+    assert details.loc['2026-02', 'date'] == pd.Timestamp('2026-02-05')
+
+
 def _fixture_data() -> tuple[pd.DataFrame, pd.DataFrame]:
     journal = pd.DataFrame(
         [

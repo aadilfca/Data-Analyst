@@ -184,6 +184,8 @@ def build_cashflow_workbook(
             ("variance", "Variance", True),
             ("status", "Status", False),
             ("voucher_detail", "Description", False),
+            ("bank_movement", "Signed Bank movement", True),
+            ("cash_movement", "Signed Cash movement", True),
         ],
     )
     _write_cashflow_detail_sheet(
@@ -276,13 +278,43 @@ def build_cashflow_workbook(
         row += 1
         _write_table(controls, row, [control, value])
 
+    if preview.get('treasury_movement_proof'):
+        _write_cashflow_movement_proof(workbook.create_sheet('Treasury Movement Proof'), preview)
     for sheet in workbook.worksheets:
         _finish_sheet(sheet)
     for row_cells in ledgerwise_sheet.iter_rows(min_row=5, max_col=5):
         for cell in row_cells[2:5]:
             if cell.value is not None:
                 cell.number_format = LEDGERWISE_MONEY_FORMAT
+    if 'Treasury Movement Proof' in workbook.sheetnames:
+        proof = workbook['Treasury Movement Proof']
+        for row in range(5, proof.max_row + 1):
+            for column in [*range(3, 9), *range(11, 17)]:
+                proof.cell(row, column).number_format = '#,##0.00;[Red](#,##0.00);-'
     return workbook
+
+
+def _write_cashflow_movement_proof(ws, preview: Mapping[str, Any]) -> None:
+    """Export full-scope source/ledger controls independently of category filters."""
+    headers = ['Period', 'Treasury', 'Category net', 'Pure internal transfers',
+               'Mixed voucher Treasury movement', 'Explained movement', 'Source movement', 'Source difference',
+               'Movement proof', 'Category allocation', 'Unallocated category net',
+               'Ledger opening', 'Calculated opening', 'Ledger closing', 'Calculated closing', 'Ledger difference', 'Ledger status']
+    _write_title(ws, 'Treasury Movement Proof',
+        'Full report scope, independent of category filters. Signed debit minus credit. Mixed voucher movements use actual Treasury legs; category allocation remains under review. Combined categories already include mixed vouchers. Unavailable ledger evidence is left blank.', len(headers))
+    _write_table(ws, 4, headers, header=True)
+    balances = preview.get('balance_reconciliation') or {}
+    for index, record in enumerate(preview.get('treasury_movement_proof') or [], 5):
+        view = record['treasury_type']
+        selected_view = str(preview.get('treasury_view') or 'combined')
+        evidence = balances if (view == selected_view or view == 'combined' and selected_view in ('combined', 'split')) else (balances.get('treasury_breakdown') or {}).get(view, {})
+        period = next((row for row in evidence.get('periods', []) if row['key'] == record['period_key']), {})
+        values = [record['period_key'], view, *[record.get(key) for key in (
+            'category_movement', 'internal_transfer_movement', 'mixed_voucher_movement',
+            'explained_movement', 'source_movement', 'variance')], record.get('status'), record.get('allocation_status'),
+            record.get('unallocated_category_movement'), *[period.get(key) for key in (
+                'opening_total', 'calculated_opening', 'closing_total', 'calculated_closing', 'variance', 'status')]]
+        _write_table(ws, index, values)
 
 
 def export_cashflow_xlsx(
@@ -453,6 +485,7 @@ def _write_cashflow_split_summary_sheet(
         _write_table(ws, row, total_values, total=True)
         _style_cashflow_summary_values(ws, row, total_columns=[2 + (index * 4) + 3 for index in range(len(period_keys) + 1)], percentage_column=width - 1, local_total_column=width)
         row += 3
+    _write_cashflow_summary_proof_rows(ws, preview, period_keys, row, split=True)
     ws.freeze_panes = "B7"
 
 def _write_cashflow_summary_sheet(
@@ -502,8 +535,53 @@ def _write_cashflow_summary_sheet(
         )
         _style_cashflow_summary_values(ws, row, total_columns=[len(period_keys) + 2], percentage_column=len(period_keys) + 3, local_total_column=len(period_keys) + 4)
         row += 3
+    _write_cashflow_summary_proof_rows(ws, preview, period_keys, row, split=False)
     ws.freeze_panes = "B6"
 
+
+
+def _write_cashflow_summary_proof_rows(ws, preview, period_keys, start_row, *, split):
+    """Append the same signed full-scope movement bridge shown on screen."""
+    proof = preview.get('treasury_movement_proof') or []
+    if not proof:
+        return
+    view = str(preview.get('treasury_view') or 'combined')
+    fields = ['bank', 'cash', 'mixed', 'combined'] if split else [view]
+    balances = preview.get('balance_reconciliation') or {}
+    def value(key, field, kind):
+        record = next((p for p in proof if p['period_key'] == key and p['treasury_type'] == ('combined' if field == 'mixed' else field)), {})
+        if kind.startswith('ledger:'):
+            if field == 'mixed':
+                return None
+            source = balances if field == view or field == 'combined' else (balances.get('treasury_breakdown') or {}).get(field, {})
+            period = next((p for p in source.get('periods', []) if p['key'] == key), {})
+            return period.get(kind.split(':')[1])
+        if field == 'mixed':
+            amount = record.get('unallocated_category_movement')
+            return amount if kind == 'category_movement' else -amount if kind == 'mixed_voucher_movement' and amount is not None else 0
+        return record.get(kind)
+    descriptors = [('category_movement', 'Category net movement'), ('internal_transfer_movement', 'Pure internal transfers')]
+    if any(p.get('mixed_voucher_count') for p in proof):
+        descriptors.append(('mixed_voucher_movement', 'Mixed voucher Treasury bridge — allocation under review'))
+    descriptors.extend([('explained_movement', 'Net cash movement'), ('ledger:opening_total', 'Opening balances—as per ledgers'),
+        ('ledger:calculated_opening', 'Calculated opening balance'), ('ledger:closing_total', 'Closing balances—as per ledgers'),
+        ('ledger:calculated_closing', 'Calculated closing balance')])
+    for row, (kind, label) in enumerate(descriptors, start_row):
+        values = [label]
+        for key in period_keys:
+            values.extend(value(key, field, kind) for field in fields)
+        def total(field):
+            if kind == 'ledger:opening_total' or kind == 'ledger:calculated_opening':
+                return value(period_keys[0], field, kind)
+            if kind.startswith('ledger:'):
+                return value(period_keys[-1], field, kind)
+            amounts = [value(key, field, kind) for key in period_keys]
+            return sum(amounts) if all(amount is not None for amount in amounts) else None
+        values.extend(total(field) for field in fields)
+        values.extend([None, _local_amount_label(total('combined' if split else view)) if total('combined' if split else view) is not None else 'Unavailable'])
+        _write_table(ws, row, values)
+        for column in range(2, len(values)-1):
+            ws.cell(row, column).number_format = '#,##0.00;[Red](#,##0.00);-'
 
 
 def _write_cashflow_ledgerwise_summary_sheet(

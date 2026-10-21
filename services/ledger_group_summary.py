@@ -18,7 +18,7 @@ import pandas as pd
 DEFAULT_TOLERANCE = 0.005
 CASHFLOW_GROUPINGS = ("day", "fortnight", "month", "quarter", "half_year", "year")
 CASHFLOW_TREASURY_TOTAL_COLUMNS = ("category", "period_key", "bank_amount", "cash_amount", "mixed_amount", "total_amount")
-CASHFLOW_TREASURY_TOTALS_VERSION = 1
+CASHFLOW_TREASURY_TOTALS_VERSION = 2
 CASHFLOW_CUSTOMER_PAYMENT_DERIVED_ACCOUNT_CODE = "__customer_payment__"
 CASHFLOW_CUSTOMER_PAYMENT_DERIVED_ACCOUNT_NAME = "Customer payment (net bank receipt)"
 
@@ -208,6 +208,8 @@ def _empty_internal_transfer_details() -> pd.DataFrame:
             "status",
             "matched",
             "voucher_detail",
+            "bank_movement",
+            "cash_movement",
         ]
     )
 
@@ -247,7 +249,7 @@ def _build_cashflow_treasury_totals(
     *,
     tolerance: float,
 ) -> pd.DataFrame:
-    """Allocate category movements to configured treasury types once per voucher."""
+    """Attribute categories only when the voucher proves one Treasury type."""
     if category_frame.empty or "voucher_id" not in category_frame.columns:
         return _empty_cashflow_treasury_totals()
 
@@ -256,15 +258,9 @@ def _build_cashflow_treasury_totals(
         return _empty_cashflow_treasury_totals()
 
     treasury["treasury_type"] = treasury["account_code"].map(treasury_type).fillna("Mixed")
-    treasury["treasury_movement"] = treasury["debit"] - treasury["credit"]
-    movement_rows = (
-        treasury.groupby(["voucher_id", "treasury_type"], dropna=False, sort=False)["treasury_movement"]
-        .sum()
-        .to_dict()
-    )
-    profiles: dict[Any, list[tuple[str, float]]] = defaultdict(list)
-    for (voucher_id, label), movement in movement_rows.items():
-        profiles[voucher_id].append((str(label), abs(float(movement or 0.0))))
+    # A zero net leg can still contain real postings; do not infer a pairing
+    # from net amounts or distribute a counter-account by relative weights.
+    profiles = treasury.groupby("voucher_id")["treasury_type"].agg(set).to_dict()
 
     allocated: defaultdict[tuple[str, str], dict[str, float]] = defaultdict(
         lambda: {
@@ -279,20 +275,11 @@ def _build_cashflow_treasury_totals(
         period_key = str(record.get("period_key") or "")
         voucher_id = record.get("voucher_id")
         amount = float(record.get("amount") or 0.0)
-        weights = {"Bank": 0.0, "Cash": 0.0, "Mixed": 0.0}
-        for label, weight in profiles.get(voucher_id, []):
-            if label in weights:
-                weights[label] += weight
-            else:
-                weights["Mixed"] += weight
-        denominator = sum(weights.values())
-        if denominator <= tolerance:
-            weights = {"Bank": 0.0, "Cash": 0.0, "Mixed": 1.0}
-            denominator = 1.0
+        labels = profiles.get(voucher_id, set())
+        label = next(iter(labels)) if len(labels) == 1 else "Mixed"
+        column = {"Bank": "bank_amount", "Cash": "cash_amount"}.get(label, "mixed_amount")
         bucket = allocated[(category, period_key)]
-        bucket["bank_amount"] += amount * weights["Bank"] / denominator
-        bucket["cash_amount"] += amount * weights["Cash"] / denominator
-        bucket["mixed_amount"] += amount * weights["Mixed"] / denominator
+        bucket[column] += amount
         bucket["total_amount"] += amount
 
     rows = [
@@ -300,6 +287,66 @@ def _build_cashflow_treasury_totals(
         for (category, period_key), values in allocated.items()
     ]
     return pd.DataFrame(rows, columns=list(CASHFLOW_TREASURY_TOTAL_COLUMNS))
+
+
+def _build_cashflow_treasury_movement_proof(
+    working: pd.DataFrame,
+    category_totals: pd.DataFrame,
+    treasury_totals: pd.DataFrame,
+    treasury_type: Mapping[str, str],
+    period_keys: Sequence[str],
+    *,
+    tolerance: float,
+) -> list[dict[str, Any]]:
+    """Explain each side from source legs, without inventing transfer pairings.
+
+    Single-type vouchers support category attribution. Pure Treasury vouchers
+    support aggregate transfers even with multiple accounts. Other multi-type
+    vouchers retain their exact Treasury effects with attribution under review.
+    Combined already contains those vouchers' counter-account categories.
+    """
+    treasury = working.loc[working["is_treasury"]].copy() if not working.empty else pd.DataFrame()
+    source = defaultdict(float)
+    transfers = defaultdict(float)
+    mixed = defaultdict(float)
+    mixed_ids = defaultdict(set)
+    if not treasury.empty:
+        treasury["treasury_type"] = treasury["account_code"].map(treasury_type)
+        types = treasury.groupby("voucher_id")["treasury_type"].agg(set).to_dict()
+        counter_ids = set(working.loc[~working["is_treasury"], "voucher_id"])
+        for (voucher, key, label), lines in treasury.groupby(["voucher_id", "period_key", "treasury_type"], sort=False):
+            amount = float((lines["debit"] - lines["credit"]).sum())
+            source[(key, label)] += amount
+            if voucher not in counter_ids:
+                transfers[(key, label)] += amount
+            elif len(types[voucher]) > 1:
+                mixed[(key, label)] += amount
+                mixed_ids[key].add(voucher)
+    allocated = defaultdict(float)
+    unallocated = defaultdict(float)
+    for record in treasury_totals.to_dict("records"):
+        key = record["period_key"]
+        for label, column in (("Bank", "bank_amount"), ("Cash", "cash_amount")):
+            allocated[(key, label)] += float(record[column])
+        unallocated[key] += float(record["mixed_amount"])
+    records = []
+    for key in period_keys:
+        for view, label in (("bank", "Bank"), ("cash", "Cash"), ("combined", "Combined")):
+            combined = view == "combined"
+            category = float(category_totals[key].sum()) if combined else allocated[(key, label)]
+            transfer = sum(transfers[(key, kind)] for kind in ("Bank", "Cash")) if combined else transfers[(key, label)]
+            uncertain = 0.0 if combined else mixed[(key, label)]
+            actual = sum(source[(key, kind)] for kind in ("Bank", "Cash")) if combined else source[(key, label)]
+            explained = category + transfer + uncertain
+            variance = actual - explained
+            records.append(dict(period_key=key, treasury_type=view,
+                category_movement=category, internal_transfer_movement=transfer,
+                mixed_voucher_movement=uncertain, explained_movement=explained,
+                source_movement=actual, variance=variance,
+                unallocated_category_movement=unallocated[key], mixed_voucher_count=len(mixed_ids[key]),
+                allocation_status="Review required" if mixed_ids[key] else "Proven",
+                status="Matched" if abs(variance) <= tolerance else "Variance"))
+    return records
 
 
 def _cashflow_treasury_reconciliation(
@@ -330,7 +377,7 @@ def _cashflow_treasury_reconciliation(
         "max_abs_variance": float(max_abs_variance),
         "mixed_amount": mixed_amount,
         "mixed_row_count": mixed_row_count,
-        "allocation_policy": "single treasury type; mixed legs weighted by absolute signed movement; zero-weight cases remain Mixed",
+        "allocation_policy": "single Treasury type only; multi-type categories remain unallocated; source legs prove movements separately",
     }
 
 def _build_cashflow_drilldown_controls(
@@ -1030,8 +1077,9 @@ def _build_cashflow_transfer_details(
         treasury["account_code"].map(account_title_by_code).fillna(""),
     )
     treasury["net_movement"] = treasury["debit"] - treasury["credit"]
+    keys = ["voucher_id", "period_key"]
     account_legs = (
-        treasury.groupby(["voucher_id", "account_code"], sort=False)
+        treasury.groupby([*keys, "account_code"], sort=False)
         .agg(
             account_name=("resolved_account_name", "first"),
             treasury_type=("treasury_type", "first"),
@@ -1042,7 +1090,7 @@ def _build_cashflow_transfer_details(
         .reset_index()
     )
     candidate_ids = (
-        account_legs.groupby("voucher_id", sort=False)["account_code"]
+        account_legs.groupby(keys, sort=False)["account_code"]
         .nunique()
         .loc[lambda values: values.gt(1)]
         .index
@@ -1051,22 +1099,21 @@ def _build_cashflow_transfer_details(
         return _empty_internal_transfer_details()
 
     voucher_meta = (
-        working.groupby("voucher_id", sort=False)
+        working.groupby(keys, sort=False)
         .agg(
             date=("date", "min"),
             month=("month", "first"),
-            period_key=("period_key", "first"),
             period_label=("period_label", "first"),
             voucher_detail=("voucher_detail", lambda values: next((value for value in values if value), "")),
         )
-        .reindex(voucher_order)
-        .loc[lambda frame: frame.index.isin(candidate_ids)]
+        .reindex(candidate_ids)
     )
+    candidates = pd.MultiIndex.from_frame(account_legs[keys]).isin(candidate_ids)
     debit_legs = account_legs.loc[
-        account_legs["net_movement"].gt(tolerance) & account_legs["voucher_id"].isin(candidate_ids)
+        account_legs["net_movement"].gt(tolerance) & candidates
     ]
     credit_legs = account_legs.loc[
-        account_legs["net_movement"].lt(-tolerance) & account_legs["voucher_id"].isin(candidate_ids)
+        account_legs["net_movement"].lt(-tolerance) & candidates
     ]
 
     def aggregate_side(legs: pd.DataFrame, prefix: str) -> pd.DataFrame:
@@ -1082,9 +1129,9 @@ def _build_cashflow_transfer_details(
                     f"{prefix}_amount",
                     f"{prefix}_leg_count",
                 ],
-                index=pd.Index([], name="voucher_id"),
+                index=pd.MultiIndex.from_tuples([], names=keys),
             )
-        result = legs.groupby("voucher_id", sort=False).agg(
+        result = legs.groupby(keys, sort=False).agg(
             account_code=("account_code", _join_unique_leg_values),
             account_name=("account_name", _join_unique_leg_values),
             treasury_type=("treasury_type", _join_unique_leg_values),
@@ -1102,15 +1149,19 @@ def _build_cashflow_transfer_details(
         )
 
     details = voucher_meta.reset_index()
-    details = details.merge(aggregate_side(credit_legs, "transferor"), on="voucher_id", how="left")
-    details = details.merge(aggregate_side(debit_legs, "transferee"), on="voucher_id", how="left")
+    details = details.merge(aggregate_side(credit_legs, "transferor"), on=keys, how="left")
+    details = details.merge(aggregate_side(debit_legs, "transferee"), on=keys, how="left")
     non_treasury_counts = (
         working.loc[~working["is_treasury"]]
-        .groupby("voucher_id", sort=False)
+        .groupby(keys, sort=False)
         .size()
         .rename("non_treasury_line_count")
     )
-    details = details.merge(non_treasury_counts, on="voucher_id", how="left")
+    details = details.merge(non_treasury_counts, on=keys, how="left")
+    for label, column in (("Bank", "bank_movement"), ("Cash", "cash_movement")):
+        movements = treasury.loc[treasury["treasury_type"].eq(label)].groupby(keys)["net_movement"].sum().rename(column)
+        details = details.merge(movements, on=keys, how="left")
+        details[column] = details[column].fillna(0.0)
     for column in (
         "transferor_account_code",
         "transferor_account_name",
@@ -1173,6 +1224,8 @@ def _build_cashflow_transfer_details(
             "status",
             "matched",
             "voucher_detail",
+            "bank_movement",
+            "cash_movement",
         ]
     ].sort_values(["date", "voucher_id"]).reset_index(drop=True)
 
@@ -1816,6 +1869,18 @@ def build_cashflow_summary(
         period_keys,
         tolerance=tolerance,
     )
+    movement_proof = _build_cashflow_treasury_movement_proof(
+        working, category_totals, treasury_category_totals, treasury_type, period_keys, tolerance=tolerance,
+    )
+    source_variance = max((abs(row['variance']) for row in movement_proof), default=0.0)
+    if source_variance > tolerance:
+        raise LedgerBalanceError('Cash/Bank movement explanation does not preserve source Treasury legs', balance_checks)
+    allocation_review = any(row['mixed_voucher_count'] for row in movement_proof)
+    treasury_reconciliation.update(
+        source_status='Matched', source_max_abs_variance=source_variance,
+        allocation_status='Review required' if allocation_review else 'Proven',
+        status='Review required' if allocation_review else treasury_reconciliation['status'],
+    )
     drilldown_controls = (
         _build_cashflow_drilldown_controls(category_totals, rollups, tolerance=tolerance)
         if include_drilldown
@@ -1877,6 +1942,7 @@ def build_cashflow_summary(
         "category_totals": category_totals,
         "treasury_category_totals": treasury_category_totals,
         "treasury_reconciliation": treasury_reconciliation,
+        "treasury_movement_proof": movement_proof,
         "treasury_totals_version": CASHFLOW_TREASURY_TOTALS_VERSION,
         "transfer_details": transfer_details,
         "transfer_reconciliation": transfer_reconciliation,
