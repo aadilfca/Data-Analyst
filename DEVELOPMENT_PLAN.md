@@ -7,8 +7,8 @@ The current contract keeps one canonical dataset and preserves complete voucher 
 | 1 — Foundation | Complete: account-scoped ledger metadata, roles, source controls and import safeguards. |
 | 2 — Ledger upload | Accepted by Aadil after successful physical import. Standard mapping, account/coverage identity, source notes and existing duplicate/archive/receipt safeguards remain. |
 | 3 — Client Data | Accepted by Aadil. Existing preview has searchable uploaded-account selection, combined period/row filters and account-scoped counts, pagination and caching. |
-| 4 — Balances | Derive period-wise ledger opening/closing evidence and calculated reconciliation; expose missing coverage. |
-| 5 — Cashflow rows | Dim-green expandable opening/closing totals, account names with code hover, and distinct calculated balances. |
+| 4 — Balances | Complete and accepted; included in the combined commit/push authorised on 2026-10-21. |
+| 5 — Cashflow rows | Complete; combined commit/push authorised on 2026-10-21. Expandable dim-green balances, account/code hover, calculations, split totals and fresh evidence. |
 | 6 — Differences | Existing-flow popup for missing/changed vouchers and their lines between ledger and voucher sources. |
 | 7 — Verification | Align exports and test period boundaries, repeated lines, zero/signed balances and accounting proofs. |
 | 8 — Drive production — final | Publish/reauthorise Google OAuth and configure hosted credentials plus persistent external archive storage after phases 2–7. Existing archive requirements remain active meanwhile. |

@@ -214,6 +214,35 @@ def select_account(page, text, *, keyboard=False):
         page.locator('#previewLedgerOptions [role=option]').first.click()
 
 
+def test_ledger_preview_retains_server_sequence_and_text_balances_across_pages(browser,static_server):
+    page,_=open_databank(browser,static_server,ledger_accounts=ACCOUNTS[:1])
+    def respond(route):
+        query=parse_qs(urlparse(route.request.url).query)
+        number=int(query.get('page',['1'])[0])
+        payload=_preview_response(number,25,account='A-1')
+        # Same-day voucher numbers deliberately descend while balances remain attached.
+        values=[(99,'V9','2026-01-01','90 DR'),(11,'V1','2026-01-01','80 DR')] if number==1 else [(4,'V8','2026-01-02','110 DR')]
+        payload['rows']=[dict(payload['rows'][0],id=key,document_group_id=voucher,
+            row_data={'Document No':voucher,'Date':day,'Amount':10,'Balance':balance}) for key,voucher,day,balance in values]
+        route.fulfill(json=payload)
+    page.route('**/api/templates/1',lambda route:route.fulfill(json={'id':1,'data_purpose':'account_ledger',
+        'has_subtotals_by_default':False,'columns':[{'column_name':n,'data_type':t} for n,t in
+        [('Document No','Text'),('Date','Date'),('Amount','Numeric'),('Balance','Text')]]}))
+    page.route('**/api/data/preview?*',respond)
+    try:
+        open_ledger(page)
+        page.wait_for_function("previewTableBody.innerText.includes('V9')")
+        assert page.locator('#previewTableBody tr td:nth-child(2)').all_text_contents()==['V9','V1']
+        assert page.locator('#previewTableBody tr td:nth-child(5)').all_text_contents()==['90 DR','80 DR']
+        page.locator('#nextPageBtn').click()
+        page.wait_for_function("previewTableBody.innerText.includes('V8')")
+        assert page.locator('#previewTableBody tr td:nth-child(5)').all_text_contents()==['110 DR']
+        page.locator('#prevPageBtn').click()
+        page.wait_for_function("previewTableBody.innerText.includes('V9')")
+        assert page.locator('#previewTableBody tr td:nth-child(2)').all_text_contents()==['V9','V1']
+    finally:page.close()
+
+
 def test_ledger_search_and_dropdown_scope_pages_and_cache_by_account(browser, static_server):
     page, calls = open_databank(browser, static_server, ledger_accounts=ACCOUNTS)
     errors=[];page.on('pageerror',lambda e:errors.append(str(e)))

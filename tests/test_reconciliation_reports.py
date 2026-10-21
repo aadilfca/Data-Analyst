@@ -75,6 +75,110 @@ def _cashflow_summary():
     }
 
 
+def test_balance_opt_in_keeps_ordinary_preview_off_the_new_snapshot_path():
+    with patch.object(reconciliation, '_build_cashflow_result', return_value={'preview': {}}) as builder, \
+            patch.object(reconciliation, 'run_read_snapshot_pg') as snapshot:
+        reconciliation.preview_cashflows(7, '2026-01-01', '2026-01-31', session=None)
+    snapshot.assert_not_called()
+    assert 'include_balances' not in builder.call_args.kwargs
+
+
+def test_balance_opt_in_builds_vouchers_and_ledger_evidence_in_one_read_snapshot():
+    active = []
+    def snapshot(callback):
+        active.append(True)
+        try:
+            return callback(object())
+        finally:
+            active.pop()
+    def build(*args, **kwargs):
+        assert active == [True]
+        assert kwargs['include_balances'] is True
+        return {'preview': {'balance_reconciliation': {'status': 'Matched'}}}
+    with patch.object(reconciliation, '_build_cashflow_result', side_effect=build) as builder, \
+            patch.object(reconciliation, 'run_read_snapshot_pg', side_effect=snapshot) as runner:
+        result = reconciliation.preview_cashflows(7, '2026-01-01', '2026-01-31',
+                                                  include_balances=True, session=None)
+    assert result['preview']['balance_reconciliation']['status'] == 'Matched'
+    runner.assert_called_once()
+    builder.assert_called_once()
+    assert active == []
+
+
+@pytest.mark.parametrize('view,expected_codes,expected_flows', [
+    ('combined', {'C1': 'Cash', 'B1': 'Bank'}, [125, 50]),
+    ('split', {'C1': 'Cash', 'B1': 'Bank'}, [125, 50]),
+    ('bank', {'B1': 'Bank'}, [80, 20]),
+    ('cash', {'C1': 'Cash'}, [45, 30]),
+])
+def test_cashflow_balance_reconciliation_uses_same_report_periods_view_and_category_effect(view, expected_codes, expected_flows):
+    from services.ledger_group_summary import CASHFLOW_TREASURY_TOTALS_VERSION
+    configuration = dict(source_template_id=9, cash_account_codes=['C1'], bank_account_codes=['B1'],
+                         match_internal_transfers=True, receipt_presentation='net')
+    summary = _cashflow_summary()
+    summary['treasury_totals_version'] = CASHFLOW_TREASURY_TOTALS_VERSION
+    summary['treasury_category_totals'] = pd.DataFrame([
+        {'category': 'Customers', 'period_key': '2026-Q1', 'bank_amount': 80, 'cash_amount': 45, 'total_amount': 125},
+        {'category': 'Customers', 'period_key': '2026-Q2', 'bank_amount': 20, 'cash_amount': 30, 'total_amount': 50},
+    ])
+    evidence = {'ready': False, 'status': 'Unavailable', 'periods': [], 'evidence_fingerprint': 'current-proof'}
+    with patch.object(reconciliation, '_require_active_client'), \
+            patch.object(reconciliation, '_cashflow_configuration', return_value=configuration), \
+            patch.object(reconciliation, '_latest_trial_balance_accounts', return_value=[{'account_code': 'B1', 'account_name': 'Bank Alpha'}]), \
+            patch.object(reconciliation, 'load_ledger_report_source', return_value=_source()), \
+            patch.object(reconciliation, 'build_cashflow_summary', return_value=summary), \
+            patch.object(reconciliation, 'load_uploaded_ledger_balances', return_value=evidence) as balances:
+        result = reconciliation._build_cashflow_result(7, '2026-02-10', '2026-04-18',
+                                                       group_by='quarter', treasury_view=view, include_balances=True)
+    args, kwargs = balances.call_args
+    assert args[:3] == (7, expected_codes, summary['periods'])
+    assert [float(v) for v in args[3].values()] == expected_flows
+    assert kwargs['query_fn'] is reconciliation.execute_query_pg
+    assert kwargs['account_names'] == ({'B1': 'Bank Alpha'} if view != 'cash' else {})
+    assert (kwargs['treasury_movements'] is not None) == (view == 'split')
+    if view == 'split':
+        assert [float(v) for v in kwargs['treasury_movements']['bank'].values()] == [80, 20]
+        assert [float(v) for v in kwargs['treasury_movements']['cash'].values()] == [45, 30]
+        assert result['preview']['balance_reconciliation']['unresolved_movements'] == {'2026-Q1': 0, '2026-Q2': 0}
+    assert result['preview']['balance_reconciliation'] == evidence
+    # Missing ledger evidence must not erase or block the working movement report.
+    assert result['preview']['category_totals'][0]['2026-Q1'] == 125
+    assert result['blocking_reasons'] == []
+    assert result['source']['ready'] is True
+
+
+def test_balance_opt_in_public_http_parameter_and_admin_guard():
+    from fastapi import FastAPI, HTTPException
+    from fastapi.testclient import TestClient
+    app = FastAPI()
+    app.include_router(reconciliation.router)
+    app.dependency_overrides[reconciliation.require_admin] = lambda: {'id': 1}
+    with TestClient(app) as client, \
+            patch.object(reconciliation, '_build_cashflow_result', return_value={'preview': {}}) as builder, \
+            patch.object(reconciliation, 'run_read_snapshot_pg', side_effect=lambda callback: callback(None)) as snapshot:
+        response = client.get('/api/reconciliation/cashflows/preview', params={
+            'client_id': 7, 'period_start': '2026-01-01', 'period_end': '2026-01-31',
+            'details': 'summary', 'include_balances': 'true'})
+        assert response.status_code == 200
+        snapshot.assert_called_once()
+        assert builder.call_args.kwargs['include_balances'] is True
+        def reject():
+            raise HTTPException(401, 'Login required')
+        app.dependency_overrides[reconciliation.require_admin] = reject
+        builder.reset_mock()
+        response = client.get('/api/reconciliation/cashflows/preview', params={
+            'client_id': 7, 'period_start': '2026-01-01', 'period_end': '2026-01-31', 'include_balances': 'true'})
+        assert response.status_code == 401
+        builder.assert_not_called()
+
+
+def test_balance_snapshot_failure_cannot_return_a_previous_successful_response():
+    with patch.object(reconciliation, 'run_read_snapshot_pg', side_effect=RuntimeError('snapshot failed')), \
+            patch.object(reconciliation, '_build_cashflow_result') as builder, pytest.raises(RuntimeError, match='snapshot failed'):
+        reconciliation.preview_cashflows(7, '2026-01-01', '2026-01-31', include_balances=True, session=None)
+    builder.assert_not_called()
+
+
 def test_prepared_rollup_summary_maps_fortnights_across_months():
     def query(sql, params=None):
         if "cashflow_preparation_state" in sql: return [{"active_preparation_revision": 17, "status": "ready"}]
@@ -1672,7 +1776,7 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "setActiveCashflowWindow" in javascript
     assert "const CASHFLOW_DEFAULT_START = '2026-01-01';" in javascript
     assert "const CASHFLOW_DEFAULT_END = '2026-06-30';" in javascript
-    assert "<script src='/static/reconciliation.js?v=35'></script>" in html
+    assert "<script src='/static/reconciliation.js?v=36'></script>" in html
     assert "cashflows-table-number" in javascript
     assert "grid-template-columns: minmax(0, 1fr)" in stylesheet
     assert ".cashflows-table td.cashflows-table-text" in stylesheet

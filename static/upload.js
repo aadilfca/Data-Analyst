@@ -107,6 +107,10 @@ let ledgerRecognisedControlRows = new Set();
 let ledgerRecognisedNoteRows = new Map();
 let ledgerAccountLoad = null;
 const ledgerAccountSelect = document.getElementById('ledgerAccountSelect');
+const ledgerAccountToggle = document.getElementById('ledgerAccountToggle');
+const ledgerAccountOptions = document.getElementById('ledgerAccountOptions');
+let ledgerAccountMatches = [];
+let ledgerAccountActiveIndex = -1;
 function isLedgerUpload() { return uploadTemplatePurpose === 'account_ledger'; }
 function ledgerUploadLabel() {
     const account = ledgerAccountChoices.find(a => a.account_code === ledgerSelectedAccountCode);
@@ -121,12 +125,63 @@ function clearLedgerUploadContext() {
     renderLedgerUploadAccounts();
 }
 function renderLedgerUploadAccounts() {
-    ledgerAccountSelect.replaceChildren(new Option('Select account', ''));
-    ledgerAccountChoices.forEach(account => {
-        ledgerAccountSelect.appendChild(new Option(`${account.account_name} — ${account.account_code}`, account.account_code));
-    });
-    ledgerAccountSelect.value = ledgerSelectedAccountCode;
+    closeLedgerAccountOptions();
+    const account = ledgerAccountChoices.find(a => a.account_code === ledgerSelectedAccountCode);
+    ledgerAccountSelect.value = account ? ledgerAccountOptionLabel(account) : '';
+    ledgerAccountSelect.title = ledgerAccountSelect.value;
     ledgerAccountSelect.disabled = !!ledgerAccountLoad || !ledgerAccountChoices.length;
+    ledgerAccountToggle.disabled = ledgerAccountSelect.disabled;
+}
+function ledgerAccountOptionLabel(account) {
+    return `${account.account_name} — ${account.account_code}`;
+}
+function closeLedgerAccountOptions() {
+    ledgerAccountOptions.hidden = true;
+    ledgerAccountSelect.setAttribute('aria-expanded', 'false');
+    ledgerAccountSelect.removeAttribute('aria-activedescendant');
+    ledgerAccountMatches = []; ledgerAccountActiveIndex = -1;
+}
+function selectLedgerUploadAccount(account) {
+    // Only an explicit choice supplies the identity used by validation/import.
+    ledgerSelectedAccountCode = account.account_code;
+    renderLedgerUploadAccounts();
+    resetValidationState(); saveUploadSessionState();
+}
+function showLedgerAccountOptions(query = '') {
+    if (!isLedgerUpload() || ledgerAccountSelect.disabled) return;
+    const term = query.trim().toLocaleLowerCase();
+    const matches = ledgerAccountChoices.filter(a => ledgerAccountOptionLabel(a).toLocaleLowerCase().includes(term));
+    ledgerAccountMatches = matches.slice(0, 100);
+    ledgerAccountActiveIndex = -1;
+    ledgerAccountSelect.removeAttribute('aria-activedescendant');
+    ledgerAccountOptions.replaceChildren();
+    ledgerAccountMatches.forEach((account, index) => {
+        const option = document.createElement('button');
+        option.type = 'button'; option.tabIndex = -1;
+        option.id = `upload-ledger-option-${index}`;
+        option.setAttribute('role', 'option');
+        option.setAttribute('aria-selected', String(account.account_code === ledgerSelectedAccountCode));
+        option.textContent = ledgerAccountOptionLabel(account);
+        option.title = account.account_code;
+        option.addEventListener('mousedown', event => event.preventDefault());
+        option.addEventListener('click', () => selectLedgerUploadAccount(account));
+        ledgerAccountOptions.appendChild(option);
+    });
+    if (!matches.length || matches.length > 100) {
+        const message = document.createElement('div');
+        message.className = 'ledger-option-message';
+        message.textContent = matches.length ? 'Showing the first 100 matches. Type more to narrow the list.' : 'No matching accounts.';
+        ledgerAccountOptions.appendChild(message);
+    }
+    ledgerAccountOptions.hidden = false;
+    ledgerAccountSelect.setAttribute('aria-expanded', 'true');
+    // This field is at the bottom of mapping: open upwards when space is tight.
+    const bounds = ledgerAccountSelect.getBoundingClientRect();
+    const above = bounds.top - 12, below = window.innerHeight - bounds.bottom - 12;
+    const opensUp = below < 180 && above > below;
+    ledgerAccountOptions.style.top = opensUp ? 'auto' : 'calc(100% + 4px)';
+    ledgerAccountOptions.style.bottom = opensUp ? 'calc(100% + 4px)' : 'auto';
+    ledgerAccountOptions.style.maxHeight = `${Math.max(80, Math.min(240, opensUp ? above : below))}px`;
 }
 function finishLedgerAccountLoading() {
     // One owner per field: an obsolete response cannot clear a newer spinner.
@@ -176,9 +231,44 @@ async function loadLedgerUploadAccounts(preferred = '', generation = uploadTempl
         }
     }
 }
-ledgerAccountSelect.addEventListener('change', () => {
-    ledgerSelectedAccountCode = ledgerAccountSelect.value;
+ledgerAccountSelect.addEventListener('focus', () => {
+    showLedgerAccountOptions(ledgerSelectedAccountCode ? '' : ledgerAccountSelect.value);
+    ledgerAccountSelect.select();
+});
+ledgerAccountSelect.addEventListener('input', () => {
+    ledgerSelectedAccountCode = ''; ledgerAccountSelect.title = '';
     resetValidationState(); saveUploadSessionState();
+    showLedgerAccountOptions(ledgerAccountSelect.value);
+});
+ledgerAccountToggle.addEventListener('mousedown', event => event.preventDefault());
+ledgerAccountToggle.addEventListener('click', () => {
+    if (!ledgerAccountOptions.hidden) closeLedgerAccountOptions();
+    else { ledgerAccountSelect.focus(); showLedgerAccountOptions(); }
+});
+document.getElementById('ledgerUploadContext').addEventListener('focusout', event => {
+    if (!event.currentTarget.contains(event.relatedTarget)) closeLedgerAccountOptions();
+});
+ledgerAccountSelect.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !ledgerAccountOptions.hidden) {
+        event.preventDefault(); event.stopPropagation();
+        renderLedgerUploadAccounts();
+    } else if (['ArrowDown', 'ArrowUp'].includes(event.key)) {
+        event.preventDefault();
+        if (ledgerAccountOptions.hidden) showLedgerAccountOptions(ledgerSelectedAccountCode ? '' : ledgerAccountSelect.value);
+        if (!ledgerAccountMatches.length) return;
+        ledgerAccountActiveIndex = ledgerAccountActiveIndex < 0
+            ? (event.key === 'ArrowDown' ? 0 : ledgerAccountMatches.length - 1)
+            : (ledgerAccountActiveIndex + (event.key === 'ArrowDown' ? 1 : -1) + ledgerAccountMatches.length) % ledgerAccountMatches.length;
+        const options = [...ledgerAccountOptions.querySelectorAll('[role="option"]')];
+        options.forEach((option, index) => option.classList.toggle('active', index === ledgerAccountActiveIndex));
+        const active = options[ledgerAccountActiveIndex];
+        ledgerAccountSelect.setAttribute('aria-activedescendant', active.id);
+        active.scrollIntoView({block: 'nearest'});
+    } else if (event.key === 'Enter') {
+        event.preventDefault();
+        const account = ledgerAccountMatches[ledgerAccountActiveIndex] || (ledgerAccountMatches.length === 1 ? ledgerAccountMatches[0] : null);
+        if (!ledgerAccountOptions.hidden && account) selectLedgerUploadAccount(account);
+    }
 });
 
 // Pagination state variables

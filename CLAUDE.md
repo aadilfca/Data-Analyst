@@ -12,17 +12,17 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- routers/reconciliation.py → Client mappings, balance inputs, canonical Cashflows reports, database coverage totals, and bounded browser ledger warm-up. See CHANGELOG_ARCHIVE.md.
+- routers/reconciliation.py → Client mappings, balance inputs, Cashflows reports, split ledger reconciliation, coverage totals and bounded browser ledger warm-up. See CHANGELOG_ARCHIVE.md.
 
 - routers/clients.py + static/clients.* → firm-level client management; admin-only except the paginated `GET /api/clients`. See CHANGELOG_ARCHIVE.md.
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, and database size with PostgreSQL table/index breakdown. See CHANGELOG_ARCHIVE.md.
-- routers/data.py + static/databank.* → Data Bank availability, calendars, account-scoped ledger selection, cached previews, Cashflows transaction previews and guarded mutations. See CHANGELOG_ARCHIVE.md.
+- routers/data.py + static/databank.* → Data Bank availability, chronological previews, account-scoped ledger selection, Cashflows transaction previews and guarded mutations. See CHANGELOG_ARCHIVE.md.
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
-- routers/import_export.py + static/upload.* → Ledger uploads, source notes, guarded mapping submissions, coverage checks, balance continuity and canonical imports. See CHANGELOG_ARCHIVE.md.
+- routers/import_export.py + static/upload.* → Ledger uploads, searchable accounts, source order, guarded mappings, coverage, balance continuity and canonical imports. See CHANGELOG_ARCHIVE.md.
 - routers/settings.py + static/settings.* → application settings and the firm-wide Holiday list; header/tabs rendered by `client_context.js`. See CHANGELOG_ARCHIVE.md.
 - routers/templates.py + static/templates.*, static/columns.* → Master columns, transactional ledger setup, role configuration, mapping/reordering, rate rules and backup/restore. See CHANGELOG_ARCHIVE.md.
 - static/client_settings.html, static/client_settings.js -> retired direct-bookmark information page; all Verification account routing is configured centrally in Account Control Centre. See CHANGELOG_ARCHIVE.md.
-- database.py, main.py → Schemas, ledger metadata, upload receipts, audits, storage guards, PostgreSQL command results, connection recovery, diagnostics, routing and Rulebook snapshots. See CHANGELOG_ARCHIVE.md.
+- database.py, main.py → Schemas, source positions, ledger metadata, upload receipts, audits, storage guards, connection recovery, diagnostics, routing and Rulebook snapshots. See CHANGELOG_ARCHIVE.md.
 - backfill_extract_amount.py → SQLite backfill, PostgreSQL assessment, portable repair plans and isolated local repair rehearsals; live apply remains disabled. See CHANGELOG_ARCHIVE.md.
 - database.py (users/sessions) → authenticated users and session records for Login → Client Cards → Dashboard; bcrypt, session-stored selected client, seeded placeholder admin. See CHANGELOG_ARCHIVE.md.
 - routers/auth.py → login/logout, current-session lookup, client selection, `get_current_user()`/`require_admin()` guards; timezone-aware session expiry. See CHANGELOG_ARCHIVE.md.
@@ -50,13 +50,13 @@ One line per file group: what it is now. Full build history for every entry live
 - services/cashflow_voucher_canonicalization.py + cashflow_voucher_occurrence_store.py + scripts/backfill_cashflow_voucher_occurrences.py -> compact audit-preserving occurrence decisions and controlled maintenance; transaction rows remain in `client_data`. See CHANGELOG_ARCHIVE.md.
 - services/cashflow_preparation.py + scripts/backfill_cashflow_prepared_read_model.py -> metadata-only preparation/job recovery boundary; prepared transaction copies and rollups are no longer rebuilt. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_xlsx.py → static Bank/Cash workbook exporter for summaries, schedules, reviews, cross-checks, and reconciliation proofs. See CHANGELOG_ARCHIVE.md.
-- services/reconciliation_balance_source.py → validates stored opening/month-end balances and converts them to reconciliation-engine inputs. See CHANGELOG_ARCHIVE.md.
+- services/reconciliation_balance_source.py → Manual and uploaded-ledger balances, coverage, freshness, and shared Bank/Cash/combined reconciliation calculations. See CHANGELOG_ARCHIVE.md.
 - services/upload_lifecycle.py + drive_archive.py + upload_observation_report.py → Scope proofs, complete-voucher Excel evidence, verified external archives and compact receipts. See CHANGELOG_ARCHIVE.md.
 - tests/test_account_control_center*.py + tests/test_cash_bank_configuration_sync.py + tests/test_cashflows*.py → regression coverage for setup, orphan assignment, derived classification, and Cashflows Reports UI.
 - tests/test_upload_lifecycle.py + test_data_deletion.py + test_import_duplicate_gates.py → Upload/archive lifecycle, rollback, retry, deletion and identity regression tests.
 
 
-- static/reconciliation.html, static/reconciliation.js -> Reports, Cashflows summaries, shared bounded ledger cache, classified transactions, and balance setup. See CHANGELOG_ARCHIVE.md.
+- static/reconciliation.html, static/reconciliation.js → Reports, expandable ledger balances, bounded movement caches, classified transactions, and balance setup. See CHANGELOG_ARCHIVE.md.
 
 ## Commands
 - Run app: [your actual run command]
@@ -82,6 +82,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 ## Conventions
 - Account Ledger templates use explicit purpose/column roles and upload-level account/coverage; balance controls remain metadata, and ledger imports never feed voucher movements.
+- Source positions remain separate canonical metadata, outside duplicate identities and financial fingerprints; previews sort dates ascending before pagination and retain source sequence.
 - Upload formatting comparisons preserve raw identity/concurrency fingerprints; temporary validation plans retain calendar dates, and only description spacing is normalized.
 - No inline event handlers (onclick, onload, onchange, etc.) in HTML
 - No <script> inside HTML containers
@@ -246,6 +247,14 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+
+- 2026-10-20: Client Data and Cashflow transactions sort chronologically; upload metadata preserves source sequence and supports guarded position-only restoration. See CHANGELOG_ARCHIVE.md.
+
+- 2026-10-20: Upload ledger accounts now support name/code search, dropdown choices and keyboard selection, preserving validation safeguards. See CHANGELOG_ARCHIVE.md.
+
+- 2026-10-20: Cashflows adds expandable ledger balances, distinct calculations, split treasury totals and fresh evidence checks. See CHANGELOG_ARCHIVE.md.
+
+- 2026-10-20: Phase 4 adds optional ledger-backed Cashflow balances, coverage diagnostics and continuous calculated balances; manual inputs remain supported. See CHANGELOG_ARCHIVE.md.
 
 - 2026-10-20: Data Bank ledger preview adds searchable imported-account selection, scoped filters and cache isolation; Phase 2 accepted. See CHANGELOG_ARCHIVE.md.
 

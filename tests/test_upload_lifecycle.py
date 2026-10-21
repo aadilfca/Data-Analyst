@@ -39,6 +39,7 @@ class Store:
         self.depth = 0
         self.source_writes = 0
         self.classified_dates = []
+        self.metadata_writes = 0
         self.protected = False
         for index, raw in enumerate(rows, 1):
             self.add(index, raw)
@@ -49,17 +50,18 @@ class Store:
         self.rows.append({'id': index, 'client_id': client, 'template_id': template, 'upload_id': 1,
                           'row_data': deepcopy(raw), 'version': 1, 'source_identity': identity,
                           'document_group_id': '1-' + raw['Voucher ID'], 'is_deleted': False,
+                          'source_row_number': index + 1, 'source_order_upload_id': 1,
                           'extract_date': datetime.strptime(raw['Transaction Date'], '%d/%m/%Y').strftime('%Y-%m-%d')})
 
     @contextmanager
     def transaction(self):
-        before = deepcopy((self.rows, self.jobs, self.plans, self.file, self.audits, self.source_writes)) if self.depth == 0 else None
+        before = deepcopy((self.rows, self.jobs, self.plans, self.file, self.audits, self.source_writes, self.metadata_writes)) if self.depth == 0 else None
         self.depth += 1
         try:
             yield self
         except BaseException:
             if before is not None:
-                self.rows, self.jobs, self.plans, self.file, self.audits, self.source_writes = before
+                self.rows, self.jobs, self.plans, self.file, self.audits, self.source_writes, self.metadata_writes = before
             raise
         finally:
             self.depth -= 1
@@ -161,6 +163,7 @@ class Store:
             self.rows.append({'id': index, 'client_id': value[0], 'template_id': value[1],
                               'upload_id': value[2], 'row_data': deepcopy(value[3].adapted), 'version': 1,
                               'extract_date': value[5], 'source_identity': value[11],
+                              'source_row_number': value[13], 'source_order_upload_id': value[14],
                               'document_group_id': value[8], 'is_deleted': False})
             self.source_writes += 1
             ids.append(index)
@@ -171,10 +174,16 @@ class Store:
         if 'INSERT INTO data_audit_log' in sql:
             for value in values:
                 self.audits.append({'id': len(self.audits) + 1, 'client_data_id': value[0], 'action': value[2]})
+        elif 'UPDATE client_data SET source_row_number' in sql:
+            for number, source, key, client, template in values:
+                target = next(r for r in self.rows if r['id'] == key and r['client_id'] == client and r['template_id'] == template)
+                target.update(source_row_number=number, source_order_upload_id=source)
+                self.metadata_writes += 1
         elif 'UPDATE client_data' in sql:
             for value in values:
                 target = next(r for r in self.rows if r['id'] == value[-1])
-                target.update(row_data=deepcopy(value[0].adapted), upload_id=value[1], extract_date=value[6], source_identity=value[7])
+                target.update(row_data=deepcopy(value[0].adapted), upload_id=value[1], extract_date=value[6], source_identity=value[7],
+                              source_row_number=value[9], source_order_upload_id=value[10])
                 self.source_writes += 1
 
 
@@ -294,6 +303,28 @@ def test_repeated_unchanged_source_is_noop_without_archive_or_plan(pipeline):
     result = upload.validate_only(request())
     assert not result['can_import'] and result['change_detection']['unchanged_count'] == 2
     assert not state['store'].jobs and not state['transfers']
+
+
+def test_legacy_source_order_refresh_keeps_values_ids_and_receipt_without_financial_archive(pipeline):
+    state=pipeline
+    state['store']=Store([row('V1'),row('V1'),row('V9'),row('OUTSIDE','01/05/2026')])
+    for saved in state['store'].rows[:3]:
+        saved.update(source_row_number=None,source_order_upload_id=None)
+    before=[(r['id'],deepcopy(r['row_data']),r['version'],r['upload_id']) for r in state['store'].rows]
+    outside=deepcopy(state['store'].rows[-1])
+    state['incoming']=[row('V9'),row('V1'),row('V1')]
+    result,validation=validate_then_import(state)
+    assert result['imported_count']==result['updated_count']==result['deleted_count']==0
+    assert result['source_order_refreshed'] and 'row order restored' in result['message']
+    assert state['store'].source_writes==state['transfers']==0
+    assert state['store'].metadata_writes==3
+    assert [(r['id'],r['row_data'],r['version'],r['upload_id']) for r in state['store'].rows]==before
+    assert state['store'].rows[-1]==outside
+    ordered=sorted(state['store'].rows[:3],key=lambda r:r['source_row_number'])
+    assert [r['id'] for r in ordered]==[3,1,2]
+    retry=upload.validate_and_import(request(validation_plan_id=validation['validation_plan_id']))
+    assert retry['recovered_commit'] and 'row order restored' in retry['message']
+    assert state['store'].metadata_writes==3 and state['transfers']==0
 
 
 def test_changed_voucher_archives_unchanged_sibling_lines_and_keeps_their_ids(pipeline):

@@ -276,7 +276,7 @@ def test_cashflows_summary_contains_inline_category_ledger_contract():
     assert 'syncCashflowSummaryPaneRows' in inline_script
     assert 'syncCashflowSummaryHeaderScroll' in inline_script
     assert 'syncCashflowSummaryRowHover' in inline_script
-    assert 'applyCashflowSummaryColumnContract' in inline_script
+    assert 'addColGroup(frozenTable' in inline_script
     assert 'cashflowSummaryLogicalColumnCount' in inline_script
     assert 'cashflows-summary-pane-layout' in inline_styles
     assert 'cashflows-summary-sticky-header' in inline_styles
@@ -287,7 +287,7 @@ def test_cashflows_summary_contains_inline_category_ledger_contract():
     assert 'table-layout: fixed;' in inline_styles
     assert 'cashflows-summary-scroll-pane' in inline_styles
     assert 'cashflows-inline-ledger-row td:first-child' in inline_styles
-    assert 'cashflows-inline-ledger-row td:not(:first-child)' in inline_styles
+    assert 'cashflows-inline-ledger-row td:nth-child(n+2)' in inline_styles
     assert 'cashflows-inline-ledger-table' not in inline_script
     assert 'cashflows-inline-ledger-table' not in inline_styles
     assert 'cashflows-inline-ledger-note' not in inline_script
@@ -310,7 +310,7 @@ def test_cashflows_summary_contains_inline_category_ledger_contract():
     assert '.cashflows-summary-table-wrap::before' in inline_styles
     assert 'font-variant-numeric: tabular-nums;' in inline_styles
 
-def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
+def test_cashflows_report_preserves_current_default_period_and_monthly_grouping():
 
     settings_html = (ROOT / "static" / "settings.html").read_text(encoding="utf-8")
     settings_script = (ROOT / "static" / "settings.js").read_text(encoding="utf-8")
@@ -325,7 +325,8 @@ def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
     assert "cashflowDefaultPeriod" in settings_script
     assert "cashflowCustomStart" in settings_script
     assert "cashflowCustomEnd" in settings_script
-    assert "/api/settings/cashflows-defaults" in reconciliation_script
+    assert "const CASHFLOW_DEFAULT_START = '2026-01-01';" in reconciliation_script
+    assert "const CASHFLOW_DEFAULT_END = '2026-06-30';" in reconciliation_script
     assert "await loadCashflowDefaultPeriods();" in reconciliation_script
     assert "defaultPeriods();" in reconciliation_script
     assert "groupBy: 'month'" in reconciliation_script
@@ -349,8 +350,8 @@ def test_cashflows_report_loads_administrator_defaults_and_monthly_grouping():
     assert "setCashflowSummaryFilterVisibility(false);" in reconciliation_script
     assert "cashflowPreviewPeriods" in reconciliation_script
     assert "syncCashflowZeroRowsButton" in reconciliation_script
-    assert "style.css?v=68" in reconciliation_html
-    assert "reconciliation.js?v=30" in reconciliation_html
+    assert "style.css?v=71" in reconciliation_html
+    assert "reconciliation.js?v=36" in reconciliation_html
     assert "cashflowsSummaryBasis" not in reconciliation_html
     assert "cashflows-transactions-note" not in reconciliation_html
     assert "renderCashflowSummary" in reconciliation_script
@@ -387,7 +388,7 @@ def test_cashflows_summary_panes_contain_full_year_horizontal_overflow():
     period_cols = "<colgroup>" + "".join("<col style='width:112px'>" for _ in range(15)) + "</colgroup>"
     markup = (
         "<div class='cashflows-summary-table-wrap'><div id='cashflowsSummaryTable' class='cashflows-summary-table-host'>"
-        "<div class='cashflows-summary-pane-layout'>"
+        "<div class='cashflows-summary-pane-layout' style='--cashflows-summary-frozen-width:360px'>"
         "<div class='cashflows-summary-sticky-header'>"
         "<div class='cashflows-summary-frozen-header-pane'><table class='cashflows-summary-header-table cashflows-summary-frozen-header-table'>" + frozen_cols +
         "<thead><tr><th>Category</th></tr></thead></table></div>"
@@ -582,12 +583,15 @@ def ledger_cache_page():
     hook = '''window.ledgerFixture = {
         load: function (result) {
             clientId = result.client_id;
+            cashflowBalancesPending = false;
+            cashflowBalanceExpanded = {opening: false, closing: false};
             cashflowSelection = {start: result.period_start, end: result.period_end, groupBy: result.group_by};
             cashflowTreasuryView = result.treasury_view;
             element('cashflowsPeriodStart').value = result.period_start;
             element('cashflowsPeriodEnd').value = result.period_end;
             element('cashflowsView').hidden = false;
             element('reportsView').hidden = true;
+            document.querySelector('.reconciliation-shell').classList.add('cashflows-view-active');
             renderResult(result);
         },
         expire: function () {cashflowRevisionCheckedAt = 0;},
@@ -596,6 +600,8 @@ def ledger_cache_page():
         stripped: function () {return lastCashflowsResult;},
         stats: function () {return Array.from(cashflowLedgerCacheOrder.values());},
         parent: deriveCashflowSummaryFromParent,
+        filter: function (value) {cashflowSummaryFilter = value; renderCashflowSummary(lastCashflowsResult.preview);},
+        zeros: toggleCashflowZeroRows,
         remember: function (key, rows) {return rememberCashflowLedger('baseline', key, {rows: rows, result: {}});},
         mutateScope: function (change) {
             if (change.client_id) clientId = change.client_id;
@@ -620,6 +626,21 @@ def ledger_cache_page():
 
 def _category_button(page, category='Operating'):
     return page.locator('.cashflows-inline-expand').filter(has_text=category).first
+
+
+def test_cashflow_transaction_drawer_keeps_server_date_and_same_day_sequence(ledger_cache_page):
+    page=ledger_cache_page
+    page.evaluate('result => window.ledgerFixture.load(result)',_ledger_report())
+    rows=[{'id':key,'row_data':{'Voucher Detail':voucher},'classification':{
+        'voucher_id':voucher,'transaction_date':day,'debit':10,'credit':0}}
+        for key,voucher,day in [(90,'V9','2026-01-01'),(10,'V1','2026-01-01'),(4,'V8','2026-01-02')]]
+    page.route('**/api/data/cashflows-classification-preview?*',lambda route:route.fulfill(json={
+        'rows':rows,'page':1,'limit':50,'total_rows':3}))
+    _category_button(page).click()
+    page.locator('.cashflows-inline-ledger-link').first.click()
+    page.wait_for_function("document.getElementById('cashflowsInlineTransactionTable').innerText.includes('V9')")
+    assert page.locator('#cashflowsInlineTransactionTable tbody tr td:nth-child(6)').all_text_contents()==['V9','V1','V8']
+    assert page.locator('#cashflowsInlineTransactionTable tbody tr td:nth-child(5)').all_text_contents()==['2026-01-01','2026-01-01','2026-01-02']
 
 
 @pytest.mark.parametrize('view', ['combined', 'bank', 'cash', 'split'])
@@ -798,3 +819,278 @@ def test_incomplete_fallback_response_is_not_cached_or_displayed(ledger_cache_pa
     assert 'Incomplete account details' in page.locator('.cashflows-inline-ledger-error').inner_text()
     assert page.locator('.cashflows-inline-ledger-link').count() == 0
     assert page.evaluate('() => ledgerFixture.stats()') == []
+
+
+def _balance_report(view='combined', month='2026-01', two_periods=False):
+    report = _ledger_report(view=view, month=month)
+    keys = [month, '2026-02'] if two_periods else [month]
+    periods = [dict(key=key, start=key+'-01', end=key+'-28', label=key) for key in keys]
+    report['period_end'] = periods[-1]['end']
+    report['ledger_context']['period_end'] = report['period_end']
+    report['preview']['periods'] = periods
+    report['preview']['months'] = keys
+    bank_codes = ['B1'] if view != 'cash' else []
+    cash_codes = ['C1'] if view != 'bank' else []
+    types = bank_codes + cash_codes
+    names = {'B1': 'Bank Alpha', 'C1': 'Office Cash'}
+    typed = {'B1': 'Bank', 'C1': 'Cash'}
+    source_periods = []
+    for index, period in enumerate(periods):
+        opening = {'B1': 100+50*index, 'C1': 50-20*index}
+        closing = {'B1': opening['B1']+50, 'C1': opening['C1']-20}
+        accounts = [dict(account_code=code, account_name=names[code], treasury_type=typed[code],
+            opening_balance=opening[code], closing_balance=closing[code], status='Ready') for code in types]
+        source_periods.append(dict(period, accounts=accounts, complete=True, status='Matched',
+            opening_total=sum(opening[c] for c in types), closing_total=sum(closing[c] for c in types),
+            calculated_opening=sum(opening[c] for c in types), calculated_closing=sum(closing[c] for c in types),
+            cashflow_net_movement=sum(closing[c]-opening[c] for c in types), variance=0))
+    def make_evidence(values):
+        return dict(periods=values, evidence_fingerprint='1'*64, ready=True, coverage_complete=True,
+            status='Matched', diagnostics=[], overall=dict(opening_total=values[0]['opening_total'],
+                closing_total=values[-1]['closing_total'], cashflow_net_movement=sum(p['cashflow_net_movement'] for p in values)))
+    evidence = make_evidence(source_periods)
+    if view == 'split':
+        evidence['treasury_breakdown'] = {}
+        for code, key in (('B1', 'bank'), ('C1', 'cash')):
+            entries = []
+            for period in source_periods:
+                account = next(a for a in period['accounts'] if a['account_code']==code)
+                entries.append(dict(period, opening_total=account['opening_balance'], closing_total=account['closing_balance'],
+                    calculated_opening=account['opening_balance'], calculated_closing=account['closing_balance'],
+                    cashflow_net_movement=50 if code=='B1' else -20, accounts=[account]))
+            evidence['treasury_breakdown'][key] = make_evidence(entries)
+        evidence['unresolved_movements'] = {key:0 for key in keys}
+    report['preview']['balance_reconciliation'] = evidence
+    receipts, payments = (0, -20) if view=='cash' else (50, 0) if view=='bank' else (50, -20)
+    categories = [dict(category=name, Total=value*len(keys), **{key:value for key in keys})
+                  for name,value in (('Operating',receipts),('Other',payments))]
+    report['preview']['category_totals'] = categories
+    report['preview']['treasury_view_totals'] = categories if view!='split' else [
+        dict(category=name,period_key=key,bank_amount=bank,cash_amount=cash,mixed_amount=0,total_amount=bank+cash)
+        for key in keys for name,bank,cash in (('Operating',50,0),('Other',0,-20))]
+    report['preview']['period_metrics'] = {key:dict(source_line_count=2, selected_voucher_count=2,
+        internal_transfer_count=0, category_review_count=0,deduction_count=0) for key in keys}
+    return report
+
+
+def _balance_toggle(page, kind='opening'):
+    return page.locator('[data-cashflow-balance-toggle="'+kind+'"]')
+
+
+def _balance_values(page, selector):
+    return page.locator('.cashflows-summary-scroll-table '+selector).locator('td').all_text_contents()
+
+
+@pytest.mark.parametrize('view', ['combined','bank','cash','split'])
+def test_balance_rows_start_compact_and_expand_names_with_code_hover(ledger_cache_page, view):
+    page = ledger_cache_page
+    page.evaluate('result=>ledgerFixture.load(result)', _balance_report(view))
+    assert page.locator('.cashflows-summary-frozen-table .cashflows-balance-row').count()==2
+    assert page.locator('.cashflows-balance-account:visible').count()==0
+    _balance_toggle(page).click()
+    assert _balance_toggle(page).get_attribute('aria-expanded')=='true'
+    expected = 1 if view in ('bank','cash') else 2
+    labels = page.locator('.cashflows-summary-frozen-table [data-cashflow-balance-child="opening"] .cashflows-balance-account-label')
+    assert labels.count()==expected
+    assert labels.first.is_visible()
+    assert 'B1' not in labels.first.inner_text()
+    assert labels.first.get_attribute('title').startswith('Account code: ')
+    assert page.locator('.cashflows-summary-frozen-table .cashflows-balance-calculated:visible').inner_text()=='Calculated opening balance'
+    _balance_toggle(page).focus()
+    page.keyboard.press('Space')
+    assert _balance_toggle(page).get_attribute('aria-expanded')=='false'
+    page.keyboard.press('Enter')
+    assert _balance_toggle(page).get_attribute('aria-expanded')=='true'
+
+
+def test_split_source_and_calculated_columns_match_with_first_opening_last_closing_totals(ledger_cache_page):
+    page = ledger_cache_page
+    page.evaluate('result=>ledgerFixture.load(result)', _balance_report('split',two_periods=True))
+    opening = _balance_values(page,'.cashflows-balance-row:first-of-type')
+    assert opening[:3]==['100 Dr','50 Dr','150 Dr']
+    assert opening[3:6]==['150 Dr','30 Dr','180 Dr']
+    assert opening[6:9]==['100 Dr','50 Dr','150 Dr']
+    closing = _balance_values(page,'.cashflows-balance-row[data-cashflow-balance-kind="closing"]')
+    assert closing[:3]==['150 Dr','30 Dr','180 Dr']
+    assert closing[3:6]==closing[6:9]==['200 Dr','10 Dr','210 Dr']
+    _balance_toggle(page,'closing').click()
+    assert _balance_values(page,'.cashflows-balance-calculated[data-cashflow-balance-child="closing"]')[:9]==closing[:9]
+    assert _balance_values(page,'.cashflows-balance-net')[:3]==['50','-20','30']
+
+
+def test_balances_survive_category_search_hide_zero_and_existing_category_expansion(ledger_cache_page):
+    page=ledger_cache_page
+    report=_balance_report()
+    page.evaluate('result=>ledgerFixture.load(result)',report)
+    _category_button(page).click()
+    page.wait_for_selector('.cashflows-inline-ledger-link')
+    before=page.locator('.cashflows-inline-ledger-link').count()
+    _balance_toggle(page).click()
+    assert page.locator('.cashflows-inline-ledger-link').count()==before
+    page.evaluate("() => ledgerFixture.filter('nothing matches')")
+    assert page.locator('.cashflows-summary-frozen-table .cashflows-balance-row').count()==2
+    assert _balance_values(page,'.cashflows-balance-net')[0]=='30'
+    assert _balance_toggle(page).get_attribute('aria-expanded')=='true'
+    page.evaluate('() => ledgerFixture.zeros()')
+    assert _balance_values(page,'.cashflows-balance-row:first-of-type')[0]=='150 Dr'
+
+
+def test_zero_credit_partial_and_literal_source_names_are_displayed_without_guessing(ledger_cache_page):
+    page=ledger_cache_page
+    report=_balance_report()
+    evidence=report['preview']['balance_reconciliation']
+    period=evidence['periods'][0]
+    period.update(opening_total=0,closing_total=None,status='Unavailable')
+    period['accounts'][0].update(account_name='<b>Bank & Co</b>',opening_balance=0,closing_balance=-25,status='Partial')
+    period['accounts'][1].update(opening_balance=0,closing_balance=None,status='Unavailable')
+    evidence.update(ready=False,coverage_complete=False,diagnostics=[dict(account_code='C1',code='ledger_not_uploaded',message='Ledger not uploaded.')])
+    page.evaluate('result=>ledgerFixture.load(result)',report)
+    assert _balance_values(page,'.cashflows-balance-row:first-of-type')[0]=='0'
+    _balance_toggle(page,'closing').click()
+    labels=page.locator('.cashflows-summary-frozen-table [data-cashflow-balance-child="closing"] .cashflows-balance-account-label')
+    assert labels.first.inner_text()=='<b>Bank & Co</b>'
+    assert labels.locator('b').count()==0
+    values=page.locator('.cashflows-summary-scroll-table .cashflows-balance-account[data-cashflow-balance-child="closing"]')
+    assert values.nth(0).locator('td').first.inner_text()=='25 Cr'
+    assert values.nth(1).locator('.cashflows-balance-unavailable').first.get_attribute('title')=='Ledger not uploaded.'
+    assert _balance_values(page,'.cashflows-balance-row[data-cashflow-balance-kind="closing"]')[0]=='Unavailable'
+
+
+def test_old_balance_is_never_reused_when_only_ledger_changes_without_voucher_revision(ledger_cache_page):
+    page=ledger_cache_page
+    report=_balance_report()
+    page.evaluate('result=>ledgerFixture.load(result)',report)
+    page.evaluate('''() => {
+        window.fetch = (url) => new Promise(resolve => {window.balanceResolver=resolve;window.balanceURL=url;});
+        window.balanceRefresh=ledgerFixture.generate(false);
+    }''')
+    page.wait_for_function('typeof balanceResolver === "function"')
+    assert 'include_balances=true' in page.evaluate('() => balanceURL')
+    assert _category_button(page).is_visible()
+    assert _balance_values(page,'.cashflows-balance-row:first-of-type')[0]=='Checking…'
+    _category_button(page).click()
+    page.wait_for_selector('.cashflows-inline-ledger-link')
+    _balance_toggle(page).click()
+    fresh=_balance_report()
+    fresh['preview']['balance_reconciliation']['evidence_fingerprint']='2'*64
+    fresh['preview']['balance_reconciliation']['periods'][0]['opening_total']=999
+    page.evaluate('''async report => {balanceResolver(new Response(JSON.stringify(report)));await balanceRefresh;}''',fresh)
+    assert _balance_values(page,'.cashflows-balance-row:first-of-type')[0]=='999 Dr'
+    assert page.locator('.cashflows-inline-ledger-link').count()==1
+    assert _balance_toggle(page).get_attribute('aria-expanded')=='true'
+
+
+@pytest.mark.parametrize('failure',['network','wrong_scope','missing_evidence','malformed_evidence'])
+def test_balance_refresh_failure_retains_movements_but_never_old_balances(ledger_cache_page,failure):
+    page=ledger_cache_page
+    report=_balance_report()
+    page.evaluate('result=>ledgerFixture.load(result)',report)
+    if failure=='network':
+        page.evaluate('''async () => {window.fetch=()=>Promise.reject(new TypeError('offline'));await ledgerFixture.generate(false);}''')
+    else:
+        fresh=_balance_report()
+        if failure=='wrong_scope':fresh['client_id']=8
+        elif failure=='missing_evidence':del fresh['preview']['balance_reconciliation']
+        else:fresh['preview']['balance_reconciliation']['periods'][0]['start']='2025-01-01'
+        page.route('**/api/reconciliation/cashflows/preview?*',lambda route:route.fulfill(json=fresh))
+        page.evaluate('() => ledgerFixture.generate(false)')
+    assert _category_button(page).is_visible()
+    assert _balance_values(page,'.cashflows-balance-row:first-of-type')[0]=='Unavailable'
+    assert page.locator('#cashflowsProcessing').is_hidden()
+
+
+def test_parent_reuse_never_copies_or_adds_old_opening_closing_balances(ledger_cache_page):
+    report=_balance_report()
+    derived=ledger_cache_page.evaluate('''r=>ledgerFixture.parent(r,r.period_start,r.period_end,'quarter','combined')''',report)
+    assert derived is not None
+    assert 'balance_reconciliation' not in derived['preview']
+
+
+def test_mixed_movements_remain_explicit_without_inventing_a_mixed_ledger_balance(ledger_cache_page):
+    page=ledger_cache_page
+    report=_balance_report('split')
+    report['preview']['treasury_view_totals'].append(dict(category='Unresolved',period_key='2026-01',
+        bank_amount=0,cash_amount=0,mixed_amount=3,total_amount=3))
+    evidence=report['preview']['balance_reconciliation']
+    evidence['unresolved_movements']['2026-01']=3
+    evidence['periods'][0].update(cashflow_net_movement=33,calculated_closing=183,variance=-3,status='Variance')
+    evidence['overall']['cashflow_net_movement']=33
+    page.evaluate('result=>ledgerFixture.load(result)',report)
+    assert _balance_values(page,'.cashflows-balance-row[data-cashflow-balance-kind="closing"]')[:4]==['150 Dr','30 Dr','—','180 Dr']
+    assert _balance_values(page,'.cashflows-balance-net')[:4]==['50','-20','3','33']
+    _balance_toggle(page,'closing').click()
+    calculated=page.locator('.cashflows-summary-scroll-table .cashflows-balance-calculated[data-cashflow-balance-child="closing"]')
+    assert calculated.locator('td').nth(3).inner_text()=='183 Dr'
+    assert calculated.locator('td').nth(3).locator('.cashflows-balance-review').count()==1
+
+
+def test_mismatched_split_evidence_is_unavailable_in_both_balance_and_net_rows(ledger_cache_page):
+    page=ledger_cache_page
+    report=_balance_report('split')
+    report['preview']['balance_reconciliation']['treasury_breakdown']['bank']['periods'][0]['start']='2025-01-01'
+    page.evaluate('result=>ledgerFixture.load(result)',report)
+    assert _balance_values(page,'.cashflows-balance-row:first-of-type')[:3]==['Unavailable','50 Dr','150 Dr']
+    assert _balance_values(page,'.cashflows-balance-net')[:3]==['Unavailable','-20','30']
+    assert 'Incomplete ledger evidence' in page.locator('.cashflows-summary-frozen-table .cashflows-balance-row').first.inner_text()
+
+
+def test_late_balance_response_cannot_replace_a_new_period(ledger_cache_page):
+    page=ledger_cache_page
+    january,february=_balance_report(),_balance_report(month='2026-02')
+    february['preview']['balance_reconciliation']['periods'][0]['opening_total']=300
+    page.evaluate('result=>ledgerFixture.load(result)',january)
+    page.evaluate('''()=>{window.waiting=[];window.fetch=()=>new Promise(resolve=>waiting.push(resolve));window.firstBalance=ledgerFixture.generate(true);}''')
+    page.evaluate('result=>ledgerFixture.load(result)',february)
+    page.evaluate('''()=>{window.secondBalance=ledgerFixture.generate(true);}''')
+    page.evaluate('''async result=>{waiting[1](new Response(JSON.stringify(result)));await secondBalance;}''',february)
+    page.evaluate('''async result=>{waiting[0](new Response(JSON.stringify(result)));await firstBalance;}''',january)
+    assert _balance_values(page,'.cashflows-balance-row:first-of-type')[0]=='300 Dr'
+    assert page.evaluate('()=>ledgerFixture.stripped().period_start')=='2026-02-01'
+
+
+def test_background_balance_completion_does_not_dismiss_an_active_ledger_load(ledger_cache_page):
+    page=ledger_cache_page
+    report=_balance_report()
+    del report['preview']['ledger_cache']  # Force the independent drilldown to load remotely.
+    page.evaluate('result=>ledgerFixture.load(result)',report)
+    page.evaluate('''()=>{
+        window.waiting=[];window.fetch=(url)=>new Promise(resolve=>waiting.push({url:url,resolve:resolve}));
+        window.balanceLoad=ledgerFixture.generate(false);
+    }''')
+    page.wait_for_function('waiting.length===1')
+    page.evaluate('''()=>{window.detailLoad=ledgerFixture.ledger();}''')
+    page.wait_for_function('waiting.length===2')
+    assert page.locator('#cashflowsProcessing').is_visible()
+    title=page.locator('#cashflowsProcessingTitle').inner_text()
+    page.evaluate('''async report=>{waiting[0].resolve(new Response(JSON.stringify(report)));await balanceLoad;}''',report)
+    assert page.locator('#cashflowsProcessing').is_visible()
+    assert page.locator('#cashflowsProcessingTitle').inner_text()==title
+    response=dict(ledger_context=report['ledger_context'],rows=[],total_rows=0,page=1,page_count=1,
+                  limit=200,client_id=7,period_start=report['period_start'],period_end=report['period_end'],
+                  group_by='month',treasury_view='combined',source={'ready':True},blocking_reasons=[])
+    page.evaluate('''async result=>{waiting[1].resolve(new Response(JSON.stringify(result)));await detailLoad;}''',response)
+    assert page.locator('#cashflowsProcessing').is_hidden()
+
+
+@pytest.mark.parametrize('width,view',[(1400,'combined'),(390,'combined'),(1400,'split'),(390,'split')])
+def test_balance_expansion_keeps_frozen_and_numeric_rows_aligned_without_page_overflow(ledger_cache_page,width,view):
+    page=ledger_cache_page
+    page.set_viewport_size({'width':width,'height':800})
+    report=_balance_report(view,two_periods=True)
+    for period in report['preview']['balance_reconciliation']['periods']:
+        period['accounts'][0]['account_name']='A long bank account name that wraps across the frozen account column'
+    page.evaluate('result=>ledgerFixture.load(result)',report)
+    _balance_toggle(page).click()
+    _balance_toggle(page,'closing').click()
+    page.wait_for_function('''() => {
+        const right=new Map(Array.from(document.querySelectorAll('.cashflows-summary-scroll-table tr[data-cashflow-summary-row-id]')).map(row=>[row.dataset.cashflowSummaryRowId,row]));
+        return Array.from(document.querySelectorAll('.cashflows-summary-frozen-table tbody tr[data-cashflow-summary-row-id]')).filter(row=>!row.hidden).every(row=>{
+            const a=row.getBoundingClientRect(),b=right.get(row.dataset.cashflowSummaryRowId).getBoundingClientRect();
+            return Math.abs(a.height-b.height)<=1 && Math.abs(a.top-b.top)<=1;
+        });
+    }''')
+    assert page.evaluate('() => document.documentElement.scrollWidth')<=width
+    if width==390:
+        assert page.locator('.cashflows-summary-scroll-pane').evaluate('(e)=>e.clientWidth')>=140
+    colors=page.evaluate('''() => ['.cashflows-balance-row','.cashflows-balance-calculated'].map(selector=>getComputedStyle(document.querySelector(selector+' td')).backgroundColor)''')
+    assert colors==['rgb(226, 239, 218)','rgb(237, 241, 247)']

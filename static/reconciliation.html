@@ -5,6 +5,26 @@
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
     <title>Reports | Internal Audit App</title>
     <link rel='stylesheet' href='/static/style.css?v=71'>
+    <style>
+        /* Balance presentation belongs to this report; shared page styles stay unchanged. */
+        #cashflowsSummaryTable .cashflows-balance-row > td { background: #e2efda; color: #244832; font-weight: 700; border-top: 1px solid #b6c9b0; border-bottom: 1px solid #b6c9b0; }
+        #cashflowsSummaryTable .cashflows-balance-toggle { color: inherit; width: 100%; justify-content: space-between; font-weight: 700; }
+        #cashflowsSummaryTable .cashflows-balance-toggle::after { content: '\25B8'; margin-left: 8px; }
+        #cashflowsSummaryTable .cashflows-balance-toggle[aria-expanded='true']::after { content: '\25BE'; }
+        #cashflowsSummaryTable .cashflows-balance-toggle:focus-visible { outline: 2px solid #24536e; outline-offset: 3px; border-radius: 2px; }
+        #cashflowsSummaryTable .cashflows-balance-account > td { background: #fbfcfa; color: #1a1a2e; }
+        #cashflowsSummaryTable .cashflows-balance-calculated > td { background: #edf1f7; color: #31475e; font-weight: 600; border-top: 1px solid #c8d3df; border-bottom: 1px solid #c8d3df; }
+        #cashflowsSummaryTable .cashflows-balance-net > td { background: #f4f7f8; color: #31475e; font-weight: 700; border-top: 1px solid #c8d3df; }
+        #cashflowsSummaryTable .cashflows-balance-number { white-space: nowrap; font-variant-numeric: tabular-nums; }
+        #cashflowsSummaryTable .cashflows-balance-unavailable, #cashflowsSummaryTable .cashflows-balance-state { color: #64748b; font-size: 11px; font-weight: 400; }
+        #cashflowsSummaryTable .cashflows-balance-account-label { cursor: help; border-bottom: 1px dotted #94a3b8; }
+        #cashflowsSummaryTable .cashflows-balance-review { box-shadow: inset 0 -2px 0 #c99032; }
+        #cashflowsSummaryTable [data-cashflow-balance-child][hidden] { display: none; }
+        #cashflowsSummaryTable .cashflows-balance-state { display: block; margin-top: 2px; }
+        @media (max-width: 600px) {
+            #cashflowsSummaryControlsPanel .cashflows-report-actions { flex-wrap: wrap; }
+        }
+    </style>
 </head>
 <body class='reconciliation-page' data-nav-module='Reports' data-nav-parent='index.html'>
     <nav class='navbar'>
@@ -223,6 +243,6 @@
         </footer>
     </main>
     <script src='/static/client_context.js?v=19'></script>
-    <script src='/static/reconciliation.js?v=35'></script>
+    <script src='/static/reconciliation.js?v=36'></script>
 </body>
 </html>

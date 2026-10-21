@@ -331,6 +331,7 @@ def test_stale_balance_proof_refresh_has_no_new_changed_or_deleted_transaction_a
         upload._prepare_ledger_rows([source], req)
         context['scope_fingerprint'] = 'scope'
         existing = [{'id':101, 'version':1, 'row_data':source, 'extract_date':'2026-01-05',
+                     'source_row_number':2, 'source_order_upload_id':10,
                      'source_identity':upload._canonical_source_identity(COLUMNS, source, 7)}]
         with patch.object(upload, 'execute_query_pg', return_value=existing):
             changes = upload.compare_transactions(3,7,COLUMNS,[source],{c['column_name']:c['column_name'] for c in COLUMNS},{},
@@ -904,7 +905,8 @@ def ledger_preview_client(monkeypatch):
             status TEXT, ledger_account_code TEXT, ledger_account_name TEXT);
         CREATE TABLE client_data (id INTEGER, client_id INTEGER, template_id INTEGER, upload_id INTEGER,
             row_data TEXT, extract_amount REAL, extract_date TEXT, data_quality_flag TEXT, rate_source TEXT,
-            document_group_id TEXT, is_deleted BOOLEAN, change_detection_status TEXT);
+            document_group_id TEXT, is_deleted BOOLEAN, change_detection_status TEXT,
+            source_row_number INTEGER, source_order_upload_id INTEGER);
         INSERT INTO clients VALUES (3, TRUE), (4, TRUE);
         INSERT INTO templates VALUES (7, 'Universal ledger', 'account_ledger', TRUE),
             (8, 'Invoices', 'standard', TRUE), (9, 'Another ledger', 'account_ledger', TRUE);
@@ -926,8 +928,8 @@ def ledger_preview_client(monkeypatch):
                (110,3,8,20,10,'2026-01-04','Ordinary',None,False,'active','ordinary')]
     for key, client, template, source, amount, day, text, quality, deleted, status, group in sources:
         raw = row('V1' if key != 107 else 'V2', day, text, amount, 0, str(amount)+' DR')
-        conn.execute('INSERT INTO client_data VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
-            (key,client,template,source,json.dumps(raw),amount,day,quality,None,group,deleted,status))
+        conn.execute('INSERT INTO client_data VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (key,client,template,source,json.dumps(raw),amount,day,quality,None,group,deleted,status,None,None))
     calls = []
     def query(sql, params=None, **kwargs):
         calls.append((sql, params))
@@ -960,7 +962,7 @@ def test_ledger_picker_uses_latest_imported_names_and_keeps_client_template_scop
 
 
 @pytest.mark.parametrize('filters,expected_ids,expected_sundays', [
-    ({}, [107,101,102], 2), ({'search':'Second'}, [107], 0),
+    ({}, [101,102,107], 2), ({'search':'Second'}, [107], 0),
     ({'amount_min':80,'amount_max':120}, [101,102], 2),
     ({'sunday_only':'true'}, [101,102], 2), ({'data_quality':'incomplete'}, [107], 0),
     ({'date_start':'2026-01-10'}, [107], 0), ({'date_end':'2026-01-03'}, [], 0),
@@ -984,12 +986,52 @@ def test_ledger_preview_keeps_repeated_lines_and_account_grouping_through_pages(
     client, _, _ = ledger_preview_client
     params = dict(client_id=3,template_id=7,date_start='2026-01-01',date_end='2026-01-31',ledger_account_code='A-1',limit=1)
     pages = [client.get('/api/data/preview', params={**params,'page':page}).json() for page in (1,2,3)]
-    assert [page['rows'][0]['id'] for page in pages] == [107,101,102]
+    assert [page['rows'][0]['id'] for page in pages] == [101,102,107]
     assert all(page['total_rows'] == 3 for page in pages)
-    assert pages[1]['rows'][0]['document_group_id'] == pages[2]['rows'][0]['document_group_id'] == 'ledger:A-1:V1'
+    assert pages[0]['rows'][0]['document_group_id'] == pages[1]['rows'][0]['document_group_id'] == 'ledger:A-1:V1'
     other = client.get('/api/data/preview', params={**params,'ledger_account_code':'B-2'}).json()
     assert other['total_rows'] == 1 and other['rows'][0]['id'] == 103
-    assert other['rows'][0]['document_group_id'] != pages[1]['rows'][0]['document_group_id']
+    assert other['rows'][0]['document_group_id'] != pages[0]['rows'][0]['document_group_id']
+
+
+def test_ledger_preview_uses_source_positions_before_pagination_without_changing_values(ledger_preview_client):
+    client, conn, _ = ledger_preview_client
+    # ID order is deliberately the opposite of this ERP's same-day row order.
+    conn.execute('UPDATE client_data SET source_row_number=4,source_order_upload_id=90 WHERE id=101')
+    conn.execute('UPDATE client_data SET source_row_number=2,source_order_upload_id=90 WHERE id=102')
+    before = list(conn.execute('SELECT id,row_data,upload_id FROM client_data ORDER BY id'))
+    params = dict(client_id=3, template_id=7, date_start='2026-01-01', date_end='2026-01-31',
+                  ledger_account_code='A-1', limit=1)
+    pages = [client.get('/api/data/preview', params={**params, 'page':p}).json() for p in (1,2,3)]
+    assert [p['rows'][0]['id'] for p in pages] == [102,101,107]
+    assert [p['rows'][0]['row_data']['Reference'] for p in pages] == ['V1','V1','V2']
+    assert list(conn.execute('SELECT id,row_data,upload_id FROM client_data ORDER BY id')) == before
+
+
+def test_comparison_keeps_original_source_rows_despite_voucher_sort_and_note_gaps():
+    req = request(comparison_mode='replace_range')
+    source = [row('V9', debit=100, credit=0, balance='100 DR'),
+              row('', pd.NaT, 'Attached source note', None,None,None),
+              row('V1', debit=0, credit=10, balance='90 DR'),
+              row('V1', debit=0, credit=0, balance='90 DR')]
+    token = upload._source_row_numbers.set({})
+    try:
+        with ledger() as context:
+            prepared, _ = prepare_note_source(source, req)
+            context['scope_fingerprint'] = 'same-account-only'
+            with patch.object(upload, 'execute_query_pg', return_value=[]):
+                changes = upload.compare_transactions(3,7,COLUMNS,prepared,
+                    {c['column_name']:c['column_name'] for c in COLUMNS},{}, comparison_mode='replace_range',
+                    date_delimiter='-', date_order='DMY')
+            payload = upload._build_validation_plan_payload(changes,COLUMNS,7,3,[],0,None,'-','DMY')
+            ordered = sorted(payload['new'], key=lambda r:r['source_row_number'])
+            assert [r['row_data']['Reference'] for r in ordered] == ['V9','V1','V1']
+            assert [r['source_row_number'] for r in ordered] == [2,4,5]
+            assert ordered[0]['row_data'][upload.LEDGER_SOURCE_NOTES] == 'Attached source note'
+            assert ordered[1]['row_data']['Book balance'] == ordered[2]['row_data']['Book balance'] == '90 DR'
+            assert len({r['source_identity'] for r in ordered}) == 3
+    finally:
+        upload._source_row_numbers.reset(token)
 
 
 @pytest.mark.parametrize('template,account', [(7,''),(7,'C-3'),(7,'X-ONLY'),(7,'D-4'),

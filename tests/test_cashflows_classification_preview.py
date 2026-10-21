@@ -276,6 +276,7 @@ def canonical_preview_db():
             derived_treasury_account_code TEXT, derived_version INTEGER,
             derived_classification_status TEXT, derived_transaction_month TEXT,
             derived_transaction_fortnight TEXT
+            , source_row_number INTEGER, source_order_upload_id INTEGER
         );
         CREATE TABLE account_control_cashflow_category_assignments (
             client_id INTEGER, account_code TEXT, category_id INTEGER
@@ -360,14 +361,14 @@ def test_preview_executes_without_retired_tables_and_preserves_source_lines(cano
 
 
 @pytest.mark.parametrize(('filters', 'expected_ids'), [
-    ({'classification_type': 'counter'}, [2, 3, 15, 5]),
+    ({'classification_type': 'counter'}, [2, 3, 5, 15]),
     ({'classification_type': 'counter', 'treasury_view': 'cash'}, [2, 3, 15]),
     ({'classification_type': 'counter', 'treasury_view': 'bank'}, [5]),
     ({'classification_type': 'cash'}, [1]),
     ({'classification_type': 'bank'}, [4]),
     ({'account_code': 'EXP', 'search': 'stationery'}, [2, 3]),
     ({'category': 'historical supplier'}, [15]),
-    ({'category': '__unassigned__', 'classification_type': 'counter'}, [15, 5]),
+    ({'category': '__unassigned__', 'classification_type': 'counter'}, [5, 15]),
     ({'account_code': 'EXP', 'search': 'missing'}, []),
     ({'account_code': 'EXP', 'page': 2, 'limit': 1}, [3]),
     ({'account_code': 'EXP', 'page': 3, 'limit': 1}, []),
@@ -377,6 +378,22 @@ def test_canonical_preview_filters_and_pagination(canonical_preview_db, filters,
     assert [row['id'] for row in result['rows']] == expected_ids
     if filters.get('page'):
         assert result['total_rows'] == 2
+
+
+def test_preview_sorts_dates_then_original_source_rows_before_page_slicing(canonical_preview_db):
+    db = canonical_preview_db
+    db.connection.execute('UPDATE client_data SET source_row_number=8,source_order_upload_id=70 WHERE id=2')
+    db.connection.execute('UPDATE client_data SET source_row_number=3,source_order_upload_id=70 WHERE id=3')
+    db.insert(90, voucher='EARLIER', account='EXP', derived_transaction_date='2026-01-01',
+              source_row_number=99, source_order_upload_id=80)
+    db.insert(91, voucher='EARLIER', account='CASH', debit=0, credit=60.125,
+              derived_transaction_date='2026-01-01', derived_treasury_type='cash', derived_classification_status='cash')
+    before = list(db.connection.execute('SELECT * FROM client_data ORDER BY id'))
+    pages = [_preview(db, account_code='EXP', page=p, limit=1) for p in (1,2,3)]
+    assert [p['rows'][0]['id'] for p in pages] == [90,3,2]
+    assert all(p['total_rows'] == 3 for p in pages)
+    assert [p['rows'][0]['classification']['transaction_date'] for p in pages] == ['2026-01-01','2026-01-05','2026-01-05']
+    assert list(db.connection.execute('SELECT * FROM client_data ORDER BY id')) == before
 
 
 @pytest.mark.parametrize('overrides', [

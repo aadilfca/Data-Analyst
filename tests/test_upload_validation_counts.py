@@ -101,6 +101,153 @@ def test_validated_calendar_date_survives_json_plan_and_actual_import_batches(ac
         assert classifications[0]['row_data']['Transaction Date'] == '01/04/2026'
     if action == 'changed':
         assert result['change_detection']['report'][0]['changed_fields'] == ['Voucher Detail']
+    assert rows[0][-2 if operation == 'insert' else -3] == 2
+    assert rows[0][-1 if operation == 'insert' else -2] == 99
+
+
+@pytest.fixture
+def source_order_store(monkeypatch):
+    """Real metadata updates in an owned database, with an outside client sentinel."""
+    import sqlite3, json
+    from types import SimpleNamespace
+    from routers import import_export as uploads
+    conn = sqlite3.connect(':memory:')
+    conn.row_factory = sqlite3.Row
+    conn.execute('''CREATE TABLE client_data (id INTEGER PRIMARY KEY,client_id INTEGER,template_id INTEGER,
+        row_data TEXT,version INTEGER,is_deleted INTEGER,change_detection_status TEXT,
+        source_row_number INTEGER,source_order_upload_id INTEGER)''')
+    columns = [{'id':1,'column_name':'Voucher','data_type':'Text'},
+               {'id':2,'column_name':'Amount','data_type':'Numeric'}]
+    existing = []
+    # Original source has V9 first; the previous importer inserted V1 first.
+    for key, raw in [(10,{'Voucher':'V1','Amount':20}), (11,{'Voucher':'V9','Amount':10}),
+                     (12,{'Voucher':'V1','Amount':20})]:
+        conn.execute('INSERT INTO client_data VALUES (?,?,?,?,1,0,\'active\',NULL,NULL)',(key,5,7,json.dumps(raw)))
+        existing.append({'id':key,'row_data':raw,'version':1,'extract_date':None})
+    conn.execute("INSERT INTO client_data VALUES (999,6,7,'{}',1,0,'active',77,1)")
+    conn.commit()
+    calls = []
+    def query(sql, params=None, **kw):
+        if 'AS scope_row_hash' in sql:
+            return existing
+        ids, client, template = params
+        executable = sql.replace('id = ANY(%s)', 'id IN ('+','.join('?' for _ in ids)+')')
+        executable = executable.replace('%s','?').replace(' FOR UPDATE','')
+        return [dict(r) for r in conn.execute(executable,(*ids,client,template))]
+    def batch(active, sql, rows):
+        assert active is conn
+        calls.append((sql,rows))
+        conn.executemany(sql.replace('%s','?'),rows)
+    monkeypatch.setattr(uploads,'execute_query_pg',query)
+    monkeypatch.setattr(uploads,'execute_batch_pg',batch)
+    source=[{'Voucher':'V9','Amount':10},{'Voucher':'V1','Amount':20},{'Voucher':'V1','Amount':20}]
+    yield SimpleNamespace(conn=conn,existing=existing,source=source,columns=columns,calls=calls,uploads=uploads)
+    conn.close()
+
+
+def test_unchanged_reupload_restores_positions_without_replacing_ids_values_or_repeated_lines(source_order_store):
+    db=source_order_store; uploads=db.uploads
+    mapping={c['column_name']:c['column_name'] for c in db.columns}
+    changes=uploads.compare_transactions(5,7,db.columns,db.source,mapping,{})
+    assert changes['new_count']==changes['changed_count']==changes['missing_count']==0
+    assert changes['unchanged_count']==3 and changes['source_order_refresh_required']
+    assert not uploads._is_duplicate_upload_noop({'id':20},changes)
+    plan=uploads._build_validation_plan_payload(changes,db.columns,7,3,[],0,None,'/','DMY')
+    assert plan['new']==plan['changed']==plan['missing']==[]
+    assert all('row_data' not in a for a in plan['source_order'])
+    request=uploads.ImportRequest(client_id=5,template_id=7,file_id=30,mappings=[])
+    before=[tuple(r) for r in db.conn.execute('SELECT id,client_id,template_id,row_data,version FROM client_data ORDER BY id')]
+    with db.conn:
+        uploads._apply_source_order_updates(db.conn,request,plan['source_order'])
+    assert [r[0] for r in db.conn.execute('SELECT id FROM client_data WHERE client_id=5 ORDER BY source_order_upload_id,source_row_number,id')] == [11,10,12]
+    assert [tuple(r) for r in db.conn.execute('SELECT id,client_id,template_id,row_data,version FROM client_data ORDER BY id')]==before
+    assert tuple(db.conn.execute('SELECT source_row_number,source_order_upload_id FROM client_data WHERE id=999').fetchone())==(77,1)
+    for old in db.existing:
+        values=db.conn.execute('SELECT source_row_number,source_order_upload_id FROM client_data WHERE id=?',(old['id'],)).fetchone()
+        old.update(dict(values))
+    repeat=uploads.compare_transactions(5,7,db.columns,db.source,mapping,{})
+    assert not repeat['source_order_refresh_required']
+    assert uploads._is_duplicate_upload_noop({'id':30},repeat)
+    assert len(db.calls)==1
+
+
+@pytest.mark.parametrize('change',['amount','version','position','client','missing','duplicate_plan'])
+def test_stale_or_foreign_order_plan_cannot_write_any_positions(source_order_store,change):
+    from fastapi import HTTPException
+    db=source_order_store; uploads=db.uploads
+    changes=uploads.compare_transactions(5,7,db.columns,db.source,{c['column_name']:c['column_name'] for c in db.columns},{})
+    actions=changes['source_order']
+    if change=='amount': db.conn.execute('UPDATE client_data SET row_data=\'{"Voucher":"V9","Amount":999}\' WHERE id=11')
+    if change=='version': db.conn.execute('UPDATE client_data SET version=2 WHERE id=11')
+    if change=='position': db.conn.execute('UPDATE client_data SET source_row_number=42 WHERE id=11')
+    if change=='client': db.conn.execute('UPDATE client_data SET client_id=6 WHERE id=11')
+    if change=='missing': db.conn.execute('DELETE FROM client_data WHERE id=11')
+    if change=='duplicate_plan': actions=actions+[actions[0]]
+    db.conn.commit()
+    before=[tuple(r) for r in db.conn.execute('SELECT * FROM client_data ORDER BY id')]
+    with pytest.raises(HTTPException) as error, db.conn:
+        uploads._apply_source_order_updates(db.conn,uploads.ImportRequest(client_id=5,template_id=7,file_id=30,mappings=[]),actions)
+    assert error.value.status_code==409
+    assert [tuple(r) for r in db.conn.execute('SELECT * FROM client_data ORDER BY id')]==before
+    assert db.calls==[]
+
+
+def test_metadata_only_plan_import_keeps_financial_counts_zero_and_recovers_its_receipt(source_order_store,monkeypatch):
+    import json
+    from contextlib import contextmanager
+    db=source_order_store; uploads=db.uploads
+    changes=uploads.compare_transactions(5,7,db.columns,db.source,{c['column_name']:c['column_name'] for c in db.columns},{})
+    payload=uploads._build_validation_plan_payload(changes,db.columns,7,3,[],0,None,'/','DMY')
+    request=uploads.ImportRequest(client_id=5,template_id=7,file_id=30,mappings=[],validation_plan_id='a'*32)
+    state={'status':'Validated','receipt':None}
+    actual_query=uploads.execute_query_pg
+    def query(sql,params=None,**kwargs):
+        if 'FROM templates' in sql: return [{'id':7,'template_name':'Transactions','rate_source':None}]
+        if 'FROM uploaded_files' in sql: return [{'file_path':'unused.xlsx','file_name':'report.xlsx','status':state['status']}]
+        if 'FROM clients' in sql: return [{'id':5,'client_name':'Test client'}]
+        if 'FROM template_column_mappings' in sql: return db.columns
+        if 'FROM upload_validation_plans' in sql: return [{'status':'ready','expires_at':None}]
+        if 'FROM upload_lifecycle_runs' in sql:
+            return [{'status':'applied','request_signature':uploads._validation_request_signature(request),'result_json':state['receipt']}] if state['receipt'] else []
+        if 'FROM client_data' in sql: return actual_query(sql,params,**kwargs)
+        return []
+    def write(sql,params=None):
+        if "SET status = 'Imported'" in sql: state['status']='Imported'
+        if "SET status = 'applied'" in sql: state['receipt']=json.loads(params[0])
+    @contextmanager
+    def transaction():
+        with db.conn: yield db.conn
+    for name,replacement in {
+        'execute_query_pg':query,'execute_write_pg':write,'pg_transaction':transaction,
+        '_load_validation_plan':lambda *a:{'plan_json':payload},
+        'prepare_lifecycle':lambda *a:{'operation_id':request.validation_plan_id,'ids':[],'lifecycle':{}},
+        'guard_lifecycle':lambda *a:None,'_check_upload_storage_budget':lambda *a:None,
+        'load_treasury_mapping_postgres':lambda *a:{},
+        'resolve_upload_occurrences_postgres':lambda *a,**kw:{'eligible':True},
+        'invalidate_cashflow_summary_read_models':lambda *a,**kw:None,
+        '_prepare_cashflow_snapshot_background':lambda *a:None,
+        '_persist_upload_summary':lambda *a,**kw:None,'log_audit':lambda *a:None,
+        'execute_batch_insert_with_ids_pg':lambda *a,**kw:pytest.fail('Unchanged rows must not be inserted'),
+    }.items(): monkeypatch.setattr(uploads,name,replacement)
+    try:
+        result=uploads._import_validation_plan(request)
+        assert result['status']=='success' and result['source_order_refreshed']
+        assert result['imported_count']==result['updated_count']==result['deleted_count']==0
+        assert len(db.calls)==1 and state['receipt']['total_rows']==3
+        retry=uploads._import_validation_plan(request)
+        assert retry['recovered_commit'] and retry['imported_count']==0
+        assert len(db.calls)==1
+    finally: uploads.IMPORT_PROGRESS.pop(30,None)
+
+
+def test_source_positions_roll_back_with_a_later_import_failure(source_order_store):
+    db=source_order_store; uploads=db.uploads
+    changes=uploads.compare_transactions(5,7,db.columns,db.source,{c['column_name']:c['column_name'] for c in db.columns},{})
+    before=[tuple(r) for r in db.conn.execute('SELECT * FROM client_data ORDER BY id')]
+    with pytest.raises(RuntimeError,match='later stage'),db.conn:
+        uploads._apply_source_order_updates(db.conn,uploads.ImportRequest(client_id=5,template_id=7,file_id=30,mappings=[]),changes['source_order'])
+        raise RuntimeError('later stage failed')
+    assert [tuple(r) for r in db.conn.execute('SELECT * FROM client_data ORDER BY id')]==before
 
 
 @pytest.fixture
@@ -757,6 +904,8 @@ class UploadValidationCountTests(unittest.TestCase):
         self.assertTrue({
             "source_identity",
             "source_fingerprint",
+            "source_row_number",
+            "source_order_upload_id",
             "derived_voucher_id",
             "derived_account_code",
             "derived_transaction_date",
@@ -1963,13 +2112,19 @@ def _arrange_staged_ledger_mapping(page, columns):
     }""",columns)
 
 
+def _select_upload_ledger_account(page, code):
+    page.locator('#ledgerAccountSelect').fill(code)
+    page.locator('#ledgerAccountOptions [role="option"]').filter(has_text=code).click()
+
+
 def test_ledger_account_and_existing_coverage_fields_reach_validate_and_invalidate_plan(upload_formatting_page):
     page=upload_formatting_page
     columns=_arrange_ledger_upload_page(page)
     assert page.locator('#ledgerUploadContext').is_visible()
-    assert page.locator('#ledgerAccountSelect option[value="A-1"]').inner_text() == 'Bank <A> — A-1'
+    page.locator('#ledgerAccountSelect').focus()
+    assert page.get_by_role('option', name='Bank <A> — A-1', exact=True).is_visible()
     assert page.locator('#ledgerUploadContext a, #ledgerUploadContext img').count()==0
-    page.locator('#ledgerAccountSelect').select_option('A-1')
+    _select_upload_ledger_account(page, 'A-1')
     _arrange_staged_ledger_mapping(page,columns)
     page.locator('#uploadCoverageStart').fill('2026-01-01')
     page.locator('#uploadCoverageEnd').fill('2026-01-31')
@@ -1984,7 +2139,7 @@ def test_ledger_account_and_existing_coverage_fields_reach_validate_and_invalida
     assert sent[0]['coverage_end']==sent[0]['ledger_period_end']=='2026-01-31'
     assert sent[0]['force_include_rows']==[]
     assert 'Opening control: 0' in page.locator('#ledgerEvidenceSummary').inner_text()
-    page.locator('#ledgerAccountSelect').select_option('B-2')
+    _select_upload_ledger_account(page, 'B-2')
     assert page.evaluate('validationPlanId') is None
     assert page.locator('#ledgerEvidenceSummary').is_hidden()
     page.locator('#comparisonModeDropdown').select_option('correction')
@@ -2017,7 +2172,7 @@ def test_missing_or_unselected_ledger_account_blocks_validate_and_offers_action(
 def test_ledger_context_is_in_review_and_summary_and_rejected_rows_cannot_be_overridden(upload_formatting_page):
     page=upload_formatting_page
     _arrange_ledger_upload_page(page)
-    page.locator('#ledgerAccountSelect').select_option('A-1')
+    _select_upload_ledger_account(page, 'A-1')
     page.evaluate("""() => {
         uploadCoverageStart.value='2026-01-01';uploadCoverageEnd.value='2026-01-31';
         setRejectedRows([{row_number:3,reasons:[{column:'Transaction Date',message:'Date is blank'}]}]);
@@ -2034,7 +2189,7 @@ def test_ledger_context_is_in_review_and_summary_and_rejected_rows_cannot_be_ove
 def test_client_mismatch_blocks_ledger_validation_and_session_restore(upload_formatting_page):
     page=upload_formatting_page
     columns=_arrange_ledger_upload_page(page)
-    page.locator('#ledgerAccountSelect').select_option('A-1')
+    _select_upload_ledger_account(page, 'A-1')
     _arrange_staged_ledger_mapping(page,columns)
     page.evaluate('() => { window.getSelectedClientId=()=>6; }')
     page.locator('#importBtn').click()
@@ -2049,7 +2204,7 @@ def test_client_mismatch_blocks_ledger_validation_and_session_restore(upload_for
 def test_standard_template_switch_hides_ledger_context_and_sends_no_account(upload_formatting_page):
     page=upload_formatting_page
     _arrange_ledger_upload_page(page)
-    page.locator('#ledgerAccountSelect').select_option('A-1')
+    _select_upload_ledger_account(page, 'A-1')
     page.evaluate("() => { const note=document.getElementById('ledgerEvidenceSummary'); note.textContent='Old balance'; note.hidden=false; }")
     page.route('**/api/templates/8/upload-columns',lambda route:route.fulfill(json={
         'columns':[{'id':1,'column_name':'Voucher','data_type':'Text'}],'total_columns':1,'data_purpose':'standard'}))
@@ -2071,7 +2226,7 @@ def test_standard_template_switch_hides_ledger_context_and_sends_no_account(uplo
 def test_validation_response_for_previous_account_is_discarded(upload_formatting_page):
     page=upload_formatting_page
     columns=_arrange_ledger_upload_page(page)
-    page.locator('#ledgerAccountSelect').select_option('A-1')
+    _select_upload_ledger_account(page, 'A-1')
     _arrange_staged_ledger_mapping(page,columns)
     page.locator('#uploadCoverageStart').fill('2026-01-01')
     page.locator('#uploadCoverageEnd').fill('2026-01-31')
@@ -2079,7 +2234,7 @@ def test_validation_response_for_previous_account_is_discarded(upload_formatting
     page.route('**/api/upload/validate',lambda route:waiting.append(route))
     page.locator('#importBtn').click()
     page.wait_for_function('uploadActionInFlight')
-    page.locator('#ledgerAccountSelect').select_option('B-2')
+    _select_upload_ledger_account(page, 'B-2')
     assert waiting
     waiting[0].fulfill(json={'has_errors':False,'can_import':True,'validation_plan_id':'stale-A-plan'})
     page.locator('#validationErrorOverlay').wait_for()
@@ -2091,13 +2246,13 @@ def test_validation_response_for_previous_account_is_discarded(upload_formatting
 def test_import_summary_uses_submitted_account_even_if_selection_changes(upload_formatting_page):
     page=upload_formatting_page
     _arrange_ledger_upload_page(page)
-    page.locator('#ledgerAccountSelect').select_option('A-1')
+    _select_upload_ledger_account(page, 'A-1')
     requests=[]
     page.route('**/api/upload/import',lambda route:requests.append(route))
     page.evaluate("""() => {
         performImport({file_id:99,ledger_account_code:'A-1',ledger_period_start:'2026-01-01',ledger_period_end:'2026-01-31'});
     }""")
-    page.locator('#ledgerAccountSelect').select_option('B-2')
+    _select_upload_ledger_account(page, 'B-2')
     assert requests
     requests[0].fulfill(json={'status':'success','total_rows':1,'imported_count':1})
     page.locator('#importSummaryOverlay').wait_for()
@@ -2108,7 +2263,7 @@ def test_import_summary_uses_submitted_account_even_if_selection_changes(upload_
 def test_validated_ledger_controls_are_labelled_separately_from_junk_rows(upload_formatting_page):
     page=upload_formatting_page
     columns=_arrange_ledger_upload_page(page)
-    page.locator('#ledgerAccountSelect').select_option('A-1')
+    _select_upload_ledger_account(page, 'A-1')
     _arrange_staged_ledger_mapping(page,columns)
     page.evaluate("""() => {
         const workbook=XLSX.utils.book_new();
@@ -2139,7 +2294,8 @@ def test_ledger_uses_standard_mapping_with_one_account_field_above_validate(uplo
     assert page.locator('#ledgerAccountSelect').get_attribute('required') is not None
     assert page.locator('#ledgerUploadContext h2, #ledgerAccountSearch, #reloadLedgerAccountsBtn').count() == 0
     assert page.locator('#ledgerAccountHelp').is_hidden()
-    assert page.locator('#ledgerAccountSelect option[value="EXP-1"]').inner_text() == 'Rent expense — EXP-1'
+    page.locator('#ledgerAccountSelect').focus()
+    assert page.get_by_role('option', name='Rent expense — EXP-1', exact=True).is_visible()
     assert page.evaluate("() => document.getElementById('ledgerUploadContext').nextElementSibling.contains(importBtn)")
     assert page.locator('#ledgerAccountSelect').bounding_box()['y'] < page.locator('#importBtn').bounding_box()['y']
 
@@ -2148,7 +2304,7 @@ def test_non_cash_bank_account_reaches_upload_validation(upload_formatting_page)
     page = upload_formatting_page
     columns = _arrange_ledger_upload_page(page)
     _arrange_staged_ledger_mapping(page, columns)
-    page.locator('#ledgerAccountSelect').select_option('EXP-1')
+    _select_upload_ledger_account(page, 'EXP-1')
     page.locator('#uploadCoverageStart').fill('2026-01-01')
     page.locator('#uploadCoverageEnd').fill('2026-01-31')
     sent = []
@@ -2157,6 +2313,96 @@ def test_non_cash_bank_account_reaches_upload_validation(upload_formatting_page)
     page.locator('#importBtn').click()
     page.wait_for_function("validationStatus==='ignored'")
     assert sent[0]['ledger_account_code'] == 'EXP-1'
+
+
+def test_upload_ledger_search_uses_names_codes_and_explicit_keyboard_selection(upload_formatting_page):
+    page = upload_formatting_page
+    _arrange_ledger_upload_page(page)
+    field = page.locator('#ledgerAccountSelect')
+    field.fill('rEnT')
+    assert page.locator('#ledgerAccountOptions').get_by_role('option').all_text_contents() == ['Rent expense — EXP-1']
+    assert page.evaluate('ledgerSelectedAccountCode') == ''
+    field.press('Enter')
+    assert field.input_value() == 'Rent expense — EXP-1'
+    assert page.evaluate('ledgerSelectedAccountCode') == 'EXP-1'
+    assert field.get_attribute('aria-expanded') == 'false'
+    field.fill('b-2')
+    assert page.evaluate('ledgerSelectedAccountCode') == ''
+    field.press('ArrowDown')
+    assert field.get_attribute('aria-activedescendant') == page.locator('#ledgerAccountOptions').get_by_role('option').get_attribute('id')
+    field.press('Enter')
+    assert field.input_value() == 'Cash B — B-2'
+    # Opening/cancelling a search preserves an unchanged confirmed choice.
+    page.get_by_role('button', name='Show ledger accounts', exact=True).click()
+    field.press('Escape')
+    assert page.locator('#ledgerAccountOptions').is_hidden()
+    assert page.evaluate('ledgerSelectedAccountCode') == 'B-2'
+    field.press('ArrowUp')
+    field.press('Enter')
+    assert page.evaluate('ledgerSelectedAccountCode') == 'EXP-1'
+
+
+def test_editing_ledger_search_invalidates_plan_and_unmatched_text_never_reaches_validate(upload_formatting_page):
+    page = upload_formatting_page
+    columns = _arrange_ledger_upload_page(page)
+    _arrange_staged_ledger_mapping(page, columns)
+    _select_upload_ledger_account(page, 'A-1')
+    page.evaluate("() => { validationStatus='valid'; validationPlanId='old-account-plan'; }")
+    field = page.locator('#ledgerAccountSelect')
+    field.fill('missing account')
+    assert page.evaluate('validationPlanId') is None
+    assert page.evaluate('ledgerSelectedAccountCode') == ''
+    assert 'No matching accounts' in page.locator('#ledgerAccountOptions').inner_text()
+    field.press('Enter')
+    sent = []
+    page.route('**/api/upload/validate', lambda route: (sent.append(True), route.fulfill(json={})))
+    page.locator('#importBtn').click()
+    assert sent == []
+    assert 'Select a current Trial Balance posting account' in page.locator('#validationErrorOverlay').inner_text()
+
+
+def test_large_upload_account_list_is_bounded_and_duplicate_names_remain_distinct(upload_formatting_page):
+    page = upload_formatting_page
+    _arrange_ledger_upload_page(page, [
+        {'account_code': f'ACC-{index:04}', 'account_name': 'Shared name'} for index in range(1000)])
+    field = page.locator('#ledgerAccountSelect')
+    field.focus()
+    assert page.locator('#ledgerAccountOptions').get_by_role('option').count() == 100
+    assert 'Type more to narrow' in page.locator('#ledgerAccountOptions').inner_text()
+    field.fill('ACC-0999')
+    assert page.locator('#ledgerAccountOptions').get_by_role('option').all_text_contents() == ['Shared name — ACC-0999']
+    field.press('Enter')
+    assert page.evaluate('ledgerSelectedAccountCode') == 'ACC-0999'
+    # Session restoration uses the selected identity, not the search text.
+    page.evaluate("async () => { await loadLedgerUploadAccounts('ACC-0999'); }")
+    assert field.input_value() == 'Shared name — ACC-0999'
+    assert page.evaluate('ledgerSelectedAccountCode') == 'ACC-0999'
+
+
+@pytest.mark.parametrize('width', [1280, 390])
+def test_upload_account_dropdown_fits_viewport_and_source_labels_are_safe(upload_formatting_page, tmp_path, width):
+    page = upload_formatting_page
+    page.set_viewport_size({'width': width, 'height': 800})
+    columns = _arrange_ledger_upload_page(page)
+    _arrange_staged_ledger_mapping(page, columns)
+    field = page.locator('#ledgerAccountSelect')
+    field.scroll_into_view_if_needed()
+    field.focus()
+    options = page.locator('#ledgerAccountOptions')
+    assert options.is_visible()
+    assert options.locator('img, a, script, b').count() == 0
+    assert 'Bank <A>' in options.inner_text()
+    assert page.evaluate("""() => {
+        const list=document.getElementById('ledgerAccountOptions');
+        const box=list.getBoundingClientRect();
+        const hit=document.elementFromPoint(box.x+box.width/2, box.y+box.height/2);
+        return box.left>=0 && box.right<=innerWidth && box.top>=0 && box.bottom<=innerHeight && list.contains(hit);
+    }""")
+    page.screenshot(path=str(tmp_path / f'upload-account-{width}.png'))
+    page.get_by_role('option', name='Bank <A> — A-1', exact=True).click()
+    assert field.input_value() == 'Bank <A> — A-1'
+    page.locator('#resetBtn').focus()
+    assert options.is_hidden()
 
 
 @pytest.mark.parametrize('outcome', ['success', 'server_error', 'malformed', 'network'])
@@ -2276,7 +2522,7 @@ def test_validation_explains_calculated_balance_provenance_without_inventing_zer
     page = upload_formatting_page
     columns = _arrange_ledger_upload_page(page)
     _arrange_staged_ledger_mapping(page, columns)
-    page.locator('#ledgerAccountSelect').select_option('EXP-1')
+    _select_upload_ledger_account(page, 'EXP-1')
     page.locator('#uploadCoverageStart').fill('2026-01-01')
     page.locator('#uploadCoverageEnd').fill('2026-01-31')
     page.route('**/api/upload/validate', lambda route: route.fulfill(json={
@@ -2303,7 +2549,7 @@ def test_ledger_continuation_review_keeps_raw_notes_and_shows_parent_without_jun
     page = upload_formatting_page
     columns = _arrange_ledger_upload_page(page)
     _arrange_staged_ledger_mapping(page, columns)
-    page.locator('#ledgerAccountSelect').select_option('A-1')
+    _select_upload_ledger_account(page, 'A-1')
     page.evaluate("""() => {
         const book = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([excelHeaders,
@@ -2334,7 +2580,7 @@ def test_ledger_coverage_popup_shows_specific_row_voucher_and_both_ranges(upload
     page = upload_formatting_page
     columns = _arrange_ledger_upload_page(page)
     _arrange_staged_ledger_mapping(page, columns)
-    page.locator('#ledgerAccountSelect').select_option('A-1')
+    _select_upload_ledger_account(page, 'A-1')
     page.locator('#uploadCoverageStart').fill('2026-01-01')
     page.locator('#uploadCoverageEnd').fill('2026-10-19')
     message = "Ledger transaction at Excel row 2, voucher 'JV-1225-100', dated 2025-12-31 is outside the declared coverage period 2026-01-01 to 2026-10-19."
@@ -2349,7 +2595,7 @@ def test_inactive_mapping_uses_issue_popup_and_never_sends_partial_validation_or
     page = upload_formatting_page
     columns = _arrange_ledger_upload_page(page)
     _arrange_staged_ledger_mapping(page, columns)
-    page.locator('#ledgerAccountSelect').select_option('A-1')
+    _select_upload_ledger_account(page, 'A-1')
     requests = []
     page.on('request', lambda r: requests.append(r.url) if '/api/upload/validate' in r.url or '/api/upload/import' in r.url else None)
     page.evaluate("""state => {

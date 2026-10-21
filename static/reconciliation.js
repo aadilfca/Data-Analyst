@@ -39,6 +39,8 @@
     const CASHFLOW_REVISION_CHECK_TTL_MS = 15000;
     const cashflowSummaryCacheLimit = 5;
     const cashflowSummaryCache = new Map();
+    let cashflowBalancesPending = false;
+    let cashflowBalanceExpanded = { opening: false, closing: false };
     const cashflowDrilldownBaseCache = new Map();
     const cashflowLedgerCacheOrder = new Map();
     const CASHFLOW_LEDGER_CACHE_MAX_ROWS = 5000;
@@ -966,6 +968,7 @@
         const metrics = cashflowParentMetricTotals(parentPreview, periods, parentGroups);
         if (!metrics) return null;
         const derivedPreview = Object.assign({}, parentPreview);
+        delete derivedPreview.balance_reconciliation;
         derivedPreview.periods = periods.map(function (period) { return Object.assign({}, period); });
         derivedPreview.months = cashflowMonthKeys(start, end);
         derivedPreview.period_metrics = {};
@@ -1027,6 +1030,10 @@
     }
     function rememberCashflowSummary(result) {
         if (!result || !cashflowReportRevision || !result.period_start || !result.period_end) return;
+        // Ledger changes need not advance the voucher revision. Cache movements
+        // only; each Load obtains its balance evidence from a fresh snapshot.
+        result = Object.assign({}, result, {preview: Object.assign({}, result.preview || {})});
+        delete result.preview.balance_reconciliation;
         const key = cashflowSummaryContextKey(result.period_start, result.period_end, result.group_by, result.treasury_view, cashflowReportRevision);
         cashflowSummaryCache.delete(key);
         cashflowSummaryCache.set(key, { result: result, revision: cashflowReportRevision, sourceKey: cashflowReportSourceKey });
@@ -1926,6 +1933,18 @@
         }
     }
     function handleCashflowSummaryClick(event) {
+        const balanceButton = event.target.closest('[data-cashflow-balance-toggle]');
+        if (balanceButton) {
+            const kind = balanceButton.dataset.cashflowBalanceToggle;
+            cashflowBalanceExpanded[kind] = !cashflowBalanceExpanded[kind];
+            const host = element('cashflowsSummaryTable');
+            host.querySelectorAll('[data-cashflow-balance-child="' + kind + '"]').forEach(function (row) {
+                row.hidden = !cashflowBalanceExpanded[kind];
+            });
+            balanceButton.setAttribute('aria-expanded', String(cashflowBalanceExpanded[kind]));
+            requestAnimationFrame(function () { syncCashflowSummaryPaneRows(host); syncCashflowSummaryUniversalScrollbar(host); });
+            return;
+        }
         const pageButton = event.target.closest('[data-cashflow-inline-page]');
         if (pageButton) { changeCashflowInlineLedgerPage(pageButton); return; }
         const ledgerButton = event.target.closest('[data-cashflow-inline-ledger]');
@@ -2079,6 +2098,199 @@
         if (!preview) return [];
         return Array.isArray(preview.treasury_view_totals) ? preview.treasury_view_totals : (preview.category_totals || []);
     }
+    function cashflowBalanceEvidence(preview, periods) {
+        if (cashflowBalancesPending || !periods.length) return null;
+        const evidence = preview.balance_reconciliation;
+        if (!evidence || !evidence.evidence_fingerprint || !Array.isArray(evidence.periods)
+                || evidence.periods.length !== periods.length) return null;
+        const matches = evidence.periods.every(function (period, index) {
+            return period && period.key === String(periods[index].key) && period.start === periods[index].start
+                && period.end === periods[index].end && Array.isArray(period.accounts)
+                && period.accounts.every(function (account) { return account && typeof account.account_code === 'string'; });
+        });
+        return matches ? evidence : null;
+    }
+    function cashflowBalanceAmount(value, reason, local, review) {
+        if (typeof value !== 'number' || !Number.isFinite(value)) {
+            const text = cashflowBalancesPending ? 'Checking…' : 'Unavailable';
+            return '<span class="cashflows-balance-unavailable" title="' + escapeHtml(reason) + '">' + text + '</span>';
+        }
+        const absolute = Math.abs(value);
+        const amount = value === 0 ? '0' : local ? formatLocalAmount(absolute)
+            : absolute.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 2});
+        const label = amount + (value === 0 ? '' : value < 0 ? ' Cr' : ' Dr');
+        return '<span class="cashflows-balance-number' + (review ? ' cashflows-balance-review' : '')
+            + '" title="' + escapeHtml(label + (reason ? ' — ' + reason : '')) + '">' + escapeHtml(label) + '</span>';
+    }
+    function cashflowBalancePart(evidence, periods, field) {
+        if (!evidence || field === 'mixed') return null;
+        if (field === 'total') return evidence;
+        const child = (evidence.treasury_breakdown || {})[field];
+        return child && Array.isArray(child.periods) && child.periods.length === periods.length
+            && child.periods.every(function (p, i) { return p && p.key === periods[i].key && p.start === periods[i].start && p.end === periods[i].end; }) ? child : null;
+    }
+    function cashflowBalanceRows(preview, periods, kind, splitFields) {
+        const evidence = cashflowBalanceEvidence(preview, periods);
+        const opening = kind === 'opening';
+        const field = opening ? 'opening_total' : 'closing_total';
+        const calculatedField = opening ? 'calculated_opening' : 'calculated_closing';
+        const accountField = opening ? 'opening_balance' : 'closing_balance';
+        const fields = splitFields || ['total'];
+        const expanded = cashflowBalanceExpanded[kind];
+        const selectedIndex = opening ? 0 : periods.length - 1;
+        const reason = cashflowBalancesPending ? 'Checking current ledger evidence for this report.'
+            : 'Balances use the full report scope. Expand to review individual accounts and unavailable evidence.';
+        function part(fieldName) {
+            return cashflowBalancePart(evidence, periods, fieldName);
+        }
+        function cells(account, calculated) {
+            let html = '';
+            periods.concat([null]).forEach(function (period, index) {
+                const position = period ? index : selectedIndex;
+                fields.forEach(function (treasuryField) {
+                    const source = part(treasuryField);
+                    const entry = source && source.periods[position];
+                    let value = entry ? entry[calculated ? calculatedField : field] : null;
+                    let explanation = reason;
+                    let review = entry && (entry.status === 'Variance' || entry.status === 'Unavailable');
+                    if (source && source.status === 'Not applicable') explanation = 'No ' + treasuryField + ' accounts are configured; this column is not applicable.';
+                    if (account) {
+                        const row = evidence && evidence.periods[position].accounts.find(function (a) { return a.account_code === account.account_code; });
+                        const applies = treasuryField === 'total' || (row && String(row.treasury_type).toLowerCase() === treasuryField);
+                        if (!applies || treasuryField === 'mixed') {
+                            html += '<td class="cashflows-table-number" title="Not applicable to this account">—</td>';
+                            return;
+                        }
+                        value = row && row[accountField];
+                        const details = Array.isArray(evidence.diagnostics) ? evidence.diagnostics : [];
+                        const diagnostic = details.find(function (d) { return d.account_code === account.account_code && (!d.period_key || d.period_key === periods[position].key); });
+                        explanation = diagnostic ? diagnostic.message : reason;
+                        review = row && row.status !== 'Ready';
+                    } else if (treasuryField === 'mixed') {
+                        html += '<td class="cashflows-table-number" title="Ledger balances belong to configured Bank or Cash accounts">—</td>';
+                        return;
+                    }
+                    if (entry && calculated) {
+                        const difference = opening ? entry.opening_total - entry.calculated_opening : entry.variance;
+                        if (typeof entry[calculatedField] === 'number' && typeof entry[field] === 'number' && Math.abs(difference) > 0.01) {
+                            review = true;
+                            explanation = 'Difference from ledger balance: ' + difference.toLocaleString(undefined, {maximumFractionDigits: 2});
+                        }
+                    }
+                    html += '<td class="cashflows-table-number">' + cashflowBalanceAmount(value, explanation, false, review) + '</td>';
+                });
+            });
+            let local = null;
+            if (account && evidence) {
+                const selected = evidence.periods[selectedIndex].accounts.find(function (a) { return a.account_code === account.account_code; });
+                local = selected && selected[accountField];
+            } else if (evidence) local = evidence.periods[selectedIndex][calculated ? calculatedField : field];
+            return html + '<td aria-label="Percentage does not apply to balances"></td><td class="cashflows-table-number">'
+                + cashflowBalanceAmount(local, reason, true, false) + '</td>';
+        }
+        const label = opening ? 'Opening balances—as per ledgers' : 'Closing balances—as per ledgers';
+        const state = cashflowBalancesPending ? 'Checking balances…' : !evidence ? 'Balance evidence unavailable'
+            : !evidence.periods[0].accounts.length ? 'No accounts configured for this view'
+            : evidence.coverage_complete && fields.every(function (name) { return name === 'mixed' || !!part(name); }) ? '' : 'Incomplete ledger evidence';
+        let html = '<tr class="cashflows-balance-row" data-cashflow-balance-kind="' + kind + '"><td><button type="button" class="cashflows-inline-expand cashflows-balance-toggle" data-cashflow-balance-toggle="'
+            + kind + '" aria-expanded="' + String(expanded) + '" title="Expand or collapse account balances">' + label + '</button>'
+            + (state ? '<span class="cashflows-balance-state">' + state + '</span>' : '') + '</td>' + cells(null, false) + '</tr>';
+        const accounts = evidence && evidence.periods.length ? evidence.periods[0].accounts.slice() : [];
+        accounts.sort(function (a, b) { return String(a.account_name || '').localeCompare(String(b.account_name || '')) || a.account_code.localeCompare(b.account_code); });
+        accounts.forEach(function (account) {
+            const name = account.account_name && account.account_name !== account.account_code ? account.account_name : 'Account name unavailable';
+            html += '<tr class="cashflows-balance-account" data-cashflow-balance-child="' + kind + '"' + (expanded ? '' : ' hidden') + '><td><span class="cashflows-balance-account-label" title="Account code: '
+                + escapeHtml(account.account_code) + '" tabindex="0">' + escapeHtml(name) + '</span></td>' + cells(account, false) + '</tr>';
+        });
+        html += '<tr class="cashflows-balance-calculated" data-cashflow-balance-child="' + kind + '"' + (expanded ? '' : ' hidden') + '><td>'
+            + (opening ? 'Calculated opening balance' : 'Calculated closing balance') + '</td>' + cells(null, true) + '</tr>';
+        return html;
+    }
+    function cashflowNetMovementRow(preview, periods, splitFields) {
+        const evidence = cashflowBalanceEvidence(preview, periods);
+        const fields = splitFields || ['total'];
+        function movement(index, field) {
+            if (!evidence) return null;
+            if (field === 'mixed') return (evidence.unresolved_movements || {})[periods[index].key];
+            const part = cashflowBalancePart(evidence, periods, field);
+            return part && part.periods[index] ? part.periods[index].cashflow_net_movement : null;
+        }
+        function amount(value, local) {
+            if (typeof value !== 'number' || !Number.isFinite(value)) return cashflowBalanceAmount(null, 'Current full-report movement is unavailable.', false, false);
+            const text = value === 0 ? '0' : local ? formatLocalAmount(value) : value.toLocaleString(undefined, {maximumFractionDigits: 2});
+            return '<span class="cashflows-balance-number">' + escapeHtml(text) + '</span>';
+        }
+        let html = '<tr class="cashflows-balance-net"><td title="Net movement for the full selected report, independent of category filtering">Net cash movement</td>';
+        periods.forEach(function (_, index) { fields.forEach(function (field) { html += '<td class="cashflows-table-number">' + amount(movement(index, field), false) + '</td>'; }); });
+        fields.forEach(function (field) {
+            const part = cashflowBalancePart(evidence, periods, field);
+            let value = part && part.overall && part.overall.cashflow_net_movement;
+            if (field === 'mixed' && evidence) {
+                const values = periods.map(function (_, index) { return movement(index, field); });
+                value = values.every(function (n) { return typeof n === 'number' && Number.isFinite(n); }) ? values.reduce(function (sum, n) { return sum + n; }, 0) : null;
+            }
+            html += '<td class="cashflows-table-number">' + amount(value, false) + '</td>';
+        });
+        return html + '<td></td><td class="cashflows-table-number">' + amount(evidence && evidence.overall && evidence.overall.cashflow_net_movement, true) + '</td></tr>';
+    }
+    function cashflowBalanceSplitFields(preview) {
+        const allRows = cashflowSplitRows(preview);
+        const periodKeys = cashflowPreviewPeriods(preview).map(function (period) { return String(period.key); });
+        const showMixedColumn = allRows.some(function (row) {
+            return Math.abs(Number(row.mixedTotal) || 0) > 0.005 || periodKeys.some(function (periodKey) {
+                return Math.abs(Number((row.periods[periodKey] || {}).mixed) || 0) > 0.005;
+            });
+        });
+        const visibleFields = showMixedColumn ? ['bank', 'cash', 'mixed', 'total'] : ['bank', 'cash', 'total'];
+        return visibleFields;
+    }
+    function cashflowBalanceColumnWidths(source, rightCount, isSplit) {
+        const balanceWidth = Array.from(source.querySelectorAll('.cashflows-balance-number')).reduce(function (width, cell) {
+            return Math.max(width, Math.min(210, Math.round(cell.textContent.length * 7.2 + 24)));
+        }, 112);
+        return Array.from({length: rightCount}, function (_, index) {
+            if (index >= rightCount - 2) return index === rightCount - 2 ? 100 : 120;
+            return !isSplit && index === rightCount - 3 ? Math.max(128, balanceWidth) : balanceWidth;
+        });
+    }
+    function refreshCashflowBalanceRows(preview) {
+        // A ledger-only refresh must not close categories or a drilldown that
+        // the user opened while the cached movement summary was available.
+        const host = element('cashflowsSummaryTable');
+        const leftBody = host.querySelector('.cashflows-summary-frozen-table tbody');
+        const rightBody = host.querySelector('.cashflows-summary-scroll-table tbody');
+        if (!leftBody || !rightBody) return false;
+        const periods = cashflowPreviewPeriods(preview);
+        const isSplit = String(preview.treasury_view || cashflowTreasuryView) === 'split';
+        const fields = isSplit ? cashflowBalanceSplitFields(preview) : null;
+        const table = document.createElement('table');
+        table.innerHTML = '<tbody>' + cashflowBalanceRows(preview, periods, 'opening', fields)
+            + cashflowNetMovementRow(preview, periods, fields) + cashflowBalanceRows(preview, periods, 'closing', fields) + '</tbody>';
+        const moneyColumns = (periods.length + 1) * (fields ? fields.length : 1) + 2;
+        const existingColumns = host.querySelectorAll('.cashflows-summary-scroll-table colgroup col').length;
+        if (moneyColumns !== existingColumns) return false;
+        const openingLeft = document.createDocumentFragment(), openingRight = document.createDocumentFragment();
+        const closingLeft = document.createDocumentFragment(), closingRight = document.createDocumentFragment();
+        Array.from(table.tBodies[0].rows).forEach(function (row, index) {
+            const opening = (row.dataset.cashflowBalanceKind || row.dataset.cashflowBalanceChild) === 'opening';
+            const parts = cashflowSummaryPaneRowParts(row, 'balance-' + (opening ? 'opening-' : 'closing-') + index, false);
+            (opening ? openingLeft : closingLeft).appendChild(parts.left);
+            (opening ? openingRight : closingRight).appendChild(parts.right);
+        });
+        host.querySelectorAll('.cashflows-balance-row, .cashflows-balance-account, .cashflows-balance-calculated, .cashflows-balance-net').forEach(function (row) { row.remove(); });
+        leftBody.insertBefore(openingLeft, leftBody.firstChild); rightBody.insertBefore(openingRight, rightBody.firstChild);
+        leftBody.appendChild(closingLeft); rightBody.appendChild(closingRight);
+        const widths = cashflowBalanceColumnWidths(host, moneyColumns, isSplit);
+        host.querySelectorAll('.cashflows-summary-scroll-header-table, .cashflows-summary-scroll-table').forEach(function (paneTable) {
+            paneTable.querySelectorAll('colgroup col').forEach(function (col, index) { col.style.width = widths[index] + 'px'; });
+            paneTable.style.width = 'max(100%, ' + widths.reduce(function (sum, width) { return sum + width; }, 0) + 'px)';
+            paneTable.style.minWidth = '100%';
+        });
+        requestAnimationFrame(function () {
+            syncCashflowSummaryPaneRows(host); syncCashflowSummaryHeaderScroll(host); syncCashflowSummaryUniversalScrollbar(host);
+        });
+        return true;
+    }
     function cashflowSplitRows(preview) {
         const periods = cashflowPreviewPeriods(preview);
         const periodKeys = periods.map(function (period) { return String(period.key); });
@@ -2164,9 +2376,25 @@
         }
         return { left: leftRow, right: rightRow };
     }
+    function fitCashflowSummaryFrozenPane(host) {
+        const layout = host && host.querySelector('.cashflows-summary-pane-layout');
+        if (!layout) return;
+        const available = host.getBoundingClientRect().width;
+        const preferred = Number(layout.dataset.cashflowCategoryWidth) || 300;
+        // Leave room for one readable amount on a narrow screen. Frozen labels
+        // wrap instead of occupying almost the entire horizontal viewport.
+        const width = available > 0 && available < 600 ? Math.min(preferred, Math.max(132, available - 152)) : preferred;
+        layout.style.setProperty('--cashflows-summary-frozen-width', width + 'px');
+        host.querySelectorAll('.cashflows-summary-frozen-header-table, .cashflows-summary-frozen-table').forEach(function (table) {
+            table.style.width = width + 'px'; table.style.minWidth = width + 'px';
+            const col = table.querySelector('colgroup col');
+            if (col) col.style.width = width + 'px';
+        });
+    }
     function syncCashflowSummaryPaneRows(host) {
         const layout = host && host.querySelector('.cashflows-summary-pane-layout');
         if (!layout) return;
+        fitCashflowSummaryFrozenPane(host);
         const leftRows = Array.from(layout.querySelectorAll('.cashflows-summary-frozen-table tbody tr[data-cashflow-summary-row-id]'));
         const rightRows = Array.from(layout.querySelectorAll('.cashflows-summary-scroll-table tbody tr[data-cashflow-summary-row-id]'));
         const rightById = new Map(rightRows.map(function (row) { return [row.dataset.cashflowSummaryRowId, row]; }));
@@ -2347,7 +2575,7 @@
     }
     function cashflowSummaryCategoryWidth(sourceTable) {
         const labels = Array.from(sourceTable.querySelectorAll('tbody tr')).filter(function (row) {
-            return !row.classList.contains('cashflows-summary-section-row')
+            return !row.hidden && !row.classList.contains('cashflows-summary-section-row')
                 && !row.classList.contains('cashflows-summary-total-row')
                 && row.children.length > 0
                 && !((Number(row.children[0].getAttribute('colspan')) || 1) > 1);
@@ -2363,11 +2591,7 @@
         const logicalCount = Math.max(cashflowSummaryLogicalColumnCount(sourceRow), 2);
         const categoryWidth = cashflowSummaryCategoryWidth(sourceTable);
         const rightCount = Math.max(logicalCount - 1, 1);
-        const rightWidths = Array.from({ length: rightCount }, function (_, index) {
-            if (isSplit) return index >= rightCount - 2 ? (index === rightCount - 2 ? 100 : 120) : 96;
-            if (index >= rightCount - 3) return index === rightCount - 3 ? 128 : index === rightCount - 2 ? 100 : 120;
-            return 112;
-        });
+        const rightWidths = cashflowBalanceColumnWidths(sourceTable, rightCount, isSplit);
         const addColGroup = function (table, widths, fillAvailable) {
             const colgroup = document.createElement('colgroup');
             widths.forEach(function (width) {
@@ -2382,6 +2606,7 @@
         };
         const layout = document.createElement('div');
         layout.className = 'cashflows-summary-pane-layout';
+        layout.dataset.cashflowCategoryWidth = String(categoryWidth);
         layout.style.setProperty('--cashflows-summary-frozen-width', categoryWidth + 'px');
         const stickyHeader = document.createElement('div');
         stickyHeader.className = 'cashflows-summary-sticky-header';
@@ -2446,6 +2671,18 @@
         container.classList.toggle('cashflows-summary-split-table', !!isSplit);
         container.innerHTML = '';
         container.appendChild(layout);
+        fitCashflowSummaryFrozenPane(container);
+        if (container.dataset.cashflowSummaryResizeBound !== 'true') {
+            let frame = 0;
+            window.addEventListener('resize', function () {
+                if (frame) return;
+                frame = requestAnimationFrame(function () {
+                    frame = 0;
+                    syncCashflowSummaryPaneRows(container); syncCashflowSummaryHeaderScroll(container); syncCashflowSummaryUniversalScrollbar(container);
+                });
+            }, {passive: true});
+            container.dataset.cashflowSummaryResizeBound = 'true';
+        }
         requestAnimationFrame(function () {
             syncCashflowSummaryPaneRows(container);
             syncCashflowSummaryHeaderScroll(container);
@@ -2457,12 +2694,8 @@
         const periods = cashflowPreviewPeriods(preview);
         const periodKeys = periods.map(function (period) { return String(period.key); });
         const allRows = cashflowSplitRows(preview);
-        const showMixedColumn = allRows.some(function (row) {
-            return Math.abs(Number(row.mixedTotal) || 0) > 0.005 || periodKeys.some(function (periodKey) {
-                const values = row.periods[periodKey] || {};
-                return Math.abs(Number(values.mixed) || 0) > 0.005;
-            });
-        });
+        const visibleFields = cashflowBalanceSplitFields(preview);
+        const showMixedColumn = visibleFields.indexOf('mixed') >= 0;
         const hasActivityRows = allRows.some(function (row) {
             return periodKeys.some(function (periodKey) {
                 const values = row.periods[periodKey] || {};
@@ -2493,13 +2726,8 @@
                 total: Math.abs(total),
             });
         });
-        const visibleFields = showMixedColumn ? ['bank', 'cash', 'mixed', 'total'] : ['bank', 'cash', 'total'];
         const subColumns = showMixedColumn ? ['Bank', 'Cash', 'Mixed / unresolved', 'Total'] : ['Bank', 'Cash', 'Total'];
         const columnCount = 1 + ((periods.length + 1) * subColumns.length) + 2;
-        if (!summaryRows.length) {
-            renderCashflowSummaryPaneLayout(table, '<tbody><tr><td class="cashflows-empty" colspan="' + columnCount + '">No Cash Flow activity was found for this period.</td></tr></tbody>', true);
-            return;
-        }
         let html = '<thead><tr class="cashflows-split-header-top"><th rowspan="2">Category</th>';
         periods.forEach(function (period) { html += '<th colspan="' + subColumns.length + '">' + escapeHtml(period.label) + '</th>'; });
         html += '<th colspan="' + subColumns.length + '">Selected total</th><th rowspan="2">% of section</th><th rowspan="2">Local total</th></tr><tr class="cashflows-split-header-sub">';
@@ -2507,6 +2735,8 @@
             subColumns.forEach(function (label) { html += '<th class="cashflows-table-number">' + escapeHtml(label) + '</th>'; });
         });
         html += '</tr></thead><tbody>';
+        html += cashflowBalanceRows(preview, periods, 'opening', visibleFields);
+        if (!summaryRows.length) html += '<tr><td class="cashflows-empty" colspan="' + columnCount + '">No Cash Flow activity was found for this period.</td></tr>';
         ['Receipts', 'Payments'].forEach(function (section) {
             const rows = sectionRows[section];
             if (!rows.length) return;
@@ -2550,6 +2780,8 @@
             });
             html += '<td class="cashflows-table-number cashflows-summary-percentage-value">100.00%</td><td class="cashflows-table-number cashflows-summary-local-total-value">' + escapeHtml(formatLocalAmount(basis)) + '</td></tr>';
         });
+        html += cashflowNetMovementRow(preview, periods, visibleFields);
+        html += cashflowBalanceRows(preview, periods, 'closing', visibleFields);
         renderCashflowSummaryPaneLayout(table, html + '</tbody>', true);
     }
     function renderCashflowSummary(preview) {
@@ -2590,13 +2822,11 @@
             });
         });
         const columns = ['Category'].concat(periods.map(function (period) { return period.label; })).concat(['Total', '% of section', 'Local total']);
-        if (!summaryRows.length) {
-            renderCashflowSummaryPaneLayout(table, '<tbody><tr><td class="cashflows-empty" colspan="' + Math.max(columns.length, 1) + '">No Cash Flow activity was found for this period.</td></tr></tbody>', false);
-            return;
-        }
         let html = '<thead><tr>' + columns.map(function (label) {
             return '<th>' + escapeHtml(label) + '</th>';
         }).join('') + '</tr></thead><tbody>';
+        html += cashflowBalanceRows(preview, periods, 'opening');
+        if (!summaryRows.length) html += '<tr><td class="cashflows-empty" colspan="' + columns.length + '">No Cash Flow activity was found for this period.</td></tr>';
         ['Receipts', 'Payments'].forEach(function (section) {
             const rows = sectionRows[section];
             if (!rows.length) return;
@@ -2622,6 +2852,8 @@
             periodTotals.forEach(function (value) { html += '<td>' + escapeHtml(formatCashflowSectionAmount(value, section)) + '</td>'; });
             html += '<td class="cashflows-summary-total-value">' + escapeHtml(formatInternationalAmount(basis)) + '</td><td class="cashflows-summary-percentage-value">100.00%</td><td class="cashflows-summary-local-total-value">' + escapeHtml(formatLocalAmount(basis)) + '</td></tr>';
         });
+        html += cashflowNetMovementRow(preview, periods);
+        html += cashflowBalanceRows(preview, periods, 'closing');
         renderCashflowSummaryPaneLayout(table, html + '</tbody>', false);
     }
     async function openCashflowDrilldown() {
@@ -2767,6 +2999,9 @@
         const forceRefresh = !!(options && options.forceRefresh);
         const generation = ++cashflowSummaryGeneration;
         if (cashflowSummaryController) cashflowSummaryController.abort();
+        cashflowBalancesPending = true;
+        cashflowBalanceExpanded = { opening: false, closing: false };
+        element('cashflowsSummaryTable').innerHTML = '';
         if (forceRefresh) clearCashflowReportCaches();
         resetCashflowInlineLedgerState();
         resetCashflowDrilldownFilters();
@@ -2782,6 +3017,7 @@
         element('cashflowsHideZeroRowsButton').disabled = true;
         element('cashflowsHideZeroRowsButton').textContent = 'Show zero rows';
         showCashflowProcessing();
+        let ownsProcessing = true;
         const start = element('cashflowsPeriodStart').value;
         const end = element('cashflowsPeriodEnd').value;
         const requestedClient = clientId;
@@ -2799,6 +3035,7 @@
         const controller = new AbortController();
         cashflowSummaryController = controller;
         const timeout = window.setTimeout(function () { controller.abort(); }, CASHFLOW_REQUEST_TIMEOUT_MS);
+        let renderedCached = false;
         try {
             if (cachedSummary) {
                 setCashflowProcessingStep('load', 'Checking the cached Cashflows summary.');
@@ -2811,30 +3048,58 @@
                 if (freshSummary) {
                     setCashflowProcessingStep('render', 'Rendering the cached Cashflows summary.');
                     renderResult(freshSummary);
+                    renderedCached = true;
                     showCashflowResultNotice(freshSummary);
-                    return;
+                    // Cached movement rows remain usable while current ledger
+                    // evidence is checked. Never display a cached balance.
+                    hideCashflowProcessing();
+                    ownsProcessing = false;
                 }
             }
-            setCashflowProcessingStep('load', 'Loading Cashflows data for the selected period.');
-            const query = new URLSearchParams({ client_id: requestedClient, period_start: start, period_end: end, group_by: requestedGrouping, treasury_view: requestedView, details: 'summary', warm_ledger_cache: 'true' });
+            if (ownsProcessing) setCashflowProcessingStep('load', 'Loading Cashflows data for the selected period.');
+            const query = new URLSearchParams({ client_id: requestedClient, period_start: start, period_end: end, group_by: requestedGrouping, treasury_view: requestedView, details: 'summary', warm_ledger_cache: 'true', include_balances: 'true' });
             if (forceRefresh) query.set('refresh', 'true');
             const result = await api('/api/reconciliation/cashflows/preview?' + query.toString(), { signal: controller.signal });
-            if (!stillCurrent() || Number(result.client_id) !== Number(requestedClient)
-                    || result.period_start !== start || result.period_end !== end
-                    || result.group_by !== requestedGrouping || result.treasury_view !== requestedView) return;
-            setCashflowProcessingStep('render', 'Rendering the grouped Cashflows summary.');
-            renderResult(result);
-            if (!element('cashflowsTransactionsSection').hidden) await loadClassifiedTransactions(true);
+            if (!stillCurrent()) return;
+            if (Number(result.client_id) !== Number(requestedClient) || result.period_start !== start || result.period_end !== end
+                    || result.group_by !== requestedGrouping || result.treasury_view !== requestedView) {
+                throw new Error('Report data no longer matches the selected client or period. Load the summary again.');
+            }
+            if (ownsProcessing) setCashflowProcessingStep('render', 'Rendering the grouped Cashflows summary.');
+            cashflowBalancesPending = false;
+            const sameMovements = renderedCached && lastCashflowsResult
+                && cashflowReportRevisionFromResult(result) > 0
+                && cashflowReportRevisionFromResult(result) === cashflowReportRevision
+                && cashflowReportSourceKeyFromResult(result) === cashflowReportSourceKey
+                && result.cashflow_configuration_key === cashflowConfigurationKey;
+            let balancesOnly = false;
+            if (sameMovements && syncCashflowReportRevision(result)) {
+                lastCashflowsResult = cashflowSummaryWithoutLedgers(result);
+                rememberCashflowSummary(lastCashflowsResult);
+                seedCashflowReportLedgers(result);
+                renderCashflowFreshness(result);
+                balancesOnly = refreshCashflowBalanceRows(lastCashflowsResult.preview || {});
+                if (!balancesOnly) renderResult(result);
+            } else {
+                if (renderedCached) hideCashflowProcessing();
+                renderResult(result);
+            }
+            if (!balancesOnly && !element('cashflowsTransactionsSection').hidden) await loadClassifiedTransactions(true);
             showCashflowResultNotice(result);
         } catch (error) {
             if (!stillCurrent()) return;
+            cashflowBalancesPending = false;
+            if (lastCashflowsResult) {
+                delete lastCashflowsResult.preview.balance_reconciliation;
+                if (!refreshCashflowBalanceRows(lastCashflowsResult.preview || {})) renderCashflowSummary(lastCashflowsResult.preview || {});
+            }
             showCashflowToast(error.name === 'AbortError'
                 ? 'Cashflows is taking longer than expected. Please try again or review the configured Transaction Report template.'
                 : error.message, true);
         } finally {
             window.clearTimeout(timeout);
             if (cashflowSummaryController === controller) cashflowSummaryController = null;
-            if (generation === cashflowSummaryGeneration) hideCashflowProcessing();
+            if (generation === cashflowSummaryGeneration && ownsProcessing) hideCashflowProcessing();
         }
     }
     function classifiedTransactionLayout(result) {

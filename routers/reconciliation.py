@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from datetime import date, datetime
+from decimal import Decimal
 from io import BytesIO
 import hashlib
 import json
@@ -18,7 +19,7 @@ from fastapi.responses import StreamingResponse
 import pandas as pd
 from pydantic import BaseModel, Field
 
-from database import execute_query_pg, execute_write_pg, log_audit, pg_transaction
+from database import execute_query_pg, execute_write_pg, log_audit, pg_transaction, run_read_snapshot_pg
 from routers.auth import require_admin
 from services.ledger_group_summary import LedgerBalanceError, build_cashflow_summary, build_cross_group_check, build_financial_statement_summary, build_group_summary, normalize_cashflow_grouping
 from services.ledger_report_source import (
@@ -47,6 +48,7 @@ from services.cashflow_preparation import (
 )
 from services.reconciliation_balance_source import (
     load_reconciliation_balance_source,
+    load_uploaded_ledger_balances,
     normalize_balance_month,
 )
 from services.reconciliation_xlsx import export_cashflow_xlsx, export_reconciliation_xlsx
@@ -1468,6 +1470,7 @@ def _build_cashflow_result(
     force_refresh: bool = False,
     customer_account_code: str = "",
     warm_ledger_cache: bool = False,
+    include_balances: bool = False,
 ) -> dict[str, Any]:
     request_started = perf_counter()
     validation_started = perf_counter()
@@ -1593,6 +1596,29 @@ def _build_cashflow_result(
     }
     preview_started = perf_counter()
     preview = _cashflow_preview(summary, detail_sections, treasury_view, customer_account_code)
+    if include_balances:
+        # The public opt-in runs the whole report in one read-only snapshot.
+        # Existing views/drilldowns retain their previous query and response path.
+        accounts = {code: 'Cash' for code in configuration['cash_account_codes'] if treasury_view != 'bank'}
+        accounts.update({code: 'Bank' for code in configuration['bank_account_codes'] if treasury_view != 'cash'})
+        periods = summary.get('periods', []) if summary else []
+        def view_movements(view):
+            projection = project_cashflow_treasury_view(summary or {}, view)
+            totals = projection['totals']
+            return {p['key']: (sum((Decimal(str(value)) for value in totals[p['key']]), Decimal(0))
+                              if projection['ready'] and p['key'] in totals else None) for p in periods}
+        movements = view_movements('combined' if treasury_view == 'split' else treasury_view)
+        split_movements = {key: view_movements(key) for key in ('bank', 'cash')} if treasury_view == 'split' else None
+        account_names = {item['account_code']: item['account_name'] for item in (_latest_trial_balance_accounts(client_id) if accounts and periods else [])
+                         if item['account_code'] in accounts}
+        preview['balance_reconciliation'] = load_uploaded_ledger_balances(
+            client_id, accounts, periods, movements, query_fn=execute_query_pg,
+            account_names=account_names, treasury_movements=split_movements)
+        if split_movements is not None:
+            preview['balance_reconciliation']['unresolved_movements'] = {
+                key: float(value - split_movements['bank'][key] - split_movements['cash'][key])
+                if value is not None and split_movements['bank'][key] is not None and split_movements['cash'][key] is not None
+                else None for key, value in movements.items()}
     configuration_key = _cashflow_configuration_key(configuration)
     ledger_context = {
         'client_id': client_id, 'template_id': configured_template_id,
@@ -1869,6 +1895,7 @@ def preview_cashflows(
     details: Optional[str] = Query(None, description="summary or comma-separated child sections"),
     refresh_from_source: bool = Query(False, alias="refresh"),
     warm_ledger_cache: bool = Query(False, description="Include bounded account roll-ups from this calculation"),
+    include_balances: bool = Query(False, description="Include current uploaded-ledger balance evidence"),
     session=Depends(require_admin),
 ):
     """Return Cashflows using the Transaction Report template configured in Account Control Centre."""
@@ -1879,17 +1906,14 @@ def preview_cashflows(
     detail_value = details if isinstance(details, str) else None
     if not isinstance(refresh_from_source, bool):
         refresh_from_source = bool(getattr(refresh_from_source, "default", False))
-    return _build_cashflow_result(
-        client_id,
-        period_start,
-        period_end,
-        detail_sections=_parse_cashflow_detail_sections(detail_value),
-        group_by=group_by,
-        treasury_view=treasury_view,
-        force_refresh=refresh_from_source,
-        customer_account_code=customer_account_code,
-        warm_ledger_cache=warm_ledger_cache if isinstance(warm_ledger_cache, bool) else False,
-    )
+    options = dict(detail_sections=_parse_cashflow_detail_sections(detail_value), group_by=group_by,
+                   treasury_view=treasury_view, force_refresh=refresh_from_source,
+                   customer_account_code=customer_account_code,
+                   warm_ledger_cache=warm_ledger_cache if isinstance(warm_ledger_cache, bool) else False)
+    if include_balances is True:
+        return run_read_snapshot_pg(lambda _conn: _build_cashflow_result(
+            client_id, period_start, period_end, **options, include_balances=True))
+    return _build_cashflow_result(client_id, period_start, period_end, **options)
 
 def _filter_cashflow_ledger_rows(
     rows: list[dict[str, Any]],

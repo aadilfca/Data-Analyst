@@ -201,11 +201,73 @@ def _ledger_row_number(row, fallback):
     return context["row_numbers"].get(id(row), source_number) if context else source_number
 
 
+def _source_order_pairs(incoming, matched, exact, equivalent):
+    """Attach positions to already-matched occurrences, never infer corrections.
+
+    Reserve exact matches first, as the shared matcher does. Identical repeated
+    lines consume distinct existing IDs in order; raw values/identity stay intact.
+    """
+    from collections import defaultdict, deque
+    remaining = list(incoming)
+    available = {old['client_data_id']: old for old in matched}
+    pairs = []
+    for key in (exact, equivalent):
+        buckets = defaultdict(deque)
+        for old in available.values():
+            buckets[key(old, True)].append(old)
+        next_remaining = []
+        for new in remaining:
+            bucket = buckets[key(new, False)]
+            if not bucket:
+                next_remaining.append(new)
+                continue
+            old = bucket.popleft()
+            available.pop(old['client_data_id'])
+            pairs.append({'client_data_id': old['client_data_id'],
+                'source_row_number': new['source_row_number'],
+                'expected_old_version': old['old_version'],
+                'expected_old_fingerprint': _row_fingerprint_token(old['old_row_data']),
+                'expected_source_row_number': old.get('source_row_number'),
+                'expected_source_order_upload_id': old.get('source_order_upload_id')})
+        remaining = next_remaining
+    if available:
+        raise HTTPException(409, 'Source row order could not be paired safely. Validate the file again.')
+    return pairs
+
+
+def _apply_source_order_updates(conn, request, actions):
+    """Guard and refresh compact positions without touching transaction values."""
+    if not actions:
+        return
+    ids = [item['client_data_id'] for item in actions]
+    if len(ids) != len(set(ids)):
+        raise HTTPException(409, 'Source order plan contains repeated row identities. Validate again.')
+    current = execute_query_pg('''SELECT id, row_data, version, source_row_number, source_order_upload_id
+        FROM client_data WHERE id = ANY(%s) AND client_id = %s AND template_id = %s
+          AND is_deleted = FALSE AND COALESCE(change_detection_status, 'active') != 'deleted' FOR UPDATE''',
+        (ids, request.client_id, request.template_id))
+    by_id = {r['id']: r for r in current}
+    for item in actions:
+        row = by_id.get(item['client_data_id'])
+        raw = row.get('row_data') if row else None
+        if isinstance(raw, str):
+            raw = json.loads(raw)
+        if (not row or row.get('version', 1) != item['expected_old_version']
+                or _row_fingerprint_token(raw) != item['expected_old_fingerprint']
+                or row.get('source_row_number') != item.get('expected_source_row_number')
+                or row.get('source_order_upload_id') != item.get('expected_source_order_upload_id')
+                or not isinstance(item.get('source_row_number'), int) or item['source_row_number'] < 2):
+            raise HTTPException(409, 'Data or source row order changed after validation. Validate again; no data was changed.')
+    execute_batch_pg(conn, '''UPDATE client_data SET source_row_number = %s, source_order_upload_id = %s
+        WHERE id = %s AND client_id = %s AND template_id = %s AND is_deleted = FALSE''',
+        [(a['source_row_number'], request.file_id, a['client_data_id'], request.client_id, request.template_id) for a in actions])
+
+
 def _prepare_source_rows(frame, request, template_cols, col_mapping):
     """Recognise controls from every source cell before projecting mapped columns.
 
     A total word alone is insufficient: document/date/account evidence always
-    wins. Keep source positions request-local, never in stored transaction data.
+    wins. Source positions remain separate from stored transaction values.
     """
     pattern = re.compile(r'(?:grand\s*)?(?:sub\s*)?total\s*:?$', re.I)
     def blank(value):
@@ -1366,7 +1428,7 @@ def _is_duplicate_upload_noop(prior_same_file: Optional[dict], change_detection:
         return False
     return not any(
         change_detection.get(key, 0)
-        for key in ("new_count", "changed_count", "missing_count")
+        for key in ("new_count", "changed_count", "missing_count", "source_order_refresh_required")
     )
 
 def _row_fingerprint_token(row_data: dict) -> str:
@@ -1522,6 +1584,7 @@ def _build_validation_plan_payload(
             "source_identity": item.get("source_identity") or _canonical_source_identity(
                 template_cols, old_row, template_id
             ),
+            "source_row_number": item.get("source_row_number"),
         })
 
     new_rows = []
@@ -1532,14 +1595,15 @@ def _build_validation_plan_payload(
             change_detection.get("new", []),
             template_id,
         )
-    for row_data, source_identity in zip(
+    for index, (row_data, source_identity) in enumerate(zip(
         change_detection.get("new", []), new_source_identities
-    ):
+    )):
         new_rows.append({
             "row_data": row_data,
             "document_group_id": get_document_group_id(template_cols, row_data, template_id),
             "line_key": _comparison_line_key(template_cols, row_data, template_id),
             "source_identity": source_identity,
+            "source_row_number": (change_detection.get('new_source_row_numbers') or [None] * len(new_source_identities))[index],
         })
 
     missing = []
@@ -1578,6 +1642,8 @@ def _build_validation_plan_payload(
         "changed": changed,
         "new": new_rows,
         "missing": missing,
+        "source_order": change_detection.get("source_order", []),
+        "source_order_refresh_required": change_detection.get("source_order_refresh_required", False),
     }
     context = _ledger_context.get()
     # JSON plans stringify native Excel dates in DD/MM/YYYY. Retain the
@@ -1858,7 +1924,7 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
     incoming_dates = []
     incoming_groups = {}
     incoming_occurrences = {}
-    for raw_row in incoming_rows:
+    for source_index, raw_row in enumerate(incoming_rows, 2):
         row_data = _canonical_import_row_data(raw_row, col_mapping, template_cols, rate_source, rate_precision)
         document_group_id = get_document_group_id(template_cols, row_data, template_id)
         date_text = _date_text_for_row(row_data, template_cols, date_delimiter, date_order)
@@ -1870,6 +1936,7 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
         incoming_occurrences[occurrence_key] = incoming_occurrences.get(occurrence_key, 0) + 1
         record = {
             "row_data": row_data,
+            "source_row_number": _ledger_row_number(raw_row, source_index),
             "date_text": date_text,
             "document_group_id": document_group_id,
             "source_identity": _canonical_source_identity(
@@ -1923,7 +1990,7 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
     existing_rows = execute_query_pg(
         f"""
         SELECT cd.id, cd.row_data, cd.version, cd.document_group_id,
-               cd.source_identity,
+               cd.source_identity, cd.source_row_number, cd.source_order_upload_id,
                cd.extract_date, vd.validation_status, vd.id AS verification_detail_id,
                {SOURCE_ROW_HASH_SQL} AS scope_row_hash
         FROM client_data cd
@@ -1957,6 +2024,8 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
             "old_validation_status": row.get("validation_status") or "Pending",
             "verification_detail_id": row.get("verification_detail_id"),
             "source_identity": row.get("source_identity"),
+            "source_row_number": row.get("source_row_number"),
+            "source_order_upload_id": row.get("source_order_upload_id"),
             "comparison_date": _date_text(row.get("extract_date")),
             "extract_date": _date_text(row.get("extract_date")) or _date_text_for_row(
                 row_data, template_cols, date_delimiter, date_order
@@ -1989,6 +2058,7 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
                 "old_version": old["old_version"],
                 "verification_detail_id": old["verification_detail_id"],
                 "source_identity": old.get("source_identity"),
+                "source_row_number": new['source_row_number'],
                 "changed_fields": sorted(k for k in before.keys() | after.keys()
                                          if before.get(k, '') != after.get(k, '')),
             }
@@ -2024,6 +2094,7 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
         matched, unmatched_incoming, unmatched_existing = match_unchanged(incoming, existing, exact, equivalent)
         result['unchanged'].extend(old['client_data_id'] for old in matched)
         result['unchanged_count'] += len(matched)
+        result.setdefault('source_order', []).extend(_source_order_pairs(incoming, matched, exact, equivalent))
 
         # Explicit line IDs are authoritative. Unmatched IDs must remain new or
         # removed lines and must never inherit another transaction's history.
@@ -2077,6 +2148,7 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
             result["changed_count"] += 1
         for new in unmatched_incoming:
             result["new"].append(new["row_data"])
+            result.setdefault('new_source_row_numbers', []).append(new['source_row_number'])
             result["new_source_identities"].append(new["source_identity"])
             result["new_count"] += 1
         if comparison_mode == "replace_range":
@@ -2123,7 +2195,10 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
             raise HTTPException(409, 'A previous voucher has additional lines outside this report period. Use wider coverage so its complete previous version can be archived.')
         if coverage and not context:
             scope_context['document_groups'] = sorted(set(scope_context['document_groups']) | set(groups))
-    if coverage or result['changed'] or result['missing']:
+    result['source_order_refresh_required'] = any(
+        item['source_row_number'] != item['expected_source_row_number']
+        or item['expected_source_order_upload_id'] is None for item in result.get('source_order', []))
+    if coverage or result['changed'] or result['missing'] or result['source_order_refresh_required']:
         result['lifecycle'] = {'scope': scope_context, 'source_fingerprint': source_fingerprint(existing_rows),
                                'fingerprint_method': 'postgres' if existing_rows and 'scope_row_hash' in existing_rows[0] else 'python'}
     return result
@@ -3405,6 +3480,7 @@ def validate_only(request: ImportRequest, perf: bool = False):
         change_detection["new_count"]
         or change_detection["changed_count"]
         or change_detection["missing_count"]
+        or change_detection.get('source_order_refresh_required')
     )
     if _ledger_context.get() and not prior_same_file:
         actionable = True  # New coverage or balance evidence can have no transaction changes.
@@ -3602,6 +3678,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
 
     changed_actions = plan_payload.get("changed", [])
     missing_actions = plan_payload.get("missing", [])
+    source_order_actions = plan_payload.get('source_order', [])
     guarded_ids = list(dict.fromkeys(
         [item["client_data_id"] for item in changed_actions]
         + [item["client_data_id"] for item in missing_actions]
@@ -3651,6 +3728,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
             "old_version": current.get("version", 1),
             "verification_detail_id": current.get("verification_detail_id"),
             "source_identity": item.get("source_identity") or current.get("source_identity"),
+            "source_row_number": item.get('source_row_number'),
             "changed_fields": item.get("changed_fields", _changed_field_names(current_data, item["new_row_data"])),
         })
 
@@ -3739,6 +3817,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
         "missing": missing,
         "comparison_mode": plan_payload.get("comparison_mode", request.comparison_mode),
         "date_range": plan_payload.get("date_range"),
+        "source_order_refresh_required": plan_payload.get('source_order_refresh_required', False),
     }
     rate_source = plan_payload.get("rate_source")
     effective_delimiter = plan_payload.get("date_delimiter") or DEFAULT_DATE_DELIMITER
@@ -3804,6 +3883,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
                     or (current_plan[0].get('expires_at') and current_plan[0]['expires_at'] < datetime.now(current_plan[0]['expires_at'].tzinfo))):
                 raise HTTPException(409, 'Validation plan expired or was superseded while archiving. Validate again; no replacement was applied.')
         _guard_plan_configuration(request, plan_payload)
+        _apply_source_order_updates(conn, request, source_order_actions)
         if guarded_ids:
             locked_rows = execute_query_pg(
                 """
@@ -3879,6 +3959,8 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
                 date_str,
                 source_identity,
                 source_fingerprint,
+                item.get('source_row_number'),
+                request.file_id if item.get('source_row_number') else None,
                 item["client_data_id"],
             ))
             changed_classification_sources.append({
@@ -3906,7 +3988,8 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
                     change_detection_status = 'active', is_deleted = FALSE,
                     data_quality_flag = %s, rate_source = %s,
                     extract_amount = %s, extract_date = %s,
-                    source_identity = %s, source_fingerprint = %s
+                    source_identity = %s, source_fingerprint = %s,
+                    source_row_number = %s, source_order_upload_id = %s
                 WHERE id = %s
                 """,
                 changed_client_data_params,
@@ -3927,7 +4010,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
         new_client_data_params = []
         new_classification_rows = []
         new_audit_params = []
-        for new_row_data, source_identity in zip(new_rows, new_row_identities):
+        for index, (new_row_data, source_identity) in enumerate(zip(new_rows, new_row_identities)):
             amount, date_str = extract_planned_columns(new_row_data)
             source_fingerprint = _row_fingerprint_token(new_row_data)
             new_client_data_params.append((
@@ -3944,6 +4027,8 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
                 rate_source,
                 source_identity,
                 source_fingerprint,
+                plan_payload['new'][index].get('source_row_number'),
+                request.file_id if plan_payload['new'][index].get('source_row_number') else None,
             ))
             inserted_count += 1
             IMPORT_PROGRESS[request.file_id]["current"] += 1
@@ -3956,11 +4041,11 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
                     (client_id, template_id, upload_id, row_data, extract_amount,
                      extract_date, created_by, version, change_detection_status,
                      document_group_id, data_quality_flag, rate_source,
-                     source_identity, source_fingerprint)
+                     source_identity, source_fingerprint, source_row_number, source_order_upload_id)
                 VALUES %s RETURNING id
                 """,
                 new_client_data_params,
-                template="(%s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, %s, %s, %s, %s)",
+                template="(%s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, %s, %s, %s, %s, %s, %s)",
             )
             for row_id, new_row_data in zip(new_ids, new_rows):
                 amount, date_str = extract_planned_columns(new_row_data)
@@ -4000,8 +4085,11 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
             """,
             (request.validation_plan_id,),
         )
+        import_message = f'Successfully imported: {inserted_count} added, {updated_count} changed, {deleted_count} removed'
+        if source_order_actions and not (inserted_count or updated_count or deleted_count):
+            import_message += '. Original source row order restored; transaction values are unchanged.'
         finish_lifecycle(prepared, {
-            'status': 'success', 'message': f'Successfully imported: {inserted_count} added, {updated_count} changed, {deleted_count} removed',
+            'status': 'success', 'message': import_message,
             'total_rows': total_rows_attempted, 'imported_count': inserted_count,
             'updated_count': updated_count, 'deleted_count': deleted_count,
         }, execute_write_pg)
@@ -4021,6 +4109,8 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
     )
     if context:
         legacy_snapshot_required = False
+    elif plan_payload.get('source_order_refresh_required'):
+        legacy_snapshot_required = True  # Transaction-window caches must see changed positions too.
     if legacy_snapshot_required:
         invalidate_cashflow_summary_read_models(
             request.client_id,
@@ -4086,12 +4176,13 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
         "status": "success",
         "source_diagnostics": plan_payload.get("source_diagnostics", {}),
         "archive_verified": bool(prepared and prepared.get('archive')),
-        "message": f"Successfully imported: {inserted_count} added, {updated_count} changed, {deleted_count} removed",
+        "message": import_message,
         "total_rows": total_rows_attempted,
         "imported_count": inserted_count,
         "updated_count": updated_count,
         "deleted_count": deleted_count,
         "validation_errors": [],
+        "source_order_refreshed": bool(source_order_actions),
         "rejected_rows": rejected_rows,
         "rejected_count": len(rejected_rows),
         "force_included_count": force_included_count,
@@ -4423,7 +4514,8 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
     )
 
     public_changes = public_change_detection(change_detection, template_cols, request.template_id)
-    if not (change_detection["new_count"] or change_detection["changed_count"] or change_detection["missing_count"]):
+    if not (change_detection["new_count"] or change_detection["changed_count"] or change_detection["missing_count"]
+            or change_detection.get('source_order_refresh_required')):
         _persist_upload_summary(request, change_detection, len(rows), status="Ignored")
         upload_summary = _build_upload_summary(
             file_info[0], template[0], request, change_detection, len(rows), status="Ignored"
@@ -4492,6 +4584,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
         )
         growth_rows = change_detection.get("new", []) + [item["new_row_data"] for item in change_detection.get("changed", [])]
         _check_upload_storage_budget(len(json.dumps(growth_rows, default=str).encode("utf-8")) * 4 + 1_048_576)
+        _apply_source_order_updates(conn, request, change_detection.get('source_order', []))
         execute_write_pg("UPDATE uploaded_files SET status = 'Imported', client_id = %s WHERE id = %s",
                          (request.client_id, request.file_id))
         _assert_active_identity_collisions(
@@ -4532,7 +4625,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
                 )
                 source_fingerprint = _row_fingerprint_token(new_row_data)
                 changed_client_data_params.append(
-                    (Json(new_row_data, dumps=lambda d: json.dumps(d, default=str)), request.file_id, doc_group_id, data_quality_flag, rate_source, amount, date_str, source_identity, source_fingerprint, cid)
+                    (Json(new_row_data, dumps=lambda d: json.dumps(d, default=str)), request.file_id, doc_group_id, data_quality_flag, rate_source, amount, date_str, source_identity, source_fingerprint, item.get('source_row_number'), request.file_id if item.get('source_row_number') else None, cid)
                 )
                 changed_classification_sources.append({
                     "id": cid,
@@ -4554,7 +4647,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
                     conn,
                     """
                     UPDATE client_data
-                    SET row_data = %s, upload_id = %s, document_group_id = %s, change_detection_status = 'active', is_deleted = FALSE, data_quality_flag = %s, rate_source = %s, extract_amount = %s, extract_date = %s, source_identity = %s, source_fingerprint = %s
+                    SET row_data = %s, upload_id = %s, document_group_id = %s, change_detection_status = 'active', is_deleted = FALSE, data_quality_flag = %s, rate_source = %s, extract_amount = %s, extract_date = %s, source_identity = %s, source_fingerprint = %s, source_row_number = %s, source_order_upload_id = %s
                     WHERE id = %s
                     """,
                     changed_client_data_params
@@ -4586,9 +4679,9 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
                     change_detection["new"],
                     request.template_id,
                 )
-            for new_row_data, source_identity in zip(
+            for source_index, (new_row_data, source_identity) in enumerate(zip(
                 change_detection["new"], new_row_identities
-            ):
+            )):
                 amount, date_str = extract_columns_from_row(new_row_data, template_cols, effective_delimiter, effective_order)
                 doc_group_id = get_document_group_id(template_cols, new_row_data, request.template_id)
                 source_fingerprint = _row_fingerprint_token(new_row_data)
@@ -4597,7 +4690,8 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
                 data_quality_flag = compute_data_quality_flag(new_row_data, critical_cols)
                 new_client_data_params.append(
                     (request.client_id, request.template_id, request.file_id,
-                     Json(new_row_data, dumps=lambda d: json.dumps(d, default=str)), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag, rate_source, source_identity, source_fingerprint)
+                     Json(new_row_data, dumps=lambda d: json.dumps(d, default=str)), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag, rate_source, source_identity, source_fingerprint,
+                     (change_detection.get('new_source_row_numbers') or [None] * len(new_row_identities))[source_index], request.file_id)
                 )
                 new_row_data_list.append(new_row_data)
                 new_extract_dates.append(date_str)
@@ -4608,11 +4702,11 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
                 new_ids = execute_batch_insert_with_ids_pg(
                     conn,
                     """
-                    INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status, document_group_id, data_quality_flag, rate_source, source_identity, source_fingerprint)
+                    INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status, document_group_id, data_quality_flag, rate_source, source_identity, source_fingerprint, source_row_number, source_order_upload_id)
                     VALUES %s RETURNING id
                     """,
                     new_client_data_params,
-                    template="(%s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, %s, %s, %s, %s)"
+                    template="(%s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, %s, %s, %s, %s, %s, %s)"
                 )
                 new_classification_sources = [
                     {
@@ -4658,7 +4752,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
             first_upload_row_data_list = []
             first_upload_extract_dates = []
             first_upload_occurrences = {}
-            for row in rows:
+            for source_index, row in enumerate(rows, 2):
                 # Build JSON row_data
                 row_data = {}
                 for t_col_name, excel_col in col_mapping.items():
@@ -4697,7 +4791,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
 
                 first_upload_client_data_params.append(
                     (request.client_id, request.template_id, request.file_id,
-                     Json(row_data, dumps=lambda d: json.dumps(d, default=str)), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag, rate_source, source_identity, source_fingerprint)
+                     Json(row_data, dumps=lambda d: json.dumps(d, default=str)), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag, rate_source, source_identity, source_fingerprint, _ledger_row_number(row, source_index), request.file_id)
                 )
                 first_upload_row_data_list.append(row_data)
                 first_upload_extract_dates.append(date_str)
@@ -4708,11 +4802,11 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
                 first_upload_ids = execute_batch_insert_with_ids_pg(
                     conn,
                     """
-                    INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status, document_group_id, data_quality_flag, rate_source, source_identity, source_fingerprint)
+                    INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status, document_group_id, data_quality_flag, rate_source, source_identity, source_fingerprint, source_row_number, source_order_upload_id)
                     VALUES %s RETURNING id
                     """,
                     first_upload_client_data_params,
-                    template="(%s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, %s, %s, %s, %s)"
+                    template="(%s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, %s, %s, %s, %s, %s, %s)"
                 )
                 first_classification_sources = [
                     {
@@ -4757,6 +4851,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
         cashflow_voucher_resolution is None
         or not cashflow_voucher_resolution.get("eligible")
         or cashflow_voucher_resolution.get("cache_invalidation_required")
+        or change_detection.get('source_order_refresh_required', False)
     )
     preparation_required = bool(
         cashflow_voucher_resolution

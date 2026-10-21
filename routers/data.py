@@ -777,7 +777,8 @@ def get_preview_rows(
         SELECT cd.id, {row_data_sql} AS row_data, cd.extract_amount, cd.extract_date, cd.data_quality_flag, cd.rate_source, cd.document_group_id
         FROM client_data cd
         WHERE {where_sql}
-        ORDER BY cd.extract_date DESC, cd.id
+        ORDER BY cd.extract_date ASC NULLS LAST, cd.source_order_upload_id ASC NULLS LAST,
+                 cd.source_row_number ASC NULLS LAST, cd.id
         LIMIT %s OFFSET %s
     """
     data_params = ([verification_column_names] + final_params if verification_column_names is not None else final_params) + [limit, offset]
@@ -895,7 +896,8 @@ def get_dataset_rows(
         SELECT id, row_data, extract_amount, extract_date, created_at
         FROM client_data
         WHERE {where_sql}
-        ORDER BY id
+        ORDER BY extract_date ASC NULLS LAST, source_order_upload_id ASC NULLS LAST,
+                 source_row_number ASC NULLS LAST, id
         LIMIT %s OFFSET %s
     """
     params.extend([limit, offset])

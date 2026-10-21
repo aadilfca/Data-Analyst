@@ -650,12 +650,24 @@
         #ledgerAccountSelect {
             width: 100%;
             min-width: 0;
+            flex: 1;
             padding: 8px;
             border: 1px solid #cbd5e1;
             border-radius: 5px;
             background: white;
             color: #334155;
         }
+
+        .ledger-account-control { position: relative; display: flex; min-width: 0; }
+        #ledgerAccountSelect { border-radius: 5px 0 0 5px; }
+        #ledgerAccountToggle { flex: 0 0 36px; border: 1px solid #cbd5e1; border-left: 0; border-radius: 0 5px 5px 0; background: #f8fafc; color: #475569; cursor: pointer; }
+        #ledgerAccountToggle:disabled { cursor: default; opacity: .55; }
+        #ledgerAccountSelect:focus-visible, #ledgerAccountToggle:focus-visible { outline: 2px solid #2563eb; outline-offset: 1px; }
+        #ledgerAccountOptions[hidden] { display: none; }
+        #ledgerAccountOptions { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 30; max-height: 240px; overflow-y: auto; padding: 4px; background: white; border: 1px solid #cbd5e1; border-radius: 6px; box-shadow: 0 8px 22px #0f172a24; }
+        #ledgerAccountOptions [role="option"] { display: block; width: 100%; padding: 9px 8px; border: 0; border-radius: 4px; background: white; text-align: left; font-size: 13px; color: #1e293b; cursor: pointer; overflow-wrap: anywhere; }
+        #ledgerAccountOptions [role="option"]:hover, #ledgerAccountOptions [role="option"].active { background: #eaf2ff; }
+        #ledgerAccountOptions .ledger-option-message { padding: 9px 8px; color: #64748b; font-size: 12px; }
 
         #ledgerAccountHelp { margin: 6px 0 0; }
 
@@ -1589,8 +1601,12 @@
                         <span class="action-note">📄 Review additions, revisions, and removals before import.</span>
                         <div id="ledgerUploadContext" hidden>
                             <label for="ledgerAccountSelect">Account <span aria-hidden="true">*</span></label>
-                            <div>
-                                <select id="ledgerAccountSelect" required aria-describedby="ledgerAccountHelp"><option value="">Select account</option></select>
+                            <div class="ledger-account-control">
+                                <input id="ledgerAccountSelect" type="text" role="combobox" required autocomplete="off"
+                                    aria-autocomplete="list" aria-controls="ledgerAccountOptions" aria-expanded="false"
+                                    aria-describedby="ledgerAccountHelp" placeholder="Search account name or code">
+                                <button id="ledgerAccountToggle" type="button" aria-label="Show ledger accounts" aria-controls="ledgerAccountOptions">▾</button>
+                                <div id="ledgerAccountOptions" role="listbox" aria-label="Trial Balance posting accounts" hidden></div>
                             </div>
                             <p id="ledgerAccountHelp" role="status" hidden></p>
                         </div>
@@ -1751,7 +1767,7 @@
             <button type="button" class="btn-primary" id="uploadReplacementConfirm">Archive and apply report</button>
         </div>
     </dialog>
-    <script src="/static/upload.js?v=19"></script>
+    <script src="/static/upload.js?v=20"></script>
 </body>
 
 </html>

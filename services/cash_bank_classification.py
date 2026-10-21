@@ -662,7 +662,8 @@ def load_cashflow_classification_preview(
             COALESCE(NULLIF(BTRIM(cd.derived_account_name), ''), '') AS source_account_name
         {from_sql}
         WHERE {where_sql}
-        ORDER BY cd.derived_transaction_date DESC NULLS LAST, cd.derived_voucher_id, cd.derived_account_code, cd.id
+        ORDER BY cd.derived_transaction_date ASC NULLS LAST, cd.source_order_upload_id ASC NULLS LAST,
+                 cd.source_row_number ASC NULLS LAST, cd.id
         LIMIT %s OFFSET %s
     """
     rows = query_fn(data_sql, tuple([*params, limit, offset]))
