@@ -1,5 +1,19 @@
 # Changelog Archive
 
+## Horizontal Cashflow reconciliation specification — 2026-10-22
+
+**Scope/status:** Aadil approved the three-file scope/approach, accepted the specification and authorised its documentation commit/push. This phase updates DEVELOPMENT_PLAN, this archive and CLAUDE. The original posting-comparison backend remains implemented but uncommitted/unaccepted; it supports the bridge, not the complete presentation.
+
+**Format:** Two full-width schedules: receipts first, payments underneath. Each reads ledger total → supported presentation adjustments → adjusted ledger total → Cashflow report total → unexplained difference. Use Add/Less signs, right-aligned amounts and voucher support. Prototype figures/rows are illustrative; actual adjustments must explain the existing approved transfer, customer charge/tax and refund/reversal treatment. Never infer deductions, allocate by arbitrary weights, invent correction pairs or insert balancing adjustments.
+
+**Sources/controls:** Voucher Transaction Report is the parent posting population; its Cashflow extract supplies categorized receipts/payments, while independent Cash/Bank ledgers supply raw movements and opening/closing balances. Compare receipts/payments separately to cents, retaining signed/repeated source postings. Missing/changed postings remain exceptions; missing/stale/invalid evidence remains unavailable. Numerical agreement does not certify extract completeness or resolve category/settlement reviews. Original values remain unchanged in canonical `client_data`; no second durable transaction copy or financial writes.
+
+**Balance/scope:** Ledger opening + categorized receipts − categorized payments + separately presented proven Treasury movements = calculated closing, compared with ledger closing. Preserve separate Bank/Cash transfer and mixed-movement controls. Inherit report dates, grouping, Treasury view and receipt presentation; show corresponding period controls and selected-range totals. Category searches/hide-zero cannot narrow reconciliation scope.
+
+**Interaction/delivery:** Reconciliation in the current Cashflow header opens one popup: horizontal working paper, voucher support and source-posting differences. Load on request; retain report context/return state. Screen and Excel must agree while existing accepted report sheets/totals remain intact. DEVELOPMENT_PLAN owns the revised 6A–10 sequence; every later phase needs its own scope/approach approval. Account selection follows reconciliation acceptance; Drive production is last.
+
+**Verification/acceptance:** Documentation consistency, scope, preservation, whitespace and size checks pass; application/local-server tests are unnecessary for this phase. Aadil accepts the three-document checkpoint and authorises commit/push on 22 October. Exclude pre-existing backend changes/history, benchmark work and private backups. Phase 6B retains file/approach gates; no application edits, database access or installs.
+
 ## Cashflow final reconciliation acceptance — 2026-10-21
 
 **Scope:** C6 verifies accepted code `bfa7731`; only the three approved guidance/history documents change. One enforced read-only PostgreSQL snapshot compares January–June Combined, Bank, Cash and Split with exact raw debit/credit sums and independent account-ledger roll-forwards. January anchors reuse accepted evidence only after complete source fingerprints match. All six monthly openings/closings and carries reconcile to cents. June closes Combined/Split 203,851,286.59, Bank 201,318,246.83 and Cash 2,533,039.76.

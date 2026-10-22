@@ -248,6 +248,8 @@ One line per file group: what it is now. Full build history for every entry live
 
 ## Status log
 
+- 2026-10-22: Accepted horizontal Cashflow reconciliation specification and revised phases; accounting bridge follows separate approval. See CHANGELOG_ARCHIVE.md, Horizontal Cashflow reconciliation specification.
+
 - 2026-10-21: C6 verifies Combined, Bank, Cash, Split and exports against independent source/ledger controls; locally accepted for commit/push. See CHANGELOG_ARCHIVE.md.
 
 - 2026-10-21: Added independent Cashflow boundary, carry, role, source-correction and screen/export regression controls; accepted for commit/push. See CHANGELOG_ARCHIVE.md, Independent Cashflow controls.

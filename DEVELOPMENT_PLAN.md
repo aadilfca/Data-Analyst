@@ -1,14 +1,14 @@
-## Cashflow reconciliation gate — 2026-10-21
+## Cashflow reconciliation gate — 2026-10-22
 
-C1 accounts/mappings reviewed. Signed customer/vendor reversal summaries and January–June combined reconciliation are locally accepted; Aadil authorises commit/push on 2026-10-21. Details: CHANGELOG_ARCHIVE.md, “Signed customer/vendor reversals”.
+C1 mappings and signed customer/vendor reversals are accepted. C4–C6 are accepted/committed (`223a1ce`, `bfa7731`, `fa6be37`); January–June figures remain the baseline. Details: CHANGELOG_ARCHIVE.md, “Cashflow final reconciliation acceptance”.
 
-C4/C5 committed/pushed (`223a1ce`, `bfa7731`). C6 locally accepted; Aadil authorises documentation commit/push. Next: original 6 Differences. Details: CHANGELOG_ARCHIVE.md, “Cashflow final reconciliation acceptance”.
+The original 6A posting-comparison backend is implemented but uncommitted/unaccepted; it supports, but does not complete, the horizontal accounting bridge. Current boundary: CHANGELOG_ARCHIVE.md, “Horizontal Cashflow reconciliation specification”.
 
-Agreed sequence: C6 acceptance → original 6 Differences → 7 Verification → separately approved account selection → final 8 Drive production. Trial Balance precision repair stays separate.
+Aadil approved the horizontal specification and revised sequence below. This phase records that agreement only. Detailed contract: CHANGELOG_ARCHIVE.md, “Horizontal Cashflow reconciliation specification”.
 
-## Current feature sequence — Cashflow ledger balances — 2026-10-20
+## Current feature sequence — Cashflow reconciliation — 2026-10-22
 
-The current contract keeps one canonical dataset and preserves complete voucher lines, declared coverage, verified archives and safe retries. This sequence governs ledger/balance work; earlier roadmaps below retain their historical context.
+This sequence governs current work; earlier roadmaps below are historical, not authority to restart performance/prepared-copy work. Preserve canonical `client_data`, complete vouchers, coverage uncertainty, verified archives and safe retries.
 
 | Phase | Status / objective |
 |---|---|
@@ -17,11 +17,18 @@ The current contract keeps one canonical dataset and preserves complete voucher 
 | 3 — Client Data | Accepted by Aadil. Existing preview has searchable uploaded-account selection, combined period/row filters and account-scoped counts, pagination and caching. |
 | 4 — Balances | Complete and accepted; included in the combined commit/push authorised on 2026-10-21. |
 | 5 — Cashflow rows | Complete; combined commit/push authorised on 2026-10-21. Expandable dim-green balances, account/code hover, calculations, split totals and fresh evidence. |
-| 6 — Differences | Existing-flow popup for missing/changed vouchers and their lines between ledger and voucher sources. |
-| 7 — Verification | Align exports and test period boundaries, repeated lines, zero/signed balances and accounting proofs. |
-| 8 — Drive production — final | Publish/reauthorise Google OAuth and configure hosted credentials plus persistent external archive storage after phases 2–7. Existing archive requirements remain active meanwhile. |
+| 6A — Specification | Accepted; documentation commit/push authorised. Horizontal receipts schedule, then payments, with supported adjustments, separate differences and ledger balance proof. |
+| 6B — Accounting bridge | Next: independent ledger receipts/payments, voucher-supported presentation adjustments and separate residuals; review/reuse the original comparison backend. Preserve accepted Cashflow policy. |
+| 6C — Screen | Header Reconciliation button opens the horizontal working paper and voucher differences in one popup, inheriting report context and retaining return state. |
+| 6D — Excel | Export the same working paper, supporting adjustments, differences and balance proof; retain accepted Cashflow sheets/totals. |
+| 7 — Reconciliation acceptance | Verify Combined/Bank/Cash/Split, monthly/partial periods, transfers, deductions, reversals, repeats, unavailable evidence, baseline and screen/export parity; obtain local acceptance. |
+| 8 — Account selection | After phase 7: separately approve/build searchable Cash/Bank multi-select after Period; default All preserves existing scope. |
+| 9 — Selected-account acceptance | Verify one/several/all accounts across reports, balances, reconciliation, details and Excel, including within-selection and cross-boundary transfers. |
+| 10 — Drive production — final | Former phase 8: publish/reauthorise OAuth, configure hosted credentials/persistent external archives, then approve production archive/recovery verification. Existing archive guards remain active. |
 
 Each implementation phase retains file/approach approval, local acceptance and separate Git approval.
+
+**This phase:** 6A accepted for a documentation checkpoint; next is 6B candidate-file confirmation and approach approval. Trial Balance precision repair, category/customer reviews and performance work remain separate.
 
 ## Active roadmap - Excel-style Cashflows database strategy - 2026-10-08
 
