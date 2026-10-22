@@ -11,9 +11,29 @@ from services.ledger_report_source import (
     load_cashflow_prepared_classification_preview,
     load_cashflow_prepared_rollup_summary,
     load_ledger_report_source,
+    load_cashflow_difference_source,
+    cashflow_reconciliation_support_page,
     select_canonical_cashflow_vouchers,
     select_cashflow_report_source_identity,
 )
+
+
+def test_reconciliation_support_pages_whole_groups_and_preserves_all_lines():
+    entries=[dict(voucher_id='A',period_key='2026-01',receipts=-10,payments=-10),
+             dict(voucher_id='A',period_key='2026-01',receipts=-5,payments=-5),
+             dict(voucher_id='B',period_key='2026-01',receipts=7,payments=7)]
+    source={'ledger_rows':[dict(id=i,voucher_id='A',account_code='BANK') for i in range(251)]
+                +[dict(id=999,voucher_id='A',account_code='CASH')],
+            'transaction_rows':[dict(id=i+1000,voucher_id='A',account_code='AR',date='2025-12-31') for i in range(252)]}
+    page=cashflow_reconciliation_support_page(source,entries,['BANK'],periods=[dict(key='2026-01',start='2026-01-01',end='2026-01-31')],limit=1)
+    assert page['total_rows']==2 and page['page_count']==2
+    assert page['rows'][0]['receipts']==page['rows'][0]['payments']==-15
+    assert len(page['rows'][0]['ledger_lines'])==251
+    assert len(page['rows'][0]['voucher_lines'])==252
+    assert not any(row['in_period'] for row in page['rows'][0]['voucher_lines'])
+    assert all(r['account_code']=='BANK' for r in page['rows'][0]['ledger_lines'])
+    assert cashflow_reconciliation_support_page(source,entries,['BANK'],page=2,limit=1)['rows'][0]['voucher_id']=='B'
+    with pytest.raises(ValueError):cashflow_reconciliation_support_page(source,entries,['BANK'],limit=201)
 
 
 def test_cashflow_report_invalidation_keeps_one_compatibility_marker():
@@ -208,6 +228,68 @@ def test_database_totals_distinguish_empty_period_from_unavailable_counts(databa
     assert source.metadata["database_totals"]["row_count"] == 0
     assert source.metadata["database_totals"]["voucher_count"] == 0
     assert source.journal.empty
+
+
+def test_difference_source_executes_complete_voucher_sql_with_repeats_and_outside_date_context(database_count_source):
+    import re
+    conn, _, _ = database_count_source
+    conn.executescript('''ALTER TABLE client_data ADD COLUMN version INTEGER;
+        ALTER TABLE client_data ADD COLUMN source_fingerprint TEXT;
+        CREATE TABLE uploaded_files(id INTEGER, client_id INTEGER, template_id INTEGER);''')
+    conn.execute("UPDATE client_data SET derived_voucher_id='V1' WHERE id IN (8,9)")
+    ledger = [dict(id=99, date='2026-01-01', voucher_id='V1', account_code='BANK')]
+    calls = []
+    def query(sql, params):
+        calls.append((sql, params))
+        if 'SELECT u.id, u.template_id' in sql:
+            return [dict(id=12, template_id=11)]
+        if 'FROM client_data cd JOIN uploaded_files' in sql:
+            return ledger
+        statement = sql.replace('::jsonb', '').replace('::date', '').replace('= ANY(%s)', 'IN (%s)')
+        statement = re.sub(r"COALESCE\(to_jsonb\(u\)->>'upload_date', to_jsonb\(u\)->>'uploaded_at'\)", 'NULL', statement)
+        parts, flat = statement.split('%s'), []
+        statement = parts[0]
+        for parameter, following in zip(params, parts[1:], strict=True):
+            if isinstance(parameter, list):
+                statement += ','.join('?' for _ in parameter) or 'NULL'
+                flat.extend(parameter)
+            else:
+                statement += '?'; flat.append(parameter)
+            statement += following
+        return [dict(row) for row in conn.execute(statement, flat)]
+    def load():
+        return load_cashflow_difference_source(7, 9, ['BANK'], '2026-01-01', '2026-01-31', query_fn=query)
+    original = load()
+    assert [r['id'] for r in original['transaction_rows']] == [1,2,3]
+    assert [r['credit'] for r in original['transaction_rows']] == [0,50,50]
+    assert original['uploads'][0]['configuration_current'] is False
+    assert calls[1][1] == (7, ['BANK'], [11])
+    assert 'GROUP BY' not in calls[2][0] and 'LIMIT' not in calls[2][0]
+    conn.execute("UPDATE client_data SET derived_transaction_date='2026-02-01' WHERE client_id=7 AND template_id=9 AND derived_voucher_id='V1'")
+    shifted = load()
+    assert [r['id'] for r in shifted['transaction_rows']] == [1,2,3]
+    assert all(r['date']=='2026-02-01' for r in shifted['transaction_rows'])
+    assert original['ledger_rows'] == shifted['ledger_rows'] == ledger
+
+
+def test_difference_source_validates_ledger_roles_without_writing_or_aggregating():
+    import json, hashlib
+    roles = {'voucher': 1, 'date': 2, 'debit': 3, 'credit': 4}
+    columns = [dict(id=i, column_name=str(i), data_type='Numeric') for i in range(1,5)]
+    upload = dict(id=5, template_id=11, ledger_columns=json.dumps(roles), columns=columns,
+        ledger_evidence={'balance_check': {'configuration': hashlib.sha256(json.dumps([roles,columns],sort_keys=True).encode()).hexdigest()}})
+    repeated = [dict(id=i, date='2026-01-05', voucher_id='V', account_code='B') for i in [1,2]]
+    calls=[]
+    def query(sql, params):
+        calls.append((sql,params))
+        return [upload] if len(calls)==1 else repeated if len(calls)==2 else []
+    result = load_cashflow_difference_source(7, 9, ['B'], '2026-01-01', '2026-01-31',query_fn=query)
+    assert result['uploads'][0]['configuration_current'] and result['uploads'][0]['comparison_roles_available']
+    assert len(result['ledger_rows'])==2
+    assert calls[-1][1][7]==['V']
+    assert 'cd.is_deleted = FALSE' in calls[1][0] and "<> 'deleted'" in calls[1][0]
+    calls.clear(); columns[0]['column_name']='Changed'
+    assert not load_cashflow_difference_source(7,9,['B'],'2026-01-01','2026-01-31',query_fn=query)['uploads'][0]['configuration_current']
 
 
 def test_real_source_sql_preserves_repeats_and_moves_corrected_dates_between_years(

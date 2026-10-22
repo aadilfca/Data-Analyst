@@ -9,6 +9,7 @@ tested with small in-memory data sets.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from decimal import Decimal, InvalidOperation
 from numbers import Number
 from typing import Any, Mapping, Sequence
 
@@ -1554,6 +1555,7 @@ def build_cashflow_summary(
     tolerance: float = DEFAULT_TOLERANCE,
     include_drilldown: bool = False,
     vendor_account_codes: Sequence[str] = (),
+    include_reconciliation_evidence: bool = False,
 ) -> dict[str, Any]:
     """Summarise vouchers containing configured Cash or Bank accounts.
 
@@ -1932,7 +1934,7 @@ def build_cashflow_summary(
         receipt_categories,
         tolerance=tolerance,
     )
-    return {
+    result = {
         'cashflow_ledger_rollups': rollups,
         'cashflow_drilldown_controls': drilldown_controls,
         'cashflow_drilldown_prepared': bool(include_drilldown),
@@ -1964,6 +1966,151 @@ def build_cashflow_summary(
         "receipt_presentation": presentation,
         **_build_vendor_payment_reports(contra if not working.empty else pd.DataFrame(), vendor_account_codes),
     }
+    if include_reconciliation_evidence:
+        # Opt-in evidence uses the actual category transformation above. Ordinary
+        # summaries do not retain another voucher payload or pay for this work.
+        profiles = {}
+        if not working.empty:
+            for voucher, lines in working.groupby('voucher_id', sort=False):
+                profiles[str(voucher)] = {
+                    'treasury_types': sorted({treasury_type[code] for code in lines.loc[lines['is_treasury'], 'account_code']}),
+                    'has_counterparts': bool((~lines['is_treasury']).any()),
+                }
+        result['reconciliation_evidence'] = {
+            'category_lines': category_frame.to_dict('records'),
+            'voucher_profiles': profiles,
+            'roles': {key: sorted(values) for key, values in (configured_roles or {}).items()},
+            'customer_vouchers': customer_payment_details['voucher_id'].astype(str).tolist(),
+        }
+    return result
+
+
+def build_cashflow_presentation_adjustments(
+    summary: Mapping[str, Any], transaction_rows: Sequence[Mapping[str, Any]],
+    account_types: Mapping[str, str], treasury_view: str,
+) -> dict[str, Any]:
+    """Explain gross Treasury sides through explicit voucher/category operations.
+
+    No adjustment is a residual against the report. Opposite Treasury postings
+    are removed, proven opposing counter-account amounts are presented gross,
+    then category reversals are netted in their existing selected-range section.
+    Raw occurrences, rather than SQL account aggregates, supply gross sides.
+    """
+    if treasury_view not in {'combined', 'bank', 'cash', 'split'}:
+        raise ValueError('Invalid Treasury view')
+    evidence = summary.get('reconciliation_evidence')
+    if evidence is None:
+        raise ValueError('Opt-in reconciliation evidence is required')
+    periods = summary['periods']
+    period_by_day = {day.date().isoformat(): p['key'] for p in periods
+                     for day in pd.date_range(p['start'], p['end'])}
+    category_lines = defaultdict(list)
+    for row in evidence['category_lines']:
+        category_lines[(str(row['voucher_id']), row['period_key'])].append(row)
+    profiles = evidence['voucher_profiles']
+    roles = evidence['roles']
+    customer_vouchers = set(evidence['customer_vouchers'])
+    treasury = defaultdict(list)
+    diagnostics = []
+
+    def amount(value):
+        number = Decimal(str(value or 0))
+        if not number.is_finite():
+            raise ValueError('Non-finite source amount')
+        return number
+
+    for row in transaction_rows:
+        if row.get('account_code') not in account_types:
+            continue
+        key = period_by_day.get(str(row.get('date'))[:10])
+        if key is None:
+            continue  # Related out-of-period postings are supporting context only.
+        try:
+            if all(row.get(field) in (None, '') for field in ('debit', 'credit')):
+                raise ValueError('Missing posting amount')
+            debit, credit = amount(row.get('debit')), amount(row.get('credit'))
+        except (InvalidOperation, ValueError):
+            diagnostics.append(dict(code='invalid_treasury_amount', source_id=row.get('id'), period_key=key))
+            continue
+        treasury[(str(row.get('voucher_id') or '').strip(), key)].append(dict(
+            row, inflow=max(debit, Decimal(0)) + max(-credit, Decimal(0)),
+            outflow=max(credit, Decimal(0)) + max(-debit, Decimal(0))))
+
+    views = ('combined', 'bank', 'cash') if treasury_view == 'split' else (treasury_view,)
+    output = {}
+    for view in views:
+        # Split assigns sections by combined selected totals, exactly as its UI
+        # and workbook do; standalone Bank/Cash use their own selected totals.
+        column = {'bank': 'bank_amount', 'cash': 'cash_amount'}.get(view)
+        sections = {}
+        target = {p['key']: {'receipts': Decimal(0), 'payments': Decimal(0)} for p in periods}
+        totals = summary['category_totals']
+        projected = defaultdict(Decimal)
+        for row in summary['treasury_category_totals'].to_dict('records'):
+            if column:
+                projected[row['category']] += amount(row[column])
+        for category, values in totals.iterrows():
+            selected_total = amount(values['Total']) if view == 'combined' or treasury_view == 'split' else projected[category]
+            sections[str(category)] = 'payments' if selected_total < 0 else 'receipts'
+        for row in summary['treasury_category_totals'].to_dict('records'):
+            value = amount(row[column] if column else row['total_amount'])
+            section = sections[str(row['category'])]
+            target[row['period_key']][section] += -value if section == 'payments' else value
+
+        entries = []
+        unresolved = []
+        source_totals = {p['key']: {'receipts': Decimal(0), 'payments': Decimal(0)} for p in periods}
+        def add(voucher, key, reason, label, receipts, payments, category=''):
+            if receipts or payments:
+                entries.append(dict(voucher_id=voucher, period_key=key, reason=reason, label=label,
+                                    category=category, receipts=float(receipts), payments=float(payments)))
+        for (voucher, key), lines in treasury.items():
+            selected = [r for r in lines if view == 'combined' or account_types[r['account_code']].casefold() == view]
+            if not selected:
+                continue
+            inflow = sum((r['inflow'] for r in selected), Decimal(0))
+            outflow = sum((r['outflow'] for r in selected), Decimal(0))
+            source_totals[key]['receipts'] += inflow
+            source_totals[key]['payments'] += outflow
+            profile = profiles.get(voucher)
+            if not profile:
+                unresolved.append(dict(voucher_id=voucher, period_key=key, reason='Voucher absent from valid Cashflow population'))
+                continue
+            if not profile['has_counterparts']:
+                add(voucher, key, 'internal_transfers', 'Internal transfers shown separately', -inflow, -outflow)
+                continue
+            if view != 'combined' and len(profile['treasury_types']) > 1:
+                add(voucher, key, 'mixed_treasury', 'Mixed Treasury movements shown separately; allocation requires review', -inflow, -outflow)
+                continue
+            categories = category_lines[(voucher, key)]
+            counter_net = sum((amount(r['amount']) for r in categories), Decimal(0))
+            if abs(inflow - outflow - counter_net) > Decimal(str(DEFAULT_TOLERANCE)):
+                unresolved.append(dict(voucher_id=voucher, period_key=key, reason='Voucher-period Treasury/counterpart movements do not balance'))
+                continue
+            offset = min(inflow, outflow)
+            add(voucher, key, 'treasury_offsets', 'Opposite Treasury postings within vouchers', -offset, -offset)
+            # The opposing counter-account side is observed in full, never
+            # apportioned among Treasury accounts or paired to guessed entries.
+            for row in categories:
+                value = amount(row['amount'])
+                if (counter_net >= 0 and value < 0) or (counter_net < 0 and value > 0):
+                    category = str(row['category'])
+                    role = next((role for role, labels in roles.items()
+                                 if voucher in customer_vouchers and role != 'customer_receipt'
+                                 and category.strip().casefold() in labels), None)
+                    label = {'bank_charge': 'Customer charges: gross presentation',
+                             'withholding_tax': 'Customer withholding tax: gross presentation',
+                             'other_deduction': 'Customer deductions: gross presentation'}.get(role,
+                                 'Opposing counter-account amounts: gross presentation')
+                    add(voucher, key, 'counterpart_gross', label, abs(value), abs(value), category)
+                section = sections[str(row['category'])]
+                if (section == 'receipts' and value < 0) or (section == 'payments' and value > 0):
+                    add(voucher, key, 'category_reversals', 'Refunds/reversals netted within '+section+' categories',
+                        -abs(value), -abs(value), str(row['category']))
+        output[view] = dict(entries=entries, cashflow_totals={key: {k: float(v) for k, v in values.items()} for key, values in target.items()},
+                            transaction_totals={key: {k: float(v) for k, v in values.items()} for key, values in source_totals.items()},
+                            unresolved=unresolved, category_sections=sections)
+    return dict(views=output, diagnostics=diagnostics)
 
 def build_group_summary(
     journal_df: pd.DataFrame,

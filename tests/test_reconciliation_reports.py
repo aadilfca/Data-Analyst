@@ -1,4 +1,5 @@
 import json
+import copy
 from io import BytesIO
 from pathlib import Path
 import logging
@@ -14,7 +15,7 @@ from services.ledger_group_summary import build_cashflow_summary, build_financia
 from services.ledger_report_source import CASHFLOW_CHILD_DETAILS_VERSION, CASHFLOW_DRILLDOWN_DETAILS_VERSION, CASHFLOW_SUMMARY_PAYLOAD_VERSION, load_cashflow_prepared_drilldown, load_cashflow_prepared_rollup_summary
 from routers import settings as settings_router
 from services.reconciliation_xlsx import export_cashflow_xlsx
-from test_reconciliation_balance_source import independent_year_boundary_case
+from test_reconciliation_balance_source import independent_year_boundary_case, horizontal_reconciliation_case
 
 
 @pytest.fixture
@@ -257,6 +258,112 @@ def test_balance_snapshot_failure_cannot_return_a_previous_successful_response()
             patch.object(reconciliation, '_build_cashflow_result') as builder, pytest.raises(RuntimeError, match='snapshot failed'):
         reconciliation.preview_cashflows(7, '2026-01-01', '2026-01-31', include_balances=True, session=None)
     builder.assert_not_called()
+
+
+def test_difference_endpoint_is_isolated_authenticated_and_paginates_whole_groups():
+    from fastapi import FastAPI, HTTPException
+    from fastapi.testclient import TestClient
+    app=FastAPI(); app.include_router(reconciliation.router)
+    app.dependency_overrides[reconciliation.require_admin]=lambda: {'id':1}
+    config=dict(source_template_id=9,bank_account_codes=['B'],cash_account_codes=['C'],cashflow_report_revision=7)
+    active=[]
+    def snapshot(callback):
+        active.append(True)
+        try: return callback(None)
+        finally: active.pop()
+    def source(*args,**kwargs):
+        assert active==[True]
+        assert args[:3]==(7,9,['B'])
+        return {}
+    # Supporting lines belong to a group and must not be silently capped at 200.
+    rows=[dict(status='matched',voucher_id='M'),dict(status='changed',voucher_id='A',voucher_lines=[{'id':i} for i in range(251)]),dict(status='ledger_only',voucher_id='B')]
+    with TestClient(app) as client, patch.object(reconciliation,'_require_active_client'), \
+            patch.object(reconciliation,'_cashflow_configuration',return_value=config), \
+            patch.object(reconciliation,'run_read_snapshot_pg',side_effect=snapshot), \
+            patch.object(reconciliation,'load_cashflow_difference_source',side_effect=source) as loader, \
+            patch.object(reconciliation,'build_cashflow_differences',side_effect=lambda *a: {'findings':copy.deepcopy(rows)}) , \
+            patch.object(reconciliation,'_build_cashflow_result') as summary:
+        params=dict(client_id=7,period_start='2026-01-01',period_end='2026-01-31',treasury_view='bank',limit=1)
+        response=client.get('/api/reconciliation/cashflows/differences',params=params)
+        assert response.status_code==200
+        result=response.json()
+        assert result['total_groups']==3 and result['total_rows']==2 and result['page_count']==2
+        assert len(result['rows'][0]['voucher_lines'])==251
+        assert client.get('/api/reconciliation/cashflows/differences',params=params|{'page':2}).json()['rows'][0]['voucher_id']=='B'
+        assert client.get('/api/reconciliation/cashflows/differences',params=params|{'differences_only':False}).json()['total_rows']==3
+        for change in ({'treasury_view':'wrong'},{'period_start':'bad'},{'limit':201},{'page':0}):
+            assert client.get('/api/reconciliation/cashflows/differences',params=params|change).status_code in [400,422]
+        summary.assert_not_called()
+        def reject(): raise HTTPException(401,'Login required')
+        app.dependency_overrides[reconciliation.require_admin]=reject
+        loader.reset_mock()
+        assert client.get('/api/reconciliation/cashflows/differences',params=params).status_code==401
+        loader.assert_not_called()
+
+
+def test_difference_snapshot_failure_does_not_return_old_diagnostics():
+    with patch.object(reconciliation,'run_read_snapshot_pg',side_effect=RuntimeError('read failed')), \
+            patch.object(reconciliation,'load_cashflow_difference_source') as loader, pytest.raises(RuntimeError,match='read failed'):
+        reconciliation.cashflow_differences(7,'2026-01-01','2026-01-31',treasury_view='combined',session=None)
+    loader.assert_not_called()
+
+
+def test_horizontal_endpoint_uses_one_snapshot_and_returns_paginated_current_support(horizontal_reconciliation_case):
+    from fastapi import FastAPI, HTTPException
+    from fastapi.testclient import TestClient
+    case=horizontal_reconciliation_case
+    config=dict(source_template_id=1,bank_account_codes=['B1'],cash_account_codes=['C1'],cashflow_report_revision=7,
+        receipt_presentation='gross',match_internal_transfers=True,customer_payment_roles=case['roles'])
+    report=SimpleNamespace(journal=case['journal'],coa=case['coa'],ready=True)
+    active=[]
+    def snapshot(callback):
+        active.append(True)
+        try:return callback(None)
+        finally:active.pop()
+    def load_report(*args,**kwargs):
+        assert active==[True]
+        return report
+    def load_evidence(*args,**kwargs):
+        assert active==[True]
+        return case['source']
+    app=FastAPI();app.include_router(reconciliation.router)
+    app.dependency_overrides[reconciliation.require_admin]=lambda:{'id':1}
+    with TestClient(app) as client, patch.object(reconciliation,'_require_active_client'), \
+            patch.object(reconciliation,'_cashflow_configuration',return_value=config), \
+            patch.object(reconciliation,'run_read_snapshot_pg',side_effect=snapshot), \
+            patch.object(reconciliation,'load_ledger_report_source',side_effect=load_report), \
+            patch.object(reconciliation,'load_cashflow_difference_source',side_effect=load_evidence), \
+            patch.object(reconciliation,'_build_cashflow_result') as ordinary:
+        params=dict(client_id=7,period_start='2026-01-01',period_end='2026-01-31')
+        url='/api/reconciliation/cashflows/reconciliation'
+        response=client.get(url,params=params)
+        assert response.status_code==200,response.text
+        result=response.json()
+        assert '_support_entries' not in result and 'support' not in result
+        assert result['views']['combined']['amount_status']=='Matched'
+        adjustment=next(row for row in result['views']['combined']['adjustments'] if row['category']=='Tax')
+        support_params=params|dict(support_key=adjustment['key'],expected_fingerprint=result['evidence_fingerprint'],limit=1)
+        child=client.get(url,params=support_params)
+        assert child.status_code==200,child.text
+        support=child.json()['support']
+        assert support['rows'][0]['voucher_id']=='RECEIPT'
+        assert len(support['rows'][0]['voucher_lines'])==4
+        assert support['rows'][0]['receipts']==20
+        assert client.get(url,params=support_params|{'expected_fingerprint':'stale'}).status_code==409
+        for change in ({'treasury_view':'wrong'},{'group_by':'wrong'},{'period_start':'bad'},
+                       {'page':0},{'limit':201},{'support_key':'unknown'},{'period_key':'wrong'}):
+            assert client.get(url,params=params|change).status_code in (400,422)
+        ordinary.assert_not_called()
+        def reject():raise HTTPException(401,'Login required')
+        app.dependency_overrides[reconciliation.require_admin]=reject
+        assert client.get(url,params=params).status_code==401
+
+
+def test_horizontal_endpoint_never_reuses_old_results_after_snapshot_failure():
+    with patch.object(reconciliation,'run_read_snapshot_pg',side_effect=RuntimeError('read failed')), \
+            patch.object(reconciliation,'load_ledger_report_source') as loader,pytest.raises(RuntimeError,match='read failed'):
+        reconciliation.cashflow_reconciliation(7,'2026-01-01','2026-01-31',group_by='month',treasury_view='combined',session=None)
+    loader.assert_not_called()
 
 
 def test_prepared_rollup_summary_maps_fortnights_across_months():

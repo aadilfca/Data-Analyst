@@ -1,13 +1,64 @@
 import pandas as pd
 import pytest
-from test_reconciliation_balance_source import independent_year_boundary_case
+from test_reconciliation_balance_source import independent_year_boundary_case, horizontal_reconciliation_case, _horizontal_summary
 
 from services.ledger_group_summary import (
     LedgerBalanceError,
     build_cashflow_summary,
     build_cross_group_check,
     build_group_summary,
+    build_cashflow_presentation_adjustments,
 )
+
+
+def test_reconciliation_evidence_is_opt_in_and_preserves_existing_summary(horizontal_reconciliation_case):
+    case=horizontal_reconciliation_case
+    ordinary=build_cashflow_summary(case['journal'],case['coa'],['C1'],['B1'],'2026-01-01','2026-01-31',
+        receipt_presentation='gross',cashflow_role_categories=case['roles'])
+    detailed=_horizontal_summary(case)
+    assert set(detailed)==set(ordinary)|{'reconciliation_evidence'}
+    for key,value in ordinary.items():
+        if isinstance(value,pd.DataFrame):
+            pd.testing.assert_frame_equal(value,detailed[key])
+        else:
+            assert value==detailed[key]
+    with pytest.raises(ValueError,match='Opt-in'):
+        build_cashflow_presentation_adjustments(ordinary,case['source']['transaction_rows'],case['accounts'],'combined')
+
+
+def test_section_assignment_uses_selected_total_not_each_month(horizontal_reconciliation_case):
+    case=horizontal_reconciliation_case
+    case['journal'].loc[case['journal']['voucher_id'].eq('REFUND'),'date']='2026-02-07'
+    for row in case['source']['transaction_rows']:
+        if row['voucher_id']=='REFUND':row['date']='2026-02-07'
+    summary=_horizontal_summary(case,end='2026-02-28')
+    result=build_cashflow_presentation_adjustments(summary,case['source']['transaction_rows'],case['accounts'],'combined')['views']['combined']
+    assert result['category_sections']['Customers']=='receipts'
+    assert result['cashflow_totals']['2026-02']=={'receipts':-100,'payments':0}
+    refunds=[r for r in result['entries'] if r['voucher_id']=='REFUND']
+    assert len(refunds)==1 and refunds[0]['receipts']==refunds[0]['payments']==-100
+    # A refund-only selection places this same category in Payments, as the
+    # established screen/export policy requires; no earlier receipt is guessed.
+    only=build_cashflow_summary(case['journal'],case['coa'],['C1'],['B1'],'2026-02-01','2026-02-28',
+        receipt_presentation='gross',cashflow_role_categories=case['roles'],include_reconciliation_evidence=True)
+    result=build_cashflow_presentation_adjustments(only,case['source']['transaction_rows'],case['accounts'],'combined')['views']['combined']
+    assert result['category_sections']['Customers']=='payments'
+    assert result['cashflow_totals']['2026-02']=={'receipts':0,'payments':100}
+    assert result['entries']==[]
+
+
+def test_split_sections_follow_combined_while_bank_only_uses_its_own_total():
+    journal=pd.DataFrame([['B','2026-01-05','BANK',100,0],['B','2026-01-05','E',0,100],
+        ['C','2026-01-06','CASH',0,200],['C','2026-01-06','E',200,0]],
+        columns=['voucher_id','date','account_code','debit','credit'])
+    coa=pd.DataFrame([{'account_code':c,'category':'Shared' if c=='E' else ''} for c in ('BANK','CASH','E')])
+    summary=build_cashflow_summary(journal,coa,['CASH'],['BANK'],'2026-01-01','2026-01-31',include_reconciliation_evidence=True)
+    rows=journal.to_dict('records');accounts={'BANK':'Bank','CASH':'Cash'}
+    split=build_cashflow_presentation_adjustments(summary,rows,accounts,'split')['views']
+    bank=build_cashflow_presentation_adjustments(summary,rows,accounts,'bank')['views']['bank']
+    assert split['bank']['cashflow_totals']['2026-01']=={'receipts':0,'payments':-100}
+    assert bank['cashflow_totals']['2026-01']=={'receipts':100,'payments':0}
+    assert split['bank']['entries'][0]['receipts']==split['bank']['entries'][0]['payments']==-100
 
 
 @pytest.mark.parametrize('presentation,collections,charges', [

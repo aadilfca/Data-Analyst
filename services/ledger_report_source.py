@@ -9,9 +9,12 @@ modifies application data.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections import defaultdict
 from datetime import date, datetime
+from decimal import Decimal
 import hashlib
 import json
+import math
 import re
 from time import perf_counter
 from typing import Any, Callable, Mapping, Sequence
@@ -3290,6 +3293,134 @@ def load_cashflow_prepared_drilldown(
             "treasury_filter_stage": f"prepared_lines_{view}",
         },
     }
+
+def load_cashflow_difference_source(
+    client_id: int, template_id: int, account_codes: Sequence[str],
+    period_start: str, period_end: str, *,
+    query_fn: Callable[..., list[dict[str, Any]]] = execute_query_pg,
+) -> dict[str, Any]:
+    """Read original occurrences for diagnostics; never feed this into summaries.
+
+    Ledger history supports the existing coverage proof. Related references are
+    read across dates so date changes are context, not invented missing postings.
+    Counterpart transaction lines are retained without grouping or deduplication.
+    The caller owns one enforced read-only snapshot.
+    """
+    codes = sorted(set(account_codes))
+    if not codes:
+        return {'uploads': [], 'ledger_rows': [], 'transaction_rows': []}
+    uploads = [dict(row) for row in query_fn("""
+        SELECT u.id, u.template_id, u.ledger_account_code, u.ledger_account_name,
+               u.ledger_period_start, u.ledger_period_end, u.ledger_evidence, t.ledger_columns,
+               COALESCE(to_jsonb(u)->>'upload_date', to_jsonb(u)->>'uploaded_at') AS uploaded_at,
+               (SELECT json_agg(json_build_object('id', m.id, 'column_name', m.column_name,
+                                                 'data_type', m.data_type) ORDER BY p.sort_order)
+                FROM template_column_mappings p JOIN master_columns m ON m.id = p.column_id AND m.is_active = TRUE
+                WHERE p.template_id = t.id) AS columns
+        FROM uploaded_files u JOIN templates t ON t.id = u.template_id
+        WHERE u.client_id = %s AND u.status = 'Imported' AND u.ledger_account_code = ANY(%s)
+          AND t.data_purpose = 'account_ledger' AND t.is_active = TRUE ORDER BY u.id
+        """, (client_id, codes))]
+    for upload in uploads:
+        try:
+            roles = json.loads(upload['ledger_columns']) if isinstance(upload['ledger_columns'], str) else upload['ledger_columns']
+            columns = json.loads(upload['columns']) if isinstance(upload['columns'], str) else upload['columns']
+            evidence = json.loads(upload['ledger_evidence']) if isinstance(upload['ledger_evidence'], str) else upload['ledger_evidence']
+            upload['configuration_current'] = hashlib.sha256(json.dumps([roles, columns or []], sort_keys=True).encode()).hexdigest() == (evidence or {}).get('balance_check', {}).get('configuration')
+            upload['comparison_roles_available'] = all(roles.get(key) for key in ('voucher', 'date', 'debit', 'credit'))
+        except (ValueError, TypeError, KeyError, AttributeError):
+            upload.update(configuration_current=False, comparison_roles_available=False)
+    templates = sorted({u['template_id'] for u in uploads})
+    ledger = query_fn("""
+        SELECT cd.id, cd.version, cd.source_fingerprint, cd.upload_id, cd.template_id, cd.extract_date,
+               cd.extract_date AS date, u.ledger_account_code AS account_code,
+               u.ledger_account_name AS account_name,
+               BTRIM(cd.row_data::jsonb ->> voucher.column_name) AS voucher_id,
+               cd.row_data::jsonb ->> debit.column_name AS debit,
+               cd.row_data::jsonb ->> credit.column_name AS credit,
+               cd.row_data::jsonb ->> description.column_name AS description,
+               COALESCE(to_jsonb(u)->>'upload_date', to_jsonb(u)->>'uploaded_at') AS uploaded_at
+        FROM client_data cd JOIN uploaded_files u ON u.id = cd.upload_id
+          AND u.client_id = cd.client_id AND u.template_id = cd.template_id
+        JOIN templates t ON t.id = cd.template_id AND t.data_purpose = 'account_ledger' AND t.is_active = TRUE
+        LEFT JOIN master_columns voucher ON voucher.id = (t.ledger_columns::jsonb ->> 'voucher')::integer
+        LEFT JOIN master_columns debit ON debit.id = (t.ledger_columns::jsonb ->> 'debit')::integer
+        LEFT JOIN master_columns credit ON credit.id = (t.ledger_columns::jsonb ->> 'credit')::integer
+        LEFT JOIN master_columns description ON description.id = (t.ledger_columns::jsonb ->> 'description')::integer
+        WHERE cd.client_id = %s AND cd.is_deleted = FALSE
+          AND COALESCE(cd.change_detection_status, 'active') <> 'deleted' AND u.status = 'Imported'
+          AND u.ledger_account_code = ANY(%s) AND cd.template_id = ANY(%s) ORDER BY cd.extract_date, cd.id
+        """, (client_id, codes, templates)) if templates else []
+    refs = sorted({_text(r.get('voucher_id')) for r in ledger if r.get('date') is not None
+                   and period_start <= str(r['date'])[:10] <= period_end and _text(r.get('voucher_id'))})
+    transactions = query_fn("""
+        WITH seeds AS (
+            SELECT DISTINCT BTRIM(cd.derived_voucher_id) AS voucher_id
+            FROM client_data cd WHERE cd.client_id = %s AND cd.template_id = %s
+              AND cd.is_deleted = FALSE AND COALESCE(cd.change_detection_status, 'active') <> 'deleted'
+              AND cd.derived_account_code = ANY(%s)
+              AND (cd.derived_transaction_date BETWEEN %s::date AND %s::date OR cd.derived_transaction_date IS NULL)
+        )
+        SELECT cd.id, cd.version, cd.source_fingerprint, cd.upload_id, cd.template_id,
+               BTRIM(cd.derived_voucher_id) AS voucher_id, cd.derived_transaction_date AS date,
+               cd.derived_account_code AS account_code, cd.derived_account_name AS account_name,
+               cd.derived_debit AS debit, cd.derived_credit AS credit,
+               COALESCE(cd.row_data::jsonb->>'Voucher Detail', cd.row_data::jsonb->>'Description', '') AS description,
+               COALESCE(to_jsonb(u)->>'upload_date', to_jsonb(u)->>'uploaded_at') AS uploaded_at
+        FROM client_data cd LEFT JOIN uploaded_files u ON u.id = cd.upload_id
+          AND u.client_id = cd.client_id AND u.template_id = cd.template_id
+        WHERE cd.client_id = %s AND cd.template_id = %s AND cd.is_deleted = FALSE
+          AND COALESCE(cd.change_detection_status, 'active') <> 'deleted'
+          AND (BTRIM(cd.derived_voucher_id) IN (SELECT voucher_id FROM seeds WHERE NULLIF(voucher_id, '') IS NOT NULL)
+               OR BTRIM(cd.derived_voucher_id) = ANY(%s)
+               OR (NULLIF(BTRIM(cd.derived_voucher_id), '') IS NULL AND cd.derived_account_code = ANY(%s)
+                   AND (cd.derived_transaction_date BETWEEN %s::date AND %s::date OR cd.derived_transaction_date IS NULL)))
+        ORDER BY cd.derived_transaction_date, cd.id
+        """, (client_id, template_id, codes, period_start, period_end,
+                client_id, template_id, refs, codes, period_start, period_end))
+    return {'uploads': uploads, 'ledger_rows': ledger, 'transaction_rows': transactions}
+
+
+def cashflow_reconciliation_support_page(
+    source: Mapping[str, Any], entries: Sequence[Mapping[str, Any]],
+    account_codes: Sequence[str], *, periods: Sequence[Mapping[str, Any]] = (), page: int = 1, limit: int = 50,
+) -> dict[str, Any]:
+    """Page whole voucher/period supports without truncating source occurrences."""
+    if page < 1 or not 1 <= limit <= 200:
+        raise ValueError('Invalid reconciliation support pagination')
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    for entry in entries:
+        key = (entry['voucher_id'], entry['period_key'])
+        group = grouped.setdefault(key, dict(voucher_id=key[0], period_key=key[1],
+                                            receipts=Decimal(0), payments=Decimal(0), operations=[]))
+        group['receipts'] += Decimal(str(entry['receipts']))
+        group['payments'] += Decimal(str(entry['payments']))
+        group['operations'].append(dict(entry))
+    groups = list(grouped.values())
+    page_count = max(1, math.ceil(len(groups) / limit))
+    current = min(page, page_count)
+    selected = groups[(current - 1) * limit:current * limit]
+    references = {row['voucher_id'] for row in selected}
+    ledgers, transactions = defaultdict(list), defaultdict(list)
+    codes = set(account_codes)
+    for row in source['ledger_rows']:
+        reference = _text(row.get('voucher_id'))
+        if reference in references and row.get('account_code') in codes:
+            ledgers[reference].append(dict(row))
+    for row in source['transaction_rows']:
+        reference = _text(row.get('voucher_id'))
+        if reference in references:
+            transactions[reference].append(dict(row))
+    bounds = {p['key']: (p['start'], p['end']) for p in periods}
+    def context(rows, key):
+        start, end = bounds.get(key, ('', ''))
+        return [dict(row, in_period=bool(start and start <= str(row.get('date', row.get('extract_date')))[:10] <= end))
+                for row in rows]
+    return dict(total_rows=len(groups), page=current, page_count=page_count, limit=limit,
+                rows=[dict(row, receipts=float(row['receipts']), payments=float(row['payments']),
+                           ledger_lines=context(ledgers[row['voucher_id']], row['period_key']),
+                           voucher_lines=context(transactions[row['voucher_id']], row['period_key'])) for row in selected])
+
 
 def load_cashflow_client_data_source(
     client_id: int,

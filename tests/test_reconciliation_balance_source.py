@@ -3,6 +3,8 @@ from services.reconciliation_balance_source import (
     load_reconciliation_balance_source,
     build_uploaded_ledger_balances,
     load_uploaded_ledger_balances,
+    build_cashflow_differences,
+    build_cashflow_reconciliation,
 )
 
 import copy
@@ -192,6 +194,281 @@ def _resolve(uploads=None, rows=None, periods=None, flows=None, accounts=None):
     uploads = [_uploaded(rows)] if uploads is None else uploads
     return build_uploaded_ledger_balances(uploads, rows, accounts or {'B1': 'Bank'},
                                          periods or [PERIOD], {'2026-01': 50} if flows is None else flows)
+
+
+def _difference_source(ledger=None, transactions=None):
+    ledger = [dict(_canonical(), date='2026-01-05', voucher_id='V1')] if ledger is None else ledger
+    transactions = [dict(id=100, account_code='B1', voucher_id='V1', date='2026-01-05', debit='50', credit='0')] if transactions is None else transactions
+    upload = _uploaded(ledger)
+    upload['comparison_roles_available'] = True
+    return dict(uploads=[upload], ledger_rows=ledger, transaction_rows=transactions)
+
+
+@pytest.fixture
+def horizontal_reconciliation_case():
+    """Independent small working paper: gross receipts 900, payments 350."""
+    import pandas as pd
+    journal = pd.DataFrame([
+        ['RECEIPT', '2026-01-05', 'B1', 950, 0],
+        ['RECEIPT', '2026-01-05', 'AR', 0, 1000],
+        ['RECEIPT', '2026-01-05', 'FEE', 30, 0],
+        ['RECEIPT', '2026-01-05', 'WHT', 20, 0],
+        ['TRANSFER', '2026-01-06', 'B1', 0, 200],
+        ['TRANSFER', '2026-01-06', 'C1', 200, 0],
+        ['REFUND', '2026-01-07', 'B1', 0, 100],
+        ['REFUND', '2026-01-07', 'AR', 100, 0],
+        ['PAYMENT', '2026-01-08', 'B1', 0, 300],
+        ['PAYMENT', '2026-01-08', 'AP', 300, 0],
+    ], columns=['voucher_id', 'date', 'account_code', 'debit', 'credit'])
+    coa = pd.DataFrame([dict(account_code=code, category=category) for code, category in
+        [('B1', ''), ('C1', ''), ('AR', 'Customers'), ('FEE', 'Charges'), ('WHT', 'Tax'), ('AP', 'Suppliers')]])
+    accounts = {'B1': 'Bank', 'C1': 'Cash'}
+    transactions = [dict(row, id=i+100, upload_id=1, source_fingerprint=str(i)) for i, row in enumerate(journal.to_dict('records'))]
+    ledger = [dict(_canonical(i+1, row['date'], str(row['debit']), str(row['credit']), row['account_code']),
+                   date=row['date'], voucher_id=row['voucher_id'])
+              for i, row in enumerate(transactions) if row['account_code'] in accounts]
+    def uploads(rows):
+        return [dict(_uploaded(rows, opening=opening, start='2026-01-01', end='2026-02-28', identity=i,
+                               code=code), comparison_roles_available=True)
+                for i, (code, opening) in enumerate([('B1', '8000'), ('C1', '2000')], 1)]
+    return dict(journal=journal, coa=coa, accounts=accounts, roles={'customer_receipt': ['Customers'],
+        'bank_charge': ['Charges'], 'withholding_tax': ['Tax']},
+        source=dict(uploads=uploads(ledger), ledger_rows=ledger, transaction_rows=transactions), refresh_uploads=uploads)
+
+
+def _horizontal_summary(case, presentation='gross', grouping='month', end='2026-01-31'):
+    from services.ledger_group_summary import build_cashflow_summary
+    return build_cashflow_summary(case['journal'], case['coa'], ['C1'], ['B1'], '2026-01-01', end,
+        receipt_presentation=presentation, cashflow_role_categories=case['roles'], group_by=grouping,
+        include_reconciliation_evidence=True)
+
+
+@pytest.mark.parametrize('presentation,expected', [('gross', (900, 350)), ('net', (850, 300))])
+@pytest.mark.parametrize('view', ['combined', 'bank', 'cash', 'split'])
+def test_horizontal_bridge_matches_independent_receipts_payments_and_balances(horizontal_reconciliation_case, presentation, expected, view):
+    case = horizontal_reconciliation_case
+    before = copy.deepcopy(case['source'])
+    result = build_cashflow_reconciliation(_horizontal_summary(case, presentation), case['source'], case['accounts'], view)
+    for kind, part in result['views'].items():
+        p = part['periods'][0]
+        assert part['amount_status'] == 'Matched'
+        assert part['posting_comparison']['posting_status'] == 'Matched'
+        assert p['receipts']['cashflow'] == (0 if kind == 'cash' else expected[0])
+        assert p['payments']['cashflow'] == (0 if kind == 'cash' else expected[1])
+        assert p['receipts']['difference'] == p['payments']['difference'] == 0
+        assert p['balance_proof']['difference'] == p['balance_proof']['continuous_difference'] == 0
+        assert p['balance_proof']['ledger_closing'] == {'combined':10550, 'bank':8350, 'cash':2200}[kind]
+        assert part['overall_balance_proof']['calculated_closing'] == part['overall_balance_proof']['ledger_closing']
+        assert part['overall_balance_proof']['difference'] == 0
+        assert part['status'] == 'Review required'  # Extraction completeness remains uncertified.
+    if 'combined' in result['views']:
+        part = result['views']['combined']
+        assert part['overall']['receipts']['ledger'] == 1150
+        assert part['overall']['payments']['ledger'] == 600
+        assert sum(r['total']['receipts'] for r in part['adjustments']) == expected[0] - 1150
+        assert sum(r['total']['payments'] for r in part['adjustments']) == expected[1] - 600
+    assert case['source'] == before
+    assert not result['complete']
+
+
+@pytest.mark.parametrize('presentation', ['net', 'gross'])
+def test_horizontal_technical_offset_uses_original_gross_sides(horizontal_reconciliation_case, presentation):
+    case = horizontal_reconciliation_case
+    case['journal'].loc[0, ['debit','credit']] = [1000,50]
+    case['source']['transaction_rows'][0].update(debit=1000, credit=50)
+    case['source']['ledger_rows'][0].update(debit='1000', credit='50')
+    case['source']['uploads'] = case['refresh_uploads'](case['source']['ledger_rows'])
+    result = build_cashflow_reconciliation(_horizontal_summary(case,presentation),case['source'],case['accounts'])['views']['combined']
+    assert result['amount_status'] == 'Matched'
+    assert result['overall']['receipts']['ledger'] == 1200
+    assert result['overall']['payments']['ledger'] == 650
+    offsets = next(r for r in result['adjustments'] if r['reason']=='treasury_offsets')
+    assert offsets['total']=={'receipts':-50,'payments':-50}
+
+
+@pytest.mark.parametrize('outflow', ['0','25'])
+def test_horizontal_source_only_postings_remain_separate_gross_differences(horizontal_reconciliation_case,outflow):
+    case=horizontal_reconciliation_case
+    case['source']['ledger_rows'].append(dict(_canonical(99,debit='25',credit=outflow),date='2026-01-05',voucher_id='EXTRA'))
+    case['source']['uploads']=case['refresh_uploads'](case['source']['ledger_rows'])
+    part=build_cashflow_reconciliation(_horizontal_summary(case),case['source'],case['accounts'])['views']['combined']
+    assert part['amount_status']=='Differences'
+    assert part['overall']['receipts']['difference']==25
+    assert part['overall']['payments']['difference']==float(outflow)
+    assert part['posting_comparison']['posting_status']=='Differences'
+    assert all(e['voucher_id']!='EXTRA' for entries in build_cashflow_reconciliation(
+        _horizontal_summary(case),case['source'],case['accounts'])['_support_entries'].values() for e in entries)
+
+
+def test_horizontal_missing_ledger_never_becomes_zero(horizontal_reconciliation_case):
+    case=horizontal_reconciliation_case
+    case['source']['uploads']=[u for u in case['source']['uploads'] if u['ledger_account_code']!='C1']
+    result=build_cashflow_reconciliation(_horizontal_summary(case),case['source'],case['accounts'],'split')
+    assert result['views']['bank']['amount_status']=='Matched'
+    for view in ('combined','cash'):
+        assert result['views'][view]['amount_status']=='Unavailable'
+        assert result['views'][view]['overall']['receipts']['ledger'] is None
+
+
+@pytest.mark.parametrize('grouping',['day','fortnight','month','quarter','half_year','year'])
+def test_horizontal_empty_subperiods_preserve_zero_and_total(horizontal_reconciliation_case,grouping):
+    case=horizontal_reconciliation_case
+    result=build_cashflow_reconciliation(_horizontal_summary(case,grouping=grouping,end='2026-02-28'),case['source'],case['accounts'])
+    part=result['views']['combined']
+    assert part['amount_status']=='Matched'
+    assert part['overall']['receipts']['cashflow']==900
+    assert part['overall']['payments']['cashflow']==350
+    assert all(p['receipts']['difference']==p['payments']['difference']==0 for p in part['periods'])
+
+
+@pytest.mark.parametrize('presentation,receipts,payments',[('net',77.35,20.65),('gross',79,22.30)])
+@pytest.mark.parametrize('grouping',['month','year'])
+def test_horizontal_independent_year_boundary_mixed_refunds_and_negative_sides(
+        independent_year_boundary_case,presentation,receipts,payments,grouping):
+    from services.ledger_group_summary import build_cashflow_summary
+    case=independent_year_boundary_case
+    transaction=case['journal'].to_dict('records')
+    treasury=[r for r in transaction if r['account_code'] in case['accounts']]
+    ledger=[dict(row,date=row['extract_date'],voucher_id=original['voucher_id'])
+            for row,original in zip(case['rows'],treasury,strict=True)]
+    source=dict(ledger_rows=ledger,transaction_rows=[dict(r,id=i+100) for i,r in enumerate(transaction)],
+        uploads=[dict(u,comparison_roles_available=True) for u in case['uploads']])
+    summary=build_cashflow_summary(case['journal'],case['coa'],['C1'],['B1','B0'],case['start'],case['end'],
+        receipt_presentation=presentation,cashflow_role_categories=case['roles'],group_by=grouping,
+        include_reconciliation_evidence=True)
+    result=build_cashflow_reconciliation(summary,source,case['accounts'],'split')
+    combined=result['views']['combined']
+    assert combined['overall']['receipts']['cashflow']==receipts
+    assert combined['overall']['payments']['cashflow']==payments
+    for view,part in result['views'].items():
+        assert part['amount_status']=='Matched',(view,part['periods'])
+        assert part['posting_comparison']['posting_status']=='Matched'
+        assert part['allocation_status']=='Review required'
+        assert all(p['balance_proof']['difference']==p['balance_proof']['continuous_difference']==0 for p in part['periods'])
+        assert part['balance_controls']['overall']['closing_total']==pytest.approx(float(case['expected'][view][-1][2]))
+
+
+@pytest.mark.parametrize('invalid',['stale','roles','blank_amount','bad_date'])
+def test_horizontal_invalid_evidence_is_not_a_matched_zero(horizontal_reconciliation_case,invalid):
+    case=horizontal_reconciliation_case
+    if invalid=='stale':case['source']['uploads'][0]['configuration_current']=False
+    if invalid=='roles':case['source']['uploads'][0]['comparison_roles_available']=False
+    if invalid=='blank_amount':case['source']['ledger_rows'][0].update(debit=None,credit=None)
+    if invalid=='bad_date':case['source']['ledger_rows'][0]['date']='bad'
+    part=build_cashflow_reconciliation(_horizontal_summary(case),case['source'],case['accounts'])['views']['combined']
+    assert part['amount_status']=='Unavailable'
+    assert part['overall']['receipts']['ledger'] is None
+    assert part['overall']['payments']['difference'] is None
+
+
+def test_horizontal_selected_total_rounds_original_precision_after_aggregation(horizontal_reconciliation_case):
+    import pandas as pd
+    case=horizontal_reconciliation_case
+    case['journal']=pd.DataFrame([['A','2026-01-05','B1',.0049,0],['A','2026-01-05','AR',0,.0049],
+        ['B','2026-02-05','B1',.0049,0],['B','2026-02-05','AR',0,.0049]],
+        columns=['voucher_id','date','account_code','debit','credit'])
+    transactions=[dict(row,id=i+100) for i,row in enumerate(case['journal'].to_dict('records'))]
+    ledger=[dict(_canonical(i+1,row['date'],str(row['debit']),str(row['credit']),'B1'),
+        date=row['date'],voucher_id=row['voucher_id']) for i,row in enumerate(transactions) if row['account_code']=='B1']
+    case['source']=dict(ledger_rows=ledger,transaction_rows=transactions,uploads=case['refresh_uploads'](ledger))
+    part=build_cashflow_reconciliation(_horizontal_summary(case,end='2026-02-28'),case['source'],case['accounts'])['views']['combined']
+    assert [p['receipts']['ledger'] for p in part['periods']]==[0,0]
+    assert part['overall']['receipts']['ledger']==part['overall']['receipts']['cashflow']==.01
+    assert part['overall']['receipts']['difference']==0
+    assert part['overall_balance_proof']['difference']==0
+
+
+@pytest.mark.parametrize('change,expected', [('none', 'matched'), ('amount', 'changed'), ('date', 'changed'),
+    ('repeat', 'changed'), ('ledger_only', 'ledger_only'), ('transaction_only', 'transaction_only'), ('blank', 'unresolved')])
+def test_differences_compare_occurrences_without_guessing_pairs(change, expected):
+    source = _difference_source()
+    if change == 'amount': source['transaction_rows'][0]['debit'] = '49'
+    if change == 'date': source['transaction_rows'][0]['date'] = '2026-02-01'
+    if change == 'repeat': source['transaction_rows'].append(dict(source['transaction_rows'][0], id=101))
+    if change == 'ledger_only': source['transaction_rows'] = []
+    if change == 'transaction_only': source = _difference_source(ledger=[])
+    if change == 'blank': source['transaction_rows'][0]['voucher_id'] = ''
+    before = copy.deepcopy(source)
+    result = build_cashflow_differences(source, {'B1': 'Bank'}, '2026-01-01', '2026-01-31')
+    assert expected in result['counts']
+    assert not result['complete']  # Matching stored postings cannot certify extraction completeness.
+    assert result['transaction_coverage_status'] == 'Not independently certified'
+    if change == 'date':
+        row = result['findings'][0]
+        assert row['difference_fields'] == ['dates']
+        assert row['transaction_movement'] == 0
+        assert row['transaction_lines'][0]['in_period'] is False
+    if change == 'repeat':
+        assert result['findings'][0]['matched_occurrences'] == 1
+        assert result['findings'][0]['transaction_line_count'] == 2
+    assert source == before
+
+
+def test_differences_equal_net_cannot_hide_missing_offsetting_postings():
+    ledger = [dict(_canonical(1), date='2026-01-05', voucher_id='V1'),
+              dict(_canonical(2, debit='0', credit='50'), date='2026-01-05', voucher_id='V1')]
+    result = build_cashflow_differences(_difference_source(ledger, []), {'B1': 'Bank'}, '2026-01-01', '2026-01-31')
+    assert result['status'] == 'Differences'
+    assert result['findings'][0]['movement_difference'] == 0
+    assert result['findings'][0]['ledger_line_count'] == 2
+
+
+@pytest.mark.parametrize('reason', ['configuration', 'roles', 'partial', 'missing', 'amount', 'date'])
+def test_differences_insufficient_evidence_never_becomes_a_matched_zero(reason):
+    source = _difference_source()
+    if reason == 'configuration': source['uploads'][0]['configuration_current'] = False
+    if reason == 'roles': source['uploads'][0]['comparison_roles_available'] = False
+    if reason == 'partial': source['uploads'][0]['ledger_evidence']['balance_check']['source_mode'] = 'partial_extract'
+    if reason == 'missing': source['uploads'] = []
+    if reason == 'amount': source['transaction_rows'][0]['debit'] = 'NaN'
+    if reason == 'date': source['transaction_rows'][0]['date'] = 'bad date'
+    result = build_cashflow_differences(source, {'B1': 'Bank'}, '2026-01-01', '2026-01-31')
+    assert result['status'] in ['Unavailable', 'Review required']
+    assert not result['posting_comparison_complete']
+    assert result['account_totals'][0]['movement_difference'] is None
+
+
+def test_differences_keep_complete_counterparts_and_signed_erp_representations():
+    source = _difference_source()
+    source['transaction_rows'][0].update(debit='0', credit='-50')
+    source['transaction_rows'].append(dict(id=101, account_code='AR', voucher_id='V1', date='2026-01-05', debit=0, credit=50))
+    result = build_cashflow_differences(source, {'B1': 'Bank'}, '2026-01-01', '2026-01-31')
+    assert result['status'] == 'Review required' and result['posting_status'] == 'Matched'
+    assert result['findings'][0]['transaction_line_count'] == 1
+    assert len(result['findings'][0]['voucher_lines']) == 2
+    assert result['findings'][0]['transaction_lines'][0]['credit'] == '-50'
+    assert 'ledger_evidence' not in result['ledger_sources'][0]
+    assert 'not certified ERP extraction times' in result['timestamp_note']
+
+
+def test_differences_do_not_collapse_reused_references_across_accounts_or_years():
+    ledger = [dict(_canonical(1, day='2025-12-31', debit='10'),date='2025-12-31',voucher_id='V'),
+              dict(_canonical(2, day='2026-01-01', debit='20'),date='2026-01-01',voucher_id='V')]
+    source = _difference_source(ledger, [dict(r,id=r['id']+100) for r in ledger])
+    source['uploads'][0] = _uploaded(ledger,start='2025-12-01',end='2026-01-31')
+    source['uploads'][0]['comparison_roles_available']=True
+    second = dict(_canonical(3,code='C1',debit='0',credit='7'),date='2026-01-05',voucher_id='V')
+    source['ledger_rows'].append(second)
+    source['transaction_rows'].append(dict(second,id=103,credit='8'))
+    upload=_uploaded(source['ledger_rows'],code='C1',identity=2,opening='0')
+    upload['comparison_roles_available']=True; source['uploads'].append(upload)
+    result=build_cashflow_differences(source,{'B1':'Bank','C1':'Cash'},'2025-12-31','2026-01-05')
+    assert result['counts']=={'matched':1,'unavailable':1}  # C1 lacks December coverage.
+    bank=next(r for r in result['findings'] if r['account_code']=='B1')
+    assert bank['ledger_line_count']==bank['transaction_line_count']==2
+    assert bank['ledger_movement']==30
+    assert len(bank['voucher_lines'])==3
+
+
+@pytest.mark.parametrize('blank', [None, ''])
+def test_differences_accept_a_blank_nonposting_side_but_not_two_missing_amounts(blank):
+    source=_difference_source()
+    source['transaction_rows'][0]['credit']=blank
+    assert build_cashflow_differences(source,{'B1':'Bank'},'2026-01-01','2026-01-31')['posting_status']=='Matched'
+    source['transaction_rows'][0]['debit']=blank
+    result=build_cashflow_differences(source,{'B1':'Bank'},'2026-01-01','2026-01-31')
+    assert result['status']=='Review required'
+    assert result['findings'][0]['movement_difference'] is None
 
 
 def test_uploaded_balances_infer_opening_and_keep_source_and_cashflow_arithmetic_separate():

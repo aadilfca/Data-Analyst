@@ -6,12 +6,14 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from bisect import bisect_left
+from collections import Counter, defaultdict
 import hashlib
 import json
 import math
 from typing import Any, Callable, Mapping, Sequence
 
 from database import execute_query_pg
+from services.ledger_group_summary import build_cashflow_presentation_adjustments
 
 
 def _text(value: Any) -> str:
@@ -479,3 +481,286 @@ def load_uploaded_ledger_balances(
         """, (client_id, codes, template_ids)) if template_ids else []
     return build_uploaded_ledger_balances(uploads, rows, account_types, periods, cashflow_movements,
                                           account_names=account_names, treasury_movements=treasury_movements)
+
+
+def build_cashflow_differences(
+    source: Mapping[str, Any], account_types: Mapping[str, str], period_start: str, period_end: str,
+) -> dict[str, Any]:
+    """Compare posting multisets without pairing corrections or changing reports.
+
+    Two-decimal signed sides handle negative-side ERP reversals. Original values
+    remain in evidence. Equal net movements never excuse differing occurrences.
+    Ledger coverage reuses the existing independent proof, not a zero-movement
+    claim: its movement variance is irrelevant to availability of source evidence.
+    """
+    start, end = date.fromisoformat(period_start), date.fromisoformat(period_end)
+    if start > end or end == date.max:
+        raise ValueError('Invalid differences reporting period')
+    ledger, transactions = source['ledger_rows'], source['transaction_rows']
+    period = {'key': 'selection', 'start': period_start, 'end': period_end}
+    coverage = build_uploaded_ledger_balances(source['uploads'], ledger, account_types, [period], {'selection': 0})
+    available = {a['account_code']: a['status'] == 'Ready' for a in coverage['periods'][0]['accounts']}
+    for code in account_types:
+        if any(not u.get('comparison_roles_available') for u in source['uploads'] if u.get('ledger_account_code') == code):
+            available[code] = False
+    groups = defaultdict(lambda: {'ledger': [], 'transaction': []})
+    voucher_lines = defaultdict(list)
+    for row in transactions:
+        if _text(row.get('voucher_id')):
+            voucher_lines[_text(row['voucher_id'])].append(row)
+
+    def inside(row):
+        try:
+            return start <= date.fromisoformat(str(row.get('date'))[:10]) <= end
+        except ValueError:
+            return False
+
+    def signature(row):
+        day = date.fromisoformat(str(row.get('date'))[:10]).isoformat()
+        if all(row.get(key) in (None, '') for key in ('debit', 'credit')):
+            raise ValueError('Missing posting amount')
+        debit, credit = (_ledger_number(row.get(key) or 0) for key in ('debit', 'credit'))
+        # Preserve gross sides: reducing a debit/credit pair to net would hide offsets.
+        normalized_debit = max(debit, Decimal(0)) + max(-credit, Decimal(0))
+        normalized_credit = max(credit, Decimal(0)) + max(-debit, Decimal(0))
+        return (day, normalized_debit.quantize(Decimal('.01')), normalized_credit.quantize(Decimal('.01')))
+
+    for side, rows in (('ledger', ledger), ('transaction', transactions)):
+        for row in rows:
+            code = row.get('account_code')
+            if code not in account_types:
+                continue
+            reference = _text(row.get('voucher_id'))
+            # Blank references are separate evidence, never joined by amount/date.
+            key = (code, reference, '' if reference else f"{side}:{row['id']}")
+            groups[key][side].append(row)
+    findings = []
+    totals = {code: {'ledger': Decimal(0), 'transaction': Decimal(0)} for code in account_types}
+    for (code, reference, unkeyed), sides in sorted(groups.items()):
+        def invalid_date(row):
+            try:
+                date.fromisoformat(str(row.get('date'))[:10])
+                return False
+            except ValueError:
+                return True
+        if not any(inside(r) or invalid_date(r) for rows in sides.values() for r in rows):
+            continue
+        signatures, invalid = {}, False
+        for side, rows in sides.items():
+            signatures[side] = Counter()
+            for row in rows:
+                try:
+                    sig = signature(row)
+                    signatures[side][sig] += 1
+                    if inside(row):
+                        totals[code][side] += sig[1] - sig[2]
+                except (ValueError, InvalidOperation):
+                    invalid = True
+        left, right = signatures['ledger'], signatures['transaction']
+        changed_fields = []
+        if left != right:
+            if Counter(day for day, _, _ in left.elements()) != Counter(day for day, _, _ in right.elements()):
+                changed_fields.append('dates')
+            if Counter((debit, credit) for _, debit, credit in left.elements()) != Counter((debit, credit) for _, debit, credit in right.elements()):
+                changed_fields.append('amounts')
+            if len(sides['ledger']) != len(sides['transaction']):
+                changed_fields.append('line_count')
+        status = ('unavailable' if not available.get(code) else 'unresolved' if invalid or unkeyed
+                  else 'transaction_only' if not sides['ledger'] else 'ledger_only' if not sides['transaction']
+                  else 'matched' if left == right else 'changed')
+        movements = {}
+        for side, rows in sides.items():
+            movements[side] = None if invalid else float(sum(
+                (signature(row)[1] - signature(row)[2] for row in rows if inside(row)), Decimal(0)))
+        def evidence_rows(rows):
+            return [dict(row, in_period=inside(row)) for row in rows]
+        findings.append(dict(account_code=code, treasury_type=account_types[code], voucher_id=reference,
+            unkeyed_identity=unkeyed or None, status=status, difference_fields=changed_fields,
+            ledger_line_count=len(sides['ledger']), transaction_line_count=len(sides['transaction']),
+            matched_occurrences=sum((left & right).values()),
+            ledger_movement=movements['ledger'], transaction_movement=movements['transaction'],
+            movement_difference=(movements['ledger'] - movements['transaction']) if not invalid else None,
+            ledger_lines=evidence_rows(sides['ledger']), transaction_lines=evidence_rows(sides['transaction']),
+            voucher_lines=evidence_rows(voucher_lines.get(reference, [])),
+            note=('Missing coverage or current configuration; absence cannot be established.' if status == 'unavailable'
+                  else 'Reference/date/amount is insufficient for a reliable comparison.' if status == 'unresolved'
+                  else 'Occurrence comparison only; line grouping can differ between extracts. No correction pairing is inferred.')))
+    counts = dict(Counter(row['status'] for row in findings))
+    posting_complete = bool(account_types) and all(available.values()) and not counts.get('unresolved')
+    status = ('Unavailable' if not account_types or not all(available.values()) else 'Review required' if counts.get('unresolved')
+              else 'Differences' if any(counts.get(k) for k in ('ledger_only', 'transaction_only', 'changed')) else 'Matched')
+    invalid_accounts = {row['account_code'] for row in findings if row['ledger_movement'] is None}
+    account_totals = [dict(account_code=code, treasury_type=account_types[code], evidence_available=available.get(code, False),
+        ledger_movement=float(amounts['ledger']) if available.get(code) and code not in invalid_accounts else None,
+        transaction_movement=float(amounts['transaction']) if code not in invalid_accounts else None,
+        movement_difference=float(amounts['ledger'] - amounts['transaction']) if available.get(code) and code not in invalid_accounts else None)
+        for code, amounts in totals.items()]
+    return dict(status='Review required' if status == 'Matched' else status, posting_status=status,
+        complete=False, posting_comparison_complete=posting_complete,
+        transaction_coverage_status='Not independently certified',
+        scope_note='Only current stored postings are compared. Transaction Report extraction completeness is not independently certified; source-only findings do not establish why a posting is absent.',
+        period_start=period_start, period_end=period_end,
+        counts=counts, account_totals=account_totals, findings=findings,
+        ledger_sources=[{key: upload.get(key) for key in ('id', 'template_id', 'ledger_account_code',
+            'ledger_account_name', 'ledger_period_start', 'ledger_period_end', 'uploaded_at')}
+            for upload in source['uploads']],
+        transaction_sources=[dict(upload_id=identity, uploaded_at=timestamp) for identity, timestamp in sorted(
+            {(row.get('upload_id'), str(row.get('uploaded_at') or '')) for row in transactions}, key=lambda item: str(item[0]))],
+        timestamp_note='Upload timestamps are import metadata, not certified ERP extraction times.',
+        coverage_diagnostics=coverage['diagnostics'],
+        evidence_fingerprint=hashlib.sha256(json.dumps([source, account_types, period], sort_keys=True, default=str).encode()).hexdigest(),
+        amount_precision=2)
+
+
+def _cashflow_gross_sides(rows, account_codes, periods):
+    """Sum original posting sides; a blank/invalid source is never a zero proof."""
+    totals = {p['key']: dict(receipts=Decimal(0), payments=Decimal(0)) for p in periods}
+    invalid = set()
+    for row in rows:
+        if row.get('account_code') not in account_codes:
+            continue
+        try:
+            day = date.fromisoformat(str(row.get('date', row.get('extract_date')))[:10])
+        except ValueError:
+            invalid.update(totals)
+            continue
+        key = next((p['key'] for p in periods if p['start'] <= day.isoformat() <= p['end']), None)
+        if key is None:
+            continue
+        try:
+            if all(row.get(field) in (None, '') for field in ('debit', 'credit')):
+                raise ValueError('Missing posting amount')
+            debit, credit = (_ledger_number(row.get(field) or 0) for field in ('debit', 'credit'))
+        except (ValueError, InvalidOperation):
+            invalid.add(key)
+            continue
+        totals[key]['receipts'] += max(debit, Decimal(0)) + max(-credit, Decimal(0))
+        totals[key]['payments'] += max(credit, Decimal(0)) + max(-debit, Decimal(0))
+    return totals, invalid
+
+
+def build_cashflow_reconciliation(
+    summary: Mapping[str, Any], source: Mapping[str, Any], account_types: Mapping[str, str],
+    treasury_view: str = 'combined',
+) -> dict[str, Any]:
+    """Reconcile independent gross ledger sides to unchanged categorized totals.
+
+    Presentation entries are generated from explicit voucher operations by the
+    summary engine. Source differences are retained separately, even if their
+    net or presentation residuals cancel. No correction or balancing entry is
+    generated from a ledger/report variance.
+    """
+    periods = summary['periods']
+    if not periods:
+        raise ValueError('A reconciliation requires reporting periods')
+    explanation = build_cashflow_presentation_adjustments(summary, source['transaction_rows'], account_types, treasury_view)
+    support = {}
+    views = {}
+    def decimal(value):
+        return Decimal(str(value))
+    def output(value):
+        if value is None:
+            return None
+        rounded = value.quantize(Decimal('.01'))
+        return float(rounded) if rounded else 0.0
+    for view, presentation in explanation['views'].items():
+        selected = {code: kind for code, kind in account_types.items() if view == 'combined' or kind.casefold() == view}
+        proof = {r['period_key']: r for r in summary['treasury_movement_proof'] if r['treasury_type'] == view}
+        movements = {p['key']: proof[p['key']]['explained_movement']
+                     if p['key'] in proof and proof[p['key']]['status'] == 'Matched' else None for p in periods}
+        balances = build_uploaded_ledger_balances(source['uploads'], source['ledger_rows'], selected, periods, movements)
+        comparison = build_cashflow_differences(source, selected, periods[0]['start'], periods[-1]['end'])
+        ledger, invalid_ledger = _cashflow_gross_sides(source['ledger_rows'], selected, periods)
+        transaction, invalid_transaction = _cashflow_gross_sides(source['transaction_rows'], selected, periods)
+        roles_available = all(u.get('comparison_roles_available') for u in source['uploads']
+                              if u.get('ledger_account_code') in selected)
+        entries = presentation['entries']
+        adjustments = {}
+        for entry in entries:
+            identity = hashlib.sha256(json.dumps([view, entry['reason'], entry['label'], entry['category']]).encode()).hexdigest()[:24]
+            row = adjustments.setdefault(identity, dict(key=identity, reason=entry['reason'], label=entry['label'],
+                category=entry['category'], periods={p['key']: dict(receipts=Decimal(0), payments=Decimal(0)) for p in periods}))
+            for side in ('receipts', 'payments'):
+                row['periods'][entry['period_key']][side] += decimal(entry[side])
+            support.setdefault(identity, []).append(dict(entry, treasury_view=view))
+        adjustment_rows = []
+        for row in adjustments.values():
+            row = dict(row)
+            values = row['periods']
+            row['total'] = {side: output(sum((p[side] for p in values.values()), Decimal(0))) for side in ('receipts', 'payments')}
+            row['periods'] = {key: {side: output(value) for side, value in p.items()} for key, p in values.items()}
+            row['support_count'] = len({(r['voucher_id'], r['period_key']) for r in support[row['key']]})
+            adjustment_rows.append(row)
+        results, unrounded_results = [], []
+        for balance in balances['periods']:
+            key = balance['key']
+            available = balance['complete'] and roles_available and key not in invalid_ledger
+            transaction_available = key not in invalid_transaction
+            target = presentation['cashflow_totals'][key]
+            sides, unrounded = {}, {}
+            for side in ('receipts', 'payments'):
+                raw = ledger[key][side] if available else None
+                adjustment = sum((decimal(e[side]) for e in entries if e['period_key'] == key), Decimal(0))
+                adjusted = raw + adjustment if raw is not None and transaction_available else None
+                expected = decimal(target[side])
+                unrounded[side] = dict(ledger=raw, transaction=transaction[key][side] if transaction_available else None,
+                    adjustments=adjustment, adjusted_ledger=adjusted, cashflow=expected,
+                    difference=adjusted - expected if adjusted is not None else None)
+                sides[side] = {field: output(value) for field, value in unrounded[side].items()}
+            unrounded_results.append(unrounded)
+            movement = proof.get(key, {})
+            opening = balance['opening_total']
+            separate_transfer = movement.get('internal_transfer_movement')
+            separate_mixed = movement.get('mixed_voucher_movement')
+            calculated = (decimal(opening) + decimal(target['receipts']) - decimal(target['payments'])
+                          + decimal(separate_transfer) + decimal(separate_mixed)
+                          if all(value is not None for value in (opening, separate_transfer, separate_mixed)) else None)
+            closing = balance['closing_total']
+            amount_status = ('Unavailable' if any(s['difference'] is None for s in sides.values()) else
+                             'Differences' if any(s['difference'] != 0 for s in sides.values()) else 'Matched')
+            results.append(dict(key=key, start=balance['start'], end=balance['end'], receipts=sides['receipts'], payments=sides['payments'],
+                amount_status=amount_status, balance_proof=dict(ledger_opening=opening, ledger_closing=closing,
+                    separate_transfer_movement=separate_transfer, separate_mixed_movement=separate_mixed,
+                    unallocated_category_movement=movement.get('unallocated_category_movement'),
+                    calculated_closing=output(calculated), difference=output(decimal(closing) - calculated) if closing is not None and calculated is not None else None,
+                    continuous_calculated_closing=output(decimal(balance['calculated_closing'])) if balance['calculated_closing'] is not None else None,
+                    continuous_difference=output(decimal(balance['variance'])) if balance['variance'] is not None else None)))
+        overall = {}
+        for side in ('receipts', 'payments'):
+            # Sum original precision before presentation rounding. Adding the
+            # displayed columns would lose fractional-cent source amounts.
+            overall[side] = {field: output(sum((p[side][field] for p in unrounded_results), Decimal(0)))
+                            if all(p[side][field] is not None for p in unrounded_results) else None for field in results[0][side]}
+        initial, final = balances['periods'][0]['opening_total'], balances['periods'][-1]['closing_total']
+        total_transfers = sum((decimal(row['internal_transfer_movement']) for row in proof.values()), Decimal(0))
+        total_mixed = sum((decimal(row['mixed_voucher_movement']) for row in proof.values()), Decimal(0))
+        total_net = sum((p['receipts']['cashflow'] - p['payments']['cashflow'] for p in unrounded_results), Decimal(0))
+        total_calculated = decimal(initial) + total_net + total_transfers + total_mixed if initial is not None else None
+        overall_proof = dict(ledger_opening=initial, ledger_closing=final,
+            separate_transfer_movement=output(total_transfers), separate_mixed_movement=output(total_mixed),
+            calculated_closing=output(total_calculated),
+            difference=output(decimal(final) - total_calculated) if final is not None and total_calculated is not None else None)
+        amount_status = ('Unavailable' if any(p['amount_status'] == 'Unavailable' for p in results) else
+                         'Differences' if any(p['amount_status'] == 'Differences' for p in results) else 'Matched')
+        allocation_review = any(r.get('mixed_voucher_count') for r in proof.values())
+        # Amount agreement is deliberately separate from occurrence and coverage
+        # acceptance. An equal-and-opposite omission still requires attention.
+        status = (amount_status if amount_status != 'Matched' else 'Review required')
+        views[view] = dict(status=status, amount_status=amount_status, periods=results, overall=overall,
+            adjustments=adjustment_rows, category_sections=presentation['category_sections'], overall_balance_proof=overall_proof,
+            allocation_status='Review required' if allocation_review else 'Proven',
+            unresolved=presentation['unresolved'], balance_controls=balances,
+            treasury_movement_proof=list(proof.values()),
+            posting_comparison={key: comparison[key] for key in ('posting_status', 'counts', 'account_totals',
+                'transaction_coverage_status', 'posting_comparison_complete', 'evidence_fingerprint', 'coverage_diagnostics')})
+        if presentation['unresolved'] and amount_status == 'Matched':
+            views[view]['status'] = 'Review required'
+    return dict(treasury_view=treasury_view, periods=periods, group_by=summary['group_by'],
+        receipt_presentation=summary['receipt_presentation'], views=views,
+        review_controls=dict(category_review_count=summary['category_review_count'],
+            customer_settlement_review_count=int(summary['customer_payment_details']['status'].ne('Matched').sum())),
+        complete=False, transaction_coverage_status='Not independently certified',
+        scope_note='Presentation agreement and posting agreement are separate. Completeness of the original Transaction Report extraction is not independently certified.',
+        diagnostics=explanation['diagnostics'], _support_entries=support,
+        evidence_fingerprint=hashlib.sha256(json.dumps([source, account_types, treasury_view,
+            summary['reconciliation_evidence'], summary['receipt_presentation'], periods], sort_keys=True, default=str).encode()).hexdigest())
