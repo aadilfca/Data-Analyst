@@ -5,7 +5,29 @@ from types import SimpleNamespace
 
 import pytest
 
-from services.cash_bank_classification import load_cashflow_classification_preview
+from services.cash_bank_classification import load_cashflow_classification_preview, normalize_cashflow_account_selection
+
+
+@pytest.mark.parametrize('codes,view,expected', [
+    (None,'bank',None), (['B1','B2','C1'],'bank',None),
+    ([' C1 ','B2','C1'],'bank',['B2']), (['C1','B2'],'cash',['C1']),
+    (['B2','B1','B1'],'combined',['B1','B2']), (['C1'],' BANK ',ValueError),
+    (['UNKNOWN'],'combined',ValueError), (['c1'],'cash',ValueError),
+    ([], 'combined',ValueError), ('C1','cash',ValueError),
+])
+def test_selection_normalizes_view_and_codes_without_changing_configured_identity(codes,view,expected):
+    accounts={'B1':'Bank','B2':'Bank','C1':'Cash'}
+    before=dict(accounts)
+    if expected is ValueError:
+        with pytest.raises(ValueError): normalize_cashflow_account_selection(codes,accounts,view)
+    else:
+        assert normalize_cashflow_account_selection(codes,accounts,view)==expected
+    assert accounts==before
+
+
+def test_explicit_all_of_a_single_type_cannot_enable_an_incompatible_view():
+    with pytest.raises(ValueError,match='compatible'):
+        normalize_cashflow_account_selection(['C1'],{'C1':'Cash'},'bank')
 
 
 def test_cashflows_classification_preview_uses_current_derived_rows_and_formats_fields():
@@ -310,7 +332,13 @@ def canonical_preview_db():
     def query(sql, params):
         calls.append((sql, params))
         executable = sql.replace('%s', '?').replace('jsonb_each_text', 'json_each').replace('::double precision', '')
-        bound = tuple(value.isoformat() if isinstance(value, date) else value for value in params)
+        bound = []
+        for value in params:
+            if isinstance(value, list):
+                executable = executable.replace('= ANY(?)', 'IN (' + ','.join('?' for _ in value) + ')', 1)
+                bound.extend(value)
+            else:
+                bound.append(value.isoformat() if isinstance(value, date) else value)
         rows = [dict(row) for row in connection.execute(executable, bound)]
         for row in rows:
             if 'row_data' in row:
@@ -344,6 +372,38 @@ def _preview(db, **filters):
     return load_cashflow_classification_preview(
         5, 9, date(2026, 1, 1), date(2026, 1, 31), query_fn=db.query, **filters,
     )
+
+
+def test_selected_preview_filters_vouchers_separately_from_counter_account_and_keeps_repeats(canonical_preview_db):
+    db = canonical_preview_db
+    before = list(db.connection.execute('SELECT * FROM client_data ORDER BY id'))
+    selected = _preview(db, selected_treasury_account_codes=[' CASH ', 'CASH'],
+        classification_type='counter', account_code='EXP', category='Office expense')
+    assert [row['id'] for row in selected['rows']] == [2, 3]
+    assert _preview(db, selected_treasury_account_codes=['BANK'], account_code='EXP')['total_rows'] == 0
+    assert [row['id'] for row in _preview(db, selected_treasury_account_codes=['BANK'])['rows']] == [4, 5]
+    assert len(db.calls) == 6  # One count/page pair per request, never per voucher/account.
+    assert list(db.connection.execute('SELECT * FROM client_data ORDER BY id')) == before
+
+
+def test_selected_preview_retains_other_treasury_legs_as_context_not_eligibility(canonical_preview_db):
+    db = canonical_preview_db
+    db.insert(20, voucher='V1', account='OTHERBANK', debit=0, credit=5,
+        derived_treasury_type='bank', derived_classification_status='bank')
+    db.insert(21, voucher='V1', account='DORMANT', debit=0, credit=0,
+        derived_treasury_type='bank', derived_classification_status='bank')
+    result = _preview(db, selected_treasury_account_codes=['CASH'])
+    row = next(row for row in result['rows'] if row['id'] == 20)
+    assert row['classification']['account_scope'] == 'Other Cash/Bank account — voucher context'
+    assert _preview(db, selected_treasury_account_codes=['DORMANT'])['total_rows'] == 0
+    assert _preview(db, selected_treasury_account_codes=['OTHERBANK'], treasury_view='cash')['total_rows'] == 0
+
+
+@pytest.mark.parametrize('selection', [[], [''], ['  '], 'CASH', [None], [123]])
+def test_selected_preview_service_rejects_malformed_scopes(selection):
+    with pytest.raises(ValueError, match='Select'):
+        load_cashflow_classification_preview(5, 9, '2026-01-01', '2026-01-31',
+            selected_treasury_account_codes=selection, query_fn=lambda *args: pytest.fail('Unexpected read'))
 
 
 def test_preview_executes_without_retired_tables_and_preserves_source_lines(canonical_preview_db):
@@ -440,11 +500,18 @@ def test_preview_http_route_reads_canonical_rows_and_validates_filters(canonical
             return [{'id': 9, 'template_name': 'Transaction Report'}]
         if 'FROM account_control_cashflow_settings' in sql:
             return [{'source_template_id': 9}]
+        if 'FROM account_control_cashflow_treasury_accounts' in sql:
+            return [{'account_code':'CASH','treasury_type':'cash'}, {'account_code':'BANK','treasury_type':'bank'}]
         # Any unexpected prepared/copy-table query fails against this database.
         return db.query(sql, params)
 
     monkeypatch.setattr(data, 'execute_query_pg', query)
     monkeypatch.setattr(data, 'get_template_columns_ordered', lambda template_id: [])
+    snapshots=[]
+    def snapshot(callback):
+        snapshots.append(True)
+        return callback(None)
+    monkeypatch.setattr(data.database, 'run_read_snapshot_pg', snapshot)
     app = FastAPI()
     app.include_router(data.router)
     client = TestClient(app)
@@ -455,6 +522,20 @@ def test_preview_http_route_reads_canonical_rows_and_validates_filters(canonical
     assert response.json()['total_rows'] == 2
     assert response.json()['rows'][0]['classification']['debit'] == 60.125
     assert response.json()['source_mode'] == 'client_data_derived'
+    assert snapshots==[]
+    response = client.get('/api/data/cashflows-classification-preview',params=params|
+        dict(selected_treasury_account_codes=['CASH']))
+    assert response.status_code==200,response.text
+    assert response.json()['total_rows']==2
+    assert response.json()['account_selection']['account_codes']==['CASH']
+    assert snapshots==[True]
+    assert client.get('/api/data/cashflows-classification-preview',params=params|
+        dict(selected_treasury_account_codes=['BANK'])).status_code==400
+    for codes in (['UNKNOWN'],[''],['CASH','UNKNOWN']):
+        assert client.get('/api/data/cashflows-classification-preview',params=params|
+            dict(selected_treasury_account_codes=codes)).status_code==400
+    assert client.get('/api/data/cashflows-classification-preview',params=params|
+        dict(selected_treasury_account_codes=['BANK','CASH'])).json()['total_rows']==2
     for invalid_filter in ({'classification_type': 'other'}, {'treasury_view': 'wire'}):
         response = client.get('/api/data/cashflows-classification-preview', params=params | invalid_filter)
         assert response.status_code == 400

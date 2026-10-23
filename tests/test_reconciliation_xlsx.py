@@ -4,8 +4,72 @@ from contextlib import closing
 import openpyxl
 import pandas as pd
 import pytest
-from test_reconciliation_balance_source import independent_year_boundary_case, horizontal_reconciliation_case, _horizontal_summary
+from test_reconciliation_balance_source import independent_year_boundary_case, horizontal_reconciliation_case, _horizontal_summary, selected_account_case, _selected_summary
 from test_reconciliation_reports import independent_year_boundary_report
+
+
+@pytest.mark.parametrize('codes', [['C1'], ['C2'], ['C1','C2'], ['B1','C1']])
+def test_selected_reconciliation_workbook_preserves_complete_context_but_scopes_ledgers(selected_account_case,codes):
+    from io import BytesIO
+    from services.reconciliation_balance_source import build_cashflow_reconciliation
+    from services.reconciliation_xlsx import export_cashflow_reconciliation_xlsx
+    case=selected_account_case
+    result=build_cashflow_reconciliation(_selected_summary(case,codes),case['source'],case['accounts'],'split',
+        include_posting_comparisons=True)
+    support=result.pop('_support_entries');comparisons=result.pop('_posting_comparisons')
+    result.update(client_id=7,period_start='2026-01-01',period_end='2026-01-31')
+    content=export_cashflow_reconciliation_xlsx(result,source=case['source'],support=support,
+        account_types=case['accounts'],comparisons=comparisons)
+    workbook=openpyxl.load_workbook(BytesIO(content),data_only=True)
+    # Workbook must defend its own scope even when passed the full contextual source.
+    ledger=list(workbook['Ledger Evidence'].iter_rows(min_row=5,values_only=True))
+    assert {r[2] for r in ledger} <= set(codes)
+    voucher=list(workbook['Voucher Evidence'].iter_rows(min_row=5,values_only=True))
+    references={r['voucher_id'] for r in case['source']['transaction_rows'] if r['account_code'] in codes}
+    expected=[r for r in case['source']['transaction_rows'] if r['voucher_id'] in references]
+    assert {r[0] for r in voucher}=={r['id'] for r in expected}
+    for row in voucher:
+        assert isinstance(row[5],str) and isinstance(row[6],str)
+        assert row[-1]==('Selected Cash/Bank account' if row[2] in codes else
+            'Other Cash/Bank account — voucher context' if row[2] in case['accounts'] else 'Counter-account — voucher context')
+    controls=dict(workbook['Report Controls'].iter_rows(min_row=5,values_only=True))
+    assert {v for k,v in controls.items() if k.startswith('Account selection / account codes / ')}==set(codes)
+    for kind,paper in result['views'].items():
+        values={r[0]:r[1] for r in workbook['Working Paper '+kind.title()].values}
+        for side in ('receipts','payments'):
+            assert values[side.title()+' as per ledgers']==paper['overall'][side]['ledger']
+            assert values[side.title()+' as per Cashflow report']==paper['overall'][side]['cashflow']
+        assert values['Closing difference (ledger − calculated)']==0
+
+
+def test_selected_cashflow_workbook_discloses_transfer_amounts_and_allocation_reviews(selected_account_case):
+    from routers.reconciliation import _cashflow_preview
+    from services.reconciliation_xlsx import build_cashflow_workbook
+    case=selected_account_case
+    preview=_cashflow_preview(_selected_summary(case,['C2']))
+    workbook=build_cashflow_workbook(preview)
+    transfer=list(workbook['Internal Transfers'].iter_rows(min_row=4,values_only=True))
+    rows=[dict(zip(transfer[0],row)) for row in transfer[1:]]
+    assert len(rows)==1
+    assert rows[0]['Selected-account transfer receipts']==20
+    assert rows[0]['Selected-account transfer payments']==0
+    assert rows[0]['Selected-account transfer net']==20
+    assert 'Complete-voucher amount (context)' in rows[0]
+    assert 'context' in rows[0]['Evidence scope']
+    # Competing sources cannot assign an expense to one selected funding account.
+    frame=pd.DataFrame([['AMB','2026-01-05','B1',0,60],['AMB','2026-01-05','C1',0,40],
+        ['AMB','2026-01-05','EXP1',100,0]],columns=['voucher_id','date','account_code','debit','credit'])
+    ambiguous=dict(case,journal=frame)
+    summary=_selected_summary(ambiguous,['C1'])
+    preview=_cashflow_preview(summary)
+    assert preview['selection_review_count']==1
+    workbook=build_cashflow_workbook(preview)
+    review=list(workbook['Review Required'].iter_rows(min_row=4,values_only=True))
+    rows=[dict(zip(review[0],row)) for row in review[1:]]
+    assert rows[0]['Voucher']=='AMB'
+    assert rows[0]['Selected payments under review']==40
+    assert rows[0]['Selection review reason']
+    assert all('selected Cash/Bank accounts' in ws['A2'].value for ws in workbook)
 
 
 def _working_paper_export(case, view='combined', presentation='gross', end='2026-01-31'):

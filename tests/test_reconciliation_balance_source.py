@@ -205,6 +205,162 @@ def _difference_source(ledger=None, transactions=None):
 
 
 @pytest.fixture
+def selected_account_case():
+    """Synthetic mixed payments/refund with eight independently covered books."""
+    import pandas as pd
+    accounts = {**dict.fromkeys(['C1','C2','C3'], 'Cash'), **dict.fromkeys(['B1','B2','B3','B4','B5'], 'Bank')}
+    journal = pd.DataFrame([
+        ['M1','2026-01-05','C1',0,107], ['M1','2026-01-05','C2',20,0],
+        ['M1','2026-01-05','SAL',7,0], ['M1','2026-01-05','CON',80,0],
+        ['M2','2026-01-06','C1',0,75], ['M2','2026-01-06','C3',70,0], ['M2','2026-01-06','SAL',5,0],
+        ['M3','2026-01-07','C1',17,0], ['M3','2026-01-07','C3',0,15], ['M3','2026-01-07','SAL',0,2],
+        ['M4','2026-01-08','C1',0,19], ['M4','2026-01-08','C3',9,0], ['M4','2026-01-08','LIA',10,0],
+    ], columns=['voucher_id','date','account_code','debit','credit'])
+    categories = {'SAL':'Salaries', 'CON':'Contractors', 'LIA':'Liaison', 'AR':'Customers',
+                  'FEE':'Charges', 'EXP1':'Expense A', 'EXP2':'Expense B'}
+    coa = pd.DataFrame([dict(account_code=code, account_title=code, category=categories.get(code,''))
+                        for code in [*accounts,*categories]])
+    def make_source(frame):
+        transactions = [dict(row, id=i+100, upload_id=1) for i,row in enumerate(frame.to_dict('records'))]
+        # The independent ledger extract uses positive Dr/Cr directions even
+        # when the transaction report represents a reversal with negatives.
+        ledger = [dict(_canonical(i+1,row['date'],
+                       str(max(row['debit'],0)+max(-row['credit'],0)),
+                       str(max(row['credit'],0)+max(-row['debit'],0)),row['account_code']),
+                       date=row['date'],voucher_id=row['voucher_id'])
+                  for i,row in enumerate(transactions) if row['account_code'] in accounts]
+        uploads = [dict(_uploaded(ledger,opening='10000',identity=i+1,code=code,
+                                 start='2026-01-01',end='2026-02-28'),comparison_roles_available=True)
+                   for i,code in enumerate(accounts)]
+        return dict(uploads=uploads,ledger_rows=ledger,transaction_rows=transactions)
+    return dict(journal=journal,coa=coa,accounts=accounts,source=make_source(journal),make_source=make_source,
+                roles={'customer_receipt':['Customers'],'bank_charge':['Charges']})
+
+
+def _selected_summary(case, selected=None, **options):
+    from services.ledger_group_summary import build_cashflow_summary
+    arguments = dict(include_reconciliation_evidence=True, include_drilldown=True,
+                     cashflow_role_categories=case['roles'], vendor_account_codes=['CON'])
+    arguments.update(options)
+    return build_cashflow_summary(case['journal'],case['coa'],
+        [c for c,k in case['accounts'].items() if k=='Cash'], [c for c,k in case['accounts'].items() if k=='Bank'],
+        '2026-01-01','2026-01-31',selected_treasury_account_codes=selected, **arguments)
+
+
+@pytest.mark.parametrize('selected',[['C1'],['C2'],['C1','C2'],['C2','C3'],['B1']])
+@pytest.mark.parametrize('view',['combined','bank','cash','split'])
+def test_selected_horizontal_working_paper_matches_independent_gross_sides_and_balances(selected_account_case,selected,view):
+    case=selected_account_case
+    if view in ('bank','cash') and not any(case['accounts'][code].lower()==view for code in selected):
+        with pytest.raises(ValueError,match='compatible'):
+            build_cashflow_reconciliation(_selected_summary(case,selected),case['source'],case['accounts'],view)
+        return
+    result=build_cashflow_reconciliation(_selected_summary(case,selected),case['source'],case['accounts'],view)
+    assert result['account_selection']['account_codes']==sorted(selected)
+    for kind,paper in result['views'].items():
+        codes={c for c in selected if kind=='combined' or case['accounts'][c].lower()==kind}
+        rows=[r for r in case['source']['ledger_rows'] if r['account_code'] in codes]
+        receipts=sum((max(Decimal(str(r['debit'])),Decimal(0))+max(-Decimal(str(r['credit'])),Decimal(0)) for r in rows),Decimal(0))
+        payments=sum((max(Decimal(str(r['credit'])),Decimal(0))+max(-Decimal(str(r['debit'])),Decimal(0)) for r in rows),Decimal(0))
+        assert paper['overall']['receipts']['ledger']==float(receipts)
+        assert paper['overall']['payments']['ledger']==float(payments)
+        assert paper['overall']['receipts']['difference']==paper['overall']['payments']['difference']==0
+        assert paper['amount_status']=='Matched'
+        assert paper['posting_comparison']['posting_status']==('Matched' if codes else 'Not applicable')
+        proof=paper['overall_balance_proof']
+        assert proof['ledger_opening']==10000*len(codes)
+        assert proof['ledger_closing']==proof['calculated_closing']==float(10000*len(codes)+receipts-payments)
+        assert proof['difference']==0 and not paper['unresolved']
+        assert {x['account_code'] for x in paper['posting_comparison']['account_totals']}==codes
+    assert result['complete'] is False and result['transaction_coverage_status']=='Not independently certified'
+
+
+def test_selected_reconciliation_missing_unselected_ledger_does_not_block_selected_book(selected_account_case):
+    case=selected_account_case
+    source=dict(case['source'],uploads=[u for u in case['source']['uploads'] if u['ledger_account_code']=='C1'])
+    result=build_cashflow_reconciliation(_selected_summary(case,['C1']),source,case['accounts'])['views']['combined']
+    assert result['amount_status']=='Matched'
+    missing=dict(source,uploads=[])
+    result=build_cashflow_reconciliation(_selected_summary(case,['C1']),missing,case['accounts'])['views']['combined']
+    assert result['amount_status']=='Unavailable'
+    assert result['overall']['receipts']['difference'] is None and result['overall_balance_proof']['ledger_closing'] is None
+
+
+def test_selected_offsetting_ledger_only_postings_cannot_hide_behind_matching_closing(selected_account_case):
+    case=selected_account_case
+    source=case['source']
+    ledger=[*source['ledger_rows'],
+        dict(_canonical(1001,'2026-01-10','7','0','C1'),date='2026-01-10',voucher_id='OFFSET'),
+        dict(_canonical(1002,'2026-01-10','0','7','C1'),date='2026-01-10',voucher_id='OFFSET')]
+    uploads=[dict(_uploaded(ledger,opening='10000',code='C1',start='2026-01-01',end='2026-02-28'),comparison_roles_available=True)]
+    source=dict(source,ledger_rows=ledger,uploads=uploads)
+    paper=build_cashflow_reconciliation(_selected_summary(case,['C1']),source,case['accounts'])['views']['combined']
+    assert paper['overall']['receipts']['difference']==paper['overall']['payments']['difference']==7
+    assert paper['amount_status']=='Differences' and paper['posting_comparison']['posting_status']!='Matched'
+    assert paper['overall_balance_proof']['difference']==0
+
+
+def test_selected_changed_gross_evidence_blocks_the_attribution_adjustment(selected_account_case):
+    case=selected_account_case
+    source=dict(case['source'],transaction_rows=[*case['source']['transaction_rows'],
+        dict(id=2001,voucher_id='M1',date='2026-01-05',account_code='C1',debit=1,credit=1)])
+    paper=build_cashflow_reconciliation(_selected_summary(case,['C1']),source,case['accounts'])['views']['combined']
+    assert paper['amount_status']=='Differences'
+    assert any('direction evidence changed' in r['reason'] for r in paper['unresolved'])
+
+
+def test_selected_zero_context_preserves_source_evidence_without_requiring_a_financial_plan(selected_account_case):
+    case=selected_account_case
+    zero=dict(id=2001,voucher_id='ZERO-CONTEXT',date='2026-01-10',account_code='C1',debit=0,credit=0)
+    source=dict(case['source'],transaction_rows=[*case['source']['transaction_rows'],zero])
+    result=build_cashflow_reconciliation(_selected_summary(case,['C1']),source,case['accounts'],include_posting_comparisons=True)
+    paper=result['views']['combined']
+    assert paper['amount_status']=='Matched' and not paper['unresolved']
+    assert paper['overall_balance_proof']['difference']==0
+    # Zero occurrences are still comparison evidence; this is not net-zero
+    # suppression of real offsetting receipts/payments.
+    assert source['transaction_rows'][-1]==zero
+    assert any(f['voucher_id']=='ZERO-CONTEXT' for f in result['_posting_comparisons']['combined']['findings'])
+
+
+def test_selected_reconciliation_fingerprint_is_scope_specific_and_order_independent(selected_account_case):
+    case=selected_account_case
+    def result(codes):return build_cashflow_reconciliation(_selected_summary(case,codes),case['source'],case['accounts'])
+    assert result(['C1','C2'])['evidence_fingerprint']==result(['C2','C1','C1'])['evidence_fingerprint']
+    assert result(['C1'])['evidence_fingerprint']!=result(['C2'])['evidence_fingerprint']
+    with pytest.raises(ValueError,match='absent'):
+        build_cashflow_reconciliation(_selected_summary(case,['C1']),case['source'],{'C2':'Cash'})
+
+
+def test_selected_partial_range_uses_prior_ledger_history_only_for_opening(selected_account_case):
+    from services.ledger_group_summary import build_cashflow_summary
+    case=selected_account_case
+    summary=build_cashflow_summary(case['journal'],case['coa'],['C1','C2','C3'],['B1','B2','B3','B4','B5'],
+        '2026-01-06','2026-01-07',selected_treasury_account_codes=['C1'],include_reconciliation_evidence=True)
+    paper=build_cashflow_reconciliation(summary,case['source'],case['accounts'])['views']['combined']
+    assert paper['overall']['receipts']['ledger']==17 and paper['overall']['payments']['ledger']==75
+    assert paper['overall_balance_proof']['ledger_opening']==9893
+    assert paper['overall_balance_proof']['ledger_closing']==9835
+    assert paper['overall_balance_proof']['difference']==0
+
+
+@pytest.mark.parametrize('multi_source',[False,True])
+def test_selected_cash_bank_pure_transfer_is_never_also_a_mixed_movement(selected_account_case,multi_source):
+    import pandas as pd
+    case=selected_account_case
+    rows=([['T','2026-01-05','B1',0,70],['T','2026-01-05','B2',0,30],['T','2026-01-05','C1',100,0]] if multi_source
+          else [['T','2026-01-05','B1',0,20],['T','2026-01-05','C1',20,0]])
+    case['journal']=pd.DataFrame(rows,columns=['voucher_id','date','account_code','debit','credit'])
+    summary=_selected_summary(case,['B1','C1'])
+    proof={p['treasury_type']:p for p in summary['treasury_movement_proof']}
+    assert proof['combined']['source_movement']==proof['combined']['internal_transfer_movement']==(30 if multi_source else 0)
+    assert all(p['mixed_voucher_movement']==p['category_movement']==p['variance']==0 for p in proof.values())
+    paper=build_cashflow_reconciliation(summary,case['make_source'](case['journal']),case['accounts'],'split')
+    for part in paper['views'].values():
+        assert part['amount_status']=='Matched' and part['overall_balance_proof']['difference']==0
+
+
+@pytest.fixture
 def horizontal_reconciliation_case():
     """Independent small working paper: gross receipts 900, payments 350."""
     import pandas as pd

@@ -10,6 +10,182 @@
     const CASHFLOW_REQUEST_TIMEOUT_MS = 120000;
     let cashflowSelection = { start: '', end: '', groupBy: 'month' };
     let cashflowTreasuryView = 'combined';
+    // Toolbar edits are pending. Financial readers use lastCashflowsResult.
+    let cashflowPendingAccounts = null;
+    let cashflowAccountOptions = null;
+    let cashflowAccountOptionsPromise = null;
+    let cashflowAccountOptionsClient = null;
+    let cashflowAccountOptionsKey = '';
+    function cashflowAccountCodes(value) {
+        const selection = value && value.account_selection;
+        return selection ? selection.account_codes : null;
+    }
+    function cashflowAccountKey(codes) {
+        if (codes == null) return 'all';
+        if (!Array.isArray(codes) || !codes.length || codes.some(function (code) { return typeof code !== 'string' || !code.trim(); })) return 'invalid';
+        return JSON.stringify(Array.from(new Set(codes.map(function (code) { return code.trim(); }))).sort());
+    }
+    function cashflowAccountsInView(codes, view) {
+        if (codes == null || !['bank', 'cash'].includes(view)) return codes;
+        if (!cashflowAccountOptions) throw new Error('Reload account choices before filtering this account selection.');
+        const eligible = new Set(cashflowAccountOptions.filter(function (account) { return account.treasury_type === view; }).map(function (account) { return account.account_code; }));
+        return codes.filter(function (code) { return eligible.has(code); });
+    }
+    function appendCashflowAccounts(params, codes) {
+        if (codes != null) {
+            if (cashflowAccountKey(codes) === 'invalid') throw new Error('Select at least one Cash/Bank account.');
+            codes.forEach(function (code) { params.append('selected_treasury_account_codes', code); });
+        }
+        return params;
+    }
+    function cashflowLoadedScope() {
+        const report = lastCashflowsResult;
+        return report && report.period_start && report.period_end ? report : {client_id: clientId, period_start: cashflowSelection.start, period_end: cashflowSelection.end,
+            group_by: cashflowSelection.groupBy, treasury_view: cashflowTreasuryView};
+    }
+    function cashflowLoadedClientChanged() {
+        const report = lastCashflowsResult;
+        const changed = report && report.client_id != null && Number(report.client_id) !== Number(clientId);
+        if (changed) showCashflowToast('Client changed. Reload Cashflows to continue.', true);
+        return changed;
+    }
+    function cashflowEligibleAccounts() {
+        return (cashflowAccountOptionsClient === clientId ? cashflowAccountOptions || [] : []).filter(function (account) {
+            return !['bank', 'cash'].includes(cashflowTreasuryView) || account.treasury_type === cashflowTreasuryView;
+        });
+    }
+    function cashflowEffectivePendingAccounts() {
+        if (cashflowPendingAccounts == null) return null;
+        if (cashflowAccountOptions && cashflowAccountOptionsClient !== clientId) return [];
+        if (!cashflowAccountOptions) return cashflowPendingAccounts.slice().sort();
+        const eligible = new Set(cashflowEligibleAccounts().map(function (account) { return account.account_code; }));
+        return cashflowPendingAccounts.filter(function (code) { return eligible.has(code); }).sort();
+    }
+    function syncCashflowAccountButton() {
+        const value = element('cashflowsAccountValue'), button = element('cashflowsAccountButton');
+        if (!value || !button) return;
+        const codes = cashflowEffectivePendingAccounts();
+        value.textContent = codes == null ? 'All accounts' : codes.length ? codes.length + ' selected' : 'Select accounts';
+        const pending = !!lastCashflowsResult && cashflowAccountKey(codes) !== cashflowAccountKey(cashflowAccountCodes(lastCashflowsResult));
+        button.classList.toggle('is-pending', pending);
+        button.title = (pending ? 'Pending changes — Load summary to apply. ' : '') +
+            (codes == null ? 'All accounts in the Treasury view' : codes.join(', ') || 'Select at least one compatible account');
+        element('cashflowsAccountHint').textContent = pending ? 'Pending — Load summary to apply' : 'Apply with Load summary';
+        const all = element('cashflowsAccountAll');
+        all.checked = cashflowPendingAccounts == null;
+        all.indeterminate = cashflowPendingAccounts != null && !!codes.length;
+    }
+    function renderCashflowAccountOptions() {
+        const host = element('cashflowsAccountOptions');
+        if (!host) return;
+        const search = element('cashflowsAccountSearch').value.trim().toLowerCase();
+        const accounts = cashflowEligibleAccounts();
+        const selected = new Set(cashflowEffectivePendingAccounts() || accounts.map(function (account) { return account.account_code; }));
+        host.innerHTML = ['bank', 'cash'].map(function (kind) {
+            const rows = accounts.filter(function (account) {
+                return account.treasury_type === kind && (!search ||
+                    (account.account_code + ' ' + account.account_name).toLowerCase().includes(search));
+            });
+            if (!rows.length) return '';
+            return '<div class="account-group">' + (kind === 'bank' ? 'Bank accounts' : 'Cash accounts') + '</div>' + rows.map(function (account) {
+                return '<label class="account-option"><input type="checkbox" data-cashflow-account="' + escapeHtml(account.account_code)
+                    + '"' + (selected.has(account.account_code) ? ' checked' : '') + '><span><span class="account-name">'
+                    + escapeHtml(account.account_name) + '</span><span class="account-code">' + escapeHtml(account.account_code) + '</span></span></label>';
+            }).join('');
+        }).join('');
+        if (cashflowAccountOptions && !host.children.length) host.textContent = search ? 'No matching accounts.' : 'No configured accounts in this Treasury view.';
+        if (cashflowPendingAccounts != null && !search) {
+            const checked = host.querySelector('input:checked');
+            if (checked) host.scrollTop = Math.max(0, checked.closest('label').offsetTop - host.offsetTop - 28);
+        }
+        syncCashflowAccountButton();
+    }
+    function closeCashflowAccountPopover(focus) {
+        element('cashflowsAccountPopover').hidden = true;
+        element('cashflowsAccountButton').setAttribute('aria-expanded', 'false');
+        if (focus) element('cashflowsAccountButton').focus();
+    }
+    async function loadCashflowAccountOptions(force) {
+        if (cashflowAccountOptionsClient === clientId && cashflowAccountOptions && !force) return true;
+        if (cashflowAccountOptionsPromise) return cashflowAccountOptionsPromise;
+        const requestedClient = clientId, status = element('cashflowsAccountStatus');
+        const task = (async function () {
+            let notice = '';
+            if (window.LoadingUI) window.LoadingUI.showSpinner(status, 'Loading Cash/Bank accounts…');
+            else status.textContent = 'Loading Cash/Bank accounts…';
+            element('cashflowsAccountRetry').hidden = true;
+            const controller = new AbortController();
+            const timer = window.setTimeout(function () { controller.abort(); }, 30000);
+            try {
+                const result = await api('/api/reconciliation/cashflows/account-options?client_id=' + encodeURIComponent(requestedClient), {signal: controller.signal});
+                if (requestedClient !== clientId) return false;
+                if (Number(result.client_id) !== Number(clientId) || !Array.isArray(result.accounts)
+                    || result.accounts.some(function (account) { return !account.account_code || !['cash', 'bank'].includes(account.treasury_type); })) {
+                    throw new Error('Account choices could not be verified. Retry accounts.');
+                }
+                cashflowAccountOptions = result.accounts;
+                cashflowAccountOptionsKey = result.configuration_key || '';
+                cashflowAccountOptionsClient = requestedClient;
+                status.textContent = '';
+                renderCashflowAccountOptions();
+                return true;
+            } catch (error) {
+                if (requestedClient === clientId) {
+                    notice = 'Accounts could not be loaded. Retry to select accounts.';
+                    element('cashflowsAccountRetry').hidden = false;
+                }
+                return false;
+            } finally {
+                window.clearTimeout(timer);
+                if (window.LoadingUI) window.LoadingUI.hideSpinner(status);
+                if (requestedClient === clientId) status.textContent = notice;
+            }
+        }());
+        cashflowAccountOptionsPromise = task;
+        try { return await task; } finally { if (cashflowAccountOptionsPromise === task) cashflowAccountOptionsPromise = null; }
+    }
+    function initialiseCashflowAccounts() {
+        const popover = element('cashflowsAccountPopover');
+        if (popover.dataset.initialised) return;
+        popover.dataset.initialised = 'true';
+        element('cashflowsAccountButton').addEventListener('click', function () {
+            if (!popover.hidden) { closeCashflowAccountPopover(false); return; }
+            closeCashflowPopover(); closeCashflowRefreshMenu();
+            popover.hidden = false;
+            element('cashflowsAccountButton').setAttribute('aria-expanded', 'true');
+            renderCashflowAccountOptions();
+            loadCashflowAccountOptions(false);
+            element('cashflowsAccountSearch').focus();
+        });
+        element('cashflowsAccountSearch').addEventListener('input', renderCashflowAccountOptions);
+        element('cashflowsAccountAll').addEventListener('change', function () {
+            cashflowPendingAccounts = this.checked ? null : [];
+            renderCashflowAccountOptions();
+        });
+        element('cashflowsAccountOptions').addEventListener('change', function (event) {
+            const code = event.target.dataset.cashflowAccount;
+            if (!code) return;
+            const chosen = new Set(cashflowEffectivePendingAccounts() || cashflowEligibleAccounts().map(function (account) { return account.account_code; }));
+            if (event.target.checked) chosen.add(code); else chosen.delete(code);
+            cashflowPendingAccounts = Array.from(chosen).sort();
+            const configured = (cashflowAccountOptions || []).map(function (account) { return account.account_code; });
+            if (cashflowAccountKey(cashflowPendingAccounts) === cashflowAccountKey(configured)) cashflowPendingAccounts = null;
+            syncCashflowAccountButton();
+        });
+        element('cashflowsAccountClear').addEventListener('click', function () { cashflowPendingAccounts = []; renderCashflowAccountOptions(); });
+        element('cashflowsAccountDone').addEventListener('click', function () { closeCashflowAccountPopover(true); });
+        element('cashflowsAccountRetry').addEventListener('click', function () { loadCashflowAccountOptions(true); });
+        document.addEventListener('click', function (event) { if (!event.target.closest('.cashflows-account-control')) closeCashflowAccountPopover(false); });
+        popover.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape') { event.preventDefault(); closeCashflowAccountPopover(true); }
+            if (event.key === 'Tab') {
+                const controls = Array.from(popover.querySelectorAll('input, button')).filter(function (node) { return !node.disabled && !node.hidden && node.getClientRects().length; });
+                const first = controls[0], last = controls[controls.length-1];
+                if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+                else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+            }
+        });
+    }
     let cashflowGroupingPreference = 'suggested';
     let stagedCashflowSelection = null;
     let activeCashflowPicker = null;
@@ -95,14 +271,15 @@
         element('cashflowsPeriodStart').value = cashflowSelection.start;
         element('cashflowsPeriodEnd').value = cashflowSelection.end;
         element('cashflowsPeriodButton').textContent = periodButtonLabel(cashflowSelection);
+        element('cashflowsPeriodButton').title = cashflowSelection.start + ' to ' + cashflowSelection.end;
         element('cashflowsGroupingSelect').value = cashflowGroupingPreference;
         syncCashflowTreasuryView();
     }
     const cashflowTreasuryViewLabels = { combined: 'Cash and Bank Total', bank: 'Bank only', cash: 'Cash only', split: 'Cash and Bank individually' };
     function cashflowTreasuryViewLabel(value) { return cashflowTreasuryViewLabels[String(value || 'combined')] || cashflowTreasuryViewLabels.combined; }
     function cashflowDefaultTreasuryType() {
-        if (cashflowTreasuryView === 'bank') return 'Bank';
-        if (cashflowTreasuryView === 'cash') return 'Cash';
+        if (cashflowLoadedScope().treasury_view === 'bank') return 'Bank';
+        if (cashflowLoadedScope().treasury_view === 'cash') return 'Cash';
         return '';
     }
     function resetCashflowDrilldownFilters() {
@@ -533,6 +710,9 @@
             + metric('Transferee total', formatInternationalAmount(reconciliation.transferee_total))
             + metric('Variance', formatInternationalAmount(reconciliation.variance_total))
             + '</div>';
+        if (preview.account_selection) panel.innerHTML += '<p>Complete voucher context. Selected transfer receipts: '
+            + escapeHtml(formatInternationalAmount(reconciliation.selected_inflow)) + '; selected transfer payments: '
+            + escapeHtml(formatInternationalAmount(reconciliation.selected_outflow)) + '.</p>';
         panel.hidden = false;
     }
     function renderCashflowCustomerWiseOptions(preview) {
@@ -689,6 +869,7 @@
         if (section === 'vendor_payments') {
             renderCashflowVendorPayments(preview);
         } else if (section === 'transfers') {
+            const scoped = !!preview.account_selection;
             renderCashflowTransferReconciliation(preview);
             const rows = (preview.transfer_details || []).map(function (row) {
                 return Object.assign({}, row, {
@@ -699,9 +880,11 @@
                 });
             });
             renderTable(element('cashflowsTransfersTable'), [
-                { key: 'date_display', label: 'Date' }, { key: 'voucher_id', label: 'Voucher' }, { key: 'transferor', label: 'Transferor' }, { key: 'transferee', label: 'Transferee' }, { key: 'amount', label: 'Amount', amount: true }, { key: 'variance', label: 'Variance', amount: true }, { key: 'status_display', label: 'Status' }, { key: 'voucher_detail', label: 'Description' },
-                { key: 'bank_movement', label: 'Signed Bank movement', amount: true }, { key: 'cash_movement', label: 'Signed Cash movement', amount: true },
-            ], rows, 'No internal transfers identified.');
+                { key: 'date_display', label: 'Date' }, { key: 'voucher_id', label: 'Voucher' }, { key: 'transferor', label: 'Transferor' }, { key: 'transferee', label: 'Transferee' }, { key: 'amount', label: scoped ? 'Voucher amount (context)' : 'Amount', amount: true }, { key: 'variance', label: 'Variance', amount: true }, { key: 'status_display', label: 'Status' }, { key: 'voucher_detail', label: 'Description' },
+                { key: 'bank_movement', label: scoped ? 'Bank movement (context)' : 'Signed Bank movement', amount: true }, { key: 'cash_movement', label: scoped ? 'Cash movement (context)' : 'Signed Cash movement', amount: true },
+            ].concat(scoped ? [{key: 'selection_inflow', label: 'Selected transfer receipts', amount: true},
+                {key: 'selection_outflow', label: 'Selected transfer payments', amount: true},
+                {key: 'selection_net_movement', label: 'Selected transfer net', amount: true}] : []), rows, 'No internal transfers identified.');
             element('cashflowsTransferCount').textContent = formatCashflowDetailCount('cashflowsTransfersTable', preview.internal_transfer_count || rows.length || 0, 'voucher(s)');
             if (activeCashflowWindow === section) element('cashflowsTransfersSection').hidden = false;
         } else if (section === 'customer_payments') {
@@ -749,11 +932,15 @@
             element('cashflowsDeductionCount').textContent = formatCashflowDetailCount('cashflowsDeductionsTable', preview.deduction_count || rows.length || 0, 'line(s)');
             if (activeCashflowWindow === section) element('cashflowsDeductionsSection').hidden = false;
         } else if (section === 'review') {
-            const rows = preview.categories_needing_review || [];
+            const rows = (preview.categories_needing_review || []).concat((preview.selection_review_details || []).map(function (row) {
+                return Object.assign({}, row, {period: row.period_key, fallback_category: 'Selected-account allocation review'});
+            }));
             renderTable(element('cashflowsReviewTable'), [
                 { key: 'voucher_id', label: 'Voucher' }, { key: 'account_code', label: 'Account code' }, { key: 'account_name', label: 'Account' }, { key: 'fallback_category', label: 'Review category' },
-            ], rows, 'No review items.');
-            element('cashflowsReviewCount').textContent = formatCashflowDetailCount('cashflowsReviewTable', preview.category_review_count || rows.length || 0, 'line(s)');
+            ].concat(preview.account_selection ? [{key: 'reason', label: 'Allocation review reason'},
+                {key: 'receipts', label: 'Selected receipts under review', amount: true},
+                {key: 'payments', label: 'Selected payments under review', amount: true}] : []), rows, 'No review items.');
+            element('cashflowsReviewCount').textContent = formatCashflowDetailCount('cashflowsReviewTable', rows.length, 'review item(s)');
             if (activeCashflowWindow === section) element('cashflowsReviewSection').hidden = false;
         }
     }
@@ -790,16 +977,18 @@
         const context = element('cashflowsDrilldownContext');
         if (!context) return;
         const groupingLabels = { day: 'Daily', fortnight: 'Fortnightly', month: 'Monthly', quarter: 'Quarterly', half_year: 'Half-yearly', year: 'Annually' };
-        const grouping = groupingLabels[String(cashflowSelection.groupBy || '')] || String(cashflowSelection.groupBy || '');
-        context.textContent = 'Period: ' + formatRange(cashflowSelection.start, cashflowSelection.end)
-            + ' | View: ' + cashflowTreasuryViewLabel(result && result.treasury_view || cashflowTreasuryView)
-            + ' | Grouping: ' + grouping;
+        const scope = cashflowLoadedScope();
+        const grouping = groupingLabels[String(scope.group_by || '')] || String(scope.group_by || '');
+        const codes = cashflowAccountCodes(scope);
+        context.textContent = 'Period: ' + formatRange(scope.period_start, scope.period_end)
+            + ' | View: ' + cashflowTreasuryViewLabel(scope.treasury_view)
+            + ' | Grouping: ' + grouping + (codes ? ' | Accounts: ' + codes.join(', ') : '');
         const totals = result && result.database_totals;
         // Cached parent reports may cover a broader period. Counts must carry
         // their own matching client/source/date scope before they are displayed.
         const templateId = lastCashflowsResult && lastCashflowsResult.configuration && lastCashflowsResult.configuration.source_template_id;
         const matches = totals && Number(totals.client_id) === Number(clientId)
-            && totals.period_start === cashflowSelection.start && totals.period_end === cashflowSelection.end
+            && totals.period_start === scope.period_start && totals.period_end === scope.period_end
             && (templateId == null || Number(totals.template_id) === Number(templateId));
         const rowCount = element('cashflowsDatabaseRowCount');
         const voucherCount = element('cashflowsDatabaseVoucherCount');
@@ -845,8 +1034,9 @@
     function cashflowDrilldownContextKey(start, end) {
         return cashflowLedgerContextKey(cashflowLedgerContext(start, end));
     }
-    function cashflowSummaryContextKey(start, end, groupBy, treasuryView, revision) {
-        return [clientId, start, end, groupBy || 'month', treasuryView || 'combined', Number(revision || cashflowReportRevision || 0), cashflowReportSourceKey || 'unresolved', cashflowConfigurationKey].join('|');
+    function cashflowSummaryContextKey(start, end, groupBy, treasuryView, revision, codes) {
+        return JSON.stringify([clientId, start, end, groupBy || 'month', treasuryView || 'combined', Number(revision || cashflowReportRevision || 0), cashflowReportSourceKey || 'unresolved', cashflowConfigurationKey,
+            cashflowAccountKey(codes === undefined ? cashflowEffectivePendingAccounts() : codes)]);
     }
     const cashflowGroupingRank = { day: 0, fortnight: 1, month: 2, quarter: 3, half_year: 4, year: 5 };
     function cashflowGroupingCanAggregate(parentGroup, childGroup) {
@@ -974,6 +1164,7 @@
     function cashflowParentMetricTotals(preview, periods, parentGroups) {
         const source = preview && preview.period_metrics;
         const metrics = ['source_line_count', 'selected_voucher_count', 'internal_transfer_count', 'category_review_count', 'deduction_count'];
+        if (preview.account_selection) metrics.push('selection_review_count');
         if (!source || typeof source !== 'object') return null;
         const totals = {};
         metrics.forEach(function (metric) { totals[metric] = 0; });
@@ -996,8 +1187,9 @@
         }
         return { totals: totals, byPeriod: byPeriod };
     }
-    function deriveCashflowSummaryFromParent(parent, start, end, groupBy, treasuryView) {
+    function deriveCashflowSummaryFromParent(parent, start, end, groupBy, treasuryView, codes) {
         if (!parent || String(parent.treasury_view || '') !== String(treasuryView || 'combined')) return null;
+        if (cashflowAccountKey(cashflowAccountCodes(parent)) !== cashflowAccountKey(codes === undefined ? cashflowEffectivePendingAccounts() : codes)) return null;
         const parentPreview = parent.preview || {};
         const selection = cashflowPeriodSelection(parentPreview, start, end, parent.group_by, groupBy);
         if (!selection) return null;
@@ -1016,6 +1208,10 @@
         derivedPreview.internal_transfer_count = metrics.totals.internal_transfer_count;
         derivedPreview.category_review_count = metrics.totals.category_review_count;
         derivedPreview.deduction_count = metrics.totals.deduction_count;
+        if (parentPreview.account_selection) {
+            derivedPreview.selection_review_count = metrics.totals.selection_review_count;
+            derivedPreview.selection_review_details = [];
+        }
         derivedPreview.detail_sections_loaded = [];
         delete derivedPreview.ledger_cache;
         derivedPreview.ledger_rollups = [];
@@ -1084,7 +1280,7 @@
         });
         return derived;
     }
-    function findCashflowParentSummary(start, end, groupBy, treasuryView) {
+    function findCashflowParentSummary(start, end, groupBy, treasuryView, codes) {
         const entries = Array.from(cashflowSummaryCache.values()).reverse();
         for (const entry of entries) {
             if (!entry || entry.revision !== cashflowReportRevision || entry.sourceKey !== cashflowReportSourceKey) continue;
@@ -1095,7 +1291,7 @@
             const childEnd = fromIso(end);
             if (!parentStart || !parentEnd || !childStart || !childEnd || parentStart > childStart || parentEnd < childEnd) continue;
             if (!cashflowGroupingCanAggregate(parent.group_by, groupBy)) continue;
-            const derived = deriveCashflowSummaryFromParent(parent, start, end, groupBy, treasuryView);
+            const derived = deriveCashflowSummaryFromParent(parent, start, end, groupBy, treasuryView, codes);
             if (derived) return derived;
         }
         return null;
@@ -1106,15 +1302,15 @@
         // only; each Load obtains its balance evidence from a fresh snapshot.
         result = Object.assign({}, result, {preview: Object.assign({}, result.preview || {})});
         delete result.preview.balance_reconciliation;
-        const key = cashflowSummaryContextKey(result.period_start, result.period_end, result.group_by, result.treasury_view, cashflowReportRevision);
+        const key = cashflowSummaryContextKey(result.period_start, result.period_end, result.group_by, result.treasury_view, cashflowReportRevision, cashflowAccountCodes(result));
         cashflowSummaryCache.delete(key);
         cashflowSummaryCache.set(key, { result: result, revision: cashflowReportRevision, sourceKey: cashflowReportSourceKey });
         while (cashflowSummaryCache.size > cashflowSummaryCacheLimit) {
             cashflowSummaryCache.delete(cashflowSummaryCache.keys().next().value);
         }
     }
-    function takeCashflowSummary(start, end, groupBy, treasuryView) {
-        const key = cashflowSummaryContextKey(start, end, groupBy, treasuryView, cashflowReportRevision);
+    function takeCashflowSummary(start, end, groupBy, treasuryView, codes) {
+        const key = cashflowSummaryContextKey(start, end, groupBy, treasuryView, cashflowReportRevision, codes);
         const entry = cashflowSummaryCache.get(key);
         if (!entry) return null;
         if (entry.revision !== cashflowReportRevision || entry.sourceKey !== cashflowReportSourceKey) {
@@ -1237,7 +1433,8 @@
     }
     function cashflowDrilldownFilterState() {
         const selectedTreasury = element('cashflowsDrilldownTreasury').value;
-        const effectiveTreasury = selectedTreasury || (cashflowTreasuryView === 'bank' ? 'Bank' : (cashflowTreasuryView === 'cash' ? 'Cash' : ''));
+        const view = cashflowLoadedScope().treasury_view;
+        const effectiveTreasury = selectedTreasury || (view === 'bank' ? 'Bank' : (view === 'cash' ? 'Cash' : ''));
         return {
             search: element('cashflowsDrilldownSearch').value.trim().toLowerCase(),
             category: element('cashflowsDrilldownCategory').value.trim().toLowerCase(),
@@ -1288,13 +1485,15 @@
     }
     // Only compact account/period data lives here. Raw transactions stay on demand.
     function cashflowLedgerContext(start, end) {
+        const scope = cashflowLoadedScope();
         return {
             client_id: clientId,
             template_id: ((lastCashflowsResult || {}).configuration || {}).source_template_id,
-            period_start: start, period_end: end,
-            group_by: cashflowSelection.groupBy || 'month', treasury_view: cashflowTreasuryView || 'combined',
+            period_start: scope.period_start || start, period_end: scope.period_end || end,
+            group_by: scope.group_by || 'month', treasury_view: scope.treasury_view || 'combined',
             report_revision: cashflowReportRevision, source_key: cashflowReportSourceKey,
-            configuration_key: cashflowConfigurationKey
+            configuration_key: cashflowConfigurationKey,
+            account_selection: scope.account_selection
         };
     }
     function cashflowLedgerContextKey(context) {
@@ -1302,7 +1501,7 @@
         return JSON.stringify(['client_id', 'template_id', 'period_start', 'period_end', 'group_by',
             'treasury_view', 'report_revision', 'source_key', 'configuration_key'].map(function (field) {
             return String(value[field] == null ? '' : value[field]);
-        }));
+        }).concat([cashflowAccountKey(cashflowAccountCodes(value))]));
     }
     function cashflowLedgerMap(kind) {
         return kind === 'baseline' ? cashflowDrilldownBaseCache : cashflowInlineLedgerCache;
@@ -1359,7 +1558,7 @@
             group_by: result.group_by, treasury_view: result.treasury_view,
             report_revision: cashflowReportRevisionFromResult(result),
             source_key: cashflowReportSourceKeyFromResult(result),
-            configuration_key: result.cashflow_configuration_key};
+            configuration_key: result.cashflow_configuration_key, account_selection: result.account_selection};
         return cashflowLedgerContextKey(loaded) === cashflowLedgerContextKey(context);
     }
     function seedCashflowReportLedgers(result) {
@@ -1595,6 +1794,8 @@
     }
     function cashflowDrawerTransactionKey(context, page, filters) {
         return [
+            clientId, ((lastCashflowsResult || {}).configuration || {}).source_template_id,
+            cashflowAccountKey(cashflowAccountCodes(cashflowLoadedScope())), cashflowConfigurationKey,
             cashflowReportRevision,
             filters.start,
             filters.end,
@@ -1726,8 +1927,8 @@
         const selectedKey = drawer.querySelector('#cashflowsInlineTransactionPeriod').value;
         const selected = cashflowDrawerPeriods().find(function (period) { return String(period.key) === String(selectedKey); });
         return {
-            start: selected ? selected.start : cashflowSelection.start,
-            end: selected ? selected.end : cashflowSelection.end,
+            start: selected ? selected.start : cashflowLoadedScope().period_start,
+            end: selected ? selected.end : cashflowLoadedScope().period_end,
             search: drawer.querySelector('#cashflowsInlineTransactionSearch').value.trim(),
             mode: drawer.querySelector('#cashflowsInlineTransactionMode').value || 'combined'
         };
@@ -1831,6 +2032,7 @@
         drawer.querySelector('#cashflowsInlineTransactionStatus').hidden = true;
     }
     function loadCashflowTransactionDrawer(resetRequest) {
+        if (cashflowLoadedClientChanged()) return Promise.resolve(null);
         const drawer = ensureCashflowTransactionDrawer();
         const context = cashflowInlineTransactionContext;
         if (!context || drawer.hidden) return Promise.resolve(null);
@@ -1838,6 +2040,19 @@
         if (cashflowInlineTransactionActiveController) cashflowInlineTransactionActiveController.abort();
         const requestSerial = cashflowInlineTransactionRequestSerial;
         const filters = cashflowDrawerFilters();
+        const loadedKey = cashflowLedgerContextKey(cashflowLedgerContext());
+        let selectedCodes;
+        try {
+            selectedCodes = cashflowAccountsInView(cashflowAccountCodes(cashflowLoadedScope()), filters.mode);
+            if (cashflowAccountKey(selectedCodes) === 'invalid') {
+                cashflowTransactionTableMessage(drawer, 'No selected accounts in this Cash/Bank view.');
+                setCashflowTransactionDrawerBusy(false);
+                return Promise.resolve(null);
+            }
+        } catch (error) {
+            cashflowTransactionTableMessage(drawer, error.message);
+            return Promise.resolve(null);
+        }
         const currentPage = Math.max(1, Number(cashflowInlineTransactionPage) || 1);
         const key = cashflowDrawerTransactionKey(context, currentPage, filters);
         const cached = cashflowInlineTransactionCache.get(key);
@@ -1866,11 +2081,14 @@
             category: context.category,
             treasury_view: filters.mode
         });
+        appendCashflowAccounts(params, selectedCodes);
         if (filters.search) params.set('search', filters.search);
         setCashflowTransactionDrawerBusy(true);
         return api('/api/data/cashflows-classification-preview?' + params.toString(), { signal: controller.signal })
             .then(function (payload) {
-                if (requestSerial !== cashflowInlineTransactionRequestSerial || drawer.hidden) return null;
+                if (requestSerial !== cashflowInlineTransactionRequestSerial || drawer.hidden
+                    || loadedKey !== cashflowLedgerContextKey(cashflowLedgerContext())) return null;
+                if (cashflowAccountKey(cashflowAccountCodes(payload)) !== cashflowAccountKey(selectedCodes)) throw new Error('Account scope changed. Reload Cashflows.');
                 cashflowInlineTransactionCache.set(key, payload);
                 renderCashflowTransactionDrawer(payload);
                 return payload;
@@ -1973,6 +2191,7 @@
                     const params = new URLSearchParams({client_id: String(clientId), period_start: context.period_start,
                         period_end: context.period_end, group_by: context.group_by, treasury_view: context.treasury_view,
                         category: category, page: String(page), limit: String(cashflowInlineLedgerLimit)});
+                    appendCashflowAccounts(params, cashflowAccountCodes(context));
                     payload = await api('/api/reconciliation/cashflows/drilldown?' + params.toString(), {signal: controller.signal});
                     if (generation !== cashflowInlineLedgerGeneration) return null;
                     if (!cashflowLedgerResponseMatches(payload, context)) {
@@ -2089,8 +2308,8 @@
         loadCashflowInlineLedgers(button, host, category, section, periods, isSplit, requestedPage);
     }
     function loadCashflowDrilldown(resetPage) {
-        const start = element('cashflowsPeriodStart').value;
-        const end = element('cashflowsPeriodEnd').value;
+        const start = cashflowLoadedScope().period_start;
+        const end = cashflowLoadedScope().period_end;
         if (!clientId || !start || !end) return Promise.resolve(null);
         if (resetPage) cashflowDrilldownPage = 1;
         const expectedContext = cashflowLedgerContext(start, end);
@@ -2127,6 +2346,7 @@
             page: String(cashflowDrilldownPage),
             limit: String(cashflowDrilldownLimit),
         });
+        appendCashflowAccounts(params, cashflowAccountCodes(expectedContext));
         const search = element('cashflowsDrilldownSearch').value.trim();
         const category = element('cashflowsDrilldownCategory').value.trim();
         const accountHead = element('cashflowsDrilldownAccountHead').value.trim();
@@ -3011,7 +3231,8 @@
     const RECONCILIATION_CACHE_MAX_ENTRIES = 20;
     function reconciliationContextKey(scope) {
         return JSON.stringify([1, scope.client_id, scope.template_id, scope.period_start, scope.period_end,
-            scope.group_by, scope.treasury_view, scope.configuration_key, scope.report_revision]);
+            scope.group_by, scope.treasury_view, scope.configuration_key, scope.report_revision,
+            cashflowAccountKey(cashflowAccountCodes(scope))]);
     }
     function clearReconciliationCache(context, identity) {
         reconciliationCacheGeneration += 1;
@@ -3322,6 +3543,7 @@
         if (options.support_key) scrollReconciliationEvidence(element('reconSupport'));
         const query = new URLSearchParams({client_id: scope.client_id, period_start: scope.period_start, period_end: scope.period_end,
             group_by: scope.group_by, treasury_view: scope.treasury_view, ...options});
+        appendCashflowAccounts(query, cashflowAccountCodes(scope));
         if (child) query.set('expected_fingerprint', fingerprint);
         const controller = new AbortController(); state.controller = controller;
         const timeout = window.setTimeout(function () { controller.abort(); }, CASHFLOW_REQUEST_TIMEOUT_MS);
@@ -3339,12 +3561,14 @@
                     && value.group_by === scope.group_by && value.treasury_view === scope.treasury_view
                     && (!value.template_id || value.template_id === scope.template_id)
                     && (!scope.configuration_key || value.configuration_key === scope.configuration_key)
-                    && (scope.report_revision == null || String(value.report_revision) === String(scope.report_revision));
+                    && (scope.report_revision == null || String(value.report_revision) === String(scope.report_revision))
+                    && cashflowAccountKey(cashflowAccountCodes(value)) === cashflowAccountKey(cashflowAccountCodes(scope));
             };
             let result;
             if (cached) {
                 const validationQuery = new URLSearchParams({client_id: scope.client_id, period_start: scope.period_start,
                     period_end: scope.period_end, group_by: scope.group_by, treasury_view: scope.treasury_view});
+                appendCashflowAccounts(validationQuery, cashflowAccountCodes(scope));
                 let validation;
                 try {
                     validation = await read('/api/reconciliation/cashflows/reconciliation/cache-validation?' + validationQuery);
@@ -3381,7 +3605,8 @@
                 state.result = result; state.needsReportReload = false;
                 state.view = result.views[scope.treasury_view] ? scope.treasury_view : 'combined';
                 element('reconContext').textContent = scope.period_start + ' to ' + scope.period_end + ' · ' + scope.group_by + ' · '
-                    + cashflowTreasuryViewLabel(scope.treasury_view) + ' · ' + result.receipt_presentation + ' receipts';
+                    + cashflowTreasuryViewLabel(scope.treasury_view) + ' · ' + result.receipt_presentation + ' receipts'
+                    + (scope.account_selection ? ' · Accounts: ' + scope.account_selection.account_codes.join(', ') : '');
                 element('reconViewLabel').hidden = scope.treasury_view !== 'split';
                 element('reconView').innerHTML = Object.keys(result.views).map(function (view) { return '<option value="' + escapeHtml(view) + '">' + escapeHtml(cashflowTreasuryViewLabel(view)) + '</option>'; }).join('');
                 element('reconView').value = state.view;
@@ -3434,6 +3659,7 @@
             : 'Reconcile the loaded Cashflows report with Cash/Bank ledgers.';
     }
     async function openCashflowReconciliation() {
+        if (cashflowLoadedClientChanged()) return;
         const report = lastCashflowsResult;
         if (cashflowBalancesPending || !report || !(report.source || {}).ready || !((report.preview || {}).periods || []).length) return;
         const state = reconciliationState, page = element('cashflowReconciliation');
@@ -3445,10 +3671,12 @@
         state.scope = {report: report, client_id: report.client_id, period_start: report.period_start, period_end: report.period_end,
             template_id: (report.configuration || {}).source_template_id,
             group_by: report.group_by, treasury_view: report.treasury_view || report.preview.treasury_view || 'combined',
+            account_selection: report.account_selection,
             report_revision: cashflowReportRevisionFromResult(report), configuration_key: report.cashflow_configuration_key || ''};
         // Use the loaded report, never unapplied dates in the main report controls.
         element('reconReportPeriod').textContent = reconciliationPeriodLabel(state.scope);
         element('reconContext').textContent = report.period_start + ' to ' + report.period_end + ' · Loaded Cashflow report';
+        if (report.account_selection) element('reconContext').textContent += ' · Accounts: ' + report.account_selection.account_codes.join(', ');
         element('reconIncludeMatched').checked = false;
         shell.hidden = true; page.hidden = false;
         setReconciliationFeature(true);
@@ -3464,6 +3692,7 @@
             // Refresh the linked report's scope even if its controls contain unapplied edits.
             cashflowSelection = {start: scope.period_start, end: scope.period_end, groupBy: scope.group_by};
             cashflowTreasuryView = scope.treasury_view;
+            cashflowPendingAccounts = cashflowAccountCodes(scope) ? cashflowAccountCodes(scope).slice() : null;
             syncCashflowSelection();
             closeCashflowReconciliation();
             await generateCashflows(null, {forceRefresh: true});
@@ -3518,7 +3747,8 @@
                 headers: {'Content-Type': 'application/json'}, body: JSON.stringify({client_id: scope.client_id,
                     period_start: scope.period_start, period_end: scope.period_end, group_by: scope.group_by,
                     treasury_view: scope.treasury_view, expected_fingerprint: result.evidence_fingerprint,
-                    expected_identity: result.cache_identity})}, false);
+                    expected_identity: result.cache_identity,
+                    ...(scope.account_selection ? {selected_treasury_account_codes: scope.account_selection.account_codes} : {})})}, false);
             task.id = job.id;
             if (task.cancelled || !current()) { discardReconciliationExport(task); return; }
             const base = '/api/reconciliation/cashflows/reconciliation/exports/' + encodeURIComponent(job.id);
@@ -3615,13 +3845,17 @@
         const summaryResult = cashflowSummaryWithoutLedgers(result);
         rememberCashflowSummary(summaryResult);
         lastCashflowsResult = summaryResult;
+        if (cashflowAccountOptionsKey && result.cashflow_configuration_key && cashflowAccountOptionsKey !== result.cashflow_configuration_key) {
+            cashflowAccountOptions = null;
+            cashflowAccountOptionsKey = '';
+        }
         renderCashflowFreshness(result);
         const preview = summaryResult.preview || {};
         resetCashflowInlineLedgerState();
         closeCashflowDrilldown();
-        cashflowTreasuryView = String(preview.treasury_view || cashflowTreasuryView || 'combined');
         syncCashflowTreasuryView();
         seedCashflowReportLedgers(result);
+        syncCashflowAccountButton();
         renderCashflowSummary(preview);
         const summaryRows = cashflowSummaryRows(preview);
         renderCategoryOptions(summaryRows.map(function (row) { return row.category; }), true);
@@ -3639,7 +3873,7 @@
         lazyActions.hidden = !source.ready;
         element('cashflowsLoadTransfersButton').textContent = 'Load internal transfers (' + String(preview.internal_transfer_count || 0) + ')';
         element('cashflowsLoadDeductionsButton').textContent = 'Load customer deductions (' + String(preview.deduction_count || 0) + ')';
-        element('cashflowsLoadReviewButton').textContent = 'Load review required (' + String(preview.category_review_count || 0) + ')';
+        element('cashflowsLoadReviewButton').textContent = 'Load review required (' + String(Number(preview.category_review_count || 0) + Number(preview.selection_review_count || 0)) + ')';
 
         const viewTransactionsButton = element('cashflowsViewTransactionsButton');
         const transactionsSection = element('cashflowsTransactionsSection');
@@ -3657,13 +3891,16 @@
         const blockingReasons = result.blocking_reasons || [];
         const reviewCount = Number(preview.category_review_count || 0);
         if (blockingReasons.length) showCashflowToast(blockingReasons.join(' '), true);
+        else if (preview.selection_review_count) showCashflowToast(String(preview.selection_review_count) + ' voucher(s) need selected-account allocation review. See Review required.', false);
         else if (reviewCount) showCashflowToast(String(reviewCount) + ' counter-account line(s) need category review.', false);
     }
     async function downloadCashflowReport(mode) {
+        if (cashflowLoadedClientChanged()) return;
         const isDrilldown = mode === 'drilldown';
         const button = element(isDrilldown ? 'cashflowsDrilldownExportButton' : 'cashflowsExportButton');
-        const start = element('cashflowsPeriodStart').value;
-        const end = element('cashflowsPeriodEnd').value;
+        const scope = cashflowLoadedScope();
+        const start = scope.period_start;
+        const end = scope.period_end;
         if (!button || !start || !end) return;
         button.disabled = true;
         button.textContent = 'Preparing export.';
@@ -3672,9 +3909,10 @@
                 client_id: clientId,
                 period_start: start,
                 period_end: end,
-                group_by: cashflowSelection.groupBy || 'month',
-                treasury_view: cashflowTreasuryView,
+                group_by: scope.group_by || 'month',
+                treasury_view: scope.treasury_view,
             });
+            appendCashflowAccounts(query, cashflowAccountCodes(scope));
             if (isDrilldown) {
                 query.set('search', element('cashflowsDrilldownSearch').value.trim());
                 query.set('category', element('cashflowsDrilldownCategory').value.trim());
@@ -3711,12 +3949,24 @@
             showCashflowToast(error.message, true);
         } finally {
             button.disabled = false;
-            button.textContent = isDrilldown ? 'Export filtered XLSX' : 'Export XLSX';
+            button.textContent = isDrilldown ? 'Export filtered XLSX' : 'XLSX';
         }
     }
 
     async function generateCashflows(event, options) {
         if (event) event.preventDefault();
+        if (cashflowPendingAccounts != null && !await loadCashflowAccountOptions(false)) {
+            showCashflowToast('Account choices are unavailable. Retry accounts before loading this selection.', true);
+            return;
+        }
+        const requestedAccounts = cashflowEffectivePendingAccounts();
+        const requestedAccountKey = cashflowAccountKey(requestedAccounts);
+        if (requestedAccountKey === 'invalid') {
+            showCashflowToast('Select at least one Cash/Bank account compatible with the Treasury view.', true);
+            element('cashflowsAccountButton').click();
+            return;
+        }
+        closeCashflowAccountPopover(false);
         closeCashflowReconciliation();
         element('cashflowsReconciliationButton').hidden = true;
         const forceRefresh = !!(options && options.forceRefresh);
@@ -3747,13 +3997,11 @@
         const requestedGrouping = cashflowSelection.groupBy;
         const requestedView = cashflowTreasuryView;
         const stillCurrent = function () {
-            return generation === cashflowSummaryGeneration && requestedClient === clientId
-                && start === cashflowSelection.start && end === cashflowSelection.end
-                && requestedGrouping === cashflowSelection.groupBy && requestedView === cashflowTreasuryView;
+            return generation === cashflowSummaryGeneration && requestedClient === clientId;
         };
         const cachedSummary = !forceRefresh
-            ? (takeCashflowSummary(start, end, cashflowSelection.groupBy, cashflowTreasuryView)
-                || findCashflowParentSummary(start, end, cashflowSelection.groupBy, cashflowTreasuryView))
+            ? (takeCashflowSummary(start, end, requestedGrouping, requestedView, requestedAccounts)
+                || findCashflowParentSummary(start, end, requestedGrouping, requestedView, requestedAccounts))
             : null;
         const controller = new AbortController();
         cashflowSummaryController = controller;
@@ -3764,8 +4012,8 @@
                 setCashflowProcessingStep('load', 'Checking the cached Cashflows summary.');
                 const isFresh = await ensureCashflowRevisionFresh(false, true);
                 const freshSummary = isFresh
-                    ? (takeCashflowSummary(start, end, cashflowSelection.groupBy, cashflowTreasuryView)
-                        || findCashflowParentSummary(start, end, cashflowSelection.groupBy, cashflowTreasuryView))
+                    ? (takeCashflowSummary(start, end, requestedGrouping, requestedView, requestedAccounts)
+                        || findCashflowParentSummary(start, end, requestedGrouping, requestedView, requestedAccounts))
                     : null;
                 if (!stillCurrent()) return;
                 if (freshSummary) {
@@ -3781,11 +4029,13 @@
             }
             if (ownsProcessing) setCashflowProcessingStep('load', 'Loading Cashflows data for the selected period.');
             const query = new URLSearchParams({ client_id: requestedClient, period_start: start, period_end: end, group_by: requestedGrouping, treasury_view: requestedView, details: 'summary', warm_ledger_cache: 'true', include_balances: 'true' });
+            appendCashflowAccounts(query, requestedAccounts);
             if (forceRefresh) query.set('refresh', 'true');
             const result = await api('/api/reconciliation/cashflows/preview?' + query.toString(), { signal: controller.signal });
             if (!stillCurrent()) return;
             if (Number(result.client_id) !== Number(requestedClient) || result.period_start !== start || result.period_end !== end
-                    || result.group_by !== requestedGrouping || result.treasury_view !== requestedView) {
+                    || result.group_by !== requestedGrouping || result.treasury_view !== requestedView
+                    || cashflowAccountKey(cashflowAccountCodes(result)) !== requestedAccountKey) {
                 throw new Error('Report data no longer matches the selected client or period. Load the summary again.');
             }
             if (ownsProcessing) setCashflowProcessingStep('render', 'Rendering the grouped Cashflows summary.');
@@ -3842,6 +4092,7 @@
         const columns = rawColumns.slice();
         columns.splice(assignedCategoryIndex, 0, 'Assigned Category');
         columns.push('Type', 'Account');
+        if (result.account_selection) columns.push('Account scope');
         return { rawColumns: rawColumns, columns: columns, assignedCategoryIndex: assignedCategoryIndex };
     }
 
@@ -3895,9 +4146,10 @@
             ], rawValues.slice(layout.assignedCategoryIndex), [
                 classification.type || 'Needs review', account
             ]);
+            if (result.account_selection) values.push(classification.account_scope || 'Voucher context');
             const cells = values.map(function (value, valueIndex) {
                 const label = columns[valueIndex];
-                const className = ['Type', 'Account', 'Assigned Category'].indexOf(label) >= 0 ? ' class="cashflows-classification-cell"' : '';
+                const className = ['Type', 'Account', 'Assigned Category', 'Account scope'].indexOf(label) >= 0 ? ' class="cashflows-classification-cell"' : '';
                 return '<td' + className + '>' + escapeHtml(value) + '</td>';
             }).join('');
             const classificationType = String(classification.type || '').trim().toLowerCase();
@@ -3909,10 +4161,13 @@
         table.innerHTML = '<thead><tr>' + headerCells + '</tr></thead><tbody>' + bodyRows + '</tbody>';
     }
     async function loadClassifiedTransactions(resetPage) {
+        if (cashflowLoadedClientChanged()) return;
+        const scope = cashflowLoadedScope();
+        const loadedKey = cashflowLedgerContextKey(cashflowLedgerContext());
         const configuration = (lastCashflowsResult || {}).configuration || {};
         const templateId = configuration.source_template_id;
-        const start = element('cashflowsPeriodStart').value;
-        const end = element('cashflowsPeriodEnd').value;
+        const start = scope.period_start;
+        const end = scope.period_end;
         if (!templateId || !clientId || !start || !end) return;
         if (resetPage) classifiedTransactionsPage = 1;
         if (classifiedTransactionsRequest) classifiedTransactionsRequest.abort();
@@ -3927,6 +4182,8 @@
             page: String(classifiedTransactionsPage),
             limit: String(classifiedTransactionsLimit)
         });
+        appendCashflowAccounts(params, cashflowAccountCodes(scope));
+        if (scope.account_selection) params.set('treasury_view', ['cash','bank'].includes(scope.treasury_view) ? scope.treasury_view : 'combined');
         const search = element('cashflowsTransactionsSearch').value.trim();
         const type = element('cashflowsTransactionsType').value;
         const account = element('cashflowsTransactionsAccount').value.trim();
@@ -3940,6 +4197,8 @@
             const result = await api('/api/data/cashflows-classification-preview?' + params.toString(), {
                 signal: classifiedTransactionsRequest.signal
             });
+            if (loadedKey !== cashflowLedgerContextKey(cashflowLedgerContext())
+                || cashflowAccountKey(cashflowAccountCodes(result)) !== cashflowAccountKey(cashflowAccountCodes(scope))) return;
             classifiedTransactionsTotal = Number(result.total_rows || 0);
             renderClassifiedTransactions(result);
         } catch (error) {
@@ -3976,10 +4235,13 @@
         syncCashflowDrilldownShortcuts();
     }
     function loadCashflowChildren() {
+        if (cashflowLoadedClientChanged()) return Promise.resolve(null);
         if (cashflowChildRequest) return cashflowChildRequest;
+        const scope = cashflowLoadedScope();
+        const loadedKey = cashflowLedgerContextKey(cashflowLedgerContext());
         const configuration = (lastCashflowsResult || {}).configuration || {};
-        const start = element('cashflowsPeriodStart').value;
-        const end = element('cashflowsPeriodEnd').value;
+        const start = scope.period_start;
+        const end = scope.period_end;
         if (!configuration.source_template_id || !clientId || !start || !end) return Promise.resolve(null);
         const buttonIds = { transfers: 'cashflowsLoadTransfersButton', customer_payments: 'cashflowsLoadCustomerPaymentsButton', vendor_payments: 'cashflowsLoadVendorPaymentsButton', deductions: 'cashflowsLoadDeductionsButton', review: 'cashflowsLoadReviewButton' };
         const labels = { transfers: 'Load internal transfers', customer_payments: 'Load customer payments', vendor_payments: 'Load vendor payments', deductions: 'Load customer deductions', review: 'Load review required' };
@@ -3996,12 +4258,18 @@
             client_id: String(clientId),
             period_start: start,
             period_end: end,
-            group_by: cashflowSelection.groupBy,
+            group_by: scope.group_by,
+            treasury_view: scope.treasury_view,
             details: 'transfers,customer_payments,vendor_payments,deductions,review'
         });
+        appendCashflowAccounts(params, cashflowAccountCodes(scope));
         cashflowChildRequest = api('/api/reconciliation/cashflows/preview?' + params.toString())
             .then(function (result) {
-                if (generation !== cashflowChildGeneration) return null;
+                if (generation !== cashflowChildGeneration || loadedKey !== cashflowLedgerContextKey(cashflowLedgerContext())) return null;
+                if (cashflowAccountKey(cashflowAccountCodes(result)) !== cashflowAccountKey(cashflowAccountCodes(scope))
+                    || (scope.account_selection && !cashflowLedgerResponseMatches(result, cashflowLedgerContext()))) {
+                    throw new Error('Account scope changed. Reload Cashflows.');
+                }
                 const preview = result.preview || {};
                 renderCashflowCustomerWiseOptions(preview);
                 Object.keys(buttonIds).forEach(function (name) {
@@ -4082,6 +4350,7 @@
         defaultPeriods();
     }
     async function initialise() {
+        initialiseCashflowAccounts();
         initialiseCashflowReconciliation();
         setCashflowSummaryFilterVisibility(false);
         element('cashflowsExportButton').addEventListener('click', function () { downloadCashflowReport('summary'); });
@@ -4159,6 +4428,7 @@
         });
         element('cashflowsTreasuryViewSelect').addEventListener('change', function (event) {
             cashflowTreasuryView = event.target.value || 'combined';
+            renderCashflowAccountOptions();
         });
         document.addEventListener('click', function (event) {
             const popover = element('cashflowsPeriodPopover');

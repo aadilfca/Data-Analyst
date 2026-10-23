@@ -221,12 +221,59 @@ def test_report_source_reads_active_client_data_derived_rows():
     assert len(calls) == 1
 
 
+def test_selected_source_keeps_complete_vouchers_and_directional_occurrences(database_count_source):
+    conn, query, calls = database_count_source
+    conn.create_function('GREATEST', 2, max)
+    conn.executemany('''INSERT INTO client_data
+        (id,client_id,template_id,upload_id,is_deleted,change_detection_status,derived_voucher_id,
+         derived_transaction_date,derived_account_code,derived_debit,derived_credit,derived_treasury_type)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''', [
+        (20,7,9,12,0,'active','T','2026-01-02','BANK',0,20,'bank'),
+        (21,7,9,12,0,'active','T','2026-01-02','CASH',20,0,'cash'),
+        (22,7,9,12,0,'active','C','2026-01-03','CASH',0,30,'cash'),
+        (23,7,9,12,0,'active','C','2026-01-03','EXP',30,0,''),
+        (24,7,9,12,0,'active','V1','2026-01-01','BANK',5,0,'bank'),
+        (25,7,9,12,0,'active','V1','2026-01-01','BANK',-5,0,'bank'),
+        (26,7,9,12,0,'active','C','2026-01-03','BANK',0,0,'bank'),
+    ])
+    source = load_ledger_report_source(7, journal_template_id=9, period_start='2026-01-01',
+        period_end='2026-01-31', account_category_source='cashflow', treasury_account_codes=['BANK','CASH'],
+        selected_treasury_account_codes=['BANK','BANK'], query_fn=query)
+    assert source.ready and len(calls) == 1
+    assert set(source.journal.voucher_id) == {'V1','T'}
+    assert set(source.journal.loc[source.journal.voucher_id.eq('T'), 'account_code']) == {'BANK','CASH'}
+    row = source.journal.loc[source.journal.voucher_id.eq('V1') & source.journal.account_code.eq('BANK')].iloc[0]
+    assert (row.debit, row.credit, row.source_inflow, row.source_outflow, row.source_line_count) == (100,0,105,5,3)
+    assert source.metadata['source_row_count'] == 7
+    assert source.metadata['database_totals']['row_count'] == 14  # A zero BANK context line cannot make C eligible.
+    assert source.metadata['selected_treasury_account_codes'] == ['BANK']
+    assert source.metadata['cashflow_report_source_mode'] == 'client_data_derived'
+
+
+def test_selected_inactive_source_remains_ready_without_fabricating_movement(database_count_source):
+    _conn, query, calls = database_count_source
+    source = load_ledger_report_source(7, journal_template_id=9, period_start='2026-01-01',
+        period_end='2026-01-31', account_category_source='cashflow',
+        selected_treasury_account_codes=['INACTIVE'], query_fn=query)
+    assert source.ready and source.journal.empty and len(calls) == 1
+    assert source.metadata['database_totals']['row_count'] == 7
+
+
+@pytest.mark.parametrize('selected', [[], [''], ['UNKNOWN'], 'BANK'])
+def test_selected_source_rejects_invalid_configured_accounts_before_query(selected):
+    with pytest.raises(ValueError, match='(Select|Selected)'):
+        load_ledger_report_source(7, journal_template_id=9, period_start='2026-01-01', period_end='2026-01-31',
+            account_category_source='cashflow', treasury_account_codes=['BANK'],
+            selected_treasury_account_codes=selected, query_fn=lambda *args: pytest.fail('Unexpected query'))
+
+
 @pytest.fixture
 def database_count_source():
     """Execute the source SELECT against disposable rows, not a SQL-shaped mock."""
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.create_function("BTRIM", 1, lambda value: value.strip() if value is not None else None)
+    conn.create_function('GREATEST', 2, max)
     conn.executescript("""
         CREATE TABLE client_data (
             id INTEGER, client_id INTEGER, template_id INTEGER, upload_id INTEGER,

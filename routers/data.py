@@ -18,7 +18,7 @@ import database
 # since routers/verification.py never imports from this module.
 from routers.verification import get_assignment_status_map
 from routers.audit_rules import build_verification_field_policy
-from services.cash_bank_classification import load_cashflow_classification_preview
+from services.cash_bank_classification import load_cashflow_classification_preview, normalize_cashflow_account_selection
 
 router = APIRouter()
 
@@ -507,64 +507,84 @@ def get_cashflows_classification_preview(
     account_code: Optional[str] = Query(None, description="Exact account-code filter"),
     category: Optional[str] = Query(None, description="Assigned-category filter"),
     treasury_view: Optional[str] = Query(None, description='combined, cash, or bank voucher mode'),
+    selected_treasury_account_codes: Optional[List[str]] = Query(None),
     perf: bool = Query(False, include_in_schema=False),
 ):
     """Return a paginated, read-only view of raw Client Data plus Cashflows classification."""
-    client = execute_query_pg(
-        "SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,)
-    )
-    if not client:
-        raise HTTPException(404, "Client not found or inactive")
-
-    template = execute_query_pg(
-        "SELECT id, template_name FROM templates WHERE id = %s AND is_active = TRUE",
-        (template_id,),
-    )
-    if not template:
-        raise HTTPException(404, "Template not found")
-
-    try:
-        start_date = datetime.fromisoformat(date_start).date()
-        end_date = datetime.fromisoformat(date_end).date()
-    except ValueError:
-        raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
-    if start_date > end_date:
-        raise HTTPException(400, "Start date must be before or equal to end date.")
-
-    settings = execute_query_pg(
-        "SELECT source_template_id FROM account_control_cashflow_settings WHERE client_id = %s",
-        (client_id,),
-    )
-    configured_template_id = settings[0].get("source_template_id") if settings else None
-    if configured_template_id is not None and int(configured_template_id) != template_id:
-        raise HTTPException(409, "This template is not the Cashflows source template configured in Account Control Centre.")
-
-    # Match the report's sole transaction source; retired copies may be empty
-    # or stale even when current Client Data contains the selected account.
-    try:
-        result = load_cashflow_classification_preview(
-            client_id,
-            template_id,
-            start_date,
-            end_date,
-            page=page,
-            limit=limit,
-            search=search,
-            classification_type=classification_type,
-            account_code=account_code,
-            category=category,
-            treasury_view=treasury_view,
-            query_fn=execute_query_pg,
+    def read(_conn=None):
+        client = execute_query_pg(
+            "SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,)
         )
-    except ValueError as error:
-        raise HTTPException(400, str(error)) from error
-    result.update({
-        "template_id": template_id,
-        "template_name": template[0].get("template_name") or "Transaction Report",
-        "template_columns": get_template_columns_ordered(template_id),
-        "classification_columns": ["Type", "Account", "Assigned Category"],
-    })
-    return result
+        if not client:
+            raise HTTPException(404, "Client not found or inactive")
+
+        template = execute_query_pg(
+            "SELECT id, template_name FROM templates WHERE id = %s AND is_active = TRUE",
+            (template_id,),
+        )
+        if not template:
+            raise HTTPException(404, "Template not found")
+
+        try:
+            start_date = datetime.fromisoformat(date_start).date()
+            end_date = datetime.fromisoformat(date_end).date()
+        except ValueError:
+            raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
+        if start_date > end_date:
+            raise HTTPException(400, "Start date must be before or equal to end date.")
+
+        settings = execute_query_pg(
+            "SELECT source_template_id FROM account_control_cashflow_settings WHERE client_id = %s",
+            (client_id,),
+        )
+        configured_template_id = settings[0].get("source_template_id") if settings else None
+        if configured_template_id is not None and int(configured_template_id) != template_id:
+            raise HTTPException(409, "This template is not the Cashflows source template configured in Account Control Centre.")
+
+        # Match the report's sole transaction source; retired copies may be empty
+        # or stale even when current Client Data contains the selected account.
+        try:
+            selection = getattr(selected_treasury_account_codes, 'default', selected_treasury_account_codes)
+            selection_options = {}
+            if selection is not None:
+                accounts = execute_query_pg(
+                    'SELECT account_code, treasury_type FROM account_control_cashflow_treasury_accounts '
+                    'WHERE client_id = %s AND is_active = TRUE', (client_id,))
+                selection = normalize_cashflow_account_selection(selection,
+                    {row['account_code']: row['treasury_type'] for row in accounts},
+                    getattr(treasury_view, 'default', treasury_view))
+                if selection is not None:
+                    selection_options['selected_treasury_account_codes'] = selection
+            result = load_cashflow_classification_preview(
+                client_id,
+                template_id,
+                start_date,
+                end_date,
+                page=page,
+                limit=limit,
+                search=search,
+                classification_type=classification_type,
+                account_code=account_code,
+                category=category,
+                treasury_view=treasury_view,
+                query_fn=execute_query_pg,
+                **selection_options,
+            )
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
+        result.update({
+            "template_id": template_id,
+            "template_name": template[0].get("template_name") or "Transaction Report",
+            "template_columns": get_template_columns_ordered(template_id),
+            "classification_columns": ["Type", "Account", "Assigned Category"],
+        })
+        if selection_options:
+            result['account_selection'] = dict(version=1, mode='selected', account_codes=selection)
+        return result
+
+    selection = getattr(selected_treasury_account_codes, 'default', selected_treasury_account_codes)
+    return database.run_read_snapshot_pg(read) if selection is not None else read()
+
 @router.get('/api/data/ledger-accounts')
 def get_preview_ledger_accounts(client_id: int, template_id: int):
     """Offer imported accounts, including historical names absent from today's TB."""

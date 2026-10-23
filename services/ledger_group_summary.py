@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from decimal import Decimal, InvalidOperation
+from math import isfinite
 from numbers import Number
 from typing import Any, Mapping, Sequence
 
@@ -1556,6 +1557,7 @@ def build_cashflow_summary(
     include_drilldown: bool = False,
     vendor_account_codes: Sequence[str] = (),
     include_reconciliation_evidence: bool = False,
+    selected_treasury_account_codes: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Summarise vouchers containing configured Cash or Bank accounts.
 
@@ -1565,6 +1567,10 @@ def build_cashflow_summary(
     retain their signs; uncertain settlements keep every original category
     and remain visible for review. Party summaries never require guessed
     matching to earlier invoices or payments.
+
+    Optional account selection narrows movements, never the configured Treasury
+    universe. Canonical aggregated inputs must come from the direction-preserving
+    selected source read; raw individual occurrences can be used directly.
     """
     start = pd.Timestamp(period_start)
     end = pd.Timestamp(period_end)
@@ -1603,9 +1609,18 @@ def build_cashflow_summary(
     cash_codes = {_canonical_code(code) for code in cash_account_codes if _canonical_code(code)}
     bank_codes = {_canonical_code(code) for code in bank_account_codes if _canonical_code(code)}
     treasury_codes = cash_codes | bank_codes
+    selection = None
+    if selected_treasury_account_codes is not None:
+        if isinstance(selected_treasury_account_codes, (str, bytes)):
+            raise ValueError('Selected Treasury accounts must be a list of account codes')
+        selection = {_canonical_code(code) for code in selected_treasury_account_codes}
+        if not selection or '' in selection or not selection <= treasury_codes:
+            raise ValueError('Select valid configured Treasury accounts')
+        if selection == treasury_codes:
+            selection = None  # Explicit All preserves every legacy result field.
     treasury_type = {code: "Cash" for code in cash_codes}
     treasury_type.update({code: "Bank" for code in bank_codes})
-    selected_vouchers = journal.loc[journal["account_code"].isin(treasury_codes), "voucher_id"].drop_duplicates().tolist()
+    selected_vouchers = journal.loc[journal["account_code"].isin(selection if selection is not None else treasury_codes), "voucher_id"].drop_duplicates().tolist()
     working = journal.loc[journal["voucher_id"].isin(selected_vouchers)].copy()
     configured_roles = _normalise_customer_payment_roles(cashflow_role_categories)
     receipt_categories = _cashflow_customer_receipt_categories(cashflow_role_categories)
@@ -1982,6 +1997,232 @@ def build_cashflow_summary(
             'roles': {key: sorted(values) for key, values in (configured_roles or {}).items()},
             'customer_vouchers': customer_payment_details['voucher_id'].astype(str).tolist(),
         }
+    if selection is not None:
+        result = _scope_cashflow_summary(result, working, contra if not working.empty else pd.DataFrame(),
+            category_frame, deduction_rows if not working.empty else pd.DataFrame(),
+            detail_lines if include_drilldown and not working.empty else pd.DataFrame(),
+            selection, treasury_type, vendor_account_codes, tolerance, include_reconciliation_evidence)
+    return result
+
+
+def _scope_cashflow_summary(result, working, contra, category_lines, deduction_rows, detail_lines,
+                            selected, account_types, vendor_codes, tolerance, include_evidence):
+    """Project selected Treasury legs without reclassifying excluded Treasury.
+
+    The ordinary engine has already checked complete vouchers and applied its
+    customer policy once. Only source-proven ownership survives this projection;
+    unknown allocations retain their actual movements as a separate bridge.
+    """
+    periods = result['periods']
+    keys = [p['key'] for p in periods]
+    lines = working.copy()
+    if not lines.empty:
+        directional = {'source_inflow', 'source_outflow'}
+        if directional & set(lines.columns):
+            if not directional <= set(lines.columns):
+                raise ValueError('Both source direction controls are required')
+            for field in directional:
+                values = pd.to_numeric(lines[field], errors='coerce')
+                if values.isna().any() or not values.map(isfinite).all() or values.lt(0).any():
+                    raise ValueError('Invalid source direction controls')
+                lines[field] = values
+            if ((lines.source_inflow - lines.source_outflow) - (lines.debit - lines.credit)).abs().gt(tolerance).any():
+                raise ValueError('Source direction controls disagree with debit/credit')
+        else:
+            canonical_without_counts = {'treasury_type', 'category'} <= set(lines.columns) and 'source_line_count' not in lines
+            if canonical_without_counts or ('source_line_count' in lines and pd.to_numeric(lines.source_line_count, errors='coerce').gt(1).any()):
+                raise ValueError('Aggregated selected rows require source direction controls')
+            lines['source_inflow'] = lines.debit.clip(lower=0) + (-lines.credit).clip(lower=0)
+            lines['source_outflow'] = lines.credit.clip(lower=0) + (-lines.debit).clip(lower=0)
+
+    plans, projected, reviews = [], [], []
+    owners, labels = set(), {}
+    customer_ids = set(result['customer_payment_details']['voucher_id'].astype(str))
+    by_voucher, source_by_voucher = defaultdict(list), defaultdict(list)
+    for row in category_lines.to_dict('records'):
+        by_voucher[str(row['voucher_id'])].append(row)
+    # Group the already fetched compact records once. Per-voucher DataFrame
+    # slicing would add thousands of allocations to the fast source path.
+    for row in lines.to_dict('records'):
+        source_by_voucher[str(row['voucher_id'])].append(row)
+    lower_types = {code: kind.casefold() for code, kind in account_types.items()}
+
+    def empty_sides():
+        return {kind: dict(receipts=0.0, payments=0.0) for kind in ('bank', 'cash')}
+
+    for voucher, group in source_by_voucher.items():
+        treasury_codes = {row['account_code'] for row in group if row['is_treasury']}
+        has_counterparts = any(not row['is_treasury'] for row in group)
+        types = {account_types[c] for c in treasury_codes}
+        complete = treasury_codes <= selected
+        hub = None
+        if not complete and has_counterparts and voucher not in customer_ids and len({row['date'] for row in group}) == 1:
+            # One normalized source OR destination across the WHOLE voucher
+            # proves ownership. Account nets alone cannot establish this rule.
+            incoming = {row['account_code'] for row in group if row['source_inflow'] > tolerance}
+            outgoing = {row['account_code'] for row in group if row['source_outflow'] > tolerance}
+            if not incoming & outgoing:
+                for candidates in (incoming, outgoing):
+                    if len(candidates) == 1 and next(iter(candidates)) in treasury_codes:
+                        hub = next(iter(candidates))
+                        break
+        kind = ('pure_transfer' if not has_counterparts else 'complete' if complete
+                else 'single_treasury_hub' if hub else 'unallocated')
+        owns_categories = complete or (hub is not None and hub in selected)
+        label = (next(iter(types)) if len(types) == 1 else 'Mixed') if complete else account_types.get(hub)
+        if kind == 'pure_transfer':
+            label = None  # Pure Treasury movement is never also mixed allocation.
+        if owns_categories:
+            owners.add(voucher)
+            labels[voucher] = label
+            for row in by_voucher[voucher]:
+                projected.append(dict(row, treasury_type=label))
+        reason = ('Customer settlement spans selected and unselected Treasury accounts'
+                  if voucher in customer_ids else 'Counterpart allocation is not proven for selected accounts')
+        period_blocks = defaultdict(list)
+        for row in group:
+            period_blocks[row['period_key']].append(row)
+        for key, block in period_blocks.items():
+            actual = empty_sides()
+            transfers = empty_sides()
+            for row in block:
+                if row['account_code'] in selected:
+                    values = actual[lower_types[row['account_code']]]
+                    values['receipts'] += float(row['source_inflow'])
+                    values['payments'] += float(row['source_outflow'])
+            if kind == 'pure_transfer':
+                transfers = {typ: dict(value) for typ, value in actual.items()}
+            elif kind == 'single_treasury_hub':
+                # Each other Treasury leg has exactly one opposing hub. These
+                # are observed components, never a residual against a subtotal.
+                for row in block:
+                    if not row['is_treasury'] or row['account_code'] == hub:
+                        continue
+                    amount = row['source_inflow'] - row['source_outflow']
+                    if hub in selected:
+                        transfers[account_types[hub].casefold()]['payments' if amount >= 0 else 'receipts'] += abs(amount)
+                    if row['account_code'] in selected:
+                        transfers[account_types[row['account_code']].casefold()]['receipts' if amount >= 0 else 'payments'] += abs(amount)
+            plan = dict(voucher_id=voucher, period_key=key, kind=kind, category_type=label,
+                        source=actual, transfers=transfers, has_counterparts=has_counterparts)
+            plans.append(plan)
+            if kind == 'unallocated':
+                reviews.append(dict(voucher_id=voucher, date=min(row['date'] for row in block), period_key=key, reason=reason,
+                    receipts=sum(x['receipts'] for x in actual.values()),
+                    payments=sum(x['payments'] for x in actual.values())))
+
+    frame = pd.DataFrame(projected, columns=[*category_lines.columns, 'treasury_type'])
+    if frame.empty:
+        totals = pd.DataFrame(index=pd.Index([], name='category'), columns=[*keys, 'Total'], dtype=float)
+    else:
+        totals = _reindex_periods(frame.pivot_table(index='category', columns='period_key', values='amount',
+            aggfunc='sum', fill_value=0.0).sort_index(), keys, 'category')
+        totals['Total'] = totals.sum(axis=1)
+    treasury_totals = []
+    if not frame.empty:
+        for (category, key), group in frame.groupby(['category', 'period_key'], sort=False):
+            treasury_totals.append(dict(category=category, period_key=key,
+                bank_amount=float(group.loc[group.treasury_type.eq('Bank'), 'amount'].sum()),
+                cash_amount=float(group.loc[group.treasury_type.eq('Cash'), 'amount'].sum()),
+                mixed_amount=float(group.loc[group.treasury_type.eq('Mixed'), 'amount'].sum()),
+                total_amount=float(group.amount.sum())))
+    treasury_totals = pd.DataFrame(treasury_totals, columns=list(CASHFLOW_TREASURY_TOTAL_COLUMNS))
+    proof = []
+    for key in keys:
+        for view in ('bank', 'cash', 'combined'):
+            kinds = ('bank', 'cash') if view == 'combined' else (view,)
+            column = {'bank': 'bank_amount', 'cash': 'cash_amount'}.get(view, 'total_amount')
+            category = float(treasury_totals.loc[treasury_totals.period_key.eq(key), column].sum())
+            actual = transfer = mixed = 0.0
+            review_ids = set()
+            for plan in (p for p in plans if p['period_key'] == key):
+                raw = sum(plan['source'][k]['receipts'] - plan['source'][k]['payments'] for k in kinds)
+                actual += raw
+                transfer += sum(plan['transfers'][k]['receipts'] - plan['transfers'][k]['payments'] for k in kinds)
+                uncertain = plan['kind'] == 'unallocated' or (plan['category_type'] == 'Mixed' and view != 'combined')
+                if uncertain:
+                    mixed += raw
+                if (plan['kind'] == 'unallocated' or plan['category_type'] == 'Mixed') and any(
+                    plan['source'][k]['receipts'] or plan['source'][k]['payments'] for k in kinds):
+                    review_ids.add(plan['voucher_id'])
+            explained = category + transfer + mixed
+            variance = actual - explained
+            if abs(variance) > tolerance:
+                raise LedgerBalanceError('Selected Cashflow does not preserve source Treasury movements', result['balance_checks'])
+            proof.append(dict(period_key=key, treasury_type=view, category_movement=category,
+                internal_transfer_movement=transfer, mixed_voucher_movement=mixed, explained_movement=explained,
+                source_movement=actual, variance=variance,
+                unallocated_category_movement=float(treasury_totals.loc[treasury_totals.period_key.eq(key), 'mixed_amount'].sum()),
+                mixed_voucher_count=len(review_ids), allocation_status='Review required' if review_ids else 'Proven', status='Matched'))
+    allocation_review = any(p['mixed_voucher_count'] for p in proof)
+    reconciliation = _cashflow_treasury_reconciliation(totals, treasury_totals, keys, tolerance=tolerance)
+    reconciliation.update(source_status='Matched', source_max_abs_variance=max((abs(p['variance']) for p in proof), default=0),
+        allocation_status='Review required' if allocation_review else 'Proven',
+        status='Review required' if allocation_review else reconciliation['status'],
+        allocation_policy='complete selected voucher or unique Treasury funding/receiving account; other selected legs remain under review')
+
+    # Only owned counter-accounts enter monetary details. Complete voucher
+    # support remains available separately, with no full-voucher double count.
+    scoped_contra = contra[contra.voucher_id.astype(str).isin(owners)].copy() if not contra.empty else contra
+    customers = result['customer_payment_details']
+    customers = customers[customers.voucher_id.astype(str).isin(owners)].reset_index(drop=True)
+    account_details = _customer_account_details(scoped_contra, customers) if not scoped_contra.empty else _empty_customer_payment_details()
+    account_periods = []
+    for (key, label), block in account_details.groupby(['period_key', 'period_label'], sort=False):
+        period = _build_cashflow_customer_payment_customer_totals(block)
+        period['period_key'], period['period_label'] = key, label
+        account_periods.append(period)
+    customer_totals = _build_cashflow_customer_payment_customer_totals(account_details)
+    result.update(category_totals=totals, treasury_category_totals=treasury_totals,
+        treasury_movement_proof=proof, treasury_reconciliation=reconciliation,
+        customer_payment_details=customers, customer_payment_customer_totals=customer_totals,
+        customer_payment_account_period_totals=pd.concat(account_periods, ignore_index=True) if account_periods else pd.DataFrame(),
+        customer_payment_period_totals=_build_cashflow_customer_payment_period_totals(account_details, periods, totals,
+            result['customer_payment_receipt_categories'], tolerance=tolerance),
+        customer_payment_reconciliation=_build_cashflow_customer_payment_reconciliation(customers, customer_totals, totals,
+            result['customer_payment_receipt_categories'], tolerance=tolerance),
+        account_selection=dict(version=1, mode='selected', account_codes=sorted(selected), configured_account_codes=sorted(account_types)),
+        selection_review_details=pd.DataFrame(reviews, columns=['voucher_id', 'date', 'period_key', 'reason', 'receipts', 'payments']),
+        selection_review_count=len({r['voucher_id'] for r in reviews}),
+        **_build_vendor_payment_reports(scoped_contra, vendor_codes))
+    if not deduction_rows.empty:
+        result['deduction_details'] = deduction_rows[deduction_rows.voucher_id.astype(str).isin(owners)].drop(columns='voucher_id').reset_index(drop=True)
+    review = result['categories_needing_review']
+    result['categories_needing_review'] = review[review.voucher_id.astype(str).isin(owners)].reset_index(drop=True)
+    result['category_review_count'] = len(result['categories_needing_review'])
+    if result['cashflow_drilldown_prepared']:
+        details = detail_lines[detail_lines.voucher_id.astype(str).isin(owners)].copy() if not detail_lines.empty else detail_lines
+        if not details.empty:
+            details['treasury_type'] = details.voucher_id.astype(str).map(labels)
+            rollups = details.groupby(['category', 'period_key', 'period_label', 'account_code', 'account_name', 'treasury_type'],
+                dropna=False, sort=False).agg(amount=('amount', 'sum'), line_count=('detail_line_key', 'nunique')).reset_index()
+        else:
+            rollups = _empty_cashflow_ledger_rollups()
+        result['cashflow_ledger_rollups'] = rollups
+        result['cashflow_drilldown_controls'] = _build_cashflow_drilldown_controls(totals, rollups, tolerance=tolerance)
+    transfers = result['transfer_details'].copy()
+    plan_by_key = {(p['voucher_id'], p['period_key']): p for p in plans}
+    for field in ('selection_inflow', 'selection_outflow'):
+        transfers[field] = 0.0
+    for index, row in transfers.iterrows():
+        plan = plan_by_key.get((str(row.voucher_id), row.period_key))
+        for side, field in (('receipts', 'selection_inflow'), ('payments', 'selection_outflow')):
+            transfers.at[index, field] = sum(plan['transfers'][kind][side] for kind in ('bank', 'cash')) if plan else 0.0
+    transfers['selection_net_movement'] = transfers.selection_inflow - transfers.selection_outflow
+    transfers['evidence_scope'] = 'Complete voucher context; selection_* fields contain selected transfer amounts'
+    result['transfer_details'] = transfers
+    result['transfer_reconciliation'] = dict(result['transfer_reconciliation'],
+        scope_note='Source voucher agreement; selected transfer totals are separate',
+        selected_inflow=float(transfers.selection_inflow.sum()), selected_outflow=float(transfers.selection_outflow.sum()))
+    for key in keys:
+        metrics = result['period_metrics'][key]
+        metrics['category_review_count'] = int(result['categories_needing_review'].period_key.eq(key).sum())
+        metrics['deduction_count'] = int(result['deduction_details'].period_key.eq(key).sum())
+        metrics['selection_review_count'] = sum(r['period_key'] == key for r in reviews)
+    if include_evidence:
+        evidence = result['reconciliation_evidence']
+        evidence['category_lines'] = frame.drop(columns='treasury_type').to_dict('records')
+        evidence['selected_scope'] = plans
     return result
 
 
@@ -2001,6 +2242,15 @@ def build_cashflow_presentation_adjustments(
     evidence = summary.get('reconciliation_evidence')
     if evidence is None:
         raise ValueError('Opt-in reconciliation evidence is required')
+    selected_plans = None
+    if summary.get('account_selection'):
+        codes = set(summary['account_selection']['account_codes'])
+        if not codes or not codes <= set(account_types):
+            raise ValueError('Selected Treasury accounts are absent from reconciliation configuration')
+        account_types = {code: kind for code, kind in account_types.items() if code in codes}
+        if 'selected_scope' not in evidence:
+            raise ValueError('Selected-account reconciliation evidence is required')
+        selected_plans = {(p['voucher_id'], p['period_key']): p for p in evidence['selected_scope']}
     periods = summary['periods']
     period_by_day = {day.date().isoformat(): p['key'] for p in periods
                      for day in pd.date_range(p['start'], p['end'])}
@@ -2072,16 +2322,43 @@ def build_cashflow_presentation_adjustments(
             outflow = sum((r['outflow'] for r in selected), Decimal(0))
             source_totals[key]['receipts'] += inflow
             source_totals[key]['payments'] += outflow
-            profile = profiles.get(voucher)
-            if not profile:
-                unresolved.append(dict(voucher_id=voucher, period_key=key, reason='Voucher absent from valid Cashflow population'))
-                continue
-            if not profile['has_counterparts']:
-                add(voucher, key, 'internal_transfers', 'Internal transfers shown separately', -inflow, -outflow)
-                continue
-            if view != 'combined' and len(profile['treasury_types']) > 1:
-                add(voucher, key, 'mixed_treasury', 'Mixed Treasury movements shown separately; allocation requires review', -inflow, -outflow)
-                continue
+            if selected_plans is not None:
+                plan = selected_plans.get((voucher, key))
+                kinds = ('bank', 'cash') if view == 'combined' else (view,)
+                if plan is None and inflow == 0 and outflow == 0:
+                    # Original zero postings remain in source/occurrence
+                    # comparisons but need no financial attribution plan.
+                    continue
+                if plan is None or any(abs(actual - sum((amount(plan['source'][kind][side]) for kind in kinds), Decimal(0)))
+                        > Decimal(str(DEFAULT_TOLERANCE)) for side, actual in (('receipts', inflow), ('payments', outflow))):
+                    unresolved.append(dict(voucher_id=voucher, period_key=key, reason='Selected direction evidence changed or is unavailable'))
+                    continue
+                uncertain = plan['kind'] == 'unallocated' or (plan['category_type'] == 'Mixed' and view != 'combined')
+                if uncertain or plan['kind'] == 'pure_transfer':
+                    reason = 'selected_allocation_review' if uncertain else 'internal_transfers'
+                    label = ('Selected Treasury movements shown separately; allocation requires review' if uncertain
+                             else 'Internal transfers shown separately')
+                    add(voucher, key, reason, label, -inflow, -outflow)
+                    continue
+                transfer_in = sum((amount(plan['transfers'][kind]['receipts']) for kind in kinds), Decimal(0))
+                transfer_out = sum((amount(plan['transfers'][kind]['payments']) for kind in kinds), Decimal(0))
+                if transfer_in > inflow + Decimal(str(DEFAULT_TOLERANCE)) or transfer_out > outflow + Decimal(str(DEFAULT_TOLERANCE)):
+                    unresolved.append(dict(voucher_id=voucher, period_key=key, reason='Selected transfer components exceed original postings'))
+                    continue
+                add(voucher, key, 'internal_transfers', 'Internal transfers shown separately', -transfer_in, -transfer_out)
+                inflow -= transfer_in
+                outflow -= transfer_out
+            else:
+                profile = profiles.get(voucher)
+                if not profile:
+                    unresolved.append(dict(voucher_id=voucher, period_key=key, reason='Voucher absent from valid Cashflow population'))
+                    continue
+                if not profile['has_counterparts']:
+                    add(voucher, key, 'internal_transfers', 'Internal transfers shown separately', -inflow, -outflow)
+                    continue
+                if view != 'combined' and len(profile['treasury_types']) > 1:
+                    add(voucher, key, 'mixed_treasury', 'Mixed Treasury movements shown separately; allocation requires review', -inflow, -outflow)
+                    continue
             categories = category_lines[(voucher, key)]
             counter_net = sum((amount(r['amount']) for r in categories), Decimal(0))
             if abs(inflow - outflow - counter_net) > Decimal(str(DEFAULT_TOLERANCE)):

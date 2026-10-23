@@ -59,6 +59,7 @@ from services.reconciliation_balance_source import (
     normalize_balance_month,
 )
 from services.reconciliation_xlsx import export_cashflow_xlsx, export_reconciliation_xlsx, export_cashflow_reconciliation_xlsx
+from services.cash_bank_classification import normalize_cashflow_account_selection
 
 
 router = APIRouter()
@@ -67,6 +68,28 @@ logger = logging.getLogger(__name__)
 # Browser roll-ups are disposable; never persist another transaction/report copy.
 CASHFLOW_BROWSER_LEDGER_MAX_ROWS = 5000
 CASHFLOW_BROWSER_LEDGER_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _cashflow_selection_options(codes):
+    """Keep omitted query defaults off the established All-account call path."""
+    codes = getattr(codes, 'default', codes)
+    return {'selected_treasury_account_codes': codes} if codes is not None else {}
+
+
+def _cashflow_selected_codes(codes, configuration, view):
+    accounts = {code: 'Bank' for code in configuration['bank_account_codes']}
+    accounts.update({code: 'Cash' for code in configuration['cash_account_codes']})
+    try:
+        return normalize_cashflow_account_selection(codes, accounts, view)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+
+
+def _cashflow_selection_context(codes, configuration):
+    if codes is None:
+        return {}
+    return dict(account_selection=dict(version=1, mode='selected', account_codes=codes,
+        configured_account_codes=sorted(set(configuration['bank_account_codes'] + configuration['cash_account_codes']))))
 
 
 def _cashflow_configuration_key(configuration: dict[str, Any]) -> str:
@@ -1449,6 +1472,10 @@ def _cashflow_preview(
         "period_metrics": summary.get("period_metrics") or {},
         "receipt_presentation": summary.get("receipt_presentation") or "net",
         "detail_sections_loaded": sorted(loaded),
+        **(dict(account_selection=summary['account_selection'],
+            selection_review_count=summary.get('selection_review_count', 0),
+            selection_review_details=_frame_records_all(summary.get('selection_review_details')) if 'review' in loaded else [])
+            if summary.get('account_selection') else {}),
     }
 
 
@@ -1494,6 +1521,7 @@ def _build_cashflow_result(
     customer_account_code: str = "",
     warm_ledger_cache: bool = False,
     include_balances: bool = False,
+    selected_treasury_account_codes: list[str] | None = None,
 ) -> dict[str, Any]:
     request_started = perf_counter()
     validation_started = perf_counter()
@@ -1507,6 +1535,8 @@ def _build_cashflow_result(
         raise HTTPException(400, str(error)) from error
     configuration_started = perf_counter()
     configuration = _cashflow_configuration(client_id)
+    selected_codes = _cashflow_selected_codes(selected_treasury_account_codes, configuration, treasury_view)
+    selection_options = _cashflow_selection_options(selected_codes)
     configuration_seconds = perf_counter() - configuration_started
     # Phase 1: Cashflows are sourced directly from active client_data rows and
     # their derived_* columns. Preparation/read-model tables are no longer part
@@ -1548,6 +1578,7 @@ def _build_cashflow_result(
                 *configuration["cash_account_codes"],
                 *configuration["bank_account_codes"],
             ],
+            **selection_options,
         )
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
@@ -1586,6 +1617,7 @@ def _build_cashflow_result(
                 vendor_account_codes=configuration.get("vendor_account_codes", []),
                 group_by=grouping,
                 include_drilldown=warm_ledger_cache or bool(detail_sections and 'drilldown' in detail_sections),
+                **selection_options,
             )
         except LedgerBalanceError as error:
             summary_status = "failed"
@@ -1603,6 +1635,12 @@ def _build_cashflow_result(
         "categories": {"status": "Review" if review_count else ("Ready" if summary else "Blocked"), "count": review_count, "message": f"{review_count} counter-account line(s) need category review." if review_count else "Counter-account categories are ready."},
         "transfers": {"status": "Ready" if summary else "Blocked", "count": transfer_count, "message": f"{transfer_count} internal transfer voucher(s) identified." if summary else "Transfer analysis is unavailable."},
     }
+    if selected_codes is not None:
+        selection_reviews = int((summary or {}).get('selection_review_count', 0))
+        controls['account_selection'] = dict(status='Ready', count=len(selected_codes),
+            message=f'{len(selected_codes)} Cash/Bank account(s) selected.')
+        controls['selection_allocation'] = dict(status='Review' if selection_reviews else ('Ready' if summary else 'Blocked'),
+            count=selection_reviews, message=f'{selection_reviews} voucher(s) need selected-account allocation review.')
     blocking_reasons = [item["message"] for item in diagnostics if item.get("severity") == "error"]
     if review_count:
         blocking_reasons.append(controls["categories"]["message"])
@@ -1625,6 +1663,8 @@ def _build_cashflow_result(
         # Existing views/drilldowns retain their previous query and response path.
         accounts = {code: 'Cash' for code in configuration['cash_account_codes'] if treasury_view != 'bank'}
         accounts.update({code: 'Bank' for code in configuration['bank_account_codes'] if treasury_view != 'cash'})
+        if selected_codes is not None:
+            accounts = {code: kind for code, kind in accounts.items() if code in selected_codes}
         periods = summary.get('periods', []) if summary else []
         def view_movements(view):
             # Category allocation and balance arithmetic have separate proofs.
@@ -1654,6 +1694,7 @@ def _build_cashflow_result(
         'report_revision': report_revision,
         'source_key': source_metadata.get('cashflow_report_source_key') or '',
         'configuration_key': configuration_key,
+        **_cashflow_selection_context(selected_codes, configuration),
     }
     if warm_ledger_cache:
         frame = summary.get('cashflow_ledger_rollups') if summary else None
@@ -1717,6 +1758,7 @@ def _build_cashflow_result(
         "cashflow_report_revision": report_revision,
         "cashflow_configuration_key": configuration_key,
         "ledger_context": ledger_context,
+        **_cashflow_selection_context(selected_codes, configuration),
         "preparation": preparation_status,
         "freshness": {
             "mode": cache_mode,
@@ -1833,6 +1875,21 @@ def _parse_cashflow_detail_sections(value: str | None) -> set[str] | None:
         raise HTTPException(400, "Invalid Cashflows detail section requested.")
     return sections
 
+@router.get('/api/reconciliation/cashflows/account-options')
+def cashflow_account_options(client_id: int = Query(..., ge=1), session=Depends(require_admin)):
+    """Small configured-account picker; never scans financial transaction rows."""
+    def read(_conn):
+        _require_active_client(client_id)
+        config = _cashflow_configuration(client_id)
+        names = {row['account_code']: row.get('account_name') for row in _latest_trial_balance_accounts(client_id)}
+        accounts = [dict(account_code=code, account_name=names.get(code) or code, treasury_type=kind)
+            for kind, codes in [('bank', config['bank_account_codes']), ('cash', config['cash_account_codes'])]
+            for code in sorted(set(codes))]
+        return dict(client_id=client_id, configuration_key=_cashflow_configuration_key(config),
+            report_revision=config.get('cashflow_report_revision'), accounts=accounts)
+    return run_read_snapshot_pg(read)
+
+
 @router.get("/api/reconciliation/cashflows/revision")
 def cashflow_revision(
     client_id: int = Query(..., ge=1),
@@ -1916,6 +1973,7 @@ def cashflow_differences(
     client_id: int = Query(..., ge=1), period_start: str = Query(...), period_end: str = Query(...),
     treasury_view: str = Query('combined'), differences_only: bool = Query(True),
     page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=200), session=Depends(require_admin),
+    selected_treasury_account_codes: Optional[List[str]] = Query(None),
 ):
     """On-demand diagnostic only: never alters the summary/export path."""
     start, end = _parse_report_period(period_start, period_end)
@@ -1930,6 +1988,10 @@ def cashflow_differences(
             raise HTTPException(400, 'Configure the Cashflows Transaction Report template first.')
         accounts = {c: 'Bank' for c in config['bank_account_codes'] if view != 'cash'}
         accounts.update({c: 'Cash' for c in config['cash_account_codes'] if view != 'bank'})
+        selected_codes = _cashflow_selected_codes(
+            getattr(selected_treasury_account_codes, 'default', selected_treasury_account_codes), config, view)
+        if selected_codes is not None:
+            accounts = {code: kind for code, kind in accounts.items() if code in selected_codes}
         source = load_cashflow_difference_source(client_id, config['source_template_id'], list(accounts),
             start.date().isoformat(), end.date().isoformat(), query_fn=execute_query_pg)
         result = build_cashflow_differences(source, accounts, start.date().isoformat(), end.date().isoformat())
@@ -1940,18 +2002,23 @@ def cashflow_differences(
         result.update(client_id=client_id, treasury_view=view, configuration_key=_cashflow_configuration_key(config),
             report_revision=config.get('cashflow_report_revision'), total_groups=len(rows), total_rows=len(filtered),
             page=current, page_count=page_count, limit=limit, rows=filtered[(current-1)*limit:current*limit])
+        result.update(_cashflow_selection_context(selected_codes, config))
         return result
     return run_read_snapshot_pg(read)
 
 
-def _reconciliation_cache_context(client_id, start, end, grouping, view, config):
+def _reconciliation_cache_context(client_id, start, end, grouping, view, config, selected_treasury_account_codes=None):
     """Called only within the same read-only snapshot as the figures/validation."""
     codes = sorted(set(config['bank_account_codes'] + config['cash_account_codes']))
+    selected = _cashflow_selected_codes(selected_treasury_account_codes, config, view)
+    if selected is not None:
+        codes = selected
     stamp = load_cashflow_reconciliation_identity(client_id, config['source_template_id'], codes, query_fn=execute_query_pg)
     configuration_key = _cashflow_configuration_key(config)
     context = dict(cache_schema=1, client_id=client_id, template_id=config['source_template_id'],
         period_start=start.date().isoformat(), period_end=end.date().isoformat(), group_by=grouping,
         treasury_view=view, configuration_key=configuration_key, report_revision=config.get('cashflow_report_revision'))
+    context.update(_cashflow_selection_context(selected, config))
     context['cache_identity'] = hashlib.sha256(json.dumps([context, stamp], sort_keys=True, default=str).encode()).hexdigest()
     return context
 
@@ -1960,6 +2027,7 @@ def _reconciliation_cache_context(client_id, start, end, grouping, view, config)
 def validate_cashflow_reconciliation_cache(
     client_id: int = Query(..., ge=1), period_start: str = Query(...), period_end: str = Query(...),
     group_by: str = Query('month'), treasury_view: str = Query('combined'), session=Depends(require_admin),
+    selected_treasury_account_codes: Optional[List[str]] = Query(None),
 ):
     """Validate both source populations without rebuilding the accounting bridge."""
     start, end = _parse_report_period(period_start, period_end)
@@ -1973,11 +2041,13 @@ def validate_cashflow_reconciliation_cache(
         config = _cashflow_configuration(client_id)
         if not config.get('source_template_id') or not (config['bank_account_codes'] or config['cash_account_codes']):
             raise HTTPException(400, 'Configure the Cashflows template and Cash/Bank accounts first.')
-        return _reconciliation_cache_context(client_id, start, end, grouping, view, config)
+        return _reconciliation_cache_context(client_id, start, end, grouping, view, config,
+            **_cashflow_selection_options(selected_treasury_account_codes))
     return run_read_snapshot_pg(read)
 
 
-def _cashflow_reconciliation_snapshot(client_id, start, end, grouping, view, *, include_posting=False, progress=None):
+def _cashflow_reconciliation_snapshot(client_id, start, end, grouping, view, *, include_posting=False, progress=None,
+                                      selected_treasury_account_codes=None):
     """Share the screen/export accounting build inside the caller's read snapshot."""
     progress = progress or (lambda *args: None)
     progress('Reading voucher source', 0, None)
@@ -1989,9 +2059,11 @@ def _cashflow_reconciliation_snapshot(client_id, start, end, grouping, view, *, 
     accounts.update({code: 'Cash' for code in config['cash_account_codes']})
     if not accounts:
         raise HTTPException(400, 'Configure Cash/Bank accounts before reconciling Cashflows.')
+    selected_codes = _cashflow_selected_codes(selected_treasury_account_codes, config, view)
+    selection_options = _cashflow_selection_options(selected_codes)
     report_source = load_ledger_report_source(client_id, journal_template_id=config['source_template_id'],
         period_start=start, period_end=end, cashflow_group_by=grouping, query_fn=execute_query_pg,
-        account_category_source='cashflow', treasury_account_codes=list(accounts))
+        account_category_source='cashflow', treasury_account_codes=list(accounts), **selection_options)
     if not report_source.ready:
         raise HTTPException(400, 'Cashflow source is unavailable; resolve its source diagnostics first.')
     try:
@@ -2000,7 +2072,10 @@ def _cashflow_reconciliation_snapshot(client_id, start, end, grouping, view, *, 
             config['cash_account_codes'], config['bank_account_codes'], start, end,
             group_by=grouping, match_internal_transfers=config['match_internal_transfers'],
             receipt_presentation=config['receipt_presentation'], cashflow_role_categories=config['customer_payment_roles'],
-            vendor_account_codes=config.get('vendor_account_codes', []), include_reconciliation_evidence=True)
+            vendor_account_codes=config.get('vendor_account_codes', []), include_reconciliation_evidence=True,
+            **selection_options)
+        if selected_codes is not None:
+            accounts = {code: kind for code, kind in accounts.items() if code in selected_codes}
         progress('Reading ledger evidence', 0, None)
         source = load_cashflow_difference_source(client_id, config['source_template_id'], list(accounts),
             start.date().isoformat(), end.date().isoformat(), query_fn=execute_query_pg)
@@ -2012,7 +2087,7 @@ def _cashflow_reconciliation_snapshot(client_id, start, end, grouping, view, *, 
     support = result.pop('_support_entries')
     config_key = _cashflow_configuration_key(config)
     result['evidence_fingerprint'] = hashlib.sha256((result['evidence_fingerprint'] + config_key).encode()).hexdigest()
-    result.update(_reconciliation_cache_context(client_id, start, end, grouping, view, config))
+    result.update(_reconciliation_cache_context(client_id, start, end, grouping, view, config, **selection_options))
     return result, source, support, accounts
 
 
@@ -2025,6 +2100,7 @@ def cashflow_reconciliation(
     posting_differences: bool = Query(False), comparison_view: str = Query('', max_length=16),
     differences_only: bool = Query(True),
     page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=200), session=Depends(require_admin),
+    selected_treasury_account_codes: Optional[List[str]] = Query(None),
 ):
     """Build the on-demand working paper; normal preview/export never calls it."""
     start, end = _parse_report_period(period_start, period_end)
@@ -2035,7 +2111,8 @@ def cashflow_reconciliation(
         raise HTTPException(400, str(error)) from error
 
     def read(_conn):
-        result, source, support, accounts = _cashflow_reconciliation_snapshot(client_id, start, end, grouping, view)
+        result, source, support, accounts = _cashflow_reconciliation_snapshot(client_id, start, end, grouping, view,
+            **_cashflow_selection_options(selected_treasury_account_codes))
         if expected_fingerprint and expected_fingerprint != result['evidence_fingerprint']:
             raise HTTPException(409, 'Reconciliation evidence changed; reload the working paper before opening support.')
         if period_key and period_key not in {p['key'] for p in result['periods']}:
@@ -2077,6 +2154,7 @@ class CashflowExportRequest(BaseModel):
     treasury_view: str = 'combined'
     expected_fingerprint: str = Field(..., min_length=64, max_length=64)
     expected_identity: str = Field(..., min_length=64, max_length=64)
+    selected_treasury_account_codes: Optional[List[str]] = None
 
 
 def _export_call(function, *args):
@@ -2091,7 +2169,8 @@ def _prepare_reconciliation_export(scope, destination, progress):
     start, end = _parse_report_period(scope['period_start'], scope['period_end'])
     def read(_conn):
         result, source, support, accounts = _cashflow_reconciliation_snapshot(scope['client_id'], start, end,
-            scope['group_by'], scope['treasury_view'], include_posting=True, progress=progress)
+            scope['group_by'], scope['treasury_view'], include_posting=True, progress=progress,
+            **_cashflow_selection_options(scope.get('selected_treasury_account_codes')))
         if (result['evidence_fingerprint'] != scope['expected_fingerprint']
                 or result['cache_identity'] != scope['expected_identity']):
             raise HTTPException(409, 'Reconciliation evidence changed; reload the working paper before exporting.')
@@ -2104,7 +2183,8 @@ def _prepare_reconciliation_export(scope, destination, progress):
             temporary_directory=destination.parent, progress=progress)
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
-    return f"Cashflow_reconciliation_{scope['treasury_view']}_{scope['period_start']}_to_{scope['period_end']}.xlsx"
+    selected_suffix = '_selected' if scope.get('selected_treasury_account_codes') else ''
+    return f"Cashflow_reconciliation{selected_suffix}_{scope['treasury_view']}_{scope['period_start']}_to_{scope['period_end']}.xlsx"
 
 
 @router.post('/api/reconciliation/cashflows/reconciliation/exports', status_code=202)
@@ -2118,6 +2198,12 @@ def start_reconciliation_export(payload: CashflowExportRequest, session=Depends(
     scope = dict(client_id=payload.client_id, period_start=start.date().isoformat(), period_end=end.date().isoformat(),
         group_by=grouping, treasury_view=view, expected_fingerprint=payload.expected_fingerprint,
         expected_identity=payload.expected_identity)
+    if payload.selected_treasury_account_codes is not None:
+        def normalize_selection(_conn):
+            _require_active_client(payload.client_id)
+            return _cashflow_selected_codes(payload.selected_treasury_account_codes,
+                _cashflow_configuration(payload.client_id), view)
+        scope.update(_cashflow_selection_options(run_read_snapshot_pg(normalize_selection)))
     export_jobs.start(_prepare_reconciliation_export)
     return _export_call(export_jobs.submit, scope, session['user_id'])
 
@@ -2140,7 +2226,8 @@ def download_reconciliation_export(job_id: str, client_id: int = Query(..., ge=1
         def validate(_conn):
             _require_active_client(client_id)
             config = _cashflow_configuration(client_id)
-            return _reconciliation_cache_context(client_id, start, end, scope['group_by'], scope['treasury_view'], config)
+            return _reconciliation_cache_context(client_id, start, end, scope['group_by'], scope['treasury_view'], config,
+                **_cashflow_selection_options(scope.get('selected_treasury_account_codes')))
         current = run_read_snapshot_pg(validate)
         if current['cache_identity'] != scope['expected_identity']:
             raise HTTPException(409, 'Reconciliation evidence changed; reload the working paper before downloading.')
@@ -2167,6 +2254,7 @@ def preview_cashflows(
     warm_ledger_cache: bool = Query(False, description="Include bounded account roll-ups from this calculation"),
     include_balances: bool = Query(False, description="Include current uploaded-ledger balance evidence"),
     session=Depends(require_admin),
+    selected_treasury_account_codes: Optional[List[str]] = Query(None),
 ):
     """Return Cashflows using the Transaction Report template configured in Account Control Centre."""
     if not isinstance(group_by, str):
@@ -2180,9 +2268,13 @@ def preview_cashflows(
                    treasury_view=treasury_view, force_refresh=refresh_from_source,
                    customer_account_code=customer_account_code,
                    warm_ledger_cache=warm_ledger_cache if isinstance(warm_ledger_cache, bool) else False)
+    options.update(_cashflow_selection_options(selected_treasury_account_codes))
     if include_balances is True:
         return run_read_snapshot_pg(lambda _conn: _build_cashflow_result(
             client_id, period_start, period_end, **options, include_balances=True))
+    if _cashflow_selection_options(selected_treasury_account_codes):
+        return run_read_snapshot_pg(lambda _conn: _build_cashflow_result(
+            client_id, period_start, period_end, **options))
     return _build_cashflow_result(client_id, period_start, period_end, **options)
 
 def _filter_cashflow_ledger_rows(
@@ -2314,19 +2406,17 @@ def cashflow_drilldown(
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=200),
     session=Depends(require_admin),
+    selected_treasury_account_codes: Optional[List[str]] = Query(None),
 ):
     '''Return server-filtered, paginated compact Cashflows ledger roll-ups.'''
     request_started = perf_counter()
     build_started = perf_counter()
     projection_mode = "full_report"
-    result = _build_cashflow_result(
-        client_id,
-        period_start,
-        period_end,
-        detail_sections={'drilldown'},
-        group_by=group_by,
-        treasury_view=treasury_view,
-    )
+    selection_options = _cashflow_selection_options(selected_treasury_account_codes)
+    def build():
+        return _build_cashflow_result(client_id, period_start, period_end, detail_sections={'drilldown'},
+            group_by=group_by, treasury_view=treasury_view, **selection_options)
+    result = run_read_snapshot_pg(lambda _conn: build()) if selection_options else build()
     build_seconds = perf_counter() - build_started
     filter_started = perf_counter()
     preview = result.get('preview') or {}
@@ -2407,6 +2497,7 @@ def cashflow_drilldown(
         'source': result.get('source') or {},
         'database_totals': result.get('database_totals'),
         'blocking_reasons': result.get('blocking_reasons') or [],
+        **({'account_selection': result['account_selection']} if result.get('account_selection') else {}),
     }
 
 @router.get("/api/reconciliation/cashflows/export")
@@ -2424,6 +2515,7 @@ def export_cashflows_report(
     summary_filter: str = Query('', max_length=200),
     hide_zero_rows: bool = Query(False),
     session=Depends(require_admin),
+    selected_treasury_account_codes: Optional[List[str]] = Query(None),
 ):
     """Export the same Cashflows period and grouping shown in Reports."""
     # Export controls and independent ledger evidence use the same snapshot as
@@ -2432,6 +2524,7 @@ def export_cashflows_report(
         client_id, period_start, period_end,
         detail_sections={'transfers', 'customer_payments', 'vendor_payments', 'deductions', 'review', 'drilldown'},
         group_by=group_by, treasury_view=treasury_view, include_balances=True,
+        **_cashflow_selection_options(selected_treasury_account_codes),
     ))
     if not result["source"]["ready"] or not result["preview"].get("periods"):
         raise HTTPException(
@@ -2507,6 +2600,8 @@ def export_cashflows_report(
     )
     view_suffix = "" if treasury_view == "combined" else f"_{treasury_view}"
     filename = f"Cashflows{view_suffix}_{result['group_by']}_{result['period_start']}_to_{result['period_end']}.xlsx"
+    if result.get('account_selection'):
+        filename = filename.replace('Cashflows', 'Cashflows_selected', 1)
     return StreamingResponse(
         BytesIO(content),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

@@ -12,11 +12,11 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- routers/reconciliation.py → Cashflow configuration, summaries, Treasury/balance proofs, working-paper APIs, source validation and consistent reconciliation exports. See CHANGELOG_ARCHIVE.md.
+- routers/reconciliation.py → Cashflow configuration, account choices, selected reports, balances, reconciliation, scoped identities and consistent exports. See CHANGELOG_ARCHIVE.md.
 
 - routers/clients.py + static/clients.* → firm-level client management; admin-only except the paginated `GET /api/clients`. See CHANGELOG_ARCHIVE.md.
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, and database size with PostgreSQL table/index breakdown. See CHANGELOG_ARCHIVE.md.
-- routers/data.py + static/databank.* → Data Bank availability, chronological previews, account-scoped ledger selection, Cashflows transaction previews and guarded mutations. See CHANGELOG_ARCHIVE.md.
+- routers/data.py + static/databank.* → Data Bank availability, chronological previews, scoped ledger/Cashflow selection and guarded mutations. See CHANGELOG_ARCHIVE.md.
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
 - routers/import_export.py + static/upload.* → Ledger uploads, searchable accounts, source order, guarded mappings, coverage, balance continuity and canonical imports. See CHANGELOG_ARCHIVE.md.
 - routers/settings.py + static/settings.* → application settings and the firm-wide Holiday list; header/tabs rendered by `client_context.js`. See CHANGELOG_ARCHIVE.md.
@@ -45,18 +45,18 @@ One line per file group: what it is now. Full build history for every entry live
 - static/search_index.js → deleted; feature registry merged into `NAV_MANIFEST` in `client_context.js` — do not recreate. See CHANGELOG_ARCHIVE.md.
 - static/loading_ui.js → shared `window.LoadingUI` primitives, including token-based target-aware global progress-cursor ownership. See CHANGELOG_ARCHIVE.md.
 - static/api_utils.js → shared `apiFetch()` (GET debounce/retry) and `apiFetchMutate()` (non-retried writes, optional Loading UI); warning-only direct-`/api/` fetch guard; partial rollout. See CHANGELOG_ARCHIVE.md.
-- services/ledger_group_summary.py + ledger_report_source.py → Signed summaries, Treasury proofs, canonical retrieval, complete voucher support and reconciliation source identities. See CHANGELOG_ARCHIVE.md.
-- services/cash_bank_classification.py + scripts/backfill_cash_bank_transaction_classifications.py → canonical PostgreSQL classifications/previews, exact amount repair, configuration reclassification and controlled backfills. See CHANGELOG_ARCHIVE.md.
+- services/ledger_group_summary.py + ledger_report_source.py → Derived-column Cashflows, optional account selection, proven allocations, complete vouchers and Treasury movement proofs. See CHANGELOG_ARCHIVE.md.
+- services/cash_bank_classification.py + scripts/backfill_cash_bank_transaction_classifications.py → Canonical classification, selected-voucher previews, account-scope validation, amount repair and controlled backfills. See CHANGELOG_ARCHIVE.md.
 - services/cashflow_voucher_canonicalization.py + cashflow_voucher_occurrence_store.py + scripts/backfill_cashflow_voucher_occurrences.py -> compact audit-preserving occurrence decisions and controlled maintenance; transaction rows remain in `client_data`. See CHANGELOG_ARCHIVE.md.
 - services/cashflow_preparation.py + scripts/backfill_cashflow_prepared_read_model.py -> metadata-only preparation/job recovery boundary; prepared transaction copies and rollups are no longer rebuilt. See CHANGELOG_ARCHIVE.md.
-- services/reconciliation_xlsx.py, reconciliation_export_jobs.py → Streaming workbooks, bounded owner-scoped jobs and OS-account-private temporary files; existing Cashflow exports remain. See CHANGELOG_ARCHIVE.md.
-- services/reconciliation_balance_source.py → Ledger balances, coverage, freshness, occurrence comparisons, receipt/payment reconciliation and opt-in comparison reuse. See CHANGELOG_ARCHIVE.md.
+- services/reconciliation_xlsx.py, reconciliation_export_jobs.py → Selected-account workbooks, complete voucher context, streaming, bounded owner-scoped jobs and private temporary files. See CHANGELOG_ARCHIVE.md.
+- services/reconciliation_balance_source.py → Independent ledger balances, selected-account reconciliation, posting comparisons, coverage controls and supported presentation adjustments. See CHANGELOG_ARCHIVE.md.
 - services/upload_lifecycle.py + drive_archive.py + upload_observation_report.py → Scope proofs, complete-voucher Excel evidence, verified external archives and compact receipts. See CHANGELOG_ARCHIVE.md.
-- tests/test_account_control_center*.py, test_cashflows*.py, test_reconciliation*.py → Setup, classification, report/UI accounting, export jobs, ownership, limits, expiry and workbook regression checks. See CHANGELOG_ARCHIVE.md.
+- tests/test_account_control_center*.py, test_cashflows*.py, test_reconciliation*.py → Setup, selected-account accounting, API/SQL contracts, report/UI parity, workbook evidence and bounded export ownership checks. See CHANGELOG_ARCHIVE.md.
 - tests/test_upload_lifecycle.py + test_data_deletion.py + test_import_duplicate_gates.py → Upload/archive lifecycle, rollback, retry, deletion and identity regression tests.
 
 
-- static/reconciliation.html, static/reconciliation.js → Cashflows, linked-period reconciliation, background Excel progress/cancellation, complete voucher evidence and validated bounded caches. See CHANGELOG_ARCHIVE.md.
+- static/reconciliation.html, static/reconciliation.js → Searchable Cash/Bank selection, loaded report scopes, scoped browser caches, linked reconciliation and consistent export requests. See CHANGELOG_ARCHIVE.md.
 
 ## Commands
 - Run app: [your actual run command]
@@ -109,6 +109,9 @@ One line per file group: what it is now. Full build history for every entry live
 - **Cashflows drill-down performance convention:** Share complete initial report roll-ups; cap combined browser retention at 5,000 rows/2 MiB serialized, evict older contexts, and paginate oversized results.
  - **Cashflows data-freshness convention:** SQL/read-model results are authoritative; the bounded browser cache is a disposable speed layer only. Scope it by revision and complete report context, validate before reuse, safely aggregate only finer-grain parent periods into fully covered coarser child periods, reject stale or misaligned responses, and provide both soft reuse and explicit hard source refresh.
 - **Cashflows split-view convention:** Attribute categories only to proven Treasury types; show actual transfer/mixed movements separately from allocation review. Hide zero-only Mixed columns; preserve backend/export detail.
+- Selected Cashflows keep configured Treasury identity separate from report scope; canonical grouped inputs require direction controls from the derived-column selected-source query.
+- Selected account scope belongs in report/API/browser-cache/export identities; omitted/explicit All preserves accepted behaviour. Selected configuration/source reads share one snapshot.
+- Cashflow toolbar changes apply with Load summary; details, reconciliation and exports use loaded scope. Empty/incompatible selections never imply All.
 
 ### Data & Performance Engineering Standard
  - **Prepare once, report fast, verify always:** interns/processors classify categories, Cash/Bank, and derived periods during controlled upload preparation—the practical “desi” preparation layer—while executives receive fast reports from validated read models.
@@ -248,6 +251,12 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+
+- 2026-10-23: Accepted selected-account Cashflows through Phase 8C; combined commit/push authorised. Phase 9 follows after limit reset. See CHANGELOG_ARCHIVE.md.
+
+- 2026-10-23: Integrated selected-account Cashflow APIs, scoped identities, transaction details and both Excel exports; toolbar follows separately. See CHANGELOG_ARCHIVE.md.
+
+- 2026-10-23: Added selected-account Cashflow backend foundation; derived fetching and All behaviour preserved. Integration/local acceptance pending. See CHANGELOG_ARCHIVE.md.
 
 - 2026-10-23: Accepted Phase 7 Cashflow/reconciliation and Excel verification; documentation commit/push authorised. See CHANGELOG_ARCHIVE.md.
 

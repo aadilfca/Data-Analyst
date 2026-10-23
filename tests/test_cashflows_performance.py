@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pandas as pd
+import pytest
 
 import database
 from routers import reconciliation
@@ -20,6 +21,7 @@ from services.ledger_report_source import (
     load_cashflow_prepared_summary,
     load_cashflow_sql_source,
     load_cashflow_client_data_source,
+    load_ledger_report_source,
     load_cashflow_summary_read_model,
     store_cashflow_summary_read_model,
 )
@@ -44,6 +46,39 @@ def test_database_coverage_uses_the_existing_source_round_trip_and_snapshot():
     assert "LEFT JOIN report_lines l ON TRUE" in sql
     assert params == (7, 9, "2026-01-01", "2026-06-30") * 2
     assert not any(word in sql.upper() for word in ("INSERT INTO", "UPDATE CLIENT_DATA", "CREATE TABLE"))
+
+
+def test_explicit_all_accounts_preserves_the_exact_derived_source_query():
+    calls = []
+    def query(sql, params):
+        calls.append((sql, params))
+        return [{'database_row_count':23, 'database_voucher_count':7, 'database_totals_only':True}]
+    options = dict(client_id=7, journal_template_id=9, period_start='2026-01-01', period_end='2026-06-30',
+        account_category_source='cashflow', treasury_account_codes=['B','C'], query_fn=query)
+    old = load_ledger_report_source(**options)
+    explicit = load_ledger_report_source(**options, selected_treasury_account_codes=['C','B','B'])
+    assert calls[0] == calls[1]
+    pd.testing.assert_frame_equal(old.journal, explicit.journal)
+    assert set(old.metadata) == set(explicit.metadata)
+    assert 'source_inflow' not in calls[0][0]
+
+
+def test_selected_account_source_uses_one_read_and_derived_financial_columns_only():
+    calls = []
+    def query(sql, params):
+        calls.append((sql, params))
+        return [{'database_row_count':23, 'database_voucher_count':7, 'database_totals_only':True}]
+    load_cashflow_client_data_source(7, journal_template_id=9, period_start='2026-01-01',
+        period_end='2026-06-30', selected_treasury_account_codes=[' B ','B'], query_fn=query)
+    assert len(calls) == 1
+    sql, params = calls[0]
+    assert params == (7,9,'2026-01-01','2026-06-30')*2 + ('B',)
+    assert "AND account_code IN (%s)" in sql
+    assert 'GROUP BY l.voucher_id, l.date, l.account_code' in sql
+    assert 'SUM(GREATEST(l.debit, 0) + GREATEST(-l.credit, 0)) AS source_inflow' in sql
+    assert 'cd.derived_debit' in sql and 'cd.derived_credit' in sql
+    assert not any(name in sql for name in ("row_data ->> 'Debit", "row_data ->> 'Credit", 'cash_bank_transaction_classifications', 'cash_bank_summary_read_models'))
+    assert not any(word in sql.upper() for word in ('INSERT INTO', 'UPDATE CLIENT_DATA', 'CREATE TABLE'))
 
 
 def test_cashflow_sqlite_and_postgres_schema_contracts_stay_aligned():
@@ -612,7 +647,8 @@ def test_cashflow_daily_rollup_preserves_treasury_totals_for_larger_periods():
     assert summary["treasury_reconciliation"]["status"] == "Matched"
 
 
-def test_browser_warmup_reuses_one_canonical_read_without_persistent_copies():
+@pytest.mark.parametrize('selection',[None,['B1']])
+def test_browser_warmup_reuses_one_canonical_read_without_persistent_copies(selection):
     """Warm-up changes grouping work, never the source read/write contract."""
     journal = pd.DataFrame([
         dict(voucher_id=f'V{i}', date='2026-01-05', account_code=code,
@@ -623,7 +659,7 @@ def test_browser_warmup_reuses_one_canonical_read_without_persistent_copies():
     coa = pd.DataFrame([dict(account_code=code, account_title=code, account_type='',
                             category='' if code == 'B1' else 'Receipts')
                         for code in journal['account_code'].unique()])
-    configuration = dict(source_template_id=9, cash_account_codes=[], bank_account_codes=['B1'],
+    configuration = dict(source_template_id=9, cash_account_codes=[], bank_account_codes=['B1','B2'],
                          match_internal_transfers=False, receipt_presentation='net')
     source = SimpleNamespace(journal=journal, coa=coa, diagnostics=(), ready=True,
                              metadata={'cashflow_report_source_key': 'client-data-v1:7:9'})
@@ -634,10 +670,38 @@ def test_browser_warmup_reuses_one_canonical_read_without_persistent_copies():
         patch.object(reconciliation, 'build_cashflow_summary', wraps=build_cashflow_summary) as builder,
         patch.object(reconciliation, 'execute_write_pg', side_effect=AssertionError('No writes')),
         patch.object(reconciliation, 'store_cashflow_summary_read_model', side_effect=AssertionError('No copies')),
+        patch.object(reconciliation, 'run_read_snapshot_pg', side_effect=lambda callback: callback(None)),
     ):
         result = reconciliation.preview_cashflows(7, '2026-01-01', '2026-01-31',
-            group_by='month', treasury_view='combined', details='summary', warm_ledger_cache=True, session=None)
+            group_by='month', treasury_view='combined', details='summary', warm_ledger_cache=True, session=None,
+            selected_treasury_account_codes=selection)
     assert loader.call_count == builder.call_count == 1
     assert result['preview']['ledger_cache']['complete'] is True
     assert result['preview']['ledger_cache']['row_count'] == 10
     assert sum(row['amount'] for row in result['preview']['ledger_cache']['rows']) == 10000
+    assert loader.call_args.kwargs.get('selected_treasury_account_codes')==selection
+    if selection:
+        assert result['preview']['ledger_cache']['context']['account_selection']['account_codes']==selection
+
+
+def test_selected_report_api_retains_one_derived_source_query_without_financial_json_extraction():
+    calls=[]
+    def query(sql,params):
+        calls.append((sql,params))
+        return [{'database_row_count':23,'database_voucher_count':7,'database_totals_only':True}]
+    configuration=dict(source_template_id=9,cash_account_codes=['C1'],bank_account_codes=['B1','B2'],
+        match_internal_transfers=True,receipt_presentation='net')
+    with patch.object(reconciliation,'_require_active_client'), \
+            patch.object(reconciliation,'_cashflow_configuration',return_value=configuration), \
+            patch.object(reconciliation,'execute_query_pg',side_effect=query), \
+            patch.object(reconciliation,'run_read_snapshot_pg',side_effect=lambda callback: callback(None)), \
+            patch.object(reconciliation,'execute_write_pg',side_effect=AssertionError('No writes')):
+        result=reconciliation.preview_cashflows(7,'2026-01-01','2026-01-31',group_by='month',
+            treasury_view='combined',details='summary',session=None,selected_treasury_account_codes=['B2','B1'])
+    assert len(calls)==1
+    sql,params=calls[0]
+    assert 'cd.derived_debit' in sql and 'cd.derived_credit' in sql
+    assert 'AND account_code IN (%s, %s)' in sql
+    assert params[-2:]==('B1','B2')
+    assert "row_data ->> 'Debit" not in sql and "row_data ->> 'Credit" not in sql
+    assert result['account_selection']['account_codes']==['B1','B2']

@@ -169,6 +169,9 @@ def _populate_cashflow_reconciliation_workbook(workbook, result, *, source, supp
     start, end = result['period_start'], result['period_end']
     scope = (f"Client {result['client_id']} | {start} to {end} | "
              f"{result['treasury_view'].title()} | {result['receipt_presentation'].title()} receipts")
+    selection = result.get('account_selection')
+    if selection:
+        scope += f" | {len(selection['account_codes'])} selected Cash/Bank accounts; see Report Controls"
     money = '#,##0.00;[Red](#,##0.00);-'
     for view, part in result['views'].items():
         workbook.progress('Writing working paper ' + view.title(), 0, None)
@@ -247,6 +250,8 @@ def _populate_cashflow_reconciliation_workbook(workbook, result, *, source, supp
 
     selected = {code for code, kind in account_types.items()
                 if result['treasury_view'] in ('combined', 'split') or kind.casefold() == result['treasury_view']}
+    if selection:
+        selected &= set(selection['account_codes'])
     ledger_rows = [row for row in source['ledger_rows'] if row.get('account_code') in selected]
     references = {str(row.get('voucher_id') or '').strip() for row in ledger_rows}
     references.update(str(row.get('voucher_id') or '').strip() for row in source['transaction_rows']
@@ -260,6 +265,8 @@ def _populate_cashflow_reconciliation_workbook(workbook, result, *, source, supp
         ('credit', 'Credit (original)'), ('description', 'Description'), ('in_period', 'Within report period'),
         ('upload_id', 'Upload ID'), ('template_id', 'Template ID'), ('version', 'Version'),
         ('uploaded_at', 'Imported at'), ('source_fingerprint', 'Source fingerprint')]
+    if selection:
+        columns.append(('account_scope', 'Account scope'))
 
     def evidence(rows):
         for row in rows:
@@ -268,6 +275,10 @@ def _populate_cashflow_reconciliation_workbook(workbook, result, *, source, supp
             day = str(value['date'])[:10]
             value['in_period'] = 'Yes' if start <= day <= end else 'Context outside period / invalid date'
             value['source_fingerprint'] = row.get('source_fingerprint', row.get('fingerprint'))
+            if selection:
+                value['account_scope'] = ('Selected Cash/Bank account' if row.get('account_code') in selected else
+                    'Other Cash/Bank account — voucher context' if row.get('account_code') in selection['configured_account_codes']
+                    else 'Counter-account — voucher context')
             # Exact source text survives Excel's fifteen-digit numeric precision.
             for key in ('debit', 'credit'):
                 if value.get(key) is not None:
@@ -286,6 +297,9 @@ def _populate_cashflow_reconciliation_workbook(workbook, result, *, source, supp
         ('Ledger source rows', len(ledger_rows)), ('Voucher source rows', len(voucher_rows)),
         ('Adjustment operations', sum(len(entries) for entries in support.values())),
         ('Posting groups including matched', sum(len(c['findings']) for c in comparisons.values()))]
+    if selection:
+        controls.extend([('Account selection', selection),
+            ('Account context', 'Only selected Cash/Bank accounts contribute ledger amounts. Other voucher accounts support classification and are not additional selected-account receipts/payments.')])
     for view, part in result['views'].items():
         controls.extend((view.title() + ' ' + key.replace('_', ' '), part.get(key)) for key in (
             'amount_status', 'status', 'allocation_status', 'unresolved'))
@@ -503,6 +517,7 @@ def build_cashflow_workbook(
         period_end=period_end,
         group_by=group_by,
     )
+    selected_scope = bool(preview.get('account_selection'))
     _write_cashflow_detail_sheet(
         workbook.create_sheet("Internal Transfers"),
         "Internal Transfers",
@@ -512,13 +527,16 @@ def build_cashflow_workbook(
             ("voucher_id", "Voucher", False),
             ("transferor", "Transferor", False),
             ("transferee", "Transferee", False),
-            ("amount", "Amount", True),
+            ("amount", "Complete-voucher amount (context)" if selected_scope else "Amount", True),
             ("variance", "Variance", True),
             ("status", "Status", False),
             ("voucher_detail", "Description", False),
-            ("bank_movement", "Signed Bank movement", True),
-            ("cash_movement", "Signed Cash movement", True),
-        ],
+            ("bank_movement", "Voucher Bank movement (context)" if selected_scope else "Signed Bank movement", True),
+            ("cash_movement", "Voucher Cash movement (context)" if selected_scope else "Signed Cash movement", True),
+        ] + ([('selection_inflow', 'Selected-account transfer receipts', True),
+              ('selection_outflow', 'Selected-account transfer payments', True),
+              ('selection_net_movement', 'Selected-account transfer net', True),
+              ('evidence_scope', 'Evidence scope', False)] if selected_scope else []),
     )
     _write_cashflow_detail_sheet(
         workbook.create_sheet("Customer Deductions"),
@@ -529,8 +547,10 @@ def build_cashflow_workbook(
     _write_cashflow_detail_sheet(
         workbook.create_sheet("Review Required"),
         "Review Required",
-        preview.get("categories_needing_review") or [],
-        [("voucher_id", "Voucher", False), ("period", "Period", False), ("account_code", "Account code", False), ("account_name", "Account", False), ("fallback_category", "Review category", False)],
+        (preview.get("categories_needing_review") or []) + (preview.get('selection_review_details') or []),
+        [("voucher_id", "Voucher", False), ("period", "Period", False), ("account_code", "Account code", False), ("account_name", "Account", False), ("fallback_category", "Review category", False)]
+        + ([('period_key', 'Selection review period', False), ('reason', 'Selection review reason', False),
+            ('receipts', 'Selected receipts under review', True), ('payments', 'Selected payments under review', True)] if selected_scope else []),
     )
 
     _write_cashflow_detail_sheet(
@@ -604,6 +624,14 @@ def build_cashflow_workbook(
         ("Drill-down mixed / unresolved amount", drilldown_split["mixed_or_unresolved_amount"]),
         ("Source Cash / Bank status", ((preview.get("drilldown_controls") or {}).get("cash_bank_split") or {}).get("status") or "Not loaded"),
     ]
+    if selected_scope:
+        selection = preview['account_selection']
+        control_rows += [('Account selection', 'Selected Cash/Bank accounts'),
+            ('Account selection version', selection['version']),
+            ('Selection allocation reviews', preview.get('selection_review_count', 0)),
+            ('Transfer context', 'Complete voucher amounts are supporting context; selected transfer receipts/payments are shown separately.')]
+        control_rows += [('Selected Cash/Bank account ' + str(index), code)
+                         for index, code in enumerate(selection['account_codes'], 1)]
     row = 4
     _write_table(controls, row, ["Control", "Value"], header=True)
     for control, value in control_rows:
@@ -612,6 +640,10 @@ def build_cashflow_workbook(
 
     if preview.get('treasury_movement_proof'):
         _write_cashflow_movement_proof(workbook.create_sheet('Treasury Movement Proof'), preview)
+    if selected_scope:
+        for sheet in workbook.worksheets:
+            note = sheet.cell(2, 1)
+            note.value = str(note.value or '') + f" | {len(selection['account_codes'])} selected Cash/Bank accounts; see Export Controls."
     for sheet in workbook.worksheets:
         _finish_sheet(sheet)
     for row_cells in ledgerwise_sheet.iter_rows(min_row=5, max_col=5):

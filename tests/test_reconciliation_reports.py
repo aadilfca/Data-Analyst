@@ -15,7 +15,269 @@ from services.ledger_group_summary import build_cashflow_summary, build_financia
 from services.ledger_report_source import CASHFLOW_CHILD_DETAILS_VERSION, CASHFLOW_DRILLDOWN_DETAILS_VERSION, CASHFLOW_SUMMARY_PAYLOAD_VERSION, load_cashflow_prepared_drilldown, load_cashflow_prepared_rollup_summary
 from routers import settings as settings_router
 from services.reconciliation_xlsx import export_cashflow_xlsx
-from test_reconciliation_balance_source import independent_year_boundary_case, horizontal_reconciliation_case
+from test_reconciliation_balance_source import independent_year_boundary_case, horizontal_reconciliation_case, selected_account_case
+
+
+@pytest.fixture
+def selected_report_env(selected_account_case, monkeypatch):
+    """Exercise real API/accounting/export code against independent fixture books."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from services.reconciliation_balance_source import build_uploaded_ledger_balances
+    case = selected_account_case
+    config = dict(source_template_id=1, bank_account_codes=[c for c,k in case['accounts'].items() if k=='Bank'],
+        cash_account_codes=[c for c,k in case['accounts'].items() if k=='Cash'], cashflow_report_revision=7,
+        receipt_presentation='net', match_internal_transfers=True, customer_payment_roles=case['roles'],
+        category_mappings={}, vendor_account_codes=['CON'])
+    active, source_calls, evidence_calls, identity_calls, source_snapshots = [], [], [], [], []
+    stamp = ['a'*64]
+    def snapshot(callback):
+        assert not active
+        active.append(True)
+        try: return callback(None)
+        finally: active.pop()
+    def report(*args, **kwargs):
+        source_calls.append(kwargs)
+        source_snapshots.append(bool(active))
+        return SimpleNamespace(journal=case['journal'], coa=case['coa'], ready=True,
+            diagnostics=(), metadata={'source_row_count':len(case['journal']), 'cashflow_report_source_key':'fixture'})
+    def evidence(client, template, codes, *args, **kwargs):
+        assert active == [True]
+        evidence_calls.append(codes)
+        source = copy.deepcopy(case['source'])
+        source['uploads'] = [r for r in source['uploads'] if r['ledger_account_code'] in codes]
+        source['ledger_rows'] = [r for r in source['ledger_rows'] if r['account_code'] in codes]
+        references = {r['voucher_id'] for r in source['transaction_rows'] if r['account_code'] in codes}
+        source['transaction_rows'] = [r for r in source['transaction_rows'] if r['voucher_id'] in references]
+        return source
+    def identity(client, template, codes, **kwargs):
+        assert active == [True]
+        identity_calls.append(codes)
+        return stamp[0]
+    def balances(client, codes, periods, movements, **kwargs):
+        assert active == [True]
+        return build_uploaded_ledger_balances(case['source']['uploads'], case['source']['ledger_rows'],
+            codes, periods, movements, account_names=kwargs['account_names'], treasury_movements=kwargs['treasury_movements'])
+    monkeypatch.setattr(reconciliation, '_require_active_client', lambda *args: None)
+    monkeypatch.setattr(reconciliation, '_cashflow_configuration', lambda *args: config)
+    monkeypatch.setattr(reconciliation, '_latest_trial_balance_accounts', lambda *args: [])
+    monkeypatch.setattr(reconciliation, 'load_ledger_report_source', report)
+    monkeypatch.setattr(reconciliation, 'load_cashflow_difference_source', evidence)
+    monkeypatch.setattr(reconciliation, 'load_cashflow_reconciliation_identity', identity)
+    monkeypatch.setattr(reconciliation, 'load_uploaded_ledger_balances', balances)
+    monkeypatch.setattr(reconciliation, 'run_read_snapshot_pg', snapshot)
+    app = FastAPI(); app.include_router(reconciliation.router)
+    app.dependency_overrides[reconciliation.require_admin] = lambda: {'user_id':1}
+    with TestClient(app) as client:
+        yield SimpleNamespace(client=client, case=case, config=config, active=active,
+            source_calls=source_calls, evidence_calls=evidence_calls, identity_calls=identity_calls, stamp=stamp,
+            source_snapshots=source_snapshots,
+            params=dict(client_id=7, period_start='2026-01-01', period_end='2026-01-31'))
+
+
+@pytest.mark.parametrize('selection', [['C1'], ['C2'], ['C1','C2'], ['C2','C3'], ['B1'], ['B1','C1']])
+@pytest.mark.parametrize('view', ['combined','bank','cash','split'])
+def test_selected_api_balances_reconciliation_details_and_excel_match_independent_books(selected_report_env, selection, view):
+    env = selected_report_env
+    params = env.params | dict(selected_treasury_account_codes=selection, treasury_view=view)
+    base = '/api/reconciliation/cashflows'
+    selected = [code for code in selection if view in ('combined','split') or env.case['accounts'][code].lower()==view]
+    response = env.client.get(base+'/preview', params=params|dict(include_balances=True, warm_ledger_cache=True))
+    if not selected:
+        assert response.status_code == 400
+        assert env.source_calls == []
+        return
+    assert response.status_code == 200, response.text
+    report = response.json(); preview = report['preview']
+    assert report['account_selection']['account_codes'] == sorted(selected)
+    assert preview['account_selection'] == report['ledger_context']['account_selection']
+    assert env.source_calls[-1]['selected_treasury_account_codes'] == sorted(selected)
+    assert env.source_calls[-1]['treasury_account_codes'] == env.config['cash_account_codes']+env.config['bank_account_codes']
+    rows = [r for r in env.case['source']['ledger_rows'] if r['account_code'] in selected]
+    receipt = sum(float(r['debit']) for r in rows); payment = sum(float(r['credit']) for r in rows)
+    balance = preview['balance_reconciliation']['overall']
+    assert balance['opening_total'] == 10000*len(selected)
+    assert balance['closing_total'] == pytest.approx(10000*len(selected)+receipt-payment)
+    paper_response = env.client.get(base+'/reconciliation', params=params)
+    assert paper_response.status_code == 200, paper_response.text
+    paper = paper_response.json()
+    assert paper['account_selection']['account_codes'] == sorted(selected)
+    assert set(env.evidence_calls[-1]) == set(selected)
+    assert set(env.identity_calls[-1]) == set(selected)
+    part = paper['views']['combined' if view=='split' else view]
+    assert part['overall']['receipts']['ledger'] == receipt
+    assert part['overall']['payments']['ledger'] == payment
+    assert part['overall']['receipts']['difference'] == part['overall']['payments']['difference'] == 0
+    assert part['overall_balance_proof']['ledger_closing'] == balance['closing_total']
+    drill = env.client.get(base+'/drilldown', params=params).json()
+    assert drill['account_selection'] == report['account_selection']
+    assert drill['ledger_context'] == report['ledger_context']
+    exported = env.client.get(base+'/export', params=params)
+    assert exported.status_code == 200, exported.text
+    assert 'Cashflows_selected' in exported.headers['content-disposition']
+    workbook = load_workbook(BytesIO(exported.content), data_only=True)
+    controls = dict(workbook['Export Controls'].values)
+    assert {value for key,value in controls.items() if str(key).startswith('Selected Cash/Bank account ')} == set(selected)
+    # Existing workbook proof fields must agree with API values, including transfer movement.
+    proof = list(workbook['Treasury Movement Proof'].values)
+    assert len(proof) > 4
+    assert 'selected Cash/Bank' in workbook['Cashflows Summary']['A2'].value
+
+
+@pytest.mark.parametrize('selection', [[], [''], ['UNKNOWN'], ['C1','UNKNOWN']])
+def test_selected_routes_reject_invalid_scope_before_reading_financial_source(selected_report_env, selection):
+    env = selected_report_env
+    # A blank repeated query item represents an explicit empty selection over HTTP.
+    params = env.params | dict(selected_treasury_account_codes=selection or [''])
+    for suffix in ['/preview','/drilldown','/export','/differences','/reconciliation','/reconciliation/cache-validation']:
+        response = env.client.get('/api/reconciliation/cashflows'+suffix, params=params)
+        assert response.status_code == 400, (suffix,response.text)
+    assert not env.source_calls and not env.evidence_calls and not env.identity_calls
+
+
+def test_selected_identity_is_order_independent_separate_from_all_and_sensitive_to_sources(selected_report_env):
+    env = selected_report_env; url = '/api/reconciliation/cashflows/reconciliation/cache-validation'
+    def get(codes=None):
+        params = env.params | (dict(selected_treasury_account_codes=codes) if codes is not None else {})
+        response = env.client.get(url, params=params)
+        assert response.status_code == 200, response.text
+        return response.json()
+    all_accounts = get()
+    assert get(list(env.case['accounts'])) == all_accounts
+    first = get(['C2',' C1 ','C1'])
+    assert get(['C1','C2']) == first
+    assert len({get(['C1'])['cache_identity'], get(['C2'])['cache_identity'],
+        first['cache_identity'], all_accounts['cache_identity']}) == 4
+    env.stamp[0] = 'changed-source-without-revision'
+    assert get(['C1','C2'])['cache_identity'] != first['cache_identity']
+
+
+def test_cashflow_account_picker_reads_only_configured_metadata_in_one_snapshot(selected_report_env,monkeypatch):
+    env=selected_report_env
+    def names(client):
+        assert env.active==[True]
+        return [dict(account_code='C1',account_name='Cash <main>'),dict(account_code='UNCONFIGURED',account_name='Excluded')]
+    monkeypatch.setattr(reconciliation,'_latest_trial_balance_accounts',names)
+    url='/api/reconciliation/cashflows/account-options'
+    response=env.client.get(url,params={'client_id':7})
+    assert response.status_code==200,response.text
+    payload=response.json()
+    assert payload['client_id']==7 and payload['configuration_key']==reconciliation._cashflow_configuration_key(env.config)
+    assert {r['account_code'] for r in payload['accounts']}==set(env.case['accounts'])
+    assert next(r for r in payload['accounts'] if r['account_code']=='C1')['account_name']=='Cash <main>'
+    assert next(r for r in payload['accounts'] if r['account_code']=='B1')['account_name']=='B1'
+    assert all(r['treasury_type']==env.case['accounts'][r['account_code']].lower() for r in payload['accounts'])
+    assert not env.source_calls and not env.evidence_calls and not env.identity_calls
+    assert env.client.get(url,params={'client_id':0}).status_code==422
+    from fastapi import HTTPException
+    def reject():raise HTTPException(403,'Forbidden')
+    env.client.app.dependency_overrides[reconciliation.require_admin]=reject
+    assert env.client.get(url,params={'client_id':7}).status_code==403
+
+
+def test_selected_preview_and_drilldown_share_configuration_and_source_snapshot_without_changing_all(selected_report_env):
+    env=selected_report_env
+    for suffix in ['/preview','/drilldown']:
+        url='/api/reconciliation/cashflows'+suffix
+        assert env.client.get(url,params=env.params).status_code==200
+        assert env.source_snapshots[-1] is False
+        assert env.client.get(url,params=env.params|dict(selected_treasury_account_codes=['C1'])).status_code==200
+        assert env.source_snapshots[-1] is True
+
+
+def test_explicit_all_api_preserves_payloads_and_omits_selection_keywords(selected_report_env):
+    env=selected_report_env
+    for view in ['combined','bank','cash','split']:
+        params=env.params|dict(treasury_view=view, include_balances=True)
+        first=env.client.get('/api/reconciliation/cashflows/preview',params=params).json()
+        second=env.client.get('/api/reconciliation/cashflows/preview',params=params|dict(selected_treasury_account_codes=list(env.case['accounts']))).json()
+        first['freshness'].pop('generated_at');second['freshness'].pop('generated_at')
+        assert first==second
+        assert 'account_selection' not in second
+    assert all('selected_treasury_account_codes' not in call for call in env.source_calls)
+
+
+def test_selected_support_cannot_be_opened_with_another_selection_fingerprint(selected_report_env):
+    env=selected_report_env; url='/api/reconciliation/cashflows/reconciliation'
+    first=env.client.get(url,params=env.params|dict(selected_treasury_account_codes=['C1'])).json()
+    rejected=env.client.get(url,params=env.params|dict(selected_treasury_account_codes=['C2'],
+        expected_fingerprint=first['evidence_fingerprint']))
+    assert rejected.status_code==409
+    first_key=first['views']['combined']['adjustments'][0]['key']
+    supported=env.client.get(url,params=env.params|dict(selected_treasury_account_codes=['C1'],
+        expected_fingerprint=first['evidence_fingerprint'],support_key=first_key))
+    assert supported.status_code==200,supported.text
+    assert supported.json()['account_selection']['account_codes']==['C1']
+
+
+def test_selected_api_does_not_require_unselected_ledgers_or_invent_missing_selected_balances(selected_report_env):
+    env=selected_report_env; url='/api/reconciliation/cashflows/preview'
+    env.case['source']['uploads']=[u for u in env.case['source']['uploads'] if u['ledger_account_code']=='C1']
+    params=env.params|dict(include_balances=True)
+    selected=env.client.get(url,params=params|dict(selected_treasury_account_codes=['C1'])).json()
+    assert selected['preview']['balance_reconciliation']['status']=='Matched'
+    missing=env.client.get(url,params=params|dict(selected_treasury_account_codes=['C2'])).json()
+    assert missing['source']['ready'] is True
+    assert missing['preview']['balance_reconciliation']['status']=='Unavailable'
+    assert missing['preview']['balance_reconciliation']['overall']['closing_total'] is None
+
+
+def test_selected_api_keeps_allocation_uncertainty_visible_even_when_amounts_reconcile(selected_report_env):
+    env=selected_report_env
+    frame=pd.DataFrame([['AMB','2026-01-05','B1',0,60],['AMB','2026-01-05','C1',0,40],
+        ['AMB','2026-01-05','EXP1',100,0]],columns=['voucher_id','date','account_code','debit','credit'])
+    env.case['journal']=frame;env.case['source']=env.case['make_source'](frame)
+    params=env.params|dict(selected_treasury_account_codes=['C1'],include_balances=True)
+    report=env.client.get('/api/reconciliation/cashflows/preview',params=params).json()
+    assert report['controls']['selection_allocation']['status']=='Review'
+    assert report['preview']['selection_review_count']==1
+    assert report['preview']['selection_review_details'][0]['payments']==40
+    assert report['preview']['balance_reconciliation']['overall']['closing_total']==9960
+    paper=env.client.get('/api/reconciliation/cashflows/reconciliation',params=params).json()
+    assert paper['review_controls']['selection_review_count']==1
+    assert paper['views']['combined']['status']=='Review required'
+    assert paper['transaction_coverage_status']=='Not independently certified'
+
+
+def test_selected_export_job_normalizes_scope_rejects_cross_scope_and_revalidates_download(selected_report_env,tmp_path,monkeypatch):
+    import time
+    from services.reconciliation_export_jobs import ReconciliationExportJobs
+    env=selected_report_env; url='/api/reconciliation/cashflows/reconciliation'
+    manager=ReconciliationExportJobs(tmp_path/'jobs')
+    monkeypatch.setattr(reconciliation,'export_jobs',manager)
+    def wait(ticket):
+        for _ in range(200):
+            status=env.client.get(url+'/exports/'+ticket['id'],params={'client_id':7}).json()
+            if status['state'] in ('ready','failed','cancelled'): return status
+            time.sleep(.02)
+        pytest.fail('Selected fixture export did not finish')
+    try:
+        params=env.params|dict(selected_treasury_account_codes=['C1','C2'])
+        parent=env.client.get(url,params=params).json()
+        payload=params|dict(expected_identity=parent['cache_identity'],expected_fingerprint=parent['evidence_fingerprint'])
+        response=env.client.post(url+'/exports',json=payload)
+        assert response.status_code==202,response.text
+        ticket=response.json()
+        assert wait(ticket)['state']=='ready'
+        reordered=env.client.post(url+'/exports',json=payload|dict(selected_treasury_account_codes=[' C2 ','C1','C2']))
+        assert reordered.status_code==202 and reordered.json()['id']==ticket['id']
+        downloaded=env.client.get(url+'/exports/'+ticket['id']+'/download',params={'client_id':7})
+        assert downloaded.status_code==200,downloaded.text
+        assert 'Cashflow_reconciliation_selected_' in downloaded.headers['content-disposition']
+        workbook=load_workbook(BytesIO(downloaded.content),data_only=True)
+        values={r[0]:r[1] for r in workbook['Working Paper Combined'].values}
+        assert values['Receipts as per Cashflow report']==parent['views']['combined']['overall']['receipts']['cashflow']
+        assert values['Payments as per Cashflow report']==parent['views']['combined']['overall']['payments']['cashflow']
+        bad=env.client.post(url+'/exports',json=payload|dict(selected_treasury_account_codes=['C3']))
+        assert bad.status_code==202 and wait(bad.json())['error_status']==409
+        for codes in ([],['UNKNOWN'],['']):
+            assert env.client.post(url+'/exports',json=payload|dict(selected_treasury_account_codes=codes)).status_code==400
+        env.stamp[0]='independent-ledger-correction'
+        stale=env.client.get(url+'/exports/'+ticket['id']+'/download',params={'client_id':7})
+        assert stale.status_code==409
+        assert env.client.get(url+'/exports/'+ticket['id'],params={'client_id':7}).json()['state']=='cancelled'
+    finally:
+        assert manager.stop()
 
 
 @pytest.fixture
@@ -2144,7 +2406,7 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "setActiveCashflowWindow" in javascript
     assert "const CASHFLOW_DEFAULT_START = '2026-01-01';" in javascript
     assert "const CASHFLOW_DEFAULT_END = '2026-06-30';" in javascript
-    assert "<script src='/static/reconciliation.js?v=46'></script>" in html
+    assert "<script src='/static/reconciliation.js?v=47'></script>" in html
     assert "id='reconReportPeriod'" in html
     assert "Linked to the loaded Cashflows Report" in html
     assert "id='reconPeriod'" not in html

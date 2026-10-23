@@ -192,6 +192,17 @@ def _ledger_number(value: Any) -> Decimal:
         raise ValueError('Invalid numeric ledger evidence') from None
 
 
+def _mark_empty_ledger_scope(part):
+    """An explicitly empty type is not an account with missing ledger evidence."""
+    for period in part['periods']:
+        period.update({field: 0.0 for field in ('opening_total', 'closing_total', 'calculated_opening',
+            'ledger_movement_total', 'cashflow_net_movement', 'calculated_closing', 'variance')})
+        period.update(complete=True, status='Not applicable')
+    part['overall'].update({field: 0.0 for field in part['overall'] if field != 'complete'})
+    part['overall']['complete'] = True
+    part.update(ready=True, coverage_complete=True, status='Not applicable', diagnostics=[], diagnostic_count=0)
+
+
 def build_uploaded_ledger_balances(
     uploads: Sequence[Mapping[str, Any]],
     rows: Sequence[Mapping[str, Any]],
@@ -420,14 +431,7 @@ def build_uploaded_ledger_balances(
                 [r for r in rows if r.get('account_code') in selected], selected, periods,
                 treasury_movements.get(key, {}), account_names=account_names)
             if not selected:
-                # An explicitly empty configured type is not a missing ledger.
-                for period in part['periods']:
-                    period.update({field: 0.0 for field in ('opening_total', 'closing_total', 'calculated_opening',
-                        'ledger_movement_total', 'cashflow_net_movement', 'calculated_closing', 'variance')})
-                    period.update(complete=True, status='Not applicable')
-                part['overall'].update({field: 0.0 for field in part['overall'] if field != 'complete'})
-                part['overall']['complete'] = True
-                part.update(ready=True, coverage_complete=True, status='Not applicable', diagnostics=[], diagnostic_count=0)
+                _mark_empty_ledger_scope(part)
             breakdown[key] = part
         result['treasury_breakdown'] = breakdown
     return result
@@ -653,6 +657,13 @@ def build_cashflow_reconciliation(
     periods = summary['periods']
     if not periods:
         raise ValueError('A reconciliation requires reporting periods')
+    if summary.get('account_selection'):
+        codes = set(summary['account_selection']['account_codes'])
+        if not codes or not codes <= set(account_types):
+            raise ValueError('Selected Treasury accounts are absent from reconciliation configuration')
+        # Both independent books and voucher comparisons must use the same
+        # selected accounts; other Treasury legs remain supporting context.
+        account_types = {code: kind for code, kind in account_types.items() if code in codes}
     explanation = build_cashflow_presentation_adjustments(summary, source['transaction_rows'], account_types, treasury_view)
     support = {}
     views = {}
@@ -666,11 +677,17 @@ def build_cashflow_reconciliation(
         return float(rounded) if rounded else 0.0
     for view, presentation in explanation['views'].items():
         selected = {code: kind for code, kind in account_types.items() if view == 'combined' or kind.casefold() == view}
+        empty_selected_type = bool(summary.get('account_selection')) and not selected
+        if empty_selected_type and treasury_view != 'split':
+            raise ValueError('Select at least one account compatible with the requested Treasury view')
         proof = {r['period_key']: r for r in summary['treasury_movement_proof'] if r['treasury_type'] == view}
         movements = {p['key']: proof[p['key']]['explained_movement']
                      if p['key'] in proof and proof[p['key']]['status'] == 'Matched' else None for p in periods}
         balances = build_uploaded_ledger_balances(source['uploads'], source['ledger_rows'], selected, periods, movements)
         comparison = build_cashflow_differences(source, selected, periods[0]['start'], periods[-1]['end'])
+        if empty_selected_type:
+            _mark_empty_ledger_scope(balances)
+            comparison.update(posting_status='Not applicable', posting_comparison_complete=True)
         if include_posting_comparisons:
             comparisons[view] = comparison
         ledger, invalid_ledger = _cashflow_gross_sides(source['ledger_rows'], selected, periods)
@@ -758,6 +775,8 @@ def build_cashflow_reconciliation(
                 'transaction_coverage_status', 'posting_comparison_complete', 'evidence_fingerprint', 'coverage_diagnostics')})
         if presentation['unresolved'] and amount_status == 'Matched':
             views[view]['status'] = 'Review required'
+        if empty_selected_type:
+            views[view]['status'] = 'Not applicable'
     result = dict(treasury_view=treasury_view, periods=periods, group_by=summary['group_by'],
         receipt_presentation=summary['receipt_presentation'], views=views,
         review_controls=dict(category_review_count=summary['category_review_count'],
@@ -769,4 +788,7 @@ def build_cashflow_reconciliation(
             summary['reconciliation_evidence'], summary['receipt_presentation'], periods], sort_keys=True, default=str).encode()).hexdigest())
     if include_posting_comparisons:
         result['_posting_comparisons'] = comparisons
+    if summary.get('account_selection'):
+        result['account_selection'] = dict(summary['account_selection'])
+        result['review_controls']['selection_review_count'] = summary['selection_review_count']
     return result

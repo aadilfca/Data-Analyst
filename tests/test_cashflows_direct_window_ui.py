@@ -394,7 +394,7 @@ def test_cashflows_report_preserves_current_default_period_and_monthly_grouping(
     assert "cashflowPreviewPeriods" in reconciliation_script
     assert "syncCashflowZeroRowsButton" in reconciliation_script
     assert "style.css?v=71" in reconciliation_html
-    assert "reconciliation.js?v=46" in reconciliation_html
+    assert "reconciliation.js?v=47" in reconciliation_html
     assert "cashflowsSummaryBasis" not in reconciliation_html
     assert "cashflows-transactions-note" not in reconciliation_html
     assert "renderCashflowSummary" in reconciliation_script
@@ -630,6 +630,7 @@ def ledger_cache_page():
             cashflowBalanceExpanded = {opening: false, closing: false};
             cashflowSelection = {start: result.period_start, end: result.period_end, groupBy: result.group_by};
             cashflowTreasuryView = result.treasury_view;
+            cashflowPendingAccounts = cashflowAccountCodes(result);
             element('cashflowsPeriodStart').value = result.period_start;
             element('cashflowsPeriodEnd').value = result.period_end;
             element('cashflowsView').hidden = false;
@@ -639,6 +640,23 @@ def ledger_cache_page():
         },
         expire: function () {cashflowRevisionCheckedAt = 0;},
         generate: function (hard) {return generateCashflows(null, {forceRefresh: hard});},
+        accounts: function (accounts, pending) {
+            cashflowAccountOptions = accounts;
+            cashflowAccountOptionsClient = clientId;
+            cashflowAccountOptionsKey = cashflowConfigurationKey;
+            if (pending !== undefined) cashflowPendingAccounts = pending;
+            renderCashflowAccountOptions();
+        },
+        pending: function () {return cashflowEffectivePendingAccounts();},
+        children: loadCashflowChildren,
+        classified: loadClassifiedTransactions,
+        download: downloadCashflowReport,
+        syncControls: syncCashflowSelection,
+        summaryKey: cashflowSummaryContextKey,
+        accountCache: function () {return cashflowAccountOptions;},
+        renewLoadedReference: function () {lastCashflowsResult=JSON.parse(JSON.stringify(lastCashflowsResult));},
+        setPending: function (codes) {cashflowPendingAccounts=codes;syncCashflowAccountButton();},
+        setView: function (view) {cashflowTreasuryView=view;renderCashflowAccountOptions();},
         reconcile: openCashflowReconciliation,
         reconciliationLoad: loadCashflowReconciliation,
         reconciliationCache: function () {return Array.from(reconciliationCache.entries());},
@@ -667,6 +685,7 @@ def ledger_cache_page():
         }
     };
     initialiseCashflowReconciliation();
+    initialiseCashflowAccounts();
     element('cashflowsSummaryTable').addEventListener('click', handleCashflowSummaryClick);'''
     script = script.replace("document.addEventListener('DOMContentLoaded', initialise);", hook)
     with playwright.sync_playwright() as instance:
@@ -683,6 +702,298 @@ def ledger_cache_page():
 
 def _category_button(page, category='Operating'):
     return page.locator('.cashflows-inline-expand').filter(has_text=category).first
+
+
+def _account_choices():
+    return [dict(account_code=code,account_name=name,treasury_type=kind) for code,name,kind in
+        [('B1','Bank Alpha','bank'),('B2','Bank Beta','bank'),('C1','Cash <main>','cash'),('C2','Branch cash','cash')]]
+
+
+def _selected_ui_report(codes,**kwargs):
+    report=_ledger_report(**kwargs)
+    selection=dict(version=1,mode='selected',account_codes=sorted(codes),configured_account_codes=['B1','B2','C1','C2'])
+    report['account_selection']=selection
+    report['ledger_context']['account_selection']=selection
+    report['preview']['account_selection']=selection
+    return report
+
+
+def test_account_picker_search_checkboxes_pending_state_keyboard_and_empty_validation(ledger_cache_page):
+    page=ledger_cache_page;calls=[]
+    page.evaluate('report=>ledgerFixture.load(report)',_ledger_report())
+    def options(route):
+        calls.append(route.request.url)
+        route.fulfill(json=dict(client_id=7,configuration_key='config-1',accounts=_account_choices()))
+    page.route('**/api/reconciliation/cashflows/account-options?*',options)
+    original=page.locator('#cashflowsSummaryTable').inner_text()
+    page.locator('#cashflowsAccountButton').click()
+    page.wait_for_selector('[data-cashflow-account="B1"]')
+    assert page.locator('#cashflowsAccountAll').is_checked()
+    page.locator('#cashflowsAccountClear').click()
+    page.locator('#cashflowsAccountSearch').fill('alpha')
+    assert page.locator('[data-cashflow-account]').count()==1
+    page.locator('[data-cashflow-account="B1"]').check()
+    page.locator('#cashflowsAccountSearch').fill('C1')
+    page.locator('[data-cashflow-account="C1"]').check()
+    assert page.locator('.account-name').inner_text()=='Cash <main>'
+    assert page.locator('#cashflowsAccountOptions main').count()==0
+    page.locator('#cashflowsAccountSearch').fill('')
+    assert page.locator('[data-cashflow-account="B1"]').is_checked()
+    assert page.locator('#cashflowsAccountValue').inner_text()=='2 selected'
+    assert page.locator('#cashflowsAccountButton').get_attribute('class')=='is-pending'
+    page.locator('#cashflowsAccountSearch').press('Escape')
+    assert page.locator('#cashflowsAccountPopover').is_hidden()
+    assert page.locator('#cashflowsAccountButton').evaluate('(node)=>node===document.activeElement')
+    assert page.locator('#cashflowsSummaryTable').inner_text()==original
+    assert page.evaluate('()=>ledgerFixture.stripped().account_selection || null') is None
+    page.locator('#cashflowsAccountButton').click()
+    page.locator('#cashflowsAccountClear').click()
+    page.locator('#cashflowsAccountDone').click()
+    page.evaluate('()=>ledgerFixture.generate(false)')
+    assert 'at least one' in page.locator('#cashflowsToast').inner_text()
+    assert page.locator('#cashflowsSummaryTable').inner_text()==original
+    page.locator('#cashflowsAccountAll').check()
+    assert page.evaluate('()=>ledgerFixture.pending()') is None
+    assert len(calls)==1
+
+
+@pytest.mark.parametrize('width',[1440,1366,1280,1024,390])
+def test_selected_account_toolbar_and_picker_fit_desktop_and_narrow_screens(ledger_cache_page,width):
+    page=ledger_cache_page;page.set_viewport_size(dict(width=width,height=900))
+    page.evaluate('report=>ledgerFixture.load(report)',_ledger_report())
+    page.evaluate('accounts=>ledgerFixture.accounts(accounts)',_account_choices())
+    page.locator('#cashflowsAccountButton').click()
+    metrics=page.evaluate('''()=>{
+        const ids=['cashflowsGroupingSelect','cashflowsTreasuryViewSelect','cashflowsPeriodButton','cashflowsAccountButton','cashflowsLedgerDrilldownButton','cashflowsReconciliationButton','cashflowsExportButton'];
+        return {controls:ids.map(id=>{const r=document.getElementById(id).getBoundingClientRect();return {id,x:r.x,y:r.y,right:r.right,bottom:r.bottom};}),
+            picker:document.getElementById('cashflowsAccountPopover').getBoundingClientRect().toJSON(),width:document.documentElement.scrollWidth};
+    }''')
+    assert metrics['picker']['x']>=0 and metrics['picker']['right']<=width
+    if width>=1280:
+        bottoms=[row['bottom'] for row in metrics['controls']]
+        assert max(bottoms)-min(bottoms)<10,metrics
+        assert all(row['right']<=width for row in metrics['controls']),metrics
+        assert metrics['controls'][2]['right']<=metrics['controls'][3]['x'],metrics
+        assert page.locator('#cashflowsAccountButton').bounding_box()['x']+page.locator('#cashflowsAccountButton').bounding_box()['width']<=page.locator('#cashflowsReportForm button[type=submit]').bounding_box()['x']
+    assert page.locator('#cashflowsLedgerDrilldownButton').inner_text()=='Ledger drill-down'
+    assert page.locator('#cashflowsExportButton').inner_text()=='XLSX'
+
+
+def test_explicit_selection_survives_view_change_and_incompatible_view_cannot_become_all(ledger_cache_page):
+    page=ledger_cache_page
+    page.evaluate('report=>ledgerFixture.load(report)',_ledger_report())
+    page.evaluate('accounts=>ledgerFixture.accounts(accounts,["C1"])',_account_choices())
+    page.evaluate('()=>ledgerFixture.setView("bank")')
+    assert page.evaluate('()=>ledgerFixture.pending()')==[]
+    page.evaluate('()=>ledgerFixture.generate(false)')
+    assert 'compatible' in page.locator('#cashflowsToast').inner_text()
+    page.evaluate('()=>ledgerFixture.setView("cash")')
+    assert page.evaluate('()=>ledgerFixture.pending()')==['C1']
+
+
+def test_parent_cache_never_derives_a_selected_scope_from_all_or_other_accounts(ledger_cache_page):
+    page=ledger_cache_page
+    report=_selected_ui_report(['B1'])
+    report['preview']['period_metrics']={'2026-01':dict(source_line_count=2,selected_voucher_count=2,
+        internal_transfer_count=0,category_review_count=0,deduction_count=0,selection_review_count=0)}
+    page.evaluate('report=>ledgerFixture.load(report)',report)
+    page.evaluate('accounts=>ledgerFixture.accounts(accounts,["B2"])',_account_choices())
+    args=[report,report['period_start'],report['period_end'],'month','combined']
+    assert page.evaluate('args=>ledgerFixture.parent(...args)',args) is None
+    page.evaluate('()=>ledgerFixture.setPending(["B1"])')
+    assert page.evaluate('args=>ledgerFixture.parent(...args)',args)['account_selection']['account_codes']==['B1']
+    args[0]=_ledger_report()
+    assert page.evaluate('args=>ledgerFixture.parent(...args)',args) is None
+
+
+def test_selected_details_classification_and_excel_use_loaded_scope_despite_pending_edits(ledger_cache_page):
+    page=ledger_cache_page;requests=[]
+    report=_selected_ui_report(['B1'],complete=False)
+    page.evaluate('report=>ledgerFixture.load(report)',report)
+    page.evaluate('accounts=>ledgerFixture.accounts(accounts,["C1"])',_account_choices())
+    page.evaluate('''()=>{ledgerFixture.mutateScope({period_start:'2026-04-01',period_end:'2026-06-30',group_by:'quarter',treasury_view:'cash'});
+        document.getElementById('cashflowsPeriodStart').value='2026-04-01';document.getElementById('cashflowsPeriodEnd').value='2026-06-30';}''')
+    def respond(route):
+        query=parse_qs(urlparse(route.request.url).query);path=urlparse(route.request.url).path
+        requests.append((path,query))
+        if path.endswith('/drilldown'):
+            route.fulfill(json=dict(report,rows=_ledger_report()['preview']['ledger_cache']['rows'],page=1,
+                page_count=1,total_rows=2,limit=50))
+        elif path.endswith('/preview'):
+            route.fulfill(json=report)
+        elif path.endswith('classification-preview'):
+            route.fulfill(json=dict(rows=[],page=1,limit=50,total_rows=0,account_selection=report['account_selection']))
+        else:
+            route.fulfill(body=b'fixture',content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                headers={'Content-Disposition':'attachment; filename="Selected.xlsx"'})
+    page.route('**/api/**',respond)
+    assert page.evaluate('()=>ledgerFixture.ledger()')['account_selection']['account_codes']==['B1']
+    page.evaluate('()=>ledgerFixture.children()')
+    page.evaluate('()=>ledgerFixture.classified(true)')
+    with page.expect_download():page.evaluate('()=>ledgerFixture.download("summary")')
+    assert len(requests)==4
+    for path,query in requests:
+        assert query['selected_treasury_account_codes']==['B1'],(path,query)
+        assert query.get('period_start',query.get('date_start'))==['2026-01-01']
+        assert query.get('period_end',query.get('date_end'))==['2026-01-28']
+        assert query.get('treasury_view')==['combined']
+    assert page.evaluate('()=>ledgerFixture.pending()')==['C1']
+    assert page.locator('#cashflowsExportButton').inner_text()=='XLSX'
+
+
+def test_selected_reconciliation_scope_validation_and_background_export_follow_loaded_accounts(ledger_cache_page,reconciliation_payload):
+    page=ledger_cache_page
+    report,parent,support,posting=reconciliation_payload('combined')
+    selection=dict(version=1,mode='selected',account_codes=['B1'],configured_account_codes=['B1','C1'])
+    report['account_selection']=selection;report['preview']['account_selection']=selection
+    parent.update(account_selection=selection,cache_schema=1,cache_identity='a'*64,template_id=report['configuration']['source_template_id'])
+    queries=[]
+    def respond(route):
+        queries.append(parse_qs(urlparse(route.request.url).query))
+        route.fulfill(json=parent)
+    page.route('**/api/reconciliation/cashflows/reconciliation?*',respond)
+    page.evaluate('report=>ledgerFixture.load(report)',report)
+    page.evaluate('accounts=>ledgerFixture.accounts(accounts,["C1"])',_account_choices())
+    page.evaluate('()=>ledgerFixture.reconcile()')
+    assert queries[0]['selected_treasury_account_codes']==['B1']
+    assert 'Accounts: B1' in page.locator('#reconContext').inner_text()
+    jobs=_export_job_routes(page)
+    with page.expect_download():page.locator('#reconExport').click()
+    assert jobs['requests'][0]['selected_treasury_account_codes']==['B1']
+    assert page.evaluate('()=>ledgerFixture.pending()')==['C1']
+
+
+@pytest.mark.parametrize('wrong_scope',[True,False])
+def test_summary_accepts_only_requested_accounts_and_preserves_later_pending_edits(ledger_cache_page,wrong_scope):
+    page=ledger_cache_page
+    page.evaluate('report=>ledgerFixture.load(report)',_selected_ui_report(['B1']))
+    page.evaluate('accounts=>ledgerFixture.accounts(accounts,["B2"])',_account_choices())
+    page.evaluate('''()=>{window.originalFetch=window.fetch;window.fetch=(url,options)=>{
+        if(String(url).includes('/cashflows/preview?')) return new Promise(resolve=>{window.summaryRequest={url:String(url),resolve};});
+        return window.originalFetch(url,options);};window.summaryDone=false;ledgerFixture.generate(false).then(()=>window.summaryDone=true);}''')
+    page.wait_for_function('()=>!!window.summaryRequest')
+    assert parse_qs(urlparse(page.evaluate('()=>window.summaryRequest.url')).query)['selected_treasury_account_codes']==['B2']
+    page.evaluate('()=>ledgerFixture.setPending(["C1"])')
+    result=_selected_ui_report(['B1'] if wrong_scope else ['B2'])
+    page.evaluate('result=>window.summaryRequest.resolve({ok:true,json:async()=>result})',result)
+    page.wait_for_function('()=>window.summaryDone')
+    if wrong_scope:
+        assert 'no longer matches' in page.locator('#cashflowsToast').inner_text()
+        assert page.evaluate('()=>ledgerFixture.stripped()') is None
+    else:
+        assert page.evaluate('()=>ledgerFixture.stripped().account_selection.account_codes')==['B2']
+        assert page.evaluate('()=>ledgerFixture.pending()')==['C1']
+        assert page.locator('#cashflowsAccountButton').get_attribute('class')=='is-pending'
+
+
+def test_selected_transfer_context_and_allocation_reviews_remain_distinct(ledger_cache_page):
+    page=ledger_cache_page;report=_selected_ui_report(['C1'])
+    preview=dict(report['preview'],transfer_reconciliation=dict(status='Matched',selected_inflow=0,selected_outflow=20),
+        transfer_details=[dict(voucher_id='T1',amount=100,selection_inflow=0,selection_outflow=20,selection_net_movement=-20)],
+        selection_review_details=[dict(voucher_id='AMB',period_key='2026-01',reason='Competing funding accounts',receipts=0,payments=40)],
+        categories_needing_review=[],selection_review_count=1)
+    page.evaluate('report=>ledgerFixture.load(report)',report)
+    page.evaluate('preview=>ledgerFixture.child("transfers",preview)',preview)
+    assert 'voucher amount (context)' in page.locator('#cashflowsTransfersTable').inner_text().lower()
+    assert 'selected transfer payments' in page.locator('#cashflowsTransfersTable').inner_text().lower()
+    page.evaluate('preview=>ledgerFixture.child("review",preview)',preview)
+    assert 'Competing funding accounts' in page.locator('#cashflowsReviewTable').inner_text()
+    assert 'selected payments under review' in page.locator('#cashflowsReviewTable').inner_text().lower()
+
+
+def test_ledger_cache_isolates_selected_accounts_even_with_same_source_and_configuration(ledger_cache_page):
+    page=ledger_cache_page
+    first=_selected_ui_report(['B1'])
+    second=_selected_ui_report(['B2'])
+    for row in second['preview']['ledger_cache']['rows']:row['amount']+=100
+    page.evaluate('report=>ledgerFixture.load(report)',first)
+    page.evaluate('report=>ledgerFixture.load(report)',second)
+    second_result=page.evaluate('()=>ledgerFixture.ledger()')
+    page.evaluate('report=>ledgerFixture.load(report)',_selected_ui_report(['B1'],complete=False))
+    first_result=page.evaluate('()=>ledgerFixture.ledger()')
+    assert second_result['rows'][0]['amount']==100.25
+    assert first_result['rows'][0]['amount']==.25
+    assert first_result['ledger_context']['account_selection']['account_codes']==['B1']
+
+
+def test_account_choice_failure_retries_without_silently_loading_all(ledger_cache_page):
+    page=ledger_cache_page;state=dict(fail=True,calls=0)
+    page.evaluate('report=>ledgerFixture.load(report)',_ledger_report())
+    def options(route):
+        state['calls']+=1
+        if state['fail']:route.fulfill(status=500,json=dict(detail='Unavailable'))
+        else:route.fulfill(json=dict(client_id=7,configuration_key='config-1',accounts=_account_choices()))
+    page.route('**/api/reconciliation/cashflows/account-options?*',options)
+    page.locator('#cashflowsAccountButton').click()
+    page.wait_for_selector('#cashflowsAccountRetry')
+    assert 'could not be loaded' in page.locator('#cashflowsAccountStatus').inner_text()
+    assert page.evaluate('()=>ledgerFixture.stripped().account_selection || null') is None
+    state['fail']=False
+    page.locator('#cashflowsAccountRetry').click()
+    page.wait_for_selector('[data-cashflow-account="B1"]')
+    assert state['calls']==2
+    assert page.locator('#cashflowsAccountStatus').inner_text()==''
+
+
+def test_same_scope_balance_refresh_does_not_discard_pending_child_details(ledger_cache_page):
+    page=ledger_cache_page;report=_selected_ui_report(['B1'])
+    page.evaluate('report=>ledgerFixture.load(report)',report)
+    page.evaluate('''()=>{window.originalFetch=window.fetch;window.fetch=(url,options)=>{
+        if(String(url).includes('/cashflows/preview?'))return new Promise(resolve=>window.finishChild=resolve);
+        return window.originalFetch(url,options);};window.childDone=false;ledgerFixture.children().then(value=>{window.childValue=value;window.childDone=true;});}''')
+    page.wait_for_function('()=>!!window.finishChild')
+    page.evaluate('()=>ledgerFixture.renewLoadedReference()')
+    page.evaluate('report=>window.finishChild({ok:true,json:async()=>report})',report)
+    page.wait_for_function('()=>window.childDone')
+    assert page.evaluate('()=>window.childValue.account_selection.account_codes')==['B1']
+    assert page.locator('#cashflowsLoadTransfersButton').is_enabled()
+
+
+def test_loaded_details_never_mix_a_changed_client_with_the_previous_report(ledger_cache_page):
+    page=ledger_cache_page;requests=[]
+    page.evaluate('report=>ledgerFixture.load(report)',_selected_ui_report(['B1']))
+    page.route('**/api/**',lambda route:(requests.append(route.request.url),route.abort()))
+    page.evaluate('''async()=>{ledgerFixture.mutateScope({client_id:8});await ledgerFixture.children();
+        await ledgerFixture.classified(true);await ledgerFixture.download('summary');await ledgerFixture.reconcile();}''')
+    assert requests==[]
+    assert 'Client changed' in page.locator('#cashflowsToast').inner_text()
+
+
+def test_selected_classified_vouchers_label_other_treasury_accounts_as_context(ledger_cache_page):
+    page=ledger_cache_page;report=_selected_ui_report(['B1'])
+    page.evaluate('report=>ledgerFixture.load(report)',report)
+    page.route('**/api/data/cashflows-classification-preview?*',lambda route:route.fulfill(json=dict(
+        account_selection=report['account_selection'],template_columns=['Debit Amount'],total_rows=1,
+        rows=[dict(row_data={'Debit Amount':5},classification=dict(type='Bank',account_code='B2',
+            account_scope='Other Cash/Bank account — voucher context'))])))
+    page.evaluate('()=>ledgerFixture.classified(true)')
+    assert 'Account scope' in page.locator('#cashflowsTransactionsTable').text_content()
+    assert 'Other Cash/Bank account' in page.locator('#cashflowsTransactionsTable').text_content()
+
+
+def test_reconciliation_cache_keys_and_validation_isolate_each_selected_scope(ledger_cache_page,reconciliation_payload):
+    import copy
+    page=ledger_cache_page;report,parent,_,_=reconciliation_payload()
+    reads=[];validations=[]
+    def response(route):
+        query=parse_qs(urlparse(route.request.url).query)
+        codes=query.get('selected_treasury_account_codes')
+        selection=dict(version=1,mode='selected',account_codes=codes,configured_account_codes=['B1','C1'])
+        value=dict(parent,account_selection=selection,cache_schema=1,cache_identity='a'*64,
+            template_id=report['configuration']['source_template_id'])
+        (validations if 'cache-validation' in route.request.url else reads).append(codes)
+        route.fulfill(json=value)
+    page.route('**/api/reconciliation/cashflows/reconciliation?*',response)
+    page.route('**/api/reconciliation/cashflows/reconciliation/cache-validation?*',response)
+    for codes in [['B1'],['C1'],['B1']]:
+        scoped=copy.deepcopy(report)
+        scoped['account_selection']=dict(version=1,mode='selected',account_codes=codes,configured_account_codes=['B1','C1'])
+        scoped['preview']['account_selection']=scoped['account_selection']
+        page.evaluate('report=>ledgerFixture.load(report)',scoped)
+        page.evaluate('()=>ledgerFixture.reconcile()')
+        page.locator('#reconClose').click()
+    assert reads==[['B1'],['C1']]
+    assert validations==[['B1']]
 
 
 @pytest.fixture
@@ -1586,8 +1897,13 @@ def test_cache_is_scoped_to_complete_report_context(ledger_cache_page, change):
     page.evaluate('result => window.ledgerFixture.load(result)', _ledger_report())
     page.evaluate('change => window.ledgerFixture.mutateScope(change)', change)
     _category_button(page).click()
-    page.wait_for_selector('.cashflows-inline-ledger-error')
-    assert page.locator('.cashflows-inline-ledger-link').count() == 0
+    if set(change) <= {'group_by','treasury_view','period_start','period_end'}:
+        # Pending controls do not change the successfully loaded report scope.
+        page.wait_for_selector('.cashflows-inline-ledger-link')
+        assert page.locator('.cashflows-inline-ledger-link').count()==1
+    else:
+        page.wait_for_selector('.cashflows-inline-ledger-error')
+        assert page.locator('.cashflows-inline-ledger-link').count() == 0
     assert requests == []
 
 

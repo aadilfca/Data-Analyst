@@ -105,6 +105,27 @@ def test_jobs_deduplicate_scope_and_keep_owner_files_private(tmp_path):
         assert manager.stop()
 
 
+def test_export_manager_keeps_selected_accounts_distinct_even_with_identical_amount_fingerprints(tmp_path):
+    manager=ReconciliationExportJobs(tmp_path/'exports')
+    manager.start(write_fixture)
+    try:
+        scopes=[SCOPE, SCOPE|{'selected_treasury_account_codes':['C1']},
+            SCOPE|{'selected_treasury_account_codes':['C2']}]
+        tickets=[]
+        for scope in scopes:
+            ticket=manager.submit(scope,1)
+            assert wait(manager,ticket['id'])['state']=='ready'
+            tickets.append(ticket)
+        assert len({ticket['id'] for ticket in tickets})==3
+        for ticket,scope in zip(tickets,scopes):
+            assert manager.submit(scope,1)['id']==ticket['id']
+            _,_,stored,lease=manager.acquire_download(ticket['id'],1,scope['client_id'])
+            assert stored==scope
+            manager.release_download(ticket['id'],lease)
+    finally:
+        assert manager.stop()
+
+
 def test_jobs_bound_queue_and_cancel_before_or_during_generation(tmp_path):
     manager = ReconciliationExportJobs(tmp_path/'exports')
     started, release = threading.Event(), threading.Event()

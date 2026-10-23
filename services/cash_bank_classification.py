@@ -511,6 +511,34 @@ def _source_account_name(source_row: Mapping[str, Any]) -> str:
     return _text(_field_value(row_data, "account_name"))
 
 
+def normalize_cashflow_account_selection(codes, account_types, treasury_view='combined'):
+    """Normalize explicit report scope without changing configured Treasury identity.
+
+    None and explicit All retain the accepted report path. A view change may
+    narrow an explicit selection, but must never silently turn it into All.
+    """
+    if codes is None:
+        return None
+    if not isinstance(codes, (list, tuple, set)) or not codes:
+        raise ValueError('Select at least one configured Cash/Bank account')
+    if any(not isinstance(code, str) or not code.strip() for code in codes):
+        raise ValueError('Select valid configured Cash/Bank account codes')
+    selected = {code.strip() for code in codes}
+    if not selected <= set(account_types):
+        raise ValueError('Selected Cash/Bank accounts are not configured for this client')
+    explicit_all = selected == set(account_types)
+    treasury_view = str(treasury_view or 'combined').strip().casefold()
+    if treasury_view not in ('combined', 'split', 'bank', 'cash'):
+        raise ValueError('Invalid treasury view')
+    if treasury_view in ('bank', 'cash'):
+        selected = {code for code in selected if account_types[code].casefold() == treasury_view}
+    if not selected:
+        raise ValueError('Select at least one account compatible with the Treasury view')
+    if explicit_all:
+        return None
+    return sorted(selected)
+
+
 def load_cashflow_classification_preview(
     client_id: int,
     template_id: int,
@@ -524,6 +552,7 @@ def load_cashflow_classification_preview(
     account_code: str | None = None,
     category: str | None = None,
     treasury_view: str | None = None,
+    selected_treasury_account_codes: list[str] | None = None,
     query_fn: Callable[..., list[dict[str, Any]]] = execute_query_pg,
 ) -> dict[str, Any]:
     """Return one read-only, paginated Client Data/classification view.
@@ -590,6 +619,16 @@ def load_cashflow_classification_preview(
     if treasury_filter not in {'combined', 'cash', 'bank'}:
         raise ValueError('Invalid treasury view')
     treasury_types = {'cash', 'bank'} if treasury_filter == 'combined' else {treasury_filter}
+    selection_sql = ''
+    selection = selected_treasury_account_codes
+    if selection is not None:
+        # The route validates configured ownership. Direct callers still fail
+        # closed on malformed lists rather than interpreting them as All.
+        if not isinstance(selection, (list, tuple)) or not selection or any(
+                not isinstance(code, str) or not code.strip() for code in selection):
+            raise ValueError('Select valid configured Cash/Bank account codes')
+        selection = sorted({code.strip() for code in selection})
+        selection_sql = ' AND treasury.derived_account_code = ANY(%s)'
     treasury_placeholders = ', '.join(['%s'] * len(treasury_types))
     if treasury_filter in {'combined', 'cash', 'bank'}:
         where.append(
@@ -606,9 +645,12 @@ def load_cashflow_classification_preview(
             " AND NULLIF(BTRIM(treasury.derived_account_code), '') IS NOT NULL"
             ' AND (COALESCE(treasury.derived_debit, 0) <> 0 OR COALESCE(treasury.derived_credit, 0) <> 0)'
             ' AND treasury.derived_treasury_type IN (' + treasury_placeholders + ')'
+            + selection_sql +
             ')'
         )
         params.extend([period_start, period_end, *sorted(treasury_types)])
+        if selection is not None:
+            params.append(selection)
 
     if account_code:
         where.append("LOWER(cd.derived_account_code) = LOWER(%s)")
@@ -695,6 +737,9 @@ def load_cashflow_classification_preview(
                 "debit": row.get("debit") or 0,
                 "credit": row.get("credit") or 0,
                 "configuration_version": row.get("configuration_version"),
+                **({'account_scope': 'Selected Cash/Bank account' if row.get('account_code') in selection else
+                    'Other Cash/Bank account — voucher context' if treasury_type in ('cash', 'bank')
+                    else 'Counter-account — voucher context'} if selection is not None else {}),
             },
         })
     return {

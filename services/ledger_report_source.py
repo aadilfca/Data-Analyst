@@ -3475,6 +3475,7 @@ def load_cashflow_client_data_source(
     period_start: Any = None,
     period_end: Any = None,
     cashflow_group_by: str | None = None,
+    selected_treasury_account_codes: Sequence[str] | None = None,
     query_fn: Callable[..., list[dict[str, Any]]] = execute_query_pg,
 ) -> LedgerReportSource:
     """Load Cashflows from active Client Data and its derived columns.
@@ -3492,6 +3493,14 @@ def load_cashflow_client_data_source(
             (_diagnostic("cashflow_period_required", "error", "Cashflows requires a report period."),),
             {"client_id": client_id, "cashflow_report_source_mode": "client_data_derived"},
         )
+
+    selected_codes = None
+    if selected_treasury_account_codes is not None:
+        if isinstance(selected_treasury_account_codes, (str, bytes)):
+            raise ValueError("Selected Treasury accounts must be a list of account codes")
+        selected_codes = sorted({_canonical_code(code) for code in selected_treasury_account_codes})
+        if not selected_codes or "" in selected_codes:
+            raise ValueError("Select at least one valid Treasury account")
 
     filters = [
         "cd.client_id = %s",
@@ -3526,6 +3535,13 @@ def load_cashflow_client_data_source(
         "(COALESCE(cd.derived_debit, 0) <> 0 OR COALESCE(cd.derived_credit, 0) <> 0)",
     ])
 
+    selection_filter = ''
+    direction_projection = ''
+    if selected_codes is not None:
+        selection_filter = " AND account_code IN (" + ', '.join(['%s'] * len(selected_codes)) + ")"
+        # Aggregate normalized source directions before debit/credit netting.
+        direction_projection = ("\n            SUM(GREATEST(l.debit, 0) + GREATEST(-l.credit, 0)) AS source_inflow,"
+                                "\n            SUM(GREATEST(l.credit, 0) + GREATEST(-l.debit, 0)) AS source_outflow,")
     query = f"""
         WITH database_totals AS (
             SELECT COUNT(*) AS database_row_count,
@@ -3567,7 +3583,7 @@ def load_cashflow_client_data_source(
         ), selected_vouchers AS (
             SELECT DISTINCT voucher_id
             FROM derived_lines
-            WHERE treasury_type IN ('cash', 'bank')
+            WHERE treasury_type IN ('cash', 'bank'){selection_filter}
         ), report_lines AS (
         SELECT
             l.voucher_id,
@@ -3576,7 +3592,7 @@ def load_cashflow_client_data_source(
             MAX(l.account_name) AS account_name,
             MAX(l.voucher_detail) AS voucher_detail,
             SUM(l.debit) AS debit,
-            SUM(l.credit) AS credit,
+            SUM(l.credit) AS credit,{direction_projection}
             MAX(l.treasury_type) AS treasury_type,
             MAX(l.category) AS category,
             MAX(l.transaction_month) AS transaction_month,
@@ -3594,8 +3610,10 @@ def load_cashflow_client_data_source(
         LEFT JOIN report_lines l ON TRUE
         ORDER BY l.date, l.voucher_id, l.account_code
     """
+    # Only voucher eligibility is narrowed. All counterparts stay in this read.
+    query_params = [*params, *params, *(selected_codes or [])]
     query_started = perf_counter()
-    rows = query_fn(query, tuple(params + params))
+    rows = query_fn(query, tuple(query_params))
     query_seconds = perf_counter() - query_started
     totals_row = dict(rows[0]) if rows else {}
     database_totals = None
@@ -3609,7 +3627,8 @@ def load_cashflow_client_data_source(
         }
     # A totals-only LEFT JOIN row is metadata, never an accounting entry.
     records = [dict(row) for row in rows if not row.get("database_totals_only", False)]
-    journal = pd.DataFrame(records).reindex(columns=[*JOURNAL_COLUMNS, "treasury_type", "category", *CASHFLOW_PREPARED_PERIOD_COLUMNS])
+    scope_columns = ['source_inflow', 'source_outflow', 'source_line_count'] if selected_codes is not None else []
+    journal = pd.DataFrame(records).reindex(columns=[*JOURNAL_COLUMNS, "treasury_type", "category", *CASHFLOW_PREPARED_PERIOD_COLUMNS, *scope_columns])
     for column in ("treasury_type", "category", *CASHFLOW_PREPARED_PERIOD_COLUMNS):
         if column not in journal:
             journal[column] = ""
@@ -3629,6 +3648,12 @@ def load_cashflow_client_data_source(
             "sql_aggregated": True,
             "raw_json_parsing": False,
         }
+        if selected_codes is not None:
+            metadata['selected_treasury_account_codes'] = selected_codes
+            metadata['cashflow_report_source_key'] = f"client-data-v1:{client_id}:{journal_template_id or 'upload'}"
+            # An inactive selected account has zero movements, not a source
+            # failure. Independent ledger coverage still governs its balances.
+            return LedgerReportSource(journal, _empty_coa(), (), metadata)
         return LedgerReportSource(_empty_journal(), _empty_coa(), diagnostics, metadata)
 
     journal["date"] = pd.to_datetime(journal["date"], errors="coerce")
@@ -3694,6 +3719,8 @@ def load_cashflow_client_data_source(
         "cashflow_classification_query_seconds": query_seconds,
         "cashflow_source_transform_seconds": 0.0,
     }
+    if selected_codes is not None:
+        metadata['selected_treasury_account_codes'] = selected_codes
     return LedgerReportSource(journal, coa, (), metadata, ())
 
 
@@ -3930,10 +3957,22 @@ def load_ledger_report_source(
     account_category_source: str = "ledger_summary",
     treasury_account_codes: Sequence[str] | None = None,
     cashflow_group_by: str | None = None,
+    selected_treasury_account_codes: Sequence[str] | None = None,
 ) -> LedgerReportSource:
     """Load one explicit Client Data Bank dataset and its client categories."""
 
     if account_category_source == "cashflow":
+        selection_options = ({'selected_treasury_account_codes': selected_treasury_account_codes}
+                             if selected_treasury_account_codes is not None else {})
+        if selection_options and treasury_account_codes is not None:
+            configured = {_canonical_code(code) for code in treasury_account_codes}
+            if isinstance(selected_treasury_account_codes, (str, bytes)):
+                raise ValueError('Selected Treasury accounts must be a list of account codes')
+            selected = {_canonical_code(code) for code in selected_treasury_account_codes}
+            if not selected or '' in selected or not selected <= configured:
+                raise ValueError('Select valid configured Treasury accounts')
+            if selected == configured:
+                selection_options = {}  # Explicit All uses the unchanged query.
         return load_cashflow_client_data_source(
             client_id,
             journal_upload_id=journal_upload_id,
@@ -3942,6 +3981,7 @@ def load_ledger_report_source(
             period_end=period_end,
             cashflow_group_by=cashflow_group_by,
             query_fn=query_fn,
+            **selection_options,
         )
 
     if journal_upload_id is not None and journal_template_id is not None:

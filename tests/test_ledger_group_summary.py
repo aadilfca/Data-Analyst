@@ -1,6 +1,7 @@
 import pandas as pd
 import pytest
-from test_reconciliation_balance_source import independent_year_boundary_case, horizontal_reconciliation_case, _horizontal_summary
+from test_reconciliation_balance_source import (independent_year_boundary_case, horizontal_reconciliation_case,
+    _horizontal_summary, selected_account_case, _selected_summary)
 
 from services.ledger_group_summary import (
     LedgerBalanceError,
@@ -24,6 +25,173 @@ def test_reconciliation_evidence_is_opt_in_and_preserves_existing_summary(horizo
             assert value==detailed[key]
     with pytest.raises(ValueError,match='Opt-in'):
         build_cashflow_presentation_adjustments(ordinary,case['source']['transaction_rows'],case['accounts'],'combined')
+
+
+def test_explicit_all_selection_preserves_every_existing_summary_field(selected_account_case):
+    case = selected_account_case
+    original = case['journal'].copy(deep=True)
+    normal = _selected_summary(case)
+    explicit = _selected_summary(case, [*reversed(case['accounts']), 'C1'])
+    assert set(normal) == set(explicit)
+    for key,value in normal.items():
+        if isinstance(value,pd.DataFrame):pd.testing.assert_frame_equal(value,explicit[key])
+        else:assert value == explicit[key],key
+    pd.testing.assert_frame_equal(original,case['journal'])
+
+
+def test_all_255_account_selections_preserve_independent_mixed_voucher_arithmetic(selected_account_case):
+    import itertools
+    case = selected_account_case
+    for count in range(1,9):
+        for selection in itertools.combinations(case['accounts'],count):
+            chosen = set(selection)
+            summary = _selected_summary(case,selection)
+            expected_categories = {'Salaries':-10,'Contractors':-80,'Liaison':-10} if 'C1' in chosen else {}
+            assert summary['category_totals']['Total'].to_dict() == expected_categories,selection
+            proof = {p['treasury_type']:p for p in summary['treasury_movement_proof']}
+            raw = sum(row.debit-row.credit for row in case['journal'].itertuples() if row.account_code in chosen)
+            transfers = sum(n*((other in chosen)-('C1' in chosen)) for other,n in [('C2',20),('C3',70),('C3',-15),('C3',9)])
+            assert proof['combined']['source_movement'] == raw,selection
+            assert proof['combined']['internal_transfer_movement'] == transfers,selection
+            assert proof['combined']['category_movement'] + transfers == raw,selection
+            assert all(p['variance']==0 and p['mixed_voucher_movement']==0 for p in proof.values())
+            assert summary.get('selection_review_count',0) == 0
+            assert summary['cashflow_drilldown_controls']['cash_bank_split']['detail_total'] == sum(expected_categories.values())
+            if chosen != set(case['accounts']):
+                assert summary['account_selection']['account_codes'] == sorted(chosen)
+
+
+def _replace_selection_journal(case, rows):
+    case['journal'] = pd.DataFrame(rows,columns=['voucher_id','date','account_code','debit','credit'])
+    return case
+
+
+def test_competing_sources_keep_exact_selected_movement_without_guessing_categories(selected_account_case):
+    case = _replace_selection_journal(selected_account_case,[
+        ['A','2026-01-05','B1',0,70],['A','2026-01-05','B2',0,30],
+        ['A','2026-01-05','EXP1',40,0],['A','2026-01-05','EXP2',60,0]])
+    part = _selected_summary(case,['B1'])
+    assert part['category_totals'].empty and part['vendor_payment_details'].empty
+    assert part['selection_review_count']==1
+    assert part['selection_review_details'].iloc[0].payments==70
+    proof = next(p for p in part['treasury_movement_proof'] if p['treasury_type']=='combined')
+    assert proof['source_movement']==proof['mixed_voucher_movement']==-70
+    assert proof['category_movement']==proof['internal_transfer_movement']==proof['variance']==0
+    both = _selected_summary(case,['B1','B2'])
+    assert both['category_totals']['Total'].to_dict()=={'Expense A':-40,'Expense B':-60}
+
+
+def test_selected_customer_split_does_not_copy_the_entire_settlement_or_deductions(selected_account_case):
+    case = _replace_selection_journal(selected_account_case,[
+        ['R','2026-01-05','B1',60,0],['R','2026-01-05','B2',37,0],
+        ['R','2026-01-05','AR',0,100],['R','2026-01-05','FEE',3,0]])
+    one = _selected_summary(case,['B1'])
+    assert one['category_totals'].empty and one['customer_payment_details'].empty and one['deduction_details'].empty
+    assert one['selection_review_count']==1
+    assert 'Customer settlement' in one['selection_review_details'].iloc[0].reason
+    proof = next(p for p in one['treasury_movement_proof'] if p['treasury_type']=='combined')
+    assert proof['mixed_voucher_movement']==60
+    both = _selected_summary(case,['B1','B2'])
+    assert both['category_totals']['Total'].to_dict()=={'Charges':-3,'Customers':100}
+    assert len(both['deduction_details'])==1
+
+
+def test_selected_mixed_types_retain_combined_sections_and_separate_type_uncertainty(selected_account_case):
+    case = _replace_selection_journal(selected_account_case,[
+        ['M','2026-01-05','B1',0,105],['M','2026-01-05','C1',100,0],['M','2026-01-05','FEE',5,0]])
+    sender = _selected_summary(case,['B1'])
+    assert sender['category_totals']['Total'].to_dict()=={'Charges':-5}
+    source = next(p for p in sender['treasury_movement_proof'] if p['treasury_type']=='combined')
+    assert (source['category_movement'],source['internal_transfer_movement'],source['source_movement'])==(-5,-100,-105)
+    both = _selected_summary(case,['B1','C1'])
+    assert both['treasury_category_totals'].iloc[0].mixed_amount==-5
+    proofs = {p['treasury_type']:p for p in both['treasury_movement_proof']}
+    assert proofs['combined']['category_movement']==-5
+    assert proofs['bank']['mixed_voucher_movement']==-105 and proofs['cash']['mixed_voucher_movement']==100
+
+
+@pytest.mark.parametrize('selection',[[],[''],['MISSING'],'C1'])
+def test_selected_summary_rejects_empty_unknown_or_scalar_selections(selected_account_case,selection):
+    with pytest.raises(ValueError,match='(Select|Selected)'):_selected_summary(selected_account_case,selection)
+
+
+@pytest.mark.parametrize('representation',['negative_debit','negative_credit'])
+def test_selected_source_direction_normalization_preserves_reversed_transfers(selected_account_case,representation):
+    rows = ([['T','2026-01-05','B1',-20,0],['T','2026-01-05','B2',20,0]] if representation=='negative_debit'
+        else [['T','2026-01-05','B1',0,20],['T','2026-01-05','B2',0,-20]])
+    case = _replace_selection_journal(selected_account_case,rows)
+    summary = _selected_summary(case,['B1'])
+    proof = next(p for p in summary['treasury_movement_proof'] if p['treasury_type']=='combined')
+    assert proof['category_movement']==0 and proof['internal_transfer_movement']==proof['source_movement']==-20
+    assert summary['transfer_details'].iloc[0].selection_outflow==20
+
+
+@pytest.mark.parametrize('control',['missing','negative','nan','infinite','inconsistent','one_direction'])
+def test_selected_aggregated_directions_fail_closed(selected_account_case,control):
+    case = selected_account_case
+    frame = case['journal'].copy()
+    frame['source_line_count']=2
+    if control!='missing':
+        frame['source_inflow']=(frame.debit.clip(lower=0)+(-frame.credit).clip(lower=0)).astype(float)
+        frame['source_outflow']=(frame.credit.clip(lower=0)+(-frame.debit).clip(lower=0)).astype(float)
+        if control=='one_direction':frame=frame.drop(columns='source_outflow')
+        else:frame.loc[0,'source_inflow']={'negative':-1,'nan':float('nan'),'infinite':float('inf'),'inconsistent':1}[control]
+    case['journal']=frame
+    with pytest.raises(ValueError,match='(direction controls|debit/credit)'):_selected_summary(case,['C1'])
+
+
+def test_hidden_opposite_occurrences_cannot_prove_a_single_funding_account(selected_account_case):
+    case=selected_account_case
+    frame=case['journal'].copy()
+    frame['source_inflow']=frame.debit.clip(lower=0)
+    frame['source_outflow']=frame.credit.clip(lower=0)
+    # Aggregated debit/credit net is unchanged; original opposite directions
+    # disqualify the new narrow attribution proof.
+    frame.loc[0,'source_inflow']+=1
+    frame.loc[0,'source_outflow']+=1
+    case['journal']=frame
+    result=_selected_summary(case,['C2'])
+    assert result['selection_review_count']==1 and result['category_totals'].empty
+    assert result['selection_review_details'].iloc[0].receipts==20
+
+
+def test_selected_canonical_input_must_use_the_direction_preserving_source_path(selected_account_case):
+    case=selected_account_case
+    case['journal']['treasury_type']=case['journal'].account_code.map(case['accounts']).fillna('')
+    case['journal']['category']=''
+    with pytest.raises(ValueError,match='source direction controls'):_selected_summary(case,['C1'])
+
+
+@pytest.mark.parametrize('grouping',['day','fortnight','month','quarter','half_year','year'])
+def test_selected_movement_controls_follow_every_existing_grouping(selected_account_case,grouping):
+    result=_selected_summary(selected_account_case,['C1'],group_by=grouping)
+    proofs=[p for p in result['treasury_movement_proof'] if p['treasury_type']=='combined']
+    assert sum(p['source_movement'] for p in proofs)==-184
+    assert sum(p['category_movement'] for p in proofs)==-100
+    assert sum(p['internal_transfer_movement'] for p in proofs)==-84
+    assert all(p['variance']==0 for p in proofs)
+
+
+@pytest.mark.parametrize('presentation,expected',[('net',{'Contractors':-40,'Customers':776}),
+                                                 ('gross',{'Charges':-24,'Contractors':-40,'Customers':800})])
+def test_selected_customer_vendor_reversals_keep_accepted_policy_without_unselected_leakage(selected_account_case,presentation,expected):
+    case=_replace_selection_journal(selected_account_case,[
+        ['R','2026-01-05','B1',1000,30],['R','2026-01-05','AR',0,1000],['R','2026-01-05','FEE',30,0],
+        ['REV','2026-01-06','B1',-200,-6],['REV','2026-01-06','AR',0,-200],['REV','2026-01-06','FEE',-6,0],
+        ['P','2026-01-07','B1',0,50],['P','2026-01-07','CON',50,0],
+        ['PR','2026-01-08','B1',0,-10],['PR','2026-01-08','CON',-10,0],
+        ['OTHER','2026-01-09','B2',37,0],['OTHER','2026-01-09','AR',0,37]])
+    summary=_selected_summary(case,['B1'],receipt_presentation=presentation)
+    assert summary['category_totals']['Total'].to_dict()==expected
+    assert set(summary['customer_payment_details'].voucher_id)=={'R','REV'}
+    assert summary['customer_payment_details'].customer_gross_amount.sum()==800
+    assert summary['deduction_details'].amount.sum()==-24
+    assert summary['vendor_payment_details'].net_payments.sum()==40
+    assert summary['selection_review_count']==0
+    from services.reconciliation_balance_source import build_cashflow_reconciliation
+    paper=build_cashflow_reconciliation(summary,case['make_source'](case['journal']),case['accounts'])['views']['combined']
+    assert paper['overall']['receipts']['difference']==paper['overall']['payments']['difference']==0
+    assert paper['overall_balance_proof']['ledger_closing']==10736
 
 
 def test_section_assignment_uses_selected_total_not_each_month(horizontal_reconciliation_case):
