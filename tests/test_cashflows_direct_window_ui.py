@@ -394,7 +394,7 @@ def test_cashflows_report_preserves_current_default_period_and_monthly_grouping(
     assert "cashflowPreviewPeriods" in reconciliation_script
     assert "syncCashflowZeroRowsButton" in reconciliation_script
     assert "style.css?v=71" in reconciliation_html
-    assert "reconciliation.js?v=43" in reconciliation_html
+    assert "reconciliation.js?v=46" in reconciliation_html
     assert "cashflowsSummaryBasis" not in reconciliation_html
     assert "cashflows-transactions-note" not in reconciliation_html
     assert "renderCashflowSummary" in reconciliation_script
@@ -1023,6 +1023,118 @@ def test_reconciliation_navigation_deep_link_loads_only_when_requested(ledger_ca
     assert "label: 'Ledger / Cashflow reconciliation'" in manifest
     assert "url: '/static/reconciliation.html?report=cashflows&feature=reconciliation', state: 'ready'" in manifest
     page.close()
+
+
+def _export_job_routes(page, *, failure=None):
+    state = dict(requests=[], polls=0, cancelled=0, downloads=0)
+    identity='e'*32
+    def respond(route):
+        path=urlparse(route.request.url).path
+        if route.request.method=='POST':
+            state['requests'].append(route.request.post_data_json)
+            return route.fulfill(status=202,json=dict(id=identity,state='queued',stage='Reading and validating evidence'))
+        if route.request.method=='DELETE':
+            state['cancelled']+=1
+            return route.fulfill(json=dict(id=identity,state='cancelled'))
+        if path.endswith('/download'):
+            state['downloads']+=1
+            return route.fulfill(body=b'fixture-xlsx-download',content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                headers={'Content-Disposition':'attachment; filename="Reconciliation.xlsx"',
+                         'Access-Control-Expose-Headers':'Content-Disposition'})
+        state['polls']+=1
+        if failure:
+            return route.fulfill(json=dict(id=identity,state='failed',error='Export evidence changed' if failure==409 else 'Export unavailable',error_status=failure))
+        if state['polls']==1:
+            return route.fulfill(json=dict(id=identity,state='running',stage='Writing Voucher Evidence',current=250,total=500))
+        return route.fulfill(json=dict(id=identity,state='ready',filename='Reconciliation.xlsx'))
+    page.route('**/api/reconciliation/cashflows/reconciliation/exports**',respond)
+    return state
+
+
+@pytest.mark.parametrize('view',['combined','bank','cash','split'])
+def test_reconciliation_excel_jobs_use_locked_scope_progress_and_preserve_report(ledger_cache_page,reconciliation_payload,view,tmp_path):
+    page=ledger_cache_page
+    errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
+    _cache_reconciliation_routes(page,reconciliation_payload,view)
+    page.evaluate("()=>{document.getElementById('cashflowsPeriodStart').value='2026-04-01';document.getElementById('cashflowsPeriodEnd').value='2026-06-30';}")
+    if view=='split':page.locator('#reconView').select_option('bank')
+    state=_export_job_routes(page)
+    working=page.locator('#reconWorking').inner_html()
+    with page.expect_download() as download:
+        page.locator('#reconExport').click()
+        assert page.locator('#reconExport').is_disabled() and page.locator('#reconReload').is_disabled()
+        assert page.locator('[data-recon-cancel-export]').is_visible()
+        page.wait_for_function("()=>document.getElementById('reconExportProcessing').innerText.includes('250 of 500')")
+        assert 'Writing Voucher Evidence' in page.locator('#reconExportProcessing').inner_text()
+        assert page.locator('#reconWorking').inner_html()==working
+    item=download.value;item.save_as(tmp_path/'export.xlsx')
+    assert item.suggested_filename=='Reconciliation.xlsx'
+    assert (tmp_path/'export.xlsx').read_bytes()==b'fixture-xlsx-download'
+    page.wait_for_function("()=>!document.getElementById('reconExport').disabled")
+    assert state['requests']==[dict(client_id=7,period_start='2026-01-01',period_end='2026-01-31',
+        group_by='month',treasury_view=view,expected_fingerprint='current-proof',expected_identity='a'*64)]
+    assert state['downloads']==1 and state['polls']==2
+    assert page.locator('#reconExportProcessing').is_hidden()
+    assert page.locator('#reconWorking').inner_html()==working
+    page.locator('#reconClose').click()
+    assert page.locator('#cashflowsView').is_visible() and not errors
+
+
+@pytest.mark.parametrize('status',[401,403,409,500])
+def test_reconciliation_excel_job_failures_release_processing_and_stale_papers(ledger_cache_page,reconciliation_payload,status):
+    page=ledger_cache_page
+    _cache_reconciliation_routes(page,reconciliation_payload)
+    state=_export_job_routes(page,failure=status)
+    downloads=[];page.on('download',lambda item:downloads.append(item))
+    page.locator('#reconExport').click();page.wait_for_selector('#reconStatus.is-error')
+    assert 'Export ' in page.locator('#reconStatus').inner_text()
+    assert page.locator('#reconExportProcessing').is_hidden()
+    assert page.locator('#reconReload').is_enabled()
+    if status in (401,403,409):
+        assert page.locator('#reconExport').is_disabled()
+        assert page.locator('#reconWorking').inner_html()==''
+        assert page.evaluate('()=>ledgerFixture.reconciliationCache()')==[]
+        page.locator('[data-recon-retry]').click();page.wait_for_selector('#reconWorking table')
+    else:
+        assert page.locator('#reconExport').is_enabled()
+        assert page.locator('#reconWorking table').count()==3
+    assert state['downloads']==0 and not downloads
+
+
+@pytest.mark.parametrize('action',['close','tab','cancel','timeout','late-ticket'])
+def test_reconciliation_excel_jobs_cancel_and_reject_obsolete_results(ledger_cache_page,reconciliation_payload,action):
+    page=ledger_cache_page
+    _cache_reconciliation_routes(page,reconciliation_payload,'split')
+    state=_export_job_routes(page)
+    downloads=[];page.on('download',lambda item:downloads.append(item))
+    if action in ('timeout','late-ticket'):
+        page.evaluate("""()=>{window.exportOriginal=window.fetch;window.fetch=(url,options)=>{
+            if(options&&options.method==='POST'&&String(url).includes('/exports')) return new Promise((resolve,reject)=>{
+                window.finishExportTicket=resolve;options.signal.addEventListener('abort',()=>reject(new DOMException('Timed out','AbortError')));});
+            return window.exportOriginal(url,options);};}""")
+    if action=='timeout':
+        page.evaluate("""()=>{const timer=window.setTimeout;window.setTimeout=(fn,delay,...args)=>timer(fn,delay===30000?20:delay,...args);}""")
+    page.locator('#reconExport').click()
+    if action=='timeout':
+        page.wait_for_selector('#reconStatus.is-error')
+        assert 'connection timed out' in page.locator('#reconStatus').inner_text()
+        assert page.locator('#reconExport').is_enabled()
+    elif action in ('close','late-ticket'):
+        page.locator('#reconClose').click()
+        if action=='late-ticket':
+            page.evaluate("()=>window.finishExportTicket({ok:true,json:async()=>({id:'e'.repeat(32),state:'queued'})})")
+        page.wait_for_function('()=>true')
+        assert page.locator('#cashflowReconciliation').is_hidden()
+    elif action=='tab':
+        page.locator('#reconDifferencesTab').click();page.wait_for_selector('#reconDifferenceRows summary')
+    else:
+        page.locator('[data-recon-cancel-export]').click()
+        assert page.locator('#reconExport').is_enabled()
+    if action!='timeout':
+        page.wait_for_function('()=>true');page.wait_for_timeout(50)
+        assert state['cancelled']==1
+    assert not downloads and state['downloads']==0
+    assert page.locator('#reconExportProcessing').is_hidden()
 
 
 def _cache_reconciliation_routes(page,reconciliation_payload,view='combined'):
@@ -1883,6 +1995,42 @@ def test_late_balance_response_cannot_replace_a_new_period(ledger_cache_page):
     page.evaluate('''async result=>{waiting[0](new Response(JSON.stringify(result)));await firstBalance;}''',january)
     assert _balance_values(page,'.cashflows-balance-row:first-of-type')[0]=='300 Dr'
     assert page.evaluate('()=>ledgerFixture.stripped().period_start')=='2026-02-01'
+
+
+@pytest.mark.parametrize('refresh_fails', [False, True])
+def test_reconciliation_waits_for_report_refresh_and_opens_on_first_available_attempt(
+        ledger_cache_page, reconciliation_payload, refresh_fails):
+    page = ledger_cache_page
+    report, parent, _, _ = reconciliation_payload()
+    page.evaluate('result => ledgerFixture.load(result)', report)
+    page.evaluate('''() => {
+        window.waiting = [];
+        window.fetch = (url) => new Promise(resolve => waiting.push({url:url, resolve:resolve}));
+        window.reportRefresh = ledgerFixture.generate(false);
+    }''')
+    page.wait_for_function('waiting.length === 1')
+    button = page.locator('#cashflowsReconciliationButton')
+    assert button.is_visible() and button.is_disabled()
+    assert button.get_attribute('aria-busy') == 'true'
+    assert 'Checking the loaded report' in button.get_attribute('title')
+    # Even a direct call cannot open a report that is about to be replaced.
+    page.evaluate('() => ledgerFixture.reconcile()')
+    assert page.locator('#cashflowReconciliation').is_hidden()
+    assert page.evaluate('waiting.length') == 1
+    page.evaluate('''async data => {
+        waiting[0].resolve(new Response(JSON.stringify(data.report), {status:data.fails ? 503 : 200}));
+        await reportRefresh;
+    }''', {'report': report, 'fails': refresh_fails})
+    assert button.is_enabled() and button.get_attribute('aria-busy') == 'false'
+    button.click()
+    page.wait_for_function('waiting.length === 2')
+    assert '/cashflows/reconciliation?' in page.evaluate('waiting[1].url')
+    assert page.locator('#cashflowReconciliation').is_visible()
+    assert page.locator('#reconProcessing').is_visible()
+    page.evaluate('data => waiting[1].resolve(new Response(JSON.stringify(data)))', parent)
+    page.wait_for_selector('#reconWorking table')
+    assert page.locator('#cashflowReconciliation').is_visible()
+    assert page.evaluate('waiting.length') == 2
 
 
 def test_background_balance_completion_does_not_dismiss_an_active_ledger_load(ledger_cache_page):

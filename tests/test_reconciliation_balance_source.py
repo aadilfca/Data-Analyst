@@ -236,6 +236,25 @@ def horizontal_reconciliation_case():
         source=dict(uploads=uploads(ledger), ledger_rows=ledger, transaction_rows=transactions), refresh_uploads=uploads)
 
 
+@pytest.mark.parametrize('view', ['combined', 'bank', 'cash', 'split'])
+def test_horizontal_export_comparisons_reuse_existing_calculations_without_public_changes(horizontal_reconciliation_case, view):
+    from unittest.mock import patch
+    import services.reconciliation_balance_source as engine
+    case = horizontal_reconciliation_case
+    summary = _horizontal_summary(case)
+    normal = engine.build_cashflow_reconciliation(summary, case['source'], case['accounts'], view)
+    with patch.object(engine, 'build_cashflow_differences', wraps=engine.build_cashflow_differences) as compare:
+        export = engine.build_cashflow_reconciliation(summary, case['source'], case['accounts'], view,
+                                                     include_posting_comparisons=True)
+    comparisons = export.pop('_posting_comparisons')
+    assert export == normal
+    assert compare.call_count == len(export['views'])
+    for kind, comparison in comparisons.items():
+        assert comparison['findings']
+        for key, value in export['views'][kind]['posting_comparison'].items():
+            assert comparison[key] == value
+
+
 def _horizontal_summary(case, presentation='gross', grouping='month', end='2026-01-31'):
     from services.ledger_group_summary import build_cashflow_summary
     return build_cashflow_summary(case['journal'], case['coa'], ['C1'], ['B1'], '2026-01-01', end,

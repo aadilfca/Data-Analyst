@@ -33,7 +33,7 @@ This document lists all source files in the project, grouped by directory, with 
 | `services/ledger_report_source.py` | Read-only adapter that normalizes Client Data Bank journals, report categories, and complete all-upload voucher inputs for canonical maintenance. |
 | `services/cashflow_voucher_canonicalization.py`, `services/cashflow_voucher_occurrence_store.py`, `services/cashflow_preparation.py` | Audit-preserving voucher decisions, occurrence persistence, and full/incremental upload, category, and treasury revisioned prepared Cashflows lines/rollups. |
 | `services/reconciliation_balance_source.py` | Normalizes stored opening/month-end balance inputs and reports missing, duplicate, invalid, or out-of-period reconciliation evidence. |
-| `services/reconciliation_xlsx.py` | OpenPyXL exporter for professional Bank/Cash monthly summaries, schedules, review controls, cross-checks, and reconciliation proofs. |
+| `services/reconciliation_xlsx.py`, `services/reconciliation_export_jobs.py` | Existing Bank/Cash/Cashflow exports plus streamed reconciliation workbooks and bounded, owner-scoped background jobs with temporary-file cleanup. |
 | `services/storage_cleanup.py`, `services/upload_lifecycle.py`, `services/drive_archive.py`, `services/upload_observation_report.py` | Protected cleanup, scoped voucher/date comparisons, complete-voucher Excel observations, deterministic recovery ZIPs, verified Drive archives and compact receipts. |
 | `services/cash_bank_classification.py` | Versioned Cash/Bank derived transaction-line builder, affected-account reporting, and controlled SQLite/PostgreSQL backfill service; never mutates raw Client Data. |
 
@@ -143,7 +143,7 @@ This document lists all source files in the project, grouped by directory, with 
 | `test_cashflow_voucher_canonicalization.py`, `test_cashflow_voucher_occurrence_backfill.py`, `test_cashflow_prepared_schema.py`, `test_cashflow_preparation.py` | Verifies voucher decisions, prepared-schema integrity, eligibility, category mapping, incremental replacement/no-op behavior, raw-data preservation, and rerun safety. |
 | `test_cashflows_classification_preview.py`, `test_cashflows_direct_window_ui.py` | Verifies the derived Cashflows preview and inline classified-transaction controls. |
 | `test_reconciliation.py`, `test_reconciliation_balance_source.py`, `test_reconciliation_reports.py` | Test account-group, balance-input, report-control, Financial Statement preview, preview/download, exact-code validation, transactional replacement, normalization, and completeness behavior. |
-| `test_reconciliation_xlsx.py` | Tests report workbook structure, formatting, typed values, missing-balance handling, and local Bank/Cash golden movement matching. |
+| `test_reconciliation_xlsx.py`, `test_reconciliation_export_jobs.py` | Workbook accounting/style/completeness, large-volume streaming, export ownership, queue bounds, cancellation, expiry, restart recovery and temporary-file cleanup. |
 | `test_pg_pool_retry.py` | Unit tests for `database.py`'s stale-pooled-connection recovery — fake pool/connection/cursor (no live Postgres): `_run_pooled_pg` retries once and succeeds, propagates a non-stale error untouched, gives up after one retry; `_is_stale_pg_connection_error` type+message match; `_getconn_pg_checked` skips a closed connection; the recovery log line fires. |
 
 ## Notes

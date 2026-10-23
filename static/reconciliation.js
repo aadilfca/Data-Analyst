@@ -357,6 +357,7 @@
         element('cashflowsProcessing').hidden = true;
         element('cashflowsProcessingTitle').textContent = 'Loading Cashflows summary';
         syncCashflowZeroRowsButton();
+        syncCashflowReconciliationEntry();
     }
     function cashflowPreviewPeriods(preview) {
         if (Array.isArray(preview.periods) && preview.periods.length) return preview.periods;
@@ -3002,7 +3003,7 @@
     }
     // A separate page view retains the Cashflows DOM, including filters and expanded rows.
     const reconciliationState = {result: null, scope: null, view: 'combined', tab: 'working',
-        controller: null, generation: 0, opener: null, lastRequest: {}, needsReportReload: false, loading: null, pending: null};
+        controller: null, generation: 0, opener: null, lastRequest: {}, needsReportReload: false, loading: null, pending: null, exportTask: null};
     // Disposable tab memory only. Store serialized data once, never report DOM.
     const reconciliationCache = new Map();
     let reconciliationCacheGeneration = 0;
@@ -3058,7 +3059,20 @@
         };
         return format(scope.period_start) + ' – ' + format(scope.period_end);
     }
+    function cancelReconciliationExport() {
+        const task = reconciliationState.exportTask;
+        if (!task) return;
+        task.cancelled = true;
+        reconciliationState.exportTask = null;
+        if (task.id) discardReconciliationExport(task);
+    }
+    function discardReconciliationExport(task) {
+        fetch('/api/reconciliation/cashflows/reconciliation/exports/' + encodeURIComponent(task.id)
+            + '?client_id=' + encodeURIComponent(task.scope.client_id),
+            {method: 'DELETE', cache: 'no-store', keepalive: true}).catch(function () {});
+    }
     function cancelReconciliationRequest() {
+        cancelReconciliationExport();
         reconciliationState.generation += 1;
         reconciliationState.pending = null;
         if (reconciliationState.controller) reconciliationState.controller.abort();
@@ -3074,22 +3088,23 @@
         window.LoadingUI.hideSkeleton(loading.skeleton);
         window.LoadingUI.stopGlobalLoading(loading.token);
         loading.target.removeAttribute('aria-busy');
-        if (loading.target === element('reconProcessing')) loading.target.hidden = true;
+        if (loading.target === element('reconProcessing') || loading.target === element('reconExportProcessing')) loading.target.hidden = true;
         syncReconciliationControls();
     }
     function syncReconciliationControls() {
         const state = reconciliationState, busy = !!state.loading;
         element('reconReload').disabled = busy;
+        element('reconExport').disabled = busy || !state.result || !state.result.evidence_fingerprint || !state.result.cache_identity;
         element('reconView').disabled = busy || !state.result;
         element('reconIncludeMatched').disabled = busy || !state.result;
         document.querySelectorAll('#cashflowReconciliation [role=tab]').forEach(function (button) { button.disabled = !state.result; });
     }
     function startReconciliationProcessing(options) {
         const support = !!options.support_key, differences = !!options.posting_differences;
-        const target = element(support ? 'reconSupport' : differences ? 'reconDifferenceRows' : 'reconProcessing');
-        const title = support ? 'Loading adjustment voucher support…' : differences
+        const target = element(options.export ? 'reconExportProcessing' : support ? 'reconSupport' : differences ? 'reconDifferenceRows' : 'reconProcessing');
+        const title = options.export ? 'Preparing reconciliation Excel…' : support ? 'Loading adjustment voucher support…' : differences
             ? 'Loading voucher differences — page ' + String(options.page || 1) + '…' : 'Preparing reconciliation…';
-        const message = support ? 'Reading complete ledger postings and related Transaction Report vouchers.' : differences
+        const message = options.export ? 'Validating the displayed working paper and preparing complete supporting evidence.' : support ? 'Reading complete ledger postings and related Transaction Report vouchers.' : differences
             ? 'Comparing original postings for the selected report range.' : 'Reading independent ledger evidence and Cashflow movements.';
         target.hidden = false;
         target.setAttribute('aria-busy', 'true');
@@ -3099,11 +3114,16 @@
             progress: target.querySelector('.recon-loading-progress'), skeleton: target.querySelector('.recon-loading-skeleton'),
             token: window.LoadingUI.startGlobalLoading(element('cashflowReconciliation'))};
         reconciliationState.loading = loading;
+        if (options.export) {
+            loading.skeleton.hidden = true;
+            target.querySelector('.recon-loading-panel').insertAdjacentHTML('beforeend',
+                '<div class="recon-export-actions"><button type="button" class="cashflows-secondary" data-recon-cancel-export>Cancel export</button></div>');
+        }
         window.LoadingUI.showSpinner(loading.title, title);
         window.LoadingUI.showProgressBar(loading.progress, {mode: 'indeterminate', message: message});
         loading.progress.setAttribute('role', 'progressbar');
         loading.progress.setAttribute('aria-label', title);
-        window.LoadingUI.showSkeleton(loading.skeleton, support || differences ? 4 : 6);
+        if (!options.export) window.LoadingUI.showSkeleton(loading.skeleton, support || differences ? 4 : 6);
         syncReconciliationControls();
     }
     function setReconciliationFeature(active) {
@@ -3128,7 +3148,7 @@
         const opener = reconciliationState.opener;
         if (opener && opener.isConnected) opener.focus({preventScroll: true});
         clearReconciliationChildren();
-        ['reconWorking', 'reconProcessing', 'reconContext', 'reconStatus', 'reconView'].forEach(function (id) { element(id).replaceChildren(); });
+        ['reconWorking', 'reconProcessing', 'reconExportProcessing', 'reconContext', 'reconStatus', 'reconView'].forEach(function (id) { element(id).replaceChildren(); });
         element('reconReportPeriod').textContent = '';
         reconciliationState.scope = null; reconciliationState.opener = null; reconciliationState.scroll = null;
         reconciliationState.lastRequest = {}; reconciliationState.supportKey = null;
@@ -3405,9 +3425,17 @@
             }
         }
     }
+    function syncCashflowReconciliationEntry() {
+        const button = element('cashflowsReconciliationButton');
+        button.disabled = cashflowBalancesPending || !element('cashflowsProcessing').hidden;
+        button.setAttribute('aria-busy', String(cashflowBalancesPending));
+        button.title = cashflowBalancesPending
+            ? 'Checking the loaded report. Reconciliation will be available when this check finishes.'
+            : 'Reconcile the loaded Cashflows report with Cash/Bank ledgers.';
+    }
     async function openCashflowReconciliation() {
         const report = lastCashflowsResult;
-        if (!report || !(report.source || {}).ready || !((report.preview || {}).periods || []).length) return;
+        if (cashflowBalancesPending || !report || !(report.source || {}).ready || !((report.preview || {}).periods || []).length) return;
         const state = reconciliationState, page = element('cashflowReconciliation');
         if (!page.hidden) return;
         state.opener = document.activeElement;
@@ -3446,11 +3474,104 @@
         return loadCashflowReconciliation({posting_differences: 'true', comparison_view: reconciliationState.view,
             differences_only: String(!element('reconIncludeMatched').checked), page: page || 1, limit: 25});
     }
+    async function downloadCashflowReconciliation() {
+        const state = reconciliationState, scope = state.scope, result = state.result;
+        if (!scope || !result || state.loading) return;
+        cancelReconciliationRequest();
+        const generation = state.generation;
+        const current = function () { return generation === state.generation && state.scope === scope
+            && scope.report === lastCashflowsResult && scope.client_id === clientId && !element('cashflowReconciliation').hidden; };
+        const task = {id: null, scope: scope, cancelled: false}; state.exportTask = task;
+        const controller = new AbortController(); state.controller = controller;
+        startReconciliationProcessing({export: true});
+        const status = element('reconStatus');
+        // Generation runs on the server. Every individual HTTP request remains bounded.
+        const request = async function (url, options, cancellable) {
+            const local = new AbortController(), abort = function () { local.abort(); };
+            if (cancellable !== false) {
+                if (controller.signal.aborted) local.abort();
+                controller.signal.addEventListener('abort', abort, {once: true});
+            }
+            const timer = window.setTimeout(abort, options && options.download ? 120000 : 30000);
+            try {
+                const response = await fetch(url, {...options, signal: local.signal, cache: 'no-store'});
+                if (!response.ok) {
+                    const value = await response.json().catch(function () { return {}; });
+                    const error = new Error(typeof value.detail === 'string' ? value.detail : 'The reconciliation export could not be prepared.');
+                    error.status = response.status; throw error;
+                }
+                // Keep the timeout active until the complete response body arrives.
+                return options && options.download ? {blob: await response.blob(), headers: response.headers} : await response.json();
+            } finally {
+                window.clearTimeout(timer); controller.signal.removeEventListener('abort', abort);
+            }
+        };
+        const pause = function () { return new Promise(function (resolve, reject) {
+            const abort = function () { window.clearTimeout(timer); reject(new DOMException('Cancelled', 'AbortError')); };
+            const timer = window.setTimeout(function () { controller.signal.removeEventListener('abort', abort); resolve(); }, 1000);
+            controller.signal.addEventListener('abort', abort, {once: true});
+            if (controller.signal.aborted) abort();
+        }); };
+        try {
+            // Await acknowledgement even after closing, so a late-created job can be cancelled.
+            let job = await request('/api/reconciliation/cashflows/reconciliation/exports', {method: 'POST',
+                headers: {'Content-Type': 'application/json'}, body: JSON.stringify({client_id: scope.client_id,
+                    period_start: scope.period_start, period_end: scope.period_end, group_by: scope.group_by,
+                    treasury_view: scope.treasury_view, expected_fingerprint: result.evidence_fingerprint,
+                    expected_identity: result.cache_identity})}, false);
+            task.id = job.id;
+            if (task.cancelled || !current()) { discardReconciliationExport(task); return; }
+            const base = '/api/reconciliation/cashflows/reconciliation/exports/' + encodeURIComponent(job.id);
+            const clientQuery = '?client_id=' + encodeURIComponent(scope.client_id);
+            const deadline = Date.now() + 660000;
+            while (true) {
+                if (!current()) return;
+                if (job.state === 'ready') break;
+                if (['failed', 'cancelled'].includes(job.state)) {
+                    const error = new Error(job.error || 'Export cancelled.'); error.status = job.error_status; throw error;
+                }
+                if (Date.now() > deadline) {
+                    discardReconciliationExport(task);
+                    throw new Error('Export preparation exceeded its limit. Please retry or select a shorter period.');
+                }
+                const loading = state.loading;
+                window.LoadingUI.showSpinner(loading.title, job.stage || 'Preparing reconciliation Excel…');
+                const counted = job.total != null && job.total > 0;
+                window.LoadingUI.showProgressBar(loading.progress, {mode: counted ? 'determinate' : 'indeterminate',
+                    message: counted ? Number(job.current).toLocaleString() + ' of ' + Number(job.total).toLocaleString() + ' rows' : 'Preparing the complete report evidence.'});
+                if (counted) window.LoadingUI.updateProgressBar(loading.progress, job.current, job.total);
+                await pause();
+                job = await request(base + clientQuery);
+            }
+            const file = await request(base + '/download' + clientQuery, {download: true});
+            if (!current()) return;
+            const match = (file.headers.get('Content-Disposition') || '').match(/filename="?([^";]+)"?/i);
+            const url = URL.createObjectURL(file.blob), link = document.createElement('a');
+            link.href = url; link.download = match ? match[1] : 'Cashflow_reconciliation.xlsx';
+            document.body.appendChild(link); link.click(); link.remove();
+            window.setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+            status.classList.remove('is-error'); status.hidden = false;
+            renderReconciliationStatus(); status.prepend(document.createTextNode('Reconciliation Excel downloaded. '));
+        } catch (error) {
+            if (!current()) return;
+            if ([401, 403, 409].includes(error.status)) {
+                clearReconciliationCache(reconciliationContextKey(scope));
+                state.result = null; state.lastRequest = {}; clearReconciliationChildren();
+                element('reconWorking').replaceChildren();
+            }
+            status.hidden = false; status.classList.add('is-error');
+            status.innerHTML = escapeHtml(error.name === 'AbortError' ? 'The export connection timed out. Retry to check the current export.' : error.message)
+                + ([401, 403, 409].includes(error.status) ? ' <button type="button" class="cashflows-secondary" data-recon-retry>Reload working paper</button>' : '');
+        } finally {
+            if (current()) { state.exportTask = null; state.controller = null; finishReconciliationProcessing(); syncReconciliationControls(); }
+        }
+    }
     function initialiseCashflowReconciliation() {
         const page = element('cashflowReconciliation');
         element('cashflowsReconciliationButton').addEventListener('click', openCashflowReconciliation);
         element('reconClose').addEventListener('click', closeCashflowReconciliation);
         element('reconReload').addEventListener('click', reloadCashflowReconciliation);
+        element('reconExport').addEventListener('click', downloadCashflowReconciliation);
         element('reconView').addEventListener('change', function () {
             cancelReconciliationRequest(); reconciliationState.view = this.value; clearReconciliationChildren(); renderReconciliationWorking();
             if (reconciliationState.tab === 'differences') loadReconciliationDifferences(1);
@@ -3468,7 +3589,9 @@
         });
         page.addEventListener('click', function (event) {
             const button = event.target.closest('button'); if (!button) return;
-            if (button.hasAttribute('data-recon-retry')) {
+            if (button.hasAttribute('data-recon-cancel-export')) {
+                cancelReconciliationRequest(); renderReconciliationStatus(); syncReconciliationControls();
+            } else if (button.hasAttribute('data-recon-retry')) {
                 if (reconciliationState.needsReportReload) reloadCashflowReconciliation();
                 else loadCashflowReconciliation(reconciliationState.lastRequest);
             } else if (button.dataset.reconTab) {
@@ -3509,6 +3632,7 @@
         const ledgerDrilldownButton = element('cashflowsLedgerDrilldownButton');
         if (ledgerDrilldownButton) ledgerDrilldownButton.hidden = !source.ready || !(preview.periods || []).length;
         element('cashflowsReconciliationButton').hidden = !source.ready || !(preview.periods || []).length;
+        syncCashflowReconciliationEntry();
 
         resetLazyCashflowSections();
         const lazyActions = element('cashflowsLazyActions');
@@ -3699,7 +3823,10 @@
         } finally {
             window.clearTimeout(timeout);
             if (cashflowSummaryController === controller) cashflowSummaryController = null;
-            if (generation === cashflowSummaryGeneration && ownsProcessing) hideCashflowProcessing();
+            if (generation === cashflowSummaryGeneration) {
+                syncCashflowReconciliationEntry();
+                if (ownsProcessing) hideCashflowProcessing();
+            }
         }
     }
     function classifiedTransactionLayout(result) {

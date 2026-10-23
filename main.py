@@ -277,6 +277,7 @@ def _initialize_postgres_in_background():
 def startup():
     print("Starting System Analyst App...")
     init_db()
+    reconciliation.export_jobs.start(reconciliation._prepare_reconciliation_export)
 
     # Supabase (Postgres) migration is best-effort and non-fatal. SQLite remains
     # the app's real database until Postgres works end-to-end, so a remote lock
@@ -297,6 +298,9 @@ def startup():
 @app.on_event("shutdown")
 def shutdown():
     """Return all Postgres connections cleanly when the local server stops."""
+    if not reconciliation.export_jobs.stop():
+        print('Export worker is finishing a source read; process exit will close its connection.', flush=True)
+        return
     try:
         from database import close_pg_pool
         close_pg_pool()

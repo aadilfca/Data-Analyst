@@ -51,6 +51,8 @@
         #cashflowReconciliation .recon-loading-panel { padding: 20px; border: 1px solid #cbd5e1; border-radius: 8px; background: #f8fafc; }
         #cashflowReconciliation .recon-loading-title { margin: 0 0 14px; font-size: 17px; color: #24536e; }
         #cashflowReconciliation .recon-loading-skeleton { margin-top: 20px; }
+        #cashflowReconciliation .recon-export-actions { margin-top: 14px; }
+        #cashflowReconciliation #reconExportProcessing { margin-bottom: 12px; }
         #cashflowReconciliation #reconProcessing .recon-loading-panel { max-width: 720px; margin: 24px auto; min-height: 280px; }
         #cashflowReconciliation .recon-evidence, #cashflowReconciliation [id^='recon'] { scroll-margin-top: 160px; }
         #cashflowReconciliation .recon-section { margin-top: 18px; border: 1px solid #d6dee8; border-radius: 7px; overflow: hidden; }
@@ -321,6 +323,7 @@
             </div>
             <label id='reconViewLabel' hidden>Proof <select id='reconView' aria-label='Reconciliation Treasury proof'></select></label>
             <button type='button' id='reconReload' class='cashflows-secondary'>Reload working paper</button>
+            <button type='button' id='reconExport' class='cashflows-secondary' disabled>Export reconciliation</button>
             </div>
             <button type='button' id='reconClose' class='cashflows-secondary recon-return'>Cashflows Report</button>
         </div>
@@ -330,6 +333,7 @@
         </div>
         <div class='recon-body'>
             <div id='reconProcessing' hidden></div>
+            <div id='reconExportProcessing' aria-label='Reconciliation Excel preparation' hidden></div>
             <div id='reconStatus' class='recon-status' role='status' aria-live='polite'></div>
             <section id='reconWorking' role='tabpanel' aria-labelledby='reconWorkingTab'></section>
             <section id='reconDifferences' role='tabpanel' aria-labelledby='reconDifferencesTab' hidden>
@@ -341,6 +345,6 @@
     </section>
     <script src='/static/client_context.js?v=21'></script>
     <script src='/static/loading_ui.js?v=ce6d21ca20c8'></script>
-    <script src='/static/reconciliation.js?v=43'></script>
+    <script src='/static/reconciliation.js?v=46'></script>
 </body>
 </html>

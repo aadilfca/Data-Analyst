@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- routers/reconciliation.py → Client mappings, signed Cashflows, Treasury proofs, balances, party details, working-paper reconciliation and source validation. See CHANGELOG_ARCHIVE.md.
+- routers/reconciliation.py → Cashflow configuration, summaries, Treasury/balance proofs, working-paper APIs, source validation and consistent reconciliation exports. See CHANGELOG_ARCHIVE.md.
 
 - routers/clients.py + static/clients.* → firm-level client management; admin-only except the paginated `GET /api/clients`. See CHANGELOG_ARCHIVE.md.
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, and database size with PostgreSQL table/index breakdown. See CHANGELOG_ARCHIVE.md.
@@ -22,7 +22,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/settings.py + static/settings.* → application settings and the firm-wide Holiday list; header/tabs rendered by `client_context.js`. See CHANGELOG_ARCHIVE.md.
 - routers/templates.py + static/templates.*, static/columns.* → Master columns, transactional ledger setup, role configuration, mapping/reordering, rate rules and backup/restore. See CHANGELOG_ARCHIVE.md.
 - static/client_settings.html, static/client_settings.js -> retired direct-bookmark information page; all Verification account routing is configured centrally in Account Control Centre. See CHANGELOG_ARCHIVE.md.
-- database.py, main.py → Schemas, source positions, ledger metadata, upload receipts, audits, storage guards, connection recovery, diagnostics, routing and Rulebook snapshots. See CHANGELOG_ARCHIVE.md.
+- database.py, main.py → Schemas, source metadata, guarded pools, diagnostics, routing, Rulebook snapshots and export-worker lifecycle. See CHANGELOG_ARCHIVE.md.
 - backfill_extract_amount.py → SQLite backfill, PostgreSQL assessment, portable repair plans and isolated local repair rehearsals; live apply remains disabled. See CHANGELOG_ARCHIVE.md.
 - database.py (users/sessions) → authenticated users and session records for Login → Client Cards → Dashboard; bcrypt, session-stored selected client, seeded placeholder admin. See CHANGELOG_ARCHIVE.md.
 - routers/auth.py → login/logout, current-session lookup, client selection, `get_current_user()`/`require_admin()` guards; timezone-aware session expiry. See CHANGELOG_ARCHIVE.md.
@@ -49,14 +49,14 @@ One line per file group: what it is now. Full build history for every entry live
 - services/cash_bank_classification.py + scripts/backfill_cash_bank_transaction_classifications.py → canonical PostgreSQL classifications/previews, exact amount repair, configuration reclassification and controlled backfills. See CHANGELOG_ARCHIVE.md.
 - services/cashflow_voucher_canonicalization.py + cashflow_voucher_occurrence_store.py + scripts/backfill_cashflow_voucher_occurrences.py -> compact audit-preserving occurrence decisions and controlled maintenance; transaction rows remain in `client_data`. See CHANGELOG_ARCHIVE.md.
 - services/cashflow_preparation.py + scripts/backfill_cashflow_prepared_read_model.py -> metadata-only preparation/job recovery boundary; prepared transaction copies and rollups are no longer rebuilt. See CHANGELOG_ARCHIVE.md.
-- services/reconciliation_xlsx.py → Bank/Cash workbook summaries, signed transfer schedules, party details and source/ledger reconciliation proofs. See CHANGELOG_ARCHIVE.md.
-- services/reconciliation_balance_source.py → Manual/uploaded-ledger balances, coverage, freshness, occurrence comparisons and horizontal receipt/payment reconciliation controls. See CHANGELOG_ARCHIVE.md.
+- services/reconciliation_xlsx.py, reconciliation_export_jobs.py → Streaming workbooks, bounded owner-scoped jobs and OS-account-private temporary files; existing Cashflow exports remain. See CHANGELOG_ARCHIVE.md.
+- services/reconciliation_balance_source.py → Ledger balances, coverage, freshness, occurrence comparisons, receipt/payment reconciliation and opt-in comparison reuse. See CHANGELOG_ARCHIVE.md.
 - services/upload_lifecycle.py + drive_archive.py + upload_observation_report.py → Scope proofs, complete-voucher Excel evidence, verified external archives and compact receipts. See CHANGELOG_ARCHIVE.md.
-- tests/test_account_control_center*.py + tests/test_cash_bank_configuration_sync.py + tests/test_cashflows*.py → Setup, mappings, classification, report UI and independent accounting regression checks. See CHANGELOG_ARCHIVE.md.
+- tests/test_account_control_center*.py, test_cashflows*.py, test_reconciliation*.py → Setup, classification, report/UI accounting, export jobs, ownership, limits, expiry and workbook regression checks. See CHANGELOG_ARCHIVE.md.
 - tests/test_upload_lifecycle.py + test_data_deletion.py + test_import_duplicate_gates.py → Upload/archive lifecycle, rollback, retry, deletion and identity regression tests.
 
 
-- static/reconciliation.html, static/reconciliation.js → Cashflows reports, reconciliation linked to loaded report periods, shared loading, voucher evidence and validated bounded caches. See CHANGELOG_ARCHIVE.md.
+- static/reconciliation.html, static/reconciliation.js → Cashflows, linked-period reconciliation, background Excel progress/cancellation, complete voucher evidence and validated bounded caches. See CHANGELOG_ARCHIVE.md.
 
 ## Commands
 - Run app: [your actual run command]
@@ -119,6 +119,7 @@ One line per file group: what it is now. Full build history for every entry live
  - Prefer one compact server request, server-side filtering/pagination, bounded payloads, indexed queries, bulk operations, and limited retries for safe reads; keep each Treasury view, period grain, and grouping configuration explicit.
  - Key caches by complete report context and revision; invalidate after source or configuration changes, abort obsolete requests, reject stale responses, and preserve a hard-refresh path when freshness is uncertain.
  - Design for slow or intermittent Sialkot connectivity: show progress, use bounded timeouts/retries, preserve usable UI, and avoid blocking alerts.
+ - Large exports stream rows with shared styles, bounded owner-scoped jobs, snapshot checks, short progress requests and expiring private files; retain complete evidence.
  - Test cold and warm loads, parent/child period reuse, changed backend data, delayed/failed requests, empty and large periods, reconciliation totals, export parity, and multi-user freshness before release.
  - Add every future proven data, database, fetching, caching, performance, or integrity technique here and follow it in every later development.
 
@@ -248,7 +249,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 ## Status log
 
-- 2026-10-23: Accepted Phase 6C reconciliation linked to loaded Cashflow periods; commit/push authorised. See CHANGELOG_ARCHIVE.md.
+- 2026-10-23: Accepted Phase 6D streaming exports, account-private storage and guarded reconciliation opening; commit/push authorised. See CHANGELOG_ARCHIVE.md.
 
 - 2026-10-22: Phase 6B adds opt-in ledger-to-Cashflow receipt/payment bridges and voucher support; accepted for commit/push. See CHANGELOG_ARCHIVE.md, Horizontal Cashflow accounting bridge.
 

@@ -15,9 +15,11 @@ from time import perf_counter
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 import pandas as pd
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
+from services.reconciliation_export_jobs import export_jobs, ExportJobError
 
 from database import execute_query_pg, execute_write_pg, log_audit, pg_transaction, run_read_snapshot_pg
 from routers.auth import require_admin
@@ -56,7 +58,7 @@ from services.reconciliation_balance_source import (
     build_cashflow_reconciliation,
     normalize_balance_month,
 )
-from services.reconciliation_xlsx import export_cashflow_xlsx, export_reconciliation_xlsx
+from services.reconciliation_xlsx import export_cashflow_xlsx, export_reconciliation_xlsx, export_cashflow_reconciliation_xlsx
 
 
 router = APIRouter()
@@ -1975,6 +1977,45 @@ def validate_cashflow_reconciliation_cache(
     return run_read_snapshot_pg(read)
 
 
+def _cashflow_reconciliation_snapshot(client_id, start, end, grouping, view, *, include_posting=False, progress=None):
+    """Share the screen/export accounting build inside the caller's read snapshot."""
+    progress = progress or (lambda *args: None)
+    progress('Reading voucher source', 0, None)
+    _require_active_client(client_id)
+    config = _cashflow_configuration(client_id)
+    if not config.get('source_template_id'):
+        raise HTTPException(400, 'Configure the Cashflows Transaction Report template first.')
+    accounts = {code: 'Bank' for code in config['bank_account_codes']}
+    accounts.update({code: 'Cash' for code in config['cash_account_codes']})
+    if not accounts:
+        raise HTTPException(400, 'Configure Cash/Bank accounts before reconciling Cashflows.')
+    report_source = load_ledger_report_source(client_id, journal_template_id=config['source_template_id'],
+        period_start=start, period_end=end, cashflow_group_by=grouping, query_fn=execute_query_pg,
+        account_category_source='cashflow', treasury_account_codes=list(accounts))
+    if not report_source.ready:
+        raise HTTPException(400, 'Cashflow source is unavailable; resolve its source diagnostics first.')
+    try:
+        progress('Calculating Cashflow movements', 0, None)
+        summary = build_cashflow_summary(report_source.journal, report_source.coa,
+            config['cash_account_codes'], config['bank_account_codes'], start, end,
+            group_by=grouping, match_internal_transfers=config['match_internal_transfers'],
+            receipt_presentation=config['receipt_presentation'], cashflow_role_categories=config['customer_payment_roles'],
+            vendor_account_codes=config.get('vendor_account_codes', []), include_reconciliation_evidence=True)
+        progress('Reading ledger evidence', 0, None)
+        source = load_cashflow_difference_source(client_id, config['source_template_id'], list(accounts),
+            start.date().isoformat(), end.date().isoformat(), query_fn=execute_query_pg)
+        progress('Reconciling ledger and Cashflow evidence', 0, None)
+        result = build_cashflow_reconciliation(summary, source, accounts, view,
+            include_posting_comparisons=include_posting)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    support = result.pop('_support_entries')
+    config_key = _cashflow_configuration_key(config)
+    result['evidence_fingerprint'] = hashlib.sha256((result['evidence_fingerprint'] + config_key).encode()).hexdigest()
+    result.update(_reconciliation_cache_context(client_id, start, end, grouping, view, config))
+    return result, source, support, accounts
+
+
 @router.get('/api/reconciliation/cashflows/reconciliation')
 def cashflow_reconciliation(
     client_id: int = Query(..., ge=1), period_start: str = Query(...), period_end: str = Query(...),
@@ -1994,36 +2035,10 @@ def cashflow_reconciliation(
         raise HTTPException(400, str(error)) from error
 
     def read(_conn):
-        _require_active_client(client_id)
-        config = _cashflow_configuration(client_id)
-        if not config.get('source_template_id'):
-            raise HTTPException(400, 'Configure the Cashflows Transaction Report template first.')
-        accounts = {code: 'Bank' for code in config['bank_account_codes']}
-        accounts.update({code: 'Cash' for code in config['cash_account_codes']})
-        if not accounts:
-            raise HTTPException(400, 'Configure Cash/Bank accounts before reconciling Cashflows.')
-        report_source = load_ledger_report_source(client_id, journal_template_id=config['source_template_id'],
-            period_start=start, period_end=end, cashflow_group_by=grouping, query_fn=execute_query_pg,
-            account_category_source='cashflow', treasury_account_codes=list(accounts))
-        if not report_source.ready:
-            raise HTTPException(400, 'Cashflow source is unavailable; resolve its source diagnostics first.')
-        try:
-            summary = build_cashflow_summary(report_source.journal, report_source.coa,
-                config['cash_account_codes'], config['bank_account_codes'], start, end,
-                group_by=grouping, match_internal_transfers=config['match_internal_transfers'],
-                receipt_presentation=config['receipt_presentation'], cashflow_role_categories=config['customer_payment_roles'],
-                vendor_account_codes=config.get('vendor_account_codes', []), include_reconciliation_evidence=True)
-            source = load_cashflow_difference_source(client_id, config['source_template_id'], list(accounts),
-                start.date().isoformat(), end.date().isoformat(), query_fn=execute_query_pg)
-            result = build_cashflow_reconciliation(summary, source, accounts, view)
-        except ValueError as error:
-            raise HTTPException(400, str(error)) from error
-        support = result.pop('_support_entries')
-        config_key = _cashflow_configuration_key(config)
-        result['evidence_fingerprint'] = hashlib.sha256((result['evidence_fingerprint'] + config_key).encode()).hexdigest()
+        result, source, support, accounts = _cashflow_reconciliation_snapshot(client_id, start, end, grouping, view)
         if expected_fingerprint and expected_fingerprint != result['evidence_fingerprint']:
             raise HTTPException(409, 'Reconciliation evidence changed; reload the working paper before opening support.')
-        if period_key and period_key not in {p['key'] for p in summary['periods']}:
+        if period_key and period_key not in {p['key'] for p in result['periods']}:
             raise HTTPException(400, 'Unknown reconciliation period.')
         if posting_differences:
             if support_key or period_key:
@@ -2048,11 +2063,95 @@ def cashflow_reconciliation(
             entries = [row for row in support[support_key] if not period_key or row['period_key'] == period_key]
             support_view = support[support_key][0]['treasury_view']
             codes = [code for code, kind in accounts.items() if support_view == 'combined' or kind.casefold() == support_view]
-            result['support'] = cashflow_reconciliation_support_page(source, entries, codes, periods=summary['periods'], page=page, limit=limit)
-        result.update(_reconciliation_cache_context(client_id, start, end, grouping, view, config))
+            result['support'] = cashflow_reconciliation_support_page(source, entries, codes, periods=result['periods'], page=page, limit=limit)
         return result
 
     return run_read_snapshot_pg(read)
+
+
+class CashflowExportRequest(BaseModel):
+    client_id: int = Field(..., ge=1)
+    period_start: str
+    period_end: str
+    group_by: str = 'month'
+    treasury_view: str = 'combined'
+    expected_fingerprint: str = Field(..., min_length=64, max_length=64)
+    expected_identity: str = Field(..., min_length=64, max_length=64)
+
+
+def _export_call(function, *args):
+    try:
+        return function(*args)
+    except ExportJobError as error:
+        raise HTTPException(error.status, error.detail) from error
+
+
+def _prepare_reconciliation_export(scope, destination, progress):
+    """Worker-owned financial snapshot; never reuse browser figures as evidence."""
+    start, end = _parse_report_period(scope['period_start'], scope['period_end'])
+    def read(_conn):
+        result, source, support, accounts = _cashflow_reconciliation_snapshot(scope['client_id'], start, end,
+            scope['group_by'], scope['treasury_view'], include_posting=True, progress=progress)
+        if (result['evidence_fingerprint'] != scope['expected_fingerprint']
+                or result['cache_identity'] != scope['expected_identity']):
+            raise HTTPException(409, 'Reconciliation evidence changed; reload the working paper before exporting.')
+        comparisons = result.pop('_posting_comparisons')
+        return result, source, support, accounts, comparisons
+    result, source, support, accounts, comparisons = run_read_snapshot_pg(read)
+    try:
+        export_cashflow_reconciliation_xlsx(result, source=source, support=support,
+            account_types=accounts, comparisons=comparisons, destination=destination,
+            temporary_directory=destination.parent, progress=progress)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    return f"Cashflow_reconciliation_{scope['treasury_view']}_{scope['period_start']}_to_{scope['period_end']}.xlsx"
+
+
+@router.post('/api/reconciliation/cashflows/reconciliation/exports', status_code=202)
+def start_reconciliation_export(payload: CashflowExportRequest, session=Depends(require_admin)):
+    start, end = _parse_report_period(payload.period_start, payload.period_end)
+    try:
+        grouping = normalize_cashflow_grouping(payload.group_by)
+        view = normalize_cashflow_treasury_view(payload.treasury_view)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    scope = dict(client_id=payload.client_id, period_start=start.date().isoformat(), period_end=end.date().isoformat(),
+        group_by=grouping, treasury_view=view, expected_fingerprint=payload.expected_fingerprint,
+        expected_identity=payload.expected_identity)
+    export_jobs.start(_prepare_reconciliation_export)
+    return _export_call(export_jobs.submit, scope, session['user_id'])
+
+
+@router.get('/api/reconciliation/cashflows/reconciliation/exports/{job_id}')
+def reconciliation_export_status(job_id: str, client_id: int = Query(..., ge=1), session=Depends(require_admin)):
+    return _export_call(export_jobs.status, job_id, session['user_id'], client_id)
+
+
+@router.delete('/api/reconciliation/cashflows/reconciliation/exports/{job_id}')
+def cancel_reconciliation_export(job_id: str, client_id: int = Query(..., ge=1), session=Depends(require_admin)):
+    return _export_call(export_jobs.cancel, job_id, session['user_id'], client_id)
+
+
+@router.get('/api/reconciliation/cashflows/reconciliation/exports/{job_id}/download')
+def download_reconciliation_export(job_id: str, client_id: int = Query(..., ge=1), session=Depends(require_admin)):
+    path, filename, scope, lease = _export_call(export_jobs.acquire_download, job_id, session['user_id'], client_id)
+    try:
+        start, end = _parse_report_period(scope['period_start'], scope['period_end'])
+        def validate(_conn):
+            _require_active_client(client_id)
+            config = _cashflow_configuration(client_id)
+            return _reconciliation_cache_context(client_id, start, end, scope['group_by'], scope['treasury_view'], config)
+        current = run_read_snapshot_pg(validate)
+        if current['cache_identity'] != scope['expected_identity']:
+            raise HTTPException(409, 'Reconciliation evidence changed; reload the working paper before downloading.')
+    except Exception:
+        export_jobs.release_download(job_id, lease)
+        export_jobs.cancel(job_id, session['user_id'], client_id)
+        raise
+    return FileResponse(path, filename=filename,
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Cache-Control': 'no-store'},
+        background=BackgroundTask(export_jobs.release_download, job_id, lease))
 
 
 @router.get("/api/reconciliation/cashflows/preview")

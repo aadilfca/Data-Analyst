@@ -641,7 +641,7 @@ def _cashflow_gross_sides(rows, account_codes, periods):
 
 def build_cashflow_reconciliation(
     summary: Mapping[str, Any], source: Mapping[str, Any], account_types: Mapping[str, str],
-    treasury_view: str = 'combined',
+    treasury_view: str = 'combined', *, include_posting_comparisons: bool = False,
 ) -> dict[str, Any]:
     """Reconcile independent gross ledger sides to unchanged categorized totals.
 
@@ -656,6 +656,7 @@ def build_cashflow_reconciliation(
     explanation = build_cashflow_presentation_adjustments(summary, source['transaction_rows'], account_types, treasury_view)
     support = {}
     views = {}
+    comparisons = {}
     def decimal(value):
         return Decimal(str(value))
     def output(value):
@@ -670,6 +671,8 @@ def build_cashflow_reconciliation(
                      if p['key'] in proof and proof[p['key']]['status'] == 'Matched' else None for p in periods}
         balances = build_uploaded_ledger_balances(source['uploads'], source['ledger_rows'], selected, periods, movements)
         comparison = build_cashflow_differences(source, selected, periods[0]['start'], periods[-1]['end'])
+        if include_posting_comparisons:
+            comparisons[view] = comparison
         ledger, invalid_ledger = _cashflow_gross_sides(source['ledger_rows'], selected, periods)
         transaction, invalid_transaction = _cashflow_gross_sides(source['transaction_rows'], selected, periods)
         roles_available = all(u.get('comparison_roles_available') for u in source['uploads']
@@ -755,7 +758,7 @@ def build_cashflow_reconciliation(
                 'transaction_coverage_status', 'posting_comparison_complete', 'evidence_fingerprint', 'coverage_diagnostics')})
         if presentation['unresolved'] and amount_status == 'Matched':
             views[view]['status'] = 'Review required'
-    return dict(treasury_view=treasury_view, periods=periods, group_by=summary['group_by'],
+    result = dict(treasury_view=treasury_view, periods=periods, group_by=summary['group_by'],
         receipt_presentation=summary['receipt_presentation'], views=views,
         review_controls=dict(category_review_count=summary['category_review_count'],
             customer_settlement_review_count=int(summary['customer_payment_details']['status'].ne('Matched').sum())),
@@ -764,3 +767,6 @@ def build_cashflow_reconciliation(
         diagnostics=explanation['diagnostics'], _support_entries=support,
         evidence_fingerprint=hashlib.sha256(json.dumps([source, account_types, treasury_view,
             summary['reconciliation_evidence'], summary['receipt_presentation'], periods], sort_keys=True, default=str).encode()).hexdigest())
+    if include_posting_comparisons:
+        result['_posting_comparisons'] = comparisons
+    return result

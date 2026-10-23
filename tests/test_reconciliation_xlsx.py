@@ -1,10 +1,280 @@
 from pathlib import Path
+from contextlib import closing
 
 import openpyxl
 import pandas as pd
 import pytest
-from test_reconciliation_balance_source import independent_year_boundary_case
+from test_reconciliation_balance_source import independent_year_boundary_case, horizontal_reconciliation_case, _horizontal_summary
 from test_reconciliation_reports import independent_year_boundary_report
+
+
+def _working_paper_export(case, view='combined', presentation='gross', end='2026-01-31'):
+    from services.reconciliation_balance_source import build_cashflow_reconciliation, build_cashflow_differences
+    from services.reconciliation_xlsx import export_cashflow_reconciliation_xlsx
+    result = build_cashflow_reconciliation(_horizontal_summary(case, presentation, end=end),
+        case['source'], case['accounts'], view)
+    support = result.pop('_support_entries')
+    result.update(client_id=7, template_id=1, period_start='2026-01-01', period_end=end,
+        cache_identity='a'*64, evidence_fingerprint='b'*64)
+    comparisons = {kind: build_cashflow_differences(case['source'],
+        {code: value for code, value in case['accounts'].items() if kind == 'combined' or value.lower() == kind},
+        '2026-01-01', end) for kind in result['views']}
+    content = export_cashflow_reconciliation_xlsx(result, source=case['source'], support=support,
+        account_types=case['accounts'], comparisons=comparisons)
+    from io import BytesIO
+    return openpyxl.load_workbook(BytesIO(content)), result, support, comparisons
+
+
+def test_streaming_reconciliation_export_keeps_65000_voucher_and_12000_ledger_rows(horizontal_reconciliation_case, tmp_path):
+    import copy
+    import time
+    from services.reconciliation_balance_source import build_cashflow_reconciliation
+    from services.reconciliation_xlsx import export_cashflow_reconciliation_xlsx
+    case = horizontal_reconciliation_case
+    source = copy.deepcopy(case['source'])
+    for identity in range(12000-len(source['ledger_rows'])):
+        source['ledger_rows'].append(dict(source['ledger_rows'][0],id=10000+identity,debit='0',credit='0',
+            source_fingerprint=f'ledger-{identity}'))
+    for identity in range(65000-len(source['transaction_rows'])):
+        source['transaction_rows'].append(dict(source['transaction_rows'][0],id=100000+identity,
+            account_code='CONTEXT',debit='0',credit='0',description=f'Original occurrence {identity}'))
+    source['uploads'] = case['refresh_uploads'](source['ledger_rows'])
+    result = build_cashflow_reconciliation(_horizontal_summary(case), source, case['accounts'], 'split',
+                                          include_posting_comparisons=True)
+    support = result.pop('_support_entries'); comparisons = result.pop('_posting_comparisons')
+    result.update(client_id=7, period_start='2026-01-01', period_end='2026-01-31')
+    progress=[];start=time.perf_counter();destination=tmp_path/'large.xlsx'
+    export_cashflow_reconciliation_xlsx(result,source=source,support=support,account_types=case['accounts'],
+        comparisons=comparisons,destination=destination,temporary_directory=tmp_path,
+        progress=lambda *values:progress.append(values))
+    seconds=time.perf_counter()-start
+    print(f'Large reconciliation generation: {seconds:.2f}s, {destination.stat().st_size} bytes')
+    with closing(openpyxl.load_workbook(destination,read_only=True,data_only=True)) as workbook:
+        for title,count in [('Voucher Evidence',65000),('Ledger Evidence',12000)]:
+            records=workbook[title].iter_rows(min_row=5,values_only=True)
+            identities=[row[0] for row in records]
+            assert len(identities)==len(set(identities))==count
+        paper=list(workbook['Working Paper Combined'].values)
+        assert next(row[1] for row in paper if row and row[0]=='Receipts as per Cashflow report')==900
+        assert next(row[1] for row in paper if row and row[0]=='Payments as per Cashflow report')==350
+    assert any(stage=='Writing Voucher Evidence' and total==65000 for stage,current,total in progress)
+    assert list(tmp_path.iterdir())==[destination]
+    print(f'Large reconciliation fixture: {seconds:.2f}s, {destination.stat().st_size} bytes, 65000 voucher / 12000 ledger rows')
+
+
+@pytest.mark.parametrize('cancel_stage', ['Writing Voucher Evidence', 'Finalizing Excel file'])
+def test_streaming_reconciliation_cancellation_cleans_owned_xml_files(horizontal_reconciliation_case,tmp_path,cancel_stage):
+    from services.reconciliation_balance_source import build_cashflow_reconciliation, build_cashflow_differences
+    from services.reconciliation_xlsx import export_cashflow_reconciliation_xlsx
+    case=horizontal_reconciliation_case
+    result=build_cashflow_reconciliation(_horizontal_summary(case),case['source'],case['accounts'])
+    support=result.pop('_support_entries');result.update(client_id=7,period_start='2026-01-01',period_end='2026-01-31')
+    comparisons={'combined':build_cashflow_differences(case['source'],case['accounts'],'2026-01-01','2026-01-31')}
+    def cancel(stage,*counts):
+        if stage==cancel_stage:raise RuntimeError('Cancelled by test')
+    with pytest.raises(RuntimeError,match='Cancelled by test'):
+        export_cashflow_reconciliation_xlsx(result,source=case['source'],support=support,account_types=case['accounts'],
+            comparisons=comparisons,temporary_directory=tmp_path,progress=cancel)
+    assert not list(tmp_path.iterdir())
+
+
+def _export_records(sheet):
+    headers = [cell.value for cell in sheet[4]]
+    return [dict(zip(headers, row)) for row in sheet.iter_rows(min_row=5, values_only=True)]
+
+
+@pytest.mark.parametrize('view', ['combined', 'bank', 'cash', 'split'])
+@pytest.mark.parametrize('presentation,expected', [('gross', (900, 350)), ('net', (850, 300))])
+def test_working_paper_export_matches_independent_books_and_screen(horizontal_reconciliation_case, view, presentation, expected):
+    import copy
+    case = horizontal_reconciliation_case
+    before = copy.deepcopy(case)
+    workbook, result, support, comparisons = _working_paper_export(case, view, presentation)
+    assert workbook.sheetnames == ['Working Paper ' + kind.title() for kind in result['views']] + [
+        'Adjustment Support', 'Posting Comparison', 'Ledger Evidence', 'Voucher Evidence', 'Report Controls']
+    for kind, part in result['views'].items():
+        sheet = workbook['Working Paper ' + kind.title()]
+        rows = {row[0].value: row[1].value for row in sheet.iter_rows(min_row=5)}
+        for side, title in [('receipts', 'Receipts'), ('payments', 'Payments')]:
+            values = part['overall'][side]
+            assert rows[title + ' as per ledgers'] == values['ledger']
+            assert rows['Adjusted ' + side + ' as per ledgers'] == values['adjusted_ledger']
+            assert rows[title + ' as per Cashflow report'] == (0 if kind == 'cash' else expected[side == 'payments'])
+        differences = [row[1].value for row in sheet if str(row[0].value).startswith('Unexplained difference')]
+        assert differences == [0, 0]
+        assert rows['Closing balance as per ledgers'] == {'combined': 10550, 'bank': 8350, 'cash': 2200}[kind]
+        assert rows['Closing difference (ledger − calculated)'] == 0
+        for cells in sheet:
+            if isinstance(cells[1].value, (int, float)):
+                assert cells[1].number_format == '#,##0.00;[Red](#,##0.00);-'
+    records = _export_records(workbook['Adjustment Support'])
+    assert len(records) == sum(len(entries) for entries in support.values())
+    for kind, part in result['views'].items():
+        for adjustment in part['adjustments']:
+            selected = [row for row in records if row['Support reference'] == adjustment['key']]
+            assert sum(row['Receipts adjustment'] for row in selected) == pytest.approx(adjustment['total']['receipts'])
+            assert sum(row['Payments adjustment'] for row in selected) == pytest.approx(adjustment['total']['payments'])
+    assert len(_export_records(workbook['Posting Comparison'])) == sum(len(c['findings']) for c in comparisons.values())
+    for sheet in workbook:
+        assert sheet.freeze_panes == 'B5' and sheet.print_title_rows == '$1:$4'
+        assert sheet.page_setup.fitToWidth == 1
+        assert sheet['A1'].font.name == 'Arial'
+    assert case['source'] == before['source']
+    pd.testing.assert_frame_equal(case['journal'], before['journal'])
+
+
+@pytest.mark.parametrize('view', ['combined', 'bank', 'cash', 'split'])
+def test_working_paper_export_keeps_complete_repeated_and_literal_source_rows(horizontal_reconciliation_case, view):
+    case = horizontal_reconciliation_case
+    for identity in range(251):
+        case['source']['transaction_rows'].append(dict(id=9000+identity, voucher_id='RECEIPT',
+            account_code='CONTEXT', date='2025-12-31', debit='0.0000000000001234567', credit='0',
+            description='=HYPERLINK("https://example.invalid", "literal")', uploaded_at='2026-02-01T12:00:00Z'))
+    case['source']['ledger_rows'][0]['description'] = '=1+1'
+    workbook, result, _, _ = _working_paper_export(case, view)
+    records = _export_records(workbook['Voucher Evidence'])
+    # Cash participates in TRANSFER only; other modes retain RECEIPT and every counterpart.
+    expected = 0 if view == 'cash' else 251
+    context = [row for row in records if row['Account code'] == 'CONTEXT']
+    assert len(context) == expected
+    assert len({row['Source row ID'] for row in context}) == expected
+    for row in context:
+        assert row['Debit (original)'] == '0.0000000000001234567'
+        assert row['Within report period'] == 'Context outside period / invalid date'
+        assert row['Imported at'] == '2026-02-01T12:00:00Z'
+    assert all(cell.data_type != 'f' for sheet in workbook for row in sheet for cell in row)
+    ledger = _export_records(workbook['Ledger Evidence'])
+    assert {row['Account code'] for row in ledger} == ({'B1', 'C1'} if view in ('combined', 'split') else {'B1' if view == 'bank' else 'C1'})
+    controls = {r['Control']: r['Value'] for r in _export_records(workbook['Report Controls'])}
+    assert controls['Voucher source rows'] == len(records)
+    assert controls['Transaction Coverage Status'] == 'Not independently certified'
+
+
+def test_working_paper_export_preserves_unavailable_evidence(horizontal_reconciliation_case):
+    case = horizontal_reconciliation_case
+    case['source']['ledger_rows'] = []
+    workbook, result, _, _ = _working_paper_export(case)
+    records = {row[0].value: row[1].value for row in workbook['Working Paper Combined'].iter_rows(min_row=5)}
+    assert records['Receipts as per ledgers'] == 'Unavailable'
+    assert records['Calculated closing balance'] == 'Unavailable'
+    assert records['Receipts as per Cashflow report'] == 900
+    assert result['views']['combined']['amount_status'] == 'Unavailable'
+
+
+def test_working_paper_export_rejects_oversized_text_instead_of_silent_excel_truncation(horizontal_reconciliation_case):
+    horizontal_reconciliation_case['source']['transaction_rows'][0]['description'] = 'x'*32768
+    with pytest.raises(ValueError, match='without truncating'):
+        _working_paper_export(horizontal_reconciliation_case)
+
+
+@pytest.mark.parametrize('length', [32767, 32768, 100003])
+def test_working_paper_export_preserves_long_serialized_control_metadata(horizontal_reconciliation_case, length):
+    import copy
+    import json
+    case = horizontal_reconciliation_case
+    # PostgreSQL upload metadata may be returned as JSON text rather than a dictionary.
+    value = json.dumps({'source_notes': '=Exact text\n' + 'معلومات / source details 🧾 '*length}, ensure_ascii=False)[:length]
+    case['source']['uploads'][0]['source_notes'] = value
+    before = copy.deepcopy(case['source'])
+    workbook, _, _, _ = _working_paper_export(case)
+    rows = _export_records(workbook['Report Controls'])
+    parts = [row for row in rows if row['Control'].startswith('Ledger upload 1 / source notes')]
+    assert len(parts) > 1
+    assert ''.join(row['Value'] for row in parts) == value
+    assert [row['Control'].rsplit(' / ', 1)[-1] for row in parts] == [f'Part {i} of {len(parts)}' for i in range(1, len(parts)+1)]
+    assert all(len(str(cell.value or '')) <= 32767 and cell.data_type != 'f'
+               for sheet in workbook for row in sheet for cell in row)
+    assert case['source'] == before
+
+
+@pytest.mark.parametrize('view', ['combined', 'bank', 'cash', 'split'])
+def test_working_paper_export_long_control_metadata_does_not_change_accounting(horizontal_reconciliation_case, view):
+    import json
+    case = horizontal_reconciliation_case
+    baseline, _, _, _ = _working_paper_export(case, view)
+    # A long free-text control and a nested serialized upload value use the same lossless path.
+    case['source']['uploads'][0]['archive_receipt'] = json.dumps({'notes': 'details '*6000})
+    case['source']['uploads'][1]['archive_receipt'] = 'Cash source details '*3000
+    workbook, _, _, _ = _working_paper_export(case, view)
+    assert workbook.sheetnames == baseline.sheetnames
+    for sheet in baseline:
+        if sheet.title == 'Report Controls':
+            continue
+        actual = workbook[sheet.title]
+        assert list(actual.values) == list(sheet.values)
+        assert actual.freeze_panes == sheet.freeze_panes
+    controls = _export_records(workbook['Report Controls'])
+    for identity, code in [(1, 'B1'), (2, 'C1')]:
+        value = case['source']['uploads'][identity-1]['archive_receipt']
+        parts = [r for r in controls if r['Control'].startswith(f'Ledger upload {identity} / archive receipt')]
+        selected = view in ('combined', 'split') or code == ('B1' if view == 'bank' else 'C1')
+        assert ''.join(r['Value'] for r in parts) == (value if selected else '')
+
+
+@pytest.mark.parametrize('end,expected', [('2026-01-31', (1000, 200)), ('2026-06-30', (1100, 50))])
+def test_working_paper_export_keeps_period_dependent_loan_category_totals(horizontal_reconciliation_case, end, expected):
+    case = horizontal_reconciliation_case
+    entries = [('RECEIPT', '2026-01-05', 'B1', 1000, 0), ('RECEIPT', '2026-01-05', 'AR', 0, 1000),
+        ('REPAY', '2026-01-10', 'B1', 0, 200), ('REPAY', '2026-01-10', 'LOAN', 200, 0),
+        ('DRAW', '2026-02-05', 'B1', 300, 0), ('DRAW', '2026-02-05', 'LOAN', 0, 300),
+        ('PAY', '2026-02-10', 'B1', 0, 50), ('PAY', '2026-02-10', 'AP', 50, 0)]
+    case['journal'] = pd.DataFrame(entries, columns=['voucher_id', 'date', 'account_code', 'debit', 'credit'])
+    case['coa'] = pd.concat([case['coa'], pd.DataFrame([dict(account_code='LOAN', category='Bank loan drawn (net)')])])
+    case['source'] = dict(uploads=[], ledger_rows=[], transaction_rows=[dict(row, id=i)
+        for i, row in enumerate(case['journal'].to_dict('records'), 1)])
+    workbook, result, _, _ = _working_paper_export(case, end=end)
+    records = {row[0].value: row[1].value for row in workbook['Working Paper Combined'] if len(row) > 1}
+    assert records['Receipts as per Cashflow report'] == expected[0]
+    assert records['Payments as per Cashflow report'] == expected[1]
+    assert result['views']['combined']['category_sections']['Bank loan drawn (net)'] == ('payments' if end == '2026-01-31' else 'receipts')
+
+
+def test_working_paper_export_retains_offsetting_postings_as_differences(horizontal_reconciliation_case):
+    case = horizontal_reconciliation_case
+    row = dict(case['source']['ledger_rows'][0], id=999, voucher_id='LEDGER-ONLY', debit='50', credit='50')
+    case['source']['ledger_rows'].append(row)
+    case['source']['uploads'] = case['refresh_uploads'](case['source']['ledger_rows'])
+    workbook, result, _, _ = _working_paper_export(case)
+    part = result['views']['combined']
+    assert part['overall']['receipts']['difference'] == 50
+    assert part['overall']['payments']['difference'] == 50
+    assert part['overall_balance_proof']['difference'] == 0
+    findings = _export_records(workbook['Posting Comparison'])
+    assert next(row for row in findings if row['Voucher'] == 'LEDGER-ONLY')['Posting status'] == 'ledger_only'
+
+
+@pytest.mark.parametrize('view', ['combined', 'bank', 'cash', 'split'])
+@pytest.mark.parametrize('presentation', ['gross', 'net'])
+def test_working_paper_export_handles_partial_dates_year_boundary_and_mixed_movements(independent_year_boundary_case, view, presentation):
+    from io import BytesIO
+    from services.ledger_group_summary import build_cashflow_summary
+    from services.reconciliation_balance_source import build_cashflow_reconciliation, build_cashflow_differences
+    from services.reconciliation_xlsx import export_cashflow_reconciliation_xlsx
+    case = independent_year_boundary_case
+    transactions = case['journal'].to_dict('records')
+    treasury = [r for r in transactions if r['account_code'] in case['accounts']]
+    source = dict(ledger_rows=[dict(row, date=row['extract_date'], voucher_id=original['voucher_id'])
+        for row, original in zip(case['rows'], treasury, strict=True)],
+        transaction_rows=[dict(row, id=i+100) for i, row in enumerate(transactions)],
+        uploads=[dict(row, comparison_roles_available=True) for row in case['uploads']])
+    summary = build_cashflow_summary(case['journal'], case['coa'], ['C1'], ['B1', 'B0'], case['start'], case['end'],
+        group_by='month', receipt_presentation=presentation, cashflow_role_categories=case['roles'], include_reconciliation_evidence=True)
+    result = build_cashflow_reconciliation(summary, source, case['accounts'], view)
+    support = result.pop('_support_entries')
+    result.update(client_id=7, period_start=case['start'], period_end=case['end'])
+    comparisons = {kind: build_cashflow_differences(source,
+        {code: value for code, value in case['accounts'].items() if kind == 'combined' or value.lower() == kind},
+        case['start'], case['end']) for kind in result['views']}
+    workbook = openpyxl.load_workbook(BytesIO(export_cashflow_reconciliation_xlsx(result,
+        source=source, support=support, account_types=case['accounts'], comparisons=comparisons)))
+    for kind, part in result['views'].items():
+        rows = {row[0].value: row[1].value for row in workbook['Working Paper ' + kind.title()] if len(row) > 1}
+        assert rows['Closing balance as per ledgers'] == pytest.approx({'combined': 26.70, 'bank': -9.56, 'cash': 36.26}[kind])
+        assert rows['Closing difference (ledger − calculated)'] == 0
+        assert rows['Separate mixed-voucher movement (signed)'] == part['overall_balance_proof']['separate_mixed_movement']
+        assert '2025-12-15 to 2026-02-10' in workbook['Working Paper ' + kind.title()]['A2'].value
+        for side, title in [('receipts', 'Receipts'), ('payments', 'Payments')]:
+            assert rows[title + ' as per Cashflow report'] == part['overall'][side]['cashflow']
 
 
 @pytest.mark.parametrize('view', ['combined', 'bank', 'cash', 'split'])

@@ -11,12 +11,17 @@ from __future__ import annotations
 from io import BytesIO
 from pathlib import Path
 import re
+import json
+import tempfile
 from copy import copy
 from typing import Any, Mapping
 
 import pandas as pd
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side, NamedStyle
+from openpyxl.cell import WriteOnlyCell
+from openpyxl.worksheet._writer import WorksheetWriter, ALL_TEMP_FILES
+from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.utils import get_column_letter
 
 
@@ -37,6 +42,333 @@ DATE_FORMAT = "dd-mmm-yy"
 LEDGERWISE_MONEY_FORMAT = '#,##0.00;[Red](#,##0.00);0.00'
 
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+class _ReconciliationWorkbook(Workbook):
+    """Streaming workbook with job-owned scratch files and deterministic cleanup.
+
+    Openpyxl has no public per-workbook scratch-directory option. Its writer
+    adapter is confined here; shared process-wide tempfile settings never change.
+    """
+    def __init__(self, directory=None, progress=None):
+        super().__init__(write_only=True)
+        self.scratch = tempfile.TemporaryDirectory(prefix='reconciliation-', dir=directory)
+        self.progress = progress or (lambda *args: None)
+        self.styles = {}
+        for name, bold, color, fill in [
+            ('body', False, TEXT, None), ('total', True, TEXT, LIGHT_BLUE),
+            ('header', True, WHITE, NAVY), ('title', True, NAVY, None),
+            ('note', False, MUTED, None), ('matched', True, TEXT, PALE_GREEN),
+            ('failed', True, TEXT, PALE_RED),
+        ]:
+            for money in (False, True, 'integer'):
+                style = NamedStyle(name=f'recon_{name}_{money}')
+                style.font = Font(name='Arial', size=14 if name == 'title' else 9 if name == 'note' else 10,
+                                  bold=bold, color=color)
+                style.alignment = Alignment(horizontal='right' if money else 'left', vertical='center', wrap_text=True)
+                if fill:
+                    style.fill = PatternFill('solid', fgColor=fill)
+                style.number_format = '#,##0.00;[Red](#,##0.00);-' if money is True else '0' if money == 'integer' else 'General'
+                self.add_named_style(style)
+                self.styles[name, money] = style._style
+
+    def save(self, filename):
+        try:
+            super().save(filename)
+        finally:
+            self.close()
+
+    def close(self):
+        for sheet in self.worksheets:
+            writer = sheet._writer
+            if writer is not None:
+                try:
+                    if not sheet.closed:
+                        sheet.close()
+                finally:
+                    if Path(writer.out).exists():
+                        writer.cleanup()
+        self.scratch.cleanup()
+
+
+def _reconciliation_append(ws, values, *, style='body', money_columns=(), status_column=None):
+    """Assign prebuilt styles once; imported strings remain literal Excel text."""
+    cells = []
+    for column, value in enumerate(values, 1):
+        if isinstance(value, (dict, list, tuple)):
+            value = json.dumps(value, ensure_ascii=False, default=str)
+        if isinstance(value, str) and len(value) > 32767:
+            raise ValueError(f'{ws.title}: source text exceeds Excel cell capacity; export was stopped without truncating evidence.')
+        cell = WriteOnlyCell(ws, value=_safe_cell(value))
+        if isinstance(cell.value, str):
+            cell.data_type = 's'
+        chosen = style
+        if column == status_column and isinstance(value, (int, float)):
+            chosen = 'matched' if value == 0 else 'failed'
+        number_style = column in money_columns
+        if not number_style and isinstance(value, int) and not isinstance(value, bool):
+            number_style = 'integer'
+        # Never mutate an assigned shared StyleArray after it has been serialized.
+        cell._style = ws.parent.styles[chosen, number_style]
+        if ws.title.startswith('Working Paper') and column == 3 and value and len(str(value)) == 24:
+            cell.hyperlink = "#'Adjustment Support'!A1"
+        cells.append(cell)
+    ws.append(cells)
+
+
+def _reconciliation_sheet(workbook, title, scope, headers):
+    ws = workbook.create_sheet(title)
+    ws.sheet_view.showGridLines = False
+    ws.freeze_panes = 'B5'
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.orientation = 'landscape'
+    ws.page_setup.paperSize = Worksheet.PAPERSIZE_A4
+    ws.page_setup.fitToWidth, ws.page_setup.fitToHeight = 1, 0
+    ws.print_title_rows = '1:4'
+    ws.oddFooter.center.text = 'Page &P of &N'
+    for index, header in enumerate(headers, 1):
+        ws.column_dimensions[get_column_letter(index)].width = min(48, max(16, len(header)+4))
+    if title.startswith('Working Paper'):
+        for column, width in [('A', 76), ('B', 24), ('C', 29)]:
+            ws.column_dimensions[column].width = width
+    ws.merged_cells.add(f'A1:{get_column_letter(len(headers))}1')
+    ws.merged_cells.add(f'A2:{get_column_letter(len(headers))}2')
+    ws.row_dimensions[1].height = 24
+    ws.row_dimensions[2].height = 30
+    # Direct only this writer's XML files to the private export directory.
+    path = str(Path(workbook.scratch.name) / f'sheet-{len(workbook.worksheets)}.xml')
+    ALL_TEMP_FILES.append(path)
+    ws._writer = WorksheetWriter(ws, out=path)
+    ws._writer.write_top()
+    display_title = ('Ledger / Cashflow reconciliation — ' + title.removeprefix('Working Paper ')
+                     if title.startswith('Working Paper ') else title)
+    _reconciliation_append(ws, [display_title], style='title')
+    _reconciliation_append(ws, [scope], style='note')
+    ws.append([])
+    _reconciliation_append(ws, headers, style='header')
+    return ws
+
+
+def build_cashflow_reconciliation_workbook(result, *, source, support, account_types, comparisons,
+                                         temporary_directory=None, progress=None):
+    workbook = _ReconciliationWorkbook(temporary_directory, progress)
+    try:
+        return _populate_cashflow_reconciliation_workbook(workbook, result, source=source, support=support,
+            account_types=account_types, comparisons=comparisons)
+    except BaseException:
+        workbook.close()
+        raise
+
+
+def _populate_cashflow_reconciliation_workbook(workbook, result, *, source, support, account_types, comparisons):
+    """Format the approved working paper without recalculating accounting amounts.
+
+    Original occurrences appear once in each source sheet. Adjustment and posting
+    schedules reference them by account/voucher and retain repeated source rows.
+    """
+    start, end = result['period_start'], result['period_end']
+    scope = (f"Client {result['client_id']} | {start} to {end} | "
+             f"{result['treasury_view'].title()} | {result['receipt_presentation'].title()} receipts")
+    money = '#,##0.00;[Red](#,##0.00);-'
+    for view, part in result['views'].items():
+        workbook.progress('Writing working paper ' + view.title(), 0, None)
+        ws = _reconciliation_sheet(workbook, 'Working Paper ' + view.title(), scope,
+                                   ['Particulars', 'Amount', 'Support reference'])
+        row = 4
+
+        def line(label, amount=None, reference='', total=False):
+            nonlocal row
+            row += 1
+            ws.row_dimensions[row].height = 15 * (len(label) // 72 + 1)
+            _reconciliation_append(ws, [label, 'Unavailable' if amount is None else amount, reference],
+                style='total' if total else 'body', money_columns=(2,),
+                status_column=2 if 'difference' in label.lower() else None)
+            return row
+
+        for side, title in [('receipts', 'Receipts'), ('payments', 'Payments')]:
+            row += 1
+            _reconciliation_append(ws, [title, '', ''], style='header')
+            values = part['overall'][side]
+            line(title + ' as per ledgers', values['ledger'], total=True)
+            for adjustment in part['adjustments']:
+                amount = adjustment['total'][side]
+                if amount == 0:
+                    continue
+                label = ('' if amount is None else 'Less: ' if amount < 0 else 'Add: ') + adjustment['label']
+                if adjustment.get('category'):
+                    label += ' — ' + adjustment['category']
+                line(label, amount, adjustment['key'])
+            line('Total presentation adjustments', values['adjustments'], total=True)
+            line('Adjusted ' + side + ' as per ledgers', values['adjusted_ledger'], total=True)
+            line(title + ' as per Cashflow report', values['cashflow'], total=True)
+            line('Unexplained difference (adjusted ledger − Cashflow)', values['difference'], total=True)
+        row += 2
+        ws.append([])
+        _reconciliation_append(ws, ['Opening and closing proof', '', ''], style='header')
+        proof = part['overall_balance_proof']
+        for label, value in [
+            ('Opening balance as per ledgers', proof['ledger_opening']),
+            ('Add: Receipts as per Cashflow report', part['overall']['receipts']['cashflow']),
+            ('Less: Payments as per Cashflow report', part['overall']['payments']['cashflow']),
+            ('Separate internal-transfer movement (signed)', proof['separate_transfer_movement']),
+            ('Separate mixed-voucher movement (signed)', proof['separate_mixed_movement']),
+            ('Calculated closing balance', proof['calculated_closing']),
+            ('Closing balance as per ledgers', proof['ledger_closing']),
+            ('Closing difference (ledger − calculated)', proof['difference']),
+        ]:
+            line(label, value, total=True)
+        row += 2
+        ws.append([])
+        _reconciliation_append(ws, ['Review controls', 'Status', ''], style='header')
+        for label, value in [
+            ('Receipt/payment amounts', part['amount_status']),
+            ('Whole-range posting comparison', part['posting_comparison']['posting_status']),
+            ('Treasury allocation', part['allocation_status']),
+            ('Transaction Report extract completeness', result['transaction_coverage_status']),
+        ]:
+            row += 1
+            _reconciliation_append(ws, [label, value, 'See Report Controls'])
+        ws.print_area = f'A1:C{row}'
+
+    adjustment_rows = (dict(entry, adjustment_key=key) for key, entries in support.items() for entry in entries)
+    _write_reconciliation_records(workbook, 'Adjustment Support', scope,
+        [('adjustment_key', 'Support reference'), ('treasury_view', 'Proof'), ('voucher_id', 'Voucher'),
+         ('period_key', 'Period'), ('reason', 'Reason'), ('label', 'Adjustment'), ('category', 'Category'),
+         ('receipts', 'Receipts adjustment'), ('payments', 'Payments adjustment')], adjustment_rows)
+    _write_reconciliation_records(workbook, 'Posting Comparison', scope,
+        [('proof_view', 'Proof'), ('account_code', 'Account code'), ('treasury_type', 'Treasury'),
+         ('voucher_id', 'Voucher'), ('unkeyed_identity', 'Unkeyed reference'), ('status', 'Posting status'),
+         ('difference_fields', 'Fields differing'), ('ledger_line_count', 'Ledger occurrences'),
+         ('transaction_line_count', 'Voucher occurrences'), ('matched_occurrences', 'Matched occurrences'),
+         ('ledger_movement', 'Ledger movement'), ('transaction_movement', 'Voucher movement'),
+         ('movement_difference', 'Movement difference'), ('note', 'Explanation')],
+        (dict(row, proof_view=view) for view, comparison in comparisons.items() for row in comparison['findings']),
+        total=sum(len(value['findings']) for value in comparisons.values()))
+
+    selected = {code for code, kind in account_types.items()
+                if result['treasury_view'] in ('combined', 'split') or kind.casefold() == result['treasury_view']}
+    ledger_rows = [row for row in source['ledger_rows'] if row.get('account_code') in selected]
+    references = {str(row.get('voucher_id') or '').strip() for row in ledger_rows}
+    references.update(str(row.get('voucher_id') or '').strip() for row in source['transaction_rows']
+                      if row.get('account_code') in selected)
+    references.update(str(entry['voucher_id']).strip() for entries in support.values() for entry in entries)
+    references.discard('')
+    voucher_rows = [row for row in source['transaction_rows']
+                    if row.get('account_code') in selected or str(row.get('voucher_id') or '').strip() in references]
+    columns = [('id', 'Source row ID'), ('date', 'Date'), ('account_code', 'Account code'),
+        ('account_name', 'Account name'), ('voucher_id', 'Voucher'), ('debit', 'Debit (original)'),
+        ('credit', 'Credit (original)'), ('description', 'Description'), ('in_period', 'Within report period'),
+        ('upload_id', 'Upload ID'), ('template_id', 'Template ID'), ('version', 'Version'),
+        ('uploaded_at', 'Imported at'), ('source_fingerprint', 'Source fingerprint')]
+
+    def evidence(rows):
+        for row in rows:
+            value = dict(row)
+            value['date'] = row.get('date', row.get('extract_date'))
+            day = str(value['date'])[:10]
+            value['in_period'] = 'Yes' if start <= day <= end else 'Context outside period / invalid date'
+            value['source_fingerprint'] = row.get('source_fingerprint', row.get('fingerprint'))
+            # Exact source text survives Excel's fifteen-digit numeric precision.
+            for key in ('debit', 'credit'):
+                if value.get(key) is not None:
+                    value[key] = str(value[key])
+            yield value
+    _write_reconciliation_records(workbook, 'Ledger Evidence', scope, columns, evidence(ledger_rows), total=len(ledger_rows))
+    _write_reconciliation_records(workbook, 'Voucher Evidence', scope, columns, evidence(voucher_rows), total=len(voucher_rows))
+
+    controls = [(key.replace('_', ' ').title(), result.get(key)) for key in (
+        'client_id', 'template_id', 'period_start', 'period_end', 'group_by', 'treasury_view',
+        'receipt_presentation', 'evidence_fingerprint', 'cache_identity', 'configuration_key', 'report_revision',
+        'transaction_coverage_status', 'complete', 'scope_note', 'review_controls', 'diagnostics')]
+    controls += [('Evidence amounts', 'Original debit/credit values are text to preserve source precision; working-paper amounts are numeric to two decimals.'),
+        ('Evidence context', 'Outside-period rows support voucher and opening-balance review; they are not additional report-period movements.'),
+        ('Import timestamps', 'Import metadata does not certify ERP extraction times.'),
+        ('Ledger source rows', len(ledger_rows)), ('Voucher source rows', len(voucher_rows)),
+        ('Adjustment operations', sum(len(entries) for entries in support.values())),
+        ('Posting groups including matched', sum(len(c['findings']) for c in comparisons.values()))]
+    for view, part in result['views'].items():
+        controls.extend((view.title() + ' ' + key.replace('_', ' '), part.get(key)) for key in (
+            'amount_status', 'status', 'allocation_status', 'unresolved'))
+        controls.extend((view.title() + ' ' + key.replace('_', ' '), comparisons[view].get(key)) for key in (
+            'posting_status', 'posting_comparison_complete', 'counts', 'account_totals', 'coverage_diagnostics'))
+        balance_controls = part['balance_controls']
+        controls.extend((view.title() + ' balance ' + key, value) for key, value in balance_controls.items() if key != 'periods')
+        for period in balance_controls.get('periods', []):
+            label = view.title() + ' balance ' + period['key']
+            controls.append((label, {key: value for key, value in period.items() if key != 'accounts'}))
+            controls.extend((label + ' account ' + str(account.get('account_code')), account)
+                            for account in period.get('accounts', []))
+    controls.extend(('Ledger upload ' + str(upload.get('id')), upload) for upload in source['uploads']
+                    if upload.get('ledger_account_code') in selected)
+    def control_records(label, value):
+        # Give each coverage/account field its own inspectable row rather than a JSON block.
+        if isinstance(value, dict) and value:
+            for key, child in value.items():
+                yield from control_records(label + ' / ' + str(key).replace('_', ' '), child)
+        elif isinstance(value, (list, tuple)) and value:
+            for index, child in enumerate(value, 1):
+                yield from control_records(label + ' / ' + str(index), child)
+        elif isinstance(value, str) and len(value) > 1000:
+            # Upload metadata can arrive as serialized JSON or long source notes.
+            # Numbered, readable parts preserve every character without one oversized cell.
+            count = (len(value) + 999) // 1000
+            for index in range(count):
+                yield dict(control=f'{label} / Part {index + 1} of {count}',
+                           value=value[index * 1000:(index + 1) * 1000])
+        else:
+            yield dict(control=label, value='Unavailable' if value is None else
+                       'None recorded' if isinstance(value, (dict, list, tuple)) else value)
+    _write_reconciliation_records(workbook, 'Report Controls', scope,
+        [('control', 'Control'), ('value', 'Value')],
+        (row for label, value in controls for row in control_records(label, value)))
+    return workbook
+
+
+def _write_reconciliation_records(workbook, title, scope, columns, records, *, total=None):
+    """Stream each complete record once; no retained evidence cells or finishing scans."""
+    sheet = None
+    row_number = 4
+    page = 0
+    written = 0
+    money_columns = tuple(index for index, (key, _) in enumerate(columns, 1)
+                          if key in {'receipts', 'payments', 'ledger_movement', 'transaction_movement', 'movement_difference'})
+    for record in records:
+        if sheet is None or row_number >= 1048576:
+            if sheet is not None:
+                sheet.auto_filter.ref = f'A4:{get_column_letter(len(columns))}{row_number}'
+                sheet.print_area = f'A1:{get_column_letter(len(columns))}{row_number}'
+            page += 1
+            name = title if page == 1 else title[:26] + f' {page}'
+            sheet = _reconciliation_sheet(workbook, name, scope, [label for _, label in columns])
+            row_number = 4
+        if written % 250 == 0:
+            workbook.progress('Writing ' + title, written, total)
+        row_number += 1
+        values = [record.get(key) for key, _ in columns]
+        # Bound row height without revisiting any already-written cell.
+        length = max((len(str(value or '')) for value in values), default=0)
+        sheet.row_dimensions[row_number].height = min(409, 15 * (length // 44 + 1))
+        _reconciliation_append(sheet, values, money_columns=money_columns)
+        # The row dimension has already been serialized with this row.
+        sheet.row_dimensions.pop(row_number, None)
+        written += 1
+    if sheet is None:
+        sheet = _reconciliation_sheet(workbook, title, scope, [label for _, label in columns])
+    sheet.auto_filter.ref = f'A4:{get_column_letter(len(columns))}{row_number}'
+    sheet.print_area = f'A1:{get_column_letter(len(columns))}{row_number}'
+    workbook.progress('Writing ' + title, written, total)
+
+
+def export_cashflow_reconciliation_xlsx(result, *, destination=None, **kwargs):
+    """Write a job file directly, or return bytes for existing integrations/tests."""
+    workbook = build_cashflow_reconciliation_workbook(result, **kwargs)
+    output = BytesIO() if destination is None else destination
+    try:
+        workbook.progress('Finalizing Excel file', 0, None)
+        workbook.save(output)
+    finally:
+        workbook.close()
+    return output.getvalue() if destination is None else None
 
 
 def build_reconciliation_workbook(

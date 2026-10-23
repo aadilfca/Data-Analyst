@@ -445,6 +445,105 @@ def test_horizontal_endpoint_never_reuses_old_results_after_snapshot_failure():
     loader.assert_not_called()
 
 
+@pytest.mark.parametrize('view', ['combined', 'bank', 'cash', 'split'])
+def test_reconciliation_excel_jobs_use_one_build_and_fresh_authenticated_download(horizontal_reconciliation_case, view, tmp_path):
+    import time
+    from fastapi import FastAPI, HTTPException
+    from fastapi.testclient import TestClient
+    from services.reconciliation_export_jobs import ReconciliationExportJobs
+    case = horizontal_reconciliation_case
+    config = dict(source_template_id=1, bank_account_codes=['B1'], cash_account_codes=['C1'],
+        cashflow_report_revision=7, receipt_presentation='gross', match_internal_transfers=True,
+        customer_payment_roles=case['roles'])
+    active, snapshots = [], []
+    manager = ReconciliationExportJobs(tmp_path/'jobs')
+    def snapshot(callback):
+        assert not active
+        active.append(True); snapshots.append(1)
+        try:
+            return callback(None)
+        finally:
+            active.pop()
+    def source(*args, **kwargs):
+        assert active == [True]
+        return case['source']
+    def report(*args, **kwargs):
+        assert active == [True]
+        return SimpleNamespace(journal=case['journal'], coa=case['coa'], ready=True)
+    def wait(client, ticket):
+        for _ in range(200):
+            response = client.get(url+'/exports/'+ticket['id'], params={'client_id':7})
+            assert response.status_code == 200, response.text
+            status = response.json()
+            if status['state'] in ('ready','failed','cancelled'):
+                return status
+            time.sleep(.02)
+        pytest.fail('Fixture export did not finish')
+    app = FastAPI(); app.include_router(reconciliation.router)
+    actor = {'user_id': 1}
+    app.dependency_overrides[reconciliation.require_admin] = lambda: actor
+    with TestClient(app) as client, patch.object(reconciliation, '_require_active_client'), \
+            patch.object(reconciliation, '_cashflow_configuration', return_value=config), \
+            patch.object(reconciliation, 'run_read_snapshot_pg', side_effect=snapshot), \
+            patch.object(reconciliation, 'load_ledger_report_source', side_effect=report), \
+            patch.object(reconciliation, 'load_cashflow_difference_source', side_effect=source), \
+            patch.object(reconciliation, 'load_cashflow_reconciliation_identity', return_value='a'*64), \
+            patch.object(reconciliation, 'export_jobs', manager), \
+            patch.object(reconciliation, '_build_cashflow_result') as ordinary:
+        try:
+            url = '/api/reconciliation/cashflows/reconciliation'
+            params = dict(client_id=7, period_start='2026-01-01', period_end='2026-01-31', treasury_view=view)
+            parent = client.get(url, params=params).json()
+            assert '_posting_comparisons' not in parent
+            params.update(expected_fingerprint=parent['evidence_fingerprint'], expected_identity=parent['cache_identity'])
+            count = len(snapshots)
+            start = client.post(url+'/exports', json=params)
+            assert start.status_code == 202, start.text
+            ticket = start.json(); status = wait(client, ticket)
+            assert status['state'] == 'ready', status
+            assert len(snapshots) == count+1  # one preparation snapshot
+            repeat = client.post(url+'/exports', json=params).json()
+            assert repeat['id'] == ticket['id'] and len(snapshots) == count+1
+            path = url+'/exports/'+ticket['id']
+            response = client.get(path+'/download', params={'client_id':7})
+            assert response.status_code == 200, response.text
+            assert len(snapshots) == count+2  # independent freshness check at download
+            assert response.headers['cache-control'] == 'no-store'
+            assert f'_{view}_2026-01-01_to_2026-01-31.xlsx' in response.headers['content-disposition']
+            workbook = load_workbook(BytesIO(response.content))
+            for kind, part in parent['views'].items():
+                rows = {r[0].value:r[1].value for r in workbook['Working Paper '+kind.title()]}
+                assert rows['Receipts as per Cashflow report'] == part['overall']['receipts']['cashflow']
+                assert rows['Payments as per Cashflow report'] == part['overall']['payments']['cashflow']
+            actor['user_id'] = 2
+            for suffix in ('','/download'):
+                assert client.get(path+suffix, params={'client_id':7}).status_code == 404
+            assert client.delete(path, params={'client_id':7}).status_code == 404
+            actor['user_id'] = 1
+            assert client.get(path, params={'client_id':8}).status_code == 404
+            for change in [dict(expected_identity='b'*64),dict(expected_fingerprint='b'*64),dict(period_end='2026-02-28')]:
+                failed = client.post(url+'/exports',json=params|change)
+                assert failed.status_code == 202, failed.text
+                assert wait(client, failed.json())['error_status'] == 409
+            for missing in ['expected_identity','expected_fingerprint']:
+                assert client.post(url+'/exports',json={k:v for k,v in params.items() if k!=missing}).status_code == 422
+            for change in [dict(group_by='wrong'),dict(treasury_view='wrong'),dict(period_start='bad')]:
+                assert client.post(url+'/exports',json=params|change).status_code == 400
+            # A ledger edit without revision advancement invalidates even a ready file.
+            case['source']['ledger_rows'][0]['description'] = 'Corrected source'
+            with patch.object(reconciliation,'load_cashflow_reconciliation_identity',return_value='changed'):
+                assert client.get(path+'/download',params={'client_id':7}).status_code == 409
+            assert client.get(path,params={'client_id':7}).json()['state'] == 'cancelled'
+            def reject():
+                raise HTTPException(403,'Access denied')
+            app.dependency_overrides[reconciliation.require_admin] = reject
+            assert client.post(url+'/exports',json=params).status_code == 403
+            assert client.get(path,params={'client_id':7}).status_code == 403
+            ordinary.assert_not_called()
+        finally:
+            assert manager.stop()
+
+
 def test_prepared_rollup_summary_maps_fortnights_across_months():
     def query(sql, params=None):
         if "cashflow_preparation_state" in sql: return [{"active_preparation_revision": 17, "status": "ready"}]
@@ -2045,7 +2144,7 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "setActiveCashflowWindow" in javascript
     assert "const CASHFLOW_DEFAULT_START = '2026-01-01';" in javascript
     assert "const CASHFLOW_DEFAULT_END = '2026-06-30';" in javascript
-    assert "<script src='/static/reconciliation.js?v=43'></script>" in html
+    assert "<script src='/static/reconciliation.js?v=46'></script>" in html
     assert "id='reconReportPeriod'" in html
     assert "Linked to the loaded Cashflows Report" in html
     assert "id='reconPeriod'" not in html
