@@ -4,7 +4,7 @@ C1 mappings and signed customer/vendor reversals are accepted. C4–C6 are accep
 
 The original 6A posting-comparison backend is accepted with 6B; the horizontal screen/export follow in 6C/6D. Evidence: CHANGELOG_ARCHIVE.md, “Horizontal Cashflow accounting bridge”.
 
-Aadil approved the horizontal specification and revised sequence below. This phase records that agreement only. Detailed contract: CHANGELOG_ARCHIVE.md, “Horizontal Cashflow reconciliation specification”.
+Aadil approved the horizontal specification and revised sequence below. Detailed contract: CHANGELOG_ARCHIVE.md, “Horizontal Cashflow reconciliation specification”.
 
 ## Current feature sequence — Cashflow reconciliation — 2026-10-22
 
@@ -18,8 +18,8 @@ This sequence governs current work; earlier roadmaps below are historical, not a
 | 4 — Balances | Complete and accepted; included in the combined commit/push authorised on 2026-10-21. |
 | 5 — Cashflow rows | Complete; combined commit/push authorised on 2026-10-21. Expandable dim-green balances, account/code hover, calculations, split totals and fresh evidence. |
 | 6A — Specification | Accepted/committed (`c32e6bb`). Horizontal receipts schedule, then payments, with supported adjustments, separate differences and ledger balance proof. |
-| 6B — Accounting bridge | Accepted; commit/push authorised. Independent gross sides, supported presentation adjustments, separate residuals and voucher support preserve accepted Cashflow policy. See archive. |
-| 6C — Screen | Header Reconciliation button opens the horizontal working paper and voucher differences in one popup, inheriting report context and retaining return state. |
+| 6B — Accounting bridge | Accepted/committed (`2f9612d`). Independent gross sides, supported presentation adjustments, separate residuals and voucher support preserve accepted Cashflow policy. See archive. |
+| 6C — Screen | Locally accepted; commit/push authorised. Full-page receipts/payments, proof and evidence; toolbar return, shared processing, validated bounded caching and return cleanup preserve report context. |
 | 6D — Excel | Export the same working paper, supporting adjustments, differences and balance proof; retain accepted Cashflow sheets/totals. |
 | 7 — Reconciliation acceptance | Verify Combined/Bank/Cash/Split, monthly/partial periods, transfers, deductions, reversals, repeats, unavailable evidence, baseline and screen/export parity; obtain local acceptance. |
 | 8 — Account selection | After phase 7: separately approve/build searchable Cash/Bank multi-select after Period; default All preserves existing scope. |
@@ -28,7 +28,7 @@ This sequence governs current work; earlier roadmaps below are historical, not a
 
 Each implementation phase retains file/approach approval, local acceptance and separate Git approval.
 
-**This phase:** 6B accepted for commit/push; next is 6C candidate-file confirmation and approach approval. Trial Balance precision repair, category/customer reviews and performance work remain separate.
+**This phase:** Aadil locally accepts all 6C screen/full-page/loading/cache work and authorises combined commit/push; 6D retains separate file/approach approval. Precision repair, category/customer reviews and performance remain separate.
 
 ## Active roadmap - Excel-style Cashflows database strategy - 2026-10-08
 

@@ -326,6 +326,9 @@ def test_horizontal_endpoint_uses_one_snapshot_and_returns_paginated_current_sup
     def load_evidence(*args,**kwargs):
         assert active==[True]
         return case['source']
+    def load_identity(*args,**kwargs):
+        assert active==[True]
+        return 'a'*64
     app=FastAPI();app.include_router(reconciliation.router)
     app.dependency_overrides[reconciliation.require_admin]=lambda:{'id':1}
     with TestClient(app) as client, patch.object(reconciliation,'_require_active_client'), \
@@ -333,12 +336,17 @@ def test_horizontal_endpoint_uses_one_snapshot_and_returns_paginated_current_sup
             patch.object(reconciliation,'run_read_snapshot_pg',side_effect=snapshot), \
             patch.object(reconciliation,'load_ledger_report_source',side_effect=load_report), \
             patch.object(reconciliation,'load_cashflow_difference_source',side_effect=load_evidence), \
+            patch.object(reconciliation,'load_cashflow_reconciliation_identity',side_effect=load_identity), \
             patch.object(reconciliation,'_build_cashflow_result') as ordinary:
         params=dict(client_id=7,period_start='2026-01-01',period_end='2026-01-31')
         url='/api/reconciliation/cashflows/reconciliation'
         response=client.get(url,params=params)
         assert response.status_code==200,response.text
         result=response.json()
+        validation=client.get(url+'/cache-validation',params=params)
+        assert validation.status_code==200,validation.text
+        assert validation.json()['cache_identity']==result['cache_identity']
+        assert validation.json()['cache_schema']==1
         assert '_support_entries' not in result and 'support' not in result
         assert result['views']['combined']['amount_status']=='Matched'
         adjustment=next(row for row in result['views']['combined']['adjustments'] if row['category']=='Tax')
@@ -350,6 +358,27 @@ def test_horizontal_endpoint_uses_one_snapshot_and_returns_paginated_current_sup
         assert len(support['rows'][0]['voucher_lines'])==4
         assert support['rows'][0]['receipts']==20
         assert client.get(url,params=support_params|{'expected_fingerprint':'stale'}).status_code==409
+        # Posting pages use the parent fingerprint even when the selected proof is Bank/Cash.
+        for view in ('combined','bank','cash','split'):
+            parent=client.get(url,params=params|{'treasury_view':view}).json()
+            part='bank' if view=='split' else view
+            posting_params=params|dict(treasury_view=view,posting_differences=True,comparison_view=part,
+                expected_fingerprint=parent['evidence_fingerprint'],differences_only=False,limit=1)
+            posting=client.get(url,params=posting_params)
+            assert posting.status_code==200,posting.text
+            data=posting.json()['posting_differences']
+            assert len(data['rows'])==1 and data['rows'][0]['status']=='matched'
+            assert data['total_rows']==(5 if view=='combined' else 1 if view=='cash' else 4)
+            assert posting.json()['evidence_fingerprint']==parent['evidence_fingerprint']
+            assert len(data['rows'][0]['voucher_lines'])>=len(data['rows'][0]['transaction_lines'])
+            second=client.get(url,params=posting_params|{'page':2}).json()['posting_differences']
+            assert second['page']==min(2,second['page_count'])
+            assert client.get(url,params=posting_params|{'expected_fingerprint':'old'}).status_code==409
+            assert client.get(url,params=posting_params|{'comparison_view':'unknown'}).status_code==400
+            assert client.get(url,params=posting_params|{'period_key':'2026-01'}).status_code==400
+            assert client.get(url,params=posting_params|{'support_key':adjustment['key']}).status_code==400
+            empty=client.get(url,params=posting_params|{'differences_only':True}).json()['posting_differences']
+            assert empty['total_rows']==0 and empty['rows']==[] and empty['counts']['matched']>0
         for change in ({'treasury_view':'wrong'},{'group_by':'wrong'},{'period_start':'bad'},
                        {'page':0},{'limit':201},{'support_key':'unknown'},{'period_key':'wrong'}):
             assert client.get(url,params=params|change).status_code in (400,422)
@@ -357,6 +386,56 @@ def test_horizontal_endpoint_uses_one_snapshot_and_returns_paginated_current_sup
         def reject():raise HTTPException(401,'Login required')
         app.dependency_overrides[reconciliation.require_admin]=reject
         assert client.get(url,params=params).status_code==401
+
+
+def test_reconciliation_cache_validation_is_authenticated_snapshot_only_and_source_sensitive():
+    from fastapi import FastAPI,HTTPException
+    from fastapi.testclient import TestClient
+    config=dict(source_template_id=1,bank_account_codes=['B1'],cash_account_codes=['C1'],cashflow_report_revision=7,
+        receipt_presentation='gross',match_internal_transfers=True,customer_payment_roles={},category_mappings={})
+    active=[];stamp=['a'*64]
+    def snapshot(callback):
+        active.append(True)
+        try:return callback(None)
+        finally:active.pop()
+    def identity(*args,**kwargs):
+        assert active==[True]
+        assert args==(7,1,['B1','C1'])
+        return stamp[0]
+    app=FastAPI();app.include_router(reconciliation.router)
+    app.dependency_overrides[reconciliation.require_admin]=lambda:{'id':1}
+    with TestClient(app) as client, patch.object(reconciliation,'_require_active_client'), \
+            patch.object(reconciliation,'_cashflow_configuration',return_value=config), \
+            patch.object(reconciliation,'run_read_snapshot_pg',side_effect=snapshot), \
+            patch.object(reconciliation,'load_cashflow_reconciliation_identity',side_effect=identity), \
+            patch.object(reconciliation,'build_cashflow_summary') as build, \
+            patch.object(reconciliation,'load_cashflow_difference_source') as evidence:
+        url='/api/reconciliation/cashflows/reconciliation/cache-validation'
+        params=dict(client_id=7,period_start='2026-01-01',period_end='2026-01-31')
+        def get(change=None):
+            response=client.get(url,params=params|(change or {}))
+            assert response.status_code==200,response.text
+            return response.json()
+        first=get();assert first==get()
+        assert set(first)=={'cache_schema','cache_identity','client_id','template_id','period_start','period_end',
+            'group_by','treasury_view','configuration_key','report_revision'}
+        stamp[0]='b'*64  # Independent ledger/source edit without a Cashflow revision increment.
+        assert get()['cache_identity']!=first['cache_identity']
+        second=get();config['category_mappings']={'100':'New category'}
+        assert get()['cache_identity']!=second['cache_identity']
+        current=get()
+        for change in ({'period_end':'2026-02-28'},{'group_by':'quarter'},{'treasury_view':'split'}):
+            assert get(change)['cache_identity']!=current['cache_identity']
+        for change in ({'client_id':0},{'period_start':'bad'},{'group_by':'bad'},{'treasury_view':'bad'}):
+            assert client.get(url,params=params|change).status_code in (400,422)
+        build.assert_not_called();evidence.assert_not_called()
+        def reject():raise HTTPException(403,'Forbidden')
+        app.dependency_overrides[reconciliation.require_admin]=reject
+        assert client.get(url,params=params).status_code==403
+    with patch.object(reconciliation,'run_read_snapshot_pg',side_effect=RuntimeError('read failed')), \
+            pytest.raises(RuntimeError,match='read failed'):
+        reconciliation.validate_cashflow_reconciliation_cache(7,'2026-01-01','2026-01-31',
+            group_by='month',treasury_view='combined',session=None)
 
 
 def test_horizontal_endpoint_never_reuses_old_results_after_snapshot_failure():
@@ -1966,7 +2045,7 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "setActiveCashflowWindow" in javascript
     assert "const CASHFLOW_DEFAULT_START = '2026-01-01';" in javascript
     assert "const CASHFLOW_DEFAULT_END = '2026-06-30';" in javascript
-    assert "<script src='/static/reconciliation.js?v=39'></script>" in html
+    assert "<script src='/static/reconciliation.js?v=42'></script>" in html
     assert "cashflows-table-number" in javascript
     assert "grid-template-columns: minmax(0, 1fr)" in stylesheet
     assert ".cashflows-table td.cashflows-table-text" in stylesheet

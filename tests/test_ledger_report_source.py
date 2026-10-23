@@ -1,4 +1,7 @@
 import sqlite3
+import hashlib
+import json
+import re
 
 import pandas as pd
 import pytest
@@ -12,10 +15,87 @@ from services.ledger_report_source import (
     load_cashflow_prepared_rollup_summary,
     load_ledger_report_source,
     load_cashflow_difference_source,
+    load_cashflow_reconciliation_identity,
     cashflow_reconciliation_support_page,
     select_canonical_cashflow_vouchers,
     select_cashflow_report_source_identity,
 )
+
+
+def test_reconciliation_identity_executes_scoped_source_query_and_detects_independent_changes():
+    """Execute the production CTEs against isolated rows; adapt PG aggregate syntax only."""
+    conn=sqlite3.connect(':memory:');conn.row_factory=sqlite3.Row
+    conn.executescript('''
+        CREATE TABLE uploaded_files(id INTEGER,client_id INTEGER,template_id INTEGER,ledger_account_code TEXT,
+            status TEXT,ledger_evidence TEXT,ledger_period_start TEXT);
+        CREATE TABLE templates(id INTEGER,is_active INTEGER,ledger_columns TEXT);
+        CREATE TABLE template_column_mappings(id INTEGER,template_id INTEGER,column_id INTEGER,sort_order INTEGER);
+        CREATE TABLE master_columns(id INTEGER,column_name TEXT,is_active INTEGER);
+        CREATE TABLE client_data(id INTEGER,client_id INTEGER,template_id INTEGER,upload_id INTEGER,
+            version INTEGER,source_fingerprint TEXT,row_data TEXT,derived_debit REAL,
+            extract_date TEXT,is_deleted INTEGER,change_detection_status TEXT);
+        INSERT INTO templates VALUES(1,1,'{}'),(2,1,'{}'),(3,1,'{}');
+        INSERT INTO uploaded_files VALUES(1,7,1,NULL,'Imported','{}','2026-01-01'),
+            (2,7,2,'B1','Imported','{}','2025-01-01'),(3,8,2,'B1','Imported','{}','2025-01-01'),
+            (4,7,3,'OTHER','Imported','{}','2025-01-01');
+        INSERT INTO template_column_mappings VALUES(1,2,1,0);
+        INSERT INTO master_columns VALUES(1,'Debit',1);
+        INSERT INTO client_data VALUES(1,7,1,1,1,'same','{}',100,'2026-01-05',0,'active'),
+            (2,7,2,2,1,'same','{}',100,'2025-01-05',0,'active'),
+            (3,8,2,3,1,'same','{}',100,'2025-01-05',0,'active'),
+            (4,7,3,4,1,'same','{}',100,'2025-01-05',0,'active');
+    ''')
+    conn.create_function('md5',1,lambda value:hashlib.md5(value.encode()).hexdigest())
+    class Checksums:
+        def __init__(self):self.items=[]
+        def step(self,kind,key,stamp):self.items.append((kind,key,stamp))
+        def finalize(self):return '|'.join(':'.join(row) for row in sorted(self.items))
+    conn.create_aggregate('checksum_agg',3,Checksums)
+    def query(sql,params):
+        assert 'BETWEEN' not in sql and 'source_fingerprint ||' not in sql
+        for alias,table in [('u','uploaded_files'),('t','templates'),('cd','client_data'),
+                            ('p','template_column_mappings'),('m','master_columns')]:
+            fields=[row[1] for row in conn.execute('PRAGMA table_info('+table+')')]
+            expression='json_object('+','.join("'"+field+"',"+alias+'.'+field for field in fields)+')'
+            sql=sql.replace('to_jsonb('+alias+')::text',expression)
+        sql=re.sub(r'\b(cd|u|t|p|m)\.id::text',r'CAST(\1.id AS TEXT)',sql)
+        sql=sql.replace('= ANY(%s)','= ANY_PLACEHOLDER')
+        sql=sql.replace('= ANY_PLACEHOLDER','IN (SELECT value FROM json_each(%s))')
+        sql=sql.replace("string_agg(kind || ':' || id || ':' || stamp, '|' ORDER BY kind, id)",'checksum_agg(kind,id,stamp)')
+        sql=sql.replace('%s','?')
+        return [dict(row) for row in conn.execute(sql,[json.dumps(p) if isinstance(p,list) else p for p in params])]
+    def stamp():return load_cashflow_reconciliation_identity(7,1,['B1'],query_fn=query)
+    baseline=stamp()
+    # Unrelated clients/accounts cannot alter this client's retained evidence.
+    conn.execute('UPDATE client_data SET derived_debit=999 WHERE id IN (3,4)')
+    assert stamp()==baseline
+    changes=[
+        "UPDATE client_data SET row_data='changed ledger' WHERE id=2",
+        'UPDATE client_data SET derived_debit=101 WHERE id=1',
+        "UPDATE uploaded_files SET ledger_evidence='changed coverage' WHERE id=2",
+        "UPDATE templates SET ledger_columns='changed roles' WHERE id=2",
+        'UPDATE template_column_mappings SET sort_order=2 WHERE id=1',
+        "UPDATE master_columns SET column_name='New debit' WHERE id=1",
+        'UPDATE templates SET is_active=0 WHERE id=2',
+        'UPDATE client_data SET is_deleted=1 WHERE id=2',
+        'DELETE FROM client_data WHERE id=2',
+        "INSERT INTO client_data VALUES(9,7,2,2,1,'same','new',0,'2024-01-01',0,'active')",
+        "UPDATE uploaded_files SET ledger_period_start='2024-01-01' WHERE id=2",
+    ]
+    for sql in changes:
+        conn.execute(sql);current=stamp()
+        assert current!=baseline,sql
+        assert current==stamp()
+        baseline=current
+    assert load_cashflow_reconciliation_identity(7,1,['B1','B1'],query_fn=query)==baseline
+    conn.close()
+
+
+@pytest.mark.parametrize('rows',[[],[{}],[dict(item_count=1,source_stamp='bad')],
+    [dict(item_count=0,source_stamp='a'*32)],[dict(item_count=None,source_stamp='a'*32)]])
+def test_reconciliation_identity_missing_proof_fails_closed(rows):
+    with pytest.raises(ValueError,match='identity is unavailable'):
+        load_cashflow_reconciliation_identity(7,1,['B1'],query_fn=lambda *args:rows)
 
 
 def test_reconciliation_support_pages_whole_groups_and_preserves_all_lines():

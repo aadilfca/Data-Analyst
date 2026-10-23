@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- routers/reconciliation.py → Client mappings, signed Cashflows, Treasury proofs, balances, party details and on-demand posting/working-paper reconciliation. See CHANGELOG_ARCHIVE.md.
+- routers/reconciliation.py → Client mappings, signed Cashflows, Treasury proofs, balances, party details, working-paper reconciliation and source validation. See CHANGELOG_ARCHIVE.md.
 
 - routers/clients.py + static/clients.* → firm-level client management; admin-only except the paginated `GET /api/clients`. See CHANGELOG_ARCHIVE.md.
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, and database size with PostgreSQL table/index breakdown. See CHANGELOG_ARCHIVE.md.
@@ -45,7 +45,7 @@ One line per file group: what it is now. Full build history for every entry live
 - static/search_index.js → deleted; feature registry merged into `NAV_MANIFEST` in `client_context.js` — do not recreate. See CHANGELOG_ARCHIVE.md.
 - static/loading_ui.js → shared `window.LoadingUI` primitives, including token-based target-aware global progress-cursor ownership. See CHANGELOG_ARCHIVE.md.
 - static/api_utils.js → shared `apiFetch()` (GET debounce/retry) and `apiFetchMutate()` (non-retried writes, optional Loading UI); warning-only direct-`/api/` fetch guard; partial rollout. See CHANGELOG_ARCHIVE.md.
-- services/ledger_group_summary.py + ledger_report_source.py → Signed summaries, Treasury proofs, opt-in presentation evidence, canonical retrieval and complete voucher support. See CHANGELOG_ARCHIVE.md.
+- services/ledger_group_summary.py + ledger_report_source.py → Signed summaries, Treasury proofs, canonical retrieval, complete voucher support and reconciliation source identities. See CHANGELOG_ARCHIVE.md.
 - services/cash_bank_classification.py + scripts/backfill_cash_bank_transaction_classifications.py → canonical PostgreSQL classifications/previews, exact amount repair, configuration reclassification and controlled backfills. See CHANGELOG_ARCHIVE.md.
 - services/cashflow_voucher_canonicalization.py + cashflow_voucher_occurrence_store.py + scripts/backfill_cashflow_voucher_occurrences.py -> compact audit-preserving occurrence decisions and controlled maintenance; transaction rows remain in `client_data`. See CHANGELOG_ARCHIVE.md.
 - services/cashflow_preparation.py + scripts/backfill_cashflow_prepared_read_model.py -> metadata-only preparation/job recovery boundary; prepared transaction copies and rollups are no longer rebuilt. See CHANGELOG_ARCHIVE.md.
@@ -56,7 +56,7 @@ One line per file group: what it is now. Full build history for every entry live
 - tests/test_upload_lifecycle.py + test_data_deletion.py + test_import_duplicate_gates.py → Upload/archive lifecycle, rollback, retry, deletion and identity regression tests.
 
 
-- static/reconciliation.html, static/reconciliation.js → Reports, Treasury bridges, signed party details, expandable balances, bounded caches and classified transactions. See CHANGELOG_ARCHIVE.md.
+- static/reconciliation.html, static/reconciliation.js → Cashflows reports, full-page reconciliation, shared loading, voucher evidence, Treasury proofs and validated bounded caches. See CHANGELOG_ARCHIVE.md.
 
 ## Commands
 - Run app: [your actual run command]
@@ -247,6 +247,8 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+
+- 2026-10-23: Accepted Phase 6C full-page reconciliation, shared processing, validated bounded caches and return cleanup; commit/push authorised. See CHANGELOG_ARCHIVE.md.
 
 - 2026-10-22: Phase 6B adds opt-in ledger-to-Cashflow receipt/payment bridges and voucher support; accepted for commit/push. See CHANGELOG_ARCHIVE.md, Horizontal Cashflow accounting bridge.
 

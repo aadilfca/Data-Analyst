@@ -24,6 +24,56 @@
         @media (max-width: 600px) {
             #cashflowsSummaryControlsPanel .cashflows-report-actions { flex-wrap: wrap; }
         }
+        /* Full-page report view; the original Cashflows DOM is retained for returning. */
+        .reconciliation-page > .reconciliation-shell[hidden], #cashflowReconciliation[hidden] { display: none !important; }
+        #cashflowReconciliation { box-sizing: border-box; width: 100%; min-width: 0; min-height: calc(100dvh - 72.5px); margin: 72.5px 0 0; color: #1a1a2e; background: #fff; }
+        #cashflowReconciliation [hidden] { display: none !important; }
+        #cashflowReconciliation .recon-head { padding: 20px 24px 14px; }
+        #cashflowReconciliation h2 { font-size: 21px; margin: 0 0 6px; }
+        #cashflowReconciliation h3 { font-size: 16px; margin: 0; }
+        #cashflowReconciliation h4 { font-size: 14px; margin: 12px 0 6px; }
+        #cashflowReconciliation p { margin: 6px 0; }
+        #cashflowReconciliation .recon-muted { color: #64748b; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+        #cashflowReconciliation .recon-toolbar { position: sticky; top: 72.5px; z-index: 2; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 12px; padding: 12px 24px; border-block: 1px solid #e2e8f0; background: #f8fafc; }
+        #cashflowReconciliation .recon-scope-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; min-width: 0; }
+        #cashflowReconciliation .recon-return { white-space: nowrap; }
+        #cashflowReconciliation label { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+        #cashflowReconciliation select { max-width: 100%; padding: 7px; border: 1px solid #cbd5e1; border-radius: 5px; background: white; }
+        #cashflowReconciliation .recon-tabs { display: flex; gap: 6px; padding: 12px 24px 0; }
+        #cashflowReconciliation [role=tab][aria-selected=true] { background: #24536e; color: #fff; border-color: #24536e; }
+        #cashflowReconciliation button:focus-visible, #cashflowReconciliation select:focus-visible, #cashflowReconciliation summary:focus-visible { outline: 2px solid #24536e; outline-offset: 3px; }
+        #cashflowReconciliation .recon-body { padding: 16px 24px 24px; }
+        #cashflowReconciliation .recon-status { padding: 12px; border: 1px solid #cbd5e1; background: #f8fafc; border-radius: 6px; line-height: 1.6; font-size: 13px; }
+        #cashflowReconciliation .recon-status.is-error { border-color: #dc2626; background: #fef2f2; }
+        #cashflowReconciliation .recon-loading-panel { padding: 20px; border: 1px solid #cbd5e1; border-radius: 8px; background: #f8fafc; }
+        #cashflowReconciliation .recon-loading-title { margin: 0 0 14px; font-size: 17px; color: #24536e; }
+        #cashflowReconciliation .recon-loading-skeleton { margin-top: 20px; }
+        #cashflowReconciliation #reconProcessing .recon-loading-panel { max-width: 720px; margin: 24px auto; min-height: 280px; }
+        #cashflowReconciliation .recon-evidence, #cashflowReconciliation [id^='recon'] { scroll-margin-top: 160px; }
+        #cashflowReconciliation .recon-section { margin-top: 18px; border: 1px solid #d6dee8; border-radius: 7px; overflow: hidden; }
+        #cashflowReconciliation .recon-section > h3 { padding: 12px 14px; background: #edf1f7; }
+        #cashflowReconciliation table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        #cashflowReconciliation th, #cashflowReconciliation td { padding: 10px 14px; text-align: left; border-bottom: 1px solid #e2e8f0; vertical-align: top; overflow-wrap: anywhere; }
+        #cashflowReconciliation th { color: #64748b; font-weight: 600; }
+        #cashflowReconciliation .recon-money { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; width: 180px; }
+        #cashflowReconciliation .recon-total { background: #f8fafc; font-weight: 600; }
+        #cashflowReconciliation .recon-difference { background: #e2efda; font-weight: 700; }
+        #cashflowReconciliation .recon-difference.needs-review { background: #fff7ed; }
+        #cashflowReconciliation .recon-adjustment { border: 0; background: none; color: #24536e; text-decoration: underline; text-underline-offset: 3px; padding: 0; text-align: left; cursor: pointer; font: inherit; }
+        #cashflowReconciliation .recon-evidence { margin-top: 18px; padding: 14px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 7px; }
+        #cashflowReconciliation .recon-evidence-head, #cashflowReconciliation .recon-paging { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-block: 10px; }
+        #cashflowReconciliation .recon-table-wrap { overflow-x: auto; max-width: 100%; }
+        #cashflowReconciliation .recon-source-table { min-width: 980px; background: #fff; font-size: 12px; }
+        #cashflowReconciliation .recon-source-table td, #cashflowReconciliation .recon-source-table th { padding: 8px; }
+        #cashflowReconciliation details { margin-top: 12px; border: 1px solid #cbd5e1; padding: 10px; border-radius: 5px; background: #fff; }
+        #cashflowReconciliation summary { cursor: pointer; font-weight: 600; overflow-wrap: anywhere; }
+        @media (max-width: 600px) {
+            #cashflowReconciliation .recon-head, #cashflowReconciliation .recon-toolbar, #cashflowReconciliation .recon-body { padding: 12px; }
+            #cashflowReconciliation .recon-tabs { padding: 12px 12px 0; }
+            #cashflowReconciliation .recon-money { width: auto; }
+            #cashflowReconciliation th, #cashflowReconciliation td { padding: 9px 8px; }
+            #cashflowReconciliation label { flex-wrap: wrap; }
+        }
     </style>
 </head>
 <body class='reconciliation-page' data-nav-module='Reports' data-nav-parent='index.html'>
@@ -119,7 +169,8 @@
                 </div>
             </div>
             <div class='cashflows-report-actions'>
-                <button type='button' id='cashflowsLedgerDrilldownButton' class='cashflows-secondary' hidden>Open ledger drill-down</button>
+                        <button type='button' id='cashflowsLedgerDrilldownButton' class='cashflows-secondary' hidden>Open ledger drill-down</button>
+                        <button type='button' id='cashflowsReconciliationButton' class='cashflows-secondary' hidden>Reconciliation</button>
                 <button type='button' id='cashflowsHideZeroRowsButton' class='cashflows-secondary' disabled>Hide zero rows</button>
                 <button type='button' id='cashflowsExportButton' class='cashflows-secondary cashflows-export-button' hidden>Export XLSX</button>
             </div>
@@ -254,7 +305,35 @@
             <span>Reports centre - Phase 1</span>
         </footer>
     </main>
-    <script src='/static/client_context.js?v=20'></script>
-    <script src='/static/reconciliation.js?v=39'></script>
+    <section id='cashflowReconciliation' role='main' aria-labelledby='cashflowReconciliationTitle' hidden>
+        <div class='recon-head'>
+            <div><h2 id='cashflowReconciliationTitle'>Ledger / Cashflow reconciliation</h2><p id='reconContext' class='recon-muted'></p></div>
+        </div>
+        <div class='recon-toolbar'>
+            <div class='recon-scope-controls'>
+            <label>Period <select id='reconPeriod' disabled aria-label='Reconciliation period'><option value=''>Selected-range total</option></select></label>
+            <label id='reconViewLabel' hidden>Proof <select id='reconView' aria-label='Reconciliation Treasury proof'></select></label>
+            <button type='button' id='reconReload' class='cashflows-secondary'>Reload working paper</button>
+            </div>
+            <button type='button' id='reconClose' class='cashflows-secondary recon-return'>Cashflows Report</button>
+        </div>
+        <div class='recon-tabs' role='tablist' aria-label='Reconciliation schedules'>
+            <button type='button' id='reconWorkingTab' class='cashflows-secondary' role='tab' aria-controls='reconWorking' aria-selected='true' data-recon-tab='working'>Working paper</button>
+            <button type='button' id='reconDifferencesTab' class='cashflows-secondary' role='tab' aria-controls='reconDifferences' aria-selected='false' tabindex='-1' data-recon-tab='differences'>Voucher differences</button>
+        </div>
+        <div class='recon-body'>
+            <div id='reconProcessing' hidden></div>
+            <div id='reconStatus' class='recon-status' role='status' aria-live='polite'></div>
+            <section id='reconWorking' role='tabpanel' aria-labelledby='reconWorkingTab'></section>
+            <section id='reconDifferences' role='tabpanel' aria-labelledby='reconDifferencesTab' hidden>
+                <div class='recon-evidence-head'><label><input type='checkbox' id='reconIncludeMatched'> Include matched postings</label><span class='recon-muted'>Whole selected range; complete account/voucher groups.</span></div>
+                <div id='reconDifferenceRows'></div>
+            </section>
+            <section id='reconSupport' class='recon-evidence' aria-label='Adjustment voucher support' hidden></section>
+        </div>
+    </section>
+    <script src='/static/client_context.js?v=21'></script>
+    <script src='/static/loading_ui.js?v=ce6d21ca20c8'></script>
+    <script src='/static/reconciliation.js?v=42'></script>
 </body>
 </html>

@@ -3294,6 +3294,51 @@ def load_cashflow_prepared_drilldown(
         },
     }
 
+def load_cashflow_reconciliation_identity(
+    client_id: int, template_id: int, account_codes: Sequence[str], *,
+    query_fn: Callable[..., list[dict[str, Any]]] = execute_query_pg,
+) -> str:
+    """Compact cache stamp, read inside the caller's accounting snapshot.
+
+    Hash actual rows (including derived repairs), not just upload revisions.
+    All ledger history is relevant to openings. Conservative whole-template
+    voucher invalidation also covers related postings outside the report dates.
+    Only aggregate checksums leave PostgreSQL; no second transaction store.
+    """
+    rows = query_fn("""
+        WITH scope_uploads AS (
+            SELECT u.* FROM uploaded_files u
+            WHERE u.client_id = %s
+              AND (u.template_id = %s OR u.ledger_account_code = ANY(%s))
+        ), scope_templates AS (
+            SELECT t.* FROM templates t
+            WHERE t.id = %s OR t.id IN (SELECT template_id FROM scope_uploads)
+        ), stamps AS (
+            SELECT 'rows' AS kind, cd.id::text AS id, md5(to_jsonb(cd)::text) AS stamp
+            FROM client_data cd WHERE cd.client_id = %s
+              AND (cd.template_id = %s OR cd.upload_id IN (SELECT id FROM scope_uploads))
+            UNION ALL
+            SELECT 'uploads', u.id::text, md5(to_jsonb(u)::text) FROM scope_uploads u
+            UNION ALL
+            SELECT 'templates', t.id::text, md5(to_jsonb(t)::text) FROM scope_templates t
+            UNION ALL
+            SELECT 'mappings', p.id::text, md5(to_jsonb(p)::text)
+            FROM template_column_mappings p WHERE p.template_id IN (SELECT id FROM scope_templates)
+            UNION ALL
+            SELECT 'columns', m.id::text, md5(to_jsonb(m)::text) FROM master_columns m
+        )
+        SELECT COUNT(*) AS item_count,
+               md5(COALESCE(string_agg(kind || ':' || id || ':' || stamp, '|' ORDER BY kind, id), '')) AS source_stamp
+        FROM stamps
+        """, (client_id, template_id, sorted(set(account_codes)), template_id, client_id, template_id))
+    # Missing/failed validation must never certify cached evidence as current.
+    if len(rows) != 1 or not re.fullmatch(r'[0-9a-f]{32}', str(rows[0].get('source_stamp', ''))) \
+            or not isinstance(rows[0].get('item_count'), int) or rows[0]['item_count'] < 1:
+        raise ValueError('Reconciliation source identity is unavailable.')
+    return hashlib.sha256(json.dumps([1, client_id, template_id, sorted(set(account_codes)),
+        rows[0]['item_count'], rows[0]['source_stamp']], separators=(',', ':')).encode()).hexdigest()
+
+
 def load_cashflow_difference_source(
     client_id: int, template_id: int, account_codes: Sequence[str],
     period_start: str, period_end: str, *,

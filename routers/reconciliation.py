@@ -40,6 +40,7 @@ from services.ledger_report_source import (
     invalidate_cashflow_summary_read_models,
     load_ledger_report_source,
     load_cashflow_difference_source,
+    load_cashflow_reconciliation_identity,
     cashflow_reconciliation_support_page,
     store_cashflow_summary_read_model,
 )
@@ -1941,12 +1942,47 @@ def cashflow_differences(
     return run_read_snapshot_pg(read)
 
 
+def _reconciliation_cache_context(client_id, start, end, grouping, view, config):
+    """Called only within the same read-only snapshot as the figures/validation."""
+    codes = sorted(set(config['bank_account_codes'] + config['cash_account_codes']))
+    stamp = load_cashflow_reconciliation_identity(client_id, config['source_template_id'], codes, query_fn=execute_query_pg)
+    configuration_key = _cashflow_configuration_key(config)
+    context = dict(cache_schema=1, client_id=client_id, template_id=config['source_template_id'],
+        period_start=start.date().isoformat(), period_end=end.date().isoformat(), group_by=grouping,
+        treasury_view=view, configuration_key=configuration_key, report_revision=config.get('cashflow_report_revision'))
+    context['cache_identity'] = hashlib.sha256(json.dumps([context, stamp], sort_keys=True, default=str).encode()).hexdigest()
+    return context
+
+
+@router.get('/api/reconciliation/cashflows/reconciliation/cache-validation')
+def validate_cashflow_reconciliation_cache(
+    client_id: int = Query(..., ge=1), period_start: str = Query(...), period_end: str = Query(...),
+    group_by: str = Query('month'), treasury_view: str = Query('combined'), session=Depends(require_admin),
+):
+    """Validate both source populations without rebuilding the accounting bridge."""
+    start, end = _parse_report_period(period_start, period_end)
+    try:
+        grouping = normalize_cashflow_grouping(group_by)
+        view = normalize_cashflow_treasury_view(treasury_view)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    def read(_conn):
+        _require_active_client(client_id)
+        config = _cashflow_configuration(client_id)
+        if not config.get('source_template_id') or not (config['bank_account_codes'] or config['cash_account_codes']):
+            raise HTTPException(400, 'Configure the Cashflows template and Cash/Bank accounts first.')
+        return _reconciliation_cache_context(client_id, start, end, grouping, view, config)
+    return run_read_snapshot_pg(read)
+
+
 @router.get('/api/reconciliation/cashflows/reconciliation')
 def cashflow_reconciliation(
     client_id: int = Query(..., ge=1), period_start: str = Query(...), period_end: str = Query(...),
     group_by: str = Query('month'), treasury_view: str = Query('combined'),
     support_key: str = Query('', max_length=64), period_key: str = Query('', max_length=40),
     expected_fingerprint: str = Query('', max_length=64),
+    posting_differences: bool = Query(False), comparison_view: str = Query('', max_length=16),
+    differences_only: bool = Query(True),
     page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=200), session=Depends(require_admin),
 ):
     """Build the on-demand working paper; normal preview/export never calls it."""
@@ -1989,6 +2025,23 @@ def cashflow_reconciliation(
             raise HTTPException(409, 'Reconciliation evidence changed; reload the working paper before opening support.')
         if period_key and period_key not in {p['key'] for p in summary['periods']}:
             raise HTTPException(400, 'Unknown reconciliation period.')
+        if posting_differences:
+            if support_key or period_key:
+                raise HTTPException(400, 'Posting differences cover the whole selected range; request adjustment support separately.')
+            selected_view = comparison_view or ('combined' if view == 'split' else view)
+            if selected_view not in result['views']:
+                raise HTTPException(400, 'Unknown reconciliation comparison view.')
+            codes = {code: kind for code, kind in accounts.items()
+                     if selected_view == 'combined' or kind.casefold() == selected_view}
+            # Reuse this working paper's snapshot and fingerprint, including in Bank/Cash views.
+            comparison = build_cashflow_differences(source, codes, start.date().isoformat(), end.date().isoformat())
+            rows = comparison.pop('findings')
+            filtered = [row for row in rows if not differences_only or row['status'] != 'matched']
+            page_count = max(1, (len(filtered) + limit - 1) // limit)
+            current = min(page, page_count)
+            comparison.update(treasury_view=selected_view, total_groups=len(rows), total_rows=len(filtered),
+                page=current, page_count=page_count, limit=limit, rows=filtered[(current-1)*limit:current*limit])
+            result['posting_differences'] = comparison
         if support_key:
             if support_key not in support:
                 raise HTTPException(400, 'Unknown reconciliation adjustment.')
@@ -1996,8 +2049,7 @@ def cashflow_reconciliation(
             support_view = support[support_key][0]['treasury_view']
             codes = [code for code, kind in accounts.items() if support_view == 'combined' or kind.casefold() == support_view]
             result['support'] = cashflow_reconciliation_support_page(source, entries, codes, periods=summary['periods'], page=page, limit=limit)
-        result.update(client_id=client_id, period_start=start.date().isoformat(), period_end=end.date().isoformat(),
-            configuration_key=config_key, report_revision=config.get('cashflow_report_revision'))
+        result.update(_reconciliation_cache_context(client_id, start, end, grouping, view, config))
         return result
 
     return run_read_snapshot_pg(read)

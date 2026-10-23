@@ -1,9 +1,10 @@
 from pathlib import Path
+import json
 import re
 from urllib.parse import parse_qs, urlparse
 
 import pytest
-from test_reconciliation_balance_source import independent_year_boundary_case
+from test_reconciliation_balance_source import independent_year_boundary_case, horizontal_reconciliation_case, _horizontal_summary
 from test_reconciliation_reports import independent_year_boundary_report
 
 
@@ -393,7 +394,7 @@ def test_cashflows_report_preserves_current_default_period_and_monthly_grouping(
     assert "cashflowPreviewPeriods" in reconciliation_script
     assert "syncCashflowZeroRowsButton" in reconciliation_script
     assert "style.css?v=71" in reconciliation_html
-    assert "reconciliation.js?v=39" in reconciliation_html
+    assert "reconciliation.js?v=42" in reconciliation_html
     assert "cashflowsSummaryBasis" not in reconciliation_html
     assert "cashflows-transactions-note" not in reconciliation_html
     assert "renderCashflowSummary" in reconciliation_script
@@ -638,6 +639,14 @@ def ledger_cache_page():
         },
         expire: function () {cashflowRevisionCheckedAt = 0;},
         generate: function (hard) {return generateCashflows(null, {forceRefresh: hard});},
+        reconcile: openCashflowReconciliation,
+        reconciliationLoad: loadCashflowReconciliation,
+        reconciliationCache: function () {return Array.from(reconciliationCache.entries());},
+        reconciliationState: function () {return {scope: reconciliationState.scope, result: reconciliationState.result,
+            pending: !!reconciliationState.pending, loading: !!reconciliationState.loading, opener: !!reconciliationState.opener};},
+        rememberReconciliation: rememberReconciliation,
+        clearReconciliationCache: clearReconciliationCache,
+        takeReconciliation: function (key) {return !!takeReconciliation(key);},
         ledger: function () {return loadCashflowDrilldown(true);},
         stripped: function () {return lastCashflowsResult;},
         stats: function () {return Array.from(cashflowLedgerCacheOrder.values());},
@@ -656,6 +665,7 @@ def ledger_cache_page():
             if (change.period_start) cashflowSelection.start = change.period_start;
         }
     };
+    initialiseCashflowReconciliation();
     element('cashflowsSummaryTable').addEventListener('click', handleCashflowSummaryClick);'''
     script = script.replace("document.addEventListener('DOMContentLoaded', initialise);", hook)
     with playwright.sync_playwright() as instance:
@@ -664,6 +674,7 @@ def ledger_cache_page():
         page.route('**/*', lambda route: route.abort())
         page.set_content(html)
         page.add_style_tag(content=css)
+        page.add_script_tag(content=(ROOT / 'static/loading_ui.js').read_text(encoding='utf-8'))
         page.add_script_tag(content=script)
         yield page
         browser.close()
@@ -671,6 +682,598 @@ def ledger_cache_page():
 
 def _category_button(page, category='Operating'):
     return page.locator('.cashflows-inline-expand').filter(has_text=category).first
+
+
+@pytest.fixture
+def reconciliation_payload(horizontal_reconciliation_case):
+    """Actual accounting bridge/source shapes, with no database or server dependency."""
+    from services.reconciliation_balance_source import build_cashflow_reconciliation, build_cashflow_differences
+    from services.ledger_report_source import cashflow_reconciliation_support_page
+    case=horizontal_reconciliation_case
+    def build(view='combined'):
+        summary=_horizontal_summary(case)
+        parent=build_cashflow_reconciliation(summary,case['source'],case['accounts'],view)
+        entries=parent.pop('_support_entries')
+        parent.update(client_id=7,period_start='2026-01-01',period_end='2026-01-31',
+            configuration_key='config-1',report_revision=12,evidence_fingerprint='current-proof')
+        report=_ledger_report(view=view)
+        report['period_end']='2026-01-31'
+        report['ledger_context']['period_end']='2026-01-31'
+        report['preview']['periods'][0]['end']='2026-01-31'
+        def support(key,period=''):
+            selected=[r for r in entries[key] if not period or r['period_key']==period]
+            return cashflow_reconciliation_support_page(case['source'],selected,list(case['accounts']),periods=summary['periods'],limit=25,page=1)
+        posting=build_cashflow_differences(case['source'],case['accounts'],'2026-01-01','2026-01-31')
+        return report,parent,support,posting
+    return build
+
+
+def _open_reconciliation(page, report, parent):
+    page.route('**/api/reconciliation/cashflows/reconciliation?*',lambda route:route.fulfill(json=parent))
+    page.evaluate('report => ledgerFixture.load(report)',report)
+    page.locator('#cashflowsReconciliationButton').click()
+    page.wait_for_selector('#reconWorking table')
+
+
+def test_horizontal_fullpage_preserves_report_and_uses_backend_amounts(ledger_cache_page,reconciliation_payload):
+    page=ledger_cache_page
+    report,parent,support,_=reconciliation_payload()
+    calls=[]
+    def respond(route):
+        query=parse_qs(urlparse(route.request.url).query);calls.append(query)
+        payload=dict(parent)
+        if 'support_key' in query:
+            assert query['expected_fingerprint']==['current-proof']
+            payload['support']=support(query['support_key'][0],query.get('period_key',[''])[0])
+        route.fulfill(json=payload)
+    page.route('**/api/reconciliation/cashflows/reconciliation?*',respond)
+    page.evaluate('report => ledgerFixture.load(report)',report)
+    page.evaluate("() => {ledgerFixture.filter('Operating'); document.getElementById('cashflowsSummaryFilter').value='Operating';}")
+    _category_button(page).click()
+    before=page.locator('#cashflowsSummaryTable').inner_text()
+    page.locator('#cashflowsReconciliationButton').click()
+    page.wait_for_selector('#reconWorking table')
+    sections=page.locator('#reconWorking > .recon-section')
+    assert sections.nth(0).locator('h3').inner_text()=='Receipts'
+    assert sections.nth(1).locator('h3').inner_text()=='Payments'
+    assert sections.nth(0).inner_text().index('Receipts as per ledgers')<sections.nth(0).inner_text().index('Receipts as per Cashflow report')
+    assert sections.nth(0).locator('tr').filter(has_text='Receipts as per Cashflow report').inner_text().endswith('900.00')
+    assert sections.nth(1).locator('tr').filter(has_text='Payments as per Cashflow report').inner_text().endswith('350.00')
+    assert page.locator('#reconStatus').inner_text().startswith('Receipt/payment amounts: Matched.')
+    assert 'Not independently certified' in page.locator('#reconStatus').inner_text()
+    page.locator('#reconPeriod').select_option('2026-01')
+    assert len(calls)==1  # Display-only month selection never changes category assignment/source scope.
+    page.locator('[data-recon-support]').filter(has_text='Tax').first.click()
+    page.wait_for_selector('#reconSupport details')
+    page.locator('#reconSupport summary').first.click()
+    assert page.locator('#reconSupport .recon-source-table').nth(1).locator('tbody tr').count()==4
+    assert calls[-1]['period_key']==['2026-01'] and calls[-1]['period_end']==['2026-01-31']
+    page.keyboard.press('Escape')
+    assert page.locator('#cashflowReconciliation').is_hidden()
+    assert page.locator('#cashflowsSummaryTable').inner_text()==before
+    assert _category_button(page).get_attribute('aria-expanded')=='true'
+    assert page.locator('#cashflowsSummaryFilter').input_value()=='Operating'
+    assert page.locator('#cashflowsReconciliationButton').evaluate('(b)=>document.activeElement===b')
+
+
+@pytest.mark.parametrize('view',['combined','bank','cash','split'])
+@pytest.mark.parametrize('width',[1280,390])
+def test_reconciliation_layout_views_and_keyboard(ledger_cache_page,reconciliation_payload,view,width):
+    page=ledger_cache_page
+    page.set_viewport_size({'width':width,'height':820})
+    report,parent,_,_=reconciliation_payload(view)
+    _open_reconciliation(page,report,parent)
+    assert page.locator('#reconViewLabel').is_visible()==(view=='split')
+    if view=='split':
+        for part in ('bank','cash','combined'):
+            page.locator('#reconView').select_option(part)
+            expected=parent['views'][part]['overall']['receipts']['cashflow']
+            text=page.locator('#reconWorking .recon-section').first.locator('tr').filter(has_text='Receipts as per Cashflow report').inner_text()
+            assert f'{expected:,.2f}' in text
+    box=page.locator('#cashflowReconciliation').bounding_box()
+    assert box['x']>=0 and box['x']+box['width']<=width
+    assert page.locator('#cashflowReconciliation').evaluate('(d)=>d.scrollWidth<=d.clientWidth+1')
+    page.locator('#reconWorkingTab').focus()
+    page.keyboard.press('ArrowRight')
+    assert page.locator('#reconDifferencesTab').get_attribute('aria-selected')=='true'
+    page.keyboard.press('Home')
+    assert page.locator('#reconWorkingTab').get_attribute('aria-selected')=='true'
+    page.locator('#reconClose').focus();page.keyboard.press('Shift+Tab')
+    assert page.evaluate("document.getElementById('cashflowReconciliation').contains(document.activeElement)")
+    page.keyboard.press('Escape')
+
+
+def test_reconciliation_unavailable_signed_values_and_safe_source_text(ledger_cache_page,reconciliation_payload):
+    page=ledger_cache_page
+    report,parent,support,_=reconciliation_payload()
+    part=parent['views']['combined']
+    part['overall']['receipts'].update(ledger=None,adjusted_ledger=None,difference=None,cashflow=-2041000)
+    part['amount_status']='Unavailable'
+    attack='<img src=x onerror="window.injected=true">'
+    adjustment=part['adjustments'][0];adjustment['label']=attack
+    child=support(adjustment['key']);child['rows'][0]['voucher_lines'][0].update(description=attack,debit='0.00001',credit='-0.00001',in_period=False)
+    child['rows'][0]['voucher_lines']*=63
+    def respond(route):
+        query=parse_qs(urlparse(route.request.url).query)
+        route.fulfill(json=parent|({'support':child} if 'support_key' in query else {}))
+    page.route('**/api/reconciliation/cashflows/reconciliation?*',respond)
+    page.evaluate('report => ledgerFixture.load(report)',report)
+    page.locator('#cashflowsReconciliationButton').click();page.wait_for_selector('#reconWorking table')
+    assert 'Unavailable' in page.locator('#reconWorking .recon-section').first.inner_text()
+    assert '(2,041,000.00)' in page.locator('#reconWorking .recon-section').first.inner_text()
+    page.locator('[data-recon-support]').filter(has_text=attack).first.click()
+    page.wait_for_selector('#reconSupport summary');page.locator('#reconSupport summary').first.click()
+    assert '0.00001' in page.locator('#reconSupport').inner_text()
+    assert '-0.00001' in page.locator('#reconSupport').inner_text()
+    assert page.locator('#reconSupport .recon-source-table').nth(1).locator('tbody tr').count()==252
+    assert 'Outside range · context only' in page.locator('#reconSupport').inner_text()
+    assert page.locator('#cashflowReconciliation img').count()==0
+    assert not page.evaluate('Boolean(window.injected)')
+
+
+def test_reconciliation_difference_paging_and_stale_evidence(ledger_cache_page,reconciliation_payload):
+    page=ledger_cache_page
+    report,parent,_,posting=reconciliation_payload()
+    calls=[];stale=[False]
+    def respond(route):
+        query=parse_qs(urlparse(route.request.url).query);calls.append(query)
+        if 'posting_differences' not in query:return route.fulfill(json=parent)
+        assert query['expected_fingerprint']==['current-proof']
+        if stale[0]:return route.fulfill(status=409,json={'detail':'Evidence changed; reload the working paper.'})
+        number=int(query['page'][0]);rows=posting['findings']
+        route.fulfill(json=parent|{'posting_differences':posting|dict(rows=[rows[number-1]],page=number,page_count=2,total_rows=2,limit=1)})
+    page.route('**/api/reconciliation/cashflows/reconciliation?*',respond)
+    page.evaluate('report => ledgerFixture.load(report)',report)
+    page.locator('#cashflowsReconciliationButton').click();page.wait_for_selector('#reconWorking table')
+    page.locator('#reconDifferencesTab').click();page.wait_for_selector('#reconDifferenceRows summary')
+    page.locator('#reconDifferenceRows [data-recon-page]').filter(has_text='Next').first.click()
+    page.wait_for_function("document.getElementById('reconDifferenceRows').innerText.includes('Page 2 of 2')")
+    assert calls[-1]['page']==['2']
+    page.locator('#reconIncludeMatched').check();page.wait_for_function("document.getElementById('reconDifferenceRows').innerText.includes('Page 1 of 2')")
+    assert calls[-1]['differences_only']==['false']
+    stale[0]=True
+    page.locator('#reconDifferenceRows [data-recon-page]').filter(has_text='Next').first.click()
+    page.wait_for_selector('#reconStatus.is-error')
+    assert page.locator('#reconWorking').inner_html()=='' and page.locator('#reconDifferenceRows').inner_html()==''
+    assert page.locator('#reconDifferencesTab').is_disabled()
+    page.locator('[data-recon-retry]').click();page.wait_for_selector('#reconWorking table')
+    assert 'posting_differences' not in calls[-1]
+
+
+def test_reconciliation_failed_request_retry_and_closed_response(ledger_cache_page,reconciliation_payload):
+    page=ledger_cache_page
+    report,parent,_,_=reconciliation_payload()
+    count=[0]
+    def respond(route):
+        count[0]+=1
+        if count[0]==1:return route.fulfill(status=503,json={'detail':'Source temporarily unavailable'})
+        route.fulfill(json=parent)
+    page.route('**/api/reconciliation/cashflows/reconciliation?*',respond)
+    page.evaluate('report => ledgerFixture.load(report)',report)
+    page.locator('#cashflowsReconciliationButton').click();page.wait_for_selector('#reconStatus.is-error')
+    assert 'Source temporarily unavailable' in page.locator('#reconStatus').inner_text()
+    page.locator('[data-recon-retry]').click();page.wait_for_selector('#reconWorking table')
+    page.locator('#reconClose').click()
+    # Resolve a delayed fetch after returning: it must not repaint or reopen reconciliation.
+    page.evaluate('''() => { window.originalFetch=window.fetch; window.fetch=()=>new Promise(resolve=>window.finishReconciliation=resolve); ledgerFixture.reconcile(); }''')
+    assert page.locator('#reconProcessing').inner_text().startswith('Preparing reconciliation')
+    page.keyboard.press('Escape')
+    page.evaluate('data=>window.finishReconciliation({ok:true,json:async()=>data})',parent)
+    page.wait_for_timeout(30)
+    assert page.locator('#cashflowReconciliation').is_hidden()
+    assert page.locator('#reconWorking').inner_html()==''
+    page.evaluate('()=>{window.fetch=window.originalFetch;}')
+
+
+def test_reconciliation_rejects_mismatched_report_and_child_fingerprints(ledger_cache_page,reconciliation_payload):
+    page=ledger_cache_page
+    report,parent,support,_=reconciliation_payload()
+    mode=['configuration']
+    def respond(route):
+        query=parse_qs(urlparse(route.request.url).query)
+        payload=dict(parent)
+        if mode[0]=='configuration':payload['configuration_key']='changed'
+        elif 'support_key' in query:
+            payload.update(evidence_fingerprint='new-source',support=support(query['support_key'][0]))
+        route.fulfill(json=payload)
+    page.route('**/api/reconciliation/cashflows/reconciliation?*',respond)
+    page.evaluate('report=>ledgerFixture.load(report)',report)
+    page.locator('#cashflowsReconciliationButton').click();page.wait_for_selector('#reconStatus.is-error')
+    assert 'loaded report and current source/configuration differ' in page.locator('#reconStatus').inner_text()
+    assert page.locator('#reconWorking').inner_html()==''
+    refreshed=report|{'cashflow_configuration_key':'changed'}
+    page.route('**/api/reconciliation/cashflows/preview?*',lambda route:route.fulfill(json=refreshed))
+    page.locator('#reconReload').click();page.wait_for_selector('#reconWorking table')
+    page.locator('#reconClose').click();mode[0]='child'
+    parent['configuration_key']='changed'
+    page.locator('#cashflowsReconciliationButton').click();page.wait_for_selector('#reconWorking table')
+    page.locator('[data-recon-support]').first.click();page.wait_for_selector('#reconStatus.is-error')
+    assert page.locator('#reconWorking').inner_html()=='' and page.locator('#reconSupport').inner_html()==''
+
+
+@pytest.mark.parametrize('feature',[False,True])
+def test_reconciliation_navigation_deep_link_loads_only_when_requested(ledger_cache_page,reconciliation_payload,feature):
+    page=ledger_cache_page.context.browser.new_page()
+    report,parent,_,_=reconciliation_payload()
+    report['period_end']=parent['period_end']='2026-06-30'
+    html=(ROOT/'static/reconciliation.html').read_text(encoding='utf-8')
+    html=re.sub(r'<script\b[^>]*>.*?</script>','',html,flags=re.S)
+    html=re.sub(r'<link\b[^>]*>','',html)
+    calls=[]
+    page.route('**/*',lambda route:route.abort())
+    page.route('**/static/reconciliation.html?*',lambda route:route.fulfill(body=html,content_type='text/html'))
+    def respond(route):
+        calls.append(route.request.url)
+        route.fulfill(json=parent if '/reconciliation?' in route.request.url else report)
+    page.route('**/api/reconciliation/cashflows/*',respond)
+    suffix='&feature=reconciliation' if feature else ''
+    page.goto('https://cashflows.test/static/reconciliation.html?report=cashflows'+suffix)
+    script=(ROOT/'static/reconciliation.js').read_text(encoding='utf-8')
+    script=script.replace("document.addEventListener('DOMContentLoaded', initialise);",'window.startReport=initialise;')
+    page.add_script_tag(content=(ROOT/'static/loading_ui.js').read_text(encoding='utf-8'))
+    page.add_script_tag(content=script)
+    page.evaluate('''async()=>{window.getSelectedClientId=()=>7;await window.startReport();}''')
+    assert page.locator('#cashflowsView').is_visible()!=feature
+    assert page.locator('#cashflowReconciliation').is_visible()==feature
+    assert len(calls)==(2 if feature else 0)
+    if feature:
+        assert '/preview?' in calls[0] and '/reconciliation?' in calls[1]
+        assert 'period_end=2026-06-30' in calls[1]
+        page.locator('#reconClose').click()
+        assert page.locator('#cashflowsView').is_visible()
+        assert 'feature=' not in page.url
+    manifest=(ROOT/'static/client_context.js').read_text(encoding='utf-8')
+    assert "label: 'Ledger / Cashflow reconciliation'" in manifest
+    assert "url: '/static/reconciliation.html?report=cashflows&feature=reconciliation', state: 'ready'" in manifest
+    page.close()
+
+
+def _cache_reconciliation_routes(page,reconciliation_payload,view='combined'):
+    report,parent,support,posting=reconciliation_payload(view)
+    parent.update(cache_schema=1,cache_identity='a'*64,template_id=report['configuration']['source_template_id'])
+    state=dict(report=report,parent=parent,validation_status=200,validation=None,support=support)
+    calls=[]
+    def respond(route):
+        query=parse_qs(urlparse(route.request.url).query)
+        validation='/cache-validation?' in route.request.url
+        calls.append(('validation' if validation else 'full',query))
+        if validation:
+            value=state['validation']
+            if value is None:
+                value={key:state['parent'][key] for key in ('cache_schema','cache_identity','template_id','client_id',
+                    'period_start','period_end','group_by','treasury_view','configuration_key','report_revision')}
+            return route.fulfill(status=state['validation_status'],json=value)
+        payload=dict(state['parent'])
+        if 'support_key' in query:
+            payload['support']=state['support'](query['support_key'][0],query.get('period_key',[''])[0])
+        if 'posting_differences' in query:
+            number=int(query['page'][0]);rows=posting['findings']
+            payload['posting_differences']=posting|dict(rows=[rows[(number-1)%len(rows)]],
+                page=number,page_count=2,total_rows=2,limit=25)
+        return route.fulfill(json=payload)
+    page.route('**/api/reconciliation/cashflows/reconciliation?*',respond)
+    page.route('**/api/reconciliation/cashflows/reconciliation/cache-validation?*',respond)
+    page.evaluate('report=>ledgerFixture.load(report)',report)
+    page.locator('#cashflowsReconciliationButton').click();page.wait_for_selector('#reconWorking table')
+    return state,calls
+
+
+@pytest.mark.parametrize('view',['combined','bank','cash','split'])
+def test_reconciliation_cache_reuses_validated_parent_and_compact_children(ledger_cache_page,reconciliation_payload,view):
+    page=ledger_cache_page
+    state,calls=_cache_reconciliation_routes(page,reconciliation_payload,view)
+    page.locator('#reconPeriod').select_option('2026-01')
+    page.locator('#reconPeriod').select_option('')
+    if view=='split':
+        page.locator('#reconView').select_option('bank');page.locator('#reconView').select_option('combined')
+    assert len(calls)==1
+    button=page.locator('[data-recon-support]').first
+    button.click();page.wait_for_selector('#reconSupport summary')
+    evidence=page.locator('#reconSupport').inner_text()
+    button.click();page.wait_for_selector('#reconSupport summary')
+    assert page.locator('#reconSupport').inner_text()==evidence
+    assert [kind for kind,_ in calls]==['full','full','validation']
+    page.locator('#reconDifferencesTab').click();page.wait_for_selector('#reconDifferenceRows summary')
+    page.locator('#reconDifferenceRows [data-recon-page]').filter(has_text='Next').first.click()
+    page.wait_for_function("document.getElementById('reconDifferenceRows').innerText.includes('Page 2 of 2')")
+    page.locator('#reconDifferenceRows [data-recon-page]').filter(has_text='Previous').first.click()
+    page.wait_for_function("document.getElementById('reconDifferenceRows').innerText.includes('Page 1 of 2')")
+    assert calls[-1][0]=='validation'
+    page.locator('#reconIncludeMatched').check();page.wait_for_selector('#reconDifferenceRows summary')
+    assert calls[-1][0]=='full' and calls[-1][1]['differences_only']==['false']
+    entries=page.evaluate('()=>ledgerFixture.reconciliationCache()')
+    children=[json.loads(entry['json']) for _,entry in entries if '"support"' in entry['json'] or '"posting_differences"' in entry['json']]
+    assert len(children)==4 and all('views' not in child and 'periods' not in child for child in children)
+    before=page.locator('#cashflowsSummaryTable').inner_html()
+    page.locator('#reconClose').click()
+    assert page.locator('#reconWorking').inner_html()==page.locator('#reconSupport').inner_html()==page.locator('#reconDifferenceRows').inner_html()==''
+    assert page.evaluate('()=>ledgerFixture.reconciliationState()')==dict(scope=None,result=None,pending=False,loading=False,opener=False)
+    assert page.locator('#cashflowsSummaryTable').inner_html()==before
+    page.locator('#cashflowsReconciliationButton').click();page.wait_for_selector('#reconWorking table')
+    assert calls[-1][0]=='validation'
+    full_count=sum(kind=='full' for kind,_ in calls)
+    page.locator('#reconReload').click();page.wait_for_selector('#reconWorking table')
+    assert calls[-1][0]=='full' and sum(kind=='full' for kind,_ in calls)==full_count+1
+    assert len(page.evaluate('()=>ledgerFixture.reconciliationCache()'))==1
+
+
+@pytest.mark.parametrize('failure',['changed','unavailable','malformed','unauthorized','forbidden'])
+def test_reconciliation_cache_never_serves_uncertain_or_unauthorized_evidence(ledger_cache_page,reconciliation_payload,failure):
+    page=ledger_cache_page
+    state,calls=_cache_reconciliation_routes(page,reconciliation_payload)
+    page.locator('#reconClose').click()
+    if failure=='changed':state['parent']['cache_identity']='b'*64
+    elif failure=='unavailable':state.update(validation_status=503,validation={'detail':'Unavailable'})
+    elif failure=='malformed':state['validation']={}
+    else:state.update(validation_status=401 if failure=='unauthorized' else 403,validation={'detail':'Access denied'})
+    page.locator('#cashflowsReconciliationButton').click()
+    if failure in ('unauthorized','forbidden'):
+        page.wait_for_selector('#reconStatus.is-error')
+        assert 'Access denied' in page.locator('#reconStatus').inner_text()
+        assert page.locator('#reconWorking').inner_html()==''
+        assert page.evaluate('()=>ledgerFixture.reconciliationCache()')==[]
+        assert [kind for kind,_ in calls]==['full','validation']
+    else:
+        page.wait_for_selector('#reconWorking table')
+        assert [kind for kind,_ in calls]==['full','validation','full']
+        assert page.evaluate('()=>ledgerFixture.reconciliationState().result.cache_identity')==state['parent']['cache_identity']
+
+
+def test_reconciliation_cache_ledger_only_change_rejects_child_even_with_same_voucher_fingerprint(ledger_cache_page,reconciliation_payload):
+    page=ledger_cache_page
+    state,calls=_cache_reconciliation_routes(page,reconciliation_payload)
+    page.locator('[data-recon-support]').first.click();page.wait_for_selector('#reconSupport summary')
+    state['parent']['cache_identity']='b'*64
+    page.locator('[data-recon-support]').first.click();page.wait_for_selector('#reconStatus.is-error')
+    assert 'evidence changed' in page.locator('#reconStatus').inner_text()
+    assert page.locator('#reconWorking').inner_html()==page.locator('#reconSupport').inner_html()==''
+    assert page.evaluate('()=>ledgerFixture.reconciliationCache()')==[]
+    assert [kind for kind,_ in calls]==['full','full','validation','full']
+    page.locator('[data-recon-retry]').click();page.wait_for_selector('#reconWorking table')
+    assert page.evaluate('()=>ledgerFixture.reconciliationState().result.cache_identity')=='b'*64
+
+
+@pytest.mark.parametrize('change',[{'client_id':8},{'template_id':10},{'group_by':'quarter'},
+    {'treasury_view':'bank'},{'period_start':'2026-01-02'},{'period_end':'2026-02-28'},
+    {'configuration_key':'config-2'},{'report_revision':13}])
+def test_reconciliation_cache_isolates_complete_context(ledger_cache_page,reconciliation_payload,change):
+    page=ledger_cache_page
+    state,calls=_cache_reconciliation_routes(page,reconciliation_payload)
+    page.locator('#reconClose').click()
+    report=state['report'];parent=state['parent'];parent.update(change)
+    for key,value in change.items():
+        if key=='template_id':report['configuration']['source_template_id']=value
+        elif key=='configuration_key':report['cashflow_configuration_key']=value
+        elif key=='report_revision':report['cashflow_report_revision']=value
+        else:report[key]=value
+    page.evaluate('report=>ledgerFixture.load(report)',report)
+    page.locator('#cashflowsReconciliationButton').click();page.wait_for_selector('#reconWorking table')
+    assert [kind for kind,_ in calls]==['full','full']
+
+
+def test_reconciliation_cache_lru_limits_combined_serialized_bytes_and_entries(ledger_cache_page):
+    result=ledger_cache_page.evaluate('''()=>{
+        const remember=(key,text)=>ledgerFixture.rememberReconciliation(key,'context',
+            {cache_schema:1,cache_identity:'a'.repeat(64),text:text});
+        for(let i=0;i<20;i++)remember(String(i),'small');
+        ledgerFixture.takeReconciliation('0');remember('20','small');
+        const keys=ledgerFixture.reconciliationCache().map(([key])=>key);
+        remember('bytes-one','账'.repeat(380000));remember('bytes-two','账'.repeat(380000));
+        const bytes=ledgerFixture.reconciliationCache().map(([key,value])=>({key,bytes:value.bytes}));
+        remember('oversized','账'.repeat(800000));
+        return {keys,bytes,final:ledgerFixture.reconciliationCache().map(([key,value])=>({key,bytes:value.bytes}))};
+    }''')
+    assert len(result['keys'])==20 and '0' in result['keys'] and '1' not in result['keys']
+    assert sum(entry['bytes'] for entry in result['final'])<=2*1024*1024
+    assert [entry['key'] for entry in result['bytes']]==['bytes-two']
+    assert result['final']==result['bytes']
+
+
+def test_reconciliation_oversized_support_displays_complete_voucher_without_retaining_it(ledger_cache_page,reconciliation_payload):
+    page=ledger_cache_page
+    state,calls=_cache_reconciliation_routes(page,reconciliation_payload)
+    original=state['support'];data=original(page.locator('[data-recon-support]').first.get_attribute('data-recon-support'))
+    data['rows'][0]['voucher_lines'][0]['description']='账'*710000
+    state['support']=lambda *args:data
+    page.locator('[data-recon-support]').first.click();page.wait_for_selector('#reconSupport summary')
+    assert page.locator('#reconSupport .recon-source-table').nth(1).locator('tbody tr').count()==len(data['rows'][0]['voucher_lines'])
+    assert page.locator('#reconSupport').evaluate("node=>node.textContent.includes('账'.repeat(710000))")
+    assert len(page.evaluate('()=>ledgerFixture.reconciliationCache()'))==1
+    page.locator('[data-recon-support]').first.click();page.wait_for_selector('#reconSupport summary')
+    assert [kind for kind,_ in calls]==['full','full','full']
+
+
+def test_reconciliation_cache_coalesces_pending_reads_and_rejects_late_closed_validation(ledger_cache_page,reconciliation_payload):
+    page=ledger_cache_page
+    state,calls=_cache_reconciliation_routes(page,reconciliation_payload)
+    _hold_reconciliation_requests(page)
+    page.locator('#reconDifferencesTab').click()
+    page.locator('#reconDifferencesTab').click()
+    assert page.evaluate('()=>pendingReconciliations.length')==1
+    # Changing the page supersedes the shared request; even a fetch ignoring abort is harmless.
+    page.evaluate("()=>{ledgerFixture.reconciliationLoad({posting_differences:'true',comparison_view:'combined',differences_only:'true',page:2,limit:25});}")
+    assert page.evaluate('()=>pendingReconciliations.length')==2
+    assert page.evaluate('()=>pendingReconciliations[0].signal.aborted')
+    page.locator('#reconClose').click()
+    _finish_reconciliation_request(page,state['parent'])
+    _finish_reconciliation_request(page,state['parent'],1)
+    page.wait_for_timeout(30)
+    assert len(page.evaluate('()=>ledgerFixture.reconciliationCache()'))==1
+    page.locator('#cashflowsReconciliationButton').click()
+    assert '/cache-validation?' in page.evaluate('()=>pendingReconciliations[2].url')
+    assert page.locator('#reconProcessing .ui-spinner').is_visible()
+    page.locator('#reconClose').click()
+    _finish_reconciliation_request(page,state['parent'],2)
+    page.wait_for_timeout(30)
+    assert page.locator('#reconWorking').inner_html()==''
+    assert page.evaluate('()=>ledgerFixture.reconciliationState()')==dict(scope=None,result=None,pending=False,loading=False,opener=False)
+
+
+def test_reconciliation_cache_invalidation_during_pending_read_cannot_restore_old_entries(ledger_cache_page,reconciliation_payload):
+    page=ledger_cache_page
+    state,_=_cache_reconciliation_routes(page,reconciliation_payload)
+    page.locator('#reconClose').click();_hold_reconciliation_requests(page)
+    page.locator('#cashflowsReconciliationButton').click()
+    assert '/cache-validation?' in page.evaluate('()=>pendingReconciliations[0].url')
+    page.evaluate('()=>ledgerFixture.clearReconciliationCache()')
+    _finish_reconciliation_request(page,state['parent'])
+    page.wait_for_function('pendingReconciliations.length===2')
+    assert '/reconciliation?' in page.evaluate('()=>pendingReconciliations[1].url')
+    page.evaluate('()=>ledgerFixture.clearReconciliationCache()')
+    _finish_reconciliation_request(page,state['parent'],1)
+    page.wait_for_selector('#reconWorking table')
+    assert page.evaluate('()=>ledgerFixture.reconciliationCache()')==[]
+
+
+def _hold_reconciliation_requests(page):
+    page.evaluate('''() => {
+        window.pendingReconciliations=[];
+        window.fetch=(url,options)=>new Promise(resolve=>{
+            window.pendingReconciliations.push({url:String(url),signal:options.signal,resolve});
+        });
+    }''')
+
+
+def _finish_reconciliation_request(page,payload,index=0):
+    page.evaluate('''({data,index})=>pendingReconciliations[index].resolve({ok:true,json:async()=>data})''',
+                  {'data':payload,'index':index})
+
+
+@pytest.mark.parametrize('width',[1280,390])
+def test_reconciliation_initial_processing_fullpage_toolbar_and_return(ledger_cache_page,reconciliation_payload,width):
+    page=ledger_cache_page
+    page.set_viewport_size({'width':width,'height':820})
+    report,parent,_,_=reconciliation_payload('split')
+    page.evaluate('report=>ledgerFixture.load(report)',report)
+    page.evaluate('''()=>{
+        document.getElementById('cashflowsSummaryTable').style.minHeight='1800px';
+        document.getElementById('cashflowsReconciliationButton').focus({preventScroll:true});
+        window.scrollTo(0,350); window.reportScroll=window.scrollY;
+        document.documentElement.style.cursor='help';
+    }''')
+    _hold_reconciliation_requests(page)
+    page.evaluate('()=>{ledgerFixture.reconcile();}')
+    assert page.locator('.reconciliation-shell').is_hidden()
+    assert page.locator('#cashflowReconciliation').get_attribute('role')=='main'
+    assert page.locator('#cashflowReconciliationTitle').bounding_box()['y']>=72.5
+    assert page.locator('#reconProcessing .ui-spinner').is_visible()
+    assert page.locator('#reconProcessing .ui-progress-bar-indeterminate').is_visible()
+    assert page.locator('#reconProcessing .ui-skeleton-row').count()==6
+    assert page.locator('#reconProcessing').get_attribute('aria-busy')=='true'
+    assert 'Preparing reconciliation' in page.locator('#reconProcessing').inner_text()
+    assert page.locator('#reconReload').is_disabled()
+    assert page.locator('#reconClose').inner_text()=='Cashflows Report'
+    assert page.locator('#reconClose').is_enabled()
+    assert page.locator('.recon-toolbar #reconPeriod').count()==1
+    assert page.locator('.recon-toolbar #reconReload').count()==1
+    assert page.locator('.recon-toolbar #reconClose').count()==1
+    toolbar=page.locator('.recon-toolbar').bounding_box()
+    back=page.locator('#reconClose').bounding_box()
+    assert back['x']>width/2 and abs(back['y']-toolbar['y']-12)<2
+    assert page.locator('#cashflowReconciliation').bounding_box()['width']==pytest.approx(width,abs=1)
+    assert page.evaluate("document.documentElement.style.cursor")=='progress'
+    page.locator('#reconClose').click()
+    assert page.locator('.reconciliation-shell').is_visible()
+    assert page.locator('#reconProcessing').is_hidden()
+    assert page.locator('[aria-busy=true]').count()==0
+    assert page.evaluate("document.documentElement.style.cursor")=='help'
+    assert page.evaluate('pendingReconciliations[0].signal.aborted')
+    assert page.evaluate('window.scrollY===window.reportScroll')
+    _finish_reconciliation_request(page,parent)
+    assert page.locator('#cashflowReconciliation').is_hidden()
+    assert page.locator('#reconWorking').inner_html()==''
+
+
+@pytest.mark.parametrize('action',['reload','support','differences','paging','matched'])
+def test_reconciliation_later_processing_uses_relevant_shared_feedback(ledger_cache_page,reconciliation_payload,action):
+    page=ledger_cache_page
+    report,parent,support,posting=reconciliation_payload()
+    _open_reconciliation(page,report,parent)
+    def payload(query):
+        if 'support_key' in query:return parent|{'support':support(query['support_key'][0])}
+        if 'posting_differences' in query:
+            number=int(query['page'][0])
+            return parent|{'posting_differences':posting|dict(rows=[posting['findings'][number-1]],
+                page=number,page_count=2,total_rows=2,limit=1)}
+        return parent
+    page.route('**/api/reconciliation/cashflows/reconciliation?*',
+        lambda route:route.fulfill(json=payload(parse_qs(urlparse(route.request.url).query))))
+    if action in ('paging','matched'):
+        page.locator('#reconDifferencesTab').click();page.wait_for_selector('#reconDifferenceRows summary')
+    _hold_reconciliation_requests(page)
+    if action=='reload':page.locator('#reconReload').click()
+    elif action=='support':page.locator('[data-recon-support]').first.click()
+    elif action=='differences':page.locator('#reconDifferencesTab').click()
+    elif action=='paging':page.locator('#reconDifferenceRows [data-recon-page]').filter(has_text='Next').first.click()
+    else:page.locator('#reconIncludeMatched').check()
+    target='#reconProcessing' if action=='reload' else '#reconSupport' if action=='support' else '#reconDifferenceRows'
+    title='Preparing reconciliation' if action=='reload' else 'Loading adjustment voucher support' if action=='support' else 'Loading voucher differences'
+    assert title in page.locator(target).inner_text()
+    assert page.locator(target+' .ui-spinner').is_visible()
+    assert page.locator(target+' .ui-progress-bar-indeterminate').is_visible()
+    assert page.locator(target).get_attribute('aria-busy')=='true'
+    assert page.locator('#reconClose').is_enabled()
+    query=parse_qs(urlparse(page.evaluate('pendingReconciliations[0].url')).query)
+    if action!='reload':assert query['expected_fingerprint']==['current-proof']
+    if action=='paging':assert query['page']==['2']
+    if action=='matched':assert query['differences_only']==['false']
+    _finish_reconciliation_request(page,payload(query))
+    page.wait_for_function("document.documentElement.style.cursor!=='progress'")
+    assert page.locator('[aria-busy=true]').count()==0
+    assert page.locator('#cashflowReconciliation .ui-spinner').count()==0
+    assert page.locator('#reconReload').is_enabled()
+
+
+def test_reconciliation_processing_ownership_survives_obsolete_support(ledger_cache_page,reconciliation_payload):
+    page=ledger_cache_page
+    report,parent,support,posting=reconciliation_payload()
+    _open_reconciliation(page,report,parent)
+    page.evaluate('()=>{window.otherLoading=LoadingUI.startGlobalLoading();}')
+    _hold_reconciliation_requests(page)
+    page.locator('[data-recon-support]').first.click()
+    old_query=parse_qs(urlparse(page.evaluate('pendingReconciliations[0].url')).query)
+    page.locator('#reconDifferencesTab').click()
+    assert page.evaluate('pendingReconciliations[0].signal.aborted')
+    _finish_reconciliation_request(page,parent|{'support':support(old_query['support_key'][0])})
+    assert page.locator('#reconDifferenceRows .ui-spinner').is_visible()
+    assert page.locator('#reconDifferenceRows').get_attribute('aria-busy')=='true'
+    assert page.locator('#reconSupport').is_hidden()
+    _finish_reconciliation_request(page,parent|{'posting_differences':posting|dict(rows=[],page=1,page_count=1,total_rows=0)},1)
+    page.wait_for_function("document.getElementById('reconDifferenceRows').getAttribute('aria-busy')===null")
+    assert page.evaluate("document.documentElement.style.cursor")=='progress'
+    page.evaluate('()=>LoadingUI.stopGlobalLoading(window.otherLoading)')
+    assert page.evaluate("document.documentElement.style.cursor")==''
+    assert page.locator('#reconSupport details').count()==0
+
+
+def test_reconciliation_timeout_releases_processing_and_allows_retry(ledger_cache_page,reconciliation_payload):
+    page=ledger_cache_page
+    report,parent,_,_=reconciliation_payload()
+    page.evaluate('report=>ledgerFixture.load(report)',report)
+    page.evaluate('''()=>{
+        const originalTimeout=window.setTimeout;
+        window.setTimeout=(callback,delay,...args)=>{
+            if(delay===120000)window.fireReconciliationTimeout=callback;
+            return originalTimeout(callback,delay,...args);
+        };
+        window.fetch=(url,options)=>new Promise((resolve,reject)=>{
+            options.signal.addEventListener('abort',()=>reject(new DOMException('Aborted','AbortError')));
+        });
+    }''')
+    page.locator('#cashflowsReconciliationButton').click()
+    assert page.locator('#reconProcessing .ui-spinner').is_visible()
+    page.evaluate('()=>window.fireReconciliationTimeout()')
+    page.wait_for_selector('#reconStatus.is-error')
+    assert 'timed out' in page.locator('#reconStatus').inner_text()
+    assert page.locator('#reconProcessing').is_hidden()
+    assert page.evaluate("document.documentElement.style.cursor")==''
+    assert page.locator('#reconReload').is_enabled()
+    _hold_reconciliation_requests(page)
+    page.locator('[data-recon-retry]').click()
+    assert page.locator('#reconProcessing .ui-spinner').is_visible()
+    _finish_reconciliation_request(page,parent)
+    page.wait_for_selector('#reconWorking table')
+    assert page.locator('#reconProcessing').is_hidden()
 
 
 def test_cashflow_transaction_drawer_keeps_server_date_and_same_day_sequence(ledger_cache_page):
