@@ -19,8 +19,8 @@ This sequence governs current work; earlier roadmaps below are historical, not a
 | 5 — Cashflow rows | Complete; combined commit/push authorised on 2026-10-21. Expandable dim-green balances, account/code hover, calculations, split totals and fresh evidence. |
 | 6A — Specification | Accepted/committed (`c32e6bb`). Horizontal receipts schedule, then payments, with supported adjustments, separate differences and ledger balance proof. |
 | 6B — Accounting bridge | Accepted/committed (`2f9612d`). Independent gross sides, supported presentation adjustments, separate residuals and voucher support preserve accepted Cashflow policy. See archive. |
-| 6C — Screen | Locally accepted; commit/push authorised. Full-page receipts/payments, proof and evidence; toolbar return, shared processing, validated bounded caching and return cleanup preserve report context. |
-| 6D — Excel | Export the same working paper, supporting adjustments, differences and balance proof; retain accepted Cashflow sheets/totals. |
+| 6C — Screen | Base accepted/committed (`fdf3e22`); linked-period refinement locally accepted, commit/push authorised. Read-only report dates, full-period figures/support and return/loading/cache behavior remain linked. |
+| 6D — Excel | Next: export the same report-period working paper, adjustments, differences and balance proof; retain accepted Cashflow sheets/totals. Scope/approach approval required. |
 | 7 — Reconciliation acceptance | Verify Combined/Bank/Cash/Split, monthly/partial periods, transfers, deductions, reversals, repeats, unavailable evidence, baseline and screen/export parity; obtain local acceptance. |
 | 8 — Account selection | After phase 7: separately approve/build searchable Cash/Bank multi-select after Period; default All preserves existing scope. |
 | 9 — Selected-account acceptance | Verify one/several/all accounts across reports, balances, reconciliation, details and Excel, including within-selection and cross-boundary transfers. |
@@ -28,7 +28,7 @@ This sequence governs current work; earlier roadmaps below are historical, not a
 
 Each implementation phase retains file/approach approval, local acceptance and separate Git approval.
 
-**This phase:** Aadil locally accepts all 6C screen/full-page/loading/cache work and authorises combined commit/push; 6D retains separate file/approach approval. Precision repair, category/customer reviews and performance remain separate.
+**This phase:** Aadil locally accepts the seven-file 6C linked-period refinement and authorises commit/push; 6D file confirmation and approach approval follow. Precision repair, category/customer reviews and performance remain separate.
 
 ## Active roadmap - Excel-style Cashflows database strategy - 2026-10-08
 

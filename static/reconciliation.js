@@ -3001,7 +3001,7 @@
         setCashflowDrilldownMode(false);
     }
     // A separate page view retains the Cashflows DOM, including filters and expanded rows.
-    const reconciliationState = {result: null, scope: null, view: 'combined', period: '', tab: 'working',
+    const reconciliationState = {result: null, scope: null, view: 'combined', tab: 'working',
         controller: null, generation: 0, opener: null, lastRequest: {}, needsReportReload: false, loading: null, pending: null};
     // Disposable tab memory only. Store serialized data once, never report DOM.
     const reconciliationCache = new Map();
@@ -3051,6 +3051,13 @@
         const label = Math.abs(amount).toLocaleString('en-GB', {minimumFractionDigits: 2, maximumFractionDigits: 2});
         return amount < 0 ? '(' + label + ')' : label;
     }
+    function reconciliationPeriodLabel(scope) {
+        // Keep both exact dates visible, including partial months and year boundaries.
+        const format = function (value) {
+            return fromIso(value).toLocaleDateString('en-GB', {day: '2-digit', month: 'short', year: 'numeric'});
+        };
+        return format(scope.period_start) + ' – ' + format(scope.period_end);
+    }
     function cancelReconciliationRequest() {
         reconciliationState.generation += 1;
         reconciliationState.pending = null;
@@ -3073,7 +3080,6 @@
     function syncReconciliationControls() {
         const state = reconciliationState, busy = !!state.loading;
         element('reconReload').disabled = busy;
-        element('reconPeriod').disabled = busy || !state.result || state.tab !== 'working';
         element('reconView').disabled = busy || !state.result;
         element('reconIncludeMatched').disabled = busy || !state.result;
         document.querySelectorAll('#cashflowReconciliation [role=tab]').forEach(function (button) { button.disabled = !state.result; });
@@ -3123,23 +3129,21 @@
         if (opener && opener.isConnected) opener.focus({preventScroll: true});
         clearReconciliationChildren();
         ['reconWorking', 'reconProcessing', 'reconContext', 'reconStatus', 'reconView'].forEach(function (id) { element(id).replaceChildren(); });
-        element('reconPeriod').innerHTML = '<option value="">Selected-range total</option>';
+        element('reconReportPeriod').textContent = '';
         reconciliationState.scope = null; reconciliationState.opener = null; reconciliationState.scroll = null;
         reconciliationState.lastRequest = {}; reconciliationState.supportKey = null;
-        reconciliationState.period = ''; reconciliationState.needsReportReload = false;
+        reconciliationState.needsReportReload = false;
     }
     function reconciliationRow(label, amount, className) {
         return '<tr class="' + (className || '') + '"><td>' + escapeHtml(label) + '</td><td class="recon-money">' + reconciliationMoney(amount) + '</td></tr>';
     }
     function reconciliationSchedule(part, side) {
-        const state = reconciliationState;
         const title = side === 'receipts' ? 'Receipts' : 'Payments';
-        const totals = state.period ? part.periods.find(function (p) { return p.key === state.period; }) : part.overall;
-        const values = totals[side];
+        const values = part.overall[side];
         let rows = reconciliationRow(title + ' as per ledgers', values.ledger, 'recon-total');
         let count = 0;
         part.adjustments.forEach(function (adjustment) {
-            const value = (state.period ? adjustment.periods[state.period] : adjustment.total)[side];
+            const value = adjustment.total[side];
             if (value === 0) return;
             count += 1;
             const label = (value == null ? '' : value < 0 ? 'Less: ' : 'Add: ') + adjustment.label
@@ -3160,13 +3164,12 @@
         const state = reconciliationState, result = state.result;
         if (!result) return;
         const part = result.views[state.view];
-        const period = part.periods.find(function (p) { return p.key === state.period; });
         const reviews = result.review_controls || {};
         const posting = part.posting_comparison || {};
         const status = element('reconStatus');
         status.hidden = false;
         status.classList.remove('is-error');
-        status.textContent = 'Receipt/payment amounts: ' + (period ? period.amount_status : part.amount_status)
+        status.textContent = 'Receipt/payment amounts: ' + part.amount_status
             + '. Whole-range posting comparison: ' + posting.posting_status
             + '. Category reviews: ' + String(reviews.category_review_count ?? 'Unavailable')
             + '; customer-settlement reviews: ' + String(reviews.customer_settlement_review_count ?? 'Unavailable')
@@ -3176,10 +3179,9 @@
         const state = reconciliationState, result = state.result;
         if (!result) return;
         const part = result.views[state.view];
-        const period = part.periods.find(function (p) { return p.key === state.period; });
-        const proof = period ? period.balance_proof : part.overall_balance_proof;
+        const proof = part.overall_balance_proof;
         let rows = reconciliationRow('Opening balance as per ledgers', proof.ledger_opening);
-        const totals = period || part.overall;
+        const totals = part.overall;
         rows += reconciliationRow('Add: Receipts as per Cashflow report', totals.receipts.cashflow);
         rows += reconciliationRow('Less: Payments as per Cashflow report', totals.payments.cashflow);
         rows += reconciliationRow('Separate internal-transfer movement (signed)', proof.separate_transfer_movement);
@@ -3187,17 +3189,12 @@
         rows += reconciliationRow('Calculated closing balance', proof.calculated_closing, 'recon-total');
         rows += reconciliationRow('Closing balance as per ledgers', proof.ledger_closing, 'recon-total');
         rows += reconciliationRow('Closing difference (ledger − calculated)', proof.difference, 'recon-difference' + (proof.difference !== 0 ? ' needs-review' : ''));
-        if (period) {
-            rows += reconciliationRow('Continuous calculated closing (carry control)', proof.continuous_calculated_closing);
-            rows += reconciliationRow('Continuous closing difference', proof.continuous_difference);
-        }
         const unresolved = (part.unresolved || []).map(function (row) {
             return '<li>' + escapeHtml([row.voucher_id, row.period_key, row.reason].filter(Boolean).join(' · ')) + '</li>';
         }).join('');
         const diagnostics = [...(result.diagnostics || []), ...((part.posting_comparison || {}).coverage_diagnostics || [])];
-        element('reconWorking').innerHTML = '<p class="recon-muted">' + escapeHtml(state.period ? (period.start + ' to ' + period.end) : 'Selected-range total')
-            + ' · ' + escapeHtml(cashflowTreasuryViewLabel(state.view))
-            + '. Period selection changes this display only; category section membership follows the full report range. Amounts in source currency, to two decimals. Brackets indicate negative values.</p>'
+        element('reconWorking').innerHTML = '<p class="recon-muted">Full report period · ' + escapeHtml(cashflowTreasuryViewLabel(state.view))
+            + '. To change the period, return to Cashflows Report and load the required dates. Amounts in source currency, to two decimals. Brackets indicate negative values.</p>'
             + reconciliationSchedule(part, 'receipts') + reconciliationSchedule(part, 'payments')
             + '<section class="recon-section" aria-label="Opening and closing proof"><h3>Opening and closing proof</h3><table><tbody>' + rows + '</tbody></table></section>'
             + (unresolved ? '<details><summary>Unresolved presentation evidence (' + part.unresolved.length + ')</summary><ul>' + unresolved + '</ul></details>' : '')
@@ -3252,7 +3249,6 @@
         element('reconWorking').hidden = tab !== 'working';
         element('reconDifferences').hidden = tab !== 'differences';
         element('reconSupport').hidden = true;
-        element('reconPeriod').disabled = tab !== 'working' || !reconciliationState.result;
     }
     function clearReconciliationChildren() {
         element('reconSupport').hidden = true;
@@ -3294,9 +3290,9 @@
         state.lastRequest = {...options};
         const fingerprint = child ? state.result.evidence_fingerprint : '';
         if (!child) {
-            state.result = null; state.period = ''; clearReconciliationChildren();
+            state.result = null; clearReconciliationChildren();
             element('reconViewLabel').hidden = true; element('reconView').replaceChildren();
-            element('reconWorking').innerHTML = ''; element('reconPeriod').innerHTML = '<option value="">Selected-range total</option>';
+            element('reconWorking').innerHTML = '';
             reconciliationSetTab('working');
         }
         const status = element('reconStatus');
@@ -3366,7 +3362,6 @@
                 state.view = result.views[scope.treasury_view] ? scope.treasury_view : 'combined';
                 element('reconContext').textContent = scope.period_start + ' to ' + scope.period_end + ' · ' + scope.group_by + ' · '
                     + cashflowTreasuryViewLabel(scope.treasury_view) + ' · ' + result.receipt_presentation + ' receipts';
-                element('reconPeriod').innerHTML += result.periods.map(function (p) { return '<option value="' + escapeHtml(p.key) + '">' + escapeHtml(p.label || p.key) + '</option>'; }).join('');
                 element('reconViewLabel').hidden = scope.treasury_view !== 'split';
                 element('reconView').innerHTML = Object.keys(result.views).map(function (view) { return '<option value="' + escapeHtml(view) + '">' + escapeHtml(cashflowTreasuryViewLabel(view)) + '</option>'; }).join('');
                 element('reconView').value = state.view;
@@ -3423,6 +3418,8 @@
             template_id: (report.configuration || {}).source_template_id,
             group_by: report.group_by, treasury_view: report.treasury_view || report.preview.treasury_view || 'combined',
             report_revision: cashflowReportRevisionFromResult(report), configuration_key: report.cashflow_configuration_key || ''};
+        // Use the loaded report, never unapplied dates in the main report controls.
+        element('reconReportPeriod').textContent = reconciliationPeriodLabel(state.scope);
         element('reconContext').textContent = report.period_start + ' to ' + report.period_end + ' · Loaded Cashflow report';
         element('reconIncludeMatched').checked = false;
         shell.hidden = true; page.hidden = false;
@@ -3435,6 +3432,11 @@
     }
     async function reloadCashflowReconciliation() {
         if (reconciliationState.needsReportReload) {
+            const scope = reconciliationState.scope;
+            // Refresh the linked report's scope even if its controls contain unapplied edits.
+            cashflowSelection = {start: scope.period_start, end: scope.period_end, groupBy: scope.group_by};
+            cashflowTreasuryView = scope.treasury_view;
+            syncCashflowSelection();
             closeCashflowReconciliation();
             await generateCashflows(null, {forceRefresh: true});
             await openCashflowReconciliation();
@@ -3449,9 +3451,6 @@
         element('cashflowsReconciliationButton').addEventListener('click', openCashflowReconciliation);
         element('reconClose').addEventListener('click', closeCashflowReconciliation);
         element('reconReload').addEventListener('click', reloadCashflowReconciliation);
-        element('reconPeriod').addEventListener('change', function () {
-            cancelReconciliationRequest(); reconciliationState.period = this.value; clearReconciliationChildren(); renderReconciliationWorking();
-        });
         element('reconView').addEventListener('change', function () {
             cancelReconciliationRequest(); reconciliationState.view = this.value; clearReconciliationChildren(); renderReconciliationWorking();
             if (reconciliationState.tab === 'differences') loadReconciliationDifferences(1);
@@ -3480,9 +3479,9 @@
                 syncReconciliationControls();
                 if (button.dataset.reconTab === 'differences') loadReconciliationDifferences(1);
             } else if (button.dataset.reconSupport) {
-                loadCashflowReconciliation({support_key: button.dataset.reconSupport, period_key: reconciliationState.period, page: 1, limit: 25});
+                loadCashflowReconciliation({support_key: button.dataset.reconSupport, page: 1, limit: 25});
             } else if (button.dataset.reconPage === 'support') {
-                loadCashflowReconciliation({support_key: reconciliationState.supportKey, period_key: reconciliationState.period, page: button.dataset.page, limit: 25});
+                loadCashflowReconciliation({support_key: reconciliationState.supportKey, page: button.dataset.page, limit: 25});
             } else if (button.dataset.reconPage === 'differences') loadReconciliationDifferences(button.dataset.page);
             else if (button.hasAttribute('data-recon-hide-support')) { cancelReconciliationRequest(); element('reconSupport').hidden = true; renderReconciliationStatus(); }
         });

@@ -36,6 +36,9 @@
         #cashflowReconciliation .recon-muted { color: #64748b; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
         #cashflowReconciliation .recon-toolbar { position: sticky; top: 72.5px; z-index: 2; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 12px; padding: 12px 24px; border-block: 1px solid #e2e8f0; background: #f8fafc; }
         #cashflowReconciliation .recon-scope-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; min-width: 0; }
+        #cashflowReconciliation .recon-report-period { min-width: 0; font-size: 13px; line-height: 1.5; }
+        #cashflowReconciliation .recon-report-period strong { display: block; font-weight: 600; overflow-wrap: anywhere; }
+        #cashflowReconciliation .recon-period-note { display: block; color: #64748b; font-size: 11px; }
         #cashflowReconciliation .recon-return { white-space: nowrap; }
         #cashflowReconciliation label { display: flex; align-items: center; gap: 8px; font-size: 13px; }
         #cashflowReconciliation select { max-width: 100%; padding: 7px; border: 1px solid #cbd5e1; border-radius: 5px; background: white; }
@@ -311,7 +314,11 @@
         </div>
         <div class='recon-toolbar'>
             <div class='recon-scope-controls'>
-            <label>Period <select id='reconPeriod' disabled aria-label='Reconciliation period'><option value=''>Selected-range total</option></select></label>
+            <div class='recon-report-period'>
+                <span class='recon-muted'>Report period</span>
+                <strong id='reconReportPeriod' aria-describedby='reconPeriodNote'></strong>
+                <span id='reconPeriodNote' class='recon-period-note'>Linked to the loaded Cashflows Report</span>
+            </div>
             <label id='reconViewLabel' hidden>Proof <select id='reconView' aria-label='Reconciliation Treasury proof'></select></label>
             <button type='button' id='reconReload' class='cashflows-secondary'>Reload working paper</button>
             </div>
@@ -334,6 +341,6 @@
     </section>
     <script src='/static/client_context.js?v=21'></script>
     <script src='/static/loading_ui.js?v=ce6d21ca20c8'></script>
-    <script src='/static/reconciliation.js?v=42'></script>
+    <script src='/static/reconciliation.js?v=43'></script>
 </body>
 </html>

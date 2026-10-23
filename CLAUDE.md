@@ -56,7 +56,7 @@ One line per file group: what it is now. Full build history for every entry live
 - tests/test_upload_lifecycle.py + test_data_deletion.py + test_import_duplicate_gates.py → Upload/archive lifecycle, rollback, retry, deletion and identity regression tests.
 
 
-- static/reconciliation.html, static/reconciliation.js → Cashflows reports, full-page reconciliation, shared loading, voucher evidence, Treasury proofs and validated bounded caches. See CHANGELOG_ARCHIVE.md.
+- static/reconciliation.html, static/reconciliation.js → Cashflows reports, reconciliation linked to loaded report periods, shared loading, voucher evidence and validated bounded caches. See CHANGELOG_ARCHIVE.md.
 
 ## Commands
 - Run app: [your actual run command]
@@ -248,7 +248,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 ## Status log
 
-- 2026-10-23: Accepted Phase 6C full-page reconciliation, shared processing, validated bounded caches and return cleanup; commit/push authorised. See CHANGELOG_ARCHIVE.md.
+- 2026-10-23: Accepted Phase 6C reconciliation linked to loaded Cashflow periods; commit/push authorised. See CHANGELOG_ARCHIVE.md.
 
 - 2026-10-22: Phase 6B adds opt-in ledger-to-Cashflow receipt/payment bridges and voucher support; accepted for commit/push. See CHANGELOG_ARCHIVE.md, Horizontal Cashflow accounting bridge.
 

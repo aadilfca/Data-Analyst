@@ -1,5 +1,15 @@
 # Changelog Archive
 
+## Cashflow reconciliation linked report period — 2026-10-23
+
+**Scope:** Seven approved files. The working paper replaces its month dropdown with exact read-only report dates and “Linked to the loaded Cashflows Report”. Receipts/payments, adjustments, balances and voucher support use the loaded report's full range. This prevents comparing a standalone January report with January displayed under January–June category sections. Backend accounting/API/Excel services remain unchanged; script advances to v43.
+
+**Behavior:** Period dates appear immediately from the loaded report, including while loading/retrying. Users return through Cashflows Report to load another range. Both existing buttons retain the toolbar; Split proof selection, shared processing, cancellation, bounded validated caching and restored report state remain. A source/configuration refresh pins the original loaded dates/grouping/Treasury scope before refreshing both reports, rather than applying unrelated control edits. Return clears the period display with other reconciliation references.
+
+**Verification:** Three UI/API/Excel modules pass 205 tests, with one intentional migration-only skip and the existing Starlette/httpx warning. Four new browser cases cover a real-engine January loan repayment whose category becomes a six-month receipt, loaded-versus-unapplied dates, reload/reopen, exact partial/year boundaries and desktop/mobile layouts. Existing checks retain all Treasury proofs, complete voucher support, loading, source-change retries and bounded-cache behavior. Desktop/mobile/loading screenshots were inspected: dates remain visible, no horizontal overflow or browser errors. Syntax, whitespace, documentation budgets and seven-file scope checks pass; backend/shared utilities and unrelated work are unchanged. External evidence: `phase6c-period-lock-pytest.xml`, browser evidence and screenshots with the same prefix. No production data writes, packages or server restart.
+
+**Acceptance:** On 23 October, Aadil confirms local acceptance and authorises commit/push, then phase 6D. Base 6C is committed as `fdf3e22`; Excel retains separate file/approach approval.
+
 ## Cashflow reconciliation validated memory cache — 2026-10-23
 
 **Scope:** Ten approved files. Reconciliation retains one parent and compact child pages in disposable tab memory, capped jointly at 20 entries and 2 MiB serialized UTF-8 data/keys. Least-recent entries are evicted; oversized complete vouchers display normally without retention or truncation. This is a serialization budget, not an actual browser-heap limit. No durable source/report copies, packages or schema changes.

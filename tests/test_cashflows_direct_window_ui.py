@@ -394,7 +394,7 @@ def test_cashflows_report_preserves_current_default_period_and_monthly_grouping(
     assert "cashflowPreviewPeriods" in reconciliation_script
     assert "syncCashflowZeroRowsButton" in reconciliation_script
     assert "style.css?v=71" in reconciliation_html
-    assert "reconciliation.js?v=42" in reconciliation_html
+    assert "reconciliation.js?v=43" in reconciliation_html
     assert "cashflowsSummaryBasis" not in reconciliation_html
     assert "cashflows-transactions-note" not in reconciliation_html
     assert "renderCashflowSummary" in reconciliation_script
@@ -663,6 +663,7 @@ def ledger_cache_page():
             if (change.group_by) cashflowSelection.groupBy = change.group_by;
             if (change.treasury_view) cashflowTreasuryView = change.treasury_view;
             if (change.period_start) cashflowSelection.start = change.period_start;
+            if (change.period_end) cashflowSelection.end = change.period_end;
         }
     };
     initialiseCashflowReconciliation();
@@ -715,6 +716,92 @@ def _open_reconciliation(page, report, parent):
     page.wait_for_selector('#reconWorking table')
 
 
+def _linked_period_report(end):
+    """Small real-engine case: a January loan repayment becomes a half-year receipt category."""
+    import pandas as pd
+    from services.ledger_group_summary import build_cashflow_summary
+    from services.reconciliation_balance_source import build_cashflow_reconciliation
+    entries=[('RECEIPT','2026-01-05','B1',1000,0),('RECEIPT','2026-01-05','AR',0,1000),
+        ('REPAY','2026-01-10','B1',0,200),('REPAY','2026-01-10','LOAN',200,0),
+        ('DRAW','2026-02-05','B1',300,0),('DRAW','2026-02-05','LOAN',0,300),
+        ('EXPENSE','2026-02-10','B1',0,50),('EXPENSE','2026-02-10','EXP',50,0)]
+    rows=[dict(id=i,voucher_id=v,date=d,account_code=a,account_name=a,debit=dr,credit=cr)
+          for i,(v,d,a,dr,cr) in enumerate(entries,1)]
+    coa=pd.DataFrame([dict(account_code=code,account_title=code,account_type=kind,category=category)
+        for code,kind,category in [('B1','Bank',''),('AR','Asset','Received from customers'),
+            ('LOAN','Liability','Bank loan drawn (net)'),('EXP','Expense','General expenses')]])
+    summary=build_cashflow_summary(pd.DataFrame(rows),coa,[],['B1'],'2026-01-01',end,
+        group_by='month',receipt_presentation='net',include_reconciliation_evidence=True)
+    parent=build_cashflow_reconciliation(summary,dict(uploads=[],ledger_rows=[],transaction_rows=rows),{'B1':'Bank'})
+    parent.pop('_support_entries')
+    parent.update(client_id=7,period_start='2026-01-01',period_end=end,
+        configuration_key='config-1',report_revision=12,evidence_fingerprint='proof-'+end)
+    report=_ledger_report()
+    report['period_end']=report['ledger_context']['period_end']=end
+    categories=summary['category_totals'].reset_index().to_dict('records')
+    report['preview'].update(periods=summary['periods'],months=summary['months'],
+        category_totals=categories,treasury_view_totals=categories)
+    report['preview'].pop('ledger_cache')
+    return report,parent
+
+
+@pytest.mark.parametrize('width',[1280,390])
+def test_reconciliation_period_lock_follows_loaded_report_and_range_totals(ledger_cache_page,width):
+    page=ledger_cache_page;page.set_viewport_size(dict(width=width,height=820))
+    january,jan_paper=_linked_period_report('2026-01-31')
+    half_year,half_paper=_linked_period_report('2026-06-30')
+    assert jan_paper['views']['combined']['category_sections']['Bank loan drawn (net)']=='payments'
+    assert half_paper['views']['combined']['category_sections']['Bank loan drawn (net)']=='receipts'
+    assert half_paper['views']['combined']['periods'][0]['receipts']['cashflow']==800
+    assert half_paper['views']['combined']['overall']['receipts']['cashflow']==1100
+    calls=[]
+    def respond(route):
+        query=parse_qs(urlparse(route.request.url).query);calls.append(query)
+        assert 'period_key' not in query
+        route.fulfill(json=jan_paper if query['period_end']==['2026-01-31'] else half_paper)
+    page.route('**/api/reconciliation/cashflows/reconciliation?*',respond)
+    page.evaluate('report=>ledgerFixture.load(report)',january)
+    # Unapplied controls must not redefine the report that is being reconciled.
+    page.evaluate("()=>{document.getElementById('cashflowsPeriodEnd').value='2026-06-30';}")
+    page.locator('#cashflowsReconciliationButton').click();page.wait_for_selector('#reconWorking table')
+    assert page.locator('#reconReportPeriod').inner_text()=='01 Jan 2026 – 31 Jan 2026'
+    assert page.locator('#reconPeriod').count()==0
+    assert page.locator('#reconWorking tr').filter(has_text='Receipts as per Cashflow report').first.inner_text().endswith('1,000.00')
+    assert page.locator('#reconWorking tr').filter(has_text='Payments as per Cashflow report').first.inner_text().endswith('200.00')
+    assert calls[-1]['period_end']==['2026-01-31']
+    page.locator('#reconReload').click();page.wait_for_selector('#reconWorking table')
+    assert calls[-1]['period_end']==['2026-01-31']
+    page.locator('#reconClose').click()
+    page.route('**/api/reconciliation/cashflows/preview?*',lambda route:route.fulfill(json=half_year))
+    page.evaluate("()=>ledgerFixture.mutateScope({period_end:'2026-06-30'})")
+    page.evaluate('()=>ledgerFixture.generate(true)')
+    main_receipts=page.locator('.cashflows-summary-scroll-pane .cashflows-summary-total-row').first
+    assert main_receipts.locator('.cashflows-summary-total-value').inner_text()=='1,100'
+    page.locator('#cashflowsReconciliationButton').click();page.wait_for_selector('#reconWorking table')
+    assert page.locator('#reconReportPeriod').inner_text()=='01 Jan 2026 – 30 Jun 2026'
+    assert 'Linked to the loaded Cashflows Report' in page.locator('.recon-toolbar').inner_text()
+    assert page.locator('#reconWorking tr').filter(has_text='Receipts as per Cashflow report').first.inner_text().endswith('1,100.00')
+    assert page.locator('#reconWorking tr').filter(has_text='Payments as per Cashflow report').first.inner_text().endswith('50.00')
+    page.locator('#reconReload').click();page.wait_for_selector('#reconWorking table')
+    assert calls[-1]['period_end']==['2026-06-30']
+    assert page.locator('#cashflowReconciliation').evaluate('(node)=>node.scrollWidth<=node.clientWidth+1')
+    page.locator('#reconClose').click()
+    assert page.locator('#reconReportPeriod').inner_text()==''
+    page.locator('#cashflowsReconciliationButton').click();page.wait_for_selector('#reconWorking table')
+    assert page.locator('#reconReportPeriod').inner_text()=='01 Jan 2026 – 30 Jun 2026'
+
+
+@pytest.mark.parametrize('start,end,label',[('2026-01-04','2026-02-26','04 Jan 2026 – 26 Feb 2026'),
+    ('2025-12-30','2026-01-03','30 Dec 2025 – 03 Jan 2026')])
+def test_reconciliation_locked_label_preserves_exact_date_boundaries(ledger_cache_page,reconciliation_payload,start,end,label):
+    report,parent,_,_=reconciliation_payload()
+    report.update(period_start=start,period_end=end);parent.update(period_start=start,period_end=end)
+    report['ledger_context'].update(period_start=start,period_end=end)
+    _open_reconciliation(ledger_cache_page,report,parent)
+    assert ledger_cache_page.locator('#reconReportPeriod').inner_text()==label
+    assert ledger_cache_page.locator('#reconReportPeriod').get_attribute('aria-describedby')=='reconPeriodNote'
+
+
 def test_horizontal_fullpage_preserves_report_and_uses_backend_amounts(ledger_cache_page,reconciliation_payload):
     page=ledger_cache_page
     report,parent,support,_=reconciliation_payload()
@@ -741,13 +828,14 @@ def test_horizontal_fullpage_preserves_report_and_uses_backend_amounts(ledger_ca
     assert sections.nth(1).locator('tr').filter(has_text='Payments as per Cashflow report').inner_text().endswith('350.00')
     assert page.locator('#reconStatus').inner_text().startswith('Receipt/payment amounts: Matched.')
     assert 'Not independently certified' in page.locator('#reconStatus').inner_text()
-    page.locator('#reconPeriod').select_option('2026-01')
-    assert len(calls)==1  # Display-only month selection never changes category assignment/source scope.
+    assert page.locator('#reconPeriod').count()==0
+    assert page.locator('#reconReportPeriod').inner_text()=='01 Jan 2026 – 31 Jan 2026'
+    assert len(calls)==1
     page.locator('[data-recon-support]').filter(has_text='Tax').first.click()
     page.wait_for_selector('#reconSupport details')
     page.locator('#reconSupport summary').first.click()
     assert page.locator('#reconSupport .recon-source-table').nth(1).locator('tbody tr').count()==4
-    assert calls[-1]['period_key']==['2026-01'] and calls[-1]['period_end']==['2026-01-31']
+    assert 'period_key' not in calls[-1] and calls[-1]['period_end']==['2026-01-31']
     page.keyboard.press('Escape')
     assert page.locator('#cashflowReconciliation').is_hidden()
     assert page.locator('#cashflowsSummaryTable').inner_text()==before
@@ -763,6 +851,9 @@ def test_reconciliation_layout_views_and_keyboard(ledger_cache_page,reconciliati
     page.set_viewport_size({'width':width,'height':820})
     report,parent,_,_=reconciliation_payload(view)
     _open_reconciliation(page,report,parent)
+    assert page.locator('#reconReportPeriod').is_visible()
+    assert page.locator('#reconReportPeriod').inner_text()=='01 Jan 2026 – 31 Jan 2026'
+    assert page.locator('#reconPeriod').count()==0
     assert page.locator('#reconViewLabel').is_visible()==(view=='split')
     if view=='split':
         for part in ('bank','cash','combined'):
@@ -878,12 +969,18 @@ def test_reconciliation_rejects_mismatched_report_and_child_fingerprints(ledger_
         route.fulfill(json=payload)
     page.route('**/api/reconciliation/cashflows/reconciliation?*',respond)
     page.evaluate('report=>ledgerFixture.load(report)',report)
+    page.evaluate("()=>{document.getElementById('cashflowsPeriodEnd').value='2026-06-30';ledgerFixture.mutateScope({period_end:'2026-06-30'});}")
     page.locator('#cashflowsReconciliationButton').click();page.wait_for_selector('#reconStatus.is-error')
     assert 'loaded report and current source/configuration differ' in page.locator('#reconStatus').inner_text()
     assert page.locator('#reconWorking').inner_html()==''
     refreshed=report|{'cashflow_configuration_key':'changed'}
-    page.route('**/api/reconciliation/cashflows/preview?*',lambda route:route.fulfill(json=refreshed))
+    preview_calls=[]
+    def refresh_report(route):
+        preview_calls.append(parse_qs(urlparse(route.request.url).query));route.fulfill(json=refreshed)
+    page.route('**/api/reconciliation/cashflows/preview?*',refresh_report)
     page.locator('#reconReload').click();page.wait_for_selector('#reconWorking table')
+    assert preview_calls[-1]['period_end']==['2026-01-31']
+    assert page.locator('#reconReportPeriod').inner_text()=='01 Jan 2026 – 31 Jan 2026'
     page.locator('#reconClose').click();mode[0]='child'
     parent['configuration_key']='changed'
     page.locator('#cashflowsReconciliationButton').click();page.wait_for_selector('#reconWorking table')
@@ -962,8 +1059,8 @@ def _cache_reconciliation_routes(page,reconciliation_payload,view='combined'):
 def test_reconciliation_cache_reuses_validated_parent_and_compact_children(ledger_cache_page,reconciliation_payload,view):
     page=ledger_cache_page
     state,calls=_cache_reconciliation_routes(page,reconciliation_payload,view)
-    page.locator('#reconPeriod').select_option('2026-01')
-    page.locator('#reconPeriod').select_option('')
+    assert page.locator('#reconPeriod').count()==0
+    assert page.locator('#reconReportPeriod').inner_text()=='01 Jan 2026 – 31 Jan 2026'
     if view=='split':
         page.locator('#reconView').select_option('bank');page.locator('#reconView').select_option('combined')
     assert len(calls)==1
@@ -1164,7 +1261,8 @@ def test_reconciliation_initial_processing_fullpage_toolbar_and_return(ledger_ca
     assert page.locator('#reconReload').is_disabled()
     assert page.locator('#reconClose').inner_text()=='Cashflows Report'
     assert page.locator('#reconClose').is_enabled()
-    assert page.locator('.recon-toolbar #reconPeriod').count()==1
+    assert page.locator('.recon-toolbar #reconReportPeriod').inner_text()=='01 Jan 2026 – 31 Jan 2026'
+    assert page.locator('#reconPeriod').count()==0
     assert page.locator('.recon-toolbar #reconReload').count()==1
     assert page.locator('.recon-toolbar #reconClose').count()==1
     toolbar=page.locator('.recon-toolbar').bounding_box()

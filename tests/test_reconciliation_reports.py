@@ -2045,7 +2045,11 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "setActiveCashflowWindow" in javascript
     assert "const CASHFLOW_DEFAULT_START = '2026-01-01';" in javascript
     assert "const CASHFLOW_DEFAULT_END = '2026-06-30';" in javascript
-    assert "<script src='/static/reconciliation.js?v=42'></script>" in html
+    assert "<script src='/static/reconciliation.js?v=43'></script>" in html
+    assert "id='reconReportPeriod'" in html
+    assert "Linked to the loaded Cashflows Report" in html
+    assert "id='reconPeriod'" not in html
+    assert "Period selection changes this display only" not in javascript
     assert "cashflows-table-number" in javascript
     assert "grid-template-columns: minmax(0, 1fr)" in stylesheet
     assert ".cashflows-table td.cashflows-table-text" in stylesheet
