@@ -249,7 +249,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 ## Status log
 
-- 2026-10-23: Accepted Phase 6D streaming exports, account-private storage and guarded reconciliation opening; commit/push authorised. See CHANGELOG_ARCHIVE.md.
+- 2026-10-23: Accepted Phase 7 Cashflow/reconciliation and Excel verification; documentation commit/push authorised. See CHANGELOG_ARCHIVE.md.
 
 - 2026-10-22: Phase 6B adds opt-in ledger-to-Cashflow receipt/payment bridges and voucher support; accepted for commit/push. See CHANGELOG_ARCHIVE.md, Horizontal Cashflow accounting bridge.
 
