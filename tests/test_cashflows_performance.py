@@ -1,6 +1,8 @@
 """Phase 6 coverage for SQL-first Cashflows source preparation."""
 
 import inspect
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -27,6 +29,62 @@ from services.ledger_report_source import (
 )
 
 
+def test_adjustment_metadata_cache_owner_lru_idle_expiry_and_memory_limits(monkeypatch):
+    clock=[0]
+    monkeypatch.setattr(reconciliation,'monotonic',lambda:clock[0])
+    cache=reconciliation._AdjustmentMembershipCache()
+    for identity in ('one','two','three'):
+        cache.put(1,identity,{'periods':[],'groups':[]})
+    assert cache.get(1,'one') is None and cache.get(2,'three') is None
+    cache.get(1,'two')  # Only the least recently used paper of this owner is evicted.
+    cache.put(1,'four',{'periods':[],'groups':[]})
+    assert cache.get(1,'three') is None
+    for owner in range(2,25):cache.put(owner,'one',{'groups':[]})
+    assert len(cache.entries)==20 and cache.get(1,'four') is None
+    clock[0]=599
+    assert cache.get(24,'one')=={'groups':[]}
+    clock[0]=600
+    assert cache.get(23,'one') is None
+    assert cache.get(24,'one')=={'groups':[]}
+    clock[0]=1200
+    assert cache.get(24,'one') is None
+    chunk={'groups':['x'*(3*1024*1024)]}
+    for owner in (1,2,3):cache.put(owner,'large',chunk)
+    assert cache.get(1,'large') is None and len(cache.entries)==2
+    assert sum(item[1] for item in cache.entries.values())<=8*1024*1024
+    value=cache.get(2,'large');value['groups'].clear()
+    assert cache.get(2,'large')['groups']  # Caller mutation cannot alter membership.
+    cache.put(4,'oversized',{'groups':['x'*(8*1024*1024)]})
+    assert cache.get(4,'oversized') is None and len(cache.entries)==2
+
+
+def test_concurrent_expired_popup_reads_share_one_membership_rebuild(monkeypatch):
+    cache=reconciliation._AdjustmentMembershipCache()
+    monkeypatch.setattr(reconciliation,'_adjustment_memberships',cache)
+    config=dict(source_template_id=1,bank_account_codes=['B'],cash_account_codes=[],match_internal_transfers=True,
+        receipt_presentation='net',customer_payment_roles={})
+    monkeypatch.setattr(reconciliation,'_require_active_client',lambda *a:None)
+    monkeypatch.setattr(reconciliation,'_cashflow_configuration',lambda *a:config)
+    monkeypatch.setattr(reconciliation,'_reconciliation_cache_context',lambda *a,**k:{'cache_identity':'a'*64})
+    monkeypatch.setattr(reconciliation,'run_read_snapshot_pg',lambda callback:callback(None))
+    monkeypatch.setattr(reconciliation,'load_ledger_report_source',lambda *a,**k:SimpleNamespace(ready=True,journal=[],coa=[]))
+    entered,release=Event(),Event();builds=[]
+    def summary(*a,**k):
+        builds.append(1);entered.set();assert release.wait(5)
+        return {'periods':[]}
+    monkeypatch.setattr(reconciliation,'build_cashflow_summary',summary)
+    monkeypatch.setattr(reconciliation,'load_cashflow_adjustment_treasury_rows',lambda *a,**k:[])
+    monkeypatch.setattr(reconciliation,'cashflow_adjustment_bundle_groups',lambda *a,**k:[])
+    def read():
+        return reconciliation._read_adjustment({'user_id':1},1,pd.Timestamp('2026-01-01'),pd.Timestamp('2026-06-30'),
+            'month','combined',None,'a'*64,lambda identity,config,metadata:metadata)
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures=[pool.submit(read) for _ in range(3)]
+        assert entered.wait(5);release.set()
+        results=[f.result(timeout=10) for f in futures]
+    assert builds==[1] and results==[dict(accounts={'B':'Bank'},periods=[],groups=[])]*3
+
+
 def test_database_coverage_uses_the_existing_source_round_trip_and_snapshot():
     calls = []
 
@@ -46,6 +104,101 @@ def test_database_coverage_uses_the_existing_source_round_trip_and_snapshot():
     assert "LEFT JOIN report_lines l ON TRUE" in sql
     assert params == (7, 9, "2026-01-01", "2026-06-30") * 2
     assert not any(word in sql.upper() for word in ("INSERT INTO", "UPDATE CLIENT_DATA", "CREATE TABLE"))
+
+
+@pytest.mark.parametrize('book',['ledger','voucher'])
+def test_flat_adjustment_source_pages_original_columns_with_fixed_query_count(book):
+    from services.ledger_report_source import load_cashflow_adjustment_rows
+    calls=[]
+    def query(sql,params):
+        calls.append((sql,params))
+        if len(calls)==1:return [dict(template_id=11,column_name='Running balance',sort_order=1)]
+        if 'SELECT COUNT(*)' in sql:return [dict(total_rows=251)]
+        return [dict(id=51,upload_id=1,template_id=11,date='2026-01-02',voucher_id='V1',account_code='C1',
+            row_data={'Running balance':'123.00001','Description':'literal %_needle'},in_period=True)]
+    entries=[dict(voucher_id='V1',period_key='jan')]*3
+    result=load_cashflow_adjustment_rows(7,1,['C1'],entries,[dict(key='jan',start='2026-01-01',end='2026-01-31')],
+        source_book=book,search='%_needle',page=2,limit=50,query_fn=query)
+    assert len(calls)==3
+    assert result['page_count']==6 and result['total_rows']==251 and result['page']==2
+    assert result['rows'][0]['row_data']['Running balance']=='123.00001'
+    assert result['columns']==['Running balance','Description']
+    assert result['total_voucher_periods']==1
+    sql,params=calls[-1]
+    assert 'EXISTS (SELECT 1 FROM membership' in sql and 'LIMIT %s OFFSET %s' in sql
+    assert params[-2:]==(50,50) and '%_needle' not in sql
+    assert not any(word in sql.upper() for word in ('INSERT INTO','UPDATE CLIENT_DATA','CREATE TABLE'))
+    if book=='voucher':assert 'cd.derived_voucher_id' in sql and 'cd.derived_transaction_date' in sql
+
+
+def test_flat_adjustment_treasury_read_uses_only_derived_directions():
+    from services.ledger_report_source import load_cashflow_adjustment_treasury_rows
+    calls=[]
+    load_cashflow_adjustment_treasury_rows(7,1,['C1'],'2026-01-01','2026-01-31',query_fn=lambda sql,params:calls.append((sql,params)) or [])
+    assert len(calls)==1
+    sql,params=calls[0]
+    assert 'cd.derived_debit' in sql and 'cd.derived_credit' in sql
+    assert 'row_data' not in sql and 'ledger_period_start' not in sql
+    assert params==(7,1,['C1'],'2026-01-01','2026-01-31')
+
+
+@pytest.mark.parametrize('book', ['ledger', 'voucher'])
+def test_adjustment_bundle_reads_shared_occurrences_once_with_bounded_queries(book):
+    from services.ledger_report_source import load_cashflow_adjustment_bundle
+    calls = []
+    def query(sql, params):
+        calls.append((sql, params))
+        if 'COUNT(*)' in sql: return [dict(total_rows=2, source_bytes=2000)]
+        if 'SELECT DISTINCT t.id' in sql: return [dict(template_id=11, column_name='Amount', sort_order=1)]
+        return [dict(id=7, template_id=11, row_data='{"Amount":9007199254740993.00001}',
+            adjustment_groups=['a:receipts','b:payments'], in_period_groups=['a:receipts']),
+            dict(id=8, template_id=11, row_data='{"Amount":0.00000000000000000000000001}',
+            adjustment_groups=['a:receipts'], in_period_groups=[])]
+    groups = [dict(key=k, side=side, label=k, category='', adjustment_total=1,
+        entries=[dict(voucher_id='V1', period_key='jan')]*3) for k,side in [('a','receipts'),('b','payments')]]
+    result = load_cashflow_adjustment_bundle(7,1,['C1'],groups,
+        [dict(key='jan',start='2026-01-01',end='2026-01-31')],source_book=book,query_fn=query)
+    assert result['complete'] and len(result['rows'])==2 and len(calls)==3
+    assert result['groups'][0]['row_ids']==[7,8] and result['groups'][1]['row_ids']==[7]
+    assert result['groups'][0]['in_period_row_ids']==[7] and result['groups'][1]['in_period_row_ids']==[]
+    assert result['rows'][0]['row_data']['Amount']=='9007199254740993.00001'
+    assert result['rows'][1]['row_data']['Amount']=='1E-26'
+    assert '9007199254740993.00001' in result['rows'][0]['search_text']
+    assert result['rows'][0]['numeric_columns']==['Amount']
+    assert len(__import__('json').loads(calls[0][1][0]))==2
+    assert calls[1][1][-1]==1000
+    assert all(not any(x in sql.upper() for x in ('INSERT INTO','UPDATE CLIENT_DATA','CREATE TABLE')) for sql,_ in calls)
+    if book=='voucher':assert 'cd.derived_voucher_id' in calls[0][0]
+
+
+@pytest.mark.parametrize('count,size,reason', [(1001,0,'row_limit'),(2,1048577,'byte_limit')])
+def test_adjustment_bundle_refuses_oversized_source_before_transferring_rows(count,size,reason):
+    from services.ledger_report_source import load_cashflow_adjustment_bundle
+    calls=[]
+    def query(sql,params):
+        calls.append(sql)
+        assert 'COUNT(*)' in sql
+        return [dict(total_rows=count,source_bytes=size)]
+    result=load_cashflow_adjustment_bundle(7,1,['C1'],[dict(key='a',side='receipts',label='a',category='',
+        adjustment_total=1,entries=[dict(voucher_id='V',period_key='jan')])],
+        [dict(key='jan',start='2026-01-01',end='2026-01-31')],query_fn=query)
+    assert result==dict(complete=False,reason=reason,rows=[],columns=[],groups=[])
+    assert len(calls)==1
+
+
+def test_flat_source_evidence_preserves_large_and_small_numeric_digits():
+    from services.ledger_report_source import load_cashflow_adjustment_rows
+    def query(sql,params):
+        if 'SELECT DISTINCT' in sql:return []
+        if 'SELECT COUNT(*)' in sql:return [{'total_rows':1}]
+        return [dict(id=1,template_id=11,row_data='{"Amount":9007199254740993.00001,"Tiny":0.00000000000000000000000001,"Flag":true}')]
+    result=load_cashflow_adjustment_rows(7,1,['C1'],[dict(voucher_id='V',period_key='jan')],
+        [dict(key='jan',start='2026-01-01',end='2026-01-31')],query_fn=query)
+    row=result['rows'][0]
+    assert row['row_data']['Amount']=='9007199254740993.00001'
+    assert row['row_data']['Tiny']=='1E-26'
+    assert row['row_data']['Flag'] is True
+    assert row['numeric_columns']==['Amount','Tiny']
 
 
 def test_explicit_all_accounts_preserves_the_exact_derived_source_query():

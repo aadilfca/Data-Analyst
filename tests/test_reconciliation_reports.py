@@ -18,12 +18,189 @@ from services.reconciliation_xlsx import export_cashflow_xlsx
 from test_reconciliation_balance_source import independent_year_boundary_case, horizontal_reconciliation_case, selected_account_case
 
 
+def test_adjustment_section_totals_aggregate_before_rounding():
+    from services.reconciliation_balance_source import cashflow_adjustment_sections
+    sections=cashflow_adjustment_sections([dict(receipts='0.004',payments='-0.004')]*2)
+    assert sections=={'receipts':{'add':0.01,'less':0.0},'payments':{'add':0.0,'less':-0.01}}
+
+
+def test_compact_adjustments_preserve_precision_and_distinct_voucher_membership():
+    from services.reconciliation_balance_source import compact_cashflow_adjustment_groups
+    entry=dict(treasury_view='combined',reason='refund',label='Refund',category='Welfare',
+        voucher_id='CPV-1',period_key='2026-01',receipts='0.004',payments='-0.004',private_source='not retained')
+    groups=compact_cashflow_adjustment_groups({'key':[entry,entry,entry|{'voucher_id':'CPV-2'}]})
+    assert {g['side']:g['adjustment_total'] for g in groups}=={'receipts':0.01,'payments':-0.01}
+    assert all(g['entries']==[dict(voucher_id='CPV-1',period_key='2026-01'),dict(voucher_id='CPV-2',period_key='2026-01')] for g in groups)
+    assert 'private_source' not in str(groups) and '0.004' not in str(groups)
+
+
+def test_group_bundle_and_oversized_pages_reuse_completed_paper(selected_report_env,monkeypatch):
+    env=selected_report_env
+    parent=env.client.get('/api/reconciliation/cashflows/reconciliation',params=env.params).json()
+    row=next(r for r in parent['views']['combined']['adjustments'] if r['total']['receipts'])
+    query=env.params|dict(proof='combined',support_key=row['key'],side='receipts',expected_identity=parent['cache_identity'])
+    calls=[]
+    def bundle(*args,**kwargs):
+        calls.append((args,kwargs));assert len(args[3])==1
+        return dict(complete=False,reason='row_limit',rows=[],columns=[],groups=[])
+    def page(*args,**kwargs):
+        calls.append((args,kwargs))
+        return dict(source_book=kwargs['source_book'],search=kwargs['search'],rows=[],columns=[],total_rows=1001,
+            page=kwargs['page'],page_count=21,limit=50)
+    def prohibited(*args,**kwargs):raise AssertionError('Warm popup must not reload or recalculate the summary')
+    monkeypatch.setattr(reconciliation,'load_cashflow_adjustment_bundle',bundle)
+    monkeypatch.setattr(reconciliation,'load_cashflow_adjustment_rows',page)
+    monkeypatch.setattr(reconciliation,'build_cashflow_summary',prohibited)
+    monkeypatch.setattr(reconciliation,'load_ledger_report_source',prohibited)
+    monkeypatch.setattr(reconciliation,'load_cashflow_adjustment_treasury_rows',prohibited)
+    base='/api/reconciliation/cashflows/reconciliation/'
+    value=env.client.get(base+'adjustment-bundle',params=query).json()
+    assert value['bundle_schema']==2 and value['support_key']==row['key'] and not value['complete']
+    for book in ('ledger','voucher'):
+        for number in (1,2,3,2):
+            response=env.client.get(base+'adjustment-transactions',params=query|dict(source_book=book,page=number))
+            assert response.status_code==200,response.text
+            assert response.json()['adjustment_total']==row['total']['receipts']
+    assert len(calls)==9
+    assert env.client.get(base+'adjustment-bundle',params=query|dict(side='payments',proof='bank')).status_code==400
+    env.stamp[0]='b'*64
+    assert env.client.get(base+'adjustment-transactions',params=query).status_code==409
+    assert len(calls)==9
+
+
+def test_membership_expiry_rebuilds_once_and_isolates_signed_in_owner(selected_report_env,monkeypatch):
+    env=selected_report_env
+    clock=[0]
+    monkeypatch.setattr(reconciliation,'monotonic',lambda:clock[0])
+    parent=env.client.get('/api/reconciliation/cashflows/reconciliation',params=env.params).json()
+    row=next(r for r in parent['views']['combined']['adjustments'] if r['total']['receipts'])
+    query=env.params|dict(support_key=row['key'],side='receipts',expected_identity=parent['cache_identity'])
+    def treasury(*args,**kwargs):return [r for r in env.case['source']['transaction_rows'] if r['account_code'] in args[2]]
+    monkeypatch.setattr(reconciliation,'load_cashflow_adjustment_treasury_rows',treasury)
+    monkeypatch.setattr(reconciliation,'load_cashflow_adjustment_rows',lambda *a,**k:dict(rows=[],columns=[],source_book=k['source_book'],search=k['search']))
+    before=len(env.source_calls)
+    url='/api/reconciliation/cashflows/reconciliation/adjustment-transactions'
+    clock[0]=601
+    for number in (1,2,3):
+        response=env.client.get(url,params=query|dict(page=number))
+        assert response.status_code==200,response.text
+        assert response.json()['adjustment_total']==row['total']['receipts']
+    assert len(env.source_calls)==before+1
+    env.client.app.dependency_overrides[reconciliation.require_admin]=lambda:{'user_id':2}
+    assert env.client.get(url,params=query).status_code==200
+    assert len(env.source_calls)==before+2
+    env.client.app.dependency_overrides[reconciliation.require_admin]=lambda:{'user_id':1}
+    assert env.client.get(url,params=query).status_code==200
+    assert len(env.source_calls)==before+2
+
+
+def test_failed_paper_snapshot_cannot_publish_membership(selected_report_env,monkeypatch):
+    env=selected_report_env
+    original=reconciliation.run_read_snapshot_pg
+    def fail(callback):
+        original(callback)
+        raise RuntimeError('snapshot did not commit its read')
+    monkeypatch.setattr(reconciliation,'run_read_snapshot_pg',fail)
+    with pytest.raises(RuntimeError,match='snapshot did not'):
+        env.client.get('/api/reconciliation/cashflows/reconciliation',params=env.params)
+    assert not reconciliation._adjustment_memberships.entries
+
+
+@pytest.mark.parametrize('selection,view', [(None,'combined'),(['C1'],'combined'),(['B1','C1'],'split')])
+def test_flat_adjustment_reader_matches_paper_without_balances_or_comparisons(selected_report_env, monkeypatch, selection, view):
+    env=selected_report_env
+    params=env.params|{'treasury_view':view}
+    if selection: params['selected_treasury_account_codes']=selection
+    parent=env.client.get('/api/reconciliation/cashflows/reconciliation',params=params).json()
+    def treasury(*args,**kwargs):
+        assert env.active==[True]
+        codes=args[2]
+        return [r for r in env.case['source']['transaction_rows'] if r['account_code'] in codes]
+    captured=[]
+    def rows(*args,**kwargs):
+        assert env.active==[True]
+        captured.append((args,kwargs))
+        return dict(rows=[],columns=[],total_rows=0,page=1,page_count=1,limit=50,source_book=kwargs['source_book'],search=kwargs['search'])
+    monkeypatch.setattr(reconciliation,'load_cashflow_adjustment_treasury_rows',treasury)
+    monkeypatch.setattr(reconciliation,'load_cashflow_adjustment_rows',rows)
+    def prohibited(*args,**kwargs): raise AssertionError('Full reconciliation rebuild is prohibited for flat detail')
+    monkeypatch.setattr(reconciliation,'_cashflow_reconciliation_snapshot',prohibited)
+    monkeypatch.setattr(reconciliation,'load_cashflow_difference_source',prohibited)
+    monkeypatch.setattr(reconciliation,'build_cashflow_reconciliation',prohibited)
+    monkeypatch.setattr(reconciliation,'build_cashflow_summary',prohibited)
+    url='/api/reconciliation/cashflows/reconciliation/adjustment-transactions'
+    count=0
+    for proof,part in parent['views'].items():
+        for adjustment in part['adjustments']:
+            for side in ('receipts','payments'):
+                if not adjustment['total'][side]: continue
+                query=params|dict(support_key=adjustment['key'],side=side,expected_identity=parent['cache_identity'])
+                response=env.client.get(url,params=query)
+                assert response.status_code==200,response.text
+                detail=response.json()
+                assert detail['adjustment_total']==adjustment['total'][side]
+                assert detail['proof']==proof
+                assert captured[-1][0][3] and all(set(entry)=={'voucher_id','period_key'} for entry in captured[-1][0][3])
+                assert env.client.get(url,params=query|{'expected_identity':'f'*64}).status_code==409
+                assert env.client.get(url,params=query|{'side':'invalid'}).status_code==400
+                assert env.client.get(url,params=query|{'limit':201}).status_code==422
+                assert env.client.get(url,params=query|{'support_key':'x'*24}).status_code==400
+                count+=1
+    assert count
+
+
+@pytest.mark.parametrize('selection,view', [(None,'combined'),(['C1'],'combined'),(['B1','C1'],'split')])
+def test_adjustment_bundle_uses_one_snapshot_build_and_matches_all_paper_groups(selected_report_env, monkeypatch, selection, view):
+    env=selected_report_env
+    params=env.params|{'treasury_view':view}
+    if selection:params['selected_treasury_account_codes']=selection
+    parent=env.client.get('/api/reconciliation/cashflows/reconciliation',params=params).json()
+    captured=[]
+    def treasury(*args,**kwargs):
+        assert env.active==[True]
+        return [r for r in env.case['source']['transaction_rows'] if r['account_code'] in args[2]]
+    def bundle(*args,**kwargs):
+        assert env.active==[True]
+        captured.append((args,kwargs))
+        return dict(complete=True,rows=[],columns=[],groups=[{k:v for k,v in g.items() if k!='entries'} for g in args[3]])
+    monkeypatch.setattr(reconciliation,'load_cashflow_adjustment_treasury_rows',treasury)
+    monkeypatch.setattr(reconciliation,'load_cashflow_adjustment_bundle',bundle)
+    def prohibited(*args,**kwargs):raise AssertionError('Preload must not rebuild balances or posting comparisons')
+    monkeypatch.setattr(reconciliation,'_cashflow_reconciliation_snapshot',prohibited)
+    monkeypatch.setattr(reconciliation,'load_cashflow_difference_source',prohibited)
+    monkeypatch.setattr(reconciliation,'build_cashflow_reconciliation',prohibited)
+    monkeypatch.setattr(reconciliation,'build_cashflow_summary',prohibited)
+    url='/api/reconciliation/cashflows/reconciliation/adjustment-bundle'
+    for proof,part in parent['views'].items():
+        before=len(env.source_calls)
+        query=params|dict(proof=proof,expected_identity=parent['cache_identity'])
+        response=env.client.get(url,params=query)
+        assert response.status_code==200,response.text
+        value=response.json()
+        assert value['complete'] and value['bundle_schema']==1 and value['proof']==proof
+        assert len(env.source_calls)==before
+        assert env.source_calls[-1].get('selected_treasury_account_codes')==selection
+        groups={(g['key'],g['side']):g for g in captured[-1][0][3]}
+        for row in part['adjustments']:
+            for side in ('receipts','payments'):
+                if row['total'][side]:assert groups[(row['key'],side)]['adjustment_total']==row['total'][side]
+        assert all(set(e)=={'voucher_id','period_key'} for g in groups.values() for e in g['entries'])
+        assert env.client.get(url,params=query|{'expected_identity':'f'*64}).status_code==409
+        assert env.client.get(url,params=query|{'proof':'invalid'}).status_code==400
+        assert env.client.get(url,params=query|{'source_book':'invalid'}).status_code==400
+        monkeypatch.setattr(reconciliation,'CASHFLOW_ADJUSTMENT_BUNDLE_MAX_BYTES',1)
+        limited=env.client.get(url,params=query).json()
+        assert not limited['complete'] and limited['reason']=='byte_limit' and limited['rows']==[] and limited['groups']==[]
+        monkeypatch.setattr(reconciliation,'CASHFLOW_ADJUSTMENT_BUNDLE_MAX_BYTES',1048576)
+
+
 @pytest.fixture
 def selected_report_env(selected_account_case, monkeypatch):
     """Exercise real API/accounting/export code against independent fixture books."""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from services.reconciliation_balance_source import build_uploaded_ledger_balances
+    monkeypatch.setattr(reconciliation, '_adjustment_memberships', reconciliation._AdjustmentMembershipCache())
     case = selected_account_case
     config = dict(source_template_id=1, bank_account_codes=[c for c,k in case['accounts'].items() if k=='Bank'],
         cash_account_codes=[c for c,k in case['accounts'].items() if k=='Cash'], cashflow_report_revision=7,
@@ -611,10 +788,14 @@ def test_horizontal_endpoint_uses_one_snapshot_and_returns_paginated_current_sup
         assert validation.json()['cache_schema']==1
         assert '_support_entries' not in result and 'support' not in result
         assert result['views']['combined']['amount_status']=='Matched'
+        counts=result['views']['combined']['voucher_completeness']
+        assert counts['ledger']['vouchers']==counts['transaction']['vouchers']==4
+        assert counts['cashflow']['vouchers']==3 and counts['source_ids_match'] is True
         adjustment=next(row for row in result['views']['combined']['adjustments'] if row['category']=='Tax')
         support_params=params|dict(support_key=adjustment['key'],expected_fingerprint=result['evidence_fingerprint'],limit=1)
         child=client.get(url,params=support_params)
         assert child.status_code==200,child.text
+        assert 'voucher_completeness' not in child.json()['views']['combined']
         support=child.json()['support']
         assert support['rows'][0]['voucher_id']=='RECEIPT'
         assert len(support['rows'][0]['voucher_lines'])==4
@@ -2406,7 +2587,7 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "setActiveCashflowWindow" in javascript
     assert "const CASHFLOW_DEFAULT_START = '2026-01-01';" in javascript
     assert "const CASHFLOW_DEFAULT_END = '2026-06-30';" in javascript
-    assert "<script src='/static/reconciliation.js?v=47'></script>" in html
+    assert "<script src='/static/reconciliation.js?v=53'></script>" in html
     assert "id='reconReportPeriod'" in html
     assert "Linked to the loaded Cashflows Report" in html
     assert "id='reconPeriod'" not in html

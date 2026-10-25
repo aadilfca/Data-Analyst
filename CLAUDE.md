@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- routers/reconciliation.py → Cashflow configuration, selected reports, reconciliation, owner-scoped temporary membership, bounded group reads, validated identities and consistent exports. See CHANGELOG_ARCHIVE.md.
+- routers/reconciliation.py → Cashflow configuration, scoped reconciliation/completeness, owner-scoped evidence, bounded group reads, validated identities and consistent exports. See CHANGELOG_ARCHIVE.md.
 
 - routers/clients.py + static/clients.* → firm-level client management; admin-only except the paginated `GET /api/clients`. See CHANGELOG_ARCHIVE.md.
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, and database size with PostgreSQL table/index breakdown. See CHANGELOG_ARCHIVE.md.
@@ -50,14 +50,14 @@ One line per file group: what it is now. Full build history for every entry live
 - services/cashflow_voucher_canonicalization.py + cashflow_voucher_occurrence_store.py + scripts/backfill_cashflow_voucher_occurrences.py -> compact audit-preserving occurrence decisions and controlled maintenance; transaction rows remain in `client_data`. See CHANGELOG_ARCHIVE.md.
 - services/cashflow_preparation.py + scripts/backfill_cashflow_prepared_read_model.py -> metadata-only preparation/job recovery boundary; prepared transaction copies and rollups are no longer rebuilt. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_xlsx.py, reconciliation_export_jobs.py → Selected-account workbooks, complete voucher context, streaming, bounded owner-scoped jobs and private temporary files. See CHANGELOG_ARCHIVE.md.
-- services/reconciliation_balance_source.py → Independent balances, selected-account reconciliation, compact adjustment membership, posting comparisons and coverage controls. See CHANGELOG_ARCHIVE.md.
+- services/reconciliation_balance_source.py → Independent balances, scoped voucher completeness, adjustment membership, posting comparisons and coverage controls. See CHANGELOG_ARCHIVE.md.
 - services/upload_lifecycle.py + drive_archive.py + upload_observation_report.py → Scope proofs, complete-voucher Excel evidence, verified external archives and compact receipts. See CHANGELOG_ARCHIVE.md.
-- tests/test_account_control_center*.py, test_cashflows*.py, test_reconciliation*.py → Setup, selected-account accounting, API/SQL contracts, report/UI parity, workbook evidence and bounded export ownership checks. See CHANGELOG_ARCHIVE.md.
+- tests/test_account_control_center*.py, test_cashflows*.py, test_reconciliation*.py → Setup, accounting, voucher completeness, API/UI parity, workbook evidence and bounded export ownership checks. See CHANGELOG_ARCHIVE.md.
 - tests/test_upload_lifecycle.py + test_data_deletion.py + test_import_duplicate_gates.py → Upload/archive lifecycle, rollback, retry, deletion and identity regression tests.
 - experiments/cashflow_fetch/*.py + tests/test_cashflow_fetch_benchmark.py → Standalone read-only transport benchmarks with exact source/report/export comparisons; never loaded by the app. See CHANGELOG_ARCHIVE.md.
 
 
-- static/reconciliation.html, static/reconciliation.js → Cashflow selection, compact reconciliation, group-intent preloads, bounded local navigation, fallback prefetch and consistent exports. See CHANGELOG_ARCHIVE.md.
+- static/reconciliation.html, static/reconciliation.js → Cashflow selection, compact reconciliation toolbar, completeness tables, shared adjustment popups, bounded caches and consistent exports. See CHANGELOG_ARCHIVE.md.
 
 ## Commands
 - Run app: [your actual run command]
@@ -255,6 +255,8 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+
+- 2026-10-25: Accepted voucher completeness, shared toolbar and compact reconciliation; combined commit/push authorised. Drive production readiness follows. See CHANGELOG_ARCHIVE.md.
 
 - 2026-10-25: Optimised optional voucher profiles in ledger_group_summary.py; main Cashflow unchanged. Local acceptance pending. See CHANGELOG_ARCHIVE.md.
 

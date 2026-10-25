@@ -3426,6 +3426,196 @@ def load_cashflow_difference_source(
     return {'uploads': uploads, 'ledger_rows': ledger, 'transaction_rows': transactions}
 
 
+def load_cashflow_adjustment_treasury_rows(client_id, template_id, account_codes, start, end, *, query_fn=execute_query_pg):
+    """Only original Treasury directions needed by the existing adjustment rules."""
+    return query_fn("""
+        SELECT cd.id, BTRIM(cd.derived_voucher_id) AS voucher_id,
+               cd.derived_transaction_date AS date, cd.derived_account_code AS account_code,
+               cd.derived_debit AS debit, cd.derived_credit AS credit
+        FROM client_data cd
+        WHERE cd.client_id = %s AND cd.template_id = %s AND cd.is_deleted = FALSE
+          AND COALESCE(cd.change_detection_status, 'active') <> 'deleted'
+          AND cd.derived_account_code = ANY(%s)
+          AND cd.derived_transaction_date BETWEEN %s::date AND %s::date
+        ORDER BY cd.derived_transaction_date, cd.id
+        """, (client_id, template_id, sorted(set(account_codes)), start, end))
+
+
+CASHFLOW_ADJUSTMENT_BUNDLE_MAX_ROWS = 1000
+CASHFLOW_ADJUSTMENT_BUNDLE_MAX_BYTES = 1024 * 1024
+
+
+def load_cashflow_adjustment_bundle(client_id, template_id, account_codes, groups, periods, *,
+                                    source_book='ledger', query_fn=execute_query_pg):
+    """One bounded union of original occurrences, with server-derived group links.
+
+    Callers can pass one prepared group so another group's size cannot reject it.
+    Oversized results explicitly fall back to the existing page reader. Nothing
+    is persisted and a partial set can never masquerade as a complete group.
+    """
+    if source_book not in ('ledger', 'voucher'):
+        raise ValueError('Invalid adjustment source')
+    bounds = {p['key']: p for p in periods}
+    membership = sorted({(g['key'], g['side'], e['voucher_id'], bounds[e['period_key']]['start'],
+                         bounds[e['period_key']]['end']) for g in groups for e in g['entries']})
+    members = json.dumps([dict(group_key=k, side=side, voucher=v, period_start=s, period_end=e)
+                          for k, side, v, s, e in membership])
+    codes = sorted(set(account_codes))
+    if source_book == 'ledger':
+        reference, day, account, title = ('BTRIM(cd.row_data::jsonb ->> voucher.column_name)',
+            'cd.extract_date', 'u.ledger_account_code', 'u.ledger_account_name')
+        extra = """JOIN templates t ON t.id = cd.template_id AND t.is_active = TRUE AND t.data_purpose = 'account_ledger'
+            LEFT JOIN master_columns voucher ON voucher.id = (t.ledger_columns::jsonb ->> 'voucher')::integer"""
+        restriction, source_params = 'u.ledger_account_code = ANY(%s)', [codes]
+        period_clause = f'AND {day} BETWEEN m.period_start::date AND m.period_end::date'
+    else:
+        reference, day = 'BTRIM(cd.derived_voucher_id)', 'cd.derived_transaction_date'
+        account, title = 'cd.derived_account_code', 'cd.derived_account_name'
+        extra, restriction, source_params, period_clause = '', 'cd.template_id = %s', [template_id], ''
+    source_sql = f"""
+        WITH membership AS (
+            SELECT * FROM jsonb_to_recordset(%s::jsonb)
+                AS x(group_key text, side text, voucher text, period_start text, period_end text)
+        ), matches AS (SELECT cd.id, cd.upload_id, cd.template_id, cd.row_data::text AS row_data,
+               {day} AS date, {reference} AS voucher_id, {account} AS account_code, {title} AS account_name,
+               EXISTS (SELECT 1 FROM membership m WHERE m.voucher = {reference}
+                   AND {day} BETWEEN m.period_start::date AND m.period_end::date) AS in_period,
+               ARRAY(SELECT DISTINCT m.group_key || ':' || m.side FROM membership m
+                   WHERE m.voucher = {reference} {period_clause}) AS adjustment_groups,
+               ARRAY(SELECT DISTINCT m.group_key || ':' || m.side FROM membership m
+                   WHERE m.voucher = {reference}
+                     AND {day} BETWEEN m.period_start::date AND m.period_end::date) AS in_period_groups
+        FROM client_data cd JOIN uploaded_files u ON u.id = cd.upload_id
+          AND u.client_id = cd.client_id AND u.template_id = cd.template_id
+        {extra}
+        WHERE cd.client_id = %s AND cd.is_deleted = FALSE
+          AND COALESCE(cd.change_detection_status, 'active') <> 'deleted' AND u.status = 'Imported'
+          AND {restriction}
+          AND EXISTS (SELECT 1 FROM membership m WHERE m.voucher = {reference} {period_clause})
+        ) """
+    source_params = (members, client_id, *source_params)
+    if membership:
+        stats = query_fn(source_sql + "SELECT COUNT(*) AS total_rows, COALESCE(SUM(octet_length(row_data) * 2 + 256), 0) AS source_bytes FROM matches", source_params)[0]
+        if int(stats['total_rows']) > CASHFLOW_ADJUSTMENT_BUNDLE_MAX_ROWS:
+            return dict(complete=False, reason='row_limit', rows=[], columns=[], groups=[])
+        if int(stats['source_bytes']) > CASHFLOW_ADJUSTMENT_BUNDLE_MAX_BYTES:
+            return dict(complete=False, reason='byte_limit', rows=[], columns=[], groups=[])
+        rows = [dict(r) for r in query_fn(source_sql + 'SELECT * FROM matches ORDER BY date NULLS LAST, id LIMIT %s',
+                                        (*source_params, CASHFLOW_ADJUSTMENT_BUNDLE_MAX_ROWS))]
+    else:
+        rows = []
+    metadata = query_fn("""
+        SELECT DISTINCT t.id AS template_id, m.column_name, p.sort_order
+        FROM templates t JOIN template_column_mappings p ON p.template_id = t.id
+        JOIN master_columns m ON m.id = p.column_id AND m.is_active = TRUE
+        WHERE t.is_active = TRUE AND (t.id = %s OR t.id IN (
+            SELECT u.template_id FROM uploaded_files u WHERE u.client_id = %s
+              AND u.ledger_account_code = ANY(%s) AND u.status = 'Imported'))
+        ORDER BY t.id, p.sort_order, m.column_name
+        """, (template_id, client_id, codes)) if rows else []
+    columns = _cashflow_adjustment_evidence_rows(rows, metadata, include_search=True)
+    links = {g['key'] + ':' + g['side']: [] for g in groups}
+    in_period = {key: [] for key in links}
+    for row in rows:
+        for key in row.pop('adjustment_groups'):
+            links[key].append(row['id'])
+        for key in row.pop('in_period_groups'):
+            in_period[key].append(row['id'])
+    headers = [dict(key=g['key'], side=g['side'], label=g['label'], category=g['category'],
+                    adjustment_total=g['adjustment_total'], row_ids=links[g['key'] + ':' + g['side']],
+                    in_period_row_ids=in_period[g['key'] + ':' + g['side']]) for g in groups]
+    return dict(complete=True, rows=rows, columns=columns, groups=headers)
+
+
+def _cashflow_adjustment_evidence_rows(rows, metadata, *, include_search=False):
+    """Keep raw monetary digits and SQL literal-search text in bounded evidence."""
+    templates = {r['template_id'] for r in rows}
+    columns = list(dict.fromkeys(m['column_name'] for m in metadata if m['template_id'] in templates))
+    def evidence_value(value):
+        if isinstance(value, bool): return value
+        if isinstance(value, (Decimal, int, float)): return str(value)
+        if isinstance(value, dict): return {k: evidence_value(v) for k,v in value.items()}
+        if isinstance(value, list): return [evidence_value(v) for v in value]
+        return value
+    for row in rows:
+        raw = row.get('row_data') or {}
+        if include_search:
+            row['search_text'] = raw if isinstance(raw, str) else json.dumps(raw, default=str)
+        if isinstance(raw, str): raw = json.loads(raw, parse_float=Decimal, parse_int=Decimal)
+        row['numeric_columns'] = [k for k,v in raw.items() if isinstance(v, (Decimal,int,float)) and not isinstance(v,bool)]
+        row['row_data'] = evidence_value(raw)
+        columns.extend(key for key in raw if key not in columns)
+    return columns
+
+
+def load_cashflow_adjustment_rows(client_id, template_id, account_codes, entries, periods, *,
+                                 source_book='ledger', search='', page=1, limit=50, query_fn=execute_query_pg):
+    """Read one flat source page; membership is server-calculated, never browser IDs.
+
+    Original JSON is display evidence only. The unchanged engine determines all
+    financial contributions. EXISTS preserves repeated source occurrences exactly
+    once, even when a voucher has several operations or reporting periods.
+    """
+    if source_book not in ('ledger', 'voucher') or page < 1 or not 1 <= limit <= 200:
+        raise ValueError('Invalid adjustment source or pagination')
+    bounds = {p['key']: p for p in periods}
+    membership = sorted({(e['voucher_id'], bounds[e['period_key']]['start'], bounds[e['period_key']]['end']) for e in entries})
+    members = json.dumps([dict(voucher=v, period_start=s, period_end=e) for v,s,e in membership])
+    codes = sorted(set(account_codes))
+    # Metadata defines all configured original columns, including blank page cells.
+    metadata = query_fn("""
+        SELECT DISTINCT t.id AS template_id, m.column_name, p.sort_order
+        FROM templates t JOIN template_column_mappings p ON p.template_id = t.id
+        JOIN master_columns m ON m.id = p.column_id AND m.is_active = TRUE
+        WHERE t.is_active = TRUE AND (t.id = %s OR t.id IN (
+            SELECT u.template_id FROM uploaded_files u WHERE u.client_id = %s
+              AND u.ledger_account_code = ANY(%s) AND u.status = 'Imported'))
+        ORDER BY t.id, p.sort_order, m.column_name
+        """, (template_id, client_id, codes))
+    if source_book == 'ledger':
+        reference = "BTRIM(cd.row_data::jsonb ->> voucher.column_name)"
+        day = 'cd.extract_date'
+        account = 'u.ledger_account_code'
+        title = 'u.ledger_account_name'
+        extra = """JOIN templates t ON t.id = cd.template_id AND t.is_active = TRUE AND t.data_purpose = 'account_ledger'
+            LEFT JOIN master_columns voucher ON voucher.id = (t.ledger_columns::jsonb ->> 'voucher')::integer"""
+        restriction = "u.ledger_account_code = ANY(%s)"
+        source_params = [codes]
+        period_clause = f'AND {day} BETWEEN membership.period_start::date AND membership.period_end::date'
+    else:
+        reference, day = 'BTRIM(cd.derived_voucher_id)', 'cd.derived_transaction_date'
+        account, title = 'cd.derived_account_code', 'cd.derived_account_name'
+        extra, restriction, source_params, period_clause = '', 'cd.template_id = %s', [template_id], ''
+    # Search is literal text and scoped to this adjustment, not just this page.
+    pattern = '%' + search.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
+    cte = f"""WITH membership AS (
+        SELECT * FROM jsonb_to_recordset(%s::jsonb) AS x(voucher text, period_start text, period_end text)
+    ), matches AS (
+        SELECT cd.id, cd.upload_id, cd.template_id, cd.row_data::text AS row_data, {day} AS date,
+               {reference} AS voucher_id, {account} AS account_code, {title} AS account_name,
+               EXISTS (SELECT 1 FROM membership WHERE membership.voucher = {reference}
+                   AND {day} BETWEEN membership.period_start::date AND membership.period_end::date) AS in_period
+        FROM client_data cd JOIN uploaded_files u ON u.id = cd.upload_id
+          AND u.client_id = cd.client_id AND u.template_id = cd.template_id
+        {extra}
+        WHERE cd.client_id = %s AND cd.is_deleted = FALSE
+          AND COALESCE(cd.change_detection_status, 'active') <> 'deleted' AND u.status = 'Imported'
+          AND {restriction}
+          AND EXISTS (SELECT 1 FROM membership WHERE membership.voucher = {reference} {period_clause})
+          AND (%s = '' OR cd.row_data::text ILIKE %s OR COALESCE({account}, '') ILIKE %s
+              OR COALESCE({title}, '') ILIKE %s)
+    ) """
+    params = [members, client_id, *source_params, search, pattern, pattern, pattern]
+    counts = query_fn(cte + 'SELECT COUNT(*) AS total_rows FROM matches', tuple(params))
+    total = int(counts[0]['total_rows'])
+    page_count = max(1, math.ceil(total / limit)); current = min(page, page_count)
+    rows = [dict(r) for r in query_fn(cte + 'SELECT * FROM matches ORDER BY date NULLS LAST, id LIMIT %s OFFSET %s',
+                                     tuple([*params, limit, (current-1)*limit]))]
+    columns = _cashflow_adjustment_evidence_rows(rows, metadata)
+    return dict(rows=rows, columns=columns, total_rows=total, page=current, page_count=page_count, limit=limit,
+                source_book=source_book, search=search, total_voucher_periods=len(membership))
+
+
 def cashflow_reconciliation_support_page(
     source: Mapping[str, Any], entries: Sequence[Mapping[str, Any]],
     account_codes: Sequence[str], *, periods: Sequence[Mapping[str, Any]] = (), page: int = 1, limit: int = 50,

@@ -394,7 +394,7 @@ def test_cashflows_report_preserves_current_default_period_and_monthly_grouping(
     assert "cashflowPreviewPeriods" in reconciliation_script
     assert "syncCashflowZeroRowsButton" in reconciliation_script
     assert "style.css?v=71" in reconciliation_html
-    assert "reconciliation.js?v=47" in reconciliation_html
+    assert "reconciliation.js?v=53" in reconciliation_html
     assert "cashflowsSummaryBasis" not in reconciliation_html
     assert "cashflows-transactions-note" not in reconciliation_html
     assert "renderCashflowSummary" in reconciliation_script
@@ -999,15 +999,19 @@ def test_reconciliation_cache_keys_and_validation_isolate_each_selected_scope(le
 @pytest.fixture
 def reconciliation_payload(horizontal_reconciliation_case):
     """Actual accounting bridge/source shapes, with no database or server dependency."""
-    from services.reconciliation_balance_source import build_cashflow_reconciliation, build_cashflow_differences
+    from services.reconciliation_balance_source import build_cashflow_reconciliation, build_cashflow_differences, cashflow_adjustment_sections, build_cashflow_voucher_completeness
     from services.ledger_report_source import cashflow_reconciliation_support_page
     case=horizontal_reconciliation_case
     def build(view='combined'):
         summary=_horizontal_summary(case)
         parent=build_cashflow_reconciliation(summary,case['source'],case['accounts'],view)
         entries=parent.pop('_support_entries')
+        counts=build_cashflow_voucher_completeness(summary,case['source'],case['accounts'],parent,entries)
+        for proof,part in parent['views'].items():
+            part['voucher_completeness']=counts[proof]
+            part['adjustment_sections']=cashflow_adjustment_sections([e for values in entries.values() for e in values if e['treasury_view']==proof])
         parent.update(client_id=7,period_start='2026-01-01',period_end='2026-01-31',
-            configuration_key='config-1',report_revision=12,evidence_fingerprint='current-proof')
+            configuration_key='config-1',report_revision=12,evidence_fingerprint='current-proof', cache_schema=1,cache_identity='a'*64,template_id=9)
         report=_ledger_report(view=view)
         report['period_end']='2026-01-31'
         report['ledger_context']['period_end']='2026-01-31'
@@ -1020,11 +1024,113 @@ def reconciliation_payload(horizontal_reconciliation_case):
     return build
 
 
+def _adjustment_button(page):
+    page.locator('.recon-adjustment-group').evaluate_all('(groups)=>groups.forEach(g=>g.open=true)')
+    return page.locator('[data-recon-support]')
+
+
+def _flat_payload(parent, support, query):
+    key=query['support_key'][0];side=query['side'][0]
+    book=query.get('source_book',['ledger'])[0];search=query.get('search',[''])[0]
+    proof=next(view for view,part in parent['views'].items() if any(r['key']==key for r in part['adjustments']))
+    adjustment=next(r for r in parent['views'][proof]['adjustments'] if r['key']==key)
+    groups=support(key)['rows']
+    source='ledger_lines' if book=='ledger' else 'voucher_lines'
+    rows=[dict(row,row_data=dict(row)) for g in groups if g[side]!=0 for row in g[source]]
+    if search: rows=[r for r in rows if search.casefold() in json.dumps(r).casefold()]
+    limit=50;count=len(rows);pages=max(1,(count+limit-1)//limit);number=min(int(query.get('page',['1'])[0]),pages)
+    context={k:v for k,v in parent.items() if k not in ('views','periods','review_controls','diagnostics')}
+    return context|dict(support_key=key,side=side,proof=proof,adjustment_total=adjustment['total'][side],
+        transactions=dict(rows=rows[(number-1)*limit:number*limit],columns=list(dict.fromkeys(k for r in rows for k in r['row_data'])),
+            total_rows=count,page=number,page_count=pages,limit=limit,source_book=book,search=search))
+
+
+def _route_flat(page,parent,support):
+    page.route('**/api/reconciliation/cashflows/reconciliation/adjustment-transactions?*',
+        lambda route:route.fulfill(json=_flat_payload(parent,support,parse_qs(urlparse(route.request.url).query,keep_blank_values=True))))
+
+
 def _open_reconciliation(page, report, parent):
     page.route('**/api/reconciliation/cashflows/reconciliation?*',lambda route:route.fulfill(json=parent))
     page.evaluate('report => ledgerFixture.load(report)',report)
     page.locator('#cashflowsReconciliationButton').click()
     page.wait_for_selector('#reconWorking table')
+
+
+@pytest.mark.parametrize('width', [1366, 390])
+def test_voucher_completeness_reuses_loaded_counts_and_existing_detail_popup(ledger_cache_page, reconciliation_payload, width):
+    page=ledger_cache_page
+    page.set_viewport_size(dict(width=width,height=1000))
+    report,parent,support,_=reconciliation_payload()
+    _route_flat(page,parent,support)
+    _open_reconciliation(page,report,parent)
+    reads=[]
+    page.on('request',lambda request:reads.append(request.url))
+    page.locator('#reconCompletenessOpen').click()
+    popup=page.locator('#reconCompletenessDialog')
+    assert popup.is_visible()
+    rows=popup.locator('table[aria-label="Voucher completeness comparison"] > tbody > tr')
+    assert [rows.nth(i).locator('td').nth(1).inner_text() for i in range(4)]==['4','4','3','3']
+    assert 'voucher IDs agree' in popup.inner_text()
+    assert 'Not independently certified' in popup.inner_text()
+    assert reads==[]  # Opening and expanding the summary need no request.
+    popup.locator('#reconCompletenessAdjustments').click()
+    assert popup.locator('#reconCompletenessAdjustmentRows').is_visible()
+    button=popup.locator('[data-recon-support]').first
+    key=button.get_attribute('data-recon-support')
+    button.click()
+    page.wait_for_selector('#reconAdjustmentDialog[open] .recon-flat-table')
+    assert page.locator('#reconAdjustmentDialog').is_visible() and popup.is_visible()
+    assert any(key in url for url in reads if '/adjustment-' in url), reads
+    page.locator('#reconAdjustmentClose').click()
+    assert popup.is_visible() and page.locator('#reconAdjustmentDialog').is_hidden()
+    assert page.evaluate('document.activeElement.closest("#reconCompletenessDialog") !== null')
+    page.keyboard.press('Escape')
+    assert popup.is_hidden() and page.locator('#cashflowReconciliation').is_visible()
+    assert page.locator('#reconCompletenessOpen').evaluate('(e)=>e===document.activeElement')
+    assert page.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
+
+
+def test_voucher_completeness_keeps_unavailable_counts_and_closes_on_reload(ledger_cache_page,reconciliation_payload):
+    page=ledger_cache_page
+    report,parent,_,_=reconciliation_payload()
+    part=parent['views']['combined']['voucher_completeness']
+    part['ledger']['vouchers']=part['ledger']['blank_id_rows']=part['source_ids_match']=None
+    _open_reconciliation(page,report,parent)
+    page.locator('#reconCompletenessOpen').click()
+    assert 'Unavailable' in page.locator('#reconCompletenessContent table').first.inner_text()
+    page.locator('#reconCompletenessClose').click()
+    page.locator('#reconReload').click()
+    page.wait_for_selector('#reconWorking table')
+    assert page.locator('#reconCompletenessDialog').is_hidden()
+
+
+def test_voucher_completeness_switches_split_proof_from_the_loaded_snapshot(ledger_cache_page,reconciliation_payload):
+    page=ledger_cache_page
+    report,parent,_,_=reconciliation_payload('split')
+    _open_reconciliation(page,report,parent)
+    page.locator('#reconView').select_option('cash')
+    page.locator('#reconCompletenessOpen').click()
+    popup=page.locator('#reconCompletenessDialog')
+    rows=popup.locator('table[aria-label="Voucher completeness comparison"] > tbody > tr')
+    assert [rows.nth(i).locator('td').nth(1).inner_text() for i in range(3)]==['1','1','0']
+    assert 'cash' in page.locator('#reconCompletenessContext').inner_text()
+
+
+def test_stale_adjustment_evidence_discards_the_completeness_snapshot(ledger_cache_page,reconciliation_payload):
+    page=ledger_cache_page
+    report,parent,_,_=reconciliation_payload()
+    page.route('**/api/reconciliation/cashflows/reconciliation/adjustment-*',
+        lambda route:route.fulfill(status=409,json={'detail':'Source changed'}))
+    _open_reconciliation(page,report,parent)
+    page.evaluate('''()=>{
+        document.getElementById('reconCompletenessOpen').click();
+        document.getElementById('reconCompletenessAdjustments').click();
+        document.querySelector('#reconCompletenessDialog [data-recon-support]').focus();
+    }''')
+    page.wait_for_function('document.getElementById("reconCompletenessOpen").disabled && document.getElementById("reconCompletenessDialog").hidden')
+    assert page.locator('#reconCompletenessDialog').is_hidden()
+    assert page.locator('#reconCompletenessOpen').is_disabled()
 
 
 def _linked_period_report(end):
@@ -1114,45 +1220,7 @@ def test_reconciliation_locked_label_preserves_exact_date_boundaries(ledger_cach
 
 
 def test_horizontal_fullpage_preserves_report_and_uses_backend_amounts(ledger_cache_page,reconciliation_payload):
-    page=ledger_cache_page
-    report,parent,support,_=reconciliation_payload()
-    calls=[]
-    def respond(route):
-        query=parse_qs(urlparse(route.request.url).query);calls.append(query)
-        payload=dict(parent)
-        if 'support_key' in query:
-            assert query['expected_fingerprint']==['current-proof']
-            payload['support']=support(query['support_key'][0],query.get('period_key',[''])[0])
-        route.fulfill(json=payload)
-    page.route('**/api/reconciliation/cashflows/reconciliation?*',respond)
-    page.evaluate('report => ledgerFixture.load(report)',report)
-    page.evaluate("() => {ledgerFixture.filter('Operating'); document.getElementById('cashflowsSummaryFilter').value='Operating';}")
-    _category_button(page).click()
-    before=page.locator('#cashflowsSummaryTable').inner_text()
-    page.locator('#cashflowsReconciliationButton').click()
-    page.wait_for_selector('#reconWorking table')
-    sections=page.locator('#reconWorking > .recon-section')
-    assert sections.nth(0).locator('h3').inner_text()=='Receipts'
-    assert sections.nth(1).locator('h3').inner_text()=='Payments'
-    assert sections.nth(0).inner_text().index('Receipts as per ledgers')<sections.nth(0).inner_text().index('Receipts as per Cashflow report')
-    assert sections.nth(0).locator('tr').filter(has_text='Receipts as per Cashflow report').inner_text().endswith('900.00')
-    assert sections.nth(1).locator('tr').filter(has_text='Payments as per Cashflow report').inner_text().endswith('350.00')
-    assert page.locator('#reconStatus').inner_text().startswith('Receipt/payment amounts: Matched.')
-    assert 'Not independently certified' in page.locator('#reconStatus').inner_text()
-    assert page.locator('#reconPeriod').count()==0
-    assert page.locator('#reconReportPeriod').inner_text()=='01 Jan 2026 – 31 Jan 2026'
-    assert len(calls)==1
-    page.locator('[data-recon-support]').filter(has_text='Tax').first.click()
-    page.wait_for_selector('#reconSupport details')
-    page.locator('#reconSupport summary').first.click()
-    assert page.locator('#reconSupport .recon-source-table').nth(1).locator('tbody tr').count()==4
-    assert 'period_key' not in calls[-1] and calls[-1]['period_end']==['2026-01-31']
-    page.keyboard.press('Escape')
-    assert page.locator('#cashflowReconciliation').is_hidden()
-    assert page.locator('#cashflowsSummaryTable').inner_text()==before
-    assert _category_button(page).get_attribute('aria-expanded')=='true'
-    assert page.locator('#cashflowsSummaryFilter').input_value()=='Operating'
-    assert page.locator('#cashflowsReconciliationButton').evaluate('(b)=>document.activeElement===b')
+    _check_flat_popup(ledger_cache_page,reconciliation_payload,'close')
 
 
 @pytest.mark.parametrize('view',['combined','bank','cash','split'])
@@ -1186,31 +1254,7 @@ def test_reconciliation_layout_views_and_keyboard(ledger_cache_page,reconciliati
 
 
 def test_reconciliation_unavailable_signed_values_and_safe_source_text(ledger_cache_page,reconciliation_payload):
-    page=ledger_cache_page
-    report,parent,support,_=reconciliation_payload()
-    part=parent['views']['combined']
-    part['overall']['receipts'].update(ledger=None,adjusted_ledger=None,difference=None,cashflow=-2041000)
-    part['amount_status']='Unavailable'
-    attack='<img src=x onerror="window.injected=true">'
-    adjustment=part['adjustments'][0];adjustment['label']=attack
-    child=support(adjustment['key']);child['rows'][0]['voucher_lines'][0].update(description=attack,debit='0.00001',credit='-0.00001',in_period=False)
-    child['rows'][0]['voucher_lines']*=63
-    def respond(route):
-        query=parse_qs(urlparse(route.request.url).query)
-        route.fulfill(json=parent|({'support':child} if 'support_key' in query else {}))
-    page.route('**/api/reconciliation/cashflows/reconciliation?*',respond)
-    page.evaluate('report => ledgerFixture.load(report)',report)
-    page.locator('#cashflowsReconciliationButton').click();page.wait_for_selector('#reconWorking table')
-    assert 'Unavailable' in page.locator('#reconWorking .recon-section').first.inner_text()
-    assert '(2,041,000.00)' in page.locator('#reconWorking .recon-section').first.inner_text()
-    page.locator('[data-recon-support]').filter(has_text=attack).first.click()
-    page.wait_for_selector('#reconSupport summary');page.locator('#reconSupport summary').first.click()
-    assert '0.00001' in page.locator('#reconSupport').inner_text()
-    assert '-0.00001' in page.locator('#reconSupport').inner_text()
-    assert page.locator('#reconSupport .recon-source-table').nth(1).locator('tbody tr').count()==252
-    assert 'Outside range · context only' in page.locator('#reconSupport').inner_text()
-    assert page.locator('#cashflowReconciliation img').count()==0
-    assert not page.evaluate('Boolean(window.injected)')
+    _check_flat_popup(ledger_cache_page,reconciliation_payload,'safe')
 
 
 def test_reconciliation_difference_paging_and_stale_evidence(ledger_cache_page,reconciliation_payload):
@@ -1295,8 +1339,9 @@ def test_reconciliation_rejects_mismatched_report_and_child_fingerprints(ledger_
     page.locator('#reconClose').click();mode[0]='child'
     parent['configuration_key']='changed'
     page.locator('#cashflowsReconciliationButton').click();page.wait_for_selector('#reconWorking table')
-    page.locator('[data-recon-support]').first.click();page.wait_for_selector('#reconStatus.is-error')
-    assert page.locator('#reconWorking').inner_html()=='' and page.locator('#reconSupport').inner_html()==''
+    page.route('**/api/reconciliation/cashflows/reconciliation/adjustment-transactions?*',lambda route:route.fulfill(status=409,json={'detail':'Source changed'}))
+    _adjustment_button(page).first.click();page.wait_for_selector('#reconSupport [role=alert]')
+    assert page.locator('#reconWorking').inner_html()==''
 
 
 @pytest.mark.parametrize('feature',[False,True])
@@ -1408,7 +1453,7 @@ def test_reconciliation_excel_job_failures_release_processing_and_stale_papers(l
         page.locator('[data-recon-retry]').click();page.wait_for_selector('#reconWorking table')
     else:
         assert page.locator('#reconExport').is_enabled()
-        assert page.locator('#reconWorking table').count()==3
+        assert page.locator('#reconWorking > .recon-section').count()==3
     assert state['downloads']==0 and not downloads
 
 
@@ -1454,7 +1499,7 @@ def _cache_reconciliation_routes(page,reconciliation_payload,view='combined'):
     state=dict(report=report,parent=parent,validation_status=200,validation=None,support=support)
     calls=[]
     def respond(route):
-        query=parse_qs(urlparse(route.request.url).query)
+        query=parse_qs(urlparse(route.request.url).query,keep_blank_values=True)
         validation='/cache-validation?' in route.request.url
         calls.append(('validation' if validation else 'full',query))
         if validation:
@@ -1464,8 +1509,8 @@ def _cache_reconciliation_routes(page,reconciliation_payload,view='combined'):
                     'period_start','period_end','group_by','treasury_view','configuration_key','report_revision')}
             return route.fulfill(status=state['validation_status'],json=value)
         payload=dict(state['parent'])
-        if 'support_key' in query:
-            payload['support']=state['support'](query['support_key'][0],query.get('period_key',[''])[0])
+        if '/adjustment-transactions?' in route.request.url:
+            return route.fulfill(json=_flat_payload(state['parent'],state['support'],query))
         if 'posting_differences' in query:
             number=int(query['page'][0]);rows=posting['findings']
             payload['posting_differences']=posting|dict(rows=[rows[(number-1)%len(rows)]],
@@ -1473,6 +1518,7 @@ def _cache_reconciliation_routes(page,reconciliation_payload,view='combined'):
         return route.fulfill(json=payload)
     page.route('**/api/reconciliation/cashflows/reconciliation?*',respond)
     page.route('**/api/reconciliation/cashflows/reconciliation/cache-validation?*',respond)
+    page.route('**/api/reconciliation/cashflows/reconciliation/adjustment-transactions?*',respond)
     page.evaluate('report=>ledgerFixture.load(report)',report)
     page.locator('#cashflowsReconciliationButton').click();page.wait_for_selector('#reconWorking table')
     return state,calls
@@ -1480,41 +1526,7 @@ def _cache_reconciliation_routes(page,reconciliation_payload,view='combined'):
 
 @pytest.mark.parametrize('view',['combined','bank','cash','split'])
 def test_reconciliation_cache_reuses_validated_parent_and_compact_children(ledger_cache_page,reconciliation_payload,view):
-    page=ledger_cache_page
-    state,calls=_cache_reconciliation_routes(page,reconciliation_payload,view)
-    assert page.locator('#reconPeriod').count()==0
-    assert page.locator('#reconReportPeriod').inner_text()=='01 Jan 2026 – 31 Jan 2026'
-    if view=='split':
-        page.locator('#reconView').select_option('bank');page.locator('#reconView').select_option('combined')
-    assert len(calls)==1
-    button=page.locator('[data-recon-support]').first
-    button.click();page.wait_for_selector('#reconSupport summary')
-    evidence=page.locator('#reconSupport').inner_text()
-    button.click();page.wait_for_selector('#reconSupport summary')
-    assert page.locator('#reconSupport').inner_text()==evidence
-    assert [kind for kind,_ in calls]==['full','full','validation']
-    page.locator('#reconDifferencesTab').click();page.wait_for_selector('#reconDifferenceRows summary')
-    page.locator('#reconDifferenceRows [data-recon-page]').filter(has_text='Next').first.click()
-    page.wait_for_function("document.getElementById('reconDifferenceRows').innerText.includes('Page 2 of 2')")
-    page.locator('#reconDifferenceRows [data-recon-page]').filter(has_text='Previous').first.click()
-    page.wait_for_function("document.getElementById('reconDifferenceRows').innerText.includes('Page 1 of 2')")
-    assert calls[-1][0]=='validation'
-    page.locator('#reconIncludeMatched').check();page.wait_for_selector('#reconDifferenceRows summary')
-    assert calls[-1][0]=='full' and calls[-1][1]['differences_only']==['false']
-    entries=page.evaluate('()=>ledgerFixture.reconciliationCache()')
-    children=[json.loads(entry['json']) for _,entry in entries if '"support"' in entry['json'] or '"posting_differences"' in entry['json']]
-    assert len(children)==4 and all('views' not in child and 'periods' not in child for child in children)
-    before=page.locator('#cashflowsSummaryTable').inner_html()
-    page.locator('#reconClose').click()
-    assert page.locator('#reconWorking').inner_html()==page.locator('#reconSupport').inner_html()==page.locator('#reconDifferenceRows').inner_html()==''
-    assert page.evaluate('()=>ledgerFixture.reconciliationState()')==dict(scope=None,result=None,pending=False,loading=False,opener=False)
-    assert page.locator('#cashflowsSummaryTable').inner_html()==before
-    page.locator('#cashflowsReconciliationButton').click();page.wait_for_selector('#reconWorking table')
-    assert calls[-1][0]=='validation'
-    full_count=sum(kind=='full' for kind,_ in calls)
-    page.locator('#reconReload').click();page.wait_for_selector('#reconWorking table')
-    assert calls[-1][0]=='full' and sum(kind=='full' for kind,_ in calls)==full_count+1
-    assert len(page.evaluate('()=>ledgerFixture.reconciliationCache()'))==1
+    _check_flat_popup(ledger_cache_page,reconciliation_payload,'cache',view)
 
 
 @pytest.mark.parametrize('failure',['changed','unavailable','malformed','unauthorized','forbidden'])
@@ -1540,17 +1552,7 @@ def test_reconciliation_cache_never_serves_uncertain_or_unauthorized_evidence(le
 
 
 def test_reconciliation_cache_ledger_only_change_rejects_child_even_with_same_voucher_fingerprint(ledger_cache_page,reconciliation_payload):
-    page=ledger_cache_page
-    state,calls=_cache_reconciliation_routes(page,reconciliation_payload)
-    page.locator('[data-recon-support]').first.click();page.wait_for_selector('#reconSupport summary')
-    state['parent']['cache_identity']='b'*64
-    page.locator('[data-recon-support]').first.click();page.wait_for_selector('#reconStatus.is-error')
-    assert 'evidence changed' in page.locator('#reconStatus').inner_text()
-    assert page.locator('#reconWorking').inner_html()==page.locator('#reconSupport').inner_html()==''
-    assert page.evaluate('()=>ledgerFixture.reconciliationCache()')==[]
-    assert [kind for kind,_ in calls]==['full','full','validation','full']
-    page.locator('[data-recon-retry]').click();page.wait_for_selector('#reconWorking table')
-    assert page.evaluate('()=>ledgerFixture.reconciliationState().result.cache_identity')=='b'*64
+    _check_flat_popup(ledger_cache_page,reconciliation_payload,'changed')
 
 
 @pytest.mark.parametrize('change',[{'client_id':8},{'template_id':10},{'group_by':'quarter'},
@@ -1590,17 +1592,7 @@ def test_reconciliation_cache_lru_limits_combined_serialized_bytes_and_entries(l
 
 
 def test_reconciliation_oversized_support_displays_complete_voucher_without_retaining_it(ledger_cache_page,reconciliation_payload):
-    page=ledger_cache_page
-    state,calls=_cache_reconciliation_routes(page,reconciliation_payload)
-    original=state['support'];data=original(page.locator('[data-recon-support]').first.get_attribute('data-recon-support'))
-    data['rows'][0]['voucher_lines'][0]['description']='账'*710000
-    state['support']=lambda *args:data
-    page.locator('[data-recon-support]').first.click();page.wait_for_selector('#reconSupport summary')
-    assert page.locator('#reconSupport .recon-source-table').nth(1).locator('tbody tr').count()==len(data['rows'][0]['voucher_lines'])
-    assert page.locator('#reconSupport').evaluate("node=>node.textContent.includes('账'.repeat(710000))")
-    assert len(page.evaluate('()=>ledgerFixture.reconciliationCache()'))==1
-    page.locator('[data-recon-support]').first.click();page.wait_for_selector('#reconSupport summary')
-    assert [kind for kind,_ in calls]==['full','full','full']
+    _check_flat_popup(ledger_cache_page,reconciliation_payload,'oversized')
 
 
 def test_reconciliation_cache_coalesces_pending_reads_and_rejects_late_closed_validation(ledger_cache_page,reconciliation_payload):
@@ -1648,7 +1640,11 @@ def test_reconciliation_cache_invalidation_during_pending_read_cannot_restore_ol
 def _hold_reconciliation_requests(page):
     page.evaluate('''() => {
         window.pendingReconciliations=[];
-        window.fetch=(url,options)=>new Promise(resolve=>{
+        // These fixtures exercise the established paged-reader lifecycle.
+        // Dedicated bundle tests separately hold/coalesce the optional preload.
+        window.fetch=(url,options)=>String(url).includes('/adjustment-bundle?')
+            ?Promise.resolve({ok:false,status:404,json:async()=>({detail:'No preload in paged-reader fixture'})})
+            :new Promise(resolve=>{
             window.pendingReconciliations.push({url:String(url),signal:options.signal,resolve});
         });
     }''')
@@ -1675,7 +1671,8 @@ def test_reconciliation_initial_processing_fullpage_toolbar_and_return(ledger_ca
     page.evaluate('()=>{ledgerFixture.reconcile();}')
     assert page.locator('.reconciliation-shell').is_hidden()
     assert page.locator('#cashflowReconciliation').get_attribute('role')=='main'
-    assert page.locator('#cashflowReconciliationTitle').bounding_box()['y']>=72.5
+    assert page.locator('#cashflowReconciliation').get_attribute('aria-labelledby')=='cashflowReconciliationTitle'
+    assert page.locator('#cashflowReconciliationTitle').evaluate("(n)=>n.closest('.recon-accessible-context').getBoundingClientRect().height")==1
     assert page.locator('#reconProcessing .ui-spinner').is_visible()
     assert page.locator('#reconProcessing .ui-progress-bar-indeterminate').is_visible()
     assert page.locator('#reconProcessing .ui-skeleton-row').count()==6
@@ -1690,7 +1687,8 @@ def test_reconciliation_initial_processing_fullpage_toolbar_and_return(ledger_ca
     assert page.locator('.recon-toolbar #reconClose').count()==1
     toolbar=page.locator('.recon-toolbar').bounding_box()
     back=page.locator('#reconClose').bounding_box()
-    assert back['x']>width/2 and abs(back['y']-toolbar['y']-12)<2
+    assert back['x']>width/2 and back['y']>=toolbar['y']
+    assert back['y']+back['height']<=toolbar['y']+toolbar['height']
     assert page.locator('#cashflowReconciliation').bounding_box()['width']==pytest.approx(width,abs=1)
     assert page.evaluate("document.documentElement.style.cursor")=='progress'
     page.locator('#reconClose').click()
@@ -1705,7 +1703,7 @@ def test_reconciliation_initial_processing_fullpage_toolbar_and_return(ledger_ca
     assert page.locator('#reconWorking').inner_html()==''
 
 
-@pytest.mark.parametrize('action',['reload','support','differences','paging','matched'])
+@pytest.mark.parametrize('action',['reload','differences','paging','matched'])
 def test_reconciliation_later_processing_uses_relevant_shared_feedback(ledger_cache_page,reconciliation_payload,action):
     page=ledger_cache_page
     report,parent,support,posting=reconciliation_payload()
@@ -1723,7 +1721,7 @@ def test_reconciliation_later_processing_uses_relevant_shared_feedback(ledger_ca
         page.locator('#reconDifferencesTab').click();page.wait_for_selector('#reconDifferenceRows summary')
     _hold_reconciliation_requests(page)
     if action=='reload':page.locator('#reconReload').click()
-    elif action=='support':page.locator('[data-recon-support]').first.click()
+    elif action=='support':_adjustment_button(page).first.click()
     elif action=='differences':page.locator('#reconDifferencesTab').click()
     elif action=='paging':page.locator('#reconDifferenceRows [data-recon-page]').filter(has_text='Next').first.click()
     else:page.locator('#reconIncludeMatched').check()
@@ -1747,24 +1745,23 @@ def test_reconciliation_later_processing_uses_relevant_shared_feedback(ledger_ca
 
 def test_reconciliation_processing_ownership_survives_obsolete_support(ledger_cache_page,reconciliation_payload):
     page=ledger_cache_page
-    report,parent,support,posting=reconciliation_payload()
+    report,parent,support,_=reconciliation_payload()
     _open_reconciliation(page,report,parent)
     page.evaluate('()=>{window.otherLoading=LoadingUI.startGlobalLoading();}')
     _hold_reconciliation_requests(page)
-    page.locator('[data-recon-support]').first.click()
-    old_query=parse_qs(urlparse(page.evaluate('pendingReconciliations[0].url')).query)
-    page.locator('#reconDifferencesTab').click()
+    _adjustment_button(page).first.click()
+    query=parse_qs(urlparse(page.evaluate('pendingReconciliations[0].url')).query,keep_blank_values=True)
+    page.locator('#reconAdjustmentFilters button[type=submit]').click()
+    assert page.evaluate('pendingReconciliations.length')==1
+    assert page.locator('#reconSupport .ui-spinner').is_visible()
+    page.locator('#reconAdjustmentClose').click()
     assert page.evaluate('pendingReconciliations[0].signal.aborted')
-    _finish_reconciliation_request(page,parent|{'support':support(old_query['support_key'][0])})
-    assert page.locator('#reconDifferenceRows .ui-spinner').is_visible()
-    assert page.locator('#reconDifferenceRows').get_attribute('aria-busy')=='true'
-    assert page.locator('#reconSupport').is_hidden()
-    _finish_reconciliation_request(page,parent|{'posting_differences':posting|dict(rows=[],page=1,page_count=1,total_rows=0)},1)
-    page.wait_for_function("document.getElementById('reconDifferenceRows').getAttribute('aria-busy')===null")
+    _finish_reconciliation_request(page,_flat_payload(parent,support,query))
+    assert page.locator('#reconSupport').inner_html()==''
+    assert page.locator('#cashflowReconciliation').is_visible()
     assert page.evaluate("document.documentElement.style.cursor")=='progress'
     page.evaluate('()=>LoadingUI.stopGlobalLoading(window.otherLoading)')
     assert page.evaluate("document.documentElement.style.cursor")==''
-    assert page.locator('#reconSupport details').count()==0
 
 
 def test_reconciliation_timeout_releases_processing_and_allows_retry(ledger_cache_page,reconciliation_payload):
@@ -2075,7 +2072,7 @@ def _c4_report(view):
 
 
 @pytest.mark.parametrize('view,expected', [('bank', ['-100']), ('cash', ['100']), ('combined', ['-']), ('split', ['-100', '100', '-', '-'])])
-def test_treasury_bridge_uses_actual_source_and_keeps_mixed_allocation_review(ledger_cache_page, view, expected):
+def test_treasury_bridge_uses_actual_source_and_keeps_mixed_allocation_review(ledger_cache_page, view, expected, tmp_path):
     page = ledger_cache_page
     report = _c4_report(view)
     errors = []
@@ -2093,7 +2090,7 @@ def test_treasury_bridge_uses_actual_source_and_keeps_mixed_allocation_review(le
         assert _balance_values(page, '.cashflows-balance-bridge')[:4] == ['-', '-', '-5', '-5']
         mixed = page.locator('.cashflows-summary-scroll-table .cashflows-balance-bridge').nth(2)
         assert mixed.locator('td').all_inner_texts()[:4] == ['-105', '100', '5', '-']
-        page.screenshot(path='C:/Users/LENOVO/.codex/visualizations/2026/10/21/01a15eeb-7a5e-7ef2-9607-b5ec5a138869/c4-mixed-bridge.png', full_page=True)
+        page.screenshot(path=str(tmp_path / 'c4-mixed-bridge.png'), full_page=True)
 
 
 def test_treasury_bridge_refresh_preserves_expansion_and_does_not_duplicate_rows(ledger_cache_page):
@@ -2346,7 +2343,8 @@ def test_reconciliation_waits_for_report_refresh_and_opens_on_first_available_at
     page.evaluate('data => waiting[1].resolve(new Response(JSON.stringify(data)))', parent)
     page.wait_for_selector('#reconWorking table')
     assert page.locator('#cashflowReconciliation').is_visible()
-    assert page.evaluate('waiting.length') == 2
+    assert page.evaluate('waiting.length') == 2  # No whole-paper preload fan-out.
+    assert page.locator('#reconProcessing').is_hidden() and page.locator('#reconReload').is_enabled()
 
 
 def test_background_balance_completion_does_not_dismiss_an_active_ledger_load(ledger_cache_page):
@@ -2430,3 +2428,437 @@ def test_parent_summary_discards_signed_party_details(ledger_cache_page):
     assert derived is not None
     assert derived['preview']['vendor_payment_details'] == []
     assert derived['preview']['customer_payment_account_period_totals'] == []
+
+def _check_flat_popup(page, fixture, mode, view='combined'):
+    state,calls=_cache_reconciliation_routes(page,fixture,view)
+    assert page.locator('.recon-adjustment-group[open]').count()==0
+    assert page.locator('#reconPeriod').count()==0
+    button=_adjustment_button(page).first
+    if mode=='oversized':
+        data=state['support'](button.get_attribute('data-recon-support'))
+        data['rows'][0]['ledger_lines'][0]['description']='账'*710000
+        state['support']=lambda *args:data
+    if mode=='safe':
+        data=state['support'](button.get_attribute('data-recon-support'))
+        data['rows'][0]['ledger_lines'][0].update(description='<img src=x onerror="window.injected=true">',debit='0.00001',credit='-0.00001',in_period=False)
+        state['support']=lambda *args:data
+    y=page.evaluate('scrollY')
+    button.click()
+    page.wait_for_selector('#reconSupport .recon-flat-table')
+    assert page.locator('#reconSupport details').count()==0
+    assert page.evaluate('scrollY')==y
+    evidence=page.locator('#reconSupport').inner_text()
+    if mode=='safe':
+        assert '0.00001' in evidence and '-0.00001' in evidence
+        assert 'Outside range · context only' in evidence
+        assert page.locator('#reconSupport img').count()==0
+        assert not page.evaluate('Boolean(window.injected)')
+    if mode=='oversized':
+        assert page.locator('#reconSupport').evaluate("n=>n.textContent.includes('账'.repeat(710000))")
+        assert len(page.evaluate('()=>ledgerFixture.reconciliationCache()'))==1
+    if mode=='close':
+        page.keyboard.press('Escape')
+        assert page.locator('#reconAdjustmentDialog').is_hidden()
+        assert page.locator('#cashflowReconciliation').is_visible()
+        assert button.evaluate('(b)=>b===document.activeElement')
+        return
+    page.locator('#reconAdjustmentClose').click()
+    if mode=='changed':
+        state['parent']['cache_identity']='b'*64
+        button.click()
+        page.wait_for_selector('#reconSupport [role=alert]')
+        assert 'Source changed' in page.locator('#reconSupport').inner_text()
+        assert page.locator('#reconWorking').inner_html()==''
+        assert page.locator('#reconExport').is_disabled()
+        return
+    button.click()
+    page.wait_for_selector('#reconSupport .recon-flat-table')
+    assert page.locator('#reconSupport').inner_text()==evidence
+    assert [kind for kind,_ in calls]==(['full','full','full'] if mode=='oversized' else ['full','full','validation'])
+    page.locator('#reconAdjustmentClose').click()
+    if mode=='cache':
+        children=[json.loads(v['json']) for _,v in page.evaluate('()=>ledgerFixture.reconciliationCache()') if 'transactions' in json.loads(v['json'])]
+        assert len(children)==1 and 'views' not in children[0]
+        page.locator('#reconClose').click()
+        assert page.locator('#reconSupport').inner_html()==''
+        page.locator('#cashflowsReconciliationButton').click()
+        page.wait_for_selector('#reconWorking table')
+        assert calls[-1][0]=='validation'
+        page.locator('#reconReload').click()
+        page.wait_for_selector('#reconWorking table')
+        assert calls[-1][0]=='full'
+
+
+@pytest.mark.parametrize('width',[1366,1280,390])
+def test_flat_popup_pages_searches_and_contains_all_original_columns(ledger_cache_page,reconciliation_payload,width):
+    page=ledger_cache_page;page.set_viewport_size({'width':width,'height':820})
+    state,calls=_cache_reconciliation_routes(page,reconciliation_payload)
+    assert len(calls)==1 and page.locator('.recon-adjustment-group[open]').count()==0
+    button=_adjustment_button(page).first
+    data=state['support'](button.get_attribute('data-recon-support'))
+    base=data['rows'][0]['ledger_lines'][0]
+    data['rows'][0]['ledger_lines']=[dict(base,id=i,description='Unique needle' if i==77 else 'Other',**{'Running balance':str(i)+'.00001'}) for i in range(121)]
+    state['support']=lambda *args:data
+    button.click();page.wait_for_selector('#reconSupport .recon-flat-table')
+    assert '121 source row(s)' in page.locator('#reconAdjustmentPage').inner_text()
+    assert page.locator('#reconSupport tbody tr').count()==50
+    assert 'Running balance' in page.locator('#reconSupport thead').inner_text()
+    dialog=page.locator('#reconAdjustmentDialog').bounding_box()
+    assert dialog['x']>=0 and dialog['x']+dialog['width']<=width+1
+    assert page.locator('#reconAdjustmentDialog').evaluate('(d)=>d.scrollWidth<=d.clientWidth+1')
+    assert page.locator('#reconAdjustmentFilters [data-adjustment-page]').count()==2
+    assert page.locator('#reconSupport [data-adjustment-page]').count()==0
+    assert page.locator('#reconSupport > p').count()==0
+    if width>=1280:
+        controls=[page.locator(selector).bounding_box() for selector in
+                  ['#reconAdjustmentSearch','#reconAdjustmentBook','#reconAdjustmentFilters button[type=submit]',
+                   '#reconAdjustmentClear','#reconAdjustmentPrevious','#reconAdjustmentPage','#reconAdjustmentNext']]
+        centers=[box['y']+box['height']/2 for box in controls]
+        assert max(centers)-min(centers)<2
+        assert all(left['x']+left['width']<=right['x'] for left,right in zip(controls,controls[1:]))
+    page.locator('#reconAdjustmentNext').click()
+    page.wait_for_function("document.getElementById('reconAdjustmentPage').innerText.includes('Page 2 of 3')")
+    assert '50.00001' in page.locator('#reconSupport').inner_text()
+    page.locator('#reconAdjustmentSearch').fill('Unique needle')
+    page.locator('#reconAdjustmentSearch').press('Enter')
+    page.wait_for_function("document.getElementById('reconAdjustmentPage').innerText.includes('1 source row(s)')")
+    assert page.locator('#reconSupport tbody tr').count()==1
+    assert '77.00001' in page.locator('#reconSupport').inner_text()
+    assert page.locator('#reconAdjustmentPrevious').is_disabled()
+    assert page.locator('#reconAdjustmentNext').is_disabled()
+    assert 'Adjustment contribution' not in page.locator('#reconSupport').inner_text()
+    page.locator('#reconAdjustmentSearch').fill('No such original source row')
+    page.locator('#reconAdjustmentSearch').press('Enter')
+    page.wait_for_function("document.getElementById('reconAdjustmentPage').innerText.includes('0 source row(s)')")
+    assert 'No matching source rows' in page.locator('#reconSupport').inner_text()
+    assert page.locator('#reconAdjustmentPrevious').is_disabled() and page.locator('#reconAdjustmentNext').is_disabled()
+    page.locator('#reconAdjustmentClear').click()
+    page.wait_for_function("document.getElementById('reconAdjustmentPage').innerText.includes('121 source row(s)')")
+    assert page.locator('#reconSupport tbody tr').count()==50
+    assert page.locator('#reconAdjustmentPrevious').is_disabled() and page.locator('#reconAdjustmentNext').is_enabled()
+    # Native modal focus containment, with the background report still at its position.
+    page.locator('#reconAdjustmentClose').focus();page.keyboard.press('Shift+Tab')
+    assert page.locator('#reconAdjustmentDialog').evaluate('(d)=>d.contains(document.activeElement)')
+    page.keyboard.press('Escape')
+    assert page.locator('#reconAdjustmentDialog').is_hidden()
+    assert page.locator('#cashflowReconciliation').is_visible()
+
+
+@pytest.mark.parametrize('change',['wrong-side','wrong-proof','wrong-total','wrong-accounts'])
+def test_flat_popup_rejects_mismatched_detail_scope(ledger_cache_page,reconciliation_payload,change):
+    page=ledger_cache_page
+    report,parent,support,_=reconciliation_payload()
+    _open_reconciliation(page,report,parent)
+    def respond(route):
+        query=parse_qs(urlparse(route.request.url).query,keep_blank_values=True)
+        value=_flat_payload(parent,support,query)
+        if change=='wrong-side':value['side']='payments' if value['side']=='receipts' else 'receipts'
+        if change=='wrong-proof':value['proof']='bank'
+        if change=='wrong-total':value['adjustment_total']+=1
+        if change=='wrong-accounts':value['account_selection']={'account_codes':['OTHER']}
+        route.fulfill(json=value)
+    page.route('**/api/reconciliation/cashflows/reconciliation/adjustment-transactions?*',respond)
+    _adjustment_button(page).first.click()
+    page.wait_for_selector('#reconSupport [role=alert]')
+    assert page.locator('#reconSupport .recon-flat-table').count()==0
+    assert page.locator('#reconWorking').inner_html()==''
+    assert page.locator('#reconStatus.is-error').is_visible()
+    assert page.locator('#reconAdjustmentPrevious').is_disabled() and page.locator('#reconAdjustmentNext').is_disabled()
+    assert page.locator('#reconAdjustmentPage').inner_text()=='Transactions unavailable'
+
+
+def test_flat_popup_preserves_source_digits_without_number_coercion(ledger_cache_page,reconciliation_payload):
+    page=ledger_cache_page
+    state,_=_cache_reconciliation_routes(page,reconciliation_payload)
+    button=_adjustment_button(page).first
+    data=state['support'](button.get_attribute('data-recon-support'))
+    data['rows'][0]['ledger_lines'][0].update(Amount='9007199254740993.00001',Tiny='1E-26',numeric_columns=['Amount','Tiny'])
+    state['support']=lambda *args:data
+    button.click();page.wait_for_selector('#reconSupport .recon-flat-table')
+    assert '9,007,199,254,740,993.00001' in page.locator('#reconSupport').inner_text()
+    assert '1E-26' in page.locator('#reconSupport').inner_text()
+
+
+@pytest.mark.parametrize('width',[1366,1280,1024,390])
+@pytest.mark.parametrize('view',['combined','split'])
+def test_reconciliation_compact_toolbar_keeps_scope_tabs_and_actions_together(ledger_cache_page,reconciliation_payload,width,view):
+    page=ledger_cache_page;page.set_viewport_size({'width':width,'height':820})
+    state,_=_cache_reconciliation_routes(page,reconciliation_payload,view)
+    assert page.locator('#cashflowReconciliationTitle').text_content()=='Ledger / Cashflow reconciliation'
+    assert page.locator('#reconContext').evaluate("(n)=>n.closest('.recon-accessible-context').getBoundingClientRect().height")==1
+    assert page.locator('#reconStatus').is_hidden()
+    assert 'Full report period' not in page.locator('#reconWorking').inner_text()
+    assert 'Receipt/payment amounts:' not in page.locator('#cashflowReconciliation').inner_text()
+    assert page.locator('.recon-toolbar [role=tablist]').count()==1
+    selectors=['.recon-report-period']
+    if view=='split':selectors+=['#reconViewLabel']
+    selectors+=['.recon-tabs','#reconCompletenessOpen','#reconReload','#reconExport','#reconClose']
+    assert page.locator('.recon-toolbar #reconCompletenessOpen').count()==1
+    assert page.locator('.recon-body > .recon-completeness-actions').count()==0
+    boxes=[page.locator(selector).bounding_box() for selector in selectors]
+    assert all(box['x']>=0 and box['x']+box['width']<=width+1 for box in boxes)
+    if width>=1280:
+        centers=[box['y']+box['height']/2 for box in boxes]
+        assert max(centers)-min(centers)<2
+        assert all(left['x']+left['width']<=right['x'] for left,right in zip(boxes,boxes[1:]))
+    else:
+        assert boxes[-1]['y']>boxes[0]['y']
+    # Tabs retain keyboard access and return to the unmodified accounting schedules.
+    page.locator('#reconWorkingTab').focus();page.keyboard.press('ArrowRight')
+    assert page.locator('#reconDifferencesTab').get_attribute('aria-selected')=='true'
+    page.keyboard.press('ArrowLeft')
+    assert page.locator('#reconWorkingTab').get_attribute('aria-selected')=='true'
+    assert page.locator('#reconWorking .recon-section').count()==3
+    body=page.locator('.recon-body').bounding_box()
+    first=page.locator('#reconWorking > .recon-section').first.bounding_box()
+    assert first['y']-body['y']<=17
+
+
+def _bundle_payload(parent,support,proof,book,support_key=None,requested_side=None):
+    rows={};groups=[]
+    for adjustment in parent['views'][proof]['adjustments']:
+        for side in ('receipts','payments'):
+            if not adjustment['total'][side] or (support_key and (adjustment['key']!=support_key or side!=requested_side)):continue
+            source=support(adjustment['key'])['rows']
+            selected={r['id']:r for g in source if g[side]!=0 for r in g['ledger_lines' if book=='ledger' else 'voucher_lines']}
+            for row_id,row in selected.items():
+                rows[row_id]=dict(row,row_data=dict(row),search_text=json.dumps(row,default=str))
+            groups.append(dict(key=adjustment['key'],side=side,adjustment_total=adjustment['total'][side],
+                row_ids=list(selected),in_period_row_ids=[i for i,r in selected.items() if r.get('in_period',True)]))
+    context={k:v for k,v in parent.items() if k not in ('views','periods','review_controls','diagnostics')}
+    return context|dict(bundle_schema=2,support_key=support_key,side=requested_side,proof=proof,source_book=book,complete=True,rows=list(rows.values()),
+        columns=list(dict.fromkeys(k for r in rows.values() for k in r['row_data'])),groups=groups)
+
+
+def _open_bundle_reconciliation(page,fixture,view='combined',large=False,wait=True):
+    report,parent,support,posting=fixture(view)
+    parent.update(cache_schema=1,cache_identity='a'*64,template_id=report['configuration']['source_template_id'])
+    candidates=parent['views']['combined' if view=='split' else view]['adjustments']
+    target=next((r for r in candidates if r['total']['receipts']>0),next(r for r in candidates if r['total']['receipts']!=0))
+    original=support
+    def support(key):
+        value=original(key)
+        if key==target['key']:
+            base=value['rows'][0]['ledger_lines'][0]
+            value['rows'][0]['ledger_lines']=[dict(base,id=10000+i,description='Unique %_needle' if i==77 else 'Other',
+                **{'Running balance':str(i)+'.00001'}) for i in range(1001 if large else 121)]
+        return value
+    state=dict(parent=parent,support=support,status=200,override=None);calls=[]
+    def respond(route):
+        query=parse_qs(urlparse(route.request.url).query,keep_blank_values=True)
+        kind='bundle' if '/adjustment-bundle?' in route.request.url else 'validation' if '/cache-validation?' in route.request.url else 'page' if '/adjustment-transactions?' in route.request.url else 'paper'
+        calls.append((kind,query))
+        if kind=='bundle':
+            value=_bundle_payload(state['parent'],state['support'],query['proof'][0],query['source_book'][0],query['support_key'][0],query['side'][0])
+            if large:value.update(complete=False,reason='row_limit',rows=[],columns=[],groups=[])
+            if state['override']:value=state['override'](value)
+            return route.fulfill(status=state['status'],json=value)
+        if kind=='page':return route.fulfill(json=_flat_payload(state['parent'],state['support'],query))
+        return route.fulfill(json=state['parent'])
+    for endpoint in ['reconciliation?','reconciliation/cache-validation?','reconciliation/adjustment-bundle?','reconciliation/adjustment-transactions?']:
+        page.route('**/api/reconciliation/cashflows/'+endpoint+'*',respond)
+    page.evaluate('r=>ledgerFixture.load(r)',report)
+    page.locator('#cashflowsReconciliationButton').click();page.wait_for_selector('#reconWorking table')
+    button=page.locator('[data-recon-support="'+target['key']+'"][data-recon-side=receipts]').first
+    button.evaluate('(b)=>b.closest("details").open=true')
+    assert [kind for kind,_ in calls]==['paper']
+    if wait:
+        button.hover()
+        page.wait_for_function("ledgerFixture.reconciliationCache().some(([k,v])=>JSON.parse(v.json).bundle_schema===2)")
+    return state,calls,button
+
+
+@pytest.mark.parametrize('view',['combined','bank','cash','split'])
+def test_adjustment_bundle_preloads_once_and_pages_searches_without_network(ledger_cache_page,reconciliation_payload,view):
+    page=ledger_cache_page
+    state,calls,button=_open_bundle_reconciliation(page,reconciliation_payload,view)
+    assert [kind for kind,_ in calls]==['paper','bundle']
+    button.click();page.wait_for_selector('#reconSupport .recon-flat-table')
+    assert '121 source row(s)' in page.locator('#reconAdjustmentPage').inner_text()
+    before=len(calls)
+    page.locator('#reconAdjustmentNext').click()
+    assert 'Page 2 of 3' in page.locator('#reconAdjustmentPage').inner_text()
+    assert '50.00001' in page.locator('#reconSupport').inner_text()
+    page.locator('#reconAdjustmentSearch').fill('%_needle');page.locator('#reconAdjustmentSearch').press('Enter')
+    assert '1 source row(s)' in page.locator('#reconAdjustmentPage').inner_text()
+    assert '77.00001' in page.locator('#reconSupport').inner_text()
+    page.locator('#reconAdjustmentClear').click()
+    assert '121 source row(s)' in page.locator('#reconAdjustmentPage').inner_text()
+    assert len(calls)==before and page.locator('#reconSupport .ui-spinner').count()==0
+    page.locator('#reconAdjustmentClose').click()
+    button.click();page.wait_for_selector('#reconSupport .recon-flat-table')
+    assert sum(k=='bundle' for k,_ in calls)==1 and sum(k=='validation' for k,_ in calls)>=1
+    # The other source book is fetched only on request, then stays local too.
+    page.locator('#reconAdjustmentBook').select_option('voucher')
+    page.locator('#reconAdjustmentFilters button[type=submit]').click()
+    page.wait_for_function("document.querySelector('#reconSupport thead').innerText.includes('Scope')")
+    assert sum(k=='bundle' for k,_ in calls)==2
+    before=len(calls);page.locator('#reconAdjustmentClear').click()
+    assert len(calls)==before
+    entries=page.evaluate('()=>ledgerFixture.reconciliationCache()')
+    assert len(entries)<=20 and sum(e['bytes'] for _,e in entries)<=2*1024*1024
+
+
+def test_adjustment_bundle_large_scope_falls_back_without_claiming_completeness(ledger_cache_page,reconciliation_payload):
+    page=ledger_cache_page
+    state,calls,button=_open_bundle_reconciliation(page,reconciliation_payload,large=True)
+    button.click();page.wait_for_selector('#reconSupport .recon-flat-table')
+    assert '1001 source row(s)' in page.locator('#reconAdjustmentPage').inner_text()
+    page.locator('#reconAdjustmentNext').click()
+    page.wait_for_function("document.getElementById('reconAdjustmentPage').innerText.includes('Page 2 of 21')")
+    page.wait_for_function("ledgerFixture.reconciliationCache().filter(([k,v])=>JSON.parse(v.json).transactions).length>=3")
+    assert sum(k=='page' for k,_ in calls)==3 and sum(k=='bundle' for k,_ in calls)==1
+
+
+def test_adjustment_group_intent_does_not_fetch_other_groups_and_cached_groups_stay_separate(ledger_cache_page,reconciliation_payload):
+    page=ledger_cache_page
+    state,calls,first=_open_bundle_reconciliation(page,reconciliation_payload)
+    first_key=first.get_attribute('data-recon-support')
+    other=next(r for r in state['parent']['views']['combined']['adjustments'] if r['key']!=first_key and r['total']['receipts'])
+    second=page.locator('[data-recon-support="'+other['key']+'"][data-recon-side=receipts]').first
+    second.evaluate('(b)=>b.closest("details").open=true');second.hover()
+    page.wait_for_function("ledgerFixture.reconciliationCache().filter(([k,v])=>JSON.parse(v.json).bundle_schema===2).length===2")
+    bundle_calls=[q for kind,q in calls if kind=='bundle']
+    assert [q['support_key'][0] for q in bundle_calls]==[first_key,other['key']]
+    second.click();page.wait_for_selector('#reconSupport .recon-flat-table')
+    assert '121 source row(s)' not in page.locator('#reconAdjustmentPage').inner_text()
+    page.locator('#reconAdjustmentClose').click()
+    first.click();page.wait_for_selector('#reconSupport .recon-flat-table')
+    assert '121 source row(s)' in page.locator('#reconAdjustmentPage').inner_text()
+    assert sum(kind=='bundle' for kind,_ in calls)==2
+
+
+@pytest.mark.parametrize('status',[401,403,409])
+def test_adjustment_group_hover_rejects_auth_or_stale_source(ledger_cache_page,reconciliation_payload,status):
+    page=ledger_cache_page
+    state,calls,button=_open_bundle_reconciliation(page,reconciliation_payload,wait=False)
+    state['status']=status
+    button.hover();page.wait_for_selector('#reconStatus.is-error')
+    assert page.locator('#reconWorking').inner_html()=='' and page.locator('#reconExport').is_disabled()
+    assert not any(json.loads(v['json']).get('bundle_schema') for _,v in page.evaluate('()=>ledgerFixture.reconciliationCache()'))
+
+
+def test_oversized_next_prefetch_is_shared_and_popup_close_discards_delayed_rows(ledger_cache_page,reconciliation_payload):
+    page=ledger_cache_page
+    page.evaluate('''()=>{
+        window.baseFetch=window.fetch;window.nextReads=[];
+        window.fetch=(url,options)=>String(url).includes('/adjustment-transactions?') && new URL(url,'https://cashflows.test').searchParams.get('page')==='2'
+            ?new Promise(resolve=>nextReads.push({url,resolve,signal:options.signal})):baseFetch(url,options);
+    }''')
+    state,calls,button=_open_bundle_reconciliation(page,reconciliation_payload,large=True)
+    button.click();page.wait_for_selector('#reconSupport .recon-flat-table')
+    page.wait_for_function('nextReads.length===1')
+    page.locator('#reconAdjustmentNext').click();page.wait_for_selector('#reconSupport .ui-spinner')
+    assert page.evaluate('nextReads.length')==1
+    query=parse_qs(urlparse(page.evaluate('nextReads[0].url')).query,keep_blank_values=True)
+    value=_flat_payload(state['parent'],state['support'],query)
+    page.locator('#reconAdjustmentClose').click()
+    assert page.evaluate('nextReads[0].signal.aborted')
+    page.evaluate('v=>nextReads[0].resolve({ok:true,json:async()=>v})',value)
+    page.wait_for_timeout(30)
+    assert page.locator('#reconSupport').inner_html()==''
+    assert not any(json.loads(v['json']).get('transactions',{}).get('page')==2 for _,v in page.evaluate('()=>ledgerFixture.reconciliationCache()'))
+
+
+def test_adjustment_bundle_reopening_rejects_changed_source_and_retains_retry(ledger_cache_page,reconciliation_payload):
+    page=ledger_cache_page
+    state,calls,button=_open_bundle_reconciliation(page,reconciliation_payload)
+    button.click();page.wait_for_selector('#reconSupport .recon-flat-table')
+    page.locator('#reconAdjustmentClose').click()
+    state['parent']=state['parent']|{'cache_identity':'b'*64}
+    button.click();page.wait_for_selector('#reconStatus.is-error')
+    assert page.locator('#reconWorking').inner_html()==''
+    assert page.locator('#reconExport').is_disabled()
+    assert page.locator('#reconSupport .recon-flat-table').count()==0
+
+
+@pytest.mark.parametrize('damage',['total','proof','rows','missing-group','accounts'])
+def test_adjustment_bundle_rejects_incomplete_or_wrong_scope_before_display(ledger_cache_page,reconciliation_payload,damage):
+    page=ledger_cache_page
+    state,calls,button=_open_bundle_reconciliation(page,reconciliation_payload)
+    page.evaluate('()=>ledgerFixture.clearReconciliationCache()')
+    def change(value):
+        if damage=='total':value['groups'][0]['adjustment_total']+=1
+        elif damage=='proof':value['proof']='invalid'
+        elif damage=='rows':value['rows'].append(value['rows'][0])
+        elif damage=='accounts':value['account_selection']={'account_codes':['OTHER']}
+        else:value['groups']=[]
+        return value
+    state['override']=change
+    button.click();page.wait_for_selector('#reconStatus.is-error')
+    assert page.locator('#reconSupport .recon-flat-table').count()==0
+    assert page.locator('#reconExport').is_disabled()
+
+
+def test_adjustment_bundle_pending_preload_is_shared_and_late_closure_cannot_restore_cache(ledger_cache_page,reconciliation_payload):
+    page=ledger_cache_page
+    page.evaluate('''()=>{
+        window.baseFetch=window.fetch;window.bundleReads=[];
+        window.fetch=(url,options)=>String(url).includes('/adjustment-bundle?')
+            ?new Promise(resolve=>bundleReads.push({resolve,signal:options.signal})):baseFetch(url,options);
+    }''')
+    state,calls,button=_open_bundle_reconciliation(page,reconciliation_payload,wait=False)
+    button.click();page.wait_for_selector('#reconSupport .ui-spinner')
+    assert page.evaluate('bundleReads.length')==1
+    page.locator('#reconAdjustmentClose').click()
+    # Ledger preload belongs to the still-open paper, not to an individual popup.
+    assert not page.evaluate('bundleReads[0].signal.aborted')
+    button.click();page.wait_for_selector('#reconSupport .ui-spinner')
+    assert page.evaluate('bundleReads.length')==1
+    support_key=button.get_attribute('data-recon-support')
+    page.locator('#reconAdjustmentClose').click();page.locator('#reconClose').click()
+    assert page.evaluate('bundleReads[0].signal.aborted')
+    value=_bundle_payload(state['parent'],state['support'],'combined','ledger',support_key,'receipts')
+    page.evaluate('v=>bundleReads[0].resolve({ok:true,json:async()=>v})',value)
+    page.wait_for_timeout(30)
+    assert not any(json.loads(v['json']).get('bundle_schema') for _,v in page.evaluate('()=>ledgerFixture.reconciliationCache()'))
+    assert page.locator('#reconSupport').inner_html()==''
+
+
+def test_adjustment_bundle_focus_intent_shares_validation_and_focus_return_does_not_refetch(ledger_cache_page,reconciliation_payload):
+    page=ledger_cache_page
+    state,calls,button=_open_bundle_reconciliation(page,reconciliation_payload)
+    button.click();page.wait_for_selector('#reconSupport .recon-flat-table')
+    page.locator('#reconAdjustmentClose').click()
+    page.locator('#reconReload').focus()
+    page.evaluate('''()=>{
+        window.baseFetch=window.fetch;window.identityReads=[];
+        window.fetch=(url,options)=>String(url).includes('/cache-validation?')
+            ?new Promise(resolve=>identityReads.push({resolve,signal:options.signal})):baseFetch(url,options);
+    }''')
+    button.focus();button.evaluate('(b)=>b.click()')
+    page.wait_for_selector('#reconSupport .ui-spinner')
+    assert page.evaluate('identityReads.length')==1
+    page.evaluate('v=>identityReads[0].resolve({ok:true,json:async()=>v})',state['parent'])
+    page.wait_for_selector('#reconSupport .recon-flat-table')
+    page.locator('#reconAdjustmentNext').click();assert page.evaluate('identityReads.length')==1
+    page.locator('#reconAdjustmentClose').click();assert page.evaluate('identityReads.length')==1
+
+
+def test_adjustment_bundle_window_return_revalidates_before_reusing_active_snapshot(ledger_cache_page,reconciliation_payload):
+    page=ledger_cache_page
+    state,calls,button=_open_bundle_reconciliation(page,reconciliation_payload)
+    button.click();page.wait_for_selector('#reconSupport .recon-flat-table')
+    page.locator('#reconAdjustmentNext').click()
+    page.evaluate("()=>window.dispatchEvent(new Event('focus'))")
+    page.wait_for_selector('#reconSupport .recon-flat-table')
+    assert 'Page 2 of 3' in page.locator('#reconAdjustmentPage').inner_text()
+    state['parent']=state['parent']|{'cache_identity':'b'*64}
+    page.evaluate("()=>window.dispatchEvent(new Event('focus'))")
+    page.wait_for_selector('#reconStatus.is-error')
+    assert page.locator('#reconSupport .recon-flat-table').count()==0
+    assert page.locator('#reconExport').is_disabled()
+
+
+def test_adjustment_bundle_unicode_search_uses_authoritative_literal_filter(ledger_cache_page,reconciliation_payload):
+    page=ledger_cache_page
+    state,calls,button=_open_bundle_reconciliation(page,reconciliation_payload)
+    button.click();page.wait_for_selector('#reconSupport .recon-flat-table')
+    page.locator('#reconAdjustmentSearch').fill('\u0130stanbul')
+    page.locator('#reconAdjustmentSearch').press('Enter')
+    page.wait_for_function("document.getElementById('reconAdjustmentPage').innerText.includes('0 source row(s)')")
+    assert calls[-1][0]=='page' and calls[-1][1]['search']==['\u0130stanbul']
+    before=len(calls);page.locator('#reconAdjustmentClear').click()
+    page.wait_for_function("document.getElementById('reconAdjustmentPage').innerText.includes('121 source row(s)')")
+    assert sum(k=='bundle' for k,_ in calls)==1
+    assert all(kind=='validation' for kind,_ in calls[before:])

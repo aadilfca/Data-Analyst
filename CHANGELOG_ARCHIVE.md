@@ -1,5 +1,21 @@
 # Changelog Archive
 
+## Voucher completeness table — Phase 10 — 2026-10-25
+
+**Scope:** Ten confirmed service/API, screen, test and record files; Aadil approved the revised table prototype. The existing reconciliation navigation entry is explicitly accepted for this phase. No new files, dependencies, endpoints, SQL, database objects, durable transaction copies or main Cashflow calculations.
+
+**Table:** The existing working-paper response includes compact counts from its already-loaded snapshot. Ledger and Transaction Report counts use distinct nonblank Voucher IDs on selected accounts within the loaded period; source zero-value postings remain included. Cashflow counts distinct vouchers with nonzero category contributions before visual filtering, including existing selected ownership and Bank/Cash/Mixed rules. Repeated lines, months and transfers do not inflate counts. Equal source counts cannot hide different ID sets; source-only IDs, category exclusions and blank-ID rows are separate controls. Missing coverage or invalid dates show unavailable counts. ERP extract completeness remains independently uncertified.
+
+**Adjustments:** One expandable row shows signed existing amount totals and distinct adjustment vouchers. Its rows reuse existing reasons, support keys and the original flat source-detail dialog, authentication, precision, pagination, cancellation and bounded caches. Adjustment counts overlap and are not additive. Existing monetary totals, separate unexplained differences, posting comparisons and Excel contracts remain unchanged. Known stale detail evidence closes the completeness popup; reload/scope changes discard it.
+
+**Verification:** Across the three confirmed test modules, 456 distinct checks pass with one existing migration-only skip. The broad run passed 450; final targeted reruns resolve two obsolete selectors and an older screenshot path outside this workspace. Eight count checks and sixteen final UI checks cover equal-count/different-ID sources, transfers, repeats/months, zero/fractional values, blanks, unavailable coverage, selected/Split scopes, no-request table opening, detail reuse, keyboard return and both stale-detail/preload rejection paths. The test screenshot now uses pytest's temporary directory. Python/JavaScript syntax and whitespace checks pass; desktop 1366/mobile 390 screenshots are inspected. Existing framework warnings remain. These are isolated fixture checks, not live Supabase or authenticated-session acceptance; no packages or server restart.
+
+**Toolbar refinement:** Aadil accepts the core popup and requests one shared action row. Working paper/Voucher differences remain grouped tabs, followed by Voucher completeness, Reload working paper, Export reconciliation and the far-right Cashflows Report return. Compact Bank/Cash/Combined proof labels preserve their API values; desktop spacing fits 1280/1366, narrow screens wrap, and the first schedule's redundant top gap is removed. Script v53 forces the UI refresh; counts, financial logic, requests and caches are unchanged.
+
+**Refinement verification:** Sixteen focused UI/wiring checks pass, including Combined/Split at 1366/1280/1024/390, popup/detail reuse, keyboard return, loading and stale evidence. Four additional screenshot captures repeat the 1280/390 cases; syntax/whitespace checks pass. No packages, database access or server restart.
+
+**Acceptance:** Aadil accepts the core popup and toolbar refinement and authorises combined Phase 8D/10 staging, commit and push on 25 October. Include the accepted shared source reader/cache tests; exclude benchmark file-map edits, experiments and private backups. Phase 11 begins with read-only readiness assessment.
+
 ## Reconciliation voucher profile assembly — Phase 8E — 2026-10-25
 
 **Scope:** Five approved files. Only optional reconciliation-evidence assembly in `ledger_group_summary.py` changes: one pass over existing voucher/account/Treasury flags replaces per-voucher DataFrame allocation/filtering. Sorted Treasury types, counterpart presence, voucher order and complete selected-voucher context remain exact. No amounts, accounting rules, ordinary main-report path, SQL, cache, upload, schema, index or API changes.
@@ -56,7 +72,7 @@
 
 **Live verification:** Enforced read-only January-June All-account checks match all 428 original ledger and voucher rows, exact group totals and period flags across nine pages. Neither group reads nor eighteen page reads rebuild the summary. Observed group loads were 3.20/3.16 seconds; direct server pages were 2.73-4.04 seconds, retaining freshness cost. Temporary paper membership used 159,742 bytes. Actual-payload desktop 1366/1280 and mobile 390 checks traverse every ledger page and both source views without pagination requests; screenshots inspected. Initial full-paper preparation remains slow and is explicitly deferred to the next separately approved phase.
 
-**Acceptance:** Aadil confirms successful local popup-cache testing on 2026-10-25; separate Git approval remains pending. Automated verification covers 471 unique passes and one existing migration-only skip; receipts are `group-cache-*.xml`. Live/visual evidence remains in this chat's controlled external directory. No installs, financial/configuration writes, persistent copies, server restart or Git actions. Initial-paper performance needs separate approval, followed by Phase 9; Drive production remains last.
+**Acceptance:** Aadil confirms successful local popup-cache testing on 2026-10-25; combined Phase 8D/10 Git closeout is authorised. Automated verification covers 471 unique passes and one existing migration-only skip; receipts are `group-cache-*.xml`. Live/visual evidence remains in this chat's controlled external directory. No installs, financial/configuration writes, persistent copies or server restart occurred during implementation. Initial-paper performance subsequently passed Phase 8E; Drive production remains last.
 
 ## Selected-account Cashflow toolbar — Phase 8C — 2026-10-23
 

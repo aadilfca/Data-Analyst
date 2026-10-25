@@ -23,15 +23,15 @@ This sequence governs current work; earlier roadmaps below are historical, not a
 | 6D — Excel | Accepted/committed (`3b1762b`): streaming workbooks, comparison reuse, bounded exports, progress/cancellation, private files and first-opening repairs preserve existing Cashflow exports. |
 | 7 — Reconciliation acceptance | Accepted/committed (`c08ac8e`). Twenty view/range combinations, eight workbooks and screen parity verified; 183 targeted tests pass. |
 | 8 — Account selection | 8A–8C accepted/committed (`4f0433d`); derived-column fetching preserved. |
-| 8D — Compact reconciliation | UI and group-cache correction locally accepted; separate Git approval pending. |
+| 8D — Compact reconciliation | UI and group-cache correction accepted; combined Git closeout with Phase 10 authorised. |
 | 8E — Reconciliation opening performance | Accepted and committed/pushed (`b0a907b`); actual-source/Excel comparisons and 297 regression tests pass. Main-report path unchanged. |
-| 9 — Selected-account acceptance | Next, recommended after limit reset: verify one/several/all accounts across reports, balances, reconciliation, details and Excel, including within-selection and cross-boundary transfers. |
-| 10 — Voucher completeness popup | After Phase 9, show distinct eligible voucher count for the loaded period/account scope, split into mutually exclusive Cash-only, Bank-only and Cash-and-Bank counts; separately show vouchers missing counterpart lines and blank-ID Treasury rows. Build from loaded evidence; show unavailable metrics as unavailable, never zero. |
+| 9 — Selected-account acceptance | Accepted by Aadil; reports work correctly. Existing focused acceptance evidence is retained. |
+| 10 — Voucher completeness popup | Core, shared toolbar and table spacing accepted by Aadil; combined commit/push authorised. |
 | 11 — Drive production — final | Former phase 8: publish/reauthorise OAuth, configure hosted credentials/persistent external archives, then approve production archive/recovery verification. Existing archive guards remain active. |
 
 Each implementation phase retains file/approach approval, local acceptance and separate Git approval.
 
-**This phase:** Voucher completeness popup planned after Phase 9; first confirm loaded evidence supports each count without adding storage or weakening source safeguards.
+**This phase:** Close accepted reconciliation work in Git, then assess Phase 11 readiness read-only before proposing production OAuth/archive actions.
 
 Agreed toolbar: one desktop row, narrower Group by/Treasury view/Period, Cash/Bank a/c after Period, and shorter Ledger drill-down / XLSX labels. Default All preserves accepted behaviour.
 

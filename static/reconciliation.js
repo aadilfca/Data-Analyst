@@ -3235,6 +3235,7 @@
             cashflowAccountKey(cashflowAccountCodes(scope))]);
     }
     function clearReconciliationCache(context, identity) {
+        cancelAdjustmentBundles(context, identity);
         reconciliationCacheGeneration += 1;
         reconciliationCache.forEach(function (entry, key) {
             if (!context || (entry.context === context && (!identity || entry.identity !== identity))) reconciliationCache.delete(key);
@@ -3318,14 +3319,16 @@
         element('reconExport').disabled = busy || !state.result || !state.result.evidence_fingerprint || !state.result.cache_identity;
         element('reconView').disabled = busy || !state.result;
         element('reconIncludeMatched').disabled = busy || !state.result;
+        element('reconCompletenessOpen').disabled = busy || !state.result
+            || !((state.result.views || {})[state.view] || {}).voucher_completeness;
         document.querySelectorAll('#cashflowReconciliation [role=tab]').forEach(function (button) { button.disabled = !state.result; });
     }
     function startReconciliationProcessing(options) {
-        const support = !!options.support_key, differences = !!options.posting_differences;
-        const target = element(options.export ? 'reconExportProcessing' : support ? 'reconSupport' : differences ? 'reconDifferenceRows' : 'reconProcessing');
-        const title = options.export ? 'Preparing reconciliation Excel…' : support ? 'Loading adjustment voucher support…' : differences
+        const differences = !!options.posting_differences;
+        const target = element(options.export ? 'reconExportProcessing' : differences ? 'reconDifferenceRows' : 'reconProcessing');
+        const title = options.export ? 'Preparing reconciliation Excel…' : differences
             ? 'Loading voucher differences — page ' + String(options.page || 1) + '…' : 'Preparing reconciliation…';
-        const message = options.export ? 'Validating the displayed working paper and preparing complete supporting evidence.' : support ? 'Reading complete ledger postings and related Transaction Report vouchers.' : differences
+        const message = options.export ? 'Validating the displayed working paper and preparing complete supporting evidence.' : differences
             ? 'Comparing original postings for the selected report range.' : 'Reading independent ledger evidence and Cashflow movements.';
         target.hidden = false;
         target.setAttribute('aria-busy', 'true');
@@ -3344,7 +3347,7 @@
         window.LoadingUI.showProgressBar(loading.progress, {mode: 'indeterminate', message: message});
         loading.progress.setAttribute('role', 'progressbar');
         loading.progress.setAttribute('aria-label', title);
-        if (!options.export) window.LoadingUI.showSkeleton(loading.skeleton, support || differences ? 4 : 6);
+        if (!options.export) window.LoadingUI.showSkeleton(loading.skeleton, differences ? 4 : 6);
         syncReconciliationControls();
     }
     function setReconciliationFeature(active) {
@@ -3355,6 +3358,8 @@
         window.history.replaceState({}, '', window.location.pathname + '?' + params.toString() + window.location.hash);
     }
     function closeCashflowReconciliation() {
+        cancelAdjustmentBundles();
+        closeReconciliationAdjustment(false);
         cancelReconciliationRequest();
         const page = element('cashflowReconciliation');
         if (page.hidden) return;
@@ -3372,7 +3377,7 @@
         ['reconWorking', 'reconProcessing', 'reconExportProcessing', 'reconContext', 'reconStatus', 'reconView'].forEach(function (id) { element(id).replaceChildren(); });
         element('reconReportPeriod').textContent = '';
         reconciliationState.scope = null; reconciliationState.opener = null; reconciliationState.scroll = null;
-        reconciliationState.lastRequest = {}; reconciliationState.supportKey = null;
+        reconciliationState.lastRequest = {};
         reconciliationState.needsReportReload = false;
     }
     function reconciliationRow(label, amount, className) {
@@ -3382,18 +3387,22 @@
         const title = side === 'receipts' ? 'Receipts' : 'Payments';
         const values = part.overall[side];
         let rows = reconciliationRow(title + ' as per ledgers', values.ledger, 'recon-total');
-        let count = 0;
-        part.adjustments.forEach(function (adjustment) {
-            const value = adjustment.total[side];
-            if (value === 0) return;
-            count += 1;
-            const label = (value == null ? '' : value < 0 ? 'Less: ' : 'Add: ') + adjustment.label
-                + (adjustment.category ? ' — ' + adjustment.category : '');
-            rows += '<tr><td><button type="button" class="recon-adjustment" data-recon-support="' + escapeHtml(adjustment.key)
-                + '">' + escapeHtml(label) + '</button></td><td class="recon-money">' + reconciliationMoney(value) + '</td></tr>';
+        ['add', 'less'].forEach(function (kind) {
+            const selected = part.adjustments.filter(function (row) {return kind === 'add' ? row.total[side] > 0 : row.total[side] < 0;});
+            // Never reconstruct section totals from rounded category display values.
+            const sections = (part.adjustment_sections || {})[side];
+            const total = sections ? sections[kind] : null;
+            const label = (kind === 'add' ? 'Add' : 'Less') + ': Reconciliation adjustments';
+            if (!selected.length) { rows += reconciliationRow(label, total, 'recon-total'); return; }
+            const children = selected.map(function (row) {
+                return '<tr><td><button type="button" class="recon-adjustment" data-recon-support="' + escapeHtml(row.key)
+                    + '" data-recon-side="' + side + '">' + escapeHtml(row.label + (row.category ? ' — ' + row.category : ''))
+                    + '</button></td><td class="recon-money">' + reconciliationMoney(row.total[side]) + '</td></tr>';
+            }).join('');
+            rows += '<tr><td colspan="2" class="recon-adjustment-cell"><details class="recon-adjustment-group" data-adjustment-side="' + side
+                + '" data-adjustment-kind="' + kind + '"><summary><span>' + label + ' (' + selected.length + ')</span><span class="recon-money">'
+                + reconciliationMoney(total) + '</span></summary><table aria-label="' + label + '"><tbody>' + children + '</tbody></table></details></td></tr>';
         });
-        if (!count) rows += '<tr><td colspan="2" class="recon-muted">No supported presentation adjustments for this selection.</td></tr>';
-        rows += reconciliationRow('Total presentation adjustments', values.adjustments, 'recon-total');
         rows += reconciliationRow('Adjusted ' + side + ' as per ledgers', values.adjusted_ledger, 'recon-total');
         rows += reconciliationRow(title + ' as per Cashflow report', values.cashflow, 'recon-total');
         rows += reconciliationRow('Unexplained difference (adjusted ledger − Cashflow)', values.difference,
@@ -3402,19 +3411,12 @@
             + '</h3><table><thead><tr><th scope="col">Particulars</th><th scope="col" class="recon-money">Amount</th></tr></thead><tbody>' + rows + '</tbody></table></section>';
     }
     function renderReconciliationStatus() {
-        const state = reconciliationState, result = state.result;
-        if (!result) return;
-        const part = result.views[state.view];
-        const reviews = result.review_controls || {};
-        const posting = part.posting_comparison || {};
+        if (!reconciliationState.result) return;
+        // Routine proof results remain in the schedules; reserve this region for actionable feedback.
         const status = element('reconStatus');
-        status.hidden = false;
+        status.hidden = true;
         status.classList.remove('is-error');
-        status.textContent = 'Receipt/payment amounts: ' + part.amount_status
-            + '. Whole-range posting comparison: ' + posting.posting_status
-            + '. Category reviews: ' + String(reviews.category_review_count ?? 'Unavailable')
-            + '; customer-settlement reviews: ' + String(reviews.customer_settlement_review_count ?? 'Unavailable')
-            + '. Extract completeness: ' + result.transaction_coverage_status + '. Treasury allocation: ' + part.allocation_status + '.';
+        status.replaceChildren();
     }
     function renderReconciliationWorking() {
         const state = reconciliationState, result = state.result;
@@ -3434,9 +3436,7 @@
             return '<li>' + escapeHtml([row.voucher_id, row.period_key, row.reason].filter(Boolean).join(' · ')) + '</li>';
         }).join('');
         const diagnostics = [...(result.diagnostics || []), ...((part.posting_comparison || {}).coverage_diagnostics || [])];
-        element('reconWorking').innerHTML = '<p class="recon-muted">Full report period · ' + escapeHtml(cashflowTreasuryViewLabel(state.view))
-            + '. To change the period, return to Cashflows Report and load the required dates. Amounts in source currency, to two decimals. Brackets indicate negative values.</p>'
-            + reconciliationSchedule(part, 'receipts') + reconciliationSchedule(part, 'payments')
+        element('reconWorking').innerHTML = reconciliationSchedule(part, 'receipts') + reconciliationSchedule(part, 'payments')
             + '<section class="recon-section" aria-label="Opening and closing proof"><h3>Opening and closing proof</h3><table><tbody>' + rows + '</tbody></table></section>'
             + (unresolved ? '<details><summary>Unresolved presentation evidence (' + part.unresolved.length + ')</summary><ul>' + unresolved + '</ul></details>' : '')
             + (diagnostics.length ? '<details><summary>Source and coverage diagnostics</summary><ul>' + diagnostics.map(function (item) {
@@ -3444,6 +3444,7 @@
             }).join('') + '</ul></details>' : '')
             + '<p class="recon-muted">' + escapeHtml(result.scope_note || '') + '</p>';
         renderReconciliationStatus();
+        // Adjustment rows load only for a hovered, focused or opened group.
     }
     function reconciliationSourceTable(title, rows) {
         const columns = [['date', 'Date'], ['account_code', 'Account code'], ['account_name', 'Account name'],
@@ -3492,24 +3493,480 @@
         element('reconSupport').hidden = true;
     }
     function clearReconciliationChildren() {
+        closeReconciliationAdjustment(false);
+        closeReconciliationCompleteness(false);
         element('reconSupport').hidden = true;
         element('reconSupport').innerHTML = '';
         element('reconDifferenceRows').innerHTML = '';
     }
-    function scrollReconciliationEvidence(target) {
-        // The wrapped mobile toolbar is taller; keep evidence below the visible controls.
-        const toolbar = element('cashflowReconciliation').querySelector('.recon-toolbar');
-        target.style.scrollMarginTop = (toolbar.getBoundingClientRect().height + 72.5 + 12) + 'px';
-        target.scrollIntoView({block: 'start'});
+    let reconciliationCompletenessOpener = null;
+    function closeReconciliationCompleteness(restoreFocus) {
+        const dialog = element('reconCompletenessDialog');
+        if (dialog.open) dialog.close();
+        dialog.hidden = true;
+        element('reconCompletenessContent').replaceChildren();
+        const opener = reconciliationCompletenessOpener;
+        reconciliationCompletenessOpener = null;
+        if (restoreFocus && opener && opener.isConnected) opener.focus({preventScroll: true});
+    }
+    function openReconciliationCompleteness() {
+        const state = reconciliationState, part = state.result && state.result.views[state.view];
+        if (!part || !part.voucher_completeness) return;
+        const counts = part.voucher_completeness, totals = part.overall;
+        const count = function (value) {return value == null ? 'Unavailable' : escapeHtml(String(value));};
+        const row = function (label, number, field) {
+            return '<tr><td>' + escapeHtml(label) + '</td><td class="recon-money">' + count(number)
+                + '</td><td class="recon-money">' + reconciliationMoney(totals.receipts[field])
+                + '</td><td class="recon-money">' + reconciliationMoney(totals.payments[field]) + '</td></tr>';
+        };
+        const head = '<thead><tr><th scope="col">Particulars</th><th scope="col" class="recon-money">No. of vouchers</th>'
+            + '<th scope="col" class="recon-money">Debit (Receipts)</th><th scope="col" class="recon-money">Credit (Payments)</th></tr></thead>';
+        const link = function (adjustment, side) {
+            const amount = adjustment.total[side];
+            return !amount ? reconciliationMoney(amount) : '<button type="button" class="recon-adjustment" data-recon-support="'
+                + escapeHtml(adjustment.key) + '" data-recon-side="' + side + '">' + reconciliationMoney(amount) + '</button>';
+        };
+        // The same support keys, reader and bounded popup cache serve both screens.
+        const children = part.adjustments.map(function (adjustment) {
+            const group = counts.adjustments.groups[adjustment.key];
+            const side = group && group.receipts ? 'receipts' : 'payments';
+            return '<tr><td><button type="button" class="recon-adjustment" data-recon-support="' + escapeHtml(adjustment.key)
+                + '" data-recon-side="' + side + '">' + escapeHtml(adjustment.label + (adjustment.category ? ' — ' + adjustment.category : ''))
+                + '</button></td><td class="recon-money">' + count(group && group.vouchers) + '</td><td class="recon-money">'
+                + link(adjustment, 'receipts') + '</td><td class="recon-money">' + link(adjustment, 'payments') + '</td></tr>';
+        }).join('');
+        const message = counts.source_ids_match == null ? 'Ledger / Transaction Report voucher comparison is unavailable.'
+            : counts.source_ids_match ? 'Ledger and Transaction Report voucher IDs agree within the loaded scope.'
+            : 'Voucher IDs differ: ' + counts.ledger_only + ' ledger-only; ' + counts.transaction_only + ' Transaction Report-only. Review Voucher differences.';
+        const adjustmentTotals = '<tr class="recon-total"><td><button type="button" id="reconCompletenessAdjustments" class="recon-adjustment"'
+            + ' aria-expanded="false" aria-controls="reconCompletenessAdjustmentRows">▸ Adjustments (signed)</button></td><td class="recon-money">'
+            + count(counts.adjustments.vouchers) + '</td><td class="recon-money">' + reconciliationMoney(totals.receipts.adjustments)
+            + '</td><td class="recon-money">' + reconciliationMoney(totals.payments.adjustments) + '</td></tr>';
+        element('reconCompletenessContent').innerHTML = '<p class="recon-completeness-message" role="status">' + escapeHtml(message)
+            + ' Posting comparison: ' + escapeHtml((part.posting_comparison || {}).posting_status || 'Unavailable') + '.</p>'
+            + '<div class="recon-table-wrap"><table class="recon-completeness-table" aria-label="Voucher completeness comparison">' + head + '<tbody>'
+            + row('As per Cash/Bank ledgers', counts.ledger.vouchers, 'ledger')
+            + row('As per Transaction Report', counts.transaction.vouchers, 'transaction')
+            + row('As per Cashflow report', counts.cashflow.vouchers, 'cashflow') + adjustmentTotals
+            + '</tbody><tbody id="reconCompletenessAdjustmentRows" hidden>' + children + '</tbody></table></div><p class="recon-muted">Counts are distinct nonblank Voucher IDs across the whole selected range; repeated lines and months count once. '
+            + 'Cashflow counts vouchers contributing nonzero category amounts before display filters. Source vouchers outside those category rows: '
+            + count(counts.outside_cashflow) + '; Cashflow IDs absent from the selected source: ' + count(counts.cashflow_only) + '.</p>'
+            + '<p class="recon-muted">Blank-ID rows (excluded from voucher counts): ledgers ' + count(counts.ledger.blank_id_rows)
+            + '; Transaction Report ' + count(counts.transaction.blank_id_rows) + '. Adjustment voucher groups can overlap; do not add their counts. '
+            + 'Signed amount adjustments bridge ledgers to Cashflow; unexplained differences remain in the working paper.</p>'
+            + '<p class="recon-muted">Source extraction completeness: Not independently certified.</p>';
+        element('reconCompletenessContext').textContent = element('reconContext').textContent + ' · Proof: ' + state.view;
+        reconciliationCompletenessOpener = document.activeElement;
+        const dialog = element('reconCompletenessDialog');
+        dialog.hidden = false; dialog.showModal();
+    }
+    // Independent popup lifecycle: closing a detail must not cancel an Excel job
+    // or let a delayed request repaint a different adjustment/proof.
+    const adjustmentPopup = {generation: 0, controller: null, opener: null, key: null, side: null, total: null, loading: null, bundle: null, page: 1};
+    const adjustmentBundles = {pending: null, intent: null, pagePending: null, restoringFocus: false};
+    const ADJUSTMENT_BUNDLE_MAX_BYTES = 1024 * 1024;
+    function adjustmentBundleKey(scope, parent, proof, book, supportKey, side) {
+        return JSON.stringify([reconciliationContextKey(scope), 'adjustment-bundle-v2', proof, book, supportKey, side, parent.cache_identity]);
+    }
+    function cancelAdjustmentBundles(context, identity) {
+        if (adjustmentBundles.pagePending) adjustmentBundles.pagePending.controller.abort();
+        adjustmentBundles.pagePending = null;
+        adjustmentPopup.pagedScope = null;
+        const pending = adjustmentBundles.pending;
+        if (pending && (!context || (pending.context === context && pending.identity !== identity))) {
+            pending.controller.abort(); adjustmentBundles.pending = null;
+        }
+        const intent = adjustmentBundles.intent;
+        if (intent && (!context || (intent.context === context && intent.identity !== identity))) {
+            intent.controller.abort(); adjustmentBundles.intent = null;
+        }
+        if (!context || (reconciliationState.scope && reconciliationContextKey(reconciliationState.scope) === context
+            && (!identity || (reconciliationState.result || {}).cache_identity !== identity))) adjustmentPopup.bundle = null;
+    }
+    async function readAdjustmentJson(url, controller) {
+        const timeout = window.setTimeout(function () {controller.abort();}, CASHFLOW_REQUEST_TIMEOUT_MS);
+        try {
+            const response = await fetch(url, {signal: controller.signal, cache: 'no-store'});
+            const result = await response.json();
+            if (!response.ok) {const error = new Error(result.detail || 'Adjustment transactions could not be loaded.'); error.status = response.status; throw error;}
+            return result;
+        } finally {window.clearTimeout(timeout);}
+    }
+    function adjustmentScopeQuery(scope) {
+        const query = new URLSearchParams({client_id: scope.client_id, period_start: scope.period_start,
+            period_end: scope.period_end, group_by: scope.group_by, treasury_view: scope.treasury_view});
+        appendCashflowAccounts(query, cashflowAccountCodes(scope)); return query;
+    }
+    function checkAdjustmentBundle(value, scope, parent, proof, book, supportKey, side) {
+        if (value.bundle_schema !== 2 || value.support_key !== supportKey || value.side !== side || value.cache_schema !== 1 || value.cache_identity !== parent.cache_identity
+            || reconciliationContextKey(value) !== reconciliationContextKey(scope) || value.proof !== proof || value.source_book !== book
+            || typeof value.complete !== 'boolean') throw Object.assign(new Error('Adjustment scope changed. Reload the working paper.'), {status:409});
+        if (!value.complete) return;
+        const ids = new Set(), referenced = new Set();
+        if (!Array.isArray(value.rows) || value.rows.length > 1000 || !Array.isArray(value.groups) || !Array.isArray(value.columns))
+            throw Object.assign(new Error('Incomplete adjustment bundle.'), {status:409});
+        value.rows.forEach(function (row) {
+            const id = String(row.id);
+            if (ids.has(id) || row.id == null || typeof row.search_text !== 'string') throw Object.assign(new Error('Invalid source occurrences.'), {status:409});
+            ids.add(id);
+        });
+        const groups = new Set(), expected = parent.views[proof].adjustments;
+        value.groups.forEach(function (group) {
+            const row = expected.find(function (item) {return item.key === group.key;});
+            const key = group.key + ':' + group.side;
+            const memberIds = new Set(Array.isArray(group.row_ids) ? group.row_ids.map(String) : []);
+            if (!row || !['receipts','payments'].includes(group.side) || row.total[group.side] !== group.adjustment_total
+                || group.key !== supportKey || group.side !== side || groups.has(key) || !Array.isArray(group.row_ids) || !Array.isArray(group.in_period_row_ids)
+                || memberIds.size !== group.row_ids.length
+                || group.row_ids.some(function (id) {return !ids.has(String(id));})
+                || group.in_period_row_ids.some(function (id) {return !memberIds.has(String(id));}))
+                throw Object.assign(new Error('Adjustment membership changed. Reload the working paper.'), {status:409});
+            groups.add(key); group.row_ids.forEach(function (id) {referenced.add(String(id));});
+        });
+        if (referenced.size !== ids.size || groups.size !== 1 || !groups.has(supportKey + ':' + side))
+            throw Object.assign(new Error('Incomplete adjustment membership.'), {status:409});
+        // A valid but oversized response is never retained or shown as a partial set.
+        if (new TextEncoder().encode(JSON.stringify(value)).length > ADJUSTMENT_BUNDLE_MAX_BYTES)
+            Object.assign(value, {complete:false, reason:'byte_limit', rows:[], columns:[], groups:[]});
+    }
+    async function fetchAdjustmentBundle(scope, parent, proof, book, supportKey, side) {
+        const key = adjustmentBundleKey(scope, parent, proof, book, supportKey, side), cached = takeReconciliation(key);
+        if (cached) return {value:JSON.parse(cached.json), fresh:false};
+        if (adjustmentBundles.pending && adjustmentBundles.pending.key === key) return adjustmentBundles.pending.promise;
+        if (adjustmentBundles.pending) adjustmentBundles.pending.controller.abort();
+        const controller = new AbortController(), cacheGeneration = reconciliationCacheGeneration;
+        const pending = {key:key, context:reconciliationContextKey(scope), identity:parent.cache_identity, controller:controller};
+        const query = adjustmentScopeQuery(scope); query.set('proof', proof); query.set('source_book', book); query.set('expected_identity', parent.cache_identity); query.set('support_key', supportKey); query.set('side', side);
+        pending.promise = (async function () {
+            try {
+                const value = await readAdjustmentJson('/api/reconciliation/cashflows/reconciliation/adjustment-bundle?' + query, controller);
+                if (controller.signal.aborted || cacheGeneration !== reconciliationCacheGeneration) return null;
+                checkAdjustmentBundle(value, scope, parent, proof, book, supportKey, side);
+                if (!controller.signal.aborted && cacheGeneration === reconciliationCacheGeneration && reconciliationState.scope === scope
+                    && reconciliationState.result === parent) rememberReconciliation(key, pending.context, value);
+                return {value:value, fresh:true};
+            } catch (error) {
+                if ([401,403,409].includes(error.status)) throw error;
+                return null; // Optional preload failure leaves the established paged reader available.
+            } finally {if (adjustmentBundles.pending === pending) adjustmentBundles.pending = null;}
+        })();
+        adjustmentBundles.pending = pending; return pending.promise;
+    }
+    function rejectAdjustmentPreload(error, scope, parent) {
+        if (![401,403,409].includes(error.status) || reconciliationState.scope !== scope || reconciliationState.result !== parent) return;
+        closeReconciliationAdjustment(false);
+        closeReconciliationCompleteness(false);
+        clearReconciliationCache(reconciliationContextKey(scope));
+        reconciliationState.needsReportReload = true; reconciliationState.result = null;
+        element('reconWorking').replaceChildren();
+        const status = element('reconStatus'); status.hidden = false; status.classList.add('is-error');
+        status.innerHTML = escapeHtml(error.message) + ' <button type="button" class="cashflows-secondary" data-recon-retry>Reload working paper</button>';
+        syncReconciliationControls();
+    }
+    function prepareAdjustmentIntent(button) {
+        if (adjustmentBundles.restoringFocus) return;
+        const state = reconciliationState, scope = state.scope, parent = state.result;
+        if (!scope || !parent || !button) return;
+        const supportKey = button.dataset.reconSupport, side = button.dataset.reconSide;
+        if (!supportKey || !side) return;
+        const old = adjustmentBundles.intent;
+        if (old && old.button === button && old.parent === parent && performance.now() - old.started < 5000) return;
+        if (old) old.controller.abort();
+        const controller = new AbortController(), intent = {button:button, parent:parent, proof:state.view,
+            context:reconciliationContextKey(scope), identity:parent.cache_identity, controller:controller, started:performance.now()};
+        const cached = takeReconciliation(adjustmentBundleKey(scope, parent, state.view, 'ledger', supportKey, side));
+        intent.promise = cached
+            ? readAdjustmentJson('/api/reconciliation/cashflows/reconciliation/cache-validation?' + adjustmentScopeQuery(scope), controller)
+                .then(function (value) {
+                    if (value.cache_schema !== 1 || value.cache_identity !== parent.cache_identity || reconciliationContextKey(value) !== intent.context)
+                        throw Object.assign(new Error('Source changed. Reload the working paper.'), {status:409});
+                    return value;
+                })
+            : fetchAdjustmentBundle(scope, parent, state.view, 'ledger', supportKey, side);
+        // Attach a handler immediately: a hover can finish without any click.
+        intent.promise.catch(function (error) {if (!controller.signal.aborted) rejectAdjustmentPreload(error, scope, parent);});
+        adjustmentBundles.intent = intent;
+    }
+    async function validateAdjustmentBundle(scope, parent, proof, controller) {
+        const intent = adjustmentBundles.intent;
+        if (intent && intent.button === adjustmentPopup.opener && intent.parent === parent && intent.proof === proof
+            && performance.now() - intent.started < 5000 && !intent.controller.signal.aborted) {
+            adjustmentBundles.intent = null; await intent.promise; return;
+        }
+        const value = await readAdjustmentJson('/api/reconciliation/cashflows/reconciliation/cache-validation?' + adjustmentScopeQuery(scope), controller);
+        if (value.cache_schema !== 1 || value.cache_identity !== parent.cache_identity || reconciliationContextKey(value) !== reconciliationContextKey(scope))
+            throw Object.assign(new Error('Source changed. Reload the working paper.'), {status:409});
+    }
+    function adjustmentBundlePage(bundle, page, search) {
+        const group = bundle.groups.find(function (row) {return row.key === adjustmentPopup.key && row.side === adjustmentPopup.side;});
+        if (!group || group.adjustment_total !== adjustmentPopup.total) throw Object.assign(new Error('Adjustment membership changed.'), {status:409});
+        const ids = new Set(group.row_ids.map(String)), inPeriod = new Set(group.in_period_row_ids.map(String)), needle = search.toLowerCase();
+        const rows = bundle.rows.filter(function (row) {return ids.has(String(row.id)) && (!search
+            || [row.search_text, row.account_code || '', row.account_name || ''].some(function (text) {return String(text).toLowerCase().includes(needle);}));});
+        const count = rows.length, pages = Math.max(1, Math.ceil(count / 50)), number = Math.min(page, pages);
+        return {adjustment_total:group.adjustment_total, transactions:{source_book:bundle.source_book, search:search, columns:bundle.columns,
+            total_rows:count, page:number, page_count:pages, rows:rows.slice((number-1)*50, number*50).map(function (row) {
+                return Object.assign({}, row, {in_period:inPeriod.has(String(row.id))});
+            })}};
+    }
+    function canSearchAdjustmentBundle(bundle, search) {
+        // PostgreSQL and browser Unicode case mappings can differ. Keep those
+        // searches on the authoritative literal-search reader; paging stays local.
+        return !search || (/^[\x00-\x7f]*$/.test(search) && bundle.rows.every(function (row) {
+            return [row.search_text, row.account_code || '', row.account_name || ''].every(function (text) {
+                return /^[\x00-\x7f]*$/.test(String(text));
+            });
+        }));
+    }
+    function adjustmentPageKey(scope, parent, proof, supportKey, side, book, search, page) {
+        return JSON.stringify([reconciliationContextKey(scope), 'flat-adjustment-v1', proof, supportKey, side, book, search, page, parent.cache_identity]);
+    }
+    function matchesAdjustmentPaging(scope, parent, proof, supportKey, side, book, search) {
+        const paging = adjustmentPopup.pagedScope;
+        return paging && paging.scope === scope && paging.parent === parent && paging.proof === proof
+            && paging.key === supportKey && paging.side === side && paging.book === book && paging.search === search;
+    }
+    function checkAdjustmentPage(result, scope, parent, proof, supportKey, side, book, search, total) {
+        if (result.cache_identity !== parent.cache_identity || reconciliationContextKey(result) !== reconciliationContextKey(scope)
+            || result.support_key !== supportKey || result.side !== side || result.proof !== proof
+            || result.transactions.source_book !== book || result.transactions.search !== search || result.adjustment_total !== total)
+            throw Object.assign(new Error('Adjustment scope or evidence changed. Reload the working paper.'), {status:409});
+    }
+    function prefetchAdjustmentPage(scope, parent, proof, supportKey, side, book, search, total, data) {
+        if (data.page >= data.page_count) return;
+        const page = data.page + 1, key = adjustmentPageKey(scope, parent, proof, supportKey, side, book, search, page);
+        if (takeReconciliation(key) || (adjustmentBundles.pagePending && adjustmentBundles.pagePending.key === key)) return;
+        if (adjustmentBundles.pagePending) adjustmentBundles.pagePending.controller.abort();
+        const controller = new AbortController(), generation = reconciliationCacheGeneration;
+        const pending = {key:key, controller:controller};
+        const query = adjustmentScopeQuery(scope);
+        Object.entries({support_key:supportKey, side:side, source_book:book, search:search, page:page, limit:50,
+            expected_identity:parent.cache_identity}).forEach(function ([name, value]) {query.set(name, value);});
+        pending.promise = (async function () {
+            try {
+                const value = await readAdjustmentJson('/api/reconciliation/cashflows/reconciliation/adjustment-transactions?' + query, controller);
+                if (controller.signal.aborted || generation !== reconciliationCacheGeneration || reconciliationState.scope !== scope
+                    || reconciliationState.result !== parent) return null;
+                checkAdjustmentPage(value, scope, parent, proof, supportKey, side, book, search, total);
+                rememberReconciliation(key, reconciliationContextKey(scope), value);
+                return value;
+            } catch (error) {
+                if (!controller.signal.aborted) rejectAdjustmentPreload(error, scope, parent);
+                return null;
+            } finally {if (adjustmentBundles.pagePending === pending) adjustmentBundles.pagePending = null;}
+        })();
+        adjustmentBundles.pagePending = pending;
+    }
+    function finishAdjustmentLoading() {
+        const loading = adjustmentPopup.loading;
+        if (!loading) return;
+        adjustmentPopup.loading = null;
+        window.LoadingUI.hideSpinner(loading.title);
+        window.LoadingUI.hideProgressBar(loading.progress);
+        window.LoadingUI.stopGlobalLoading(loading.token);
+        element('reconSupport').removeAttribute('aria-busy');
+    }
+    function closeReconciliationAdjustment(restoreFocus) {
+        adjustmentPopup.generation += 1;
+        if (adjustmentPopup.controller) adjustmentPopup.controller.abort();
+        adjustmentPopup.controller = null;
+        adjustmentPopup.pendingKey = null;
+        adjustmentPopup.bundle = null;
+        adjustmentPopup.pagedScope = null;
+        if (adjustmentBundles.pagePending) adjustmentBundles.pagePending.controller.abort();
+        adjustmentBundles.pagePending = null;
+        adjustmentPopup.page = 1;
+        finishAdjustmentLoading();
+        const dialog = element('reconAdjustmentDialog');
+        // Native dialog.close() also restores focus before our explicit fallback.
+        adjustmentBundles.restoringFocus = true;
+        try {if (dialog.open) dialog.close();} finally {adjustmentBundles.restoringFocus = false;}
+        dialog.hidden = true;
+        element('reconSupport').replaceChildren();
+        element('reconAdjustmentPage').textContent = '';
+        element('reconAdjustmentPrevious').disabled = true;
+        element('reconAdjustmentNext').disabled = true;
+        const opener = adjustmentPopup.opener;
+        adjustmentPopup.opener = null;
+        if (restoreFocus) {
+            if (adjustmentBundles.intent) adjustmentBundles.intent.controller.abort();
+            adjustmentBundles.intent = null;
+        }
+        if (restoreFocus && opener && opener.isConnected) {
+            // Returning focus is not a new request to inspect evidence.
+            adjustmentBundles.restoringFocus = true;
+            try {opener.focus({preventScroll: true});} finally {adjustmentBundles.restoringFocus = false;}
+        }
+    }
+    function openReconciliationAdjustment(button) {
+        if (!reconciliationState.result) return;
+        closeReconciliationAdjustment(false);
+        adjustmentPopup.opener = button;
+        adjustmentPopup.key = button.dataset.reconSupport;
+        adjustmentPopup.side = button.dataset.reconSide;
+        const part = reconciliationState.result.views[reconciliationState.view];
+        const row = part.adjustments.find(function (value) {return value.key === adjustmentPopup.key;});
+        adjustmentPopup.total = row.total[adjustmentPopup.side];
+        element('reconAdjustmentTitle').textContent = row.label + (row.category ? ' — ' + row.category : '');
+        element('reconAdjustmentContext').textContent = element('reconContext').textContent + ' · ' + adjustmentPopup.side
+            + ' adjustment: ' + reconciliationMoney(adjustmentPopup.total);
+        element('reconAdjustmentSearch').value = '';
+        element('reconAdjustmentBook').value = 'ledger';
+        const dialog = element('reconAdjustmentDialog');
+        dialog.hidden = false; dialog.showModal();
+        loadReconciliationAdjustment(1);
+    }
+    function renderReconciliationAdjustmentRows(result) {
+        const target = element('reconSupport');
+    const data = result.transactions, rawColumns = data.columns || [];
+        adjustmentPopup.page = data.page;
+    const showScope = data.source_book === 'voucher' || data.rows.some(function (row) {return row.in_period === false;});
+    const headers = ['Account code', 'Account name'].concat(showScope ? ['Scope'] : []).concat(rawColumns);
+    const rows = data.rows.map(function (row) {
+        const values = [row.account_code, row.account_name].concat(showScope ? [
+            row.in_period === false ? 'Outside range · context only' : 'Within range · voucher context'] : []).concat(rawColumns.map(function (column) {return (row.row_data || {})[column];}));
+        return '<tr' + (row.in_period === false ? ' class="context-only"' : '') + '>' + values.map(function (value, index) {
+            // Group source-number text lexically; never coerce evidence to Number.
+            let text = value == null ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
+            const rawIndex = index - 2 - (showScope ? 1 : 0);
+            const sourceNumber = (row.numeric_columns || []).includes(rawColumns[rawIndex]);
+            if (sourceNumber && /^[+-]?\d+(?:\.\d+)?$/.test(text)) {
+                const parts = text.split('.');
+                parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+                text = parts.join('.');
+            }
+            const numeric = sourceNumber || typeof value === 'number' || /^[+-]?[\d,]+(?:\.\d+)?(?:\s*(?:DR|CR))?$/i.test(text);
+            return '<td class="' + (numeric ? 'source-number' : text.length > 70 ? 'source-narrative' : '') + '">' + escapeHtml(text) + '</td>';
+        }).join('') + '</tr>';
+    }).join('');
+    element('reconAdjustmentPage').textContent = data.total_rows + ' source row(s) · Page ' + data.page + ' of ' + data.page_count;
+    const previous = element('reconAdjustmentPrevious'), next = element('reconAdjustmentNext');
+    previous.dataset.adjustmentPage = String(data.page - 1); previous.disabled = data.page <= 1;
+    next.dataset.adjustmentPage = String(data.page + 1); next.disabled = data.page >= data.page_count;
+    target.innerHTML = rows ? '<div class="recon-table-wrap"><table class="recon-flat-table"><thead><tr>' + headers.map(function (name) {return '<th scope="col">' + escapeHtml(name) + '</th>';}).join('')
+        + '</tr></thead><tbody>' + rows + '</tbody></table></div>' : '<p>No matching source rows. Complete voucher rows remain available through Source.</p>';
+    }
+    async function loadReconciliationAdjustment(page) {
+        const state = reconciliationState, scope = state.scope, parent = state.result;
+        const dialog = element('reconAdjustmentDialog'), target = element('reconSupport');
+        if (!scope || !parent || !dialog.open) return;
+        adjustmentPopup.page = page;
+        const side = adjustmentPopup.side, supportKey = adjustmentPopup.key;
+        const book = element('reconAdjustmentBook').value, search = element('reconAdjustmentSearch').value.trim();
+        const context = reconciliationContextKey(scope), cacheGeneration = reconciliationCacheGeneration;
+        const active = adjustmentPopup.bundle;
+        if (active && active.scope === scope && active.parent === parent && active.proof === state.view && active.book === book
+            && canSearchAdjustmentBundle(active.value, search)) {
+            renderReconciliationAdjustmentRows(adjustmentBundlePage(active.value, page, search));
+            return;
+        }
+        adjustmentPopup.bundle = null;
+        const key = adjustmentPageKey(scope, parent, state.view, supportKey, side, book, search, page);
+        const ready = takeReconciliation(key);
+        if (ready && matchesAdjustmentPaging(scope, parent, state.view, supportKey, side, book, search)) {
+            const result = JSON.parse(ready.json);
+            checkAdjustmentPage(result, scope, parent, state.view, supportKey, side, book, search, adjustmentPopup.total);
+            renderReconciliationAdjustmentRows(result);
+            prefetchAdjustmentPage(scope, parent, state.view, supportKey, side, book, search, adjustmentPopup.total, result.transactions);
+            return;
+        }
+        if (adjustmentPopup.controller && adjustmentPopup.pendingKey === key) return;
+        adjustmentPopup.generation += 1;
+        if (adjustmentPopup.controller) adjustmentPopup.controller.abort();
+        finishAdjustmentLoading();
+        const generation = adjustmentPopup.generation, controller = new AbortController();
+        adjustmentPopup.controller = controller;
+        adjustmentPopup.pendingKey = key;
+        const query = new URLSearchParams({client_id: scope.client_id, period_start: scope.period_start, period_end: scope.period_end,
+            group_by: scope.group_by, treasury_view: scope.treasury_view, support_key: supportKey, side: side,
+            expected_identity: parent.cache_identity, source_book: book, search: search, page: page, limit: 50});
+        appendCashflowAccounts(query, cashflowAccountCodes(scope));
+        const current = function () {return generation === adjustmentPopup.generation && dialog.open && scope === state.scope
+            && parent === state.result && scope.client_id === clientId && scope.report === lastCashflowsResult;};
+        // Disable obsolete page targets while a new filter/page is being validated.
+        element('reconAdjustmentPrevious').disabled = true;
+        element('reconAdjustmentNext').disabled = true;
+        element('reconAdjustmentPage').textContent = 'Loading transactions…';
+        target.hidden = false; target.setAttribute('aria-busy', 'true');
+        target.innerHTML = '<div class="recon-loading-panel"><h3 class="recon-loading-title"></h3><div class="recon-loading-progress"></div></div>';
+        const loading = {title: target.querySelector('h3'), progress: target.querySelector('.recon-loading-progress'), token: window.LoadingUI.startGlobalLoading(target)};
+        adjustmentPopup.loading = loading;
+        window.LoadingUI.showSpinner(loading.title, 'Loading adjustment transactions…');
+        window.LoadingUI.showProgressBar(loading.progress, {mode: 'indeterminate', message: 'Validating source and reading the requested transaction page.'});
+        const timeout = window.setTimeout(function () {controller.abort();}, CASHFLOW_REQUEST_TIMEOUT_MS);
+        const read = async function (url) {
+            const response = await fetch(url, {signal: controller.signal, cache: 'no-store'});
+            const value = await response.json();
+            if (!response.ok) {const error = new Error(value.detail || 'Transactions could not be loaded.'); error.status = response.status; throw error;}
+            return value;
+        };
+        try {
+            const bundle = await fetchAdjustmentBundle(scope, parent, state.view, book, supportKey, side);
+            if (!current()) return;
+            if (bundle && bundle.value.complete && canSearchAdjustmentBundle(bundle.value, search)) {
+                checkAdjustmentBundle(bundle.value, scope, parent, state.view, book, supportKey, side);
+                if (!bundle.fresh) await validateAdjustmentBundle(scope, parent, state.view, controller);
+                if (!current()) return;
+                adjustmentPopup.bundle = {value:bundle.value, scope:scope, parent:parent, proof:state.view, book:book};
+                renderReconciliationAdjustmentRows(adjustmentBundlePage(bundle.value, page, search));
+                return;
+            }
+            let result, cached = takeReconciliation(key);
+            const validated = matchesAdjustmentPaging(scope, parent, state.view, supportKey, side, book, search);
+            if (validated && adjustmentBundles.pagePending && adjustmentBundles.pagePending.key === key) {
+                result = await adjustmentBundles.pagePending.promise;
+                if (!current()) return;
+                cached = takeReconciliation(key);
+            }
+            if (validated && cached && !result) result = JSON.parse(cached.json);
+            if (cached && !result) {
+                const validation = new URLSearchParams({client_id: scope.client_id, period_start: scope.period_start, period_end: scope.period_end,
+                    group_by: scope.group_by, treasury_view: scope.treasury_view});
+                appendCashflowAccounts(validation, cashflowAccountCodes(scope));
+                const identity = await read('/api/reconciliation/cashflows/reconciliation/cache-validation?' + validation);
+                if (identity.cache_schema !== 1 || reconciliationContextKey(identity) !== context || identity.cache_identity !== parent.cache_identity) {
+                    const error = new Error('Source changed. Reload the working paper.'); error.status = 409; throw error;
+                }
+                if (cacheGeneration === reconciliationCacheGeneration) result = JSON.parse(cached.json);
+            }
+            if (!result) result = await read('/api/reconciliation/cashflows/reconciliation/adjustment-transactions?' + query);
+            if (!current()) return;
+            checkAdjustmentPage(result, scope, parent, state.view, supportKey, side, book, search, adjustmentPopup.total);
+            if (cacheGeneration === reconciliationCacheGeneration) rememberReconciliation(key, context, result);
+            adjustmentPopup.pagedScope = {scope:scope, parent:parent, proof:state.view, key:supportKey, side:side, book:book, search:search};
+            renderReconciliationAdjustmentRows(result);
+            prefetchAdjustmentPage(scope, parent, state.view, supportKey, side, book, search, adjustmentPopup.total, result.transactions);
+        } catch (error) {
+            if (!current()) return;
+            element('reconAdjustmentPage').textContent = 'Transactions unavailable';
+            if ([401, 403, 409].includes(error.status)) {
+                clearReconciliationCache(context);
+                state.needsReportReload = true;
+                state.result = null;
+                closeReconciliationCompleteness(false);
+                element('reconWorking').replaceChildren();
+                element('reconStatus').hidden = false;
+                element('reconStatus').textContent = 'Reconciliation evidence is unavailable or changed. Reload the working paper.';
+                element('reconStatus').classList.add('is-error');
+                syncReconciliationControls();
+            }
+            target.innerHTML = '<p role="alert">' + escapeHtml(error.name === 'AbortError' ? 'The transaction request timed out.' : error.message)
+                + '</p><button type="button" class="cashflows-secondary" ' + ([401,403,409].includes(error.status) ? 'data-adjustment-reload' : 'data-adjustment-retry')
+                + '>' + ([401,403,409].includes(error.status) ? 'Reload working paper' : 'Retry') + '</button>';
+        } finally {
+            window.clearTimeout(timeout);
+            if (adjustmentPopup.loading === loading) finishAdjustmentLoading();
+            if (adjustmentPopup.controller === controller) {adjustmentPopup.controller = null; adjustmentPopup.pendingKey = null;}
+        }
     }
     function loadCashflowReconciliation(options, control) {
         const state = reconciliationState;
         if (!state.scope || element('cashflowReconciliation').hidden) return Promise.resolve();
         const context = reconciliationContextKey(state.scope);
-        const key = JSON.stringify([context, options.support_key || '', options.period_key || '',
+        const key = JSON.stringify([context, options.period_key || '',
             !!options.posting_differences, options.comparison_view || '', options.differences_only || '',
             String(options.page || 1), String(options.limit || 25),
-            options.support_key || options.posting_differences ? (state.result || {}).evidence_fingerprint : '']);
+            options.posting_differences ? (state.result || {}).evidence_fingerprint : '']);
         const force = !!(control || {}).forceRefresh, requestKey = key + ':' + force;
         if (state.pending && state.pending.key === requestKey) return state.pending.promise;
         const promise = runCashflowReconciliation(options, {key: key, context: context, forceRefresh: force});
@@ -3521,7 +3978,7 @@
     async function runCashflowReconciliation(options, control) {
         const state = reconciliationState;
         if (!state.scope || element('cashflowReconciliation').hidden) return;
-        const child = !!(options.support_key || options.posting_differences);
+        const child = !!options.posting_differences;
         if (child && !state.result) return;
         cancelReconciliationRequest();
         const generation = state.generation, scope = state.scope;
@@ -3540,7 +3997,6 @@
         status.classList.remove('is-error');
         if (child) renderReconciliationStatus(); else { status.hidden = true; status.textContent = ''; }
         startReconciliationProcessing(options);
-        if (options.support_key) scrollReconciliationEvidence(element('reconSupport'));
         const query = new URLSearchParams({client_id: scope.client_id, period_start: scope.period_start, period_end: scope.period_end,
             group_by: scope.group_by, treasury_view: scope.treasury_view, ...options});
         appendCashflowAccounts(query, cashflowAccountCodes(scope));
@@ -3599,7 +4055,7 @@
             // An external refresh may clear memory while this snapshot is in flight.
             if (cacheGeneration === reconciliationCacheGeneration) {
                 clearReconciliationCache(control.context, result.cache_identity);
-                rememberReconciliation(control.key, control.context, result, options.support_key ? 'support' : child ? 'posting_differences' : '');
+                rememberReconciliation(control.key, control.context, result, child ? 'posting_differences' : '');
             }
             if (!child) {
                 state.result = result; state.needsReportReload = false;
@@ -3608,18 +4064,11 @@
                     + cashflowTreasuryViewLabel(scope.treasury_view) + ' · ' + result.receipt_presentation + ' receipts'
                     + (scope.account_selection ? ' · Accounts: ' + scope.account_selection.account_codes.join(', ') : '');
                 element('reconViewLabel').hidden = scope.treasury_view !== 'split';
-                element('reconView').innerHTML = Object.keys(result.views).map(function (view) { return '<option value="' + escapeHtml(view) + '">' + escapeHtml(cashflowTreasuryViewLabel(view)) + '</option>'; }).join('');
+                // Keep proof names compact while retaining the existing API values.
+                const proofLabels = {combined: 'Combined', bank: 'Bank', cash: 'Cash'};
+                element('reconView').innerHTML = Object.keys(result.views).map(function (view) { return '<option value="' + escapeHtml(view) + '">' + escapeHtml(proofLabels[view] || cashflowTreasuryViewLabel(view)) + '</option>'; }).join('');
                 element('reconView').value = state.view;
                 renderReconciliationWorking();
-            } else if (options.support_key) {
-                const support = result.support;
-                state.supportKey = options.support_key;
-                element('reconSupport').innerHTML = '<div class="recon-evidence-head"><h3>Adjustment voucher support</h3><button type="button" class="cashflows-secondary" data-recon-hide-support>Close support</button></div>'
-                    + '<p class="recon-muted">Original source amounts; import timestamps do not certify ERP extraction times. Outside-range lines provide context only.</p>'
-                    + reconciliationPaging(support, 'support') + reconciliationEvidence(support.rows, false)
-                    + (!support.rows.length ? '<p>No supporting groups for this period.</p>' : '') + reconciliationPaging(support, 'support');
-                renderReconciliationStatus();
-                scrollReconciliationEvidence(element('reconSupport'));
             } else {
                 const data = result.posting_differences;
                 element('reconDifferenceRows').innerHTML = '<p class="recon-muted">Posting comparison: ' + escapeHtml(data.posting_status) + ' · '
@@ -3635,8 +4084,7 @@
                 clearReconciliationCache(control.context);
                 state.result = null; clearReconciliationChildren(); element('reconWorking').innerHTML = '';
                 state.lastRequest = {};
-            } else if (options.support_key) element('reconSupport').innerHTML = '';
-            else if (child) element('reconDifferenceRows').innerHTML = '';
+            } else if (child) element('reconDifferenceRows').innerHTML = '';
             status.classList.add('is-error');
             status.hidden = false;
             status.innerHTML = escapeHtml(error.name === 'AbortError' ? 'The reconciliation request timed out.' : error.message)
@@ -3780,8 +4228,8 @@
             link.href = url; link.download = match ? match[1] : 'Cashflow_reconciliation.xlsx';
             document.body.appendChild(link); link.click(); link.remove();
             window.setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
-            status.classList.remove('is-error'); status.hidden = false;
-            renderReconciliationStatus(); status.prepend(document.createTextNode('Reconciliation Excel downloaded. '));
+            renderReconciliationStatus();
+            status.hidden = false; status.textContent = 'Reconciliation Excel downloaded.';
         } catch (error) {
             if (!current()) return;
             if ([401, 403, 409].includes(error.status)) {
@@ -3798,6 +4246,46 @@
     }
     function initialiseCashflowReconciliation() {
         const page = element('cashflowReconciliation');
+        const completeness = element('reconCompletenessDialog');
+        element('reconCompletenessOpen').addEventListener('click', openReconciliationCompleteness);
+        element('reconCompletenessClose').addEventListener('click', function () {closeReconciliationCompleteness(true);});
+        completeness.addEventListener('cancel', function (event) {event.preventDefault(); closeReconciliationCompleteness(true);});
+        completeness.addEventListener('keydown', function (event) {if (event.key === 'Escape') event.stopPropagation();});
+        completeness.addEventListener('click', function (event) {
+            const button = event.target.closest('#reconCompletenessAdjustments');
+            if (!button) return;
+            const expanded = button.getAttribute('aria-expanded') === 'true';
+            button.setAttribute('aria-expanded', String(!expanded));
+            button.textContent = (expanded ? '▸' : '▾') + ' Adjustments (signed)';
+            element('reconCompletenessAdjustmentRows').hidden = expanded;
+        });
+        const dialog = element('reconAdjustmentDialog');
+        element('reconAdjustmentClose').addEventListener('click', function () {closeReconciliationAdjustment(true);});
+        dialog.addEventListener('cancel', function (event) {event.preventDefault(); closeReconciliationAdjustment(true);});
+        dialog.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape') event.stopPropagation();
+            if (event.key !== 'Tab') return;
+            const controls = Array.from(dialog.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled)'))
+                .filter(function (node) {return node.getClientRects().length;});
+            const first = controls[0], last = controls[controls.length - 1];
+            if (event.shiftKey && document.activeElement === first) {event.preventDefault(); last.focus();}
+            else if (!event.shiftKey && document.activeElement === last) {event.preventDefault(); first.focus();}
+        });
+        element('reconAdjustmentFilters').addEventListener('submit', function (event) {event.preventDefault(); loadReconciliationAdjustment(1);});
+        element('reconAdjustmentClear').addEventListener('click', function () {element('reconAdjustmentSearch').value = ''; loadReconciliationAdjustment(1);});
+        page.addEventListener('pointerover', function (event) {prepareAdjustmentIntent(event.target.closest('[data-recon-support]'));});
+        page.addEventListener('focusin', function (event) {prepareAdjustmentIntent(event.target.closest('[data-recon-support]'));});
+        const resume = function () {
+            if (document.hidden) return;
+            if (adjustmentBundles.intent) adjustmentBundles.intent.controller.abort();
+            adjustmentBundles.intent = null; adjustmentPopup.bundle = null; adjustmentPopup.pagedScope = null;
+            if (adjustmentBundles.pagePending) adjustmentBundles.pagePending.controller.abort();
+            adjustmentBundles.pagePending = null;
+            if (dialog.open) loadReconciliationAdjustment(adjustmentPopup.page);
+        };
+        window.addEventListener('focus', resume);
+        document.addEventListener('visibilitychange', resume);
+        targetAdjustmentActions();
         element('cashflowsReconciliationButton').addEventListener('click', openCashflowReconciliation);
         element('reconClose').addEventListener('click', closeCashflowReconciliation);
         element('reconReload').addEventListener('click', reloadCashflowReconciliation);
@@ -3832,11 +4320,17 @@
                 syncReconciliationControls();
                 if (button.dataset.reconTab === 'differences') loadReconciliationDifferences(1);
             } else if (button.dataset.reconSupport) {
-                loadCashflowReconciliation({support_key: button.dataset.reconSupport, page: 1, limit: 25});
-            } else if (button.dataset.reconPage === 'support') {
-                loadCashflowReconciliation({support_key: reconciliationState.supportKey, page: button.dataset.page, limit: 25});
+                openReconciliationAdjustment(button);
             } else if (button.dataset.reconPage === 'differences') loadReconciliationDifferences(button.dataset.page);
-            else if (button.hasAttribute('data-recon-hide-support')) { cancelReconciliationRequest(); element('reconSupport').hidden = true; renderReconciliationStatus(); }
+        });
+    }
+    function targetAdjustmentActions() {
+        element('reconAdjustmentDialog').addEventListener('click', function (event) {
+            const button = event.target.closest('button');
+            if (!button) return;
+            if (button.dataset.adjustmentPage) loadReconciliationAdjustment(Number(button.dataset.adjustmentPage));
+            if (button.hasAttribute('data-adjustment-retry')) loadReconciliationAdjustment(1);
+            if (button.hasAttribute('data-adjustment-reload')) {closeReconciliationAdjustment(false); reloadCashflowReconciliation();}
         });
     }
     function renderResult(result) {

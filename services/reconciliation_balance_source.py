@@ -643,6 +643,145 @@ def _cashflow_gross_sides(rows, account_codes, periods):
     return totals, invalid
 
 
+def cashflow_adjustment_key(view, entry):
+    """One identity contract for the accepted paper and its flat detail reader."""
+    return hashlib.sha256(json.dumps([view, entry['reason'], entry['label'], entry['category']]).encode()).hexdigest()[:24]
+
+
+def cashflow_adjustment_sections(entries):
+    """Sum original operation precision, not rounded category display amounts."""
+    sections = {}
+    for side in ('receipts', 'payments'):
+        sections[side] = {}
+        for name, sign in (('add', 1), ('less', -1)):
+            values = [Decimal(str(e[side])) for e in entries if Decimal(str(e[side])) * sign > 0]
+            sections[side][name] = float(sum(values, Decimal(0)).quantize(Decimal('.01')))
+    return sections
+
+
+def cashflow_adjustment_membership(summary, treasury_rows, accounts, view, support_key, side):
+    """Use the existing engine, without ledger history, balances or comparisons."""
+    explanation = build_cashflow_presentation_adjustments(summary, treasury_rows, accounts, view)
+    entries = [e for proof, part in explanation['views'].items() for e in part['entries']
+               if cashflow_adjustment_key(proof, e) == support_key and Decimal(str(e[side])) != 0]
+    if not entries:
+        raise ValueError('Unknown or empty reconciliation adjustment for this side')
+    return entries
+
+
+def cashflow_adjustment_bundle_groups(summary, treasury_rows, accounts, view, proof):
+    """Prepare all groups once; retain the accepted engine's operation precision."""
+    explanation = build_cashflow_presentation_adjustments(summary, treasury_rows, accounts, view)
+    if proof not in explanation['views']:
+        raise ValueError('Unknown reconciliation proof')
+    groups = {}
+    for entry in explanation['views'][proof]['entries']:
+        for side in ('receipts', 'payments'):
+            if Decimal(str(entry[side])) == 0:
+                continue
+            key = cashflow_adjustment_key(proof, entry)
+            group = groups.setdefault((key, side), dict(key=key, side=side, label=entry['label'],
+                category=entry['category'], entries=[], amount=Decimal(0)))
+            group['entries'].append(entry)
+            group['amount'] += Decimal(str(entry[side]))
+    for group in groups.values():
+        group['adjustment_total'] = float(group.pop('amount').quantize(Decimal('.01')))
+    return list(groups.values())
+
+
+def compact_cashflow_adjustment_groups(support):
+    """Retain membership and exact group totals, never original transaction rows."""
+    groups = {}
+    for entries in support.values():
+        for entry in entries:
+            proof = entry['treasury_view']
+            key = cashflow_adjustment_key(proof, entry)
+            for side in ('receipts', 'payments'):
+                amount = Decimal(str(entry[side]))
+                if not amount:
+                    continue
+                group = groups.setdefault((proof, key, side), dict(proof=proof, key=key, side=side,
+                    label=entry['label'], category=entry['category'], refs=set(), amount=Decimal(0)))
+                group['refs'].add((entry['voucher_id'], entry['period_key']))
+                group['amount'] += amount
+    for group in groups.values():
+        group['entries'] = [dict(voucher_id=voucher, period_key=period) for voucher, period in sorted(group.pop('refs'))]
+        group['adjustment_total'] = float(group.pop('amount').quantize(Decimal('.01')))
+    return list(groups.values())
+
+
+def build_cashflow_voucher_completeness(summary, source, accounts, paper, support):
+    """Compact screen controls from this snapshot; no reads or stored row copies.
+
+    Source counts include zero-value postings, while the Cashflow count uses
+    nonzero category contributions before visual filters. Repeated postings,
+    months and adjustment reasons must never inflate a distinct voucher count.
+    """
+    evidence = summary['reconciliation_evidence']
+    periods = {p['key'] for p in paper['periods']}
+    start, end = paper['periods'][0]['start'], paper['periods'][-1]['end']
+    plans = {str(p['voucher_id']): p['category_type'] for p in evidence.get('selected_scope', [])}
+    profiles = evidence['voucher_profiles']
+
+    def population(rows, codes):
+        identities, blank, invalid = set(), 0, False
+        for row in rows:
+            if row.get('account_code') not in codes:
+                continue
+            try:
+                day = date.fromisoformat(str(row.get('date'))[:10]).isoformat()
+            except ValueError:
+                invalid = True
+                continue
+            if start <= day <= end:
+                identity = _text(row.get('voucher_id'))
+                if identity:
+                    identities.add(identity)
+                else:
+                    blank += 1
+        return identities, blank, invalid
+
+    result = {}
+    selected_codes = set((summary.get('account_selection') or {}).get('account_codes', accounts))
+    for view, part in paper['views'].items():
+        codes = {code for code, kind in accounts.items()
+                 if code in selected_codes and (view == 'combined' or kind.casefold() == view)}
+        ledger, ledger_blank, ledger_invalid = population(source['ledger_rows'], codes)
+        transaction, transaction_blank, transaction_invalid = population(source['transaction_rows'], codes)
+        ledger_ready = not ledger_invalid and all(p['receipts']['ledger'] is not None for p in part['periods'])
+        transaction_ready = not transaction_invalid
+        cashflow = set()
+        for row in evidence['category_lines']:
+            voucher = _text(row.get('voucher_id'))
+            if not voucher or row['period_key'] not in periods or not _ledger_number(row['amount']):
+                continue
+            kinds = profiles.get(voucher, {}).get('treasury_types', [])
+            kind = plans.get(voucher) if 'selected_scope' in evidence else (kinds[0] if len(kinds) == 1 else 'Mixed')
+            if view == 'combined' or str(kind).casefold() == view:
+                cashflow.add(voucher)
+        groups, adjustment_ids = {}, set()
+        for key, entries in support.items():
+            relevant = [r for r in entries if r['treasury_view'] == view]
+            if not relevant:
+                continue
+            ids = {_text(r['voucher_id']) for r in relevant if _text(r['voucher_id'])}
+            adjustment_ids.update(ids)
+            groups[key] = dict(vouchers=len(ids), **{side: len({_text(r['voucher_id']) for r in relevant
+                if _text(r['voucher_id']) and Decimal(str(r[side])) != 0}) for side in ('receipts', 'payments')})
+        result[view] = dict(schema=1,
+            ledger=dict(vouchers=len(ledger) if ledger_ready else None,
+                        blank_id_rows=ledger_blank if ledger_ready else None),
+            transaction=dict(vouchers=len(transaction) if transaction_ready else None,
+                             blank_id_rows=transaction_blank if transaction_ready else None),
+            cashflow=dict(vouchers=len(cashflow)), adjustments=dict(vouchers=len(adjustment_ids), groups=groups),
+            source_ids_match=(ledger == transaction) if ledger_ready and transaction_ready else None,
+            ledger_only=len(ledger - transaction) if ledger_ready and transaction_ready else None,
+            transaction_only=len(transaction - ledger) if ledger_ready and transaction_ready else None,
+            outside_cashflow=len(transaction - cashflow) if transaction_ready else None,
+            cashflow_only=len(cashflow - transaction) if transaction_ready else None)
+    return result
+
+
 def build_cashflow_reconciliation(
     summary: Mapping[str, Any], source: Mapping[str, Any], account_types: Mapping[str, str],
     treasury_view: str = 'combined', *, include_posting_comparisons: bool = False,
@@ -697,7 +836,7 @@ def build_cashflow_reconciliation(
         entries = presentation['entries']
         adjustments = {}
         for entry in entries:
-            identity = hashlib.sha256(json.dumps([view, entry['reason'], entry['label'], entry['category']]).encode()).hexdigest()[:24]
+            identity = cashflow_adjustment_key(view, entry)
             row = adjustments.setdefault(identity, dict(key=identity, reason=entry['reason'], label=entry['label'],
                 category=entry['category'], periods={p['key']: dict(receipts=Decimal(0), payments=Decimal(0)) for p in periods}))
             for side in ('receipts', 'payments'):

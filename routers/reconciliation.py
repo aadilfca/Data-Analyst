@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from collections import OrderedDict
 from datetime import date, datetime
 from decimal import Decimal
 from io import BytesIO
@@ -11,7 +12,8 @@ import json
 import logging
 import math
 import re
-from time import perf_counter
+from time import perf_counter, monotonic
+from threading import RLock
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -43,6 +45,10 @@ from services.ledger_report_source import (
     load_ledger_report_source,
     load_cashflow_difference_source,
     load_cashflow_reconciliation_identity,
+    load_cashflow_adjustment_treasury_rows,
+    load_cashflow_adjustment_rows,
+    load_cashflow_adjustment_bundle,
+    CASHFLOW_ADJUSTMENT_BUNDLE_MAX_BYTES,
     cashflow_reconciliation_support_page,
     store_cashflow_summary_read_model,
 )
@@ -56,6 +62,10 @@ from services.reconciliation_balance_source import (
     load_uploaded_ledger_balances,
     build_cashflow_differences,
     build_cashflow_reconciliation,
+    build_cashflow_voucher_completeness,
+    cashflow_adjustment_sections,
+    cashflow_adjustment_bundle_groups,
+    compact_cashflow_adjustment_groups,
     normalize_balance_month,
 )
 from services.reconciliation_xlsx import export_cashflow_xlsx, export_reconciliation_xlsx, export_cashflow_reconciliation_xlsx
@@ -68,6 +78,140 @@ logger = logging.getLogger(__name__)
 # Browser roll-ups are disposable; never persist another transaction/report copy.
 CASHFLOW_BROWSER_LEDGER_MAX_ROWS = 5000
 CASHFLOW_BROWSER_LEDGER_MAX_BYTES = 2 * 1024 * 1024
+
+
+class _AdjustmentMembershipCache:
+    """Process-local metadata only; bounded across owners and read snapshots.
+
+    A per-build lock coalesces expiry/restart misses. Publication happens only
+    after the read snapshot succeeds, so a retried/failed read cannot seed it.
+    """
+    def __init__(self):
+        self.entries = OrderedDict()
+        self.lock = RLock()
+        self.build_lock = RLock()
+        self.max_bytes = 8 * 1024 * 1024
+        self.max_entries = 20
+        self.per_owner = 2
+        self.ttl = 600
+
+    def _prune(self):
+        now = monotonic()
+        for key, (_, _, touched) in list(self.entries.items()):
+            if now - touched >= self.ttl:
+                self.entries.pop(key)
+
+    def get(self, owner, identity):
+        if owner is None:
+            return None
+        with self.lock:
+            self._prune()
+            key = (owner, identity)
+            item = self.entries.pop(key, None)
+            if item is None:
+                return None
+            payload, size, _ = item
+            self.entries[key] = (payload, size, monotonic())
+            return json.loads(payload)
+
+    def put(self, owner, identity, value):
+        if owner is None:
+            return
+        payload = json.dumps(value, separators=(',', ':'), ensure_ascii=False).encode('utf-8')
+        size = len(payload)
+        with self.lock:
+            self._prune()
+            key = (owner, identity)
+            self.entries.pop(key, None)
+            if size > self.max_bytes:
+                return
+            while sum(k[0] == owner for k in self.entries) >= self.per_owner:
+                self.entries.pop(next(k for k in self.entries if k[0] == owner))
+            while self.entries and (len(self.entries) >= self.max_entries
+                    or sum(item[1] for item in self.entries.values()) + size > self.max_bytes):
+                self.entries.popitem(last=False)
+            self.entries[key] = (payload, size, monotonic())
+
+
+_adjustment_memberships = _AdjustmentMembershipCache()
+
+
+def _adjustment_owner(session):
+    return session.get('user_id') if isinstance(session, dict) else None
+
+
+def _adjustment_metadata(periods, accounts, support):
+    return dict(periods=periods, accounts=accounts, groups=compact_cashflow_adjustment_groups(support))
+
+
+class _AdjustmentMembershipMiss(Exception):
+    pass
+
+
+def _read_adjustment(session, client_id, start, end, grouping, view, selected_codes, expected_identity, reader):
+    """Validate every source read; reuse only server-derived compact membership.
+
+    Wait for a cold rebuild outside the database snapshot/connection. Warm
+    readers do not acquire the build lock. A cold retry validates its own source
+    snapshot again and publishes only after that complete read succeeds.
+    """
+    owner = _adjustment_owner(session)
+
+    def read(allow_build):
+        prepared = {}
+
+        def snapshot(_conn):
+            _require_active_client(client_id)
+            config = _cashflow_configuration(client_id)
+            if not config.get('source_template_id'):
+                raise HTTPException(400, 'Configure the Cashflows Transaction Report template first.')
+            selected = _cashflow_selected_codes(selected_codes, config, view)
+            options = _cashflow_selection_options(selected)
+            identity = _reconciliation_cache_context(client_id, start, end, grouping, view, config, **options)
+            if identity['cache_identity'] != expected_identity:
+                raise HTTPException(409, 'Reconciliation evidence changed; reload the working paper.')
+            metadata = _adjustment_memberships.get(owner, identity['cache_identity'])
+            if metadata is None:
+                if not allow_build:
+                    raise _AdjustmentMembershipMiss()
+                accounts = {c: 'Bank' for c in config['bank_account_codes']}
+                accounts.update({c: 'Cash' for c in config['cash_account_codes']})
+                report = load_ledger_report_source(client_id, journal_template_id=config['source_template_id'],
+                    period_start=start, period_end=end, cashflow_group_by=grouping, query_fn=execute_query_pg,
+                    account_category_source='cashflow', treasury_account_codes=list(accounts), **options)
+                if not report.ready:
+                    raise HTTPException(400, 'Cashflow source is unavailable; reload the report.')
+                summary = build_cashflow_summary(report.journal, report.coa, config['cash_account_codes'], config['bank_account_codes'],
+                    start, end, group_by=grouping, match_internal_transfers=config['match_internal_transfers'],
+                    receipt_presentation=config['receipt_presentation'], cashflow_role_categories=config['customer_payment_roles'],
+                    vendor_account_codes=config.get('vendor_account_codes', []), include_reconciliation_evidence=True, **options)
+                if selected is not None:
+                    accounts = {c:k for c,k in accounts.items() if c in selected}
+                treasury = load_cashflow_adjustment_treasury_rows(client_id, config['source_template_id'], list(accounts),
+                    start.date().isoformat(), end.date().isoformat(), query_fn=execute_query_pg)
+                groups = []
+                for proof in (('combined', 'bank', 'cash') if view == 'split' else (view,)):
+                    for group in cashflow_adjustment_bundle_groups(summary, treasury, accounts, view, proof):
+                        refs = {(e['voucher_id'], e['period_key']) for e in group['entries']}
+                        groups.append(dict(group, proof=proof,
+                            entries=[dict(voucher_id=v, period_key=p) for v,p in sorted(refs)]))
+                metadata = dict(accounts=accounts, periods=summary['periods'], groups=groups)
+                prepared.update(identity=identity['cache_identity'], value=metadata)
+            return reader(identity, config, metadata)
+
+        try:
+            result = run_read_snapshot_pg(snapshot)
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
+        if prepared:
+            _adjustment_memberships.put(owner, prepared['identity'], prepared['value'])
+        return result
+
+    try:
+        return read(False)
+    except _AdjustmentMembershipMiss:
+        with _adjustment_memberships.build_lock:
+            return read(True)
 
 
 def _cashflow_selection_options(codes):
@@ -2047,6 +2191,7 @@ def validate_cashflow_reconciliation_cache(
 
 
 def _cashflow_reconciliation_snapshot(client_id, start, end, grouping, view, *, include_posting=False, progress=None,
+                                      include_completeness=False,
                                       selected_treasury_account_codes=None):
     """Share the screen/export accounting build inside the caller's read snapshot."""
     progress = progress or (lambda *args: None)
@@ -2085,6 +2230,11 @@ def _cashflow_reconciliation_snapshot(client_id, start, end, grouping, view, *, 
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
     support = result.pop('_support_entries')
+    if include_completeness:
+        # Reuse the loaded source/category evidence; exports retain their contract.
+        counts = build_cashflow_voucher_completeness(summary, source, accounts, result, support)
+        for proof, part in result['views'].items():
+            part['voucher_completeness'] = counts[proof]
     config_key = _cashflow_configuration_key(config)
     result['evidence_fingerprint'] = hashlib.sha256((result['evidence_fingerprint'] + config_key).encode()).hexdigest()
     result.update(_reconciliation_cache_context(client_id, start, end, grouping, view, config, **selection_options))
@@ -2110,8 +2260,10 @@ def cashflow_reconciliation(
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
 
+    prepared = {}
     def read(_conn):
         result, source, support, accounts = _cashflow_reconciliation_snapshot(client_id, start, end, grouping, view,
+            include_completeness=not support_key and not posting_differences,
             **_cashflow_selection_options(selected_treasury_account_codes))
         if expected_fingerprint and expected_fingerprint != result['evidence_fingerprint']:
             raise HTTPException(409, 'Reconciliation evidence changed; reload the working paper before opening support.')
@@ -2141,9 +2293,89 @@ def cashflow_reconciliation(
             support_view = support[support_key][0]['treasury_view']
             codes = [code for code, kind in accounts.items() if support_view == 'combined' or kind.casefold() == support_view]
             result['support'] = cashflow_reconciliation_support_page(source, entries, codes, periods=result['periods'], page=page, limit=limit)
+        # Presentation-only additions; the export/accounting snapshot is unchanged.
+        if not support_key and not posting_differences:
+            for proof, part in result['views'].items():
+                part['adjustment_sections'] = cashflow_adjustment_sections(
+                    [entry for values in support.values() for entry in values if entry['treasury_view'] == proof])
+            prepared.update(identity=result['cache_identity'], value=_adjustment_metadata(result['periods'], accounts, support))
         return result
 
-    return run_read_snapshot_pg(read)
+    result = run_read_snapshot_pg(read)
+    if prepared:
+        _adjustment_memberships.put(_adjustment_owner(session), prepared['identity'], prepared['value'])
+    return result
+
+
+@router.get('/api/reconciliation/cashflows/reconciliation/adjustment-transactions')
+def cashflow_adjustment_transactions(
+    client_id: int = Query(..., ge=1), period_start: str = Query(...), period_end: str = Query(...),
+    group_by: str = Query('month'), treasury_view: str = Query('combined'),
+    support_key: str = Query(..., min_length=24, max_length=24), side: str = Query(...),
+    expected_identity: str = Query(..., min_length=64, max_length=64),
+    source_book: str = Query('ledger'), search: str = Query('', max_length=200),
+    page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=200),
+    selected_treasury_account_codes: Optional[List[str]] = Query(None), session=Depends(require_admin),
+):
+    """Flat evidence only: never rebuild ledger balances or posting comparisons."""
+    start, end = _parse_report_period(period_start, period_end)
+    try:
+        grouping = normalize_cashflow_grouping(group_by)
+        view = normalize_cashflow_treasury_view(treasury_view)
+        if side not in ('receipts', 'payments') or source_book not in ('ledger', 'voucher'):
+            raise ValueError('Invalid adjustment side or source')
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    def reader(identity, config, metadata):
+        group = next((g for g in metadata['groups'] if g['key'] == support_key and g['side'] == side), None)
+        if group is None:
+            raise HTTPException(400, 'Unknown or empty reconciliation adjustment for this side')
+        proof = group['proof']
+        codes = [c for c,k in metadata['accounts'].items() if proof == 'combined' or k.casefold() == proof]
+        detail = load_cashflow_adjustment_rows(client_id, config['source_template_id'], codes, group['entries'], metadata['periods'],
+            source_book=source_book, search=search, page=page, limit=limit, query_fn=execute_query_pg)
+        return dict(identity, support_key=support_key, side=side, proof=proof, adjustment_total=group['adjustment_total'],
+            label=group['label'], category=group['category'], transactions=detail)
+    return _read_adjustment(session, client_id, start, end, grouping, view, selected_treasury_account_codes, expected_identity, reader)
+
+
+@router.get('/api/reconciliation/cashflows/reconciliation/adjustment-bundle')
+def cashflow_adjustment_bundle(
+    client_id: int = Query(..., ge=1), period_start: str = Query(...), period_end: str = Query(...),
+    group_by: str = Query('month'), treasury_view: str = Query('combined'), proof: str = Query(...),
+    expected_identity: str = Query(..., min_length=64, max_length=64), source_book: str = Query('ledger'),
+    support_key: str = Query('', max_length=24), side: str = Query('', max_length=8),
+    selected_treasury_account_codes: Optional[List[str]] = Query(None), session=Depends(require_admin),
+):
+    """Bounded original rows for one group, using the prepared paper membership."""
+    start, end = _parse_report_period(period_start, period_end)
+    try:
+        grouping = normalize_cashflow_grouping(group_by)
+        view = normalize_cashflow_treasury_view(treasury_view)
+        if source_book not in ('ledger', 'voucher') or proof not in (('combined','bank','cash') if view == 'split' else (view,)):
+            raise ValueError('Invalid adjustment source or proof')
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    # Omitted key/side preserves the preceding browser's bounded whole-proof API.
+    support_key = getattr(support_key, 'default', support_key)
+    side = getattr(side, 'default', side)
+    if bool(support_key) != bool(side) or (support_key and (len(support_key) != 24 or side not in ('receipts', 'payments'))):
+        raise HTTPException(400, 'Invalid adjustment group or side')
+    def reader(identity, config, metadata):
+        groups = [g for g in metadata['groups'] if g['proof'] == proof
+                  and (not support_key or (g['key'] == support_key and g['side'] == side))]
+        if support_key and not groups:
+            raise HTTPException(400, 'Unknown or empty reconciliation adjustment for this proof')
+        codes = [c for c,k in metadata['accounts'].items() if proof == 'combined' or k.casefold() == proof]
+        detail = load_cashflow_adjustment_bundle(client_id, config['source_template_id'], codes, groups, metadata['periods'],
+            source_book=source_book, query_fn=execute_query_pg)
+        result = dict(identity, bundle_schema=2 if support_key else 1, proof=proof, source_book=source_book, **detail)
+        if support_key:
+            result.update(support_key=support_key, side=side)
+        if len(json.dumps(result, default=str, ensure_ascii=False, separators=(',', ':')).encode('utf-8')) > CASHFLOW_ADJUSTMENT_BUNDLE_MAX_BYTES:
+            result.update(complete=False, reason='byte_limit', rows=[], columns=[], groups=[])
+        return result
+    return _read_adjustment(session, client_id, start, end, grouping, view, selected_treasury_account_codes, expected_identity, reader)
 
 
 class CashflowExportRequest(BaseModel):

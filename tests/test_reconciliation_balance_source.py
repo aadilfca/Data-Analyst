@@ -5,6 +5,7 @@ from services.reconciliation_balance_source import (
     load_uploaded_ledger_balances,
     build_cashflow_differences,
     build_cashflow_reconciliation,
+    build_cashflow_voucher_completeness,
 )
 
 import copy
@@ -12,6 +13,88 @@ import hashlib
 import json
 from decimal import Decimal
 import pytest
+
+
+def _completeness(case, summary=None, view='combined'):
+    summary = summary if summary is not None else _horizontal_summary(case)
+    paper = build_cashflow_reconciliation(summary, case['source'], case['accounts'], view)
+    return build_cashflow_voucher_completeness(summary, case['source'], case['accounts'], paper, paper['_support_entries'])
+
+
+def test_voucher_completeness_counts_unique_sources_and_category_contributions(horizontal_reconciliation_case):
+    case = horizontal_reconciliation_case
+    before = copy.deepcopy(case['source'])
+    counts = _completeness(case)['combined']
+    assert counts['ledger'] == {'vouchers': 4, 'blank_id_rows': 0}
+    assert counts['transaction'] == {'vouchers': 4, 'blank_id_rows': 0}
+    assert counts['cashflow'] == {'vouchers': 3}  # Pure transfer is presented separately.
+    assert counts['outside_cashflow'] == 1 and counts['cashflow_only'] == 0
+    assert counts['source_ids_match'] is True
+    assert counts['adjustments']['vouchers'] == 3  # Receipt has two roles, counted once.
+    assert all(group['vouchers'] == 1 for group in counts['adjustments']['groups'].values())
+    assert case['source'] == before
+
+
+def test_equal_voucher_counts_do_not_hide_different_ids(horizontal_reconciliation_case):
+    case = horizontal_reconciliation_case
+    case['source']['ledger_rows'][0]['voucher_id'] = 'OTHER'
+    counts = _completeness(case)['combined']
+    assert counts['ledger']['vouchers'] == counts['transaction']['vouchers'] == 4
+    assert counts['source_ids_match'] is False
+    assert counts['ledger_only'] == counts['transaction_only'] == 1
+
+
+def test_voucher_counts_do_not_sum_repeated_months_or_fractional_adjustments(horizontal_reconciliation_case):
+    case = horizontal_reconciliation_case
+    summary = _horizontal_summary(case, end='2026-02-28')
+    paper = build_cashflow_reconciliation(summary, case['source'], case['accounts'])
+    support = paper['_support_entries']
+    for book in ('ledger_rows', 'transaction_rows'):
+        original = case['source'][book][0]
+        case['source'][book].append(dict(original, id=999, date='2026-02-05'))
+    for key, entries in support.items():
+        entries += [dict(entry, period_key='2026-02', receipts='0.004', payments=0) for entry in list(entries)]
+    counts = build_cashflow_voucher_completeness(summary,case['source'],case['accounts'],paper,support)['combined']
+    assert counts['ledger']['vouchers'] == counts['transaction']['vouchers'] == 4
+    assert counts['adjustments']['vouchers'] == 3
+    assert all(group['vouchers'] == 1 for group in counts['adjustments']['groups'].values())
+
+
+def test_voucher_counts_keep_blanks_zero_rows_and_invalid_dates_separate(horizontal_reconciliation_case):
+    case = horizontal_reconciliation_case
+    summary = _horizontal_summary(case)
+    template = case['source']['transaction_rows'][0]
+    case['source']['transaction_rows'] += [dict(template, id=999, voucher_id='', debit=0, credit=0),
+        dict(template, id=1000, voucher_id='ZERO', debit=0, credit=0),
+        dict(template, id=1001, date='2025-12-31', voucher_id='OUTSIDE')]
+    counts = _completeness(case, summary)['combined']
+    assert counts['transaction'] == {'vouchers': 5, 'blank_id_rows': 1}
+    assert counts['cashflow']['vouchers'] == 3 and counts['outside_cashflow'] == 2
+    case['source']['transaction_rows'].append(dict(template, id=1002, date='invalid'))
+    counts = _completeness(case, summary)['combined']
+    assert counts['transaction']['vouchers'] is None
+    assert counts['source_ids_match'] is None and counts['outside_cashflow'] is None
+
+
+def test_voucher_count_with_missing_ledger_coverage_is_unavailable(horizontal_reconciliation_case):
+    case = horizontal_reconciliation_case
+    case['source']['uploads'] = []
+    counts = _completeness(case)['combined']
+    assert counts['ledger']['vouchers'] is None and counts['ledger']['blank_id_rows'] is None
+    assert counts['transaction']['vouchers'] == 4 and counts['source_ids_match'] is None
+
+
+@pytest.mark.parametrize('selection,view', [(['B1'], 'bank'), (['C1'], 'cash'), (['B1','C1'], 'split')])
+def test_voucher_completeness_uses_selected_account_and_proof(selected_account_case, selection, view):
+    case = selected_account_case
+    summary = _selected_summary(case, selection)
+    counts = _completeness(case, summary, view)
+    for proof, part in counts.items():
+        codes = {code for code in selection if proof == 'combined' or case['accounts'][code].casefold() == proof}
+        expected = {row['voucher_id'] for row in case['source']['transaction_rows']
+                    if row['account_code'] in codes and '2026-01-01' <= str(row['date']) <= '2026-01-31' and row['voucher_id']}
+        assert part['transaction']['vouchers'] == len(expected)
+        assert part['source_ids_match'] is True
 
 
 @pytest.fixture
