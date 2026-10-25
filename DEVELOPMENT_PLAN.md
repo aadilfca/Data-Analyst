@@ -4,7 +4,7 @@
 |---|---|
 | 1 — Create copies | Accepted: successful full backup, local/Drive checksum and privacy checks, processing display and safe retries; release authorised. |
 | 2 — Prove recovery | Accepted: Aadil tested the backup; isolated recovery verified 89 application tables, 255,367 records, 80 sequences, settings/object permissions and 49 financial control groups against the captured source state. |
-| Closeout | Phase 1 is pushed; Phase 2 Git closeout is underway. No further backup development phase is planned. |
+| Closeout | Phase 1 and Phase 2 are pushed (`98c2c18`). No further backup development phase is planned. |
 
 Setup retains its existing backup entry; Phase 2 is an operator-only local rehearsal. No working-table writes, app restore button, automatic schedule or retention deletion. Source workbooks/Storage objects/global roles/environment credentials remain separate.
 
