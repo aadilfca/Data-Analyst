@@ -24,13 +24,14 @@ This sequence governs current work; earlier roadmaps below are historical, not a
 | 7 — Reconciliation acceptance | Accepted/committed (`c08ac8e`). Twenty view/range combinations, eight workbooks and screen parity verified; 183 targeted tests pass. |
 | 8 — Account selection | 8A–8C accepted/committed (`4f0433d`); derived-column fetching preserved. |
 | 8D — Compact reconciliation | UI and group-cache correction locally accepted; separate Git approval pending. |
-| 8E — Reconciliation opening performance | Optional voucher profiles now use one pass; exact actual-source/Excel comparisons and 297 regression tests pass. Local acceptance pending; main-report path unchanged. |
+| 8E — Reconciliation opening performance | Accepted and committed/pushed (`b0a907b`); actual-source/Excel comparisons and 297 regression tests pass. Main-report path unchanged. |
 | 9 — Selected-account acceptance | Next, recommended after limit reset: verify one/several/all accounts across reports, balances, reconciliation, details and Excel, including within-selection and cross-boundary transfers. |
-| 10 — Drive production — final | Former phase 8: publish/reauthorise OAuth, configure hosted credentials/persistent external archives, then approve production archive/recovery verification. Existing archive guards remain active. |
+| 10 — Voucher completeness popup | After Phase 9, show distinct eligible voucher count for the loaded period/account scope, split into mutually exclusive Cash-only, Bank-only and Cash-and-Bank counts; separately show vouchers missing counterpart lines and blank-ID Treasury rows. Build from loaded evidence; show unavailable metrics as unavailable, never zero. |
+| 11 — Drive production — final | Former phase 8: publish/reauthorise OAuth, configure hosted credentials/persistent external archives, then approve production archive/recovery verification. Existing archive guards remain active. |
 
 Each implementation phase retains file/approach approval, local acceptance and separate Git approval.
 
-**This phase:** Optional reconciliation-profile optimisation verified; local acceptance pending. Main report/upload preparation and accepted Phase 8D baseline preserved; separate Git approval remains required.
+**This phase:** Voucher completeness popup planned after Phase 9; first confirm loaded evidence supports each count without adding storage or weakening source safeguards.
 
 Agreed toolbar: one desktop row, narrower Group by/Treasury view/Period, Cash/Bank a/c after Period, and shorter Ledger drill-down / XLSX labels. Default All preserves accepted behaviour.
 
