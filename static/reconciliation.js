@@ -3563,13 +3563,15 @@
     // Independent popup lifecycle: closing a detail must not cancel an Excel job
     // or let a delayed request repaint a different adjustment/proof.
     const adjustmentPopup = {generation: 0, controller: null, opener: null, key: null, side: null, total: null, loading: null, bundle: null, page: 1};
-    const adjustmentBundles = {pending: null, intent: null, pagePending: null, restoringFocus: false, hoverTimer: null, hoverButton: null};
+    const adjustmentBundles = {pending: null, intent: null, pagePending: null, restoringFocus: false, hoverTimer: null, hoverButton: null,
+        resumeTimer: null, resumeController: null};
     const ADJUSTMENT_BUNDLE_MAX_BYTES = 1024 * 1024;
     function adjustmentBundleKey(scope, parent, proof, book, supportKey, side) {
         return JSON.stringify([reconciliationContextKey(scope), 'adjustment-bundle-v2', proof, book, supportKey, side, parent.cache_identity]);
     }
     function cancelAdjustmentBundles(context, identity) {
         clearAdjustmentHoverIntent();
+        cancelAdjustmentResume();
         if (adjustmentBundles.pagePending) adjustmentBundles.pagePending.controller.abort();
         adjustmentBundles.pagePending = null;
         adjustmentPopup.pagedScope = null;
@@ -3669,6 +3671,62 @@
         if (adjustmentBundles.hoverTimer !== null) window.clearTimeout(adjustmentBundles.hoverTimer);
         adjustmentBundles.hoverTimer = null;
         adjustmentBundles.hoverButton = null;
+    }
+    function setAdjustmentResumeState(state, message) {
+        const form = element('reconAdjustmentFilters'), status = element('reconAdjustmentFreshness');
+        form.inert = state !== 'ready';
+        status.hidden = !message;
+        status.textContent = message || '';
+        element('reconAdjustmentRetryCheck').hidden = state !== 'failed';
+        const target = element('reconSupport');
+        if (state === 'checking') target.setAttribute('aria-busy', 'true');
+        else target.removeAttribute('aria-busy');
+    }
+    function cancelAdjustmentResume() {
+        if (adjustmentBundles.resumeTimer !== null) window.clearTimeout(adjustmentBundles.resumeTimer);
+        adjustmentBundles.resumeTimer = null;
+        if (adjustmentBundles.resumeController) adjustmentBundles.resumeController.abort();
+        adjustmentBundles.resumeController = null;
+        setAdjustmentResumeState('ready', '');
+    }
+    async function revalidateOpenAdjustment() {
+        const dialog = element('reconAdjustmentDialog'), state = reconciliationState;
+        const scope = state.scope, parent = state.result, proof = state.view;
+        if (!dialog.open || !scope || !parent || adjustmentPopup.controller || adjustmentBundles.resumeController) return;
+        const key = adjustmentPopup.key, side = adjustmentPopup.side, identity = parent.cache_identity;
+        const controller = new AbortController();
+        adjustmentBundles.resumeController = controller;
+        const isCurrent = function () {return dialog.open && state.scope === scope && state.result === parent
+            && parent.cache_identity === identity && state.view === proof && adjustmentPopup.key === key && adjustmentPopup.side === side;};
+        setAdjustmentResumeState('checking', 'Checking that the source data is unchanged…');
+        try {
+            await validateAdjustmentBundle(scope, parent, proof, controller);
+            if (controller.signal.aborted || !isCurrent()) return;
+            setAdjustmentResumeState('ready', '');
+        } catch (error) {
+            if (controller.signal.aborted || !isCurrent()) return;
+            if ([401, 403, 409].includes(error.status)) {
+                adjustmentBundles.resumeController = null;
+                rejectAdjustmentPreload(error, scope, parent);
+                return;
+            }
+            setAdjustmentResumeState('failed', 'The source could not be verified. These rows are on hold; retry the check before using them.');
+        } finally {
+            if (adjustmentBundles.resumeController === controller) adjustmentBundles.resumeController = null;
+        }
+    }
+    function scheduleAdjustmentResume(dialog) {
+        if (document.hidden) return;
+        if (adjustmentBundles.intent) adjustmentBundles.intent.controller.abort();
+        adjustmentBundles.intent = null;
+        if (adjustmentBundles.pagePending) adjustmentBundles.pagePending.controller.abort();
+        adjustmentBundles.pagePending = null;
+        if (!dialog.open || adjustmentPopup.controller || adjustmentBundles.resumeController || adjustmentBundles.resumeTimer !== null) return;
+        adjustmentBundles.resumeTimer = window.setTimeout(function () {
+            adjustmentBundles.resumeTimer = null;
+            if (document.hidden) return;
+            revalidateOpenAdjustment();
+        }, 150);
     }
     // Hover previews are optional; wait for a stable pointer to avoid fetching links crossed while moving.
     function scheduleAdjustmentHoverIntent(button) {
@@ -3787,6 +3845,7 @@
         element('reconSupport').removeAttribute('aria-busy');
     }
     function closeReconciliationAdjustment(restoreFocus) {
+        cancelAdjustmentResume();
         adjustmentPopup.generation += 1;
         if (adjustmentPopup.controller) adjustmentPopup.controller.abort();
         adjustmentPopup.controller = null;
@@ -4293,6 +4352,7 @@
         });
         element('reconAdjustmentFilters').addEventListener('submit', function (event) {event.preventDefault(); loadReconciliationAdjustment(1);});
         element('reconAdjustmentClear').addEventListener('click', function () {element('reconAdjustmentSearch').value = ''; loadReconciliationAdjustment(1);});
+        element('reconAdjustmentRetryCheck').addEventListener('click', revalidateOpenAdjustment);
         page.addEventListener('pointerover', function (event) {scheduleAdjustmentHoverIntent(event.target.closest('[data-recon-support]'));});
         page.addEventListener('pointerout', function (event) {
             const button = event.target.closest('[data-recon-support]');
@@ -4300,14 +4360,7 @@
             if (event.relatedTarget.closest('[data-recon-support]') !== button) clearAdjustmentHoverIntent(button);
         });
         page.addEventListener('focusin', function (event) {prepareAdjustmentIntent(event.target.closest('[data-recon-support]'));});
-        const resume = function () {
-            if (document.hidden) return;
-            if (adjustmentBundles.intent) adjustmentBundles.intent.controller.abort();
-            adjustmentBundles.intent = null; adjustmentPopup.bundle = null; adjustmentPopup.pagedScope = null;
-            if (adjustmentBundles.pagePending) adjustmentBundles.pagePending.controller.abort();
-            adjustmentBundles.pagePending = null;
-            if (dialog.open) loadReconciliationAdjustment(adjustmentPopup.page);
-        };
+        const resume = function () {scheduleAdjustmentResume(dialog);};
         window.addEventListener('focus', resume);
         document.addEventListener('visibilitychange', resume);
         targetAdjustmentActions();

@@ -1,8 +1,12 @@
 # Changelog Archive
 
+## Voucher detail tab-return validation — 2026-10-25
+
+Focus and visible-tab events now coalesce into one read-only identity check. Open detail rows remain visible while controls are locked; success unlocks them without rerendering. A source change retains the existing close/reload gate; a network failure keeps rows locked with an explicit retry. Nested completeness/detail dialogs and accounting/data paths are unchanged. Twenty-seven focused browser regressions pass, including stale-source rejection and failure/retry; JavaScript syntax and whitespace checks pass. Aadil confirmed the local test and approved Git closeout.
+
 ## Voucher detail hover request reduction — 2026-10-25
 
-Adjustment-detail hover previews now wait 250 ms on one link; leaving or moving cancels an unstarted preview. Focus and click remain immediate. Existing scope/freshness checks, cache bounds, cancellation and paged fallback are unchanged. No report calculation or database behavior changed. Nine focused browser regressions, JavaScript syntax and whitespace checks pass. Aadil confirmed the local screen test; Git closeout is pending.
+Adjustment-detail hover previews now wait 250 ms on one link; leaving or moving cancels an unstarted preview. Focus and click remain immediate. Existing scope/freshness checks, cache bounds, cancellation and paged fallback are unchanged. No report calculation or database behavior changed. Nine focused browser regressions, JavaScript syntax and whitespace checks pass. Aadil confirmed the local screen test; commit `27aa112` was pushed to `origin/main`.
 
 ## Full-backup diagnostics and resumable Drive — Phase 1 follow-up — 2026-10-25
 

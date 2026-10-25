@@ -2874,6 +2874,57 @@ def test_adjustment_bundle_window_return_revalidates_before_reusing_active_snaps
     assert page.locator('#reconExport').is_disabled()
 
 
+def test_adjustment_tab_return_coalesces_events_and_keeps_rows_visible(ledger_cache_page,reconciliation_payload):
+    page=ledger_cache_page
+    state,calls,_=_open_bundle_reconciliation(page,reconciliation_payload)
+    page.locator('#reconCompletenessOpen').click()
+    page.locator('#reconCompletenessAdjustments').click()
+    button=page.locator('#reconCompletenessDialog [data-recon-support]').first
+    button.click();page.wait_for_selector('#reconSupport .recon-flat-table')
+    original=page.locator('#reconSupport').inner_html()
+    assert page.locator('#reconCompletenessDialog').evaluate('(d)=>d.open')
+    page.evaluate('''()=>{
+        window.baseFetch=window.fetch;window.resumeReads=[];
+        window.fetch=(url,options)=>String(url).includes('/cache-validation?')
+            ?new Promise((resolve,reject)=>resumeReads.push({resolve,reject,signal:options.signal})):baseFetch(url,options);
+    }''')
+    page.evaluate("()=>{window.dispatchEvent(new Event('focus'));document.dispatchEvent(new Event('visibilitychange'));}")
+    page.wait_for_function('resumeReads.length===1')
+    assert page.locator('#reconAdjustmentDialog').evaluate('(d)=>d.open')
+    assert page.locator('#reconSupport').inner_html()==original
+    assert page.locator('#reconAdjustmentFilters').evaluate('(f)=>f.inert')
+    assert 'Checking' in page.locator('#reconAdjustmentFreshness').inner_text()
+    assert page.locator('#reconAdjustmentRetryCheck').is_hidden()
+    page.evaluate('v=>resumeReads[0].resolve({ok:true,json:async()=>v})',state['parent'])
+    page.wait_for_function("document.getElementById('reconAdjustmentFreshness').hidden")
+    assert page.locator('#reconSupport').inner_html()==original
+    assert not page.locator('#reconAdjustmentFilters').evaluate('(f)=>f.inert')
+
+
+def test_adjustment_tab_return_verification_failure_keeps_rows_locked_until_retry(ledger_cache_page,reconciliation_payload):
+    page=ledger_cache_page
+    state,calls,button=_open_bundle_reconciliation(page,reconciliation_payload)
+    button.click();page.wait_for_selector('#reconSupport .recon-flat-table')
+    original=page.locator('#reconSupport').inner_html()
+    page.evaluate('''()=>{
+        window.baseFetch=window.fetch;window.resumeReads=[];
+        window.fetch=(url,options)=>String(url).includes('/cache-validation?')
+            ?new Promise((resolve,reject)=>resumeReads.push({resolve,reject,signal:options.signal})):baseFetch(url,options);
+    }''')
+    page.evaluate("()=>window.dispatchEvent(new Event('focus'))")
+    page.wait_for_function('resumeReads.length===1')
+    page.evaluate("()=>resumeReads[0].reject(new TypeError('connection interrupted'))")
+    page.wait_for_function("!document.getElementById('reconAdjustmentRetryCheck').hidden")
+    assert page.locator('#reconSupport').inner_html()==original
+    assert page.locator('#reconAdjustmentFilters').evaluate('(f)=>f.inert')
+    page.locator('#reconAdjustmentRetryCheck').click()
+    page.wait_for_function('resumeReads.length===2')
+    page.evaluate('v=>resumeReads[1].resolve({ok:true,json:async()=>v})',state['parent'])
+    page.wait_for_function("document.getElementById('reconAdjustmentFreshness').hidden")
+    assert page.locator('#reconSupport').inner_html()==original
+    assert not page.locator('#reconAdjustmentFilters').evaluate('(f)=>f.inert')
+
+
 def test_adjustment_bundle_unicode_search_uses_authoritative_literal_filter(ledger_cache_page,reconciliation_payload):
     page=ledger_cache_page
     state,calls,button=_open_bundle_reconciliation(page,reconciliation_payload)

@@ -58,7 +58,7 @@ One line per file group: what it is now. Full build history for every entry live
 - experiments/cashflow_fetch/*.py + tests/test_cashflow_fetch_benchmark.py → Standalone read-only transport benchmarks with exact source/report/export comparisons; never loaded by the app. See CHANGELOG_ARCHIVE.md.
 
 
-- static/reconciliation.html, static/reconciliation.js → Cashflow selection, compact reconciliation toolbar, completeness tables, delayed hover previews, shared adjustment popups and bounded caches. See CHANGELOG_ARCHIVE.md.
+- static/reconciliation.html, static/reconciliation.js → Cashflow selection, completeness tables, delayed hover previews, coalesced tab-return validation, shared popups and bounded caches. See CHANGELOG_ARCHIVE.md.
 
 ## Commands
 - Run app: [your actual run command]
@@ -258,7 +258,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 ## Status log
 
-- 2026-10-25: Voucher detail hover preloads now wait for stable pointer intent; clicks, focus loading and report calculations remain unchanged. See CHANGELOG_ARCHIVE.md.
+- 2026-10-25: Reconciliation keeps detail rows during coalesced tab-return checks; stale or unverifiable evidence stays locked. See CHANGELOG_ARCHIVE.md.
 
 - 2026-10-25: Full database backups with resumable verified Drive copies and processing progress are locally accepted; commit/push authorised. See CHANGELOG_ARCHIVE.md.
 

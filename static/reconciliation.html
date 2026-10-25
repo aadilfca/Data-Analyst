@@ -431,7 +431,10 @@
             </section>
             <dialog id='reconAdjustmentDialog' aria-labelledby='reconAdjustmentTitle' hidden>
                 <header class='recon-popup-header'>
-                    <div><h3 id='reconAdjustmentTitle'>Adjustment transactions</h3><div id='reconAdjustmentContext' class='recon-popup-context'></div></div>
+                    <div><h3 id='reconAdjustmentTitle'>Adjustment transactions</h3><div id='reconAdjustmentContext' class='recon-popup-context'></div>
+                        <p id='reconAdjustmentFreshness' class='recon-muted' role='status' aria-live='polite' hidden></p>
+                        <button type='button' id='reconAdjustmentRetryCheck' class='cashflows-secondary' hidden>Retry source check</button>
+                    </div>
                     <button type='button' id='reconAdjustmentClose' class='cashflows-secondary' aria-label='Close adjustment transactions'>Close</button>
                 </header>
                 <form id='reconAdjustmentFilters' class='recon-popup-controls'>
@@ -455,6 +458,6 @@
     </section>
     <script src='/static/client_context.js?v=21'></script>
     <script src='/static/loading_ui.js?v=ce6d21ca20c8'></script>
-    <script src='/static/reconciliation.js?v=54'></script>
+    <script src='/static/reconciliation.js?v=55'></script>
 </body>
 </html>
