@@ -2728,6 +2728,30 @@ def test_adjustment_group_intent_does_not_fetch_other_groups_and_cached_groups_s
     assert sum(kind=='bundle' for kind,_ in calls)==2
 
 
+def test_adjustment_hover_waits_for_stable_pointer_and_click_starts_immediately(ledger_cache_page,reconciliation_payload):
+    page=ledger_cache_page
+    state,calls,first=_open_bundle_reconciliation(page,reconciliation_payload,wait=False)
+    first_key=first.get_attribute('data-recon-support')
+    other=next(r for r in state['parent']['views']['combined']['adjustments'] if r['key']!=first_key and r['total']['receipts'])
+    second=page.locator('[data-recon-support="'+other['key']+'"][data-recon-side=receipts]').first
+    first.evaluate('(b)=>b.closest("details").open=true')
+    second.evaluate('(b)=>b.closest("details").open=true')
+
+    first.hover()
+    page.wait_for_timeout(60)
+    second.hover()
+    page.wait_for_function("ledgerFixture.reconciliationCache().filter(([k,v])=>JSON.parse(v.json).bundle_schema===2).length===1")
+    bundle_calls=[q for kind,q in calls if kind=='bundle']
+    assert [q['support_key'][0] for q in bundle_calls]==[other['key']]
+
+    first.focus()
+    first.evaluate('(b)=>b.click()')
+    page.wait_for_selector('#reconSupport .recon-flat-table')
+    page.wait_for_timeout(300)
+    bundle_calls=[q for kind,q in calls if kind=='bundle']
+    assert [q['support_key'][0] for q in bundle_calls]==[other['key'],first_key]
+
+
 @pytest.mark.parametrize('status',[401,403,409])
 def test_adjustment_group_hover_rejects_auth_or_stale_source(ledger_cache_page,reconciliation_payload,status):
     page=ledger_cache_page

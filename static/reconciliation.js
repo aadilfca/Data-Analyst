@@ -3563,12 +3563,13 @@
     // Independent popup lifecycle: closing a detail must not cancel an Excel job
     // or let a delayed request repaint a different adjustment/proof.
     const adjustmentPopup = {generation: 0, controller: null, opener: null, key: null, side: null, total: null, loading: null, bundle: null, page: 1};
-    const adjustmentBundles = {pending: null, intent: null, pagePending: null, restoringFocus: false};
+    const adjustmentBundles = {pending: null, intent: null, pagePending: null, restoringFocus: false, hoverTimer: null, hoverButton: null};
     const ADJUSTMENT_BUNDLE_MAX_BYTES = 1024 * 1024;
     function adjustmentBundleKey(scope, parent, proof, book, supportKey, side) {
         return JSON.stringify([reconciliationContextKey(scope), 'adjustment-bundle-v2', proof, book, supportKey, side, parent.cache_identity]);
     }
     function cancelAdjustmentBundles(context, identity) {
+        clearAdjustmentHoverIntent();
         if (adjustmentBundles.pagePending) adjustmentBundles.pagePending.controller.abort();
         adjustmentBundles.pagePending = null;
         adjustmentPopup.pagedScope = null;
@@ -3663,7 +3664,26 @@
         status.innerHTML = escapeHtml(error.message) + ' <button type="button" class="cashflows-secondary" data-recon-retry>Reload working paper</button>';
         syncReconciliationControls();
     }
+    function clearAdjustmentHoverIntent(button) {
+        if (button && adjustmentBundles.hoverButton !== button) return;
+        if (adjustmentBundles.hoverTimer !== null) window.clearTimeout(adjustmentBundles.hoverTimer);
+        adjustmentBundles.hoverTimer = null;
+        adjustmentBundles.hoverButton = null;
+    }
+    // Hover previews are optional; wait for a stable pointer to avoid fetching links crossed while moving.
+    function scheduleAdjustmentHoverIntent(button) {
+        if (!button) return;
+        if (adjustmentBundles.hoverButton === button) return;
+        clearAdjustmentHoverIntent();
+        adjustmentBundles.hoverButton = button;
+        adjustmentBundles.hoverTimer = window.setTimeout(function () {
+            adjustmentBundles.hoverTimer = null;
+            adjustmentBundles.hoverButton = null;
+            if (button.isConnected) prepareAdjustmentIntent(button);
+        }, 250);
+    }
     function prepareAdjustmentIntent(button) {
+        clearAdjustmentHoverIntent();
         if (adjustmentBundles.restoringFocus) return;
         const state = reconciliationState, scope = state.scope, parent = state.result;
         if (!scope || !parent || !button) return;
@@ -4273,7 +4293,12 @@
         });
         element('reconAdjustmentFilters').addEventListener('submit', function (event) {event.preventDefault(); loadReconciliationAdjustment(1);});
         element('reconAdjustmentClear').addEventListener('click', function () {element('reconAdjustmentSearch').value = ''; loadReconciliationAdjustment(1);});
-        page.addEventListener('pointerover', function (event) {prepareAdjustmentIntent(event.target.closest('[data-recon-support]'));});
+        page.addEventListener('pointerover', function (event) {scheduleAdjustmentHoverIntent(event.target.closest('[data-recon-support]'));});
+        page.addEventListener('pointerout', function (event) {
+            const button = event.target.closest('[data-recon-support]');
+            if (!button || !(event.relatedTarget instanceof Element)) {clearAdjustmentHoverIntent(button); return;}
+            if (event.relatedTarget.closest('[data-recon-support]') !== button) clearAdjustmentHoverIntent(button);
+        });
         page.addEventListener('focusin', function (event) {prepareAdjustmentIntent(event.target.closest('[data-recon-support]'));});
         const resume = function () {
             if (document.hidden) return;
@@ -4320,6 +4345,7 @@
                 syncReconciliationControls();
                 if (button.dataset.reconTab === 'differences') loadReconciliationDifferences(1);
             } else if (button.dataset.reconSupport) {
+                clearAdjustmentHoverIntent();
                 openReconciliationAdjustment(button);
             } else if (button.dataset.reconPage === 'differences') loadReconciliationDifferences(button.dataset.page);
         });

@@ -36,7 +36,7 @@ Cashflow history and remaining OAuth follow-up; full-database backup work is abo
 | 8D — Compact reconciliation | UI and group-cache correction accepted and pushed with Phase 10 (`77eb806`). |
 | 8E — Reconciliation opening performance | Accepted and committed/pushed (`b0a907b`); actual-source/Excel comparisons and 297 regression tests pass. Main-report path unchanged. |
 | 9 — Selected-account acceptance | Accepted by Aadil; reports work correctly. Existing focused acceptance evidence is retained. |
-| 10 — Voucher completeness popup | Core, shared toolbar and table spacing accepted and pushed (`77eb806`). |
+| 10 — Voucher completeness popup | Core/table accepted and pushed (`77eb806`); stable-pointer detail hover fix locally tested and accepted. Git closeout pending. |
 | 11 — Drive production — final | Keep Render Free for reporting; local replacement safeguards and synthetic Drive upload/download/checksum/extraction passed. OAuth publishing status remains unverified. |
 
 Each implementation phase retains file/approach approval, local acceptance and separate Git approval.

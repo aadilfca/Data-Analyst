@@ -1,5 +1,9 @@
 # Changelog Archive
 
+## Voucher detail hover request reduction — 2026-10-25
+
+Adjustment-detail hover previews now wait 250 ms on one link; leaving or moving cancels an unstarted preview. Focus and click remain immediate. Existing scope/freshness checks, cache bounds, cancellation and paged fallback are unchanged. No report calculation or database behavior changed. Nine focused browser regressions, JavaScript syntax and whitespace checks pass. Aadil confirmed the local screen test; Git closeout is pending.
+
 ## Full-backup diagnostics and resumable Drive — Phase 1 follow-up — 2026-10-25
 
 **Exact current cause:** The latest HAR records a 154.75-second POST/503 after a valid 18,623,399-byte ZIP was saved. A controlled same-file retry confirms nested URLError/TimeoutError, “The write operation timed out”, in HTTP sendall: the old multipart sender attempted the entire ZIP with a 45-second socket timeout. The configured private My Drive folder is writable; the reserved file was absent. PostgreSQL export already succeeded, and ApiUtils bypass warnings do not cause this failure. Earlier incomplete native dumps were a separate event: their original stderr was discarded; one read-only diagnostic export/decode subsequently passed. Neither event justifies guessing database/server setting changes.
