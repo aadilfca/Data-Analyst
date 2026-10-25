@@ -72,6 +72,7 @@ One line per file group: what it is now. Full build history for every entry live
 - Supabase is a working store, not an archive: retain one current canonical set per client/template and no second durable transaction copy in reports, read models, occurrences, revisions, caches, or audit payloads. Audit events may retain only changed fields or fingerprints; initial INSERT events retain no row payload. Compact configuration, counts, fingerprints, checksums, and run metadata are allowed.
 - Validate every upload before writing; unchanged reports are no-ops and legitimate line multiplicity survives. Complete reports replace explicitly declared coverage: retain unchanged occurrences, archive unmatched old lines, insert unmatched incoming lines. Line IDs are optional; never invent correction pairings. Partial extracts retain absent rows and block ambiguous corrections.
 - Upload changes/removals require a protected external ZIP and downloaded/checksummed Google Drive copy before committing. Archive failure, stale source/configuration/plan or protected references block replacement; compact operation receipts reconcile lost acknowledgements. App OAuth settings are independent of Codex's Drive connector. See CHANGELOG_ARCHIVE.md, Declared-coverage upload lifecycle.
+- Operating policy: keep Render Free for reporting; replace uploaded data through the local Windows app with a protected archive outside the checkout and a verified Drive copy.
 - Active identities are database-unique where existing data is clean. Until duplicate legacy groups are resolved, application gates remain authoritative and migrations must report blockers rather than delete or merge rows.
 - Source workbooks, SQL dumps, reports, and workpapers stay in controlled external/offline storage. Supabase may hold temporary staging metadata only; rejected, ignored, or fully deleted upload files and metadata must be removed.
 - **Locked deletion contract:** guarded preview/apply permanently removes source rows, derived classifications, occurrence metadata, audit payloads, upload metadata, validation plans, and staged files. Soft-delete and restore are not valid source-data lifecycle operations; protected verification/evidence references block the purge.
@@ -256,7 +257,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 ## Status log
 
-- 2026-10-25: Accepted voucher completeness, shared toolbar and compact reconciliation; combined commit/push authorised. Drive production readiness follows. See CHANGELOG_ARCHIVE.md.
+- 2026-10-25: Reconciliation pushed (77eb806); synthetic Drive archive recovery passed; OAuth publishing status remains unverified. See CHANGELOG_ARCHIVE.md.
 
 - 2026-10-25: Optimised optional voucher profiles in ledger_group_summary.py; main Cashflow unchanged. Local acceptance pending. See CHANGELOG_ARCHIVE.md.
 

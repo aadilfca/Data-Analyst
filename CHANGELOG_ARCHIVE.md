@@ -1,5 +1,15 @@
 # Changelog Archive
 
+## Drive production readiness and operating policy — Phase 11 — 2026-10-25
+
+**Decision/scope:** Aadil confirmed the three-record file list and approved this documentation approach. Keep Render Free for reporting; replace existing uploaded data through the local Windows app. Retain a protected archive outside the checkout and the existing downloaded/checksummed Drive copy before replacement. This is an operating policy; no application permissions, hosted settings, credentials, archive guards or financial data were changed. Paid hosting/persistent-disk setup is outside this chosen route.
+
+**Readiness evidence:** All five local archive settings are present; the configured directory exists outside the checkout. A live app-specific OAuth refresh and read-only Drive folder request succeed; the target is active and writable. A synthetic ZIP was uploaded, read back with the app's checksum verification, downloaded separately, checksum-checked and extracted/compared in a temporary isolated folder. Its temporary Drive file was removed; no client data or upload was changed. Seven isolated archive/configuration tests pass (simulated transfers). OAuth publishing status and a real financial-data restore remain unverified.
+
+**Remaining:** Check Google Cloud OAuth publishing status before certifying long-term token readiness. Current authentication proves the configured connection works now, not the console publishing state. No real ledger/archive was uploaded or restored, and local settings do not configure Render.
+
+**Record verification/Git:** Only CLAUDE.md, DEVELOPMENT_PLAN.md and this archive were updated. Status remains within its 80-line budget; docs whitespace checks apply. The seven isolated tests passed; no live app replacement or database restore was run. Aadil's record acceptance and explicit Git approval remain required; reconciliation is already pushed as `77eb806` and unrelated work stays excluded.
+
 ## Voucher completeness table — Phase 10 — 2026-10-25
 
 **Scope:** Ten confirmed service/API, screen, test and record files; Aadil approved the revised table prototype. The existing reconciliation navigation entry is explicitly accepted for this phase. No new files, dependencies, endpoints, SQL, database objects, durable transaction copies or main Cashflow calculations.
