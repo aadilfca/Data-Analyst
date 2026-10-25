@@ -52,7 +52,7 @@ One line per file group: what it is now. Full build history for every entry live
 - services/reconciliation_xlsx.py, reconciliation_export_jobs.py → Selected-account workbooks, complete voucher context, streaming, bounded owner-scoped jobs and private temporary files. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_balance_source.py → Independent balances, scoped voucher completeness, adjustment membership, posting comparisons and coverage controls. See CHANGELOG_ARCHIVE.md.
 - services/upload_lifecycle.py + drive_archive.py + upload_observation_report.py → Scope proofs, complete-voucher Excel evidence, verified external archives and compact receipts. See CHANGELOG_ARCHIVE.md.
-- routers/database_backup.py + services/database_backup.py + static/setup.* → Local PostgreSQL backups, resumable verified Drive copies, progress and safe retries. See CHANGELOG_ARCHIVE.md.
+- routers/database_backup.py + services/database_backup.py + static/setup.* + scripts/rehearse_database_backup.py → Local backups, resumable Drive verification, processing feedback and isolated recovery rehearsals. See CHANGELOG_ARCHIVE.md.
 - tests/test_account_control_center*.py, test_cashflows*.py, test_reconciliation*.py → Setup, accounting, voucher completeness, API/UI parity, workbook evidence and bounded export ownership checks. See CHANGELOG_ARCHIVE.md.
 - tests/test_upload_lifecycle.py + test_data_deletion.py + test_import_duplicate_gates.py → Upload/archive lifecycle, rollback, retry, deletion and identity regression tests.
 - experiments/cashflow_fetch/*.py + tests/test_cashflow_fetch_benchmark.py → Standalone read-only transport benchmarks with exact source/report/export comparisons; never loaded by the app. See CHANGELOG_ARCHIVE.md.
@@ -260,7 +260,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 - 2026-10-25: Reconciliation keeps detail rows during coalesced tab-return checks; stale or unverifiable evidence stays locked. See CHANGELOG_ARCHIVE.md.
 
-- 2026-10-25: Full database backups with resumable verified Drive copies and processing progress are locally accepted; commit/push authorised. See CHANGELOG_ARCHIVE.md.
+- 2026-10-25: Isolated application recovery verified and locally accepted; complete rows, settings, numbering and object permissions match. See CHANGELOG_ARCHIVE.md.
 
 - 2026-10-25: Optimised optional voucher profiles in ledger_group_summary.py; main Cashflow unchanged. Local acceptance pending. See CHANGELOG_ARCHIVE.md.
 

@@ -3,10 +3,12 @@
 | Phase | Status / objective |
 |---|---|
 | 1 — Create copies | Accepted: successful full backup, local/Drive checksum and privacy checks, processing display and safe retries; release authorised. |
-| 2 — Prove recovery | Later approval: restore a backup into a separate local PostgreSQL database and compare complete data/settings and accounting controls. |
-| This phase | Local test and independent verification passed; commit/push authorised. Recovery rehearsal remains separately approved work. |
+| 2 — Prove recovery | Accepted: Aadil tested the backup; isolated recovery verified 89 application tables, 255,367 records, 80 sequences, settings/object permissions and 49 financial control groups against the captured source state. |
+| Closeout | Phase 1 is pushed; Phase 2 Git closeout is underway. No further backup development phase is planned. |
 
-Use the existing Setup navigation entry as approved. No source-table writes, restore action, automatic schedule or retention deletion is introduced. Source workbooks/Storage objects/server-global roles/environment credentials remain outside a database dump.
+Setup retains its existing backup entry; Phase 2 is an operator-only local rehearsal. No working-table writes, app restore button, automatic schedule or retention deletion. Source workbooks/Storage objects/global roles/environment credentials remain separate.
+
+Recovery uses protected local evidence and existing PostgreSQL tools. Compact checks transfer complete-table fingerprints, not rows; older backups pass current-state comparison only when every checked section matches. Managed Supabase services and rendered report/export parity are not certified here. See CHANGELOG_ARCHIVE.md, “Isolated backup recovery proof — Phase 2”.
 
 ## Cashflow reconciliation gate — 2026-10-22
 

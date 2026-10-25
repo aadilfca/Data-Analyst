@@ -17,7 +17,7 @@ Every finding from a review session is recorded here — never fixed silently, n
 |------|--------|---------|----------|
 | 2026-09-09 | Dashboard / Release | Render `/api/dashboard/db-size` reports `0 B` because the dashboard size query reads local SQLite while business data is in Postgres; release reporting needs a Postgres-backed size source or an explicit limitation. | Fix |
 | 2026-09-09 | Dashboard / Release | RESOLVED: `/api/dashboard/db-size` now uses the Postgres client-data size estimator; focused HTTP regression passed. | Fix |
-| 2026-09-09 | Backup / Release | Export Backup omits Verification, audit-rule and Form tables. No current full PostgreSQL backup/restore evidence was available at combined closeout; full recovery sign-off remains unverified. | Fix |
+| 2026-09-09 | Backup / Release | RESOLVED for application data: full ZIP and isolated recovery preserve all checked tables, rows, settings, sequences and object permissions. Managed Supabase services/external files remain separate; legacy setup JSON remains limited. | Fix |
 | 2026-09-09 | Backup / Release | User accepted the backup-scope limitation and closed the development plan; retain this as an operational follow-up, not a pending development phase. | Defer |
 | 2026-09-09 | Audit Rules / Mobile | Whole-page width measured 850px at a 390px viewport in the combined review. Desktop Category tabs pass; mobile layout acceptance is limited. | Defer |
 | 2026-09-09 | Audit Rules | RESOLVED: a rail click during delayed startup could be overwritten by the URL-restore pass; explicit user selection now wins and loads its panel. | Fix |

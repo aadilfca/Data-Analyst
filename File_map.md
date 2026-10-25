@@ -38,7 +38,7 @@ This document lists all source files in the project, grouped by directory, with 
 | `services/cash_bank_classification.py` | Versioned Cash/Bank derived transaction-line builder, affected-account reporting, and controlled SQLite/PostgreSQL backfill service; never mutates raw Client Data. |
 
 ## Operations Scripts (`scripts/`)
-| `scripts/backfill_cash_bank_transaction_classifications.py`, `scripts/backfill_cashflow_voucher_occurrences.py`, `scripts/backfill_cashflow_prepared_read_model.py` | Explicit operator-run backfills; default dry-run and `--apply` for writes. |
+| `scripts/backfill_cash_bank_transaction_classifications.py`, `scripts/backfill_cashflow_voucher_occurrences.py`, `scripts/backfill_cashflow_prepared_read_model.py`, `scripts/rehearse_database_backup.py` | Explicit backfills and guarded local recovery rehearsals; default preview, separate write/run flags, no live recovery target. |
 ## Routers (`routers/`)
 | File | Purpose |
 |------|---------|
@@ -128,7 +128,7 @@ This document lists all source files in the project, grouped by directory, with 
 | File | Purpose |
 |------|---------|
 | `test_app_smoke.py` | Boots the real app via FastAPI's `TestClient` against a temp SQLite DB and proves routers respond (dashboard page + `/api/clients`). |
-| `test_upload_validation_counts.py`, `test_import_duplicate_gates.py`, `test_account_ledger_foundation.py`, `test_upload_lifecycle.py`, `test_upload_observation_report.py`, `test_database_backup.py` | Isolated upload/ledger/archive tests; full-backup access, no-overwrite/retry/native-export proofs and responsive UI. |
+| `test_upload_validation_counts.py`, `test_import_duplicate_gates.py`, `test_account_ledger_foundation.py`, `test_upload_lifecycle.py`, `test_upload_observation_report.py`, `test_database_backup.py`, `test_database_backup_rehearsal.py` | Isolated upload/archive, full-backup/UI and local-recovery tests; line multiplicity, snapshot controls, permissions and target isolation. |
 | `test_data_deletion.py` | Verifies guarded permanent source-data deletion scope, preview freshness, protected references, deletion order, and route error handling. |
 | `test_cash_bank_transaction_classification.py`, `test_cash_bank_transaction_backfill.py`, `test_cash_bank_transaction_upload_classification.py` | Verifies the versioned Cash/Bank derived layer, controlled backfill, upload-time classification, idempotence, rollback, and raw-data preservation. |
 | `test_verification_indexes.py`, `test_verification_account_sets.py` | Verifies cashbook lookup indexing, simplified and legacy routing, JV Treasury legs, transfers, prefix fallback, Cash movement signs, explicit debit/credit rules for all non-Treasury workstreams, signed preview/session presentation, imbalance detection, and Treasury exclusion. |
