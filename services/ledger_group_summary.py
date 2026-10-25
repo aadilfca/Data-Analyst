@@ -1986,11 +1986,22 @@ def build_cashflow_summary(
         # summaries do not retain another voucher payload or pay for this work.
         profiles = {}
         if not working.empty:
-            for voucher, lines in working.groupby('voucher_id', sort=False):
-                profiles[str(voucher)] = {
-                    'treasury_types': sorted({treasury_type[code] for code in lines.loc[lines['is_treasury'], 'account_code']}),
-                    'has_counterparts': bool((~lines['is_treasury']).any()),
-                }
+            # Read existing flags once instead of allocating/filtering a new
+            # DataFrame for every voucher. No amounts or accounting rules change.
+            for voucher, code, is_treasury in working[
+                ['voucher_id', 'account_code', 'is_treasury']
+            ].itertuples(index=False, name=None):
+                key = str(voucher)
+                profile = profiles.get(key)
+                if profile is None:
+                    profile = {'treasury_types': set(), 'has_counterparts': False}
+                    profiles[key] = profile
+                if is_treasury:
+                    profile['treasury_types'].add(treasury_type[code])
+                else:
+                    profile['has_counterparts'] = True
+            for profile in profiles.values():
+                profile['treasury_types'] = sorted(profile['treasury_types'])
         result['reconciliation_evidence'] = {
             'category_lines': category_frame.to_dict('records'),
             'voucher_profiles': profiles,

@@ -27,6 +27,71 @@ def test_reconciliation_evidence_is_opt_in_and_preserves_existing_summary(horizo
         build_cashflow_presentation_adjustments(ordinary,case['source']['transaction_rows'],case['accounts'],'combined')
 
 
+@pytest.mark.parametrize('shuffle', [None,7,33])
+@pytest.mark.parametrize('selection', [None,['C1'],['B1','C1'],['B1','B2','C1','C2']])
+def test_reconciliation_voucher_profiles_preserve_complete_context_and_order(shuffle, selection):
+    """Independently transcribed flags include repetitions and excluded legs."""
+    rows = [
+        ['CASH-R','2026-01-05','C1',10,0], ['CASH-R','2026-01-05','E',0,6],
+        ['CASH-R','2026-01-05','E',0,4],
+        ['BANK-P','2026-01-05','B1',0,8], ['BANK-P','2026-01-05','E',8,0],
+        ['INTERNAL','2026-01-05','B2',0,5], ['INTERNAL','2026-01-05','C2',5,0],
+        ['MIXED','2026-01-05','B1',0,7], ['MIXED','2026-01-05','C1',5,0],
+        ['MIXED','2026-01-05','E',2,0],
+        ['ZERO','2026-01-05','B1',0,0], ['ZERO','2026-01-05','E',0,0],
+        ['PAIR','2026-01-05','B1',0,4], ['PAIR','2026-01-05','B2',4,0],
+        [' 001 ','2026-01-05',' C1 ',3,0], [' 001 ','2026-01-05','E',0,3],
+        ['واؤچر-α','2026-01-05','C2',2,0], ['واؤچر-α','2026-01-05','E',0,2],
+        ['OUTSIDE','2025-12-31','C1',9,0], ['OUTSIDE','2025-12-31','E',0,9],
+        ['NO-TREASURY','2026-01-05','E',2,0], ['NO-TREASURY','2026-01-05','E',0,2],
+    ]
+    journal = pd.DataFrame(rows, columns=['voucher_id','date','account_code','debit','credit'])
+    if shuffle is not None:
+        journal = journal.sample(frac=1, random_state=shuffle).reset_index(drop=True)
+    original = journal.copy(deep=True)
+    coa = pd.DataFrame([dict(account_code=code,account_title=code,category='Operations' if code=='E' else '')
+                        for code in ('B1','B2','C1','C2','E')])
+    options = {'selected_treasury_account_codes':selection} if selection is not None else {}
+    result = build_cashflow_summary(journal,coa,['C1','C2'],['B1','B2'],'2026-01-01','2026-01-31',
+        include_reconciliation_evidence=True, **options)
+    expected = {
+        'CASH-R':(['Cash'],True), 'BANK-P':(['Bank'],True), 'INTERNAL':(['Bank','Cash'],False),
+        'MIXED':(['Bank','Cash'],True), 'ZERO':(['Bank'],True), 'PAIR':(['Bank'],False),
+        '001':(['Cash'],True), 'واؤچر-α':(['Cash'],True),
+    }
+    selected = set(selection or ['B1','B2','C1','C2'])
+    included = {row.voucher_id.strip() for row in journal.itertuples()
+                if row.date.startswith('2026-01') and row.account_code.strip() in selected}
+    order = list(dict.fromkeys(row.voucher_id.strip() for row in journal.itertuples()
+                 if row.date.startswith('2026-01') and row.voucher_id.strip() in included))
+    profiles = result['reconciliation_evidence']['voucher_profiles']
+    assert profiles == {key:dict(treasury_types=types,has_counterparts=other)
+                        for key,(types,other) in expected.items() if key in included}
+    assert list(profiles) == order
+    pd.testing.assert_frame_equal(journal,original)
+
+
+@pytest.mark.parametrize('amount', [0,0.004,100.005,1_000_000_000_000])
+def test_reconciliation_voucher_flags_do_not_change_with_amount_precision(amount):
+    journal = pd.DataFrame([['EDGE','2026-01-05','C1',amount,0],['EDGE','2026-01-05','E',0,amount]],
+        columns=['voucher_id','date','account_code','debit','credit'])
+    original = journal.copy(deep=True)
+    coa = pd.DataFrame([dict(account_code=code,account_title=code,category='Operations' if code=='E' else '')
+                        for code in ('C1','E')])
+    result = build_cashflow_summary(journal,coa,['C1'],[],'2026-01-01','2026-01-31',include_reconciliation_evidence=True)
+    assert result['reconciliation_evidence']['voucher_profiles'] == {
+        'EDGE':dict(treasury_types=['Cash'],has_counterparts=True)}
+    pd.testing.assert_frame_equal(journal,original)
+
+
+@pytest.mark.parametrize('rows', [[],[['OTHER','2026-01-05','E',0,0]]])
+def test_reconciliation_voucher_profiles_are_empty_without_eligible_treasury(rows):
+    journal = pd.DataFrame(rows,columns=['voucher_id','date','account_code','debit','credit'])
+    coa = pd.DataFrame([dict(account_code='E',account_title='Other',category='Operations')])
+    result = build_cashflow_summary(journal,coa,['C1'],['B1'],'2026-01-01','2026-01-31',include_reconciliation_evidence=True)
+    assert result['reconciliation_evidence']['voucher_profiles'] == {}
+
+
 def test_explicit_all_selection_preserves_every_existing_summary_field(selected_account_case):
     case = selected_account_case
     original = case['journal'].copy(deep=True)
