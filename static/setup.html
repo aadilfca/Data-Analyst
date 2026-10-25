@@ -6,6 +6,35 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Setup Module</title>
     <link rel="stylesheet" href="/static/style.css?v=70">
+    <style>
+        #fullDatabaseBackup { background: white; padding: 24px; margin-top: 25px; border-radius: 16px; box-shadow: 0 2px 8px #0000000f; }
+        #fullDatabaseBackup h2 { color: #1a1a2e; font-size: 18px; margin: 0 0 12px; }
+        #fullDatabaseBackup p { color: #64748b; line-height: 1.5; margin: 10px 0; }
+        #fullDatabaseBackup .full-backup-actions { display: flex; gap: 12px; flex-wrap: wrap; margin: 16px 0; }
+        #fullDatabaseBackup button:disabled { opacity: .6; cursor: not-allowed; }
+        #fullDatabaseBackup dl { display: grid; grid-template-columns: minmax(110px, 140px) minmax(0, 1fr); gap: 10px 16px; margin: 16px 0; }
+        #fullDatabaseBackup dt { color: #64748b; }
+        #fullDatabaseBackup dd { margin: 0; color: #1a1a2e; overflow-wrap: anywhere; }
+        #fullDatabaseBackup .backup-progress { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px; margin: 12px 0; }
+        #fullDatabaseBackup .backup-progress-heading { display: flex; gap: 10px; align-items: center; color: #1a1a2e; }
+        #fullDatabaseBackup .backup-progress-heading strong { flex: 1; min-width: 0; }
+        #fullDatabaseBackup .backup-progress-metrics { color: #64748b; font-size: 13px; margin: 8px 0; }
+        #fullDatabaseBackup .backup-progress-track { position: relative; height: 9px; border-radius: 8px; background: #e2e8f0; overflow: hidden; }
+        #fullDatabaseBackup .backup-progress[aria-busy="true"] .backup-progress-track::after { content: ''; position: absolute; top: 0; bottom: 0; width: 30%; background: linear-gradient(90deg, transparent, #86efac, transparent); animation: full-backup-scan 1.8s linear infinite; }
+        #fullDatabaseBackup .backup-progress-fill { height: 100%; background: #16a34a; width: 0; transition: width .3s; }
+        #fullDatabaseBackup .backup-progress-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 0; list-style: none; color: #64748b; font-size: 13px; }
+        #fullDatabaseBackup .backup-progress-steps .active { color: #1a1a2e; font-weight: 600; }
+        #fullDatabaseBackup .backup-progress-steps .done { color: #166534; }
+        #fullDatabaseBackup .backup-progress-log { padding-left: 18px; color: #64748b; font-size: 13px; line-height: 1.6; }
+        #fullDatabaseBackup .backup-spinner { flex-shrink: 0; width: 15px; height: 15px; border: 2px solid #cbd5e1; border-top-color: #16a34a; border-radius: 50%; animation: full-backup-spin .8s linear infinite; }
+        @keyframes full-backup-spin { to { transform: rotate(360deg); } }
+        @keyframes full-backup-scan { from { left: -30%; } to { left: 100%; } }
+        @media (prefers-reduced-motion: reduce) { #fullDatabaseBackup .backup-spinner, #fullDatabaseBackup .backup-progress-track::after { animation: none !important; } }
+        #fullDatabaseBackup [hidden] { display: none !important; }
+        #fullDatabaseBackupStatus[data-kind="error"] { color: #991b1b; }
+        #fullDatabaseBackupStatus[data-kind="success"] { color: #166534; }
+        @media (max-width: 480px) { #fullDatabaseBackup { padding: 18px; } #fullDatabaseBackup dl { grid-template-columns: 1fr; gap: 5px; } #fullDatabaseBackup dd { margin-bottom: 10px; } #fullDatabaseBackup .backup-progress-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    </style>
 </head>
 
 <body data-nav-module="Setup" data-nav-parent="index.html">
@@ -94,12 +123,44 @@
                 </div>
             </div>
         </section>
-        <!-- Backup / Restore Toolbar -->
+        <!-- Separate local administrator action; never calls Setup Data import. -->
+        <section id="fullDatabaseBackup" aria-labelledby="fullDatabaseBackupTitle" hidden>
+            <h2 id="fullDatabaseBackupTitle">Full database backup</h2>
+            <p>Like saving Excel v1 or v2, this creates a separate dated copy of the database data and settings.
+                Your working tables stay in use. Keep original Excel files and app credentials separately.</p>
+            <div class="full-backup-actions">
+                <button id="createFullDatabaseBackupBtn" class="btn-upload" type="button" disabled>Create full backup</button>
+                <button id="checkFullDatabaseBackupBtn" class="btn-upload" type="button" hidden>Check backup status</button>
+            </div>
+            <p id="fullDatabaseBackupStatus" role="status" aria-live="polite">Checking backup availability…</p>
+            <div id="fullDatabaseBackupProgress" class="backup-progress" aria-busy="false" hidden>
+                <div class="backup-progress-heading"><span id="fullDatabaseBackupSpinner" class="backup-spinner" aria-hidden="true" hidden></span><strong id="fullDatabaseBackupStep"></strong></div>
+                <div id="fullDatabaseBackupMetrics" class="backup-progress-metrics"></div>
+                <div id="fullDatabaseBackupBar" class="backup-progress-track" role="progressbar" aria-label="Completed backup stages" aria-valuemin="0" aria-valuemax="4" aria-valuenow="0"><div id="fullDatabaseBackupFill" class="backup-progress-fill"></div></div>
+                <ol class="backup-progress-steps"><li data-backup-step="0">1. Save database</li><li data-backup-step="1">2. Check file</li><li data-backup-step="2">3. Prepare ZIP</li><li data-backup-step="3">4. Copy/check Drive</li></ol>
+                <p id="fullDatabaseBackupActivity"></p>
+                <div id="fullDatabaseBackupTransfer" hidden>
+                    <p id="fullDatabaseBackupTransferText" class="backup-progress-metrics"></p>
+                    <div id="fullDatabaseBackupTransferBar" class="backup-progress-track" role="progressbar" aria-label="Current Drive transfer" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="fullDatabaseBackupTransferFill" class="backup-progress-fill"></div></div>
+                </div>
+                <ul id="fullDatabaseBackupLog" class="backup-progress-log" aria-label="Backup activity"></ul>
+            </div>
+            <dl id="fullDatabaseBackupDetails" hidden>
+                <dt>Backup file</dt><dd id="fullDatabaseBackupFile"></dd>
+                <dt>Local copy</dt><dd id="fullDatabaseBackupPath"></dd>
+                <dt>Drive copy</dt><dd id="fullDatabaseBackupDrive"></dd>
+                <dt>Created</dt><dd id="fullDatabaseBackupCreated"></dd>
+                <dt>Copies checked</dt><dd id="fullDatabaseBackupVerified"></dd>
+            </dl>
+            <a id="fullDatabaseBackupDriveLink" target="_blank" rel="noopener noreferrer" hidden>Open verified Drive copy</a>
+            <p>Restoring a backup is a separate controlled step. This action does not restore or replace working data.</p>
+        </section>
+        <!-- Existing Setup Data export/import remains a separate operation. -->
         <section
             style="background:white; border-radius:16px; padding:20px 25px; box-shadow:0 2px 8px rgba(0,0,0,0.06); margin-top:25px;">
-            <h2 style="font-size:18px; color:#1a1a2e; margin-bottom:10px;">💾 Backup & Restore</h2>
-            <p style="color:#64748b; font-size:14px; margin-bottom:15px;">Export all columns and templates, or import a
-                previously exported JSON file to restore your setup data.</p>
+            <h2 style="font-size:18px; color:#1a1a2e; margin-bottom:10px;">💾 Legacy setup data transfer</h2>
+            <p style="color:#64748b; font-size:14px; margin-bottom:15px;">Export selected setup and client-data tables as JSON.
+                This is not a full database backup. Import replaces existing setup, client and transaction data; use only for a separately approved transfer.</p>
             <div style="display:flex; gap:12px; flex-wrap:wrap;">
                 <button id="exportBackupBtn" class="btn-upload" style="background:#3b82f6; padding:10px 25px;">📤 Export
                     Setup Data</button>
@@ -112,7 +173,9 @@
     </div>
 
     <script src="/static/client_context.js?v=21"></script>
-    <script src="/static/setup.js?v=2"></script>
+    <script src="/static/loading_ui.js?v=1"></script>
+    <script src="/static/api_utils.js?v=1"></script>
+    <script src="/static/setup.js?v=5"></script>
 </body>
 
 </html>

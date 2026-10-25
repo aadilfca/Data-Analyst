@@ -1,3 +1,13 @@
+## Current work — Full database backups — 2026-10-25
+
+| Phase | Status / objective |
+|---|---|
+| 1 — Create copies | Accepted: successful full backup, local/Drive checksum and privacy checks, processing display and safe retries; release authorised. |
+| 2 — Prove recovery | Later approval: restore a backup into a separate local PostgreSQL database and compare complete data/settings and accounting controls. |
+| This phase | Local test and independent verification passed; commit/push authorised. Recovery rehearsal remains separately approved work. |
+
+Use the existing Setup navigation entry as approved. No source-table writes, restore action, automatic schedule or retention deletion is introduced. Source workbooks/Storage objects/server-global roles/environment credentials remain outside a database dump.
+
 ## Cashflow reconciliation gate — 2026-10-22
 
 C1 mappings and signed customer/vendor reversals are accepted. C4–C6 are accepted/committed (`223a1ce`, `bfa7731`, `fa6be37`); January–June figures remain the baseline. Details: CHANGELOG_ARCHIVE.md, “Cashflow final reconciliation acceptance”.
@@ -6,9 +16,9 @@ The original 6A posting-comparison backend is accepted with 6B; the horizontal s
 
 Aadil approved the horizontal specification and revised sequence below. Detailed contract: CHANGELOG_ARCHIVE.md, “Horizontal Cashflow reconciliation specification”.
 
-## Current feature sequence — Cashflow reconciliation — 2026-10-22
+## Cashflow reconciliation sequence — 2026-10-22
 
-This sequence governs current work; earlier roadmaps below are historical, not authority to restart performance/prepared-copy work. Preserve canonical `client_data`, complete vouchers, coverage uncertainty, verified archives and safe retries.
+Cashflow history and remaining OAuth follow-up; full-database backup work is above. Earlier roadmaps do not authorise renewed performance/prepared-copy work. Preserve canonical `client_data`, complete vouchers and verified archives.
 
 | Phase | Status / objective |
 |---|---|
@@ -31,7 +41,7 @@ This sequence governs current work; earlier roadmaps below are historical, not a
 
 Each implementation phase retains file/approach approval, local acceptance and separate Git approval.
 
-**This phase:** Check OAuth publishing status in Google Cloud Console before treating long-term token readiness as verified; no app or data changes are needed for that check.
+**OAuth follow-up:** Check publishing status in Google Cloud Console before treating long-term token readiness as verified.
 
 Agreed toolbar: one desktop row, narrower Group by/Treasury view/Period, Cash/Bank a/c after Period, and shorter Ledger drill-down / XLSX labels. Default All preserves accepted behaviour.
 

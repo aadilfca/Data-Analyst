@@ -16,3 +16,5 @@ services:
         sync: false
       - key: PYTHON_VERSION
         value: 3.13.0
+      - key: LOCAL_DATABASE_BACKUP_ENABLED
+        value: "false"
