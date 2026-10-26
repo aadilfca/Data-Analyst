@@ -34,7 +34,7 @@ One line per file group: what it is now. Full build history for every entry live
 - static/procedure_modal.js → shared Verification/Audit Workbook Procedure modal for grouped Data Table search, evidence/Forms, procedures, and observations. See CHANGELOG_ARCHIVE.md.
 - static/audit_workbook.js, static/audit_workbook.html → Audit Workbook: session rows, filtering, totals, shared Procedure Modal, and cached evidence/Form completion badges. See CHANGELOG_ARCHIVE.md.
 - routers/trial_balance.py → Trial Balance upload, hierarchy, categories, deletion, and shared latest parsed-upload lookup. See CHANGELOG_ARCHIVE.md.
-- routers/account_control_center.py → client/account mappings, Cash Flow categories, treasury setup, historical-orphan assignments, and incremental prepared-model gateways. See CHANGELOG_ARCHIVE.md.
+- routers/account_control_center.py → account mappings, Financial Statement outlines with orphan-safe cascade deletion, Cash Flow configuration, and treasury setup. See CHANGELOG_ARCHIVE.md.
 - static/trial_balance.html, static/trial_balance.js → Trial Balance upload/review with loading feedback; Period End supplies `as_of_date` without a separate input. See CHANGELOG_ARCHIVE.md.
 - static/account_control_center.html, static/account_control_center.js → central mappings, Financial Statement outline setup and assignment, and Cash Flow configuration. See CHANGELOG_ARCHIVE.md.
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
@@ -257,7 +257,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
-- 2026-10-26: Financial Statements setup now organises headings and assignable categories by statement; legacy categories remain available. See CHANGELOG_ARCHIVE.md, Financial Statements development.
+- 2026-10-26: Financial Statements setup offers Delete, Rename, Deactivate; unassigned headings cascade to child categories. See CHANGELOG_ARCHIVE.md, Financial Statements development.
 - 2026-10-26: Cashflows builds shared category ledger details after summary render; inline expansion remains available during build. See CHANGELOG_ARCHIVE.md.
 - 2026-10-25: Reconciliation keeps detail rows during coalesced tab-return checks; stale or unverifiable evidence stays locked. See CHANGELOG_ARCHIVE.md.
 - 2026-10-25: Isolated application recovery verified and locally accepted; complete rows, settings, numbering and object permissions match. See CHANGELOG_ARCHIVE.md.

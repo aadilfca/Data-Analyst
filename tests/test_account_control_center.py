@@ -4,6 +4,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from contextlib import nullcontext
 from unittest.mock import patch
 
 from fastapi import HTTPException
@@ -355,6 +356,75 @@ class CashFlowControlTests(unittest.TestCase):
 
 
 class FinancialStatementControlTests(unittest.TestCase):
+    def test_delete_unplaced_financial_statement_category(self):
+        with patch.object(control_center, "_require_active_client"), patch.object(
+            control_center, "pg_transaction", return_value=nullcontext()
+        ), patch.object(
+            control_center, "execute_query_pg", side_effect=[
+                [{"id": 31, "label": "Unused", "statement_section": None, "row_type": "category"}], [],
+                [{"account_code": "OLD-1"}],
+            ]
+        ), patch.object(control_center, "execute_write_pg") as write:
+            result = control_center.delete_account_control_category(
+                31, client_id=1, session={"username": "Admin"}
+            )
+        self.assertEqual(result, {"deleted": True, "category_id": 31, "deleted_child_count": 0, "orphan_assignments_cleared": 1})
+        self.assertEqual(write.call_count, 2)
+        self.assertIn("UPDATE account_control_assignments", write.call_args_list[0].args[0])
+        self.assertIn("SET financial_statement_category_id = NULL", write.call_args_list[0].args[0])
+        self.assertIn("DELETE FROM account_control_categories", write.call_args_list[1].args[0])
+
+    def test_delete_heading_cascades_unassigned_child_categories(self):
+        children = [{"id": 32, "label": "Land"}, {"id": 33, "label": "Equipment"}]
+        with patch.object(control_center, "_require_active_client"), patch.object(
+            control_center, "pg_transaction", return_value=nullcontext()
+        ), patch.object(
+            control_center, "execute_query_pg", side_effect=[
+                [{"id": 31, "label": "Fixed assets", "statement_section": "balance_sheet", "row_type": "heading"}],
+                children, [], [],
+            ]
+        ), patch.object(control_center, "execute_write_pg") as write:
+            result = control_center.delete_account_control_category(
+                31, client_id=1, session={"username": "Admin"}
+            )
+        self.assertEqual(result["deleted_child_count"], 2)
+        self.assertEqual(result["orphan_assignments_cleared"], 0)
+        self.assertEqual(write.call_count, 2)
+        self.assertIn("parent_category_id = %s", write.call_args_list[0].args[0])
+        self.assertIn("DELETE FROM account_control_categories", write.call_args_list[1].args[0])
+
+    def test_delete_heading_is_blocked_when_child_category_has_real_account_assignment(self):
+        with patch.object(control_center, "_require_active_client"), patch.object(
+            control_center, "pg_transaction", return_value=nullcontext()
+        ), patch.object(
+            control_center, "execute_query_pg", side_effect=[
+                [{"id": 31, "label": "Fixed assets", "statement_section": "balance_sheet", "row_type": "heading"}],
+                [{"id": 32, "label": "Land"}], [{"account_code": "10-01"}],
+            ]
+        ), patch.object(control_center, "execute_write_pg") as write:
+            with self.assertRaises(HTTPException) as raised:
+                control_center.delete_account_control_category(
+                    31, client_id=1, session={"username": "Admin"}
+                )
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("child categories", raised.exception.detail)
+        write.assert_not_called()
+
+    def test_delete_unplaced_category_rejects_existing_account_assignment(self):
+        with patch.object(control_center, "_require_active_client"), patch.object(
+            control_center, "pg_transaction", return_value=nullcontext()
+        ), patch.object(
+            control_center, "execute_query_pg", side_effect=[
+                [{"id": 31, "statement_section": None, "row_type": "category"}], [{"id": 5}],
+            ]
+        ), patch.object(control_center, "execute_write_pg") as write:
+            with self.assertRaises(HTTPException) as raised:
+                control_center.delete_account_control_category(
+                    31, client_id=1, session={"username": "Admin"}
+                )
+        self.assertEqual(raised.exception.status_code, 409)
+        write.assert_not_called()
+
     def test_statement_outline_payload_keeps_section_kind_and_parent(self):
         category = control_center._clean_category_payload(
             control_center.AccountControlCategoryPayload(

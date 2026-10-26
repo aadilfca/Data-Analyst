@@ -60,6 +60,10 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     mapping["categories"] = [
         {"id": 10, "client_id": 1, "category_type": "financial_statement", "category_key": "current_assets", "label": "Current assets", "sort_order": 0, "is_active": True},
         {"id": 11, "client_id": 1, "category_type": "financial_statement", "category_key": "current_liabilities", "label": "Current liabilities", "sort_order": 1, "is_active": True},
+        {"id": 12, "client_id": 1, "category_type": "financial_statement", "category_key": "fixed_assets", "label": "Fixed Assets", "statement_section": None, "row_type": "category", "sort_order": 2, "is_active": True},
+        {"id": 30, "client_id": 1, "category_type": "financial_statement", "category_key": "non_current_assets", "label": "Non Current Assets", "statement_section": "balance_sheet", "row_type": "heading", "parent_category_id": None, "sort_order": 3, "is_active": True},
+        {"id": 31, "client_id": 1, "category_type": "financial_statement", "category_key": "property", "label": "Property", "statement_section": "balance_sheet", "row_type": "category", "parent_category_id": 30, "sort_order": 4, "is_active": True},
+        {"id": 32, "client_id": 1, "category_type": "financial_statement", "category_key": "equipment", "label": "Equipment", "statement_section": "balance_sheet", "row_type": "category", "parent_category_id": 30, "sort_order": 5, "is_active": True},
     ]
     mapping["note_categories"] = [
         {"id": 20, "client_id": 1, "category_type": "note", "category_key": "accounting_policies", "label": "Accounting policies", "sort_order": 0, "is_active": True},
@@ -88,6 +92,12 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
                 category_list.append(body)
                 calls.append((request.method, url, body))
                 route.fulfill(status=200, content_type="application/json", body=json.dumps({"saved": True, "category": body}))
+            elif request.method == "DELETE":
+                category_id = int(url.split("/categories/")[1].split("?")[0])
+                removed = [item for item in mapping["categories"] if item["id"] == category_id or item.get("parent_category_id") == category_id]
+                mapping["categories"] = [item for item in mapping["categories"] if item not in removed]
+                calls.append((request.method, url, {"category_id": category_id, "deleted_child_count": len(removed) - 1}))
+                route.fulfill(status=200, content_type="application/json", body=json.dumps({"deleted": True, "category_id": category_id, "deleted_child_count": len(removed) - 1}))
             else:
                 route.fulfill(status=200, content_type="application/json", body=json.dumps({"saved": True}))
             return
@@ -238,6 +248,19 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     setup_tabs = page.locator("[data-acc-financial-setup-tab]")
     assert setup_tabs.all_text_contents() == ["Balance Sheet", "Notes to Balance Sheet", "Income Statement", "Notes to Income Statement"]
     assert page.locator("#accFinancialSetupPanelBalanceSheet [data-fs-action='add-heading']").is_visible()
+    assert page.locator("#accFinancialSetupPanelBalanceSheet .acc2-fs-unplaced").get_by_text("Fixed Assets").is_visible()
+    assert page.locator("#accFinancialSetupPanelBalanceSheet [data-fs-id='30'][data-fs-action='delete']").is_visible()
+    assert page.locator("#accFinancialSetupPanelBalanceSheet .acc2-fs-category").filter(has_text="Property").locator("[data-fs-action='delete']").is_visible()
+    page.once("dialog", lambda dialog: dialog.accept())
+    page.locator("#accFinancialSetupPanelBalanceSheet .acc2-fs-unplaced .acc2-fs-category").filter(has_text="Fixed Assets").locator("[data-fs-action='delete']").click()
+    page.wait_for_function("!document.querySelector('#accFinancialSetupPanelBalanceSheet .acc2-fs-unplaced') || !document.querySelector('#accFinancialSetupPanelBalanceSheet .acc2-fs-unplaced').textContent.includes('Fixed Assets')")
+    assert any(call[0] == "DELETE" and call[2]["category_id"] == 12 for call in calls)
+    cascade_dialogs = []
+    page.once("dialog", lambda dialog: (cascade_dialogs.append(dialog.message), dialog.accept()))
+    page.locator("#accFinancialSetupPanelBalanceSheet [data-fs-id='30'][data-fs-action='delete']").click()
+    page.wait_for_function("!document.querySelector('#accFinancialSetupPanelBalanceSheet').textContent.includes('Non Current Assets')")
+    assert "all 2 child categories" in cascade_dialogs[0]
+    assert any(call[0] == "DELETE" and call[2]["category_id"] == 30 and call[2]["deleted_child_count"] == 2 for call in calls)
     setup_tabs.nth(1).click()
     assert setup_tabs.nth(1).get_attribute("aria-selected") == "true"
     assert page.locator("#accFinancialSetupPanelNotesBalanceSheet").get_attribute("hidden") is None

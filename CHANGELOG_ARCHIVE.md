@@ -8697,3 +8697,9 @@ Record phase decisions, implementation, verification, and acceptance here as the
 **Implementation:** Added client-specific statement section, row type and parent links to Financial Statement categories, with SQLite/PostgreSQL upgrades. The setup modal now lists headings, child categories and standalone rows for Balance Sheet and Income Statement. Account assignments exclude headings and show category paths; existing flat categories remain unplaced and assignable. Notes tabs remain deferred.
 
 **Verification:** Focused Account Control Centre backend and UI suites pass (31 tests); Python compilation, JavaScript syntax and `git diff --check` pass. Pytest reports a cache-directory warning. Local-server acceptance remains pending; existing unrelated worktree changes are preserved.
+
+### Financial Statement outline deletion - 2026-10-26
+
+**Implementation:** Added Delete beside Rename and Deactivate for statement headings and categories. A category can be deleted only when no account code in any Trial Balance uses it. An unassigned heading can be deleted with its child categories after a confirmation alert; assigned children block the cascade. Orphaned Financial Statement links are cleared while other account-control fields remain. The page script version is 11.
+
+**Verification:** Focused Account Control Centre backend and UI suites pass (35 tests); Python compilation, JavaScript syntax and `git diff --check` pass. Pytest reports a cache-directory warning. The earlier unused Fixed Assets category was deleted for client 5; three orphan links were cleared while their account-control rows and other fields remained. Local acceptance of cascade controls is pending.

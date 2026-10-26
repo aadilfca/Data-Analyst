@@ -894,13 +894,14 @@ function accRenderFinancialOutlines() {
         const rows = accFinancialCategories.filter(function (item) { return item.statement_section === section; });
         const headings = rows.filter(function (item) { return item.row_type === 'heading'; });
         const leaves = rows.filter(function (item) { return item.row_type !== 'heading'; });
-        function actions(item) { return '<button type="button" class="acc2-fs-small" data-fs-action="rename" data-fs-id="' + item.id + '">Rename</button><button type="button" class="acc2-fs-small" data-fs-action="toggle" data-fs-id="' + item.id + '" data-fs-active="' + item.is_active + '">' + (item.is_active ? 'Deactivate' : 'Restore') + '</button>'; }
+        function actions(item) { return '<button type="button" class="acc2-fs-small" data-fs-action="delete" data-fs-id="' + item.id + '">Delete</button><button type="button" class="acc2-fs-small" data-fs-action="rename" data-fs-id="' + item.id + '">Rename</button><button type="button" class="acc2-fs-small" data-fs-action="toggle" data-fs-id="' + item.id + '" data-fs-active="' + item.is_active + '">' + (item.is_active ? 'Deactivate' : 'Restore') + '</button>'; }
         const outline = headings.map(function (heading) {
             const children = leaves.filter(function (item) { return Number(item.parent_category_id) === Number(heading.id); });
             return '<article class="acc2-fs-heading' + (heading.is_active ? '' : ' inactive') + '"><div class="acc2-fs-heading-title"><strong>' + accEscape(heading.label) + '</strong><div>' + actions(heading) + '<button type="button" class="acc2-fs-small primary" data-fs-action="add-category" data-fs-parent="' + heading.id + '">+ Category</button></div></div>' + (children.length ? children.map(function (item) { return '<div class="acc2-fs-category' + (item.is_active ? '' : ' inactive') + '"><span>' + accEscape(item.label) + '</span><span>' + actions(item) + '</span></div>'; }).join('') : '<div class="acc2-fs-empty">No categories in this heading yet.</div>') + '</article>';
         }).join('');
         const standalone = leaves.filter(function (item) { return !item.parent_category_id; });
-        panel.innerHTML = '<div class="acc2-fs-toolbar"><span>Arrange headings and assignable categories</span><div><button type="button" class="acc2-action-btn" data-fs-action="add-heading">+ Add heading</button><button type="button" class="acc2-action-btn secondary" data-fs-action="add-category">+ Add category</button></div></div>' + (outline || '') + (standalone.length ? '<div class="acc2-fs-standalone"><h3>Standalone categories</h3>' + standalone.map(function (item) { return '<div class="acc2-fs-category' + (item.is_active ? '' : ' inactive') + '"><span>' + accEscape(item.label) + '</span><span>' + actions(item) + '</span></div>'; }).join('') + '</div>' : '') + (!outline && !standalone.length ? '<div class="acc2-fs-empty-state">Start with a heading, or add a standalone category.</div>' : '');
+        const unplaced = section === 'balance_sheet' ? accFinancialCategories.filter(function (item) { return !item.statement_section && item.row_type !== 'heading'; }) : [];
+        panel.innerHTML = '<div class="acc2-fs-toolbar"><span>Arrange headings and assignable categories</span><div><button type="button" class="acc2-action-btn" data-fs-action="add-heading">+ Add heading</button><button type="button" class="acc2-action-btn secondary" data-fs-action="add-category">+ Add category</button></div></div>' + (outline || '') + (standalone.length ? '<div class="acc2-fs-standalone"><h3>Standalone categories</h3>' + standalone.map(function (item) { return '<div class="acc2-fs-category' + (item.is_active ? '' : ' inactive') + '"><span>' + accEscape(item.label) + '</span><span>' + actions(item) + '</span></div>'; }).join('') + '</div>' : '') + (unplaced.length ? '<div class="acc2-fs-standalone acc2-fs-unplaced"><h3>Unplaced categories</h3>' + unplaced.map(function (item) { return '<div class="acc2-fs-category' + (item.is_active ? '' : ' inactive') + '"><span>' + accEscape(item.label) + '</span><span>' + actions(item) + '</span></div>'; }).join('') + '</div>' : '') + (!outline && !standalone.length && !unplaced.length ? '<div class="acc2-fs-empty-state">Start with a heading, or add a standalone category.</div>' : '');
     });
 }
 function accFinancialKey(label) { return String(label || '').normalize('NFKD').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 70) || 'category'; }
@@ -923,6 +924,17 @@ async function accHandleFinancialOutlineAction(event) {
         await accApi('/api/account-control-center/categories/' + item.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, category_type: 'financial_statement', label: label.trim(), statement_section: item.statement_section, row_type: item.row_type, parent_category_id: item.parent_category_id, sort_order: item.sort_order, is_active: item.is_active }) });
     } else if (item && action === 'toggle') {
         await accApi('/api/account-control-center/categories/' + item.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, category_type: 'financial_statement', label: item.label, statement_section: item.statement_section, row_type: item.row_type, parent_category_id: item.parent_category_id, sort_order: item.sort_order, is_active: !item.is_active }) });
+    } else if (item && action === 'delete') {
+        const children = item.row_type === 'heading' ? accFinancialCategories.filter(function (row) { return Number(row.parent_category_id) === Number(item.id); }) : [];
+        const prompt = children.length
+            ? 'Delete heading “' + item.label + '” and all ' + children.length + ' child categor' + (children.length === 1 ? 'y' : 'ies') + '? This cannot be undone. The heading and its children must have no Trial Balance account assignments.'
+            : 'Permanently delete category “' + item.label + '”? It must have no Trial Balance account assignments. This cannot be undone.';
+        if (!window.confirm(prompt)) return;
+        const result = await accApi('/api/account-control-center/categories/' + item.id + '?client_id=' + encodeURIComponent(accClientId), { method: 'DELETE' });
+        await accLoadFinancialCategories();
+        const childCount = Number(result.deleted_child_count || 0);
+        accShowStatus(childCount ? 'Deleted heading and ' + childCount + ' child categor' + (childCount === 1 ? 'y.' : 'ies.') : 'Deleted category “' + item.label + '”.', 'success');
+        return;
     } else return;
     await accLoadFinancialCategories();
 }

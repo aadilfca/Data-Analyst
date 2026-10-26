@@ -983,6 +983,97 @@ def update_account_control_category(category_id: int, payload: AccountControlCat
     )
     return {"saved": True, "category": {"id": category_id, **category}}
 
+
+@router.delete("/api/account-control-center/categories/{category_id}")
+def delete_account_control_category(
+    category_id: int,
+    client_id: int = Query(..., ge=1),
+    session=Depends(require_admin),
+):
+    """Delete an unassigned Financial Statement row, cascading through an empty heading."""
+    _require_active_client(client_id)
+    with pg_transaction():
+        rows = execute_query_pg(
+            """SELECT id, label, statement_section, row_type FROM account_control_categories
+               WHERE id = %s AND client_id = %s AND category_type = 'financial_statement'""",
+            (category_id, client_id),
+        )
+        if not rows:
+            raise HTTPException(404, "Financial Statement category not found")
+        category = rows[0]
+        if category["row_type"] not in {"heading", "category"}:
+            raise HTTPException(400, "Only Financial Statement headings and categories can be deleted")
+
+        child_categories = []
+        if category["row_type"] == "heading":
+            child_categories = execute_query_pg(
+                """SELECT id, label FROM account_control_categories
+                   WHERE client_id = %s AND category_type = 'financial_statement' AND parent_category_id = %s
+                   ORDER BY sort_order, LOWER(label), category_key""",
+                (client_id, category_id),
+            )
+        delete_ids = [category_id] + [int(child["id"]) for child in child_categories]
+        id_placeholders = ", ".join(["%s"] * len(delete_ids))
+
+        # Preserve categories used by any account code in any Trial Balance upload.
+        current_assignments = execute_query_pg(
+            f"""SELECT a.account_code FROM account_control_assignments a
+               WHERE a.client_id = %s AND a.financial_statement_category_id IN ({id_placeholders})
+                 AND EXISTS (
+                     SELECT 1 FROM trial_balance_accounts t
+                     JOIN trial_balance_uploads u ON u.id = t.upload_id
+                     WHERE u.client_id = a.client_id AND t.account_code = a.account_code
+                 ) LIMIT 1""",
+            tuple([client_id, *delete_ids]),
+        )
+        if current_assignments:
+            if category["row_type"] == "heading":
+                raise HTTPException(409, "One or more child categories is assigned to a Trial Balance account")
+            raise HTTPException(409, "This category is assigned to a Trial Balance account")
+
+        orphan_assignments = execute_query_pg(
+            f"""SELECT a.account_code FROM account_control_assignments a
+               WHERE a.client_id = %s AND a.financial_statement_category_id IN ({id_placeholders})
+                 AND NOT EXISTS (
+                     SELECT 1 FROM trial_balance_accounts t
+                     JOIN trial_balance_uploads u ON u.id = t.upload_id
+                     WHERE u.client_id = a.client_id AND t.account_code = a.account_code
+                 )""",
+            tuple([client_id, *delete_ids]),
+        )
+        if orphan_assignments:
+            execute_write_pg(
+                """UPDATE account_control_assignments
+                   SET financial_statement_category_id = NULL, updated_by = %s, updated_at = CURRENT_TIMESTAMP
+                   WHERE client_id = %s AND financial_statement_category_id IN ({})
+                     AND NOT EXISTS (
+                         SELECT 1 FROM trial_balance_accounts t
+                         JOIN trial_balance_uploads u ON u.id = t.upload_id
+                         WHERE u.client_id = account_control_assignments.client_id
+                           AND t.account_code = account_control_assignments.account_code
+                     )""".format(id_placeholders),
+                tuple([str((session or {}).get("username") or "Admin"), client_id, *delete_ids]),
+            )
+
+        if child_categories:
+            execute_write_pg(
+                """DELETE FROM account_control_categories
+                   WHERE client_id = %s AND category_type = 'financial_statement' AND parent_category_id = %s""",
+                (client_id, category_id),
+            )
+
+        execute_write_pg(
+            """DELETE FROM account_control_categories
+               WHERE id = %s AND client_id = %s AND category_type = 'financial_statement'""",
+            (category_id, client_id),
+        )
+    return {
+        "deleted": True,
+        "category_id": category_id,
+        "deleted_child_count": len(child_categories),
+        "orphan_assignments_cleared": len(orphan_assignments),
+    }
+
 @router.get("/api/account-control-center/mapping")
 def get_account_control_mapping(client_id: int = Query(..., ge=1), session=Depends(require_admin)):
     """Return the latest Trial Balance tree with one simplified assignment object per account."""
