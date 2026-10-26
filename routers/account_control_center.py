@@ -524,6 +524,9 @@ class AccountControlCategoryPayload(BaseModel):
     category_type: str = "financial_statement"
     category_key: str
     label: str
+    statement_section: Optional[str] = None
+    row_type: str = "category"
+    parent_category_id: Optional[int] = Field(default=None, ge=1)
     sort_order: int = Field(default=0, ge=0)
     is_active: bool = True
 
@@ -532,6 +535,9 @@ class AccountControlCategoryUpdatePayload(BaseModel):
     client_id: int = Field(..., ge=1)
     category_type: str = "financial_statement"
     label: str
+    statement_section: Optional[str] = None
+    row_type: str = "category"
+    parent_category_id: Optional[int] = Field(default=None, ge=1)
     sort_order: int = Field(default=0, ge=0)
     is_active: bool = True
 
@@ -792,12 +798,14 @@ def _validate_control_categories(client_id: int, assignment: dict[str, Any]) -> 
         if category_id is None:
             continue
         rows = execute_query_pg(
-            """SELECT id FROM account_control_categories
+            """SELECT id, row_type FROM account_control_categories
                WHERE id = %s AND client_id = %s AND category_type = %s AND is_active = TRUE""",
             (category_id, client_id, category_type),
         )
         if not rows:
             raise HTTPException(400, f"Invalid active {category_type.replace('_', ' ')} category")
+        if category_type == "financial_statement" and rows[0].get("row_type", "category") != "category":
+            raise HTTPException(400, "Headings cannot be assigned to accounts")
 
 
 def _upsert_control_assignment(assignment: dict[str, Any], updated_by: str) -> None:
@@ -833,11 +841,18 @@ def _clean_category_payload(payload: AccountControlCategoryPayload) -> dict[str,
         raise HTTPException(400, "Category key is required and must be 80 characters or fewer")
     if not label or len(label) > 120:
         raise HTTPException(400, "Category label is required and must be 120 characters or fewer")
+    statement_section = _clean_statement_section(payload.statement_section)
+    row_type = _clean_statement_row_type(payload.row_type)
+    if category_type == "financial_statement" and row_type == "heading" and payload.parent_category_id is not None:
+        raise HTTPException(400, "Headings must be top-level")
     return {
         "client_id": payload.client_id,
         "category_type": category_type,
         "category_key": category_key,
         "label": label,
+        "statement_section": statement_section,
+        "row_type": row_type,
+        "parent_category_id": payload.parent_category_id,
         "sort_order": payload.sort_order,
         "is_active": payload.is_active,
     }
@@ -848,13 +863,58 @@ def _clean_category_update(payload: AccountControlCategoryUpdatePayload) -> dict
     label = _normalise_text(payload.label)
     if not label or len(label) > 120:
         raise HTTPException(400, "Category label is required and must be 120 characters or fewer")
+    statement_section = _clean_statement_section(payload.statement_section)
+    row_type = _clean_statement_row_type(payload.row_type)
+    if category_type == "financial_statement" and row_type == "heading" and payload.parent_category_id is not None:
+        raise HTTPException(400, "Headings must be top-level")
     return {
         "client_id": payload.client_id,
         "category_type": category_type,
         "label": label,
+        "statement_section": statement_section,
+        "row_type": row_type,
+        "parent_category_id": payload.parent_category_id,
         "sort_order": payload.sort_order,
         "is_active": payload.is_active,
     }
+
+
+def _clean_statement_section(value: Optional[str]) -> Optional[str]:
+    if value is None or not _normalise_text(value):
+        return None
+    section = _normalise_text(value).casefold()
+    if section not in {"balance_sheet", "income_statement"}:
+        raise HTTPException(400, "Financial statement section is invalid")
+    return section
+
+
+def _clean_statement_row_type(value: str) -> str:
+    row_type = _normalise_text(value).casefold()
+    if row_type not in {"heading", "category"}:
+        raise HTTPException(400, "Financial statement row type is invalid")
+    return row_type
+
+
+def _validate_statement_parent(category: dict[str, Any], current_id: Optional[int] = None) -> None:
+    if category["category_type"] != "financial_statement":
+        if category["statement_section"] or category["parent_category_id"] is not None:
+            raise HTTPException(400, "Only Financial Statement categories can use outline sections")
+        return
+    parent_id = category["parent_category_id"]
+    if category["row_type"] == "heading" and parent_id is not None:
+        raise HTTPException(400, "Headings must be top-level")
+    if parent_id is None:
+        return
+    if not category["statement_section"]:
+        raise HTTPException(400, "Choose a statement before nesting this category")
+    if parent_id == current_id:
+        raise HTTPException(400, "A category cannot be its own parent")
+    parents = execute_query_pg(
+        "SELECT statement_section, row_type, is_active FROM account_control_categories WHERE id = %s AND client_id = %s AND category_type = 'financial_statement'",
+        (parent_id, category["client_id"]),
+    )
+    if not parents or parents[0]["row_type"] != "heading" or not parents[0]["is_active"] or parents[0]["statement_section"] != category["statement_section"]:
+        raise HTTPException(400, "Choose an active heading in the same statement")
 
 
 def _public_control_assignment(assignment: dict[str, Any]) -> dict[str, Any]:
@@ -875,7 +935,8 @@ def list_account_control_categories(
     cleaned_type = _clean_category_type(category_type)
     active_clause = "" if include_inactive else " AND is_active = TRUE"
     rows = execute_query_pg(
-        f"""SELECT id, client_id, category_type, category_key, label, sort_order, is_active
+        f"""SELECT id, client_id, category_type, category_key, label, statement_section, row_type,
+                   parent_category_id, sort_order, is_active
             FROM account_control_categories
             WHERE client_id = %s AND category_type = %s{active_clause}
             ORDER BY sort_order, LOWER(label), category_key""",
@@ -888,6 +949,7 @@ def list_account_control_categories(
 def create_account_control_category(payload: AccountControlCategoryPayload, session=Depends(require_admin)):
     category = _clean_category_payload(payload)
     _require_active_client(category["client_id"])
+    _validate_statement_parent(category)
     existing = execute_query_pg(
         "SELECT id FROM account_control_categories WHERE client_id = %s AND category_type = %s AND category_key = %s",
         (category["client_id"], category["category_type"], category["category_key"]),
@@ -896,9 +958,9 @@ def create_account_control_category(payload: AccountControlCategoryPayload, sess
         raise HTTPException(409, "A category with this key already exists")
     execute_write_pg(
         """INSERT INTO account_control_categories
-           (client_id, category_type, category_key, label, sort_order, is_active, updated_at)
-           VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)""",
-        (category["client_id"], category["category_type"], category["category_key"], category["label"], category["sort_order"], category["is_active"]),
+           (client_id, category_type, category_key, label, statement_section, row_type, parent_category_id, sort_order, is_active, updated_at)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)""",
+        (category["client_id"], category["category_type"], category["category_key"], category["label"], category["statement_section"], category["row_type"], category["parent_category_id"], category["sort_order"], category["is_active"]),
     )
     return {"saved": True, "category": category}
 
@@ -911,11 +973,13 @@ def update_account_control_category(category_id: int, payload: AccountControlCat
     )
     if not rows:
         raise HTTPException(404, "Category not found")
+    _validate_statement_parent(category)
     execute_write_pg(
         """UPDATE account_control_categories
-           SET label = %s, sort_order = %s, is_active = %s, updated_at = CURRENT_TIMESTAMP
+           SET label = %s, statement_section = %s, row_type = %s, parent_category_id = %s,
+               sort_order = %s, is_active = %s, updated_at = CURRENT_TIMESTAMP
            WHERE id = %s AND client_id = %s AND category_type = %s""",
-        (category["label"], category["sort_order"], category["is_active"], category_id, category["client_id"], category["category_type"]),
+        (category["label"], category["statement_section"], category["row_type"], category["parent_category_id"], category["sort_order"], category["is_active"], category_id, category["client_id"], category["category_type"]),
     )
     return {"saved": True, "category": {"id": category_id, **category}}
 

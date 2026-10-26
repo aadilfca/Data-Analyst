@@ -97,6 +97,9 @@ class AccountSetPostgresMigrationTests(unittest.TestCase):
         database._ensure_postgres_account_set_tables(connection)
         sql = "\n".join(connection.cursor_instance.statements)
         self.assertIn("CREATE TABLE IF NOT EXISTS account_control_categories", sql)
+        self.assertIn("ADD COLUMN IF NOT EXISTS statement_section", sql)
+        self.assertIn("ADD COLUMN IF NOT EXISTS row_type", sql)
+        self.assertIn("ADD COLUMN IF NOT EXISTS parent_category_id", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS account_control_assignments", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS account_sets", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS account_set_versions", sql)
@@ -352,6 +355,24 @@ class CashFlowControlTests(unittest.TestCase):
 
 
 class FinancialStatementControlTests(unittest.TestCase):
+    def test_statement_outline_payload_keeps_section_kind_and_parent(self):
+        category = control_center._clean_category_payload(
+            control_center.AccountControlCategoryPayload(
+                client_id=1, category_key="local_sales", label="Local sales",
+                statement_section="income_statement", parent_category_id=9,
+            )
+        )
+        self.assertEqual(category["statement_section"], "income_statement")
+        self.assertEqual(category["row_type"], "category")
+        self.assertEqual(category["parent_category_id"], 9)
+
+    def test_statement_heading_cannot_be_assigned_to_account(self):
+        assignment = {"financial_statement_category_id": 4, "note_category_id": None}
+        with patch.object(control_center, "execute_query_pg", return_value=[{"id": 4, "row_type": "heading"}]):
+            with self.assertRaises(HTTPException) as raised:
+                control_center._validate_control_categories(1, assignment)
+        self.assertEqual(raised.exception.status_code, 400)
+
     def test_tab_payloads_track_only_the_fields_they_supply(self):
         verification = control_center._clean_control_assignment(
             control_center.AccountControlAssignmentPayload(

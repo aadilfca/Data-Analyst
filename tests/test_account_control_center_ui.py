@@ -237,7 +237,7 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     assert page.locator("#accFinancialSetupModal").is_visible()
     setup_tabs = page.locator("[data-acc-financial-setup-tab]")
     assert setup_tabs.all_text_contents() == ["Balance Sheet", "Notes to Balance Sheet", "Income Statement", "Notes to Income Statement"]
-    assert page.locator("#accFinancialSetupModal [role='tabpanel']:not(:empty)").count() == 0
+    assert page.locator("#accFinancialSetupPanelBalanceSheet [data-fs-action='add-heading']").is_visible()
     setup_tabs.nth(1).click()
     assert setup_tabs.nth(1).get_attribute("aria-selected") == "true"
     assert page.locator("#accFinancialSetupPanelNotesBalanceSheet").get_attribute("hidden") is None

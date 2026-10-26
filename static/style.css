@@ -10158,6 +10158,20 @@ body {
 .acc2-modal-header p { margin: 0; color: #5c6b78; }
 .acc2-modal-close { border: 0; background: transparent; color: #536575; font-size: 28px; line-height: 1; cursor: pointer; }
 .acc2-modal-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 20px; border-bottom: 1px solid #dbe4ea; }
+#accFinancialSetupModal .acc2-modal { width: min(1080px, 100%); }
+#accFinancialSetupModal .acc2-fs-toolbar, #accFinancialSetupModal .acc2-fs-heading-title, #accFinancialSetupModal .acc2-fs-category { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+#accFinancialSetupModal .acc2-fs-toolbar { margin-bottom: 18px; color: #536577; font-size: 13px; }
+#accFinancialSetupModal .acc2-fs-toolbar > div, #accFinancialSetupModal .acc2-fs-heading-title > div, #accFinancialSetupModal .acc2-fs-category > span:last-child { display: flex; align-items: center; gap: 7px; }
+#accFinancialSetupModal .acc2-fs-heading { border: 1px solid #dbe4ea; border-radius: 10px; margin: 10px 0; overflow: hidden; }
+#accFinancialSetupModal .acc2-fs-heading-title { padding: 13px 16px; background: #f3f7fa; color: #18344b; }
+#accFinancialSetupModal .acc2-fs-category { padding: 10px 16px 10px 32px; border-top: 1px solid #edf1f4; color: #34495e; }
+#accFinancialSetupModal .acc2-fs-standalone { margin-top: 22px; }
+#accFinancialSetupModal .acc2-fs-standalone h3 { color: #536577; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; }
+#accFinancialSetupModal .acc2-fs-empty, #accFinancialSetupModal .acc2-fs-empty-state { padding: 14px 16px; color: #718096; font-size: 13px; }
+#accFinancialSetupModal .acc2-fs-empty-state { border: 1px dashed #cad6df; border-radius: 10px; text-align: center; padding: 34px 16px; }
+#accFinancialSetupModal .acc2-fs-small { border: 0; background: transparent; color: #1769aa; cursor: pointer; font-size: 12px; padding: 4px 6px; }
+#accFinancialSetupModal .acc2-fs-small.primary { border: 1px solid #c9dce9; border-radius: 6px; background: white; }
+#accFinancialSetupModal .inactive { opacity: .58; }
 .acc2-modal-tab { border: 0; border-bottom: 3px solid transparent; padding: 10px 12px; background: transparent; color: #536575; cursor: pointer; }
 .acc2-modal-tab.active { border-bottom-color: #1769aa; color: #124d7d; font-weight: 700; }
 .acc2-modal-search { width: 100%; margin: 8px 0 14px; }

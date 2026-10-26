@@ -176,10 +176,12 @@ function accOptionMarkup(selected) {
 function accCategoryOptionMarkupFor(categories, selected) {
     let html = '<option value="">Unassigned</option>';
     if (selected === '__mixed') html = '<option value="__mixed" selected>Mixed assignments - choose one</option>' + html;
-    html += categories.map(function (category) {
+    html += categories.filter(function (category) { return category.row_type !== 'heading'; }).map(function (category) {
         const value = String(category.id);
         const inactive = !category.is_active;
-        const label = (inactive ? 'Inactive: ' : '') + category.label;
+        const parent = categories.find(function (candidate) { return Number(candidate.id) === Number(category.parent_category_id); });
+        const section = category.statement_section === 'balance_sheet' ? 'Balance Sheet' : (category.statement_section === 'income_statement' ? 'Income Statement' : 'Unplaced');
+        const label = (inactive ? 'Inactive: ' : '') + (parent ? parent.label + ' › ' : '') + category.label + ' · ' + section;
         return '<option value="' + accEscape(value) + '"' + (value === String(selected) ? ' selected' : '') + (inactive && value !== String(selected) ? ' disabled' : '') + '>' + accEscape(label) + '</option>';
     }).join('');
     return html;
@@ -884,6 +886,45 @@ async function accLoadFinancialCategories() {
     accFinancialCategories = result.categories || [];
     accFinancialLoaded = true;
     accRenderFinancialRows();
+    accRenderFinancialOutlines();
+}
+function accRenderFinancialOutlines() {
+    document.querySelectorAll('[data-fs-section]').forEach(function (panel) {
+        const section = panel.dataset.fsSection;
+        const rows = accFinancialCategories.filter(function (item) { return item.statement_section === section; });
+        const headings = rows.filter(function (item) { return item.row_type === 'heading'; });
+        const leaves = rows.filter(function (item) { return item.row_type !== 'heading'; });
+        function actions(item) { return '<button type="button" class="acc2-fs-small" data-fs-action="rename" data-fs-id="' + item.id + '">Rename</button><button type="button" class="acc2-fs-small" data-fs-action="toggle" data-fs-id="' + item.id + '" data-fs-active="' + item.is_active + '">' + (item.is_active ? 'Deactivate' : 'Restore') + '</button>'; }
+        const outline = headings.map(function (heading) {
+            const children = leaves.filter(function (item) { return Number(item.parent_category_id) === Number(heading.id); });
+            return '<article class="acc2-fs-heading' + (heading.is_active ? '' : ' inactive') + '"><div class="acc2-fs-heading-title"><strong>' + accEscape(heading.label) + '</strong><div>' + actions(heading) + '<button type="button" class="acc2-fs-small primary" data-fs-action="add-category" data-fs-parent="' + heading.id + '">+ Category</button></div></div>' + (children.length ? children.map(function (item) { return '<div class="acc2-fs-category' + (item.is_active ? '' : ' inactive') + '"><span>' + accEscape(item.label) + '</span><span>' + actions(item) + '</span></div>'; }).join('') : '<div class="acc2-fs-empty">No categories in this heading yet.</div>') + '</article>';
+        }).join('');
+        const standalone = leaves.filter(function (item) { return !item.parent_category_id; });
+        panel.innerHTML = '<div class="acc2-fs-toolbar"><span>Arrange headings and assignable categories</span><div><button type="button" class="acc2-action-btn" data-fs-action="add-heading">+ Add heading</button><button type="button" class="acc2-action-btn secondary" data-fs-action="add-category">+ Add category</button></div></div>' + (outline || '') + (standalone.length ? '<div class="acc2-fs-standalone"><h3>Standalone categories</h3>' + standalone.map(function (item) { return '<div class="acc2-fs-category' + (item.is_active ? '' : ' inactive') + '"><span>' + accEscape(item.label) + '</span><span>' + actions(item) + '</span></div>'; }).join('') + '</div>' : '') + (!outline && !standalone.length ? '<div class="acc2-fs-empty-state">Start with a heading, or add a standalone category.</div>' : '');
+    });
+}
+function accFinancialKey(label) { return String(label || '').normalize('NFKD').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 70) || 'category'; }
+async function accHandleFinancialOutlineAction(event) {
+    const button = event.target.closest('[data-fs-action]');
+    if (!button) return;
+    const action = button.dataset.fsAction;
+    const panel = button.closest('[data-fs-section]');
+    const section = panel.dataset.fsSection;
+    const item = accFinancialCategories.find(function (row) { return Number(row.id) === Number(button.dataset.fsId); });
+    if (action === 'add-heading' || action === 'add-category') {
+        const label = window.prompt(action === 'add-heading' ? 'Heading name' : 'Category name');
+        if (!label || !label.trim()) return;
+        const parentId = button.dataset.fsParent ? Number(button.dataset.fsParent) : null;
+        const body = { client_id: accClientId, category_type: 'financial_statement', category_key: accFinancialKey(label), label: label.trim(), statement_section: section, row_type: action === 'add-heading' ? 'heading' : 'category', parent_category_id: parentId, sort_order: accFinancialCategories.length };
+        await accApi('/api/account-control-center/categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    } else if (item && action === 'rename') {
+        const label = window.prompt('Rename category', item.label);
+        if (!label || !label.trim()) return;
+        await accApi('/api/account-control-center/categories/' + item.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, category_type: 'financial_statement', label: label.trim(), statement_section: item.statement_section, row_type: item.row_type, parent_category_id: item.parent_category_id, sort_order: item.sort_order, is_active: item.is_active }) });
+    } else if (item && action === 'toggle') {
+        await accApi('/api/account-control-center/categories/' + item.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, category_type: 'financial_statement', label: item.label, statement_section: item.statement_section, row_type: item.row_type, parent_category_id: item.parent_category_id, sort_order: item.sort_order, is_active: !item.is_active }) });
+    } else return;
+    await accLoadFinancialCategories();
 }
 async function accLoadNoteCategories() {
     const result = await accApi('/api/account-control-center/categories?client_id=' + encodeURIComponent(accClientId) + '&category_type=note&include_inactive=true');
@@ -1237,6 +1278,7 @@ function accBindEvents() {
     accElement('accFinancialSetupFab').addEventListener('click', function () { accSetFinancialSetupModal(true); });
     accElement('accFinancialSetupClose').addEventListener('click', function () { accSetFinancialSetupModal(false); });
     document.querySelectorAll('[data-acc-financial-setup-tab]').forEach(function (tab) { tab.addEventListener('click', function () { accSetFinancialSetupTab(tab.dataset.accFinancialSetupTab); }); });
+    document.querySelectorAll('[data-fs-section]').forEach(function (panel) { panel.addEventListener('click', function (event) { accHandleFinancialOutlineAction(event).catch(function (error) { accShowStatus(error.message, 'error'); }); }); });
     accElement('accNotesFilter').addEventListener('input', accRenderNotesRows);
     accElement('accNotesRows').addEventListener('change', function (event) { accHandleNoteChange(event); });
     accElement('accNotesCategoryForm').addEventListener('submit', accCreateNoteCategory);

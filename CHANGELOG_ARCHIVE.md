@@ -8691,3 +8691,9 @@ Record phase decisions, implementation, verification, and acceptance here as the
 **Verification:** Account Control Centre Playwright tests pass for Financial Statement assignment/modal behavior and existing Cash Flow popups. JavaScript syntax and `git diff --check` pass. Pytest reported a pre-existing cache-directory warning; no application failure.
 
 **Acceptance:** Aadil confirmed local testing on 2026-10-26.
+
+### Statement outline editor - 2026-10-26
+
+**Implementation:** Added client-specific statement section, row type and parent links to Financial Statement categories, with SQLite/PostgreSQL upgrades. The setup modal now lists headings, child categories and standalone rows for Balance Sheet and Income Statement. Account assignments exclude headings and show category paths; existing flat categories remain unplaced and assignable. Notes tabs remain deferred.
+
+**Verification:** Focused Account Control Centre backend and UI suites pass (31 tests); Python compilation, JavaScript syntax and `git diff --check` pass. Pytest reports a cache-directory warning. Local-server acceptance remains pending; existing unrelated worktree changes are preserved.
