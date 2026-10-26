@@ -8661,3 +8661,21 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Timings:** Two reversed-order laptop rounds: baseline 14.48/6.36 seconds; positional rows 6.31/6.51; descriptor rows 5.98/5.97. The first baseline is an outlier; the later descriptor comparison improves about 6.1%, while positional rows are slightly slower. JSON-equivalent envelopes are 7.16/3.42/2.37 MB, not measured wire traffic. Login/rendering are excluded; two rounds cannot certify cold-load or multi-user speed. No production integration is recommended from this evidence alone.
 
 **Evidence/acceptance:** Compact local evidence is `cashflow-fetch-sandbox-20261019.json` in the task visualization directory. Backend-only acceptance remains pending; no staging, commit or push. Any production candidate requires separate scope, approval and broader parity/freshness verification.
+
+## Cashflows balance-preview Trial Balance lookup - 2026-10-26
+
+**Scope/implementation:** In the three approved files, the opt-in Cashflows balance preview now restricts latest parsed Trial Balance account-name lookup to configured Cash/Bank codes. Other callers retain the full lookup; latest-upload selection, balance calculations, report source, schema, and data remain unchanged. Empty filtered requests skip the query.
+
+**Verification:** Focused performance module passes 30 tests; new tests cover filtered, unfiltered, and empty account-code behavior. Prior read-only profiling measured the broad lookup at 12,354 rows/1.828 seconds and the eight-code lookup at 8 rows/0.077 seconds. This indicates a query-path opportunity; end-to-end timing still requires Aadil's local-server check. No database or configuration writes occurred.
+
+## Cashflows lazy ledger detail preparation - 2026-10-26
+
+**Scope/implementation:** In the five approved files, summary requests no longer ask the backend to prebuild browser ledger-cache rows. Fresh balance evidence and the canonical `client_data` summary remain; the separate on-demand drilldown endpoint and explicit backend warm-cache option are unchanged. Reconciliation script cache version advanced to 56.
+
+**Verification:** The focused Cashflows performance module passes 32 tests, including summary-only and explicit warm-cache behavior. Python compilation, JavaScript syntax, and whitespace checks pass. Playwright loaded script version 56, rendered the six-month summary, and loaded paginated ledger drilldown. This browser session did not expose post-change request duration, so no speedup is claimed. No database/configuration writes occurred.
+
+## Cashflows background category ledger build - 2026-10-26
+
+**Scope:** In the five approved files, ready summaries now start one shared, unfiltered ledger build immediately after rendering. Categories stay clickable; expansions share the in-flight request and filter locally. A muted live status appears while building. Failed, incomplete or oversized baselines fall back to the existing category request; same-context failures are not retried repeatedly. Revision and report-generation checks discard stale responses. Script cache version is 57; no database or schema changes.
+
+**Verification:** New Playwright checks pass for concurrent expansion, fallback, and stale-response rejection. The performance module passes 32 tests. The full UI run passed 186 tests and exposed four assertions tied to old cache/version/request behavior; after updating them, all eight affected and new UI checks pass. Syntax, compilation and whitespace checks pass. Local-server timing remains for Aadil; the extra unfiltered read is an intentional per-report cost.

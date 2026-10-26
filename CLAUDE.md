@@ -58,7 +58,7 @@ One line per file group: what it is now. Full build history for every entry live
 - experiments/cashflow_fetch/*.py + tests/test_cashflow_fetch_benchmark.py → Standalone read-only transport benchmarks with exact source/report/export comparisons; never loaded by the app. See CHANGELOG_ARCHIVE.md.
 
 
-- static/reconciliation.html, static/reconciliation.js → Cashflow selection, completeness tables, delayed hover previews, coalesced tab-return validation, shared popups and bounded caches. See CHANGELOG_ARCHIVE.md.
+- static/reconciliation.html, static/reconciliation.js → Cashflow selection, completeness, background shared ledger preparation, inline category expansion, freshness checks, and bounded caches. See CHANGELOG_ARCHIVE.md.
 
 ## Commands
 - Run app: [your actual run command]
@@ -257,65 +257,36 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
-
+- 2026-10-26: Cashflows builds shared category ledger details after summary render; inline expansion remains available during build. See CHANGELOG_ARCHIVE.md.
 - 2026-10-25: Reconciliation keeps detail rows during coalesced tab-return checks; stale or unverifiable evidence stays locked. See CHANGELOG_ARCHIVE.md.
-
 - 2026-10-25: Isolated application recovery verified and locally accepted; complete rows, settings, numbering and object permissions match. See CHANGELOG_ARCHIVE.md.
-
 - 2026-10-25: Optimised optional voucher profiles in ledger_group_summary.py; main Cashflow unchanged. Local acceptance pending. See CHANGELOG_ARCHIVE.md.
-
 - 2026-10-23: Accepted selected-account Cashflows through Phase 8C; combined commit/push authorised. Phase 9 follows after limit reset. See CHANGELOG_ARCHIVE.md.
-
 - 2026-10-23: Integrated selected-account Cashflow APIs, scoped identities, transaction details and both Excel exports; toolbar follows separately. See CHANGELOG_ARCHIVE.md.
-
 - 2026-10-23: Added selected-account Cashflow backend foundation; derived fetching and All behaviour preserved. Integration/local acceptance pending. See CHANGELOG_ARCHIVE.md.
-
 - 2026-10-23: Accepted Phase 7 Cashflow/reconciliation and Excel verification; documentation commit/push authorised. See CHANGELOG_ARCHIVE.md.
-
 - 2026-10-22: Phase 6B adds opt-in ledger-to-Cashflow receipt/payment bridges and voucher support; accepted for commit/push. See CHANGELOG_ARCHIVE.md, Horizontal Cashflow accounting bridge.
-
 - 2026-10-22: Accepted horizontal Cashflow reconciliation specification and revised phases; accounting bridge follows separate approval. See CHANGELOG_ARCHIVE.md, Horizontal Cashflow reconciliation specification.
-
 - 2026-10-21: Original Phase 6A adds on-demand ledger/voucher comparisons, complete posting evidence and explicit coverage uncertainty; local acceptance pending. See CHANGELOG_ARCHIVE.md.
-
 - 2026-10-21: C6 verifies Combined, Bank, Cash, Split and exports against independent source/ledger controls; locally accepted for commit/push. See CHANGELOG_ARCHIVE.md.
-
 - 2026-10-21: Added independent Cashflow boundary, carry, role, source-correction and screen/export regression controls; accepted for commit/push. See CHANGELOG_ARCHIVE.md, Independent Cashflow controls.
-
 - 2026-10-21: Cashflows reconciles separate Treasury movements, aligns payment subtotal signs and exports complete deductions; locally accepted. See CHANGELOG_ARCHIVE.md.
-
 - 2026-10-21: Cashflows preserves signed customer/vendor reversals, adds period details and shared export totals; January–June combined reconciliation verified. See CHANGELOG_ARCHIVE.md.
-
 - 2026-10-20: Client Data and Cashflow transactions sort chronologically; upload metadata preserves source sequence and supports guarded position-only restoration. See CHANGELOG_ARCHIVE.md.
-
 - 2026-10-20: Upload ledger accounts now support name/code search, dropdown choices and keyboard selection, preserving validation safeguards. See CHANGELOG_ARCHIVE.md.
-
 - 2026-10-20: Cashflows adds expandable ledger balances, distinct calculations, split treasury totals and fresh evidence checks. See CHANGELOG_ARCHIVE.md.
-
 - 2026-10-20: Phase 4 adds optional ledger-backed Cashflow balances, coverage diagnostics and continuous calculated balances; manual inputs remain supported. See CHANGELOG_ARCHIVE.md.
-
 - 2026-10-20: Data Bank ledger preview adds searchable imported-account selection, scoped filters and cache isolation; Phase 2 accepted. See CHANGELOG_ARCHIVE.md.
-
 - 2026-10-20: Ledger uploads preserve source notes and balances; fixed table-lock result handling, guarded mapping submissions and root traceback retention. See CHANGELOG_ARCHIVE.md.
-
 - 2026-10-20: Upload recognises raw-source totals, preserves Excel row numbers and shows stage-specific issue dialogs. See CHANGELOG_ARCHIVE.md, Upload source controls and issue diagnostics.
-
 - 2026-10-20: Added public app, privacy and terms pages with shared styling and login links. See CHANGELOG_ARCHIVE.md.
-
 - 2026-10-19: Complete-voucher observations and scoped date corrections; local Drive archives verified, production branding pending. See CHANGELOG_ARCHIVE.md.
-
 - 2026-10-19: Complete uploads replace declared coverage after verified external archiving; compact receipts protect retries and concurrent changes. See CHANGELOG_ARCHIVE.md.
-
 - 2026-10-19: Upload compares calendar dates and description spacing, preserves planned dates, displays readable previews, and identifies genuine voucher conflicts.
-
 - 2026-10-19: Added ledger template roles, account-scoped upload safeguards and balance evidence with isolated regression coverage; actual uploads remain user-controlled.
-
 - 2026-10-19: Cashflows preloads bounded ledger roll-ups, shares revision/configuration-scoped browser caches, and paginates oversized categories; regression and export-parity checks added.
-
 - 2026-10-19: Fixed Cashflows transaction windows to read canonical Client Data; removed retired preview fallbacks and added source/filter regression coverage.
-
 - 2026-10-19: Added isolated read-only Cashflows fetching experiments and safety/parity tests; production integration remains separate. See CHANGELOG_ARCHIVE.md, Cashflows fetching sandbox.
-
 - Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; performance findings reference the investigation documents.
 - 2026-10-12: Cashflows Phase 1 now reads active `client_data` derived rows directly; report caches, prepared lines, and targeted prepared drilldowns are inactive.
 - 2026-10-12: Cashflows canonical debit/credit fields now use PostgreSQL double precision; canonical-only repair restores exact amounts without legacy classification inserts.
@@ -338,6 +309,7 @@ One line per file group: what it is now. Full build history for every entry live
 - 2026-09-01/25: Database sizing, Ledger Reconciliation, Rulebook, Account Sets, Verification, Forms, vendor/import, and cleanup work progressed.
 - 2026-08-05/31: Verification fixtures, database/performance work, Postgres migration, administration, Client Data, and shared Loading UI shipped.
 - 2026-07-09/08-02: Upload, Verification, Audit Rules, navigation, Client Data Bank, Trial Balance, templates, Categories, and foundational requirements shipped.
+
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
 - Findings from a Code Health Review session go to `KNOWN_ISSUES.md`, not the Status log — the Status log records changes made, that file records issues found

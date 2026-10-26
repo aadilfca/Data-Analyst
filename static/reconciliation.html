@@ -17,6 +17,8 @@
         #cashflowsSummaryControlsPanel .cashflows-period-button { box-sizing: border-box; height: 36px; width: 140px; min-width: 0; max-width: 140px; padding-inline: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         #cashflowsSummaryControlsPanel .cashflows-report-actions { gap: 6px; flex: 0 0 auto; }
         #cashflowsSummaryControlsPanel .cashflows-secondary { padding-inline: 10px; }
+        #cashflowsCategoryBuildStatus { margin: 0 0 8px; padding: 6px 9px; border: 1px solid #dbe3ea; border-radius: 5px; background: #f8fafc; color: #64748b; font-size: 12px; opacity: .82; }
+        #cashflowsCategoryBuildStatus[hidden] { display: none !important; }
         .cashflows-account-control { position: relative; display: grid; gap: 5px; flex: 0 0 176px; min-width: 0; }
         .cashflows-account-control [hidden] { display: none !important; }
         #cashflowsAccountButton { display: flex; align-items: center; justify-content: space-between; gap: 8px; box-sizing: border-box; width: 176px; height: 36px; padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 5px; color: #1a1a2e; background: #fff; font: inherit; font-size: 12px; text-align: left; }
@@ -209,6 +211,7 @@
             <div id='cashflowsToast' class='cashflows-toast' role='status' aria-live='polite' hidden></div>
         </div>
     <div id='cashflowsSummaryControlsPanel' class='cashflows-report-header'>
+        <div id='cashflowsCategoryBuildStatus' class='cashflows-category-build-status' role='status' aria-live='polite' hidden></div>
         <form id='cashflowsReportForm' class='cashflows-filter-bar'>
             <div class='cashflows-report-scope' role='group' aria-label='Cashflows report scope'>
                 <label class='cashflows-grouping-control' for='cashflowsGroupingSelect'>Group by<select id='cashflowsGroupingSelect' aria-label='Cashflows report grouping'><option value='suggested'>Suggested</option><option value='day'>Daily</option><option value='fortnight'>Fortnightly</option><option value='month'>Monthly</option><option value='quarter'>Quarterly</option><option value='half_year'>Half-yearly</option><option value='year'>Annually</option></select></label>
@@ -458,6 +461,6 @@
     </section>
     <script src='/static/client_context.js?v=21'></script>
     <script src='/static/loading_ui.js?v=ce6d21ca20c8'></script>
-    <script src='/static/reconciliation.js?v=55'></script>
+    <script src='/static/reconciliation.js?v=57'></script>
 </body>
 </html>

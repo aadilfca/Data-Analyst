@@ -226,6 +226,9 @@
     let cashflowInlineLedgerControllers = new Map();
     let cashflowInlineLedgerGeneration = 0;
     const cashflowInlineLedgerLimit = 200;
+    let cashflowLedgerBaselineBuild = null;
+    let cashflowLedgerBaselineUnavailableKey = '';
+    let cashflowCategoryBuildStatusKey = '';
     let cashflowInlineTransactionCache = new Map();
     const cashflowInlineTransactionLimit = 50;
     const cashflowInlineHtmlClose = '>';
@@ -1584,12 +1587,90 @@
         return Object.assign({}, result, {preview: preview});
     }
     function cacheCashflowDrilldownBaseline(result) {
-        if (!result || !Array.isArray(result.base_rows)) return;
+        if (!result || !Array.isArray(result.base_rows)) return false;
         const context = cashflowLedgerContext(result.period_start, result.period_end);
-        if (!cashflowLedgerResponseMatches(result, context)) return;
+        if (!cashflowLedgerResponseMatches(result, context)) return false;
         const baseResult = Object.assign({}, result, {rows: [], account_head_options: []});
         delete baseResult.base_rows;
-        rememberCashflowLedger('baseline', cashflowLedgerContextKey(context), {rows: result.base_rows, result: baseResult});
+        return rememberCashflowLedger('baseline', cashflowLedgerContextKey(context), {rows: result.base_rows, result: baseResult});
+    }
+    function setCashflowCategoryBuildStatus(contextKey, message) {
+        const status = element('cashflowsCategoryBuildStatus');
+        if (!status) return;
+        if (message) {
+            cashflowCategoryBuildStatusKey = contextKey;
+            status.textContent = message;
+            status.hidden = false;
+            return;
+        }
+        if (contextKey && cashflowCategoryBuildStatusKey !== contextKey) return;
+        status.textContent = '';
+        status.hidden = true;
+        cashflowCategoryBuildStatusKey = '';
+    }
+    function cashflowLedgerBuildContextIsCurrent(context, contextKey, generation) {
+        if (generation !== cashflowInlineLedgerGeneration || !cashflowLoadedLedgerContextMatches(context)) return false;
+        const current = cashflowLedgerContext(context.period_start, context.period_end);
+        return cashflowLedgerContextKey(current) === contextKey;
+    }
+    function prepareCashflowLedgerBaseline(context, generation) {
+        const contextKey = cashflowLedgerContextKey(context);
+        const statusKey = contextKey + '|generation=' + generation;
+        const cached = takeCashflowLedger('baseline', contextKey);
+        if (cached) return Promise.resolve(cached);
+        if (cashflowLedgerBaselineUnavailableKey === contextKey) return Promise.resolve(null);
+        if (!clientId || !context.period_start || !context.period_end
+                || !cashflowLedgerBuildContextIsCurrent(context, contextKey, generation)) {
+            return Promise.resolve(null);
+        }
+        if (cashflowLedgerBaselineBuild) {
+            if (cashflowLedgerBaselineBuild.contextKey === contextKey
+                    && cashflowLedgerBaselineBuild.generation === generation) return cashflowLedgerBaselineBuild.promise;
+            setCashflowCategoryBuildStatus(statusKey, 'Categories are building…');
+            return cashflowLedgerBaselineBuild.promise.catch(function () { return null; }).then(function () {
+                if (!cashflowLedgerBuildContextIsCurrent(context, contextKey, generation)) {
+                    setCashflowCategoryBuildStatus(statusKey, '');
+                    return null;
+                }
+                return prepareCashflowLedgerBaseline(context, generation);
+            });
+        }
+
+        setCashflowCategoryBuildStatus(statusKey, 'Categories are building…');
+        const task = {contextKey: contextKey, generation: generation, promise: null};
+        task.promise = (async function () {
+            try {
+                const fresh = await ensureCashflowRevisionFresh(false, true);
+                if (!fresh || !cashflowLedgerBuildContextIsCurrent(context, contextKey, generation)) return null;
+                const params = new URLSearchParams({
+                    client_id: String(context.client_id),
+                    period_start: context.period_start,
+                    period_end: context.period_end,
+                    group_by: context.group_by,
+                    treasury_view: context.treasury_view,
+                    page: '1',
+                    limit: '1',
+                });
+                appendCashflowAccounts(params, cashflowAccountCodes(context));
+                const result = await api('/api/reconciliation/cashflows/drilldown?' + params.toString());
+                if (!cashflowLedgerBuildContextIsCurrent(context, contextKey, generation)
+                        || !cashflowLedgerResponseMatches(result, context)
+                        || !Array.isArray(result.base_rows)) return null;
+                if (!cacheCashflowDrilldownBaseline(result)) return null;
+                return takeCashflowLedger('baseline', contextKey) || null;
+            } catch (error) {
+                return null;
+            } finally {
+                if (cashflowLedgerBuildContextIsCurrent(context, contextKey, generation)
+                        && !cashflowDrilldownBaseCache.has(contextKey)) {
+                    cashflowLedgerBaselineUnavailableKey = contextKey;
+                }
+                if (cashflowLedgerBaselineBuild === task) cashflowLedgerBaselineBuild = null;
+                setCashflowCategoryBuildStatus(statusKey, '');
+            }
+        })();
+        cashflowLedgerBaselineBuild = task;
+        return task.promise;
     }
     function syncCashflowDrilldownPagination(result) {
         const payload = result || lastCashflowDrilldownResult || {};
@@ -1621,6 +1702,7 @@
     }
     function resetCashflowInlineLedgerState() {
         cashflowInlineLedgerGeneration += 1;
+        cashflowLedgerBaselineUnavailableKey = '';
         cashflowInlineLedgerControllers.forEach(function (controller) { controller.abort(); });
         cashflowInlineLedgerControllers = new Map();
         clearCashflowInlineCache();
@@ -2177,7 +2259,9 @@
             if (!cashflowLoadedLedgerContextMatches(context)) throw new Error('Report scope changed. Reload Cashflows to continue.');
             if (generation !== cashflowInlineLedgerGeneration
                     || contextKey !== cashflowDrilldownContextKey(cashflowSelection.start, cashflowSelection.end)) return null;
-            const baseline = takeCashflowLedger('baseline', contextKey);
+            let baseline = takeCashflowLedger('baseline', contextKey);
+            if (!baseline) baseline = await prepareCashflowLedgerBaseline(context, generation);
+            if (generation !== cashflowInlineLedgerGeneration || controller.signal.aborted) return null;
             let payload;
             if (baseline) {
                 // One complete baseline is shared by every category and the full ledger view.
@@ -4601,7 +4685,7 @@
                 }
             }
             if (ownsProcessing) setCashflowProcessingStep('load', 'Loading Cashflows data for the selected period.');
-            const query = new URLSearchParams({ client_id: requestedClient, period_start: start, period_end: end, group_by: requestedGrouping, treasury_view: requestedView, details: 'summary', warm_ledger_cache: 'true', include_balances: 'true' });
+            const query = new URLSearchParams({ client_id: requestedClient, period_start: start, period_end: end, group_by: requestedGrouping, treasury_view: requestedView, details: 'summary', include_balances: 'true' });
             appendCashflowAccounts(query, requestedAccounts);
             if (forceRefresh) query.set('refresh', 'true');
             const result = await api('/api/reconciliation/cashflows/preview?' + query.toString(), { signal: controller.signal });
@@ -4630,6 +4714,11 @@
             } else {
                 if (renderedCached) hideCashflowProcessing();
                 renderResult(result);
+            }
+            if (stillCurrent() && result.source && result.source.ready
+                    && result.preview && Array.isArray(result.preview.periods) && result.preview.periods.length) {
+                const ledgerContext = cashflowLedgerContext(result.period_start, result.period_end);
+                void prepareCashflowLedgerBaseline(ledgerContext, cashflowInlineLedgerGeneration);
             }
             if (!balancesOnly && !element('cashflowsTransactionsSection').hidden) await loadClassifiedTransactions(true);
             showCashflowResultNotice(result);

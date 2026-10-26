@@ -394,7 +394,7 @@ def test_cashflows_report_preserves_current_default_period_and_monthly_grouping(
     assert "cashflowPreviewPeriods" in reconciliation_script
     assert "syncCashflowZeroRowsButton" in reconciliation_script
     assert "style.css?v=71" in reconciliation_html
-    assert "reconciliation.js?v=53" in reconciliation_html
+    assert "reconciliation.js?v=57" in reconciliation_html
     assert "cashflowsSummaryBasis" not in reconciliation_html
     assert "cashflows-transactions-note" not in reconciliation_html
     assert "renderCashflowSummary" in reconciliation_script
@@ -640,6 +640,11 @@ def ledger_cache_page():
         },
         expire: function () {cashflowRevisionCheckedAt = 0;},
         generate: function (hard) {return generateCashflows(null, {forceRefresh: hard});},
+        prepareBaseline: function () {
+            const context = cashflowLedgerContext(cashflowSelection.start, cashflowSelection.end);
+            void prepareCashflowLedgerBaseline(context, cashflowInlineLedgerGeneration);
+        },
+        invalidateLedgerGeneration: resetCashflowInlineLedgerState,
         accounts: function (accounts, pending) {
             cashflowAccountOptions = accounts;
             cashflowAccountOptionsClient = clientId;
@@ -702,6 +707,102 @@ def ledger_cache_page():
 
 def _category_button(page, category='Operating'):
     return page.locator('.cashflows-inline-expand').filter(has_text=category).first
+
+
+def _drilldown_payload(report, rows, base_rows=None):
+    return dict(client_id=report['client_id'], period_start=report['period_start'],
+        period_end=report['period_end'], group_by=report['group_by'],
+        treasury_view=report['treasury_view'], rows=rows, base_rows=base_rows,
+        ledger_context=report['ledger_context'], cashflow_report_revision=12,
+        cashflow_configuration_key='config-1', account_head_options=[],
+        total_rows=len(rows), page=1, limit=50, page_count=1, controls={},
+        source=report['source'], database_totals=None, blocking_reasons=[])
+
+
+def test_background_ledger_build_is_shared_with_immediate_category_expansion(ledger_cache_page):
+    page = ledger_cache_page
+    report = _ledger_report()
+    rows = report['preview']['ledger_cache']['rows']
+    report['preview'].pop('ledger_cache')
+    baseline_routes = []
+
+    def hold_baseline(route):
+        baseline_routes.append(route)
+
+    page.route('**/api/reconciliation/cashflows/drilldown?*', hold_baseline)
+    page.evaluate('report => ledgerFixture.load(report)', report)
+    with page.expect_request(lambda request: '/api/reconciliation/cashflows/drilldown?' in request.url):
+        page.evaluate('() => ledgerFixture.prepareBaseline()')
+    page.wait_for_function("() => document.getElementById('cashflowsCategoryBuildStatus').hidden === false")
+
+    operating = _category_button(page, 'Operating')
+    other = _category_button(page, 'Other')
+    operating.click()
+    other.click()
+    assert operating.get_attribute('aria-expanded') == 'true'
+    assert other.get_attribute('aria-expanded') == 'true'
+    assert page.locator('#cashflowsCategoryBuildStatus').inner_text() == 'Categories are building…'
+    assert len(baseline_routes) == 1
+
+    baseline_routes[0].fulfill(json=_drilldown_payload(report, rows[:1], base_rows=rows))
+    page.wait_for_function("() => document.getElementById('cashflowsCategoryBuildStatus').hidden === true")
+    page.wait_for_function("() => document.querySelectorAll('.cashflows-inline-ledger-row').length >= 2")
+    assert page.locator('.cashflows-inline-ledger-row').count() >= 2
+    assert len(baseline_routes) == 1
+
+
+def test_failed_background_ledger_build_falls_back_to_category_request(ledger_cache_page):
+    page = ledger_cache_page
+    page_errors = []
+    page.on('pageerror', lambda error: page_errors.append(str(error)))
+    report = _ledger_report()
+    rows = report['preview']['ledger_cache']['rows']
+    report['preview'].pop('ledger_cache')
+    calls = []
+    baseline_routes = []
+
+    def serve_drilldown(route):
+        calls.append(route.request.url)
+        query = parse_qs(urlparse(calls[-1]).query)
+        if query.get('category'):
+            route.fulfill(json=_drilldown_payload(report, [rows[0]]))
+        else:
+            baseline_routes.append(route)
+
+    page.route('**/api/reconciliation/cashflows/drilldown?*', serve_drilldown)
+    page.evaluate('report => ledgerFixture.load(report)', report)
+    with page.expect_request(lambda request: '/api/reconciliation/cashflows/drilldown?' in request.url):
+        page.evaluate('() => ledgerFixture.prepareBaseline()')
+    _category_button(page, 'Operating').click()
+    assert len(calls) == 1
+    with page.expect_response(lambda response: 'category=Operating' in response.url):
+        baseline_routes[0].fulfill(json=_drilldown_payload(report, [], base_rows=None))
+    assert len(calls) == 2
+    assert 'category=' not in calls[0]
+    assert 'category=Operating' in calls[1], calls
+    page.wait_for_timeout(100)
+    assert page.locator('.cashflows-inline-ledger-row').count() >= 1, {
+        'errors': page_errors,
+        'host_text': page.locator('.cashflows-inline-ledger-host').all_inner_texts(),
+        'toast': page.locator('#cashflowsToast').inner_text(),
+    }
+    assert not page_errors
+
+
+def test_stale_background_ledger_response_is_not_cached(ledger_cache_page):
+    page = ledger_cache_page
+    report = _ledger_report()
+    rows = report['preview']['ledger_cache']['rows']
+    report['preview'].pop('ledger_cache')
+    baseline_routes = []
+    page.route('**/api/reconciliation/cashflows/drilldown?*', lambda route: baseline_routes.append(route))
+    page.evaluate('report => ledgerFixture.load(report)', report)
+    with page.expect_request(lambda request: '/api/reconciliation/cashflows/drilldown?' in request.url):
+        page.evaluate('() => ledgerFixture.prepareBaseline()')
+    page.evaluate('() => ledgerFixture.invalidateLedgerGeneration()')
+    baseline_routes[0].fulfill(json=_drilldown_payload(report, rows[:1], base_rows=rows))
+    page.wait_for_function("() => document.getElementById('cashflowsCategoryBuildStatus').hidden === true")
+    assert page.evaluate('() => ledgerFixture.stats()') == []
 
 
 def _account_choices():
@@ -1368,10 +1469,11 @@ def test_reconciliation_navigation_deep_link_loads_only_when_requested(ledger_ca
     page.evaluate('''async()=>{window.getSelectedClientId=()=>7;await window.startReport();}''')
     assert page.locator('#cashflowsView').is_visible()!=feature
     assert page.locator('#cashflowReconciliation').is_visible()==feature
-    assert len(calls)==(2 if feature else 0)
+    assert len(calls)==(3 if feature else 0)
     if feature:
-        assert '/preview?' in calls[0] and '/reconciliation?' in calls[1]
-        assert 'period_end=2026-06-30' in calls[1]
+        assert '/preview?' in calls[0] and '/drilldown?' in calls[1] and '/reconciliation?' in calls[2]
+        assert 'category=' not in calls[1]
+        assert 'period_end=2026-06-30' in calls[2]
         page.locator('#reconClose').click()
         assert page.locator('#cashflowsView').is_visible()
         assert 'feature=' not in page.url
@@ -1863,7 +1965,7 @@ def test_oversized_category_pages_are_explicit_and_reachable(ledger_cache_page):
     assert page.locator('.cashflows-inline-ledger-link').inner_text() == 'Account 200'
     page.locator('[data-cashflow-inline-page="1"]').click()
     page.wait_for_function("document.querySelectorAll('.cashflows-inline-ledger-link').length === 200")
-    assert requested_pages == [1, 2]
+    assert requested_pages == [1, 1, 2]  # One unfiltered baseline attempt precedes the paged fallback.
 
 
 @pytest.mark.parametrize('failure', ['unavailable', 'changed'])
@@ -1939,7 +2041,7 @@ def test_hard_refresh_reloads_source_and_reseeds_rollups(ledger_cache_page):
     page.evaluate('result => window.ledgerFixture.load(result)', report)
     page.evaluate('() => window.ledgerFixture.generate(true)')
     assert requests[0]['refresh'] == ['true']
-    assert requests[0]['warm_ledger_cache'] == ['true']
+    assert 'warm_ledger_cache' not in requests[0]
     assert sum(entry['rows'] for entry in page.evaluate('() => window.ledgerFixture.stats()')) == 2
 
 

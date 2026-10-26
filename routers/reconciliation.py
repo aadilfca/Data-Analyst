@@ -479,14 +479,28 @@ def _require_active_client(client_id: int) -> None:
         raise HTTPException(404, "Client not found or inactive")
 
 
-def _latest_trial_balance_accounts(client_id: int) -> list[dict[str, Any]]:
+def _latest_trial_balance_accounts(
+    client_id: int, account_codes: Optional[List[str]] = None
+) -> list[dict[str, Any]]:
+    account_filter = ""
+    params: list[Any] = [client_id]
+    if account_codes is not None:
+        normalized_codes = list(dict.fromkeys(
+            str(code).strip() for code in account_codes if code is not None and str(code).strip()
+        ))
+        if not normalized_codes:
+            return []
+        account_filter = "AND a.account_code = ANY(%s)"
+        params.append(normalized_codes)
+    params.append(client_id)
     return execute_query_pg(
-        """
+        f"""
         SELECT a.id, a.account_code, a.account_name, a.source_account_type,
                a.classification, u.period_start, u.period_end, u.period_type
         FROM trial_balance_accounts a
         JOIN trial_balance_uploads u ON u.id = a.upload_id
         WHERE u.client_id = %s AND u.status = 'parsed'
+          {account_filter}
           AND u.id = (
               SELECT id FROM trial_balance_uploads
               WHERE client_id = %s AND status = 'parsed'
@@ -495,7 +509,7 @@ def _latest_trial_balance_accounts(client_id: int) -> list[dict[str, Any]]:
           )
         ORDER BY a.sort_order
         """,
-        (client_id, client_id),
+        tuple(params),
     )
 
 
@@ -1820,8 +1834,14 @@ def _build_cashflow_result(
                     for p in periods}
         movements = view_movements('combined' if treasury_view == 'split' else treasury_view)
         split_movements = {key: view_movements(key) for key in ('bank', 'cash')} if treasury_view == 'split' else None
-        account_names = {item['account_code']: item['account_name'] for item in (_latest_trial_balance_accounts(client_id) if accounts and periods else [])
-                         if item['account_code'] in accounts}
+        trial_balance_accounts = (
+            _latest_trial_balance_accounts(client_id, list(accounts)) if accounts and periods else []
+        )
+        account_names = {
+            item['account_code']: item['account_name']
+            for item in trial_balance_accounts
+            if item['account_code'] in accounts
+        }
         preview['balance_reconciliation'] = load_uploaded_ledger_balances(
             client_id, accounts, periods, movements, query_fn=execute_query_pg,
             account_names=account_names, treasury_movements=split_movements)

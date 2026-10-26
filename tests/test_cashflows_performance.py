@@ -801,8 +801,9 @@ def test_cashflow_daily_rollup_preserves_treasury_totals_for_larger_periods():
 
 
 @pytest.mark.parametrize('selection',[None,['B1']])
-def test_browser_warmup_reuses_one_canonical_read_without_persistent_copies(selection):
-    """Warm-up changes grouping work, never the source read/write contract."""
+@pytest.mark.parametrize('warm_ledger_cache',[False,True])
+def test_browser_ledger_cache_is_built_only_when_requested(selection, warm_ledger_cache):
+    """Summary-only loads skip ledger rollups; explicit warm-up retains them."""
     journal = pd.DataFrame([
         dict(voucher_id=f'V{i}', date='2026-01-05', account_code=code,
              account_name=code, debit=100 if code == 'B1' else 0,
@@ -826,14 +827,20 @@ def test_browser_warmup_reuses_one_canonical_read_without_persistent_copies(sele
         patch.object(reconciliation, 'run_read_snapshot_pg', side_effect=lambda callback: callback(None)),
     ):
         result = reconciliation.preview_cashflows(7, '2026-01-01', '2026-01-31',
-            group_by='month', treasury_view='combined', details='summary', warm_ledger_cache=True, session=None,
+            group_by='month', treasury_view='combined', details='summary',
+            warm_ledger_cache=warm_ledger_cache, session=None,
             selected_treasury_account_codes=selection)
     assert loader.call_count == builder.call_count == 1
-    assert result['preview']['ledger_cache']['complete'] is True
-    assert result['preview']['ledger_cache']['row_count'] == 10
-    assert sum(row['amount'] for row in result['preview']['ledger_cache']['rows']) == 10000
+    assert builder.call_args.kwargs['include_drilldown'] is warm_ledger_cache
+    assert result['preview']['periods']
+    if warm_ledger_cache:
+        assert result['preview']['ledger_cache']['complete'] is True
+        assert result['preview']['ledger_cache']['row_count'] == 10
+        assert sum(row['amount'] for row in result['preview']['ledger_cache']['rows']) == 10000
+    else:
+        assert 'ledger_cache' not in result['preview']
     assert loader.call_args.kwargs.get('selected_treasury_account_codes')==selection
-    if selection:
+    if selection and warm_ledger_cache:
         assert result['preview']['ledger_cache']['context']['account_selection']['account_codes']==selection
 
 
@@ -858,3 +865,33 @@ def test_selected_report_api_retains_one_derived_source_query_without_financial_
     assert params[-2:]==('B1','B2')
     assert "row_data ->> 'Debit" not in sql and "row_data ->> 'Credit" not in sql
     assert result['account_selection']['account_codes']==['B1','B2']
+
+
+def test_latest_trial_balance_lookup_can_limit_rows_to_requested_treasury_accounts():
+    calls = []
+    with patch.object(
+        reconciliation,
+        'execute_query_pg',
+        side_effect=lambda sql, params: calls.append((sql, params)) or [],
+    ):
+        reconciliation._latest_trial_balance_accounts(7, [' B1 ', 'B2', 'B1', None, ' '])
+        reconciliation._latest_trial_balance_accounts(7)
+
+    filtered_sql, filtered_params = calls[0]
+    assert 'AND a.account_code = ANY(%s)' in filtered_sql
+    assert filtered_params == (7, ['B1', 'B2'], 7)
+    assert "u.status = 'parsed'" in filtered_sql
+    assert 'ORDER BY (period_end IS NULL), period_end DESC, uploaded_at DESC' in filtered_sql
+
+    unfiltered_sql, unfiltered_params = calls[1]
+    assert 'a.account_code = ANY' not in unfiltered_sql
+    assert unfiltered_params == (7, 7)
+
+
+def test_latest_trial_balance_lookup_skips_query_for_empty_account_filter():
+    with patch.object(
+        reconciliation,
+        'execute_query_pg',
+        side_effect=AssertionError('No query for empty account filter'),
+    ):
+        assert reconciliation._latest_trial_balance_accounts(7, []) == []
