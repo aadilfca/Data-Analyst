@@ -550,20 +550,6 @@ function accRenderSource() {
     const upload = accLatestUpload;
     accElement('accSourceInfo').textContent = upload ? 'Source: ' + (upload.file_name || 'Latest Trial Balance') + (upload.as_of_date ? ' - ' + upload.as_of_date : '') : 'No parsed Trial Balance';
 }
-function accRenderFinancialCategoryList() {
-    const list = accElement('accFinancialCategoryList');
-    if (!accFinancialCategories.length) {
-        list.innerHTML = '<span class="acc2-empty">No Financial Statement categories defined yet.</span>';
-        return;
-    }
-    list.innerHTML = accFinancialCategories.map(function (category, index) {
-        const status = category.is_active ? 'Active' : 'Inactive';
-        const action = category.is_active ? 'Deactivate' : 'Reactivate';
-        const upDisabled = index === 0 ? ' disabled' : '';
-        const downDisabled = index === accFinancialCategories.length - 1 ? ' disabled' : '';
-        return '<div class="acc2-category-item"><div><strong>' + accEscape(category.label) + '</strong><span>' + accEscape(category.category_key) + ' - ' + status + '</span></div><div class="acc2-category-actions"><button type="button" class="acc2-mini-action" data-acc-category-id="' + category.id + '" data-acc-category-action="rename">Rename</button><button type="button" class="acc2-mini-action" data-acc-category-id="' + category.id + '" data-acc-category-action="up"' + upDisabled + ' aria-label="Move ' + accEscape(category.label) + ' up">↑</button><button type="button" class="acc2-mini-action" data-acc-category-id="' + category.id + '" data-acc-category-action="down"' + downDisabled + ' aria-label="Move ' + accEscape(category.label) + ' down">↓</button><button type="button" class="acc2-mini-action" data-acc-category-id="' + category.id + '" data-acc-category-action="toggle" data-acc-category-active="' + (category.is_active ? 'true' : 'false') + '">' + action + '</button></div></div>';
-    }).join('');
-}
 function accRenderNoteCategoryList() {
     const list = accElement('accNotesCategoryList');
     if (!accNoteCategories.length) {
@@ -897,7 +883,6 @@ async function accLoadFinancialCategories() {
     const result = await accApi('/api/account-control-center/categories?client_id=' + encodeURIComponent(accClientId) + '&category_type=financial_statement&include_inactive=true');
     accFinancialCategories = result.categories || [];
     accFinancialLoaded = true;
-    accRenderFinancialCategoryList();
     accRenderFinancialRows();
 }
 async function accLoadNoteCategories() {
@@ -1042,59 +1027,6 @@ async function accHandleFinancialChange(event) {
         await accLoadMapping(true).catch(function () {});
     }
 }
-async function accCreateFinancialCategory(event) {
-    event.preventDefault();
-    const key = accElement('accFinancialCategoryKey').value.trim();
-    const label = accElement('accFinancialCategoryLabel').value.trim();
-    const button = event.submitter || accElement('accFinancialCategoryForm').querySelector('button[type="submit"]');
-    try {
-        await accWithButtonBusy(button, 'Adding category...', async function () {
-            await accApi('/api/account-control-center/categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, category_type: 'financial_statement', category_key: key, label: label, sort_order: accFinancialCategories.length }) });
-            accElement('accFinancialCategoryForm').reset();
-            await accLoadFinancialCategories();
-            accShowStatus('Financial Statement category added.', 'success');
-        });
-    } catch (error) { accShowStatus(error.message, 'error'); }
-}
-async function accUpdateFinancialCategory(category, patch, message) {
-    await accApi('/api/account-control-center/categories/' + category.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, category_type: 'financial_statement', label: patch.label == null ? category.label : patch.label, sort_order: patch.sort_order == null ? category.sort_order : patch.sort_order, is_active: patch.is_active == null ? category.is_active : patch.is_active }) });
-    await accLoadFinancialCategories();
-    accShowStatus(message, 'success');
-}
-async function accHandleFinancialCategoryAction(event) {
-    const button = event.target.closest('[data-acc-category-id]');
-    if (!button || button.disabled) return;
-    const category = accFinancialCategories.find(function (item) { return String(item.id) === button.dataset.accCategoryId; });
-    if (!category) return;
-    const action = button.dataset.accCategoryAction;
-    try {
-        if (action === 'toggle') {
-            await accWithButtonBusy(button, 'Updating category...', function () { return accUpdateFinancialCategory(category, { is_active: button.dataset.accCategoryActive !== 'true' }, 'Financial Statement category status updated.'); });
-            return;
-        }
-        if (action === 'rename') {
-            const label = window.prompt('Display label for ' + category.category_key, category.label);
-            if (label == null || !label.trim() || label.trim() === category.label) return;
-            await accWithButtonBusy(button, 'Renaming category...', function () { return accUpdateFinancialCategory(category, { label: label.trim() }, 'Financial Statement category renamed.'); });
-            return;
-        }
-        const index = accFinancialCategories.findIndex(function (item) { return item.id === category.id; });
-        const targetIndex = action === 'up' ? index - 1 : index + 1;
-        const target = accFinancialCategories[targetIndex];
-        if (!target) return;
-        const updateCategoryOrder = function (item, sortOrder) {
-            return accApi('/api/account-control-center/categories/' + item.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, category_type: 'financial_statement', label: item.label, sort_order: sortOrder, is_active: item.is_active }) });
-        };
-        await accWithButtonBusy(button, 'Reordering categories...', async function () {
-            await Promise.all([
-                updateCategoryOrder(category, target.sort_order),
-                updateCategoryOrder(target, category.sort_order),
-            ]);
-            await accLoadFinancialCategories();
-            accShowStatus('Financial Statement category order updated.', 'success');
-        });
-    } catch (error) { accShowStatus(error.message, 'error'); }
-}
 async function accSaveNoteLeaf(account, select) {
     const result = accElement('accNotesRows').querySelector('[data-acc-note-result="' + CSS.escape(account.account_code) + '"]');
     const value = select.value ? Number(select.value) : null;
@@ -1193,6 +1125,23 @@ function accSetCashflowConfigTab(tabName) {
     document.querySelectorAll('[data-acc-cashflow-config-panel]').forEach(function (panel) { panel.hidden = panel.dataset.accCashflowConfigPanel !== tabName; });
 }
 function accSetCashflowModal(id, open) { const modal = accElement(id); if (modal) modal.hidden = !open; }
+function accSetFinancialSetupModal(isOpen) {
+    const modal = accElement('accFinancialSetupModal');
+    if (!modal) return;
+    modal.hidden = !isOpen;
+    if (isOpen) accElement('accFinancialSetupClose').focus();
+    else accElement('accFinancialSetupFab').focus();
+}
+function accSetFinancialSetupTab(tabName) {
+    document.querySelectorAll('[data-acc-financial-setup-tab]').forEach(function (tab) {
+        const active = tab.dataset.accFinancialSetupTab === tabName;
+        tab.classList.toggle('active', active);
+        tab.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    document.querySelectorAll('[id^="accFinancialSetupPanel"]').forEach(function (panel) {
+        panel.hidden = panel.getAttribute('aria-labelledby') !== document.querySelector('[data-acc-financial-setup-tab="' + CSS.escape(tabName) + '"]').id;
+    });
+}
 function accSetTabLoading(tabName, isLoading) {
     const tab = document.querySelector('[data-acc-tab="' + CSS.escape(tabName) + '"]');
     if (!tab) return;
@@ -1221,6 +1170,7 @@ function accSetTab(tabName) {
     accElement('accFinancialPanel').hidden = tabName !== 'financial';
     accElement('accNotesPanel').hidden = tabName !== 'notes';
     accElement('accCashflowCategoryFab').hidden = tabName !== 'cashflow';
+    accElement('accFinancialSetupFab').hidden = tabName !== 'financial';
     if (tabName === 'cashflow' && !accCashflowLoaded) {
         accSetCashflowGridState('Loading Cash Flow Setup...', false, true);
         accLoadLazyTab('cashflow', 'Loading Cash Flow Setup...', accLoadCashflow, accSetCashflowGridState);
@@ -1281,11 +1231,12 @@ function accBindEvents() {
     accElement('accCashflowTemplateSelect').addEventListener('change', function (event) { accLoadCashflowTemplateMapping(event.target.value).catch(function (error) { accSetCashflowTemplateState(error.message, true); }); });
     accElement('accCashflowTemplateMapping').addEventListener('change', accHandleCashflowTemplateMappingChange);
     accElement('accCashflowTemplateSave').addEventListener('click', function () { accSaveCashflowTemplate().catch(function (error) { accSetCashflowTemplateState(error.message, true); }); });
-    document.addEventListener('keydown', function (event) { if (event.key === 'Escape') { accSetCashflowModal('accCashflowCategoryModal', false); accSetCashflowModal('accCashflowAccountsModal', false); accSetCashflowModal('accCashflowTemplateModal', false); } });
+    document.addEventListener('keydown', function (event) { if (event.key === 'Escape') { accSetCashflowModal('accCashflowCategoryModal', false); accSetCashflowModal('accCashflowAccountsModal', false); accSetCashflowModal('accCashflowTemplateModal', false); if (!accElement('accFinancialSetupModal').hidden) accSetFinancialSetupModal(false); } });
     accElement('accFinancialFilter').addEventListener('input', accRenderFinancialRows);
     accElement('accFinancialRows').addEventListener('change', function (event) { accHandleFinancialChange(event); });
-    accElement('accFinancialCategoryForm').addEventListener('submit', accCreateFinancialCategory);
-    accElement('accFinancialCategoryList').addEventListener('click', function (event) { accHandleFinancialCategoryAction(event); });
+    accElement('accFinancialSetupFab').addEventListener('click', function () { accSetFinancialSetupModal(true); });
+    accElement('accFinancialSetupClose').addEventListener('click', function () { accSetFinancialSetupModal(false); });
+    document.querySelectorAll('[data-acc-financial-setup-tab]').forEach(function (tab) { tab.addEventListener('click', function () { accSetFinancialSetupTab(tab.dataset.accFinancialSetupTab); }); });
     accElement('accNotesFilter').addEventListener('input', accRenderNotesRows);
     accElement('accNotesRows').addEventListener('change', function (event) { accHandleNoteChange(event); });
     accElement('accNotesCategoryForm').addEventListener('submit', accCreateNoteCategory);

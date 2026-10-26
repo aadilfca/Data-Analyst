@@ -227,16 +227,22 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     page.wait_for_selector("#accPageBusy", state="hidden")
     assert page.locator("#accTabFinancial").is_enabled()
     page.evaluate("window.fetch = window.__accOriginalFetch")
-    assert page.locator("#accFinancialCategoryList .acc2-category-item").count() == 2
-    assert page.get_by_role("button", name="Rename").count() == 2
     page.locator("select.acc2-financial-category[data-acc-code='20-15-50-0001']").select_option("10")
     page.wait_for_timeout(150)
     assert any(call[0] == "PUT" and call[2].get("financial_statement_category_id") == 10 and "verification_workstream" not in call[2] for call in calls)
-    page.locator("#accFinancialCategoryKey").fill("fixed_assets")
-    page.locator("#accFinancialCategoryLabel").fill("Fixed assets")
-    page.locator("#accFinancialCategoryForm button[type='submit']").click()
-    page.wait_for_timeout(150)
-    assert page.locator("#accFinancialCategoryList .acc2-category-item").count() == 3
+    assert page.locator("#accFinancialCategoryForm").count() == 0
+    financial_fab = page.locator("#accFinancialSetupFab")
+    assert financial_fab.is_visible()
+    financial_fab.click()
+    assert page.locator("#accFinancialSetupModal").is_visible()
+    setup_tabs = page.locator("[data-acc-financial-setup-tab]")
+    assert setup_tabs.all_text_contents() == ["Balance Sheet", "Notes to Balance Sheet", "Income Statement", "Notes to Income Statement"]
+    assert page.locator("#accFinancialSetupModal [role='tabpanel']:not(:empty)").count() == 0
+    setup_tabs.nth(1).click()
+    assert setup_tabs.nth(1).get_attribute("aria-selected") == "true"
+    assert page.locator("#accFinancialSetupPanelNotesBalanceSheet").get_attribute("hidden") is None
+    page.locator("#accFinancialSetupClose").click()
+    assert page.locator("#accFinancialSetupModal").is_hidden()
     assert page.locator("#accFinancialPanel").is_visible()
     assert page.locator("#accVerificationPanel").is_hidden()
     page.locator("#accTabNotes").click()

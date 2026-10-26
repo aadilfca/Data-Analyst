@@ -8679,3 +8679,15 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 **Scope:** In the five approved files, ready summaries now start one shared, unfiltered ledger build immediately after rendering. Categories stay clickable; expansions share the in-flight request and filter locally. A muted live status appears while building. Failed, incomplete or oversized baselines fall back to the existing category request; same-context failures are not retried repeatedly. Revision and report-generation checks discard stale responses. Script cache version is 57; no database or schema changes.
 
 **Verification:** New Playwright checks pass for concurrent expansion, fallback, and stale-response rejection. The performance module passes 32 tests. The full UI run passed 186 tests and exposed four assertions tied to old cache/version/request behavior; after updating them, all eight affected and new UI checks pass. Syntax, compilation and whitespace checks pass. Local-server timing remains for Aadil; the extra unfiltered read is an intentional per-report cost.
+
+## Financial Statements development
+
+Record phase decisions, implementation, verification, and acceptance here as the report is developed.
+
+### Account Control Centre setup shell - 2026-10-26
+
+**Implementation:** Removed the Financial Statements category-management block while retaining category data for account assignment. Added a fixed + button and wide modal with four selectable, blank tabs: Balance Sheet, Notes to Balance Sheet, Income Statement, and Notes to Income Statement. No schema or API changes; existing Cash Flow UI is unchanged.
+
+**Verification:** Account Control Centre Playwright tests pass for Financial Statement assignment/modal behavior and existing Cash Flow popups. JavaScript syntax and `git diff --check` pass. Pytest reported a pre-existing cache-directory warning; no application failure.
+
+**Acceptance:** Aadil confirmed local testing on 2026-10-26.
