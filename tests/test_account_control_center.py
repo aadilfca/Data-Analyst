@@ -356,6 +356,56 @@ class CashFlowControlTests(unittest.TestCase):
 
 
 class FinancialStatementControlTests(unittest.TestCase):
+    def test_reorder_financial_statement_siblings_persists_requested_order(self):
+        selected = [
+            {"id": 2, "row_type": "category", "statement_section": "balance_sheet", "parent_category_id": 10},
+            {"id": 1, "row_type": "category", "statement_section": "balance_sheet", "parent_category_id": 10},
+        ]
+        with patch.object(control_center, "_require_active_client"), patch.object(
+            control_center, "pg_transaction", return_value=nullcontext()
+        ), patch.object(control_center, "execute_query_pg", side_effect=[selected, [{"id": 1}, {"id": 2}]]), patch.object(
+            control_center, "execute_write_pg"
+        ) as write:
+            result = control_center.reorder_account_control_categories(
+                control_center.AccountControlCategoryReorderPayload(client_id=1, category_ids=[2, 1]),
+                session={"username": "Admin"},
+            )
+        self.assertEqual(result, {"saved": True, "category_ids": [2, 1]})
+        self.assertEqual([call.args[1] for call in write.call_args_list], [(0, 2, 1), (10, 1, 1)])
+
+    def test_reorder_rejects_rows_with_different_parent_groups(self):
+        rows = [
+            {"id": 2, "row_type": "category", "statement_section": "balance_sheet", "parent_category_id": 10},
+            {"id": 3, "row_type": "category", "statement_section": "balance_sheet", "parent_category_id": 11},
+        ]
+        with patch.object(control_center, "_require_active_client"), patch.object(
+            control_center, "pg_transaction", return_value=nullcontext()
+        ), patch.object(control_center, "execute_query_pg", return_value=rows), patch.object(
+            control_center, "execute_write_pg"
+        ) as write:
+            with self.assertRaises(HTTPException) as raised:
+                control_center.reorder_account_control_categories(
+                    control_center.AccountControlCategoryReorderPayload(client_id=1, category_ids=[2, 3]),
+                    session={"username": "Admin"},
+                )
+        self.assertEqual(raised.exception.status_code, 400)
+        write.assert_not_called()
+
+    def test_reorder_requires_the_complete_sibling_group(self):
+        selected = [{"id": 2, "row_type": "category", "statement_section": "balance_sheet", "parent_category_id": 10}]
+        with patch.object(control_center, "_require_active_client"), patch.object(
+            control_center, "pg_transaction", return_value=nullcontext()
+        ), patch.object(control_center, "execute_query_pg", side_effect=[selected, [{"id": 1}, {"id": 2}]]), patch.object(
+            control_center, "execute_write_pg"
+        ) as write:
+            with self.assertRaises(HTTPException) as raised:
+                control_center.reorder_account_control_categories(
+                    control_center.AccountControlCategoryReorderPayload(client_id=1, category_ids=[2]),
+                    session={"username": "Admin"},
+                )
+        self.assertEqual(raised.exception.status_code, 400)
+        write.assert_not_called()
+
     def test_delete_unplaced_financial_statement_category(self):
         with patch.object(control_center, "_require_active_client"), patch.object(
             control_center, "pg_transaction", return_value=nullcontext()

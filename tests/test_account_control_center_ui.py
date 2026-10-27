@@ -64,6 +64,8 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
         {"id": 30, "client_id": 1, "category_type": "financial_statement", "category_key": "non_current_assets", "label": "Non Current Assets", "statement_section": "balance_sheet", "row_type": "heading", "parent_category_id": None, "sort_order": 3, "is_active": True},
         {"id": 31, "client_id": 1, "category_type": "financial_statement", "category_key": "property", "label": "Property", "statement_section": "balance_sheet", "row_type": "category", "parent_category_id": 30, "sort_order": 4, "is_active": True},
         {"id": 32, "client_id": 1, "category_type": "financial_statement", "category_key": "equipment", "label": "Equipment", "statement_section": "balance_sheet", "row_type": "category", "parent_category_id": 30, "sort_order": 5, "is_active": True},
+        {"id": 40, "client_id": 1, "category_type": "financial_statement", "category_key": "current_assets_heading", "label": "Current Assets Heading", "statement_section": "balance_sheet", "row_type": "heading", "parent_category_id": None, "sort_order": 6, "is_active": True},
+        {"id": 41, "client_id": 1, "category_type": "financial_statement", "category_key": "stock", "label": "Stock", "statement_section": "balance_sheet", "row_type": "category", "parent_category_id": 40, "sort_order": 7, "is_active": True},
     ]
     mapping["note_categories"] = [
         {"id": 20, "client_id": 1, "category_type": "note", "category_key": "accounting_policies", "label": "Accounting policies", "sort_order": 0, "is_active": True},
@@ -82,6 +84,7 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
             is_note = "category_type=note" in url
             if request.method == "GET":
                 category_list = mapping["note_categories"] if is_note else mapping["categories"]
+                category_list.sort(key=lambda item: (item.get("sort_order", 0), item.get("label", "").lower(), item.get("category_key", "")))
                 route.fulfill(status=200, content_type="application/json", body=json.dumps({"categories": category_list}))
             elif request.method == "POST":
                 body = json.loads(request.post_data or "{}")
@@ -92,6 +95,12 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
                 category_list.append(body)
                 calls.append((request.method, url, body))
                 route.fulfill(status=200, content_type="application/json", body=json.dumps({"saved": True, "category": body}))
+            elif request.method == "PUT" and url.split("?")[0].endswith("/categories/order"):
+                body = json.loads(request.post_data or "{}")
+                calls.append((request.method, url, body))
+                for order, category_id in enumerate(body["category_ids"]):
+                    next(item for item in mapping["categories"] if item["id"] == category_id)["sort_order"] = order * 10
+                route.fulfill(status=200, content_type="application/json", body=json.dumps({"saved": True, "category_ids": body["category_ids"]}))
             elif request.method == "DELETE":
                 category_id = int(url.split("/categories/")[1].split("?")[0])
                 removed = [item for item in mapping["categories"] if item["id"] == category_id or item.get("parent_category_id") == category_id]
@@ -213,6 +222,10 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     page.evaluate("window.fetch = window.__accOriginalFetch")
     assert any(call[0] == "POST" and call[2]["parent_account_code"] == "20-15-50" for call in calls)
     assert page.locator("select[data-acc-code='20-15-50']").input_value() == "local_vendor"
+    main_notice = page.locator("#accStatus.acc2-main-toast.success")
+    assert main_notice.is_visible()
+    assert main_notice.evaluate("element => getComputedStyle(element).position") == "fixed"
+    assert main_notice.evaluate("element => getComputedStyle(element).right") == "20px"
 
     page.evaluate("""() => {
         window.__accOriginalFetch = window.fetch;
@@ -237,20 +250,62 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     page.wait_for_selector("#accPageBusy", state="hidden")
     assert page.locator("#accTabFinancial").is_enabled()
     page.evaluate("window.fetch = window.__accOriginalFetch")
-    page.locator("select.acc2-financial-category[data-acc-code='20-15-50-0001']").select_option("10")
-    page.wait_for_timeout(150)
+    with page.expect_response(lambda response: response.url.endswith("/api/account-control-center/mapping") and response.request.method == "PUT"):
+        page.locator("select.acc2-financial-category[data-acc-code='20-15-50-0001']").select_option("10")
+    page.evaluate("""() => {
+        window.__accOriginalFetch = window.fetch;
+        window.__accReleaseFinancialLeaf = null;
+        window.fetch = (input, init) => String(input).endsWith('/api/account-control-center/mapping') && init && init.method === 'PUT'
+            ? new Promise(resolve => { window.__accReleaseFinancialLeaf = () => window.__accOriginalFetch(input, init).then(resolve); })
+            : window.__accOriginalFetch(input, init);
+    }""")
+    page.locator("select.acc2-financial-category[data-acc-code='20-15-50-0001']").select_option("11")
+    page.wait_for_function("window.__accReleaseFinancialLeaf !== null")
+    assert page.locator("#accPageBusy").is_hidden()
+    assert page.locator("#accFinancialRows [data-acc-fs-result='20-15-50-0001'] .acc2-inline-saving").is_visible()
+    page.evaluate("window.__accReleaseFinancialLeaf()")
+    page.wait_for_function("document.querySelector('#accFinancialRows [data-acc-fs-result=\"20-15-50-0001\"]')?.textContent === 'Saved'")
+    page.evaluate("window.fetch = window.__accOriginalFetch")
     assert any(call[0] == "PUT" and call[2].get("financial_statement_category_id") == 10 and "verification_workstream" not in call[2] for call in calls)
+    assert any(call[0] == "PUT" and call[2].get("financial_statement_category_id") == 11 and "verification_workstream" not in call[2] for call in calls)
     assert page.locator("#accFinancialCategoryForm").count() == 0
     financial_fab = page.locator("#accFinancialSetupFab")
     assert financial_fab.is_visible()
     financial_fab.click()
     assert page.locator("#accFinancialSetupModal").is_visible()
+    assert page.locator("#accStatus").is_hidden()
     setup_tabs = page.locator("[data-acc-financial-setup-tab]")
     assert setup_tabs.all_text_contents() == ["Balance Sheet", "Notes to Balance Sheet", "Income Statement", "Notes to Income Statement"]
     assert page.locator("#accFinancialSetupPanelBalanceSheet [data-fs-action='add-heading']").is_visible()
     assert page.locator("#accFinancialSetupPanelBalanceSheet .acc2-fs-unplaced").get_by_text("Fixed Assets").is_visible()
     assert page.locator("#accFinancialSetupPanelBalanceSheet [data-fs-id='30'][data-fs-action='delete']").is_visible()
     assert page.locator("#accFinancialSetupPanelBalanceSheet .acc2-fs-category").filter(has_text="Property").locator("[data-fs-action='delete']").is_visible()
+    property_handle = page.locator("#accFinancialSetupPanelBalanceSheet [data-fs-sort-row][data-fs-id='31'] [data-fs-drag-handle]")
+    stock_row = page.locator("#accFinancialSetupPanelBalanceSheet [data-fs-sort-row][data-fs-id='41']")
+    property_handle.drag_to(stock_row, target_position={"x": 40, "y": stock_row.bounding_box()["height"] - 2})
+    assert not any(call[0] == "PUT" and call[1].split("?")[0].endswith("/categories/order") for call in calls)
+    equipment_row = page.locator("#accFinancialSetupPanelBalanceSheet [data-fs-sort-row][data-fs-id='32']")
+    page.evaluate("""() => {
+        window.__accReleaseFinancialOrder = null;
+        window.fetch = (input, init) => String(input).endsWith('/api/account-control-center/categories/order')
+            ? new Promise(resolve => { window.__accReleaseFinancialOrder = () => window.__accOriginalFetch(input, init).then(resolve); })
+            : window.__accOriginalFetch(input, init);
+    }""")
+    property_handle.drag_to(equipment_row, target_position={"x": 40, "y": equipment_row.bounding_box()["height"] - 2})
+    page.wait_for_function("window.__accReleaseFinancialOrder !== null")
+    assert page.locator("#accFinancialSetupPanelBalanceSheet").get_attribute("aria-busy") == "true"
+    assert page.locator("#accFinancialSetupPanelBalanceSheet [data-fs-order-status] .ui-spinner").is_visible()
+    assert "Saving order" in page.locator("#accFinancialSetupPanelBalanceSheet [data-fs-order-status]").text_content()
+    page.evaluate("window.__accReleaseFinancialOrder()")
+    page.wait_for_function("document.querySelector('#accFinancialSetupPanelBalanceSheet').getAttribute('aria-busy') !== 'true'")
+    page.evaluate("window.fetch = window.__accOriginalFetch")
+    page.wait_for_function("document.querySelector('[data-fs-sort-group=\\\"children:30\\\"] [data-fs-sort-row]')?.textContent.includes('Equipment')")
+    assert any(call[0] == "PUT" and call[2].get("category_ids") == [32, 31] for call in calls)
+    heading_handle = page.locator("#accFinancialSetupPanelBalanceSheet > .acc2-fs-heading-list > [data-fs-sort-kind='heading'][data-fs-id='30'] > .acc2-fs-heading-title [data-fs-drag-handle]")
+    current_heading = page.locator("#accFinancialSetupPanelBalanceSheet > .acc2-fs-heading-list > [data-fs-sort-kind='heading'][data-fs-id='40']")
+    heading_handle.drag_to(current_heading, target_position={"x": 45, "y": current_heading.bounding_box()["height"] - 2})
+    page.wait_for_function("document.querySelector('[data-fs-sort-group=\\\"headings:balance_sheet\\\"] [data-fs-sort-row]')?.dataset.fsId === '40'")
+    assert any(call[0] == "PUT" and call[2].get("category_ids") == [40, 30] for call in calls)
     page.once("dialog", lambda dialog: dialog.accept())
     page.locator("#accFinancialSetupPanelBalanceSheet .acc2-fs-unplaced .acc2-fs-category").filter(has_text="Fixed Assets").locator("[data-fs-action='delete']").click()
     page.wait_for_function("!document.querySelector('#accFinancialSetupPanelBalanceSheet .acc2-fs-unplaced') || !document.querySelector('#accFinancialSetupPanelBalanceSheet .acc2-fs-unplaced').textContent.includes('Fixed Assets')")
@@ -261,6 +316,15 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     page.wait_for_function("!document.querySelector('#accFinancialSetupPanelBalanceSheet').textContent.includes('Non Current Assets')")
     assert "all 2 child categories" in cascade_dialogs[0]
     assert any(call[0] == "DELETE" and call[2]["category_id"] == 30 and call[2]["deleted_child_count"] == 2 for call in calls)
+    popup_notice = page.locator("#accFinancialSetupModal [data-acc-popup-notice]")
+    assert popup_notice.is_visible()
+    assert popup_notice.get_attribute("role") == "status"
+    assert popup_notice.evaluate("""element => {
+        const a = element.getBoundingClientRect();
+        const b = element.closest('.acc2-modal').querySelector('.acc2-modal-tabs').getBoundingClientRect();
+        return a.bottom <= b.top || a.top >= b.bottom;
+    }""")
+    popup_notice.wait_for(state="hidden", timeout=6000)
     setup_tabs.nth(1).click()
     assert setup_tabs.nth(1).get_attribute("aria-selected") == "true"
     assert page.locator("#accFinancialSetupPanelNotesBalanceSheet").get_attribute("hidden") is None

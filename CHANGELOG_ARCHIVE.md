@@ -8703,3 +8703,23 @@ Record phase decisions, implementation, verification, and acceptance here as the
 **Implementation:** Added Delete beside Rename and Deactivate for statement headings and categories. A category can be deleted only when no account code in any Trial Balance uses it. An unassigned heading can be deleted with its child categories after a confirmation alert; assigned children block the cascade. Orphaned Financial Statement links are cleared while other account-control fields remain. The page script version is 11.
 
 **Verification:** Focused Account Control Centre backend and UI suites pass (35 tests); Python compilation, JavaScript syntax and `git diff --check` pass. Pytest reports a cache-directory warning. The earlier unused Fixed Assets category was deleted for client 5; three orphan links were cleared while their account-control rows and other fields remained. Local acceptance of cascade controls is pending.
+
+### Financial Statement outline drag ordering - 2026-10-26
+
+**Implementation:** Added left-side drag handles for statement headings and categories. Headings reorder within their statement and carry their children; categories reorder only within their existing parent group. A transactional API validates the complete sibling order. Page script version is 12.
+
+**Verification:** Focused Account Control Centre backend and UI suites pass (38 tests); syntax and whitespace checks pass. Pytest reports a cache-directory warning. Local acceptance is pending.
+
+**Processing feedback:** Account Control Centre loads the shared `LoadingUI` helper and displays an inline “Saving order” spinner during drag reorder. The outline is marked busy to prevent another drag until save completes; success and failure paths restore the UI. The page script version is 13. The focused Playwright drag test passed with the API deliberately held pending, confirming the spinner and busy state.
+
+### Account Control Centre temporary notices - 2026-10-27
+
+**Implementation:** Routed Account Control Centre success and error messages to a compact top-right page toast or an in-flow message below the header of an open popup. Both are accessible, temporary, and reset their dismissal timer when replaced; opening a popup clears any page toast. The popup message occupies its own row so it does not cover controls. `account_control_center.html` now requests `style.css?v=71`.
+
+**Verification:** The focused Account Control Centre Playwright flow passed, checking page-toast placement, popup routing, non-overlap with tabs, and automatic dismissal. JavaScript syntax and `git diff --check` passed.
+
+### Financial Statement leaf-save feedback - 2026-10-27
+
+**Implementation:** Removed the page-wide busy banner only from individual Financial Statement account-category saves. The affected row retains its spinner and “Saved”/“Retry” state; parent bulk updates and all other global processing indicators are unchanged.
+
+**Verification:** The focused Playwright flow held the Financial Statement save request pending and confirmed the row spinner stayed visible while `#accPageBusy` remained hidden; save completion restored the row state. JavaScript syntax and `git diff --check` passed.

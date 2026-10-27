@@ -542,6 +542,11 @@ class AccountControlCategoryUpdatePayload(BaseModel):
     is_active: bool = True
 
 
+class AccountControlCategoryReorderPayload(BaseModel):
+    client_id: int = Field(..., ge=1)
+    category_ids: list[int]
+
+
 _ACCOUNT_CONTROL_ASSIGNMENT_FIELDS = (
     "verification_workstream", "financial_statement_category_id", "note_category_id",
 )
@@ -963,6 +968,53 @@ def create_account_control_category(payload: AccountControlCategoryPayload, sess
         (category["client_id"], category["category_type"], category["category_key"], category["label"], category["statement_section"], category["row_type"], category["parent_category_id"], category["sort_order"], category["is_active"]),
     )
     return {"saved": True, "category": category}
+
+
+@router.put("/api/account-control-center/categories/order")
+def reorder_account_control_categories(payload: AccountControlCategoryReorderPayload, session=Depends(require_admin)):
+    """Persist one complete sibling order without allowing rows to change parents."""
+    _require_active_client(payload.client_id)
+    category_ids = payload.category_ids
+    if not category_ids or any(isinstance(item, bool) or item < 1 for item in category_ids):
+        raise HTTPException(400, "A non-empty list of valid category ids is required")
+    if len(set(category_ids)) != len(category_ids):
+        raise HTTPException(400, "A category can appear only once in the order")
+
+    with pg_transaction():
+        rows = execute_query_pg(
+            """SELECT id, row_type, statement_section, parent_category_id
+               FROM account_control_categories
+               WHERE client_id = %s AND category_type = 'financial_statement' AND id = ANY(%s)""",
+            (payload.client_id, category_ids),
+        )
+        if len(rows) != len(category_ids):
+            raise HTTPException(404, "One or more Financial Statement rows were not found")
+        first = rows[0]
+        group = (first["row_type"], first["statement_section"], first["parent_category_id"])
+        if any((row["row_type"], row["statement_section"], row["parent_category_id"]) != group for row in rows):
+            raise HTTPException(400, "Rows can be reordered only within the same statement and parent")
+        if first["row_type"] not in {"heading", "category"}:
+            raise HTTPException(400, "Only Financial Statement headings and categories can be reordered")
+
+        siblings = execute_query_pg(
+            """SELECT id FROM account_control_categories
+               WHERE client_id = %s AND category_type = 'financial_statement' AND row_type = %s
+                 AND statement_section IS NOT DISTINCT FROM %s
+                 AND parent_category_id IS NOT DISTINCT FROM %s
+               ORDER BY sort_order, LOWER(label), category_key""",
+            (payload.client_id, group[0], group[1], group[2]),
+        )
+        if {int(row["id"]) for row in siblings} != set(category_ids):
+            raise HTTPException(400, "The order must include every row in this sibling group")
+
+        for sort_order, ordered_id in enumerate(category_ids):
+            execute_write_pg(
+                """UPDATE account_control_categories
+                   SET sort_order = %s, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = %s AND client_id = %s AND category_type = 'financial_statement'""",
+                (sort_order * 10, ordered_id, payload.client_id),
+            )
+    return {"saved": True, "category_ids": category_ids}
 
 @router.put("/api/account-control-center/categories/{category_id}")
 def update_account_control_category(category_id: int, payload: AccountControlCategoryUpdatePayload, session=Depends(require_admin)):

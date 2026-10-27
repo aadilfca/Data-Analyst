@@ -11,12 +11,15 @@ let accCashflowTreasury = { cash: [], bank: [] };
 let accCashflowSettings = { match_internal_transfers: false, receipt_presentation: 'net', source_template_id: null, role_categories: { customer_receipt: [], bank_charge: [], withholding_tax: [], other_deduction: [] } };
 let accCashflowTemplateMapping = null;
 let accFinancialLoaded = false;
+let accFinancialDraggingId = null;
 let accNotesLoaded = false;
 let accCashflowLoaded = false;
 let accIsAdmin = false;
 let accBusyOperations = new Map();
 let accBusySequence = 0;
 let accTabLoading = { cashflow: false, financial: false, notes: false };
+const accStatusTimers = new WeakMap();
+const ACC_STATUS_DURATION_MS = 4200;
 
 const ACC_WORKSTREAMS = [
     { value: 'cash', label: 'Cash vouchers' },
@@ -34,13 +37,44 @@ function accEscape(value) {
     });
 }
 function accNormaliseCode(value) { return String(value == null ? '' : value).trim(); }
-function accShowStatus(message, type) {
-    const status = accElement('accStatus');
-    status.textContent = message;
-    status.className = 'acc2-status' + (type ? ' ' + type : '');
-    status.hidden = false;
+function accHideStatus(status) {
+    if (!status) return;
+    const timer = accStatusTimers.get(status);
+    if (timer) window.clearTimeout(timer);
+    accStatusTimers.delete(status);
+    status.hidden = true;
 }
-function accClearStatus() { accElement('accStatus').hidden = true; }
+function accGetPopupStatus(modal) {
+    let status = modal.querySelector('[data-acc-popup-notice]');
+    if (status) return status;
+    status = document.createElement('div');
+    status.className = 'acc2-status acc2-modal-notice';
+    status.dataset.accPopupNotice = '';
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
+    status.hidden = true;
+    const header = modal.querySelector('.acc2-modal-header');
+    if (header) header.insertAdjacentElement('afterend', status);
+    else modal.insertBefore(status, modal.firstChild);
+    return status;
+}
+function accShowStatus(message, type) {
+    const mainStatus = accElement('accStatus');
+    const openModal = document.querySelector('.acc2-modal-backdrop:not([hidden]) .acc2-modal');
+    const status = openModal ? accGetPopupStatus(openModal) : mainStatus;
+    if (status !== mainStatus) accHideStatus(mainStatus);
+    document.querySelectorAll('[data-acc-popup-notice]').forEach(function (other) { if (other !== status) accHideStatus(other); });
+    accHideStatus(status);
+    status.textContent = message;
+    status.className = status === mainStatus ? 'acc2-status acc2-main-toast' + (type ? ' ' + type : '') : 'acc2-status acc2-modal-notice' + (type ? ' ' + type : '');
+    status.setAttribute('role', type === 'error' ? 'alert' : 'status');
+    status.hidden = false;
+    accStatusTimers.set(status, window.setTimeout(function () { status.hidden = true; accStatusTimers.delete(status); }, ACC_STATUS_DURATION_MS));
+}
+function accClearStatus() {
+    accHideStatus(accElement('accStatus'));
+    document.querySelectorAll('[data-acc-popup-notice]').forEach(accHideStatus);
+}
 function accRenderBusyState() {
     const busy = accElement('accPageBusy');
     if (!busy) return;
@@ -895,14 +929,76 @@ function accRenderFinancialOutlines() {
         const headings = rows.filter(function (item) { return item.row_type === 'heading'; });
         const leaves = rows.filter(function (item) { return item.row_type !== 'heading'; });
         function actions(item) { return '<button type="button" class="acc2-fs-small" data-fs-action="delete" data-fs-id="' + item.id + '">Delete</button><button type="button" class="acc2-fs-small" data-fs-action="rename" data-fs-id="' + item.id + '">Rename</button><button type="button" class="acc2-fs-small" data-fs-action="toggle" data-fs-id="' + item.id + '" data-fs-active="' + item.is_active + '">' + (item.is_active ? 'Deactivate' : 'Restore') + '</button>'; }
+        function dragHandle(item, kind) { return '<button type="button" class="acc2-fs-drag-handle" draggable="true" data-fs-drag-handle data-fs-id="' + item.id + '" aria-label="Drag to reorder ' + kind + ' ' + accEscape(item.label) + '" title="Drag to reorder">☰</button>'; }
         const outline = headings.map(function (heading) {
             const children = leaves.filter(function (item) { return Number(item.parent_category_id) === Number(heading.id); });
-            return '<article class="acc2-fs-heading' + (heading.is_active ? '' : ' inactive') + '"><div class="acc2-fs-heading-title"><strong>' + accEscape(heading.label) + '</strong><div>' + actions(heading) + '<button type="button" class="acc2-fs-small primary" data-fs-action="add-category" data-fs-parent="' + heading.id + '">+ Category</button></div></div>' + (children.length ? children.map(function (item) { return '<div class="acc2-fs-category' + (item.is_active ? '' : ' inactive') + '"><span>' + accEscape(item.label) + '</span><span>' + actions(item) + '</span></div>'; }).join('') : '<div class="acc2-fs-empty">No categories in this heading yet.</div>') + '</article>';
+            const childRows = children.map(function (item) { return '<div class="acc2-fs-category acc2-fs-sort-row' + (item.is_active ? '' : ' inactive') + '" data-fs-sort-row data-fs-sort-kind="category" data-fs-sort-group="children:' + heading.id + '" data-fs-id="' + item.id + '"><span class="acc2-fs-category-label">' + dragHandle(item, 'category') + '<span>' + accEscape(item.label) + '</span></span><span>' + actions(item) + '</span></div>'; }).join('');
+            return '<article class="acc2-fs-heading acc2-fs-sort-row' + (heading.is_active ? '' : ' inactive') + '" data-fs-sort-row data-fs-sort-kind="heading" data-fs-sort-group="headings:' + accEscape(section) + '" data-fs-id="' + heading.id + '"><div class="acc2-fs-heading-title"><span class="acc2-fs-heading-label">' + dragHandle(heading, 'heading') + '<strong>' + accEscape(heading.label) + '</strong></span><div>' + actions(heading) + '<button type="button" class="acc2-fs-small primary" data-fs-action="add-category" data-fs-parent="' + heading.id + '">+ Category</button></div></div><div class="acc2-fs-children" data-fs-sort-group="children:' + heading.id + '">' + (childRows || '<div class="acc2-fs-empty">No categories in this heading yet.</div>') + '</div></article>';
         }).join('');
         const standalone = leaves.filter(function (item) { return !item.parent_category_id; });
         const unplaced = section === 'balance_sheet' ? accFinancialCategories.filter(function (item) { return !item.statement_section && item.row_type !== 'heading'; }) : [];
-        panel.innerHTML = '<div class="acc2-fs-toolbar"><span>Arrange headings and assignable categories</span><div><button type="button" class="acc2-action-btn" data-fs-action="add-heading">+ Add heading</button><button type="button" class="acc2-action-btn secondary" data-fs-action="add-category">+ Add category</button></div></div>' + (outline || '') + (standalone.length ? '<div class="acc2-fs-standalone"><h3>Standalone categories</h3>' + standalone.map(function (item) { return '<div class="acc2-fs-category' + (item.is_active ? '' : ' inactive') + '"><span>' + accEscape(item.label) + '</span><span>' + actions(item) + '</span></div>'; }).join('') + '</div>' : '') + (unplaced.length ? '<div class="acc2-fs-standalone acc2-fs-unplaced"><h3>Unplaced categories</h3>' + unplaced.map(function (item) { return '<div class="acc2-fs-category' + (item.is_active ? '' : ' inactive') + '"><span>' + accEscape(item.label) + '</span><span>' + actions(item) + '</span></div>'; }).join('') + '</div>' : '') + (!outline && !standalone.length && !unplaced.length ? '<div class="acc2-fs-empty-state">Start with a heading, or add a standalone category.</div>' : '');
+        const standaloneRows = standalone.map(function (item) { return '<div class="acc2-fs-category acc2-fs-sort-row' + (item.is_active ? '' : ' inactive') + '" data-fs-sort-row data-fs-sort-kind="category" data-fs-sort-group="standalone:' + accEscape(section) + '" data-fs-id="' + item.id + '"><span class="acc2-fs-category-label">' + dragHandle(item, 'category') + '<span>' + accEscape(item.label) + '</span></span><span>' + actions(item) + '</span></div>'; }).join('');
+        const unplacedRows = unplaced.map(function (item) { return '<div class="acc2-fs-category acc2-fs-sort-row' + (item.is_active ? '' : ' inactive') + '" data-fs-sort-row data-fs-sort-kind="category" data-fs-sort-group="unplaced" data-fs-id="' + item.id + '"><span class="acc2-fs-category-label">' + dragHandle(item, 'category') + '<span>' + accEscape(item.label) + '</span></span><span>' + actions(item) + '</span></div>'; }).join('');
+        panel.innerHTML = '<div class="acc2-fs-toolbar"><span>Drag the ☰ handle to reorder within a statement or parent.</span><span class="acc2-fs-order-status" data-fs-order-status role="status" aria-live="polite"></span><div><button type="button" class="acc2-action-btn" data-fs-action="add-heading">+ Add heading</button><button type="button" class="acc2-action-btn secondary" data-fs-action="add-category">+ Add category</button></div></div>' + (outline ? '<div class="acc2-fs-heading-list" data-fs-sort-group="headings:' + accEscape(section) + '">' + outline + '</div>' : '') + (standalone.length ? '<div class="acc2-fs-standalone acc2-fs-sort-list"><h3>Standalone categories</h3><div data-fs-sort-group="standalone:' + accEscape(section) + '">' + standaloneRows + '</div></div>' : '') + (unplaced.length ? '<div class="acc2-fs-standalone acc2-fs-unplaced acc2-fs-sort-list"><h3>Unplaced categories</h3><div data-fs-sort-group="unplaced">' + unplacedRows + '</div></div>' : '') + (!outline && !standalone.length && !unplaced.length ? '<div class="acc2-fs-empty-state">Start with a heading, or add a standalone category.</div>' : '');
     });
+}
+function accFinancialSortRows(group) {
+    return Array.from(group.children).filter(function (node) { return node.matches('[data-fs-sort-row]'); });
+}
+function accClearFinancialDropState(panel) {
+    panel.querySelectorAll('.acc2-fs-drop-before, .acc2-fs-drop-after, .acc2-fs-dragging').forEach(function (node) {
+        node.classList.remove('acc2-fs-drop-before', 'acc2-fs-drop-after', 'acc2-fs-dragging');
+    });
+}
+function accHandleFinancialDragStart(event) {
+    const handle = event.target.closest('[data-fs-drag-handle]');
+    const row = handle && handle.closest('[data-fs-sort-row]');
+    const panel = row && row.closest('[data-fs-section]');
+    if (!row || !event.dataTransfer || panel.getAttribute('aria-busy') === 'true') { event.preventDefault(); return; }
+    accFinancialDraggingId = row.dataset.fsId;
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', accFinancialDraggingId);
+    row.classList.add('acc2-fs-dragging');
+}
+function accHandleFinancialDragOver(event) {
+    const target = event.target.closest('[data-fs-sort-row]');
+    const source = accFinancialDraggingId && document.querySelector('[data-fs-sort-row][data-fs-id="' + CSS.escape(accFinancialDraggingId) + '"]');
+    if (!target || !source || target === source || target.dataset.fsSortGroup !== source.dataset.fsSortGroup) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    const after = event.clientY > target.getBoundingClientRect().top + target.getBoundingClientRect().height / 2;
+    target.classList.toggle('acc2-fs-drop-after', after);
+    target.classList.toggle('acc2-fs-drop-before', !after);
+}
+async function accHandleFinancialDrop(event) {
+    const target = event.target.closest('[data-fs-sort-row]');
+    const source = accFinancialDraggingId && document.querySelector('[data-fs-sort-row][data-fs-id="' + CSS.escape(accFinancialDraggingId) + '"]');
+    if (!target || !source || target === source || target.dataset.fsSortGroup !== source.dataset.fsSortGroup) return;
+    event.preventDefault();
+    const group = source.parentElement;
+    const rows = accFinancialSortRows(group);
+    const ids = rows.map(function (row) { return row.dataset.fsId; });
+    const sourceIndex = ids.indexOf(source.dataset.fsId);
+    const targetIndex = ids.indexOf(target.dataset.fsId);
+    if (sourceIndex < 0 || targetIndex < 0) return;
+    ids.splice(sourceIndex, 1);
+    const after = event.clientY > target.getBoundingClientRect().top + target.getBoundingClientRect().height / 2;
+    const adjustedTargetIndex = targetIndex - (sourceIndex < targetIndex ? 1 : 0);
+    const insertAt = adjustedTargetIndex + (after ? 1 : 0);
+    ids.splice(Math.min(insertAt, ids.length), 0, source.dataset.fsId);
+    if (ids.every(function (id, index) { return id === rows[index].dataset.fsId; })) return;
+    const panel = source.closest('[data-fs-section]');
+    const orderStatus = panel && panel.querySelector('[data-fs-order-status]');
+    if (panel) panel.setAttribute('aria-busy', 'true');
+    if (orderStatus && window.LoadingUI) window.LoadingUI.showSpinner(orderStatus, 'Saving order', { escalate: false });
+    try {
+        await accApi('/api/account-control-center/categories/order', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, category_ids: ids.map(Number) }) });
+        await accLoadFinancialCategories();
+        accShowStatus('Financial Statement order updated.', 'success');
+    } finally {
+        if (orderStatus && window.LoadingUI) window.LoadingUI.hideSpinner(orderStatus);
+        if (panel) panel.removeAttribute('aria-busy');
+    }
 }
 function accFinancialKey(label) { return String(label || '').normalize('NFKD').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 70) || 'category'; }
 async function accHandleFinancialOutlineAction(event) {
@@ -1042,9 +1138,7 @@ async function accSaveFinancialLeaf(account, select) {
     accSetInlineBusy(select, result, 'Saving...');
     let saved = false;
     try {
-        await accWithBusy('Saving Financial Statement category...', function () {
-            return accApi('/api/account-control-center/mapping', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, account_code: account.account_code, financial_statement_category_id: value }) });
-        });
+        await accApi('/api/account-control-center/mapping', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, account_code: account.account_code, financial_statement_category_id: value }) });
         accAssignment(account).financial_statement_category_id = value;
         saved = true;
         accShowStatus('Saved Financial Statement category for ' + account.account_code + '.', 'success');
@@ -1177,12 +1271,12 @@ function accSetCashflowConfigTab(tabName) {
     document.querySelectorAll('[data-acc-cashflow-config-tab]').forEach(function (tab) { tab.classList.toggle('active', tab.dataset.accCashflowConfigTab === tabName); });
     document.querySelectorAll('[data-acc-cashflow-config-panel]').forEach(function (panel) { panel.hidden = panel.dataset.accCashflowConfigPanel !== tabName; });
 }
-function accSetCashflowModal(id, open) { const modal = accElement(id); if (modal) modal.hidden = !open; }
+function accSetCashflowModal(id, open) { const modal = accElement(id); if (modal) { modal.hidden = !open; if (open) accHideStatus(accElement('accStatus')); } }
 function accSetFinancialSetupModal(isOpen) {
     const modal = accElement('accFinancialSetupModal');
     if (!modal) return;
     modal.hidden = !isOpen;
-    if (isOpen) accElement('accFinancialSetupClose').focus();
+    if (isOpen) { accHideStatus(accElement('accStatus')); accElement('accFinancialSetupClose').focus(); }
     else accElement('accFinancialSetupFab').focus();
 }
 function accSetFinancialSetupTab(tabName) {
@@ -1290,7 +1384,15 @@ function accBindEvents() {
     accElement('accFinancialSetupFab').addEventListener('click', function () { accSetFinancialSetupModal(true); });
     accElement('accFinancialSetupClose').addEventListener('click', function () { accSetFinancialSetupModal(false); });
     document.querySelectorAll('[data-acc-financial-setup-tab]').forEach(function (tab) { tab.addEventListener('click', function () { accSetFinancialSetupTab(tab.dataset.accFinancialSetupTab); }); });
-    document.querySelectorAll('[data-fs-section]').forEach(function (panel) { panel.addEventListener('click', function (event) { accHandleFinancialOutlineAction(event).catch(function (error) { accShowStatus(error.message, 'error'); }); }); });
+    document.querySelectorAll('[data-fs-section]').forEach(function (panel) {
+        panel.addEventListener('click', function (event) { accHandleFinancialOutlineAction(event).catch(function (error) { accShowStatus(error.message, 'error'); }); });
+        panel.addEventListener('dragstart', accHandleFinancialDragStart);
+        panel.addEventListener('dragover', accHandleFinancialDragOver);
+        panel.addEventListener('drop', function (event) {
+            accHandleFinancialDrop(event).catch(function (error) { accShowStatus(error.message, 'error'); accLoadFinancialCategories().catch(function () {}); }).finally(function () { accClearFinancialDropState(panel); accFinancialDraggingId = null; });
+        });
+        panel.addEventListener('dragend', function () { accClearFinancialDropState(panel); accFinancialDraggingId = null; });
+    });
     accElement('accNotesFilter').addEventListener('input', accRenderNotesRows);
     accElement('accNotesRows').addEventListener('change', function (event) { accHandleNoteChange(event); });
     accElement('accNotesCategoryForm').addEventListener('submit', accCreateNoteCategory);
