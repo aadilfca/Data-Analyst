@@ -51,6 +51,12 @@ def choose_financial_category(page, account_code, category_id):
     row.locator("[data-fs-picker-option][data-fs-picker-value='{}']".format(category_id)).click()
 
 
+def choose_note(page, account_code, note_id):
+    row = page.locator("#accNotesRows tr:has(select.acc2-note-category[data-acc-code='{}'])".format(account_code))
+    row.locator("[data-fs-picker-trigger]").click()
+    row.locator("[data-fs-picker-option][data-fs-picker-value='{}']".format(note_id)).click()
+
+
 def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, static_server):
     mapping = {
         "client_id": 1,
@@ -58,9 +64,9 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
         "verification_workstreams": ["bank", "cash", "local_vendor"],
         "accounts": [
             {"id": 1, "account_code": "20-15-50", "account_name": "Local creditors", "parent_account_code": None, "level": 3, "is_leaf": False, "assignment": {"verification_workstream": None}},
-            {"id": 2, "account_code": "20-15-50-0001", "account_name": "Supplier A", "parent_account_code": "20-15-50", "level": 4, "is_leaf": True, "assignment": {"verification_workstream": None}},
-            {"id": 3, "account_code": "20-15-50-0002", "account_name": "Supplier B", "parent_account_code": "20-15-50", "level": 4, "is_leaf": True, "assignment": {"verification_workstream": "bank"}},
-            {"id": 4, "account_code": "10-15-115-10-0001", "account_name": "Cash in hand", "parent_account_code": None, "level": 5, "is_leaf": True, "assignment": {"verification_workstream": "cash"}},
+            {"id": 2, "account_code": "20-15-50-0001", "account_name": "Supplier A", "parent_account_code": "20-15-50", "level": 4, "is_leaf": True, "assignment": {"verification_workstream": None, "financial_statement_category_id": None, "note_category_id": None}},
+            {"id": 3, "account_code": "20-15-50-0002", "account_name": "Supplier B", "parent_account_code": "20-15-50", "level": 4, "is_leaf": True, "assignment": {"verification_workstream": "bank", "financial_statement_category_id": None, "note_category_id": None}},
+            {"id": 4, "account_code": "10-15-115-10-0001", "account_name": "Cash in hand", "parent_account_code": None, "level": 5, "is_leaf": True, "assignment": {"verification_workstream": "cash", "financial_statement_category_id": None, "note_category_id": None}},
         ],
     }
     mapping["categories"] = [
@@ -369,7 +375,8 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     assert notes_bs.locator(".acc2-notes-group").get_by_text("Current Assets").is_visible()
     assert notes_bs.locator(".acc2-notes-source-label").get_by_text("Stock").is_visible()
     notes_bs.locator("[data-source-id='41'][data-note-action='link']").click()
-    assert notes_bs.locator("[data-note-drop-parent]").count() == 1
+    page.wait_for_function("document.querySelector('#accFinancialSetupPanelNotesBalanceSheet [data-note-source-drop][data-source-id=\"41\"][data-note-anchor-id=\"21\"]') !== null")
+    assert notes_bs.locator("[data-note-source-drop][data-source-id='41'][data-note-anchor-id='21']").count() == 1
     move_confirmations = []
     page.once("dialog", lambda dialog: (move_confirmations.append(dialog.message), dialog.accept()))
     notes_bs.locator("[data-note-anchor-id='21'][data-note-anchor-drag-handle]").drag_to(notes_bs.locator("[data-note-source-drop][data-source-id='42']"))
@@ -388,22 +395,68 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     opening_stock.locator("[data-note-drag-handle]").drag_to(raw_material, target_position={"x": 25, "y": raw_material.bounding_box()["height"] // 2})
     page.wait_for_function("document.querySelector('#accFinancialSetupPanelNotesBalanceSheet [data-note-id=\"22\"] > [data-note-drop-parent] [data-note-id=\"23\"]') !== null")
     assert any(call[0] == "PUT" and call[2].get("category_type") == "note" and call[2].get("parent_category_id") for call in calls)
+    page.once("dialog", lambda dialog: dialog.accept("Export Customers"))
+    notes_bs.locator("[data-note-source-drop][data-source-id='42'] [data-note-action='add-child']").click()
+    page.wait_for_function("document.querySelector('#accFinancialSetupPanelNotesBalanceSheet')?.textContent.includes('Export Customers')")
     page.locator("#accFinancialSetupClose").click()
     assert page.locator("#accFinancialSetupModal").is_hidden()
     assert page.locator("#accFinancialPanel").is_visible()
     assert page.locator("#accVerificationPanel").is_hidden()
     page.locator("#accTabNotes").click()
-    page.wait_for_selector("#accNotesRows .acc2-note-category")
-    assert page.locator("#accNotesCategoryList .acc2-category-item").count() == 1
-    page.locator("select.acc2-note-category[data-acc-code='20-15-50-0001']").select_option("20")
-    page.wait_for_timeout(150)
-    assert any(call[0] == "PUT" and call[2].get("note_category_id") == 20 and "verification_workstream" not in call[2] and "financial_statement_category_id" not in call[2] for call in calls)
-    page.locator("#accNotesCategoryKey").fill("estimates")
-    page.locator("#accNotesCategoryLabel").fill("Key estimates")
-    page.locator("#accNotesCategoryForm button[type='submit']").click()
-    page.wait_for_timeout(150)
-    assert page.locator("#accNotesCategoryList .acc2-category-item").count() == 2
     assert page.locator("#accNotesPanel").is_visible()
+    assert "Define reusable note categories" not in page.locator("#accNotesPanel").text_content()
+    assert page.locator("#accNotesCategoryForm, #accNotesCategoryList").count() == 0
+    page.wait_for_selector("#accNotesGridWrap:not([hidden])")
+    assert page.locator("#accNotesRows .acc2-note-category").count() == 4
+    notes_fab = page.locator("#accNotesSetupFab")
+    assert notes_fab.is_visible()
+    notes_fab.click()
+    assert page.locator("#accFinancialSetupModal").is_visible()
+    assert page.locator("#accFinancialSetupModal").get_attribute("data-entry-mode") == "notes"
+    assert page.locator("#accFinancialSetupModalTitle").text_content() == "Notes to Financial Statements"
+    assert page.locator("#accFinancialSetupTabNotesBalanceSheet").get_attribute("aria-selected") == "true"
+    for panel_id in ("accFinancialSetupPanelBalanceSheet", "accFinancialSetupPanelIncomeStatement"):
+        panel = page.locator("#" + panel_id)
+        assert panel.locator("[data-fs-action], [data-fs-drag-handle]").count() == 0
+        assert "Read-only reference" in panel.text_content()
+    assert page.locator("#accFinancialSetupPanelNotesBalanceSheet [data-note-action]").count() > 0
+    page.locator("#accFinancialSetupTabIncomeStatement").click()
+    assert page.locator("#accFinancialSetupPanelIncomeStatement").get_attribute("hidden") is None
+    assert page.locator("#accFinancialSetupPanelIncomeStatement [data-fs-action], #accFinancialSetupPanelIncomeStatement [data-fs-drag-handle]").count() == 0
+    page.locator("#accFinancialSetupClose").click()
+    assert page.evaluate("document.activeElement.id") == "accNotesSetupFab"
+    page.locator("#accTabFinancial").click()
+    page.locator("#accFinancialSetupFab").click()
+    assert page.locator("#accFinancialSetupModal").get_attribute("data-entry-mode") == "financial"
+    assert page.locator("#accFinancialSetupPanelBalanceSheet [data-fs-action='add-heading']").is_visible()
+    page.locator("#accFinancialSetupClose").click()
+    choose_financial_category(page, "20-15-50-0001", 42)
+    page.wait_for_function("document.querySelector('#accStatus')?.textContent.includes('20-15-50-0001')")
+    choose_financial_category(page, "20-15-50-0002", 42)
+    page.wait_for_function("document.querySelector('#accStatus')?.textContent.includes('20-15-50-0002')")
+    choose_financial_category(page, "10-15-115-10-0001", 41)
+    page.wait_for_function("document.querySelector('#accStatus')?.textContent.includes('10-15-115-10-0001')")
+    page.locator("#accTabNotes").click()
+    notes_parent = page.locator("#accNotesRows tr").filter(has_text="Local creditors")
+    assert notes_parent.locator(".acc2-note-source").text_content().endswith("Cash equivalents")
+    page.once("dialog", lambda dialog: dialog.accept())
+    choose_note(page, "20-15-50", 24)
+    page.wait_for_function("document.querySelector('#accNotesRows [data-acc-note-result=\"20-15-50-0001\"]')?.textContent === 'Saved'")
+    assert any(call[0] == "POST" and call[1].endswith("/mapping/apply-to-children") and call[2].get("note_category_id") == 24 for call in calls)
+    supplier_a = page.locator("#accNotesRows tr:has(select.acc2-note-category[data-acc-code='20-15-50-0001'])")
+    supplier_a.locator("[data-fs-picker-trigger]").click()
+    note_menu = supplier_a.locator("[data-fs-picker-menu]")
+    assert note_menu.locator("[data-fs-picker-option] > span:first-child").all_text_contents() == ["Unassigned", "Cash equivalents › Raw material › Opening stock", "Cash equivalents › Export Customers"]
+    note_menu.locator("[data-fs-picker-search-input]").fill("Opening stock")
+    assert note_menu.locator("[data-fs-picker-option]:visible").count() == 1
+    note_menu.locator("[data-fs-picker-search-input]").fill("")
+    note_menu.locator("[data-fs-picker-option][data-fs-picker-value='23']").click()
+    page.wait_for_function("document.querySelector('#accNotesRows [data-acc-note-result=\"20-15-50-0001\"]')?.textContent === 'Saved'")
+    assert any(call[0] == "PUT" and call[2].get("note_category_id") == 23 and "verification_workstream" not in call[2] and "financial_statement_category_id" not in call[2] for call in calls)
+    cash_row = page.locator("#accNotesRows tr:has(select.acc2-note-category[data-acc-code='10-15-115-10-0001'])")
+    assert cash_row.locator(".acc2-note-source").text_content().endswith("Stock")
+    assert cash_row.locator("[data-fs-picker-trigger]").is_disabled()
+    assert cash_row.locator("[data-fs-picker-value-label]").text_content() == "No notes defined under this category"
     page.locator("#accTabVerification").click()
     page.locator("#accAccountFilter").fill("Supplier A")
     assert page.locator("#accAccountRows tr").count() == 1

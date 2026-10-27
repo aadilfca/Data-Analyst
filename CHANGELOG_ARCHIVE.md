@@ -8741,3 +8741,15 @@ Record phase decisions, implementation, verification, and acceptance here as the
 **Implementation:** Fixed Financial Statement source lookup parameter order. Linked note headings can move to another category in the same statement, preserving their IDs, descendants, and account assignments; the Notes panel confirms the effect when current Trial Balance accounts are assigned. Breakdown moves also enforce a same-statement boundary on the API. The Account Control Centre script cache version is 16.
 
 **Verification:** The focused Account Control Centre backend and browser suites pass (44 tests), including same-statement moves, assigned-account confirmation, and rejection of Balance Sheet/Income Statement cross-moves. Python compilation, JavaScript syntax, and `git diff --check` pass. Local-server acceptance and Git actions remain pending.
+
+### Notes setup entry point - 2026-10-27
+
+**Implementation:** Removed the legacy Notes category editor and direct Trial Balance note-assignment grid from the Notes tab. Added a Notes setup round button that opens the existing four-tab modal in Notes mode: Balance Sheet and Income Statement are read-only references, while both Notes outlines remain editable. Existing legacy data is retained; no schema or backend behavior changed. The Account Control Centre script cache version is 17.
+
+**Verification:** Focused Account Control Centre UI checks confirm the removed legacy controls, Notes button flow, read-only statement tabs, and editable Notes tabs. JavaScript syntax and `git diff --check` pass. Local-server acceptance is pending.
+
+### Notes account assignments - 2026-10-27
+
+**Implementation:** Restored the Notes account-head table with read-only Financial Statement context and a searchable picker limited to active terminal notes under the assigned statement category (the linked note root is selectable when it has no breakdowns). Leaf assignments use the existing mapping API; parent assignments apply to descendants. No Trial Balance rows, backend schema, or saved assignments are moved or cleared. Account remapping across statement categories and its parent/subtotal consequences are deferred; do not infer or automate note reassignment in this phase. Account Control Centre script cache version is 18.
+
+**Verification:** Focused Account Control Centre browser suite passes (2 tests), including parent inheritance, effective note filtering, nested paths after a source move, and leaf/parent saves. JavaScript syntax and `git diff --check` pass. No backend-only work; local-server acceptance remains pending.
