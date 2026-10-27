@@ -3049,6 +3049,7 @@ def init_db():
                 statement_section TEXT CHECK (statement_section IN ('balance_sheet', 'income_statement')),
                 row_type TEXT NOT NULL DEFAULT 'category' CHECK (row_type IN ('heading', 'category')),
                 parent_category_id INTEGER REFERENCES account_control_categories(id) ON DELETE RESTRICT,
+                source_statement_category_id INTEGER REFERENCES account_control_categories(id) ON DELETE RESTRICT,
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 is_active INTEGER NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -3064,6 +3065,8 @@ def init_db():
             conn.execute("ALTER TABLE account_control_categories ADD COLUMN row_type TEXT NOT NULL DEFAULT 'category'")
         if "parent_category_id" not in category_columns:
             conn.execute("ALTER TABLE account_control_categories ADD COLUMN parent_category_id INTEGER REFERENCES account_control_categories(id) ON DELETE RESTRICT")
+        if "source_statement_category_id" not in category_columns:
+            conn.execute("ALTER TABLE account_control_categories ADD COLUMN source_statement_category_id INTEGER REFERENCES account_control_categories(id) ON DELETE RESTRICT")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_control_categories_client_type ON account_control_categories (client_id, category_type, is_active)")
         conn.execute('''
             CREATE TABLE IF NOT EXISTS account_control_assignments (
@@ -4183,6 +4186,7 @@ def _ensure_postgres_account_set_tables(conn):
         cur.execute("ALTER TABLE account_control_categories ADD COLUMN IF NOT EXISTS statement_section TEXT")
         cur.execute("ALTER TABLE account_control_categories ADD COLUMN IF NOT EXISTS row_type TEXT NOT NULL DEFAULT 'category'")
         cur.execute("ALTER TABLE account_control_categories ADD COLUMN IF NOT EXISTS parent_category_id INTEGER REFERENCES account_control_categories(id) ON DELETE RESTRICT")
+        cur.execute("ALTER TABLE account_control_categories ADD COLUMN IF NOT EXISTS source_statement_category_id INTEGER REFERENCES account_control_categories(id) ON DELETE RESTRICT")
         cur.execute('''
             CREATE TABLE IF NOT EXISTS account_control_assignments (
                 id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

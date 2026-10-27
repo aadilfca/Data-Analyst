@@ -12,6 +12,8 @@ let accCashflowSettings = { match_internal_transfers: false, receipt_presentatio
 let accCashflowTemplateMapping = null;
 let accFinancialLoaded = false;
 let accFinancialDraggingId = null;
+let accNoteDraggingId = null;
+let accNoteDraggingAnchorId = null;
 let accNotesLoaded = false;
 let accCashflowLoaded = false;
 let accIsAdmin = false;
@@ -223,7 +225,7 @@ function accCategoryOptionMarkupFor(categories, selected) {
     return html;
 }
 function accCategoryOptionMarkup(selected) { return accCategoryOptionMarkupFor(accFinancialCategories, selected); }
-function accNoteCategoryOptionMarkup(selected) { return accCategoryOptionMarkupFor(accNoteCategories, selected); }
+function accNoteCategoryOptionMarkup(selected) { return accCategoryOptionMarkupFor(accNoteCategories.filter(function (item) { return item.parent_category_id == null; }), selected); }
 function accCashflowCategoryOptionMarkup(selected) { return accCategoryOptionMarkupFor(accCashflowCategories, selected); }
 function accFinancialPickerLabel(categoryId) {
     if (categoryId === '__mixed') return 'Mixed assignments — choose one';
@@ -642,15 +644,16 @@ function accRenderSource() {
 }
 function accRenderNoteCategoryList() {
     const list = accElement('accNotesCategoryList');
-    if (!accNoteCategories.length) {
+    const manageable = accNoteCategories.filter(function (item) { return item.source_statement_category_id == null && item.parent_category_id == null; });
+    if (!manageable.length) {
         list.innerHTML = '<span class="acc2-empty">No note categories defined yet.</span>';
         return;
     }
-    list.innerHTML = accNoteCategories.map(function (category, index) {
+    list.innerHTML = manageable.map(function (category, index) {
         const status = category.is_active ? 'Active' : 'Inactive';
         const action = category.is_active ? 'Deactivate' : 'Reactivate';
         const upDisabled = index === 0 ? ' disabled' : '';
-        const downDisabled = index === accNoteCategories.length - 1 ? ' disabled' : '';
+        const downDisabled = index === manageable.length - 1 ? ' disabled' : '';
         return '<div class="acc2-category-item"><div><strong>' + accEscape(category.label) + '</strong><span>' + accEscape(category.category_key) + ' - ' + status + '</span></div><div class="acc2-category-actions"><button type="button" class="acc2-mini-action" data-acc-note-id="' + category.id + '" data-acc-note-action="rename">Rename</button><button type="button" class="acc2-mini-action" data-acc-note-id="' + category.id + '" data-acc-note-action="up"' + upDisabled + ' aria-label="Move ' + accEscape(category.label) + ' up">↑</button><button type="button" class="acc2-mini-action" data-acc-note-id="' + category.id + '" data-acc-note-action="down"' + downDisabled + ' aria-label="Move ' + accEscape(category.label) + ' down">↓</button><button type="button" class="acc2-mini-action" data-acc-note-id="' + category.id + '" data-acc-note-action="toggle" data-acc-note-active="' + (category.is_active ? 'true' : 'false') + '">' + action + '</button></div></div>';
     }).join('');
 }
@@ -975,6 +978,7 @@ async function accLoadFinancialCategories() {
     accFinancialLoaded = true;
     accRenderFinancialRows();
     accRenderFinancialOutlines();
+    accRenderNotesOutlines();
 }
 function accRenderFinancialOutlines() {
     document.querySelectorAll('[data-fs-section]').forEach(function (panel) {
@@ -1088,12 +1092,38 @@ async function accHandleFinancialOutlineAction(event) {
     } else return;
     await accLoadFinancialCategories();
 }
+function accRenderNotesOutlines() {
+    document.querySelectorAll('[data-notes-section]').forEach(function (panel) {
+        const section = panel.dataset.notesSection;
+        const headings = accFinancialCategories.filter(function (row) { return row.statement_section === section && row.row_type === 'heading'; });
+        const rows = accFinancialCategories.filter(function (row) { return row.statement_section === section && row.row_type !== 'heading'; });
+        const roots = accNoteCategories.filter(function (row) { return row.source_statement_category_id != null; });
+        const legacy = accNoteCategories.filter(function (row) { return row.source_statement_category_id == null && row.parent_category_id == null; });
+        function breakdownMarkup(item) {
+            const children = accNoteCategories.filter(function (row) { return Number(row.parent_category_id) === Number(item.id); });
+            return '<div class="acc2-note-breakdown" data-note-row data-note-id="' + item.id + '"><div class="acc2-note-row"><button type="button" class="acc2-fs-drag-handle" draggable="true" data-note-drag-handle aria-label="Move breakdown ' + accEscape(item.label) + '" title="Drag to reorder or move">☰</button><span>' + accEscape(item.label) + '</span><button type="button" class="acc2-fs-small" data-note-action="add" data-note-parent="' + item.id + '">+ Breakdown</button><button type="button" class="acc2-fs-small" data-note-action="rename" data-note-id="' + item.id + '">Rename</button><button type="button" class="acc2-fs-small" data-note-action="delete" data-note-id="' + item.id + '">Delete</button></div><div class="acc2-note-children" data-note-drop-parent="' + item.id + '">' + children.map(breakdownMarkup).join('') + '</div></div>';
+        }
+        function sourceRow(source) {
+            const root = roots.find(function (item) { return Number(item.source_statement_category_id) === Number(source.id); });
+            const drag = root ? '<button type="button" class="acc2-fs-drag-handle" draggable="true" data-note-anchor-drag-handle data-note-anchor-id="' + root.id + '" aria-label="Move note heading ' + accEscape(source.label) + '" title="Drag this note to another category in this statement">☰</button>' : '';
+            return '<div class="acc2-notes-source-row" data-note-source-drop data-source-id="' + source.id + '"' + (root ? ' data-note-anchor-row data-note-anchor-id="' + root.id + '"' : '') + '>' + drag + '<span class="acc2-notes-source-label">' + accEscape(source.label) + '</span>' + (root ? '<button type="button" class="acc2-fs-small" data-note-action="add-child" data-note-parent="' + root.id + '">+ Breakdown</button><button type="button" class="acc2-fs-small" data-note-action="delete" data-note-id="' + root.id + '">Remove note</button><div class="acc2-note-children" data-note-drop-parent="' + root.id + '">' + accNoteCategories.filter(function (item) { return Number(item.parent_category_id) === Number(root.id); }).map(breakdownMarkup).join('') + '</div>' : '<button type="button" class="acc2-fs-small primary" data-note-action="link" data-source-id="' + source.id + '">+ Add note</button>') + '</div>';
+        }
+        const groups = headings.map(function (heading) {
+            const children = rows.filter(function (row) { return Number(row.parent_category_id) === Number(heading.id); });
+            return '<section class="acc2-notes-group"><h3>' + accEscape(heading.label) + '</h3>' + (children.map(sourceRow).join('') || '<p class="acc2-fs-empty">No statement categories in this heading.</p>') + '</section>';
+        }).join('');
+        const standalone = rows.filter(function (row) { return !row.parent_category_id; }).map(sourceRow).join('');
+        const legacyMarkup = legacy.map(breakdownMarkup).join('');
+        panel.innerHTML = '<div class="acc2-fs-toolbar"><span>Notes follow their statement row. Add breakdowns as needed; drag ☰ to reorder or move them.</span><span class="acc2-fs-order-status" data-note-order-status role="status" aria-live="polite"></span></div>' + groups + (standalone ? '<section class="acc2-notes-group"><h3>Standalone statement rows</h3>' + standalone + '</section>' : '') + (legacyMarkup ? '<section class="acc2-notes-group legacy"><h3>Unlinked / legacy notes</h3>' + legacyMarkup + '</section>' : '') + (!groups && !standalone && !legacyMarkup ? '<div class="acc2-fs-empty-state">Add a Financial Statement category first.</div>' : '');
+    });
+}
 async function accLoadNoteCategories() {
     const result = await accApi('/api/account-control-center/categories?client_id=' + encodeURIComponent(accClientId) + '&category_type=note&include_inactive=true');
     accNoteCategories = result.categories || [];
     accNotesLoaded = true;
     accRenderNoteCategoryList();
     accRenderNotesRows();
+    accRenderNotesOutlines();
 }
 function accMappingPayload(accountCode, workstream) {
     return { client_id: accClientId, account_code: accountCode, verification_workstream: workstream || null };
@@ -1412,7 +1442,7 @@ async function accCreateNoteCategory(event) {
     } catch (error) { accShowStatus(error.message, 'error'); }
 }
 async function accUpdateNoteCategory(category, patch, message) {
-    await accApi('/api/account-control-center/categories/' + category.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, category_type: 'note', label: patch.label == null ? category.label : patch.label, sort_order: patch.sort_order == null ? category.sort_order : patch.sort_order, is_active: patch.is_active == null ? category.is_active : patch.is_active }) });
+    await accApi('/api/account-control-center/categories/' + category.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, category_type: 'note', label: patch.label == null ? category.label : patch.label, parent_category_id: category.parent_category_id, source_statement_category_id: category.source_statement_category_id, sort_order: patch.sort_order == null ? category.sort_order : patch.sort_order, is_active: patch.is_active == null ? category.is_active : patch.is_active }) });
     await accLoadNoteCategories();
     accShowStatus(message, 'success');
 }
@@ -1433,18 +1463,136 @@ async function accHandleNoteCategoryAction(event) {
             await accWithButtonBusy(button, 'Renaming category...', function () { return accUpdateNoteCategory(category, { label: label.trim() }, 'Note category renamed.'); });
             return;
         }
-        const index = accNoteCategories.findIndex(function (item) { return item.id === category.id; });
-        const target = accNoteCategories[action === 'up' ? index - 1 : index + 1];
+        const siblings = accNoteCategories.filter(function (item) { return item.source_statement_category_id == null && item.parent_category_id == null; });
+        const index = siblings.findIndex(function (item) { return item.id === category.id; });
+        const target = siblings[action === 'up' ? index - 1 : index + 1];
         if (!target) return;
-        const updateCategoryOrder = function (item, sortOrder) {
-            return accApi('/api/account-control-center/categories/' + item.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, category_type: 'note', label: item.label, sort_order: sortOrder, is_active: item.is_active }) });
-        };
         await accWithButtonBusy(button, 'Reordering categories...', async function () {
-            await Promise.all([updateCategoryOrder(category, target.sort_order), updateCategoryOrder(target, category.sort_order)]);
+            const reordered = siblings.slice();
+            reordered.splice(index, 1);
+            reordered.splice(action === 'up' ? index - 1 : index + 1, 0, category);
+            await accApi('/api/account-control-center/categories/order', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, category_type: 'note', category_ids: reordered.map(function (item) { return item.id; }), parent_category_id: null }) });
             await accLoadNoteCategories();
             accShowStatus('Note category order updated.', 'success');
         });
     } catch (error) { accShowStatus(error.message, 'error'); }
+}
+async function accHandleNotesOutlineAction(event) {
+    const button = event.target.closest('[data-note-action]');
+    if (!button) return;
+    const action = button.dataset.noteAction;
+    if (action === 'link') {
+        const source = accFinancialCategories.find(function (item) { return Number(item.id) === Number(button.dataset.sourceId); });
+        if (!source) return;
+        await accApi('/api/account-control-center/categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, category_type: 'note', category_key: 'statement_' + source.id, label: source.label, source_statement_category_id: source.id, sort_order: source.sort_order }) });
+        await accLoadNoteCategories();
+        accShowStatus('Note heading linked to ' + source.label + '.', 'success');
+        return;
+    }
+    const item = accNoteCategories.find(function (row) { return Number(row.id) === Number(button.dataset.noteId || button.dataset.noteParent); });
+    if (action === 'add' || action === 'add-child') {
+        const parentId = Number(button.dataset.noteParent);
+        const label = window.prompt('Breakdown name');
+        if (!label || !label.trim()) return;
+        await accApi('/api/account-control-center/categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, category_type: 'note', category_key: 'note_' + Date.now(), label: label.trim(), parent_category_id: parentId, sort_order: accNoteCategories.length }) });
+        await accLoadNoteCategories();
+        accShowStatus('Note breakdown added.', 'success');
+    } else if (item && action === 'rename') {
+        const label = window.prompt('Rename breakdown', item.label);
+        if (!label || !label.trim() || label.trim() === item.label) return;
+        await accUpdateNoteCategory(item, { label: label.trim() }, 'Note breakdown renamed.');
+    } else if (item && action === 'delete') {
+        const descendants = (function count(id) { const children = accNoteCategories.filter(function (row) { return Number(row.parent_category_id) === Number(id); }); return children.reduce(function (total, child) { return total + 1 + count(child.id); }, 0); })(item.id);
+        if (!window.confirm('Delete “' + item.label + '”' + (descendants ? ' and its ' + descendants + ' child breakdown(s)' : '') + '? Assigned note categories cannot be deleted.')) return;
+        const result = await accApi('/api/account-control-center/categories/' + item.id + '?client_id=' + encodeURIComponent(accClientId), { method: 'DELETE' });
+        await accLoadNoteCategories();
+        accShowStatus(result.deleted_child_count ? 'Note breakdown and child rows deleted.' : 'Note breakdown deleted.', 'success');
+    }
+}
+function accNoteSubtreeAssignedCount(categoryId) {
+    const category = accNoteCategories.find(function (item) { return Number(item.id) === Number(categoryId); });
+    const own = Number(category && category.assigned_account_count || 0);
+    const children = accNoteCategories.filter(function (item) { return Number(item.parent_category_id) === Number(categoryId); });
+    return own + children.reduce(function (total, child) { return total + accNoteSubtreeAssignedCount(child.id); }, 0);
+}
+function accHandleNotesDragStart(event) {
+    const anchorHandle = event.target.closest('[data-note-anchor-drag-handle]');
+    if (anchorHandle) {
+        const anchorRow = anchorHandle.closest('[data-note-anchor-row]');
+        if (!anchorRow || !event.dataTransfer) { event.preventDefault(); return; }
+        accNoteDraggingAnchorId = anchorRow.dataset.noteAnchorId;
+        accNoteDraggingId = null;
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', accNoteDraggingAnchorId);
+        anchorRow.classList.add('acc2-note-dragging');
+        return;
+    }
+    const handle = event.target.closest('[data-note-drag-handle]');
+    const row = handle && handle.closest('[data-note-row]');
+    if (!row || !event.dataTransfer) { event.preventDefault(); return; }
+    accNoteDraggingId = row.dataset.noteId;
+    accNoteDraggingAnchorId = null;
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', accNoteDraggingId);
+    row.classList.add('acc2-note-dragging');
+}
+async function accHandleNotesDrop(event) {
+    const panel = event.currentTarget;
+    if (accNoteDraggingAnchorId) {
+        const targetSource = event.target.closest('[data-note-source-drop]');
+        const note = accNoteCategories.find(function (item) { return Number(item.id) === Number(accNoteDraggingAnchorId); });
+        const source = targetSource && accFinancialCategories.find(function (item) { return Number(item.id) === Number(targetSource.dataset.sourceId); });
+        if (!note || !targetSource || !source || Number(note.source_statement_category_id) === Number(source.id)) return;
+        event.preventDefault();
+        if (source.statement_section !== panel.dataset.notesSection) return;
+        const assigned = accNoteSubtreeAssignedCount(note.id);
+        const warning = assigned
+            ? 'This note has ' + assigned + ' currently assigned Trial Balance account' + (assigned === 1 ? '' : 's') + '. Move it to “' + source.label + '”? The note and its assignments will stay together, and future statements will report them under the new category.'
+            : 'Move this note to “' + source.label + '”? Its breakdowns will move with it.';
+        if (!window.confirm(warning)) return;
+        const status = panel.querySelector('[data-note-order-status]');
+        panel.setAttribute('aria-busy', 'true');
+        if (status && window.LoadingUI) window.LoadingUI.showSpinner(status, 'Moving note', { escalate: false });
+        try {
+            await accApi('/api/account-control-center/categories/' + note.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, category_type: 'note', label: note.label, statement_section: null, row_type: 'category', parent_category_id: null, source_statement_category_id: source.id, sort_order: source.sort_order, is_active: note.is_active }) });
+            await accLoadNoteCategories();
+            accShowStatus('Note moved. Its account assignments remain linked.', 'success');
+        } finally {
+            if (status && window.LoadingUI) window.LoadingUI.hideSpinner(status);
+            panel.removeAttribute('aria-busy');
+        }
+        return;
+    }
+    const source = accNoteDraggingId && panel.querySelector('[data-note-row][data-note-id="' + CSS.escape(accNoteDraggingId) + '"]');
+    const target = event.target.closest('[data-note-row]');
+    if (!source || (target === source) || (!target && !event.target.closest('[data-note-drop-parent]'))) return;
+    event.preventDefault();
+    const targetParentContainer = event.target.closest('[data-note-drop-parent]');
+    let parentId = targetParentContainer ? Number(targetParentContainer.dataset.noteDropParent) : Number(target && target.parentElement.closest('[data-note-drop-parent]')?.dataset.noteDropParent || 0) || null;
+    let group;
+    let before = false;
+    if (target && event.clientY > target.getBoundingClientRect().top + target.getBoundingClientRect().height * .34 && event.clientY < target.getBoundingClientRect().bottom - target.getBoundingClientRect().height * .34) {
+        parentId = Number(target.dataset.noteId);
+        group = target.querySelector(':scope > [data-note-drop-parent]');
+    } else {
+        group = target ? target.parentElement : targetParentContainer;
+        if (target) before = event.clientY < target.getBoundingClientRect().top + target.getBoundingClientRect().height / 2;
+    }
+    if (!group) return;
+    const ids = Array.from(group.children).filter(function (node) { return node.matches('[data-note-row]'); }).map(function (node) { return node.dataset.noteId; }).filter(function (id) { return id !== accNoteDraggingId; });
+    const insertIndex = target && target.parentElement === group ? ids.indexOf(target.dataset.noteId) + (before ? 0 : 1) : ids.length;
+    ids.splice(Math.max(0, insertIndex), 0, accNoteDraggingId);
+    const status = panel.querySelector('[data-note-order-status]');
+    panel.setAttribute('aria-busy', 'true');
+    if (status && window.LoadingUI) window.LoadingUI.showSpinner(status, 'Saving note order', { escalate: false });
+    try {
+        await accApi('/api/account-control-center/categories/order', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, category_type: 'note', category_ids: ids.map(Number), parent_category_id: parentId }) });
+        await accLoadNoteCategories();
+        accShowStatus('Note breakdown order updated.', 'success');
+    } finally {
+        if (status && window.LoadingUI) window.LoadingUI.hideSpinner(status);
+        panel.removeAttribute('aria-busy');
+    }
 }
 function accSetCashflowConfigTab(tabName) {
     document.querySelectorAll('[data-acc-cashflow-config-tab]').forEach(function (tab) { tab.classList.toggle('active', tab.dataset.accCashflowConfigTab === tabName); });
@@ -1455,7 +1603,7 @@ function accSetFinancialSetupModal(isOpen) {
     const modal = accElement('accFinancialSetupModal');
     if (!modal) return;
     modal.hidden = !isOpen;
-    if (isOpen) { accHideStatus(accElement('accStatus')); accElement('accFinancialSetupClose').focus(); }
+    if (isOpen) { accHideStatus(accElement('accStatus')); accElement('accFinancialSetupClose').focus(); if (!accNotesLoaded) accLoadNoteCategories().catch(function (error) { accShowStatus(error.message, 'error'); }); }
     else accElement('accFinancialSetupFab').focus();
 }
 function accSetFinancialSetupTab(tabName) {
@@ -1578,6 +1726,13 @@ function accBindEvents() {
             accHandleFinancialDrop(event).catch(function (error) { accShowStatus(error.message, 'error'); accLoadFinancialCategories().catch(function () {}); }).finally(function () { accClearFinancialDropState(panel); accFinancialDraggingId = null; });
         });
         panel.addEventListener('dragend', function () { accClearFinancialDropState(panel); accFinancialDraggingId = null; });
+    });
+    document.querySelectorAll('[data-notes-section]').forEach(function (panel) {
+        panel.addEventListener('click', function (event) { accHandleNotesOutlineAction(event).catch(function (error) { accShowStatus(error.message, 'error'); }); });
+        panel.addEventListener('dragstart', accHandleNotesDragStart);
+        panel.addEventListener('dragover', function (event) { if ((accNoteDraggingId || accNoteDraggingAnchorId) && event.target.closest('[data-note-row], [data-note-drop-parent], [data-note-source-drop]')) { event.preventDefault(); if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'; } });
+        panel.addEventListener('drop', function (event) { accHandleNotesDrop(event).catch(function (error) { accShowStatus(error.message, 'error'); accLoadNoteCategories().catch(function () {}); }).finally(function () { panel.querySelectorAll('.acc2-note-dragging').forEach(function (row) { row.classList.remove('acc2-note-dragging'); }); accNoteDraggingId = null; accNoteDraggingAnchorId = null; }); });
+        panel.addEventListener('dragend', function () { panel.querySelectorAll('.acc2-note-dragging').forEach(function (row) { row.classList.remove('acc2-note-dragging'); }); accNoteDraggingId = null; accNoteDraggingAnchorId = null; });
     });
     accElement('accNotesFilter').addEventListener('input', accRenderNotesRows);
     accElement('accNotesRows').addEventListener('change', function (event) { accHandleNoteChange(event); });

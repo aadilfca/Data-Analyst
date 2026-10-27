@@ -36,7 +36,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/trial_balance.py → Trial Balance upload, hierarchy, categories, deletion, and shared latest parsed-upload lookup. See CHANGELOG_ARCHIVE.md.
 - routers/account_control_center.py → account mappings, Financial Statement outline order and orphan-safe cascade deletion, Cash Flow configuration, and treasury setup. See CHANGELOG_ARCHIVE.md.
 - static/trial_balance.html, static/trial_balance.js → Trial Balance upload/review with loading feedback; Period End supplies `as_of_date` without a separate input. See CHANGELOG_ARCHIVE.md.
-- static/account_control_center.html, static/account_control_center.js → central mappings, searchable grouped Financial Statement assignment, outline editing, row-level saves, routed notices, and Cash Flow configuration. See CHANGELOG_ARCHIVE.md.
+- static/account_control_center.html, static/account_control_center.js → central mappings, Financial Statement outlines, nested Notes with assignment-preserving moves, row-level saves, notices, and Cash Flow setup. See CHANGELOG_ARCHIVE.md.
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Two-pane Audit Rules editor for Documents, Cross-checks, Categories, Voucher Checks and Assertions, plus Assign Categories. See CHANGELOG_ARCHIVE.md.
 - category_control_center_prototype.html → standalone review-only prototype for the Category Control Center redesign; sample data only, no backend connection.

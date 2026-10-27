@@ -527,6 +527,7 @@ class AccountControlCategoryPayload(BaseModel):
     statement_section: Optional[str] = None
     row_type: str = "category"
     parent_category_id: Optional[int] = Field(default=None, ge=1)
+    source_statement_category_id: Optional[int] = Field(default=None, ge=1)
     sort_order: int = Field(default=0, ge=0)
     is_active: bool = True
 
@@ -538,6 +539,7 @@ class AccountControlCategoryUpdatePayload(BaseModel):
     statement_section: Optional[str] = None
     row_type: str = "category"
     parent_category_id: Optional[int] = Field(default=None, ge=1)
+    source_statement_category_id: Optional[int] = Field(default=None, ge=1)
     sort_order: int = Field(default=0, ge=0)
     is_active: bool = True
 
@@ -545,6 +547,8 @@ class AccountControlCategoryUpdatePayload(BaseModel):
 class AccountControlCategoryReorderPayload(BaseModel):
     client_id: int = Field(..., ge=1)
     category_ids: list[int]
+    category_type: str = "financial_statement"
+    parent_category_id: Optional[int] = Field(default=None, ge=1)
 
 
 _ACCOUNT_CONTROL_ASSIGNMENT_FIELDS = (
@@ -858,6 +862,7 @@ def _clean_category_payload(payload: AccountControlCategoryPayload) -> dict[str,
         "statement_section": statement_section,
         "row_type": row_type,
         "parent_category_id": payload.parent_category_id,
+        "source_statement_category_id": payload.source_statement_category_id,
         "sort_order": payload.sort_order,
         "is_active": payload.is_active,
     }
@@ -879,6 +884,7 @@ def _clean_category_update(payload: AccountControlCategoryUpdatePayload) -> dict
         "statement_section": statement_section,
         "row_type": row_type,
         "parent_category_id": payload.parent_category_id,
+        "source_statement_category_id": payload.source_statement_category_id,
         "sort_order": payload.sort_order,
         "is_active": payload.is_active,
     }
@@ -902,9 +908,46 @@ def _clean_statement_row_type(value: str) -> str:
 
 def _validate_statement_parent(category: dict[str, Any], current_id: Optional[int] = None) -> None:
     if category["category_type"] != "financial_statement":
-        if category["statement_section"] or category["parent_category_id"] is not None:
-            raise HTTPException(400, "Only Financial Statement categories can use outline sections")
+        if category["statement_section"] or (category["parent_category_id"] is not None and category.get("source_statement_category_id") is not None):
+            raise HTTPException(400, "Note breakdowns cannot also be linked statement rows")
+        source_id = category.get("source_statement_category_id")
+        parent_id = category["parent_category_id"]
+        if source_id is not None:
+            source = execute_query_pg(
+                "SELECT statement_section, row_type, is_active FROM account_control_categories WHERE id = %s AND client_id = %s AND category_type = 'financial_statement'",
+                (source_id, category["client_id"]),
+            )
+            if not source or source[0]["row_type"] != "category" or not source[0]["is_active"] or not source[0]["statement_section"]:
+                raise HTTPException(400, "Choose an active Financial Statement category as the note source")
+            linked = execute_query_pg(
+                "SELECT id FROM account_control_categories WHERE client_id = %s AND category_type = 'note' AND source_statement_category_id = %s AND id IS DISTINCT FROM %s LIMIT 1",
+                (category["client_id"], source_id, current_id),
+            )
+            if linked:
+                raise HTTPException(409, "This Financial Statement row already has a note heading")
+        if parent_id is not None:
+            if parent_id == current_id:
+                raise HTTPException(400, "A note category cannot be its own parent")
+            parent = execute_query_pg(
+                "SELECT parent_category_id, source_statement_category_id, is_active FROM account_control_categories WHERE id = %s AND client_id = %s AND category_type = 'note'",
+                (parent_id, category["client_id"]),
+            )
+            if not parent or not parent[0]["is_active"]:
+                raise HTTPException(400, "Choose an active note breakdown as the parent")
+            ancestor_id = parent_id
+            seen = {current_id} if current_id else set()
+            while ancestor_id is not None:
+                if ancestor_id in seen:
+                    raise HTTPException(400, "Note breakdowns cannot contain a cycle")
+                seen.add(ancestor_id)
+                ancestors = execute_query_pg(
+                    "SELECT parent_category_id FROM account_control_categories WHERE id = %s AND client_id = %s AND category_type = 'note'",
+                    (ancestor_id, category["client_id"]),
+                )
+                ancestor_id = ancestors[0]["parent_category_id"] if ancestors else None
         return
+    if category.get("source_statement_category_id") is not None:
+        raise HTTPException(400, "Only note categories can link to a Financial Statement row")
     parent_id = category["parent_category_id"]
     if category["row_type"] == "heading" and parent_id is not None:
         raise HTTPException(400, "Headings must be top-level")
@@ -929,6 +972,31 @@ def _public_control_assignment(assignment: dict[str, Any]) -> dict[str, Any]:
     )}
 
 
+def _note_statement_section(category_id: int, client_id: int) -> Optional[str]:
+    """Resolve the inherited statement section for a note row, if it has one."""
+    current_id: Optional[int] = category_id
+    seen: set[int] = set()
+    while current_id is not None:
+        if current_id in seen:
+            raise HTTPException(409, "The note outline contains a cycle")
+        seen.add(current_id)
+        rows = execute_query_pg(
+            "SELECT parent_category_id, source_statement_category_id FROM account_control_categories WHERE id = %s AND client_id = %s AND category_type = 'note'",
+            (current_id, client_id),
+        )
+        if not rows:
+            return None
+        source_id = rows[0]["source_statement_category_id"]
+        if source_id is not None:
+            source = execute_query_pg(
+                "SELECT statement_section FROM account_control_categories WHERE id = %s AND client_id = %s AND category_type = 'financial_statement'",
+                (source_id, client_id),
+            )
+            return source[0]["statement_section"] if source else None
+        current_id = rows[0]["parent_category_id"]
+    return None
+
+
 @router.get("/api/account-control-center/categories")
 def list_account_control_categories(
     client_id: int = Query(..., ge=1),
@@ -940,11 +1008,24 @@ def list_account_control_categories(
     cleaned_type = _clean_category_type(category_type)
     active_clause = "" if include_inactive else " AND is_active = TRUE"
     rows = execute_query_pg(
-        f"""SELECT id, client_id, category_type, category_key, label, statement_section, row_type,
-                   parent_category_id, sort_order, is_active
-            FROM account_control_categories
-            WHERE client_id = %s AND category_type = %s{active_clause}
-            ORDER BY sort_order, LOWER(label), category_key""",
+        f"""SELECT c.id, c.client_id, c.category_type, c.category_key,
+                   CASE WHEN c.category_type = 'note' THEN COALESCE(s.label, c.label) ELSE c.label END AS label,
+                   c.statement_section, c.row_type, c.parent_category_id, c.source_statement_category_id,
+                   s.statement_section AS source_statement_section,
+                   CASE WHEN c.category_type = 'note' THEN (
+                       SELECT COUNT(*) FROM account_control_assignments a
+                       WHERE a.client_id = c.client_id AND a.note_category_id = c.id
+                         AND EXISTS (
+                             SELECT 1 FROM trial_balance_accounts t
+                             JOIN trial_balance_uploads u ON u.id = t.upload_id
+                             WHERE u.client_id = a.client_id AND t.account_code = a.account_code
+                         )
+                   ) ELSE 0 END AS assigned_account_count,
+                   c.sort_order, c.is_active
+            FROM account_control_categories c
+            LEFT JOIN account_control_categories s ON s.id = c.source_statement_category_id
+            WHERE c.client_id = %s AND c.category_type = %s{active_clause.replace('is_active', 'c.is_active')}
+            ORDER BY c.sort_order, LOWER(COALESCE(s.label, c.label)), c.category_key""",
         (client_id, cleaned_type),
     )
     return {"client_id": client_id, "category_type": cleaned_type, "categories": [dict(row) for row in rows]}
@@ -963,9 +1044,9 @@ def create_account_control_category(payload: AccountControlCategoryPayload, sess
         raise HTTPException(409, "A category with this key already exists")
     execute_write_pg(
         """INSERT INTO account_control_categories
-           (client_id, category_type, category_key, label, statement_section, row_type, parent_category_id, sort_order, is_active, updated_at)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)""",
-        (category["client_id"], category["category_type"], category["category_key"], category["label"], category["statement_section"], category["row_type"], category["parent_category_id"], category["sort_order"], category["is_active"]),
+           (client_id, category_type, category_key, label, statement_section, row_type, parent_category_id, source_statement_category_id, sort_order, is_active, updated_at)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)""",
+        (category["client_id"], category["category_type"], category["category_key"], category["label"], category["statement_section"], category["row_type"], category["parent_category_id"], category["source_statement_category_id"], category["sort_order"], category["is_active"]),
     )
     return {"saved": True, "category": category}
 
@@ -980,7 +1061,35 @@ def reorder_account_control_categories(payload: AccountControlCategoryReorderPay
     if len(set(category_ids)) != len(category_ids):
         raise HTTPException(400, "A category can appear only once in the order")
 
+    category_type = _clean_category_type(payload.category_type)
     with pg_transaction():
+        if category_type == "note":
+            rows = execute_query_pg(
+                "SELECT id, parent_category_id, source_statement_category_id, is_active FROM account_control_categories WHERE client_id = %s AND category_type = 'note' AND id = ANY(%s)",
+                (payload.client_id, category_ids),
+            )
+            if len(rows) != len(category_ids) or any(row["source_statement_category_id"] is not None for row in rows):
+                raise HTTPException(400, "Only note breakdown rows can be moved")
+            parent_id = payload.parent_category_id
+            if parent_id is not None:
+                for row in rows:
+                    _validate_statement_parent({"category_type": "note", "client_id": payload.client_id, "parent_category_id": parent_id, "source_statement_category_id": None, "statement_section": None}, current_id=int(row["id"]))
+            elif any(row["parent_category_id"] is not None for row in rows):
+                raise HTTPException(400, "Note breakdowns must remain under a note parent")
+            note_sections = {_note_statement_section(int(row["id"]), payload.client_id) for row in rows}
+            target_section = _note_statement_section(parent_id, payload.client_id) if parent_id is not None else None
+            if note_sections != {target_section}:
+                raise HTTPException(400, "Notes can move only within the same statement")
+            siblings = execute_query_pg(
+                "SELECT id FROM account_control_categories WHERE client_id = %s AND category_type = 'note' AND parent_category_id IS NOT DISTINCT FROM %s AND source_statement_category_id IS NULL ORDER BY sort_order, LOWER(label), category_key",
+                (payload.client_id, parent_id),
+            )
+            if not {int(row["id"]) for row in siblings}.issubset(set(category_ids)):
+                raise HTTPException(400, "The order must include every existing row in the destination group")
+            for sort_order, ordered_id in enumerate(category_ids):
+                execute_write_pg("UPDATE account_control_categories SET parent_category_id = %s, sort_order = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s AND client_id = %s AND category_type = 'note'", (parent_id, sort_order * 10, ordered_id, payload.client_id))
+            return {"saved": True, "category_ids": category_ids, "parent_category_id": parent_id}
+
         rows = execute_query_pg(
             """SELECT id, row_type, statement_section, parent_category_id
                FROM account_control_categories
@@ -1020,18 +1129,30 @@ def reorder_account_control_categories(payload: AccountControlCategoryReorderPay
 def update_account_control_category(category_id: int, payload: AccountControlCategoryUpdatePayload, session=Depends(require_admin)):
     category = _clean_category_update(payload)
     rows = execute_query_pg(
-        "SELECT id FROM account_control_categories WHERE id = %s AND client_id = %s AND category_type = %s",
+        "SELECT id, source_statement_category_id FROM account_control_categories WHERE id = %s AND client_id = %s AND category_type = %s",
         (category_id, category["client_id"], category["category_type"]),
     )
     if not rows:
         raise HTTPException(404, "Category not found")
-    _validate_statement_parent(category)
+    if category["category_type"] == "note" and rows[0]["source_statement_category_id"] != category["source_statement_category_id"]:
+        old_source_id = rows[0]["source_statement_category_id"]
+        new_source_id = category["source_statement_category_id"]
+        if old_source_id is None or new_source_id is None:
+            raise HTTPException(400, "Linked note headings can move only to another category in the same statement")
+        old_section = _note_statement_section(category_id, category["client_id"])
+        new_source = execute_query_pg(
+            "SELECT statement_section FROM account_control_categories WHERE id = %s AND client_id = %s AND category_type = 'financial_statement'",
+            (new_source_id, category["client_id"]),
+        )
+        if not new_source or old_section != new_source[0]["statement_section"]:
+            raise HTTPException(400, "Notes can move only within the same statement")
+    _validate_statement_parent(category, current_id=category_id)
     execute_write_pg(
         """UPDATE account_control_categories
-           SET label = %s, statement_section = %s, row_type = %s, parent_category_id = %s,
+           SET label = %s, statement_section = %s, row_type = %s, parent_category_id = %s, source_statement_category_id = %s,
                sort_order = %s, is_active = %s, updated_at = CURRENT_TIMESTAMP
            WHERE id = %s AND client_id = %s AND category_type = %s""",
-        (category["label"], category["statement_section"], category["row_type"], category["parent_category_id"], category["sort_order"], category["is_active"], category_id, category["client_id"], category["category_type"]),
+        (category["label"], category["statement_section"], category["row_type"], category["parent_category_id"], category["source_statement_category_id"], category["sort_order"], category["is_active"], category_id, category["client_id"], category["category_type"]),
     )
     return {"saved": True, "category": {"id": category_id, **category}}
 
@@ -1045,6 +1166,36 @@ def delete_account_control_category(
     """Delete an unassigned Financial Statement row, cascading through an empty heading."""
     _require_active_client(client_id)
     with pg_transaction():
+        note_rows = execute_query_pg(
+            "SELECT id, label, parent_category_id FROM account_control_categories WHERE id = %s AND client_id = %s AND category_type = 'note'",
+            (category_id, client_id),
+        )
+        if note_rows:
+            note_ids = [category_id]
+            frontier = [category_id]
+            while frontier:
+                children = execute_query_pg(
+                    "SELECT id FROM account_control_categories WHERE client_id = %s AND category_type = 'note' AND parent_category_id = ANY(%s)",
+                    (client_id, frontier),
+                )
+                frontier = [int(row["id"]) for row in children]
+                note_ids.extend(frontier)
+            placeholders = ", ".join(["%s"] * len(note_ids))
+            assigned = execute_query_pg(
+                f"SELECT account_code FROM account_control_assignments WHERE client_id = %s AND note_category_id IN ({placeholders}) AND EXISTS (SELECT 1 FROM trial_balance_accounts t JOIN trial_balance_uploads u ON u.id = t.upload_id WHERE u.client_id = account_control_assignments.client_id AND t.account_code = account_control_assignments.account_code) LIMIT 1",
+                tuple([client_id, *note_ids]),
+            )
+            if assigned:
+                raise HTTPException(409, "This note breakdown is assigned to a Trial Balance account")
+            execute_write_pg(
+                f"UPDATE account_control_assignments SET note_category_id = NULL, updated_by = %s, updated_at = CURRENT_TIMESTAMP WHERE client_id = %s AND note_category_id IN ({placeholders})",
+                tuple([str((session or {}).get("username") or "Admin"), client_id, *note_ids]),
+            )
+            # Delete leaves before parents because the parent link is protected by a foreign key.
+            for note_id in reversed(note_ids):
+                execute_write_pg("DELETE FROM account_control_categories WHERE id = %s AND client_id = %s AND category_type = 'note'", (note_id, client_id))
+            return {"deleted": True, "category_id": category_id, "deleted_child_count": len(note_ids) - 1, "orphan_assignments_cleared": 0}
+
         rows = execute_query_pg(
             """SELECT id, label, statement_section, row_type FROM account_control_categories
                WHERE id = %s AND client_id = %s AND category_type = 'financial_statement'""",
@@ -1065,6 +1216,12 @@ def delete_account_control_category(
                 (client_id, category_id),
             )
         delete_ids = [category_id] + [int(child["id"]) for child in child_categories]
+        linked_notes = execute_query_pg(
+            "SELECT id FROM account_control_categories WHERE client_id = %s AND category_type = 'note' AND source_statement_category_id = ANY(%s) LIMIT 1",
+            (client_id, delete_ids),
+        )
+        if linked_notes:
+            raise HTTPException(409, "Delete the linked note breakdown first")
         id_placeholders = ", ".join(["%s"] * len(delete_ids))
 
         # Preserve categories used by any account code in any Trial Balance upload.

@@ -8729,3 +8729,15 @@ Record phase decisions, implementation, verification, and acceptance here as the
 **Implementation:** Replaced the flat Financial Statement assignment dropdown with a searchable picker grouped under Balance Sheet and Income Statement, with nested headings and a separate legacy/unplaced section. The hidden native select remains the assignment source for existing save and parent-apply behavior. Page assets now use `style.css?v=72` and `account_control_center.js?v=14`.
 
 **Verification:** The focused Account Control Centre Playwright flow confirms grouping, filtering, selection/save, existing parent assignment, and outline behavior. JavaScript syntax and `git diff --check` pass.
+
+### Notes to Financial Statements outline - 2026-10-27
+
+**Implementation:** Notes tabs inherit headings and statement rows from Balance Sheet or Income Statement. Each source row can link a reusable note root, with unlimited nested breakdown rows; statement label changes flow through the source link. Breakdown rows can be reordered or moved under another note parent; linked roots follow their statement row. The existing Notes account assignment remains available for roots and legacy rows, while breakdowns are excluded. Note deletes cascade only when no current Trial Balance account uses the affected rows; statement rows with linked notes are protected. SQLite and PostgreSQL schemas add the source link. Asset versions are style 73 and script 15.
+
+**Verification:** The focused Account Control Centre backend and browser suites pass (41 tests), including inherited note headings, linked roots, nested breakdown creation, and cross-parent drag movement. Python compilation, JavaScript syntax, and `git diff --check` pass. Local-server acceptance and Git actions remain pending.
+
+### Notes category moves - 2026-10-27
+
+**Implementation:** Fixed Financial Statement source lookup parameter order. Linked note headings can move to another category in the same statement, preserving their IDs, descendants, and account assignments; the Notes panel confirms the effect when current Trial Balance accounts are assigned. Breakdown moves also enforce a same-statement boundary on the API. The Account Control Centre script cache version is 16.
+
+**Verification:** The focused Account Control Centre backend and browser suites pass (44 tests), including same-statement moves, assigned-account confirmation, and rejection of Balance Sheet/Income Statement cross-moves. Python compilation, JavaScript syntax, and `git diff --check` pass. Local-server acceptance and Git actions remain pending.

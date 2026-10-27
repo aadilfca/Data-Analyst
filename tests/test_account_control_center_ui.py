@@ -72,6 +72,7 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
         {"id": 32, "client_id": 1, "category_type": "financial_statement", "category_key": "equipment", "label": "Equipment", "statement_section": "balance_sheet", "row_type": "category", "parent_category_id": 30, "sort_order": 5, "is_active": True},
         {"id": 40, "client_id": 1, "category_type": "financial_statement", "category_key": "current_assets_heading", "label": "Current Assets Heading", "statement_section": "balance_sheet", "row_type": "heading", "parent_category_id": None, "sort_order": 6, "is_active": True},
         {"id": 41, "client_id": 1, "category_type": "financial_statement", "category_key": "stock", "label": "Stock", "statement_section": "balance_sheet", "row_type": "category", "parent_category_id": 40, "sort_order": 7, "is_active": True},
+        {"id": 42, "client_id": 1, "category_type": "financial_statement", "category_key": "cash_equivalents", "label": "Cash equivalents", "statement_section": "balance_sheet", "row_type": "category", "parent_category_id": 40, "sort_order": 8, "is_active": True},
     ]
     mapping["note_categories"] = [
         {"id": 20, "client_id": 1, "category_type": "note", "category_key": "accounting_policies", "label": "Accounting policies", "sort_order": 0, "is_active": True},
@@ -96,17 +97,30 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
                 body = json.loads(request.post_data or "{}")
                 is_note = body.get("category_type") == "note"
                 category_list = mapping["note_categories"] if is_note else mapping["categories"]
-                body["id"] = 21 if is_note else 12
+                body["id"] = max([int(item["id"]) for item in category_list] or [20 if is_note else 11]) + 1
                 body["is_active"] = True
+                if is_note: body["assigned_account_count"] = 1 if body.get("source_statement_category_id") else 0
                 category_list.append(body)
                 calls.append((request.method, url, body))
                 route.fulfill(status=200, content_type="application/json", body=json.dumps({"saved": True, "category": body}))
             elif request.method == "PUT" and url.split("?")[0].endswith("/categories/order"):
                 body = json.loads(request.post_data or "{}")
                 calls.append((request.method, url, body))
+                category_list = mapping["note_categories"] if body.get("category_type") == "note" else mapping["categories"]
                 for order, category_id in enumerate(body["category_ids"]):
-                    next(item for item in mapping["categories"] if item["id"] == category_id)["sort_order"] = order * 10
+                    item = next(item for item in category_list if item["id"] == category_id)
+                    item["sort_order"] = order * 10
+                    if body.get("category_type") == "note": item["parent_category_id"] = body.get("parent_category_id")
                 route.fulfill(status=200, content_type="application/json", body=json.dumps({"saved": True, "category_ids": body["category_ids"]}))
+            elif request.method == "PUT":
+                body = json.loads(request.post_data or "{}")
+                is_note = body.get("category_type") == "note"
+                category_list = mapping["note_categories"] if is_note else mapping["categories"]
+                category_id = int(url.split("/categories/")[1])
+                category = next(item for item in category_list if item["id"] == category_id)
+                category.update({key: value for key, value in body.items() if key != "client_id"})
+                calls.append((request.method, url, body))
+                route.fulfill(status=200, content_type="application/json", body=json.dumps({"saved": True, "category": category}))
             elif request.method == "DELETE":
                 category_id = int(url.split("/categories/")[1].split("?")[0])
                 removed = [item for item in mapping["categories"] if item["id"] == category_id or item.get("parent_category_id") == category_id]
@@ -351,6 +365,29 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     setup_tabs.nth(1).click()
     assert setup_tabs.nth(1).get_attribute("aria-selected") == "true"
     assert page.locator("#accFinancialSetupPanelNotesBalanceSheet").get_attribute("hidden") is None
+    notes_bs = page.locator("#accFinancialSetupPanelNotesBalanceSheet")
+    assert notes_bs.locator(".acc2-notes-group").get_by_text("Current Assets").is_visible()
+    assert notes_bs.locator(".acc2-notes-source-label").get_by_text("Stock").is_visible()
+    notes_bs.locator("[data-source-id='41'][data-note-action='link']").click()
+    assert notes_bs.locator("[data-note-drop-parent]").count() == 1
+    move_confirmations = []
+    page.once("dialog", lambda dialog: (move_confirmations.append(dialog.message), dialog.accept()))
+    notes_bs.locator("[data-note-anchor-id='21'][data-note-anchor-drag-handle]").drag_to(notes_bs.locator("[data-note-source-drop][data-source-id='42']"))
+    page.wait_for_function("document.querySelector('#accFinancialSetupPanelNotesBalanceSheet [data-note-source-drop][data-source-id=\"42\"] [data-note-anchor-id=\"21\"]') !== null")
+    assert "1 currently assigned Trial Balance account" in move_confirmations[0]
+    assert any(item["id"] == 21 and item["source_statement_category_id"] == 42 for item in mapping["note_categories"])
+    page.once("dialog", lambda dialog: dialog.accept("Raw material"))
+    notes_bs.locator("[data-note-action='add-child']").click()
+    page.wait_for_function("document.querySelector('#accFinancialSetupPanelNotesBalanceSheet')?.textContent.includes('Raw material')")
+    assert notes_bs.get_by_text("Raw material").is_visible()
+    page.once("dialog", lambda dialog: dialog.accept("Opening stock"))
+    notes_bs.locator(".acc2-notes-group.legacy [data-note-action='add']").click()
+    page.wait_for_function("document.querySelector('#accFinancialSetupPanelNotesBalanceSheet')?.textContent.includes('Opening stock')")
+    raw_material = notes_bs.locator("[data-note-row][data-note-id='22']")
+    opening_stock = notes_bs.locator("[data-note-row][data-note-id='23']")
+    opening_stock.locator("[data-note-drag-handle]").drag_to(raw_material, target_position={"x": 25, "y": raw_material.bounding_box()["height"] // 2})
+    page.wait_for_function("document.querySelector('#accFinancialSetupPanelNotesBalanceSheet [data-note-id=\"22\"] > [data-note-drop-parent] [data-note-id=\"23\"]') !== null")
+    assert any(call[0] == "PUT" and call[2].get("category_type") == "note" and call[2].get("parent_category_id") for call in calls)
     page.locator("#accFinancialSetupClose").click()
     assert page.locator("#accFinancialSetupModal").is_hidden()
     assert page.locator("#accFinancialPanel").is_visible()

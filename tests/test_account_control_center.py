@@ -33,6 +33,7 @@ class AccountSetSchemaTests(unittest.TestCase):
                             "SELECT name FROM sqlite_master WHERE type = 'index'"
                         ).fetchall()
                     }
+                    category_columns = {row[1] for row in conn.execute("PRAGMA table_info(account_control_categories)").fetchall()}
                 conn.close()
                 self.assertTrue(
                     {
@@ -49,6 +50,7 @@ class AccountSetSchemaTests(unittest.TestCase):
                         "account_control_cashflow_config_entries",
                     }.issubset(tables)
                 )
+                self.assertIn("source_statement_category_id", category_columns)
                 self.assertTrue(
                     {
                         "idx_account_sets_client",
@@ -101,6 +103,7 @@ class AccountSetPostgresMigrationTests(unittest.TestCase):
         self.assertIn("ADD COLUMN IF NOT EXISTS statement_section", sql)
         self.assertIn("ADD COLUMN IF NOT EXISTS row_type", sql)
         self.assertIn("ADD COLUMN IF NOT EXISTS parent_category_id", sql)
+        self.assertIn("ADD COLUMN IF NOT EXISTS source_statement_category_id", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS account_control_assignments", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS account_sets", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS account_set_versions", sql)
@@ -356,6 +359,103 @@ class CashFlowControlTests(unittest.TestCase):
 
 
 class FinancialStatementControlTests(unittest.TestCase):
+    def test_note_category_can_link_to_one_active_statement_category(self):
+        category = control_center._clean_category_payload(
+            control_center.AccountControlCategoryPayload(
+                client_id=1, category_type="note", category_key="statement_12", label="Inventory",
+                source_statement_category_id=12,
+            )
+        )
+        with patch.object(control_center, "execute_query_pg", side_effect=[
+            [{"row_type": "category", "is_active": True, "statement_section": "balance_sheet"}], [],
+        ]) as query:
+            control_center._validate_statement_parent(category)
+        self.assertEqual(query.call_args_list[0].args[1], (12, 1))
+
+    def test_note_category_rejects_duplicate_statement_link(self):
+        category = {"category_type": "note", "client_id": 1, "parent_category_id": None, "source_statement_category_id": 12, "statement_section": None}
+        with patch.object(control_center, "execute_query_pg", side_effect=[
+            [{"row_type": "category", "is_active": True, "statement_section": "balance_sheet"}], [{"id": 30}],
+        ]):
+            with self.assertRaises(HTTPException) as raised:
+                control_center._validate_statement_parent(category)
+        self.assertEqual(raised.exception.status_code, 409)
+
+    def test_move_linked_note_within_same_statement_preserves_assignments(self):
+        payload = control_center.AccountControlCategoryUpdatePayload(
+            client_id=1, category_type="note", label="Printing expenses",
+            source_statement_category_id=11, is_active=True,
+        )
+        note_row = {"id": 50, "source_statement_category_id": 10, "parent_category_id": None}
+        inherited_note = {"parent_category_id": None, "source_statement_category_id": 10}
+        with patch.object(control_center, "execute_query_pg", side_effect=[
+            [note_row], [inherited_note], [{"statement_section": "income_statement"}],
+            [{"statement_section": "income_statement"}],
+            [{"statement_section": "income_statement", "row_type": "category", "is_active": True}], [],
+        ]), patch.object(control_center, "execute_write_pg") as write:
+            result = control_center.update_account_control_category(50, payload, session={"username": "Admin"})
+        self.assertTrue(result["saved"])
+        self.assertEqual(result["category"]["source_statement_category_id"], 11)
+        sql = write.call_args.args[0]
+        self.assertIn("source_statement_category_id = %s", sql)
+        self.assertNotIn("account_control_assignments", sql)
+
+    def test_move_linked_note_between_statements_is_rejected(self):
+        payload = control_center.AccountControlCategoryUpdatePayload(
+            client_id=1, category_type="note", label="Printing expenses",
+            source_statement_category_id=21, is_active=True,
+        )
+        with patch.object(control_center, "execute_query_pg", side_effect=[
+            [{"id": 50, "source_statement_category_id": 10, "parent_category_id": None}],
+            [{"parent_category_id": None, "source_statement_category_id": 10}],
+            [{"statement_section": "income_statement"}],
+            [{"statement_section": "balance_sheet"}],
+        ]), patch.object(control_center, "execute_write_pg") as write:
+            with self.assertRaises(HTTPException) as raised:
+                control_center.update_account_control_category(50, payload, session={"username": "Admin"})
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertIn("same statement", raised.exception.detail)
+        write.assert_not_called()
+
+    def test_reorder_note_breakdowns_persists_complete_sibling_order(self):
+        selected = [
+            {"id": 52, "parent_category_id": None, "source_statement_category_id": None, "is_active": True},
+            {"id": 51, "parent_category_id": None, "source_statement_category_id": None, "is_active": True},
+        ]
+        with patch.object(control_center, "_require_active_client"), patch.object(
+            control_center, "pg_transaction", return_value=nullcontext()
+        ), patch.object(control_center, "execute_query_pg", side_effect=[selected, [{"parent_category_id": None, "source_statement_category_id": None}], [{"parent_category_id": None, "source_statement_category_id": None}], [{"id": 51}, {"id": 52}]]), patch.object(
+            control_center, "execute_write_pg"
+        ) as write:
+            result = control_center.reorder_account_control_categories(
+                control_center.AccountControlCategoryReorderPayload(
+                    client_id=1, category_type="note", parent_category_id=None, category_ids=[52, 51]
+                ),
+                session={"username": "Admin"},
+            )
+        self.assertEqual(result["category_ids"], [52, 51])
+        self.assertEqual([call.args[1] for call in write.call_args_list], [(None, 0, 52, 1), (None, 10, 51, 1)])
+
+    def test_reorder_rejects_note_breakdown_move_between_statements(self):
+        selected = [{"id": 52, "parent_category_id": 10, "source_statement_category_id": None, "is_active": True}]
+        with patch.object(control_center, "_require_active_client"), patch.object(
+            control_center, "pg_transaction", return_value=nullcontext()
+        ), patch.object(control_center, "_validate_statement_parent"), patch.object(
+            control_center, "_note_statement_section", side_effect=["balance_sheet", "income_statement"]
+        ), patch.object(control_center, "execute_query_pg", return_value=selected), patch.object(
+            control_center, "execute_write_pg"
+        ) as write:
+            with self.assertRaises(HTTPException) as raised:
+                control_center.reorder_account_control_categories(
+                    control_center.AccountControlCategoryReorderPayload(
+                        client_id=1, category_type="note", parent_category_id=20, category_ids=[52]
+                    ),
+                    session={"username": "Admin"},
+                )
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertIn("same statement", raised.exception.detail)
+        write.assert_not_called()
+
     def test_reorder_financial_statement_siblings_persists_requested_order(self):
         selected = [
             {"id": 2, "row_type": "category", "statement_section": "balance_sheet", "parent_category_id": 10},
@@ -411,7 +511,7 @@ class FinancialStatementControlTests(unittest.TestCase):
             control_center, "pg_transaction", return_value=nullcontext()
         ), patch.object(
             control_center, "execute_query_pg", side_effect=[
-                [{"id": 31, "label": "Unused", "statement_section": None, "row_type": "category"}], [],
+                [], [{"id": 31, "label": "Unused", "statement_section": None, "row_type": "category"}], [], [],
                 [{"account_code": "OLD-1"}],
             ]
         ), patch.object(control_center, "execute_write_pg") as write:
@@ -430,8 +530,9 @@ class FinancialStatementControlTests(unittest.TestCase):
             control_center, "pg_transaction", return_value=nullcontext()
         ), patch.object(
             control_center, "execute_query_pg", side_effect=[
+                [],
                 [{"id": 31, "label": "Fixed assets", "statement_section": "balance_sheet", "row_type": "heading"}],
-                children, [], [],
+                children, [], [], [],
             ]
         ), patch.object(control_center, "execute_write_pg") as write:
             result = control_center.delete_account_control_category(
@@ -448,8 +549,9 @@ class FinancialStatementControlTests(unittest.TestCase):
             control_center, "pg_transaction", return_value=nullcontext()
         ), patch.object(
             control_center, "execute_query_pg", side_effect=[
+                [],
                 [{"id": 31, "label": "Fixed assets", "statement_section": "balance_sheet", "row_type": "heading"}],
-                [{"id": 32, "label": "Land"}], [{"account_code": "10-01"}],
+                [{"id": 32, "label": "Land"}], [], [{"account_code": "10-01"}],
             ]
         ), patch.object(control_center, "execute_write_pg") as write:
             with self.assertRaises(HTTPException) as raised:
@@ -465,7 +567,7 @@ class FinancialStatementControlTests(unittest.TestCase):
             control_center, "pg_transaction", return_value=nullcontext()
         ), patch.object(
             control_center, "execute_query_pg", side_effect=[
-                [{"id": 31, "statement_section": None, "row_type": "category"}], [{"id": 5}],
+                [], [{"id": 31, "statement_section": None, "row_type": "category"}], [], [{"id": 5}],
             ]
         ), patch.object(control_center, "execute_write_pg") as write:
             with self.assertRaises(HTTPException) as raised:
