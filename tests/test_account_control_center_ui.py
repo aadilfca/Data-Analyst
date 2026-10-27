@@ -45,6 +45,12 @@ def browser():
             instance.close()
 
 
+def choose_financial_category(page, account_code, category_id):
+    row = page.locator("#accFinancialRows tr:has(select.acc2-financial-category[data-acc-code='{}'])".format(account_code))
+    row.locator("[data-fs-picker-trigger]").click()
+    row.locator("[data-fs-picker-option][data-fs-picker-value='{}']".format(category_id)).click()
+
+
 def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, static_server):
     mapping = {
         "client_id": 1,
@@ -246,12 +252,29 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     assert page.locator("#accTabFinancial").is_disabled()
     page.wait_for_function("window.__accReleaseFinancial !== null")
     page.evaluate("window.__accReleaseFinancial()")
-    page.wait_for_selector("#accFinancialRows .acc2-financial-category")
+    page.wait_for_selector("#accFinancialRows .acc2-financial-category", state="attached")
     page.wait_for_selector("#accPageBusy", state="hidden")
     assert page.locator("#accTabFinancial").is_enabled()
     page.evaluate("window.fetch = window.__accOriginalFetch")
+    picker_row = page.locator("#accFinancialRows tr:has(select[data-acc-code='20-15-50-0001'])")
+    picker_trigger = picker_row.locator("[data-fs-picker-trigger]")
+    picker_trigger.click()
+    picker = picker_row.locator("[data-fs-picker]")
+    picker_sections = picker.locator(".acc2-fs-picker-section-title")
+    assert picker_sections.all_text_contents()[:2] == ["Balance Sheet", "Income Statement"]
+    assert picker.locator(".acc2-fs-picker-heading").get_by_text("Non Current Assets").is_visible()
+    picker_search = picker.locator("[data-fs-picker-search-input]")
+    picker_search.fill("Equipment")
+    assert picker.locator("[data-fs-picker-option]:visible").count() == 1
+    assert "Equipment" in picker.locator("[data-fs-picker-option]:visible").first.text_content()
+    picker_search.fill("")
+    assert picker_sections.nth(0).is_visible()
     with page.expect_response(lambda response: response.url.endswith("/api/account-control-center/mapping") and response.request.method == "PUT"):
-        page.locator("select.acc2-financial-category[data-acc-code='20-15-50-0001']").select_option("10")
+        picker.locator("[data-fs-picker-option][data-fs-picker-value='32']").click()
+    assert page.locator("select.acc2-financial-category[data-acc-code='20-15-50-0001']").input_value() == "32"
+    assert any(call[0] == "PUT" and call[2].get("financial_statement_category_id") == 32 for call in calls)
+    with page.expect_response(lambda response: response.url.endswith("/api/account-control-center/mapping") and response.request.method == "PUT"):
+        choose_financial_category(page, "20-15-50-0001", 10)
     page.evaluate("""() => {
         window.__accOriginalFetch = window.fetch;
         window.__accReleaseFinancialLeaf = null;
@@ -259,7 +282,7 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
             ? new Promise(resolve => { window.__accReleaseFinancialLeaf = () => window.__accOriginalFetch(input, init).then(resolve); })
             : window.__accOriginalFetch(input, init);
     }""")
-    page.locator("select.acc2-financial-category[data-acc-code='20-15-50-0001']").select_option("11")
+    choose_financial_category(page, "20-15-50-0001", 11)
     page.wait_for_function("window.__accReleaseFinancialLeaf !== null")
     assert page.locator("#accPageBusy").is_hidden()
     assert page.locator("#accFinancialRows [data-acc-fs-result='20-15-50-0001'] .acc2-inline-saving").is_visible()

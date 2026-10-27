@@ -36,7 +36,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/trial_balance.py → Trial Balance upload, hierarchy, categories, deletion, and shared latest parsed-upload lookup. See CHANGELOG_ARCHIVE.md.
 - routers/account_control_center.py → account mappings, Financial Statement outline order and orphan-safe cascade deletion, Cash Flow configuration, and treasury setup. See CHANGELOG_ARCHIVE.md.
 - static/trial_balance.html, static/trial_balance.js → Trial Balance upload/review with loading feedback; Period End supplies `as_of_date` without a separate input. See CHANGELOG_ARCHIVE.md.
-- static/account_control_center.html, static/account_control_center.js → central mappings, Financial Statement outline, row-level saves, drag ordering with routed notices, and Cash Flow configuration. See CHANGELOG_ARCHIVE.md.
+- static/account_control_center.html, static/account_control_center.js → central mappings, searchable grouped Financial Statement assignment, outline editing, row-level saves, routed notices, and Cash Flow configuration. See CHANGELOG_ARCHIVE.md.
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Two-pane Audit Rules editor for Documents, Cross-checks, Categories, Voucher Checks and Assertions, plus Assign Categories. See CHANGELOG_ARCHIVE.md.
 - category_control_center_prototype.html → standalone review-only prototype for the Category Control Center redesign; sample data only, no backend connection.
@@ -257,7 +257,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
-- 2026-10-27: Financial Statement leaf saves keep row progress without the redundant page banner; temporary notices route to the page or popup. See CHANGELOG_ARCHIVE.md.
+- 2026-10-27: Financial Statement assignment groups searchable categories by statement and heading; leaf saves retain row feedback with routed temporary notices. See CHANGELOG_ARCHIVE.md.
 - 2026-10-26: Cashflows builds shared category ledger details after summary render; inline expansion remains available during build. See CHANGELOG_ARCHIVE.md.
 - 2026-10-25: Reconciliation keeps detail rows during coalesced tab-return checks; stale or unverifiable evidence stays locked. See CHANGELOG_ARCHIVE.md.
 - 2026-10-25: Isolated application recovery verified and locally accepted; complete rows, settings, numbering and object permissions match. See CHANGELOG_ARCHIVE.md.

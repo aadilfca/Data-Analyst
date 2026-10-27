@@ -10155,6 +10155,34 @@ body {
 .acc2-financial-category, .acc2-note-category { min-width: 210px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; color: #1e293b; cursor: pointer; padding: 7px 8px; font: inherit; font-size: 12px; }
 .acc2-financial-category:focus, .acc2-note-category:focus { border-color: #2563eb; outline: 2px solid #bfdbfe; }
 .acc2-financial-category:disabled, .acc2-note-category:disabled { cursor: not-allowed; opacity: .65; }
+.acc2-fs-picker { position: relative; min-width: 210px; }
+.acc2-fs-picker-trigger { display: flex; width: 100%; min-height: 38px; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 7px; background: #fff; color: #1e293b; font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.acc2-fs-picker-trigger:hover { border-color: #93a9b8; }
+.acc2-fs-picker-trigger:focus-visible, .acc2-fs-picker-option:focus-visible { outline: 2px solid #93c5fd; outline-offset: 1px; }
+.acc2-fs-picker-trigger:disabled { cursor: not-allowed; opacity: .65; }
+.acc2-fs-picker-trigger > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acc2-fs-picker-chevron { flex: 0 0 auto; color: #64748b; font-size: 15px; }
+.acc2-fs-picker-menu { position: fixed; z-index: 6100; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #cbd5e1; border-radius: 10px; background: #fff; box-shadow: 0 16px 38px rgba(15, 23, 42, .22); }
+.acc2-fs-picker-menu[hidden] { display: none; }
+.acc2-fs-picker-search-label { padding: 10px 12px 4px; color: #64748b; font-size: 11px; font-weight: 700; }
+.acc2-fs-picker-search { flex: 0 0 auto; margin: 0 10px 8px; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px; color: #1e293b; font: inherit; font-size: 12px; }
+.acc2-fs-picker-search:focus { border-color: #2563eb; outline: 2px solid #bfdbfe; }
+.acc2-fs-picker-option-wrap { min-height: 0; overflow-y: auto; padding: 2px 7px 8px; }
+.acc2-fs-picker-option { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 10px; border: 0; border-radius: 5px; background: transparent; color: #263b4d; font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.acc2-fs-picker-option[hidden] { display: none; }
+.acc2-fs-picker-option:hover, .acc2-fs-picker-option:focus { background: #eff6ff; }
+.acc2-fs-picker-option[aria-selected="true"] { background: #e8f2fb; color: #174c73; font-weight: 700; }
+.acc2-fs-picker-option:disabled { color: #8a96a1; cursor: not-allowed; }
+.acc2-fs-picker-check { flex: 0 0 auto; color: #1769aa; opacity: 0; }
+.acc2-fs-picker-option[aria-selected="true"] .acc2-fs-picker-check { opacity: 1; }
+.acc2-fs-picker-inactive { color: #8a96a1; font-size: 10px; font-weight: 700; }
+.acc2-fs-picker-section { padding-top: 7px; }
+.acc2-fs-picker-section-title { margin: 0 8px 4px; padding: 0 3px 5px; border-bottom: 2px solid #7c2639; color: #7c2639; font-size: 11px; font-weight: 800; letter-spacing: .045em; text-transform: uppercase; }
+.acc2-fs-picker-section-title.muted { border-bottom-width: 1px; border-bottom-color: #d6dde3; color: #697887; }
+.acc2-fs-picker-heading { padding: 6px 10px 3px 17px; color: #34495e; font-size: 12px; font-weight: 700; }
+.acc2-fs-picker-heading-group .acc2-fs-picker-option { padding-left: 31px; }
+.acc2-fs-picker-mixed, .acc2-fs-picker-empty-group, .acc2-fs-picker-no-results { padding: 8px 12px; color: #748391; font-size: 11px; }
+.acc2-fs-picker-no-results[hidden] { display: none; }
 .acc2-cashflow-fab { position: fixed; right: 28px; bottom: 28px; z-index: 2100; width: 54px; height: 54px; border: 0; border-radius: 50%; background: #1769aa; color: #fff; font-size: 30px; line-height: 1; box-shadow: 0 8px 22px rgba(16, 55, 88, .28); cursor: pointer; }
 .acc2-cashflow-fab:hover { background: #0f548b; transform: translateY(-1px); }
 .acc2-modal-backdrop { position: fixed; inset: 0; z-index: 4000; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(20, 39, 58, .48); }

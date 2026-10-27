@@ -8723,3 +8723,9 @@ Record phase decisions, implementation, verification, and acceptance here as the
 **Implementation:** Removed the page-wide busy banner only from individual Financial Statement account-category saves. The affected row retains its spinner and “Saved”/“Retry” state; parent bulk updates and all other global processing indicators are unchanged.
 
 **Verification:** The focused Playwright flow held the Financial Statement save request pending and confirmed the row spinner stayed visible while `#accPageBusy` remained hidden; save completion restored the row state. JavaScript syntax and `git diff --check` passed.
+
+### Financial Statement assignment picker - 2026-10-27
+
+**Implementation:** Replaced the flat Financial Statement assignment dropdown with a searchable picker grouped under Balance Sheet and Income Statement, with nested headings and a separate legacy/unplaced section. The hidden native select remains the assignment source for existing save and parent-apply behavior. Page assets now use `style.css?v=72` and `account_control_center.js?v=14`.
+
+**Verification:** The focused Account Control Centre Playwright flow confirms grouping, filtering, selection/save, existing parent assignment, and outline behavior. JavaScript syntax and `git diff --check` pass.

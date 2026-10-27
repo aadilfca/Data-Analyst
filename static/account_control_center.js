@@ -100,6 +100,8 @@ function accSetSelectBusy(select, isBusy) {
     if (!select || !select.isConnected) return;
     select.disabled = isBusy || !accIsAdmin;
     select.setAttribute('aria-busy', isBusy ? 'true' : 'false');
+    const pickerTrigger = select.matches('.acc2-financial-category') && select.closest('[data-fs-picker]') && select.closest('[data-fs-picker]').querySelector('[data-fs-picker-trigger]');
+    if (pickerTrigger) pickerTrigger.disabled = isBusy || !accIsAdmin;
 }
 function accSetInlineBusy(select, result, message) {
     accSetSelectBusy(select, true);
@@ -223,6 +225,58 @@ function accCategoryOptionMarkupFor(categories, selected) {
 function accCategoryOptionMarkup(selected) { return accCategoryOptionMarkupFor(accFinancialCategories, selected); }
 function accNoteCategoryOptionMarkup(selected) { return accCategoryOptionMarkupFor(accNoteCategories, selected); }
 function accCashflowCategoryOptionMarkup(selected) { return accCategoryOptionMarkupFor(accCashflowCategories, selected); }
+function accFinancialPickerLabel(categoryId) {
+    if (categoryId === '__mixed') return 'Mixed assignments — choose one';
+    if (!categoryId) return 'Unassigned';
+    const category = accFinancialCategories.find(function (item) { return Number(item.id) === Number(categoryId) && item.row_type !== 'heading'; });
+    if (!category) return 'Unassigned';
+    const parent = accFinancialCategories.find(function (item) { return Number(item.id) === Number(category.parent_category_id) && item.row_type === 'heading'; });
+    const section = category.statement_section === 'balance_sheet' ? 'BS' : (category.statement_section === 'income_statement' ? 'IS' : 'Legacy');
+    return section + ' · ' + (!category.is_active ? 'Inactive · ' : '') + (parent ? parent.label + ' › ' : '') + category.label;
+}
+function accFinancialPickerOptionMarkup(category, parent, sectionLabel, selectedId) {
+    const inactive = !category.is_active;
+    const search = [category.label, parent && parent.label, sectionLabel].filter(Boolean).join(' ').toLowerCase();
+    return '<button type="button" class="acc2-fs-picker-option' + (inactive ? ' inactive' : '') + '" role="option" data-fs-picker-option data-fs-picker-value="' + category.id + '" data-fs-picker-search="' + accEscape(search) + '" aria-selected="' + (String(selectedId) === String(category.id) ? 'true' : 'false') + '"' + (inactive ? ' disabled aria-disabled="true"' : '') + '><span>' + (inactive ? '<span class="acc2-fs-picker-inactive">Inactive</span> ' : '') + accEscape(category.label) + '</span><span class="acc2-fs-picker-check" aria-hidden="true">✓</span></button>';
+}
+function accFinancialPickerSectionMarkup(section, label, categories, selectedId) {
+    const rows = categories.filter(function (item) { return item.statement_section === section && item.row_type !== 'heading'; });
+    const headings = rows.filter(function (item) { return Number(item.parent_category_id) > 0; }).map(function (item) {
+        return categories.find(function (candidate) { return Number(candidate.id) === Number(item.parent_category_id) && candidate.row_type === 'heading' && candidate.statement_section === section; });
+    }).filter(Boolean).filter(function (item, index, items) { return items.findIndex(function (candidate) { return Number(candidate.id) === Number(item.id); }) === index; }).sort(function (a, b) { return Number(a.sort_order || 0) - Number(b.sort_order || 0); });
+    let content = '';
+    headings.forEach(function (heading) {
+        const children = rows.filter(function (item) { return Number(item.parent_category_id) === Number(heading.id); }).sort(function (a, b) { return Number(a.sort_order || 0) - Number(b.sort_order || 0); });
+        if (!children.length) return;
+        content += '<div class="acc2-fs-picker-heading-group" data-fs-picker-heading-group><div class="acc2-fs-picker-heading" role="presentation">' + accEscape(heading.label) + '</div>' + children.map(function (item) { return accFinancialPickerOptionMarkup(item, heading, label, selectedId); }).join('') + '</div>';
+    });
+    const standalone = rows.filter(function (item) { return !headings.some(function (heading) { return Number(heading.id) === Number(item.parent_category_id); }); }).sort(function (a, b) { return Number(a.sort_order || 0) - Number(b.sort_order || 0); });
+    if (standalone.length) content += '<div class="acc2-fs-picker-heading-group" data-fs-picker-heading-group><div class="acc2-fs-picker-heading" role="presentation">Other ' + accEscape(label) + ' categories</div>' + standalone.map(function (item) { return accFinancialPickerOptionMarkup(item, null, label, selectedId); }).join('') + '</div>';
+    if (!content) content = '<div class="acc2-fs-picker-empty-group" role="presentation">No ' + accEscape(label) + ' categories yet.</div>';
+    return '<div class="acc2-fs-picker-section" data-fs-picker-section data-fs-picker-section-key="' + section + '"><div class="acc2-fs-picker-section-title" role="presentation">' + accEscape(label) + '</div>' + content + '</div>';
+}
+function accFinancialPickerMenuMarkup(selectedId) {
+    const categories = accFinancialCategories;
+    let html = '<div class="acc2-fs-picker-option-wrap" data-fs-picker-option-wrap role="listbox" aria-label="Financial Statement categories">';
+    html += '<button type="button" class="acc2-fs-picker-option" role="option" data-fs-picker-option data-fs-picker-value="" data-fs-picker-search="unassigned" aria-selected="' + (!selectedId ? 'true' : 'false') + '"><span>Unassigned</span><span class="acc2-fs-picker-check" aria-hidden="true">✓</span></button>';
+    if (selectedId === '__mixed') html += '<div class="acc2-fs-picker-mixed" role="presentation">Mixed assignments — choose one</div>';
+    html += accFinancialPickerSectionMarkup('balance_sheet', 'Balance Sheet', categories, selectedId);
+    html += accFinancialPickerSectionMarkup('income_statement', 'Income Statement', categories, selectedId);
+    const unplaced = categories.filter(function (item) { return item.row_type !== 'heading' && !item.statement_section; }).sort(function (a, b) { return Number(a.sort_order || 0) - Number(b.sort_order || 0); });
+    if (unplaced.length) {
+        html += '<div class="acc2-fs-picker-section" data-fs-picker-section data-fs-picker-section-key="unplaced"><div class="acc2-fs-picker-section-title muted" role="presentation">Unplaced / legacy categories</div>';
+        html += '<div class="acc2-fs-picker-heading-group" data-fs-picker-heading-group>' + unplaced.map(function (item) { return accFinancialPickerOptionMarkup(item, null, 'Unplaced categories', selectedId); }).join('') + '</div></div>';
+    }
+    return html + '<div class="acc2-fs-picker-no-results" data-fs-picker-no-results hidden>No matching categories.</div></div>';
+}
+function accFinancialPickerMarkup(account, selectedId) {
+    const codeKey = String(account.account_code || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const pickerId = 'accFsPicker_' + codeKey;
+    return '<div class="acc2-fs-picker" data-fs-picker>' +
+        '<button type="button" class="acc2-fs-picker-trigger" data-fs-picker-trigger role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-controls="' + pickerId + '_menu" aria-label="Financial Statement category for account ' + accEscape(account.account_code) + '"' + (!accIsAdmin ? ' disabled' : '') + '><span data-fs-picker-value-label>' + accEscape(accFinancialPickerLabel(selectedId)) + '</span><span class="acc2-fs-picker-chevron" aria-hidden="true">▾</span></button>' +
+        '<div class="acc2-fs-picker-menu" id="' + pickerId + '_menu" data-fs-picker-menu hidden><label class="acc2-fs-picker-search-label" for="' + pickerId + '_search">Find a category</label><input type="search" class="acc2-fs-picker-search" id="' + pickerId + '_search" data-fs-picker-search-input placeholder="Search categories or headings" autocomplete="off">' + accFinancialPickerMenuMarkup(selectedId) + '</div>' +
+        '<select class="acc2-financial-category" data-acc-code="' + accEscape(account.account_code) + '" data-acc-parent="' + (!account.is_leaf ? 'true' : 'false') + '" aria-hidden="true" tabindex="-1" hidden' + (!accIsAdmin ? ' disabled' : '') + '>' + accCategoryOptionMarkup(selectedId) + '</select></div>';
+}
 const ACC_CASHFLOW_ROLE_DEFINITIONS = [
     { key: 'customer_receipt', controlId: 'accCashflowCustomerReceiptCategories', menuId: 'accCashflowCustomerReceiptMenu', optionsId: 'accCashflowCustomerReceiptOptions', searchId: 'accCashflowCustomerReceiptSearch', label: 'Customer receipt categories' },
     { key: 'bank_charge', controlId: 'accCashflowBankChargeCategories', menuId: 'accCashflowBankChargeMenu', optionsId: 'accCashflowBankChargeOptions', searchId: 'accCashflowBankChargeSearch', label: 'Bank charge categories' },
@@ -546,7 +600,7 @@ function accRenderFinancialRows() {
                 '<td class="acc2-code" style="padding-left:' + (indent + 10) + 'px">' + accEscape(account.account_code) + '</td>' +
                 '<td>' + accEscape(account.account_name || 'Unknown account') + '</td>' +
                 '<td><span class="acc2-type ' + (isParent ? 'parent' : 'leaf') + '">' + (isParent ? 'Parent' : 'Leaf') + '</span></td>' +
-                '<td><select class="acc2-financial-category" data-acc-code="' + accEscape(account.account_code) + '" data-acc-parent="' + (isParent ? 'true' : 'false') + '"' + (!accIsAdmin ? ' disabled' : '') + '>' + accCategoryOptionMarkup(selected) + '</select></td>' +
+                '<td>' + accFinancialPickerMarkup(account, selected) + '</td>' +
                 '<td>' + result + '</td>' +
                 '</tr>';
         }).join('');
@@ -1160,9 +1214,134 @@ async function accApplyFinancialParent(account, select) {
         accSetSelectBusy(select, false);
     }
 }
+function accFilterFinancialPicker(picker) {
+    const searchInput = picker.querySelector('[data-fs-picker-search-input]');
+    const term = String(searchInput && searchInput.value || '').trim().toLowerCase();
+    const options = Array.from(picker.querySelectorAll('[data-fs-picker-option]'));
+    options.forEach(function (option) { option.hidden = !!term && String(option.dataset.fsPickerSearch || '').indexOf(term) === -1; });
+    picker.querySelectorAll('[data-fs-picker-heading-group]').forEach(function (group) {
+        group.hidden = !group.querySelector('[data-fs-picker-option]:not([hidden])');
+    });
+    picker.querySelectorAll('[data-fs-picker-section]').forEach(function (section) {
+        section.hidden = !!term && !section.querySelector('[data-fs-picker-option]:not([hidden])');
+    });
+    const visibleCount = options.filter(function (option) { return !option.hidden && !option.disabled; }).length;
+    const noResults = picker.querySelector('[data-fs-picker-no-results]');
+    if (noResults) noResults.hidden = visibleCount > 0;
+}
+function accPositionFinancialPicker(picker) {
+    const trigger = picker.querySelector('[data-fs-picker-trigger]');
+    const menu = picker.querySelector('[data-fs-picker-menu]');
+    if (!trigger || !menu) return;
+    const rect = trigger.getBoundingClientRect();
+    const maxHeight = Math.min(380, Math.max(180, window.innerHeight - 24));
+    const width = Math.min(Math.max(rect.width, 340), window.innerWidth - 24);
+    menu.style.width = width + 'px';
+    menu.style.maxHeight = maxHeight + 'px';
+    menu.style.visibility = 'hidden';
+    menu.hidden = false;
+    const height = Math.min(menu.scrollHeight, maxHeight);
+    const left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12));
+    let top = rect.bottom + 5;
+    if (top + height > window.innerHeight - 10 && rect.top > height + 10) top = rect.top - height - 5;
+    menu.style.left = left + 'px';
+    menu.style.top = Math.max(10, Math.min(top, window.innerHeight - height - 10)) + 'px';
+    menu.style.visibility = '';
+}
+function accCloseFinancialPicker(picker, returnFocus) {
+    if (!picker) return;
+    const trigger = picker.querySelector('[data-fs-picker-trigger]');
+    const menu = picker.querySelector('[data-fs-picker-menu]');
+    if (menu) menu.hidden = true;
+    if (trigger) {
+        trigger.setAttribute('aria-expanded', 'false');
+        if (returnFocus) trigger.focus();
+    }
+    picker.classList.remove('is-open');
+}
+function accCloseFinancialPickers(except) {
+    document.querySelectorAll('[data-fs-picker].is-open').forEach(function (picker) { if (picker !== except) accCloseFinancialPicker(picker, false); });
+}
+function accOpenFinancialPicker(picker) {
+    const trigger = picker && picker.querySelector('[data-fs-picker-trigger]');
+    const menu = picker && picker.querySelector('[data-fs-picker-menu]');
+    if (!trigger || !menu || trigger.disabled) return;
+    accCloseFinancialPickers(picker);
+    picker.classList.add('is-open');
+    trigger.setAttribute('aria-expanded', 'true');
+    const searchInput = picker.querySelector('[data-fs-picker-search-input]');
+    if (searchInput) searchInput.value = '';
+    accFilterFinancialPicker(picker);
+    accPositionFinancialPicker(picker);
+    if (searchInput) searchInput.focus();
+}
+function accUpdateFinancialPickerSelection(select) {
+    const picker = select && select.closest('[data-fs-picker]');
+    if (!picker) return;
+    const label = picker.querySelector('[data-fs-picker-value-label]');
+    if (label) label.textContent = accFinancialPickerLabel(select.value);
+    picker.querySelectorAll('[data-fs-picker-option]').forEach(function (option) {
+        option.setAttribute('aria-selected', String(option.dataset.fsPickerValue) === String(select.value) ? 'true' : 'false');
+    });
+}
+function accHandleFinancialPickerClick(event) {
+    const trigger = event.target.closest('[data-fs-picker-trigger]');
+    if (trigger) {
+        const picker = trigger.closest('[data-fs-picker]');
+        if (picker.classList.contains('is-open')) accCloseFinancialPicker(picker, false);
+        else accOpenFinancialPicker(picker);
+        return;
+    }
+    const option = event.target.closest('[data-fs-picker-option]');
+    if (!option || option.disabled || option.hidden) return;
+    const picker = option.closest('[data-fs-picker]');
+    const select = picker && picker.querySelector('.acc2-financial-category');
+    if (!select) return;
+    const value = option.dataset.fsPickerValue || '';
+    accCloseFinancialPicker(picker, true);
+    if (select.value === value) return;
+    select.value = value;
+    accUpdateFinancialPickerSelection(select);
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+}
+function accHandleFinancialPickerInput(event) {
+    const searchInput = event.target.closest('[data-fs-picker-search-input]');
+    if (searchInput) accFilterFinancialPicker(searchInput.closest('[data-fs-picker]'));
+}
+function accHandleFinancialPickerKeydown(event) {
+    const trigger = event.target.closest('[data-fs-picker-trigger]');
+    if (trigger && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+        event.preventDefault();
+        accOpenFinancialPicker(trigger.closest('[data-fs-picker]'));
+        const options = trigger.closest('[data-fs-picker]').querySelectorAll('[data-fs-picker-option]:not([hidden]):not(:disabled)');
+        if (options.length) options[event.key === 'ArrowUp' ? options.length - 1 : 0].focus();
+        return;
+    }
+    const picker = event.target.closest('[data-fs-picker]');
+    if (!picker || !picker.classList.contains('is-open')) return;
+    if (event.key === 'Escape') {
+        event.preventDefault();
+        accCloseFinancialPicker(picker, true);
+        return;
+    }
+    const option = event.target.closest('[data-fs-picker-option]');
+    if (!option) {
+        if (event.target.matches('[data-fs-picker-search-input]') && event.key === 'ArrowDown') {
+            const first = picker.querySelector('[data-fs-picker-option]:not([hidden]):not(:disabled)');
+            if (first) { event.preventDefault(); first.focus(); }
+        }
+        return;
+    }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const options = Array.from(picker.querySelectorAll('[data-fs-picker-option]:not([hidden]):not(:disabled)'));
+    const index = options.indexOf(option);
+    const nextIndex = event.key === 'Home' ? 0 : (event.key === 'End' ? options.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length);
+    if (options[nextIndex]) { event.preventDefault(); options[nextIndex].focus(); }
+}
 async function accHandleFinancialChange(event) {
     const select = event.target.closest('.acc2-financial-category');
     if (!select) return;
+    accUpdateFinancialPickerSelection(select);
     const account = accAccounts.find(function (item) { return accNormaliseCode(item.account_code) === accNormaliseCode(select.dataset.accCode); });
     if (!account) return;
     accClearStatus();
@@ -1380,7 +1559,14 @@ function accBindEvents() {
     accElement('accCashflowTemplateSave').addEventListener('click', function () { accSaveCashflowTemplate().catch(function (error) { accSetCashflowTemplateState(error.message, true); }); });
     document.addEventListener('keydown', function (event) { if (event.key === 'Escape') { accSetCashflowModal('accCashflowCategoryModal', false); accSetCashflowModal('accCashflowAccountsModal', false); accSetCashflowModal('accCashflowTemplateModal', false); if (!accElement('accFinancialSetupModal').hidden) accSetFinancialSetupModal(false); } });
     accElement('accFinancialFilter').addEventListener('input', accRenderFinancialRows);
-    accElement('accFinancialRows').addEventListener('change', function (event) { accHandleFinancialChange(event); });
+    const financialRows = accElement('accFinancialRows');
+    financialRows.addEventListener('change', function (event) { accHandleFinancialChange(event); });
+    financialRows.addEventListener('click', accHandleFinancialPickerClick);
+    financialRows.addEventListener('input', accHandleFinancialPickerInput);
+    financialRows.addEventListener('keydown', accHandleFinancialPickerKeydown);
+    document.addEventListener('click', function (event) { if (!event.target.closest('[data-fs-picker]')) accCloseFinancialPickers(); });
+    document.addEventListener('scroll', function (event) { if (!event.target.closest || !event.target.closest('[data-fs-picker-menu]')) accCloseFinancialPickers(); }, true);
+    window.addEventListener('resize', function () { accCloseFinancialPickers(); });
     accElement('accFinancialSetupFab').addEventListener('click', function () { accSetFinancialSetupModal(true); });
     accElement('accFinancialSetupClose').addEventListener('click', function () { accSetFinancialSetupModal(false); });
     document.querySelectorAll('[data-acc-financial-setup-tab]').forEach(function (tab) { tab.addEventListener('click', function () { accSetFinancialSetupTab(tab.dataset.accFinancialSetupTab); }); });
