@@ -574,6 +574,43 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     assert income_total.evaluate("element => element.nextElementSibling.dataset.fsId") == admin_expenses.get_attribute("data-fs-id")
     assert any(call[0] == "POST" and call[2].get("statement_section") == "income_statement" for call in calls)
 
+    income_statement.locator("[data-fs-calc-action='add-total']").click()
+    editor = income_statement.locator("[data-fs-calc-editor]")
+    editor.locator("[data-fs-calc-label]").fill("Operating Profit")
+    earlier_total = editor.locator("[data-fs-choice-group='earlier-totals'] input[data-fs-calc-include]")
+    assert earlier_total.count() == 1
+    earlier_total.check()
+    sales_id = revenue.locator(".acc2-fs-category").filter(has_text="Product sales").get_attribute("data-fs-id")
+    sales_choice = editor.locator("[data-source-category-id='{}']".format(sales_id))
+    assert sales_choice.is_disabled()
+    assert "Included via Gross Profit" in sales_choice.locator("xpath=ancestor::label[1]").text_content()
+    assert editor.locator("[data-source-category-id='{}']".format(cost_of_sales_id)).is_disabled()
+    earlier_total.uncheck()
+    assert not sales_choice.is_disabled()
+    earlier_total.check()
+    admin_choice = editor.locator("[data-source-category-id='{}']".format(admin_expenses.get_attribute("data-fs-id")))
+    admin_choice.check()
+    admin_choice.locator("xpath=ancestor::label[1]").locator("[data-fs-calc-operator]").select_option("subtract")
+    assert editor.locator("[data-fs-calc-placement]").text_content() == "Appears after: Administrative expenses"
+    editor.locator("[data-fs-calc-action='save']").click()
+    page.wait_for_function("document.querySelector('#accFinancialSetupPanelIncomeStatement')?.textContent.includes('Operating Profit')")
+    operating_profit = income_statement.locator("[data-fs-calculation-id]").filter(has_text="Operating Profit")
+    assert "Gross Profit − Administrative expenses" in operating_profit.text_content()
+    assert operating_profit.evaluate("element => element.previousElementSibling.dataset.fsId") == admin_expenses.get_attribute("data-fs-id")
+    assert any(call[0] == "POST" and call[2].get("label") == "Operating Profit" and any(component.get("source_calculation_id") is not None for component in call[2].get("components", [])) for call in calls)
+
+    operating_profit_id = operating_profit.get_attribute("data-fs-calculation-id")
+    income_statement.locator("[data-fs-calc-action='add-total']").click()
+    editor = income_statement.locator("[data-fs-calc-editor]")
+    editor.locator("[data-fs-calc-label]").fill("Net Profit")
+    operating_choice = editor.locator("[data-fs-choice-group='earlier-totals'] .acc2-fs-calc-choice").filter(has_text="Operating Profit").locator("input[data-fs-calc-include]")
+    operating_choice.check()
+    assert editor.locator("[data-fs-calc-placement]").text_content() == "Appears after: Operating Profit"
+    editor.locator("[data-fs-calc-action='save']").click()
+    page.wait_for_function("document.querySelector('#accFinancialSetupPanelIncomeStatement')?.textContent.includes('Net Profit')")
+    net_profit = income_statement.locator("[data-fs-calculation-id]").filter(has_text="Net Profit")
+    assert income_statement.locator("[data-fs-calculation-id='{}']".format(operating_profit_id)).evaluate("element => element.nextElementSibling.dataset.fsCalculationId") == net_profit.get_attribute("data-fs-calculation-id")
+
     page.locator("#accFinancialSetupTabNotesBalanceSheet").click()
     assert page.locator("#accFinancialSetupPanelNotesBalanceSheet [data-fs-calculation-id]").count() == 0
     page.locator("#accFinancialSetupTabBalanceSheet").click()

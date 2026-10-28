@@ -1070,7 +1070,11 @@ def _clean_statement_calculation(payload: StatementCalculationPayload) -> dict[s
     }
 
 
-def _validate_statement_calculation_components(calculation: dict[str, Any]) -> list[dict[str, Any]]:
+def _validate_statement_calculation_components(
+    calculation: dict[str, Any],
+    *,
+    calculation_id: Optional[int] = None,
+) -> list[dict[str, Any]]:
     components = calculation["components"]
     cleaned: list[dict[str, Any]] = []
     seen: set[tuple[str, int]] = set()
@@ -1086,7 +1090,7 @@ def _validate_statement_calculation_components(calculation: dict[str, Any]) -> l
             key = ("category", source_category_id)
         else:
             if (source_category_id is None) == (source_calculation_id is None):
-                raise HTTPException(400, "A total row must reference one category or subtotal")
+                raise HTTPException(400, "A total row must reference one category, subtotal, or earlier total")
             key = ("category", source_category_id) if source_category_id is not None else ("calculation", source_calculation_id)
         if key in seen:
             raise HTTPException(400, "A calculation row can be included only once")
@@ -1118,12 +1122,25 @@ def _validate_statement_calculation_components(calculation: dict[str, Any]) -> l
     else:
         source_ids = [row["source_calculation_id"] for row in cleaned if row["source_calculation_id"] is not None]
         category_ids = [row["source_category_id"] for row in cleaned if row["source_category_id"] is not None]
-        subtotal_rows = execute_query_pg(
-            "SELECT id, parent_heading_id FROM account_control_statement_calculations WHERE client_id = %s AND statement_section = %s AND calculation_type = 'subtotal' AND id = ANY(%s)",
+        source_rows = execute_query_pg(
+            "SELECT id, parent_heading_id, calculation_type, sort_order FROM account_control_statement_calculations WHERE client_id = %s AND statement_section = %s AND id = ANY(%s)",
             (calculation["client_id"], calculation["statement_section"], source_ids),
         ) if source_ids else []
-        if {int(row["id"]) for row in subtotal_rows} != set(source_ids):
-            raise HTTPException(400, "Totals can include only existing subtotals in this statement")
+        source_by_id = {int(row["id"]): row for row in source_rows}
+        if set(source_by_id) != set(source_ids):
+            raise HTTPException(400, "Totals can include only existing calculation lines in this statement")
+        subtotal_rows = [row for row in source_rows if row["calculation_type"] == "subtotal"]
+        current_order = int(calculation.get("sort_order") or 0)
+        invalid_totals = [
+            row for row in source_rows
+            if row["calculation_type"] == "total"
+            and (
+                int(row["id"]) == calculation_id
+                or int(row["sort_order"]) >= current_order
+            )
+        ]
+        if any(row["calculation_type"] not in {"subtotal", "total"} for row in source_rows) or invalid_totals:
+            raise HTTPException(400, "A total can include only subtotals and earlier totals in this statement")
         category_rows = execute_query_pg(
             """SELECT c.id, c.parent_category_id
                FROM account_control_categories c
@@ -1141,6 +1158,103 @@ def _validate_statement_calculation_components(calculation: dict[str, Any]) -> l
         category_headings = {int(row["parent_category_id"]) for row in category_rows if row["parent_category_id"] is not None}
         if subtotal_headings & category_headings:
             raise HTTPException(400, "Choose either a heading subtotal or its categories, not both")
+        needs_lineage_check = any(row["calculation_type"] == "total" for row in source_rows) or calculation_id is not None
+        if needs_lineage_check:
+            lineage_rows = execute_query_pg(
+                """SELECT calculation.id AS calculation_id, calculation.calculation_type, calculation.parent_heading_id,
+                          component.source_category_id, component.source_calculation_id
+                   FROM account_control_statement_calculations calculation
+                   LEFT JOIN account_control_statement_calculation_components component ON component.calculation_id = calculation.id
+                   WHERE calculation.client_id = %s AND calculation.statement_section = %s""",
+                (calculation["client_id"], calculation["statement_section"]),
+            )
+            category_rows_all = execute_query_pg(
+                "SELECT id, parent_category_id FROM account_control_categories WHERE client_id = %s AND category_type = 'financial_statement' AND statement_section = %s AND row_type = 'category'",
+                (calculation["client_id"], calculation["statement_section"]),
+            )
+            calculation_by_id: dict[int, dict[str, Any]] = {}
+            components_by_calculation: dict[int, list[dict[str, Any]]] = {}
+            for row in lineage_rows:
+                source_id = int(row["calculation_id"])
+                calculation_by_id[source_id] = {
+                    "calculation_type": row["calculation_type"],
+                    "parent_heading_id": row["parent_heading_id"],
+                }
+                if row["source_category_id"] is not None or row["source_calculation_id"] is not None:
+                    components_by_calculation.setdefault(source_id, []).append({
+                        "source_category_id": row["source_category_id"],
+                        "source_calculation_id": row["source_calculation_id"],
+                    })
+            category_ids_by_heading: dict[int, set[int]] = {}
+            for row in category_rows_all:
+                if row["parent_category_id"] is not None:
+                    category_ids_by_heading.setdefault(int(row["parent_category_id"]), set()).add(int(row["id"]))
+            if calculation_id is not None:
+                components_by_calculation[calculation_id] = [
+                    {"source_category_id": row["source_category_id"], "source_calculation_id": row["source_calculation_id"]}
+                    for row in cleaned
+                ]
+
+            lineage_cache: dict[int, set[int]] = {}
+
+            def calculation_lineage(source_id: int, visiting: Optional[set[int]] = None) -> set[int]:
+                if source_id in lineage_cache:
+                    return set(lineage_cache[source_id])
+                source = calculation_by_id.get(source_id)
+                if not source:
+                    return set()
+                visiting = set() if visiting is None else visiting
+                if source_id in visiting:
+                    return set()
+                visiting.add(source_id)
+                if source["calculation_type"] == "subtotal":
+                    result = category_ids_by_heading.get(int(source["parent_heading_id"]), set()).copy()
+                else:
+                    result: set[int] = set()
+                    for child in components_by_calculation.get(source_id, []):
+                        if child["source_category_id"] is not None:
+                            result.add(int(child["source_category_id"]))
+                        elif child["source_calculation_id"] is not None:
+                            result.update(calculation_lineage(int(child["source_calculation_id"]), visiting))
+                visiting.remove(source_id)
+                lineage_cache[source_id] = set(result)
+                return result
+
+            def formula_overlaps(formula_components: list[dict[str, Any]]) -> bool:
+                included: set[int] = set()
+                for component in formula_components:
+                    if component["source_category_id"] is not None:
+                        source_categories = {int(component["source_category_id"])}
+                    else:
+                        source_categories = calculation_lineage(int(component["source_calculation_id"]))
+                    if included & source_categories:
+                        return True
+                    included.update(source_categories)
+                return False
+
+            if calculation_id is None:
+                if formula_overlaps(cleaned):
+                    raise HTTPException(400, "Avoid double-counting: choose an earlier total or its included source rows, not both")
+            else:
+                affected_total_ids = {calculation_id}
+                changed = True
+                while changed:
+                    changed = False
+                    for candidate_id, candidate in calculation_by_id.items():
+                        if candidate["calculation_type"] != "total" or candidate_id in affected_total_ids:
+                            continue
+                        if any(
+                            component["source_calculation_id"] is not None
+                            and int(component["source_calculation_id"]) in affected_total_ids
+                            for component in components_by_calculation.get(candidate_id, [])
+                        ):
+                            affected_total_ids.add(candidate_id)
+                            changed = True
+                for affected_id in affected_total_ids:
+                    if calculation_by_id.get(affected_id, {}).get("calculation_type") == "total" and formula_overlaps(components_by_calculation.get(affected_id, [])):
+                        if affected_id == calculation_id:
+                            raise HTTPException(400, "Avoid double-counting: choose an earlier total or its included source rows, not both")
+                        raise HTTPException(409, "This change would double-count a source in a later total. Adjust that total first")
     return cleaned
 
 
@@ -1179,20 +1293,20 @@ def list_statement_calculations(
             source_ids = [int(row["source_calculation_id"]) for row in saved_components if row["source_calculation_id"] is not None]
             category_ids = [int(row["source_category_id"]) for row in saved_components if row["source_category_id"] is not None]
             sources = execute_query_pg(
-                "SELECT id, label FROM account_control_statement_calculations WHERE client_id = %s AND statement_section = %s AND calculation_type = 'subtotal' AND id = ANY(%s)",
+                "SELECT id, label, calculation_type FROM account_control_statement_calculations WHERE client_id = %s AND statement_section = %s AND id = ANY(%s)",
                 (client_id, section, source_ids or [0]),
             ) if source_ids else []
             categories = execute_query_pg(
                 "SELECT id, label FROM account_control_categories WHERE client_id = %s AND category_type = 'financial_statement' AND statement_section = %s AND row_type = 'category' AND id = ANY(%s)",
                 (client_id, section, category_ids),
             ) if category_ids else []
-            subtotal_labels = {int(row["id"]): row["label"] for row in sources}
+            calculation_labels = {int(row["id"]): row["label"] for row in sources}
             category_labels = {int(row["id"]): row["label"] for row in categories}
             components = []
             for row in sorted(saved_components, key=lambda item: int(item.get("sort_order") or 0)):
                 category_id = row["source_category_id"]
                 calculation_id = row["source_calculation_id"]
-                label = category_labels.get(int(category_id)) if category_id is not None else subtotal_labels.get(int(calculation_id))
+                label = category_labels.get(int(category_id)) if category_id is not None else calculation_labels.get(int(calculation_id))
                 if label is None:
                     continue
                 components.append({
@@ -1212,14 +1326,23 @@ def _persist_statement_calculation(calculation_id: Optional[int], payload: State
         existing = []
         if calculation_id is not None:
             existing = execute_query_pg(
-                "SELECT id, calculation_type, parent_heading_id FROM account_control_statement_calculations WHERE id = %s AND client_id = %s AND statement_section = %s",
+                "SELECT id, calculation_type, parent_heading_id, sort_order FROM account_control_statement_calculations WHERE id = %s AND client_id = %s AND statement_section = %s",
                 (calculation_id, calculation["client_id"], calculation["statement_section"]),
             )
             if not existing:
                 raise HTTPException(404, "Calculation line not found")
             if existing[0]["calculation_type"] != calculation["calculation_type"] or existing[0]["parent_heading_id"] != calculation["parent_heading_id"]:
                 raise HTTPException(400, "A calculation line's type and position cannot be changed")
-        components = _validate_statement_calculation_components(calculation)
+        if calculation["calculation_type"] == "total":
+            if calculation_id is None:
+                existing_totals = execute_query_pg(
+                    "SELECT COALESCE(MAX(sort_order), -1) AS last_order FROM account_control_statement_calculations WHERE client_id = %s AND statement_section = %s AND calculation_type = 'total'",
+                    (calculation["client_id"], calculation["statement_section"]),
+                )
+                calculation["sort_order"] = int(existing_totals[0]["last_order"] if existing_totals and existing_totals[0]["last_order"] is not None else -1) + 1
+            else:
+                calculation["sort_order"] = int(existing[0]["sort_order"])
+        components = _validate_statement_calculation_components(calculation, calculation_id=calculation_id)
         if calculation_id is None:
             if calculation["calculation_type"] == "subtotal":
                 duplicate = execute_query_pg(
@@ -1228,12 +1351,6 @@ def _persist_statement_calculation(calculation_id: Optional[int], payload: State
                 )
                 if duplicate:
                     raise HTTPException(409, "This heading already has a subtotal")
-            if calculation["calculation_type"] == "total":
-                existing_totals = execute_query_pg(
-                    "SELECT COALESCE(MAX(sort_order), -1) AS last_order FROM account_control_statement_calculations WHERE client_id = %s AND statement_section = %s AND calculation_type = 'total'",
-                    (calculation["client_id"], calculation["statement_section"]),
-                )
-                calculation["sort_order"] = int(existing_totals[0]["last_order"] if existing_totals and existing_totals[0]["last_order"] is not None else -1) + 1
             calculation_id = execute_write_pg(
                 "INSERT INTO account_control_statement_calculations (client_id, statement_section, calculation_type, label, parent_heading_id, sort_order, updated_at) VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP) RETURNING id",
                 (calculation["client_id"], calculation["statement_section"], calculation["calculation_type"], calculation["label"], calculation["parent_heading_id"], calculation["sort_order"]),
@@ -1276,13 +1393,13 @@ def delete_statement_calculation(
         )
         if not rows:
             raise HTTPException(404, "Calculation line not found")
-        if rows[0]["calculation_type"] == "subtotal":
-            used = execute_query_pg(
-                "SELECT id FROM account_control_statement_calculation_components WHERE source_calculation_id = %s LIMIT 1",
-                (calculation_id,),
-            )
-            if used:
-                raise HTTPException(409, "Remove this subtotal from its Total line before deleting it")
+        used = execute_query_pg(
+            "SELECT id FROM account_control_statement_calculation_components WHERE source_calculation_id = %s LIMIT 1",
+            (calculation_id,),
+        )
+        if used:
+            detail = "Remove this subtotal from its Total line before deleting it" if rows[0]["calculation_type"] == "subtotal" else "Remove this total from later Total lines before deleting it"
+            raise HTTPException(409, detail)
         execute_write_pg("DELETE FROM account_control_statement_calculations WHERE id = %s AND client_id = %s", (calculation_id, client_id))
     return {"deleted": True, "calculation_id": calculation_id}
 

@@ -8803,3 +8803,9 @@ Record phase decisions, implementation, verification, and acceptance here as the
 **Implementation:** The Total editor groups choices by Balance Sheet heading and allows a section subtotal or individual categories. Selecting one mode disables the other for that heading; the API independently rejects subtotal/category overlap. Direct category sources retain their labels and follow their current parent heading in the placement preview and outline. Deleting a referenced category is guarded, and moving one retains its Total reference unless it would overlap a destination subtotal. No schema change.
 
 **Verification:** Account Control Centre API tests pass (52 tests) and the focused browser suite passes (2 tests), including mixed sources, overlap prevention, placement, and direct category persistence. JavaScript syntax and `git diff --check` pass. Local-server acceptance is pending.
+
+### Chained statement totals - 2026-10-28
+
+**Implementation:** Statement totals can use earlier totals as sources, with dependent lines displayed after their selected source. The picker disables categories or subtotals already included through a selected total, and the API recursively rejects overlapping source roll-ups—including downstream overlaps after editing a referenced total. Referenced totals cannot be deleted. No schema change.
+
+**Verification:** Account Control Centre API and browser tests pass (65), including picker disable/restore, recursive overlap rejection and row placement. Python/JavaScript syntax checks and `git diff --check` pass. Pytest reports a non-blocking cache-directory warning; local-server acceptance is pending.

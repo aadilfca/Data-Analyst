@@ -780,9 +780,9 @@ class FinancialStatementCalculationTests(unittest.TestCase):
         )
         with patch.object(control_center, "_require_active_client"), patch.object(
             control_center, "execute_query_pg", side_effect=[
-                [{"id": 77, "parent_heading_id": 30}],
-                [{"id": 31, "parent_category_id": 40}],
                 [{"last_order": 0}],
+                [{"id": 77, "parent_heading_id": 30, "calculation_type": "subtotal", "sort_order": 0}],
+                [{"id": 31, "parent_category_id": 40}],
             ]
         ), patch.object(control_center, "execute_write_pg", side_effect=[88, None, None]) as write, patch.object(
             control_center, "pg_transaction", return_value=nullcontext()
@@ -807,13 +807,141 @@ class FinancialStatementCalculationTests(unittest.TestCase):
             ],
         }
         with patch.object(control_center, "execute_query_pg", side_effect=[
-            [{"id": 77, "parent_heading_id": 30}],
+            [{"id": 77, "parent_heading_id": 30, "calculation_type": "subtotal", "sort_order": 0}],
             [{"id": 31, "parent_category_id": 30}],
         ]):
             with self.assertRaises(HTTPException) as raised:
                 control_center._validate_statement_calculation_components(calculation)
         self.assertEqual(raised.exception.status_code, 400)
         self.assertIn("either a heading subtotal or its categories", raised.exception.detail)
+
+    def test_total_can_reference_an_earlier_total(self):
+        calculation = {
+            "client_id": 1,
+            "statement_section": "income_statement",
+            "calculation_type": "total",
+            "sort_order": 1,
+            "parent_heading_id": None,
+            "components": [control_center.StatementCalculationComponentPayload(source_calculation_id=77)],
+        }
+        with patch.object(control_center, "execute_query_pg", side_effect=[
+            [{"id": 77, "parent_heading_id": None, "calculation_type": "total", "sort_order": 0}],
+            [{"calculation_id": 77, "calculation_type": "total", "parent_heading_id": None, "source_category_id": 31, "source_calculation_id": None}],
+            [{"id": 31, "parent_category_id": 40}],
+        ]):
+            components = control_center._validate_statement_calculation_components(calculation)
+        self.assertEqual(components[0]["source_calculation_id"], 77)
+
+    def test_total_rejects_later_or_self_total_references(self):
+        calculation = {
+            "client_id": 1,
+            "statement_section": "income_statement",
+            "calculation_type": "total",
+            "sort_order": 1,
+            "parent_heading_id": None,
+            "components": [control_center.StatementCalculationComponentPayload(source_calculation_id=77)],
+        }
+        for source_order, calculation_id in ((2, None), (1, 77)):
+            with self.subTest(source_order=source_order, calculation_id=calculation_id), patch.object(
+                control_center, "execute_query_pg", return_value=[{
+                    "id": 77, "parent_heading_id": None, "calculation_type": "total", "sort_order": source_order,
+                }]
+            ):
+                with self.assertRaises(HTTPException) as raised:
+                    control_center._validate_statement_calculation_components(calculation, calculation_id=calculation_id)
+            self.assertEqual(raised.exception.status_code, 400)
+            self.assertIn("earlier totals", raised.exception.detail)
+
+    def test_create_total_persists_earlier_total_reference(self):
+        payload = control_center.StatementCalculationPayload(
+            client_id=1,
+            statement_section="income_statement",
+            calculation_type="total",
+            label="Operating Profit",
+            components=[control_center.StatementCalculationComponentPayload(source_calculation_id=77)],
+        )
+        with patch.object(control_center, "_require_active_client"), patch.object(
+            control_center, "execute_query_pg", side_effect=[
+                [{"last_order": 0}],
+                [{"id": 77, "parent_heading_id": None, "calculation_type": "total", "sort_order": 0}],
+                [{"calculation_id": 77, "calculation_type": "total", "parent_heading_id": None, "source_category_id": 31, "source_calculation_id": None}],
+                [{"id": 31, "parent_category_id": 40}],
+            ]
+        ), patch.object(control_center, "execute_write_pg", side_effect=[88, None]) as write, patch.object(
+            control_center, "pg_transaction", return_value=nullcontext()
+        ):
+            result = control_center.create_statement_calculation(payload, session={"username": "Admin"})
+        self.assertEqual(result["calculation_id"], 88)
+        component_insert = next(call for call in write.call_args_list if "calculation_components" in call.args[0])
+        self.assertEqual(component_insert.args[1][2], 77)
+
+    def test_total_list_returns_earlier_total_label(self):
+        with patch.object(control_center, "_require_active_client"), patch.object(
+            control_center, "execute_query_pg", side_effect=[
+                [{"id": 88, "client_id": 1, "statement_section": "income_statement", "calculation_type": "total", "label": "Operating Profit", "parent_heading_id": None, "sort_order": 1}],
+                [{"source_category_id": None, "source_calculation_id": 77, "operator": "add", "sort_order": 0}],
+                [{"id": 77, "label": "Gross Profit", "calculation_type": "total"}],
+            ]
+        ):
+            result = control_center.list_statement_calculations(client_id=1, statement_section="income_statement", session={"username": "Admin"})
+        component = result["calculations"][0]["components"][0]
+        self.assertEqual((component["label"], component["source_calculation_id"]), ("Gross Profit", 77))
+
+    def test_total_rejects_category_already_included_via_earlier_total(self):
+        calculation = {
+            "client_id": 1,
+            "statement_section": "income_statement",
+            "calculation_type": "total",
+            "sort_order": 1,
+            "components": [
+                control_center.StatementCalculationComponentPayload(source_calculation_id=77),
+                control_center.StatementCalculationComponentPayload(source_category_id=31),
+            ],
+        }
+        with patch.object(control_center, "execute_query_pg", side_effect=[
+            [{"id": 77, "parent_heading_id": None, "calculation_type": "total", "sort_order": 0}],
+            [{"id": 31, "parent_category_id": 40}],
+            [{"calculation_id": 77, "calculation_type": "total", "parent_heading_id": None, "source_category_id": 31, "source_calculation_id": None}],
+            [{"id": 31, "parent_category_id": 40}],
+        ]):
+            with self.assertRaises(HTTPException) as raised:
+                control_center._validate_statement_calculation_components(calculation)
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertIn("Avoid double-counting", raised.exception.detail)
+
+    def test_editing_total_cannot_make_later_total_double_count(self):
+        calculation = {
+            "client_id": 1,
+            "statement_section": "income_statement",
+            "calculation_type": "total",
+            "sort_order": 0,
+            "components": [control_center.StatementCalculationComponentPayload(source_category_id=32)],
+        }
+        with patch.object(control_center, "execute_query_pg", side_effect=[
+            [{"id": 32, "parent_category_id": 40}],
+            [
+                {"calculation_id": 77, "calculation_type": "total", "parent_heading_id": None, "source_category_id": 31, "source_calculation_id": None},
+                {"calculation_id": 88, "calculation_type": "total", "parent_heading_id": None, "source_category_id": None, "source_calculation_id": 77},
+                {"calculation_id": 88, "calculation_type": "total", "parent_heading_id": None, "source_category_id": 32, "source_calculation_id": None},
+            ],
+            [{"id": 31, "parent_category_id": 40}, {"id": 32, "parent_category_id": 50}],
+        ]):
+            with self.assertRaises(HTTPException) as raised:
+                control_center._validate_statement_calculation_components(calculation, calculation_id=77)
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("later total", raised.exception.detail)
+
+    def test_referenced_total_cannot_be_deleted(self):
+        with patch.object(control_center, "_require_active_client"), patch.object(
+            control_center, "execute_query_pg", side_effect=[[{"calculation_type": "total"}], [{"id": 1}]]
+        ), patch.object(control_center, "execute_write_pg") as write, patch.object(
+            control_center, "pg_transaction", return_value=nullcontext()
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                control_center.delete_statement_calculation(77, client_id=1, session={"username": "Admin"})
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("later Total lines", raised.exception.detail)
+        write.assert_not_called()
 
     def test_subtotal_list_includes_new_direct_categories_with_plus_by_default(self):
         with patch.object(control_center, "_require_active_client"), patch.object(
@@ -891,9 +1019,9 @@ class FinancialStatementCalculationTests(unittest.TestCase):
         )
         with patch.object(control_center, "_require_active_client"), patch.object(
             control_center, "execute_query_pg", side_effect=[
-                [{"id": 77, "parent_heading_id": 30}],
-                [{"id": 51, "parent_category_id": 40}],
                 [{"last_order": -1}],
+                [{"id": 77, "parent_heading_id": 30, "calculation_type": "subtotal", "sort_order": 0}],
+                [{"id": 51, "parent_category_id": 40}],
             ]
         ), patch.object(control_center, "execute_write_pg", side_effect=[88, None, None]) as write, patch.object(
             control_center, "pg_transaction", return_value=nullcontext()
