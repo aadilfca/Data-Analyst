@@ -754,6 +754,7 @@ class FinancialStatementCalculationTests(unittest.TestCase):
     def test_subtotal_rejects_stale_or_cross_heading_categories(self):
         calculation = {
             "client_id": 1,
+            "statement_section": "balance_sheet",
             "calculation_type": "subtotal",
             "parent_heading_id": 30,
             "components": [control_center.StatementCalculationComponentPayload(source_category_id=31)],
@@ -797,6 +798,7 @@ class FinancialStatementCalculationTests(unittest.TestCase):
     def test_total_rejects_subtotal_and_category_from_same_heading(self):
         calculation = {
             "client_id": 1,
+            "statement_section": "balance_sheet",
             "calculation_type": "total",
             "parent_heading_id": None,
             "components": [
@@ -843,16 +845,91 @@ class FinancialStatementCalculationTests(unittest.TestCase):
             ("Total Current Assets", None, 77, "add"), ("Cash and Bank", 31, None, "subtract"),
         ])
 
-    def test_calculations_are_rejected_for_income_statement_in_this_phase(self):
+    def test_income_statement_calculation_payload_is_accepted(self):
         payload = control_center.StatementCalculationPayload(
             client_id=1,
             statement_section="income_statement",
             calculation_type="total",
             label="Profit",
         )
-        with self.assertRaises(HTTPException) as raised:
-            control_center._clean_statement_calculation(payload)
+        cleaned = control_center._clean_statement_calculation(payload)
+        self.assertEqual(cleaned["statement_section"], "income_statement")
+
+    def test_income_statement_subtotal_uses_its_own_heading_categories(self):
+        payload = control_center.StatementCalculationPayload(
+            client_id=1,
+            statement_section="income_statement",
+            calculation_type="subtotal",
+            label="Total Revenue",
+            parent_heading_id=30,
+            components=[control_center.StatementCalculationComponentPayload(source_category_id=31)],
+        )
+        with patch.object(control_center, "_require_active_client"), patch.object(
+            control_center, "execute_query_pg", side_effect=[
+                [{"id": 30, "statement_section": "income_statement", "row_type": "heading", "is_active": True}],
+                [{"id": 31}],
+                [],
+            ]
+        ) as query, patch.object(control_center, "execute_write_pg", side_effect=[77, None]) as write, patch.object(
+            control_center, "pg_transaction", return_value=nullcontext()
+        ):
+            result = control_center.create_statement_calculation(payload, session={"username": "Admin"})
+        self.assertEqual(result["calculation_id"], 77)
+        self.assertEqual(query.call_args_list[1].args[1], (1, "income_statement", 30))
+        self.assertEqual(write.call_args_list[0].args[1][1], "income_statement")
+
+    def test_income_statement_total_persists_only_income_statement_sources(self):
+        payload = control_center.StatementCalculationPayload(
+            client_id=1,
+            statement_section="income_statement",
+            calculation_type="total",
+            label="Net profit",
+            components=[
+                control_center.StatementCalculationComponentPayload(source_calculation_id=77, operator="add"),
+                control_center.StatementCalculationComponentPayload(source_category_id=51, operator="subtract"),
+            ],
+        )
+        with patch.object(control_center, "_require_active_client"), patch.object(
+            control_center, "execute_query_pg", side_effect=[
+                [{"id": 77, "parent_heading_id": 30}],
+                [{"id": 51, "parent_category_id": 40}],
+                [{"last_order": -1}],
+            ]
+        ), patch.object(control_center, "execute_write_pg", side_effect=[88, None, None]) as write, patch.object(
+            control_center, "pg_transaction", return_value=nullcontext()
+        ):
+            result = control_center.create_statement_calculation(payload, session={"username": "Admin"})
+        self.assertEqual(result["calculation_id"], 88)
+        insert_call = write.call_args_list[0]
+        self.assertIn("statement_section", insert_call.args[0])
+        self.assertEqual(insert_call.args[1][1], "income_statement")
+
+    def test_income_statement_total_accepts_standalone_category(self):
+        calculation = {
+            "client_id": 1,
+            "statement_section": "income_statement",
+            "calculation_type": "total",
+            "parent_heading_id": None,
+            "components": [control_center.StatementCalculationComponentPayload(source_category_id=51)],
+        }
+        with patch.object(control_center, "execute_query_pg", return_value=[{"id": 51, "parent_category_id": None}]) as query:
+            components = control_center._validate_statement_calculation_components(calculation)
+        self.assertEqual(components[0]["source_category_id"], 51)
+        self.assertIn("c.parent_category_id IS NULL", query.call_args.args[0])
+
+    def test_balance_sheet_total_still_rejects_standalone_category(self):
+        calculation = {
+            "client_id": 1,
+            "statement_section": "balance_sheet",
+            "calculation_type": "total",
+            "parent_heading_id": None,
+            "components": [control_center.StatementCalculationComponentPayload(source_category_id=51)],
+        }
+        with patch.object(control_center, "execute_query_pg", return_value=[]):
+            with self.assertRaises(HTTPException) as raised:
+                control_center._validate_statement_calculation_components(calculation)
         self.assertEqual(raised.exception.status_code, 400)
+        self.assertIn("categories under headings", raised.exception.detail)
 
 
 if __name__ == "__main__":

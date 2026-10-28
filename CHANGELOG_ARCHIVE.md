@@ -8774,6 +8774,24 @@ Record phase decisions, implementation, verification, and acceptance here as the
 
 **Verification:** Account Control Centre backend and browser suites pass (49 tests); Python compilation, JavaScript syntax, and `git diff --check` pass. The shared stylesheet cache version is 76 across all 21 pages that load it. Local-server acceptance is pending.
 
+### Income Statement totals and subtotals - 2026-10-28
+
+**Implementation:** Extended the existing calculation setup to Income Statement. Both sections now support heading subtotals and statement totals with signed categories/subtotals, section-isolated choices and placement. Existing schema already allowed both sections; no migration was needed.
+
+**Verification:** Account Control Centre backend tests pass (54) and browser tests pass (2); Python and JavaScript syntax checks plus `git diff --check` pass. Pytest emitted a non-blocking cache-directory warning. Local-server acceptance is pending.
+
+### Income Statement standalone total sources - 2026-10-28
+
+**Implementation:** Added standalone Income Statement categories to the Total picker and API validation. Totals sourced from standalone rows appear after that group; Balance Sheet still requires heading-backed categories.
+
+**Verification:** Account Control Centre backend tests pass (56) and browser tests pass (2), including standalone selection and placement. Python/JavaScript syntax checks and `git diff --check` pass. Local-server acceptance is pending.
+
+### Statement total row placement - 2026-10-28
+
+**Implementation:** Statement totals now anchor to the final selected category or subtotal row. The live preview names that row, and totals render immediately after it, before any later unselected rows.
+
+**Verification:** Account Control Centre browser tests pass (2), including Gross Profit after Cost of Sales and before later expenses. JavaScript syntax and `git diff --check` pass. Local-server acceptance is pending.
+
 ### Balance Sheet total placement - 2026-10-28
 
 **Implementation:** Statement totals now appear after the last Balance Sheet heading whose subtotal is included, following the current heading order. The total editor previews this placement and updates it as included subtotals change. Totals without a resolvable source heading remain visible in an editable recovery section.

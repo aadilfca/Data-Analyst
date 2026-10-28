@@ -96,7 +96,9 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
             return
         if "/api/account-control-center/statement-calculations" in url:
             if request.method == "GET":
-                route.fulfill(status=200, content_type="application/json", body=json.dumps({"calculations": mapping["statement_calculations"]}))
+                section = "income_statement" if "statement_section=income_statement" in url else "balance_sheet"
+                calculations = [item for item in mapping["statement_calculations"] if item.get("statement_section", "balance_sheet") == section]
+                route.fulfill(status=200, content_type="application/json", body=json.dumps({"calculations": calculations}))
             elif request.method == "POST":
                 body = json.loads(request.post_data or "{}")
                 body["id"] = max([item["id"] for item in mapping["statement_calculations"]] or [100]) + 1
@@ -499,21 +501,79 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     editor = balance_sheet.locator("[data-fs-calc-editor]")
     editor.locator("[data-fs-calc-label]").fill("Total Assets")
     editor.locator("[data-source-calculation-id='101']").check()
-    assert editor.locator("[data-fs-calc-placement]").text_content() == "Appears after: Current Assets Heading"
+    assert editor.locator("[data-fs-calc-placement]").text_content() == "Appears after: Total Non Current Assets"
     editor.locator("[data-source-calculation-id='102']").check()
-    assert editor.locator("[data-fs-calc-placement]").text_content() == "Appears after: Non Current Assets"
+    assert editor.locator("[data-fs-calc-placement]").text_content() == "Appears after: Total Non Current Assets"
     assert editor.locator("[data-source-category-id='44']").is_disabled()
     editor.locator("[data-source-calculation-id='102']").uncheck()
     editor.locator("[data-source-category-id='44']").check()
     assert editor.locator("[data-source-calculation-id='102']").is_disabled()
-    assert editor.locator("[data-fs-calc-placement]").text_content() == "Appears after: Non Current Assets"
+    assert editor.locator("[data-fs-calc-placement]").text_content() == "Appears after: Property and Equipment"
     editor.locator("[data-fs-calc-action='save']").click()
     page.wait_for_function("document.querySelector('#accFinancialSetupPanelBalanceSheet')?.textContent.includes('Total Assets')")
     total = balance_sheet.locator("[data-fs-calculation-id]").filter(has_text="Total Assets")
     assert balance_sheet.locator("[data-fs-calculation-id]").count() == 3
-    assert total.evaluate("element => element.previousElementSibling.dataset.fsId") == non_current_heading.get_attribute("data-fs-id")
-    assert total.evaluate("element => element.nextElementSibling.textContent.includes('Capital')")
+    assert total.evaluate("element => element.previousElementSibling.dataset.fsId") == "44"
+    assert total.evaluate("element => element.parentElement.closest('.acc2-fs-heading').nextElementSibling.textContent.includes('Capital')")
     assert any(call[0] == "POST" and call[2].get("calculation_type") == "total" and any(component.get("source_category_id") == 44 for component in call[2].get("components", [])) for call in calls)
+
+    income_statement = page.locator("#accFinancialSetupPanelIncomeStatement")
+    page.locator("#accFinancialSetupTabIncomeStatement").click()
+    assert income_statement.locator("[data-fs-calculation-id]").count() == 0
+    page.once("dialog", lambda dialog: dialog.accept("Revenue"))
+    income_statement.locator("[data-fs-action='add-heading']").click()
+    page.wait_for_function("document.querySelector('#accFinancialSetupPanelIncomeStatement')?.textContent.includes('Revenue')")
+    revenue = income_statement.locator(".acc2-fs-heading").filter(has_text="Revenue")
+    page.once("dialog", lambda dialog: dialog.accept("Product sales"))
+    revenue.locator("[data-fs-action='add-category']").click()
+    page.wait_for_function("document.querySelector('#accFinancialSetupPanelIncomeStatement')?.textContent.includes('Product sales')")
+    page.once("dialog", lambda dialog: dialog.accept("Service sales"))
+    revenue.locator("[data-fs-action='add-category']").click()
+    page.wait_for_function("document.querySelector('#accFinancialSetupPanelIncomeStatement')?.textContent.includes('Service sales')")
+    revenue.locator("[data-fs-calc-action='add-subtotal']").click()
+    editor = income_statement.locator("[data-fs-calc-editor]")
+    editor.locator("[data-fs-calc-label]").fill("Total Revenue")
+    editor.locator("[data-fs-calc-action='save']").click()
+    page.wait_for_function("document.querySelector('#accFinancialSetupPanelIncomeStatement')?.textContent.includes('Total Revenue')")
+    page.once("dialog", lambda dialog: dialog.accept("Expenses"))
+    income_statement.locator("[data-fs-action='add-heading']").click()
+    page.wait_for_function("document.querySelector('#accFinancialSetupPanelIncomeStatement')?.textContent.includes('Expenses')")
+    expenses = income_statement.locator(".acc2-fs-heading").filter(has_text="Expenses")
+    page.once("dialog", lambda dialog: dialog.accept("Cost of Sales"))
+    expenses.locator("[data-fs-action='add-category']").click()
+    page.wait_for_function("document.querySelector('#accFinancialSetupPanelIncomeStatement')?.textContent.includes('Cost of Sales')")
+    page.once("dialog", lambda dialog: dialog.accept("Administrative expenses"))
+    expenses.locator("[data-fs-action='add-category']").click()
+    page.wait_for_function("document.querySelector('#accFinancialSetupPanelIncomeStatement')?.textContent.includes('Administrative expenses')")
+    page.once("dialog", lambda dialog: dialog.accept("Other income"))
+    income_statement.locator(".acc2-fs-toolbar [data-fs-action='add-category']").click()
+    page.wait_for_function("document.querySelector('#accFinancialSetupPanelIncomeStatement')?.textContent.includes('Other income')")
+    income_statement.locator("[data-fs-calc-action='add-total']").click()
+    editor = income_statement.locator("[data-fs-calc-editor]")
+    editor.locator("[data-fs-calc-label]").fill("Gross Profit")
+    revenue_subtotal = editor.locator("[data-fs-choice-kind='subtotal'] input[data-fs-calc-include]")
+    assert revenue_subtotal.count() == 1
+    revenue_subtotal.check()
+    cost_of_sales = expenses.locator(".acc2-fs-category").filter(has_text="Cost of Sales")
+    cost_of_sales_id = cost_of_sales.get_attribute("data-fs-id")
+    cost_of_sales_choice = editor.locator("[data-source-category-id='{}']".format(cost_of_sales_id))
+    cost_of_sales_choice.check()
+    cost_of_sales_choice.locator("xpath=ancestor::label[1]").locator("[data-fs-calc-operator]").select_option("subtract")
+    standalone_row = editor.locator("[data-fs-choice-heading-id='standalone'] input[data-fs-calc-include]")
+    assert standalone_row.count() == 1
+    standalone_row.check()
+    assert editor.locator("[data-fs-calc-placement]").text_content() == "Appears after: Other income"
+    standalone_row.uncheck()
+    assert editor.locator("[data-fs-calc-placement]").text_content() == "Appears after: Cost of Sales"
+    editor.locator("[data-fs-calc-action='save']").click()
+    page.wait_for_function("document.querySelector('#accFinancialSetupPanelIncomeStatement')?.textContent.includes('Gross Profit')")
+    income_total = income_statement.locator("[data-fs-calculation-id]").filter(has_text="Gross Profit")
+    assert income_statement.locator("[data-fs-calculation-id]").count() == 2
+    admin_expenses = expenses.locator(".acc2-fs-category").filter(has_text="Administrative expenses")
+    assert income_total.evaluate("element => element.previousElementSibling.dataset.fsId") == cost_of_sales_id
+    assert income_total.evaluate("element => element.nextElementSibling.dataset.fsId") == admin_expenses.get_attribute("data-fs-id")
+    assert any(call[0] == "POST" and call[2].get("statement_section") == "income_statement" for call in calls)
+
     page.locator("#accFinancialSetupTabNotesBalanceSheet").click()
     assert page.locator("#accFinancialSetupPanelNotesBalanceSheet [data-fs-calculation-id]").count() == 0
     page.locator("#accFinancialSetupTabBalanceSheet").click()
