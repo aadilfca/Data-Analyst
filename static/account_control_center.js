@@ -4,6 +4,8 @@ let accAccounts = [];
 let accLatestUpload = null;
 let accTrialBalanceCache = { clientId: null, accounts: null, upload: null, request: null };
 let accFinancialCategories = [];
+let accFinancialCalculations = [];
+let accFinancialCalculationEditor = null;
 let accNoteCategories = [];
 let accCashflowCategories = [];
 let accCashflowHistoricalOrphans = [];
@@ -11,10 +13,14 @@ let accCashflowTreasury = { cash: [], bank: [] };
 let accCashflowSettings = { match_internal_transfers: false, receipt_presentation: 'net', source_template_id: null, role_categories: { customer_receipt: [], bank_charge: [], withholding_tax: [], other_deduction: [] } };
 let accCashflowTemplateMapping = null;
 let accFinancialLoaded = false;
+let accAppliedFinancialAccountFilter = '';
+let accAppliedFinancialCategoryFilter = '';
 let accFinancialDraggingId = null;
 let accNoteDraggingId = null;
 let accNoteDraggingAnchorId = null;
 let accNotesLoaded = false;
+let accAppliedNotesAccountFilter = '';
+let accAppliedNotesCategoryFilter = '';
 let accCashflowLoaded = false;
 let accIsAdmin = false;
 let accBusyOperations = new Map();
@@ -202,6 +208,26 @@ function accEffectiveNoteCategory(account) {
         return value == null ? '' : String(value);
     })));
     return values.length === 1 ? values[0] : (values.length > 1 ? '__mixed' : '');
+}
+function accFilterAccountRows(accountQuery, assignmentQuery, getAssignmentText) {
+    const accountTerm = String(accountQuery || '').trim().toLowerCase();
+    const assignmentTerm = String(assignmentQuery || '').trim().toLowerCase();
+    const matched = accAccounts.filter(function (account) {
+        const accountText = (String(account.account_code || '') + ' ' + String(account.account_name || '')).toLowerCase();
+        const assignmentText = String(getAssignmentText(account) || '').toLowerCase();
+        return (!accountTerm || accountText.indexOf(accountTerm) !== -1) && (!assignmentTerm || assignmentText.indexOf(assignmentTerm) !== -1);
+    });
+    const visible = new Set(matched);
+    if (accountTerm || assignmentTerm) {
+        matched.forEach(function (match) {
+            const code = accNormaliseCode(match.account_code);
+            accAccounts.forEach(function (candidate) {
+                const parentCode = accNormaliseCode(candidate.account_code);
+                if (!candidate.is_leaf && code.indexOf(parentCode + '-') === 0) visible.add(candidate);
+            });
+        });
+    }
+    return accAccounts.filter(function (account) { return visible.has(account); });
 }
 function accOptionMarkup(selected) {
     let html = '<option value="">Unassigned</option>';
@@ -584,14 +610,13 @@ function accRenderCashflowRows() {
     accElement('accCashflowGridWrap').hidden = false;
 }
 function accRenderFinancialRows() {
-    const filter = String(accElement('accFinancialFilter').value || '').trim().toLowerCase();
-    const visible = accAccounts.filter(function (account) {
-        return !filter || (String(account.account_code || '') + ' ' + String(account.account_name || '')).toLowerCase().indexOf(filter) !== -1;
+    const visible = accFilterAccountRows(accAppliedFinancialAccountFilter, accAppliedFinancialCategoryFilter, function (account) {
+        return accFinancialPickerLabel(accEffectiveFinancialCategory(account));
     });
     accElement('accFinancialCount').textContent = visible.length + ' of ' + accAccounts.length + ' accounts';
     const rows = accElement('accFinancialRows');
     if (!visible.length) {
-        rows.innerHTML = '<tr><td colspan="5" class="acc2-empty">No accounts match this search.</td></tr>';
+        rows.innerHTML = '<tr><td colspan="5" class="acc2-empty">No accounts match these filters.</td></tr>';
     } else {
         rows.innerHTML = visible.map(function (account) {
             const isParent = !account.is_leaf;
@@ -639,6 +664,17 @@ function accNotePickerLabel(statementCategoryId, selectedId, options) {
     const selected = options.find(function (item) { return String(item.category.id) === String(selectedId); });
     return selected ? selected.path.join(' › ') : 'Existing note assignment';
 }
+function accNoteAssignmentSearchText(account) {
+    const statementCategoryId = accEffectiveFinancialCategory(account);
+    const noteCategoryId = accEffectiveNoteCategory(account);
+    if (noteCategoryId === '__mixed') return 'Mixed assignments';
+    if (!noteCategoryId) return 'Unassigned';
+    const options = statementCategoryId && statementCategoryId !== '__mixed' ? accGetEffectiveNoteOptions(statementCategoryId) : [];
+    const selected = options.find(function (item) { return String(item.category.id) === String(noteCategoryId); });
+    if (selected) return selected.path.join(' ');
+    const existing = accNoteCategories.find(function (item) { return Number(item.id) === Number(noteCategoryId); });
+    return existing ? existing.label : 'Existing note assignment';
+}
 function accNotePickerMarkup(account, selectedId, statementCategoryId, options) {
     const codeKey = String(account.account_code || '').replace(/[^a-zA-Z0-9_-]/g, '_');
     const pickerId = 'accNotePicker_' + codeKey;
@@ -669,14 +705,11 @@ function accNotePickerMarkup(account, selectedId, statementCategoryId, options) 
         '<select class="acc2-note-category" data-acc-code="' + accEscape(account.account_code) + '" data-acc-parent="' + (!account.is_leaf ? 'true' : 'false') + '" aria-hidden="true" tabindex="-1" hidden' + (disabled ? ' disabled' : '') + '>' + selectMarkup + '</select></div>';
 }
 function accRenderNotesRows() {
-    const filter = String(accElement('accNotesFilter').value || '').trim().toLowerCase();
-    const visible = accAccounts.filter(function (account) {
-        return !filter || (String(account.account_code || '') + ' ' + String(account.account_name || '')).toLowerCase().indexOf(filter) !== -1;
-    });
+    const visible = accFilterAccountRows(accAppliedNotesAccountFilter, accAppliedNotesCategoryFilter, accNoteAssignmentSearchText);
     accElement('accNotesCount').textContent = visible.length + ' of ' + accAccounts.length + ' accounts';
     const rows = accElement('accNotesRows');
     if (!visible.length) {
-        rows.innerHTML = '<tr><td colspan="6" class="acc2-empty">No accounts match this search.</td></tr>';
+        rows.innerHTML = '<tr><td colspan="6" class="acc2-empty">No accounts match these filters.</td></tr>';
     } else {
         rows.innerHTML = visible.map(function (account) {
             const isParent = !account.is_leaf;
@@ -1019,7 +1052,9 @@ async function accLoadCashflow() {
 }
 async function accLoadFinancialCategories() {
     const result = await accApi('/api/account-control-center/categories?client_id=' + encodeURIComponent(accClientId) + '&category_type=financial_statement&include_inactive=true');
+    const calculationResult = await accApi('/api/account-control-center/statement-calculations?client_id=' + encodeURIComponent(accClientId) + '&statement_section=balance_sheet');
     accFinancialCategories = result.categories || [];
+    accFinancialCalculations = calculationResult.calculations || [];
     accFinancialLoaded = true;
     accRenderFinancialRows();
     if (accNotesLoaded) accRenderNotesRows();
@@ -1033,22 +1068,149 @@ function accRenderFinancialOutlines() {
         const rows = accFinancialCategories.filter(function (item) { return item.statement_section === section; });
         const headings = rows.filter(function (item) { return item.row_type === 'heading'; });
         const leaves = rows.filter(function (item) { return item.row_type !== 'heading'; });
+        const calculations = section === 'balance_sheet' ? accFinancialCalculations : [];
+        const totals = calculations.filter(function (item) { return item.calculation_type === 'total'; }).sort(function (a, b) { return Number(a.sort_order) - Number(b.sort_order) || Number(a.id) - Number(b.id); });
+        const totalsByHeading = new Map();
+        const unplacedTotals = [];
         function actions(item) { return readOnly ? '' : '<button type="button" class="acc2-fs-small" data-fs-action="delete" data-fs-id="' + item.id + '">Delete</button><button type="button" class="acc2-fs-small" data-fs-action="rename" data-fs-id="' + item.id + '">Rename</button><button type="button" class="acc2-fs-small" data-fs-action="toggle" data-fs-id="' + item.id + '" data-fs-active="' + item.is_active + '">' + (item.is_active ? 'Deactivate' : 'Restore') + '</button>'; }
         function dragHandle(item, kind) { return readOnly ? '' : '<button type="button" class="acc2-fs-drag-handle" draggable="true" data-fs-drag-handle data-fs-id="' + item.id + '" aria-label="Drag to reorder ' + kind + ' ' + accEscape(item.label) + '" title="Drag to reorder">☰</button>'; }
+        function calculationMarkup(calculation, kind) {
+            const summary = (calculation.components || []).map(function (component, index) {
+                return (component.operator === 'subtract' ? (index ? ' − ' : '− ') : (index ? ' + ' : '+ ')) + accEscape(component.label);
+            }).join('');
+            const actionsMarkup = readOnly ? '' : '<span><button type="button" class="acc2-fs-small" data-fs-calc-action="edit" data-fs-calc-id="' + calculation.id + '">Edit</button><button type="button" class="acc2-fs-small" data-fs-calc-action="delete" data-fs-calc-id="' + calculation.id + '">Delete</button></span>';
+            return '<div class="acc2-fs-calculation-line ' + kind + '" data-fs-calculation-id="' + calculation.id + '"><span class="acc2-fs-calculation-label"><span class="acc2-fs-sigma" aria-hidden="true">Σ</span><span><strong>' + accEscape(calculation.label) + '</strong><small>' + (summary || 'No rows selected') + '</small></span></span>' + actionsMarkup + '</div>';
+        }
+        totals.forEach(function (total) {
+            const anchor = accFinancialTotalAnchorHeading(total.components || [], headings, calculations, accFinancialCategories);
+            if (!anchor) { unplacedTotals.push(total); return; }
+            const group = totalsByHeading.get(Number(anchor.id)) || [];
+            group.push(total);
+            totalsByHeading.set(Number(anchor.id), group);
+        });
         const outline = headings.map(function (heading) {
             const children = leaves.filter(function (item) { return Number(item.parent_category_id) === Number(heading.id); });
             const childRows = children.map(function (item) { return '<div class="acc2-fs-category acc2-fs-sort-row' + (item.is_active ? '' : ' inactive') + '" data-fs-sort-row data-fs-sort-kind="category" data-fs-sort-group="children:' + heading.id + '" data-fs-id="' + item.id + '"><span class="acc2-fs-category-label">' + dragHandle(item, 'category') + '<span>' + accEscape(item.label) + '</span></span><span>' + actions(item) + '</span></div>'; }).join('');
+            const subtotal = calculations.find(function (item) { return item.calculation_type === 'subtotal' && Number(item.parent_heading_id) === Number(heading.id); });
+            const subtotalButton = !readOnly && section === 'balance_sheet' && !subtotal && children.length ? '<button type="button" class="acc2-fs-small primary" data-fs-calc-action="add-subtotal" data-fs-heading-id="' + heading.id + '">+ Subtotal</button>' : '';
             const addCategoryButton = readOnly ? '' : '<button type="button" class="acc2-fs-small primary" data-fs-action="add-category" data-fs-parent="' + heading.id + '">+ Category</button>';
-            return '<article class="acc2-fs-heading acc2-fs-sort-row' + (heading.is_active ? '' : ' inactive') + '" data-fs-sort-row data-fs-sort-kind="heading" data-fs-sort-group="headings:' + accEscape(section) + '" data-fs-id="' + heading.id + '"><div class="acc2-fs-heading-title"><span class="acc2-fs-heading-label">' + dragHandle(heading, 'heading') + '<strong>' + accEscape(heading.label) + '</strong></span><div>' + actions(heading) + addCategoryButton + '</div></div><div class="acc2-fs-children" data-fs-sort-group="children:' + heading.id + '">' + (childRows || '<div class="acc2-fs-empty">No categories in this heading yet.</div>') + '</div></article>';
+            const subtotalRow = subtotal ? calculationMarkup(subtotal, 'subtotal') : '';
+            const anchoredTotals = (totalsByHeading.get(Number(heading.id)) || []).map(function (total) { return calculationMarkup(total, 'total'); }).join('');
+            return '<article class="acc2-fs-heading acc2-fs-sort-row' + (heading.is_active ? '' : ' inactive') + '" data-fs-sort-row data-fs-sort-kind="heading" data-fs-sort-group="headings:' + accEscape(section) + '" data-fs-id="' + heading.id + '"><div class="acc2-fs-heading-title"><span class="acc2-fs-heading-label">' + dragHandle(heading, 'heading') + '<strong>' + accEscape(heading.label) + '</strong></span><div>' + actions(heading) + subtotalButton + addCategoryButton + '</div></div><div class="acc2-fs-children" data-fs-sort-group="children:' + heading.id + '">' + (childRows || '<div class="acc2-fs-empty">No categories in this heading yet.</div>') + subtotalRow + '</div></article>' + anchoredTotals;
         }).join('');
         const standalone = leaves.filter(function (item) { return !item.parent_category_id; });
         const unplaced = section === 'balance_sheet' ? accFinancialCategories.filter(function (item) { return !item.statement_section && item.row_type !== 'heading'; }) : [];
         const standaloneRows = standalone.map(function (item) { return '<div class="acc2-fs-category acc2-fs-sort-row' + (item.is_active ? '' : ' inactive') + '" data-fs-sort-row data-fs-sort-kind="category" data-fs-sort-group="standalone:' + accEscape(section) + '" data-fs-id="' + item.id + '"><span class="acc2-fs-category-label">' + dragHandle(item, 'category') + '<span>' + accEscape(item.label) + '</span></span><span>' + actions(item) + '</span></div>'; }).join('');
         const unplacedRows = unplaced.map(function (item) { return '<div class="acc2-fs-category acc2-fs-sort-row' + (item.is_active ? '' : ' inactive') + '" data-fs-sort-row data-fs-sort-kind="category" data-fs-sort-group="unplaced" data-fs-id="' + item.id + '"><span class="acc2-fs-category-label">' + dragHandle(item, 'category') + '<span>' + accEscape(item.label) + '</span></span><span>' + actions(item) + '</span></div>'; }).join('');
-        const toolbarActions = readOnly ? '' : '<div><button type="button" class="acc2-action-btn" data-fs-action="add-heading">+ Add heading</button><button type="button" class="acc2-action-btn secondary" data-fs-action="add-category">+ Add category</button></div>';
+        const toolbarActions = readOnly ? '' : '<div><button type="button" class="acc2-action-btn" data-fs-action="add-heading">+ Add heading</button><button type="button" class="acc2-action-btn secondary" data-fs-action="add-category">+ Add category</button>' + (section === 'balance_sheet' ? '<button type="button" class="acc2-action-btn secondary" data-fs-calc-action="add-total">+ Add total</button>' : '') + '</div>';
         const toolbarMessage = readOnly ? 'Read-only reference. Edit statement structure from Financial Statement accounts.' : 'Drag the ☰ handle to reorder within a statement or parent.';
         const emptyMessage = readOnly ? 'No categories are available in this statement yet.' : 'Start with a heading, or add a standalone category.';
-        panel.innerHTML = '<div class="acc2-fs-toolbar"><span>' + toolbarMessage + '</span><span class="acc2-fs-order-status" data-fs-order-status role="status" aria-live="polite"></span>' + toolbarActions + '</div>' + (outline ? '<div class="acc2-fs-heading-list" data-fs-sort-group="headings:' + accEscape(section) + '">' + outline + '</div>' : '') + (standalone.length ? '<div class="acc2-fs-standalone acc2-fs-sort-list"><h3>Standalone categories</h3><div data-fs-sort-group="standalone:' + accEscape(section) + '">' + standaloneRows + '</div></div>' : '') + (unplaced.length ? '<div class="acc2-fs-standalone acc2-fs-unplaced acc2-fs-sort-list"><h3>Unplaced categories</h3><div data-fs-sort-group="unplaced">' + unplacedRows + '</div></div>' : '') + (!outline && !standalone.length && !unplaced.length ? '<div class="acc2-fs-empty-state">' + emptyMessage + '</div>' : '');
+        const unplacedTotalMarkup = !readOnly && unplacedTotals.length ? '<section class="acc2-fs-total-list"><h3>Totals needing a source heading</h3>' + unplacedTotals.map(function (item) { return calculationMarkup(item, 'total'); }).join('') + '</section>' : '';
+        panel.innerHTML = accFinancialCalculationEditorMarkup(section) + '<div class="acc2-fs-toolbar"><span>' + toolbarMessage + '</span><span class="acc2-fs-order-status" data-fs-order-status role="status" aria-live="polite"></span>' + toolbarActions + '</div>' + (outline ? '<div class="acc2-fs-heading-list" data-fs-sort-group="headings:' + accEscape(section) + '">' + outline + '</div>' : '') + (standalone.length ? '<div class="acc2-fs-standalone acc2-fs-sort-list"><h3>Standalone categories</h3><div data-fs-sort-group="standalone:' + accEscape(section) + '">' + standaloneRows + '</div></div>' : '') + (unplaced.length ? '<div class="acc2-fs-standalone acc2-fs-unplaced acc2-fs-sort-list"><h3>Unplaced categories</h3><div data-fs-sort-group="unplaced">' + unplacedRows + '</div></div>' : '') + unplacedTotalMarkup + (!outline && !standalone.length && !unplaced.length ? '<div class="acc2-fs-empty-state">' + emptyMessage + '</div>' : '');
+        accUpdateFinancialTotalChoiceAvailability(panel.querySelector('[data-fs-calc-editor]'));
+    });
+}
+
+function accFinancialTotalAnchorHeading(components, headings, calculations, categories) {
+    const headingPositions = new Map(headings.map(function (heading, index) { return [Number(heading.id), index]; }));
+    let anchor = null;
+    let anchorPosition = -1;
+    (components || []).forEach(function (component) {
+        const subtotal = component.source_calculation_id != null && calculations.find(function (item) {
+            return item.calculation_type === 'subtotal' && Number(item.id) === Number(component.source_calculation_id);
+        });
+        const category = component.source_category_id != null && categories.find(function (item) {
+            return item.row_type === 'category' && Number(item.id) === Number(component.source_category_id);
+        });
+        const parentHeadingId = subtotal ? subtotal.parent_heading_id : category ? category.parent_category_id : null;
+        if (parentHeadingId == null) return;
+        const position = headingPositions.get(Number(parentHeadingId));
+        if (position != null && position > anchorPosition) {
+            anchor = headings[position];
+            anchorPosition = position;
+        }
+    });
+    return anchor;
+}
+
+function accFinancialCalculationEditorMarkup(section) {
+    const state = accFinancialCalculationEditor;
+    if (!state || section !== 'balance_sheet' || accElement('accFinancialSetupModal').dataset.entryMode === 'notes') return '';
+    const heading = accFinancialCategories.find(function (item) { return Number(item.id) === Number(state.parent_heading_id); });
+    const selected = new Map((state.components || []).map(function (component) {
+        const key = component.source_category_id != null ? 'category:' + component.source_category_id : 'calculation:' + component.source_calculation_id;
+        return [key, component];
+    }));
+    const choices = state.calculation_type === 'subtotal'
+        ? accFinancialCategories.filter(function (item) { return item.row_type === 'category' && Number(item.parent_category_id) === Number(state.parent_heading_id); }).map(function (item) { return { id: item.id, label: item.label, kind: 'category', headingId: state.parent_heading_id }; })
+        : [];
+    const totalGroups = state.calculation_type === 'total'
+        ? accFinancialCategories.filter(function (item) { return item.statement_section === 'balance_sheet' && item.row_type === 'heading'; }).map(function (item) {
+            const children = accFinancialCategories.filter(function (category) { return category.row_type === 'category' && Number(category.parent_category_id) === Number(item.id); });
+            if (!children.length) return null;
+            const subtotal = accFinancialCalculations.find(function (calculation) { return calculation.calculation_type === 'subtotal' && Number(calculation.parent_heading_id) === Number(item.id); });
+            const rows = (subtotal ? [{ id: subtotal.id, label: subtotal.label, kind: 'calculation', headingId: item.id }] : []).concat(children.map(function (category) {
+                return { id: category.id, label: category.label, kind: 'category', headingId: item.id };
+            }));
+            return { heading: item, choices: rows };
+        }).filter(Boolean)
+        : [];
+    const allChoices = state.calculation_type === 'total' ? totalGroups.flatMap(function (group) { return group.choices; }) : choices;
+    function renderChoice(choice) {
+        const key = choice.kind + ':' + choice.id;
+        const component = selected.get(key);
+        const totalChoice = state.calculation_type === 'total';
+        const checked = !totalChoice || !!component;
+        const sourceAttr = choice.kind === 'category' ? 'data-source-category-id="' : 'data-source-calculation-id="';
+        const choiceKind = choice.kind === 'category' ? 'category' : 'subtotal';
+        const kindLabel = totalChoice && choiceKind === 'subtotal' ? '<small class="acc2-fs-calc-choice-type">Subtotal</small>' : '';
+        return '<label class="acc2-fs-calc-choice ' + (totalChoice ? 'is-' + choiceKind : '') + '" data-fs-choice-row data-fs-choice-heading-id="' + choice.headingId + '" data-fs-choice-kind="' + choiceKind + '"><span><input type="' + (totalChoice ? 'checkbox' : 'hidden') + '" data-fs-calc-include data-fs-choice-heading-id="' + choice.headingId + '" data-fs-choice-kind="' + choiceKind + '" ' + (checked ? 'checked ' : '') + sourceAttr + choice.id + '"><span class="acc2-fs-calc-choice-name">' + accEscape(choice.label) + '</span>' + kindLabel + '</span><select data-fs-calc-operator aria-label="Add or subtract ' + accEscape(choice.label) + '"' + (totalChoice && !checked ? ' disabled' : '') + '><option value="add"' + (!component || component.operator === 'add' ? ' selected' : '') + '>+</option><option value="subtract"' + (component && component.operator === 'subtract' ? ' selected' : '') + '>−</option></select></label>';
+    }
+    const rows = state.calculation_type === 'total'
+        ? totalGroups.map(function (group) { return '<section class="acc2-fs-calc-choice-group" data-fs-choice-group="' + group.heading.id + '"><h4>' + accEscape(group.heading.label) + '</h4>' + group.choices.map(renderChoice).join('') + '</section>'; }).join('')
+        : choices.map(renderChoice).join('');
+    const title = state.calculation_type === 'subtotal' ? 'Subtotal for ' + (heading ? heading.label : 'heading') : 'Statement total';
+    const initialAnchor = state.calculation_type === 'total'
+        ? accFinancialTotalAnchorHeading(state.components || [], accFinancialCategories.filter(function (item) { return item.statement_section === 'balance_sheet' && item.row_type === 'heading'; }), accFinancialCalculations, accFinancialCategories)
+        : null;
+    const placementPreview = state.calculation_type === 'total'
+        ? '<small class="acc2-fs-calc-placement" data-fs-calc-placement role="status">' + (initialAnchor ? 'Appears after: ' + accEscape(initialAnchor.label) : 'Select rows to choose where this total appears.') + '</small>'
+        : '';
+    return '<section class="acc2-fs-calc-editor" data-fs-calc-editor><div class="acc2-fs-calc-editor-head"><div><strong>' + accEscape(title) + '</strong><small>' + (state.calculation_type === 'subtotal' ? 'All categories under this heading are included.' : 'Choose a subtotal or individual categories within each heading.') + '</small>' + placementPreview + '</div></div><label class="acc2-fs-calc-label">Line label<input type="text" maxlength="120" data-fs-calc-label value="' + accEscape(state.label || '') + '"></label><div class="acc2-fs-calc-choices">' + (rows || '<div class="acc2-fs-empty">' + (state.calculation_type === 'subtotal' ? 'Add a category to this heading first.' : 'Add Balance Sheet categories before creating a total.')) + '</div><div class="acc2-fs-calc-editor-actions"><button type="button" class="acc2-action-btn" data-fs-calc-action="save"' + (!allChoices.length ? ' disabled' : '') + '>Save line</button><button type="button" class="acc2-action-btn secondary" data-fs-calc-action="cancel">Cancel</button></div></section>';
+}
+function accUpdateFinancialCalculationPlacementPreview(editor) {
+    const preview = editor && editor.querySelector('[data-fs-calc-placement]');
+    if (!preview) return;
+    const components = Array.from(editor.querySelectorAll('[data-fs-calc-include]')).filter(function (input) {
+        return input.type === 'hidden' || input.checked;
+    }).map(function (input) { return {
+        source_category_id: input.dataset.sourceCategoryId || null,
+        source_calculation_id: input.dataset.sourceCalculationId || null,
+    }; });
+    const headings = accFinancialCategories.filter(function (item) { return item.statement_section === 'balance_sheet' && item.row_type === 'heading'; });
+    const anchor = accFinancialTotalAnchorHeading(components, headings, accFinancialCalculations, accFinancialCategories);
+    preview.textContent = anchor ? 'Appears after: ' + anchor.label : 'Select rows to choose where this total appears.';
+}
+function accUpdateFinancialTotalChoiceAvailability(editor) {
+    if (!editor) return;
+    const groups = new Map();
+    editor.querySelectorAll('[data-fs-calc-include][type="checkbox"]').forEach(function (input) {
+        const key = input.dataset.fsChoiceHeadingId;
+        const choices = groups.get(key) || [];
+        choices.push(input);
+        groups.set(key, choices);
+    });
+    groups.forEach(function (choices) {
+        const hasSubtotal = choices.some(function (input) { return input.dataset.fsChoiceKind === 'subtotal' && input.checked; });
+        const hasCategory = choices.some(function (input) { return input.dataset.fsChoiceKind === 'category' && input.checked; });
+        choices.forEach(function (input) {
+            const conflicts = (input.dataset.fsChoiceKind === 'subtotal' && hasCategory) || (input.dataset.fsChoiceKind === 'category' && hasSubtotal);
+            const row = input.closest('[data-fs-choice-row]');
+            const operator = row.querySelector('[data-fs-calc-operator]');
+            input.disabled = conflicts;
+            operator.disabled = conflicts || !input.checked;
+            row.classList.toggle('is-unavailable', conflicts);
+        });
     });
 }
 function accFinancialSortRows(group) {
@@ -1110,6 +1272,93 @@ async function accHandleFinancialDrop(event) {
     }
 }
 function accFinancialKey(label) { return String(label || '').normalize('NFKD').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 70) || 'category'; }
+function accOpenFinancialCalculationEditor(calculationType, headingId, calculationId) {
+    const calculation = calculationId ? accFinancialCalculations.find(function (item) { return Number(item.id) === Number(calculationId); }) : null;
+    const heading = headingId ? accFinancialCategories.find(function (item) { return Number(item.id) === Number(headingId); }) : null;
+    const components = calculation ? calculation.components || [] : calculationType === 'subtotal'
+        ? accFinancialCategories.filter(function (item) { return item.row_type === 'category' && Number(item.parent_category_id) === Number(headingId); }).map(function (item) { return { source_category_id: item.id, operator: 'add' }; })
+        : [];
+    accFinancialCalculationEditor = {
+        calculation_id: calculation ? calculation.id : null,
+        calculation_type: calculation ? calculation.calculation_type : calculationType,
+        parent_heading_id: calculation ? calculation.parent_heading_id : (heading ? heading.id : null),
+        label: calculation ? calculation.label : (calculationType === 'subtotal' ? 'Total ' + heading.label : ''),
+        sort_order: calculation ? calculation.sort_order : accFinancialCalculations.filter(function (item) { return item.calculation_type === 'total'; }).length,
+        components: components.map(function (item) { return { ...item }; }),
+    };
+    accRenderFinancialOutlines();
+    const labelInput = document.querySelector('[data-fs-section="balance_sheet"] [data-fs-calc-label]');
+    if (labelInput) { labelInput.focus(); labelInput.select(); }
+}
+async function accHandleFinancialCalculationAction(event) {
+    const button = event.target.closest('[data-fs-calc-action]');
+    if (!button) return;
+    const action = button.dataset.fsCalcAction;
+    if (action === 'cancel') {
+        accFinancialCalculationEditor = null;
+        accRenderFinancialOutlines();
+        return;
+    }
+    if (action === 'add-subtotal') {
+        accOpenFinancialCalculationEditor('subtotal', Number(button.dataset.fsHeadingId));
+        return;
+    }
+    if (action === 'add-total') {
+        accOpenFinancialCalculationEditor('total', null);
+        return;
+    }
+    if (action === 'edit') {
+        accOpenFinancialCalculationEditor(null, null, Number(button.dataset.fsCalcId));
+        return;
+    }
+    if (action === 'delete') {
+        const calculation = accFinancialCalculations.find(function (item) { return Number(item.id) === Number(button.dataset.fsCalcId); });
+        if (!calculation || !window.confirm('Delete calculation line “' + calculation.label + '”?')) return;
+        await accApi('/api/account-control-center/statement-calculations/' + calculation.id + '?client_id=' + encodeURIComponent(accClientId), { method: 'DELETE' });
+        await accLoadFinancialCategories();
+        accShowStatus('Deleted calculation line “' + calculation.label + '”.', 'success');
+        return;
+    }
+    if (action !== 'save') return;
+    const editor = button.closest('[data-fs-calc-editor]');
+    const label = editor.querySelector('[data-fs-calc-label]').value.trim();
+    const components = Array.from(editor.querySelectorAll('[data-fs-calc-include]')).filter(function (input) {
+        return input.type === 'hidden' || input.checked;
+    }).map(function (input) {
+        const row = input.closest('.acc2-fs-calc-choice');
+        const component = { operator: row.querySelector('[data-fs-calc-operator]').value };
+        if (input.dataset.sourceCategoryId) component.source_category_id = Number(input.dataset.sourceCategoryId);
+        if (input.dataset.sourceCalculationId) component.source_calculation_id = Number(input.dataset.sourceCalculationId);
+        return component;
+    });
+    if (!label) { accShowStatus('Enter a label for this calculation line.', 'error'); return; }
+    if (!components.length) { accShowStatus('Select at least one row for this total.', 'error'); return; }
+    const state = accFinancialCalculationEditor;
+    const payload = {
+        client_id: accClientId,
+        statement_section: 'balance_sheet',
+        calculation_type: state.calculation_type,
+        label: label,
+        parent_heading_id: state.calculation_type === 'subtotal' ? Number(state.parent_heading_id) : null,
+        sort_order: state.sort_order,
+        components: components,
+    };
+    await accWithButtonBusy(button, 'Saving line', async function () {
+        const method = state.calculation_id ? 'PUT' : 'POST';
+        const url = '/api/account-control-center/statement-calculations' + (state.calculation_id ? '/' + state.calculation_id : '');
+        await accApi(url, { method: method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    });
+    accFinancialCalculationEditor = null;
+    await accLoadFinancialCategories();
+    accShowStatus('Saved calculation line “' + label + '”.', 'success');
+}
+function accHandleCalculationIncludeChange(event) {
+    const input = event.target.closest('[data-fs-calc-include]');
+    if (!input || input.type !== 'checkbox') return;
+    const editor = input.closest('[data-fs-calc-editor]');
+    accUpdateFinancialTotalChoiceAvailability(editor);
+    accUpdateFinancialCalculationPlacementPreview(editor);
+}
 async function accHandleFinancialOutlineAction(event) {
     const button = event.target.closest('[data-fs-action]');
     if (!button) return;
@@ -1744,7 +1993,11 @@ function accBindEvents() {
     accElement('accCashflowTemplateMapping').addEventListener('change', accHandleCashflowTemplateMappingChange);
     accElement('accCashflowTemplateSave').addEventListener('click', function () { accSaveCashflowTemplate().catch(function (error) { accSetCashflowTemplateState(error.message, true); }); });
     document.addEventListener('keydown', function (event) { if (event.key === 'Escape') { accSetCashflowModal('accCashflowCategoryModal', false); accSetCashflowModal('accCashflowAccountsModal', false); accSetCashflowModal('accCashflowTemplateModal', false); if (!accElement('accFinancialSetupModal').hidden) accSetFinancialSetupModal(false); } });
-    accElement('accFinancialFilter').addEventListener('input', accRenderFinancialRows);
+    accElement('accFinancialFilterLoad').addEventListener('click', function () {
+        accAppliedFinancialAccountFilter = accElement('accFinancialFilter').value;
+        accAppliedFinancialCategoryFilter = accElement('accFinancialCategoryFilter').value;
+        accRenderFinancialRows();
+    });
     const financialRows = accElement('accFinancialRows');
     financialRows.addEventListener('change', function (event) { accHandleFinancialChange(event); });
     financialRows.addEventListener('click', accHandleFinancialPickerClick);
@@ -1763,6 +2016,8 @@ function accBindEvents() {
     accElement('accFinancialSetupClose').addEventListener('click', function () { accSetFinancialSetupModal(false); });
     document.querySelectorAll('[data-acc-financial-setup-tab]').forEach(function (tab) { tab.addEventListener('click', function () { accSetFinancialSetupTab(tab.dataset.accFinancialSetupTab); }); });
     document.querySelectorAll('[data-fs-section]').forEach(function (panel) {
+        panel.addEventListener('click', function (event) { accHandleFinancialCalculationAction(event).catch(function (error) { accShowStatus(error.message, 'error'); }); });
+        panel.addEventListener('change', accHandleCalculationIncludeChange);
         panel.addEventListener('click', function (event) { accHandleFinancialOutlineAction(event).catch(function (error) { accShowStatus(error.message, 'error'); }); });
         panel.addEventListener('dragstart', accHandleFinancialDragStart);
         panel.addEventListener('dragover', accHandleFinancialDragOver);
@@ -1771,7 +2026,11 @@ function accBindEvents() {
         });
         panel.addEventListener('dragend', function () { accClearFinancialDropState(panel); accFinancialDraggingId = null; });
     });
-    accElement('accNotesFilter').addEventListener('input', accRenderNotesRows);
+    accElement('accNotesFilterLoad').addEventListener('click', function () {
+        accAppliedNotesAccountFilter = accElement('accNotesFilter').value;
+        accAppliedNotesCategoryFilter = accElement('accNotesCategoryFilter').value;
+        accRenderNotesRows();
+    });
     document.querySelectorAll('[data-notes-section]').forEach(function (panel) {
         panel.addEventListener('click', function (event) { accHandleNotesOutlineAction(event).catch(function (error) { accShowStatus(error.message, 'error'); }); });
         panel.addEventListener('dragstart', accHandleNotesDragStart);

@@ -83,6 +83,7 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     mapping["note_categories"] = [
         {"id": 20, "client_id": 1, "category_type": "note", "category_key": "accounting_policies", "label": "Accounting policies", "sort_order": 0, "is_active": True},
     ]
+    mapping["statement_calculations"] = []
     calls = []
 
     def handle_api(route, request):
@@ -92,6 +93,43 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
             return
         if "/api/users" in url:
             route.fulfill(status=200, content_type="application/json", body=json.dumps([]))
+            return
+        if "/api/account-control-center/statement-calculations" in url:
+            if request.method == "GET":
+                route.fulfill(status=200, content_type="application/json", body=json.dumps({"calculations": mapping["statement_calculations"]}))
+            elif request.method == "POST":
+                body = json.loads(request.post_data or "{}")
+                body["id"] = max([item["id"] for item in mapping["statement_calculations"]] or [100]) + 1
+                for component in body.get("components", []):
+                    if component.get("source_category_id") is not None:
+                        source = next(item for item in mapping["categories"] if item["id"] == component["source_category_id"])
+                        component["label"] = source["label"]
+                    elif component.get("source_calculation_id") is not None:
+                        source = next(item for item in mapping["statement_calculations"] if item["id"] == component["source_calculation_id"])
+                        component["label"] = source["label"]
+                body.setdefault("sort_order", len(mapping["statement_calculations"]))
+                mapping["statement_calculations"].append(body)
+                calls.append((request.method, url, body))
+                route.fulfill(status=200, content_type="application/json", body=json.dumps({"saved": True, "calculation_id": body["id"]}))
+            elif request.method == "PUT":
+                body = json.loads(request.post_data or "{}")
+                calculation_id = int(url.split("/statement-calculations/")[1])
+                calculation = next(item for item in mapping["statement_calculations"] if item["id"] == calculation_id)
+                calculation.update(body)
+                for component in calculation.get("components", []):
+                    if component.get("source_category_id") is not None:
+                        source = next(item for item in mapping["categories"] if item["id"] == component["source_category_id"])
+                        component["label"] = source["label"]
+                    elif component.get("source_calculation_id") is not None:
+                        source = next(item for item in mapping["statement_calculations"] if item["id"] == component["source_calculation_id"])
+                        component["label"] = source["label"]
+                calls.append((request.method, url, body))
+                route.fulfill(status=200, content_type="application/json", body=json.dumps({"saved": True}))
+            elif request.method == "DELETE":
+                calculation_id = int(url.split("/statement-calculations/")[1].split("?")[0])
+                mapping["statement_calculations"] = [item for item in mapping["statement_calculations"] if item["id"] != calculation_id]
+                calls.append((request.method, url, {"calculation_id": calculation_id}))
+                route.fulfill(status=200, content_type="application/json", body=json.dumps({"deleted": True}))
             return
         if "/api/account-control-center/categories" in url:
             is_note = "category_type=note" in url
@@ -429,6 +467,56 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     page.locator("#accFinancialSetupFab").click()
     assert page.locator("#accFinancialSetupModal").get_attribute("data-entry-mode") == "financial"
     assert page.locator("#accFinancialSetupPanelBalanceSheet [data-fs-action='add-heading']").is_visible()
+    balance_sheet = page.locator("#accFinancialSetupPanelBalanceSheet")
+    balance_sheet.locator("[data-fs-calc-action='add-subtotal'][data-fs-heading-id='40']").click()
+    editor = balance_sheet.locator("[data-fs-calc-editor]")
+    editor.locator("[data-fs-calc-label]").fill("Total Non Current Assets")
+    editor.locator("[data-source-category-id='42']").locator("xpath=ancestor::label[1]").locator("[data-fs-calc-operator]").select_option("subtract")
+    editor.locator("[data-fs-calc-action='save']").click()
+    page.wait_for_function("document.querySelector('#accFinancialSetupPanelBalanceSheet')?.textContent.includes('Total Non Current Assets')")
+    subtotal = balance_sheet.locator("[data-fs-calculation-id]").filter(has_text="Total Non Current Assets")
+    assert "Stock − Cash equivalents" in subtotal.text_content()
+
+    page.once("dialog", lambda dialog: dialog.accept("Non Current Assets"))
+    balance_sheet.locator("[data-fs-action='add-heading']").click()
+    page.wait_for_function("Array.from(document.querySelectorAll('#accFinancialSetupPanelBalanceSheet .acc2-fs-heading-title strong')).some(heading => heading.textContent === 'Non Current Assets')")
+    non_current_heading_id = page.evaluate("""() => Array.from(document.querySelectorAll('#accFinancialSetupPanelBalanceSheet .acc2-fs-heading'))
+        .find(heading => heading.querySelector('.acc2-fs-heading-title strong')?.textContent === 'Non Current Assets')?.dataset.fsId""")
+    non_current_heading = balance_sheet.locator(".acc2-fs-heading[data-fs-id='{}']".format(non_current_heading_id))
+    page.once("dialog", lambda dialog: dialog.accept("Property and Equipment"))
+    non_current_heading.locator("[data-fs-action='add-category']").click()
+    page.wait_for_function("document.querySelector('#accFinancialSetupPanelBalanceSheet')?.textContent.includes('Property and Equipment')")
+    non_current_heading.locator("[data-fs-calc-action='add-subtotal']").click()
+    editor = balance_sheet.locator("[data-fs-calc-editor]")
+    editor.locator("[data-fs-calc-label]").fill("Total Non Current Assets")
+    editor.locator("[data-fs-calc-action='save']").click()
+    page.wait_for_function("document.querySelector('#accFinancialSetupPanelBalanceSheet')?.textContent.includes('Total Non Current Assets')")
+
+    page.once("dialog", lambda dialog: dialog.accept("Capital"))
+    balance_sheet.locator("[data-fs-action='add-heading']").click()
+    page.wait_for_function("document.querySelector('#accFinancialSetupPanelBalanceSheet')?.textContent.includes('Capital')")
+    balance_sheet.locator("[data-fs-calc-action='add-total']").click()
+    editor = balance_sheet.locator("[data-fs-calc-editor]")
+    editor.locator("[data-fs-calc-label]").fill("Total Assets")
+    editor.locator("[data-source-calculation-id='101']").check()
+    assert editor.locator("[data-fs-calc-placement]").text_content() == "Appears after: Current Assets Heading"
+    editor.locator("[data-source-calculation-id='102']").check()
+    assert editor.locator("[data-fs-calc-placement]").text_content() == "Appears after: Non Current Assets"
+    assert editor.locator("[data-source-category-id='44']").is_disabled()
+    editor.locator("[data-source-calculation-id='102']").uncheck()
+    editor.locator("[data-source-category-id='44']").check()
+    assert editor.locator("[data-source-calculation-id='102']").is_disabled()
+    assert editor.locator("[data-fs-calc-placement]").text_content() == "Appears after: Non Current Assets"
+    editor.locator("[data-fs-calc-action='save']").click()
+    page.wait_for_function("document.querySelector('#accFinancialSetupPanelBalanceSheet')?.textContent.includes('Total Assets')")
+    total = balance_sheet.locator("[data-fs-calculation-id]").filter(has_text="Total Assets")
+    assert balance_sheet.locator("[data-fs-calculation-id]").count() == 3
+    assert total.evaluate("element => element.previousElementSibling.dataset.fsId") == non_current_heading.get_attribute("data-fs-id")
+    assert total.evaluate("element => element.nextElementSibling.textContent.includes('Capital')")
+    assert any(call[0] == "POST" and call[2].get("calculation_type") == "total" and any(component.get("source_category_id") == 44 for component in call[2].get("components", [])) for call in calls)
+    page.locator("#accFinancialSetupTabNotesBalanceSheet").click()
+    assert page.locator("#accFinancialSetupPanelNotesBalanceSheet [data-fs-calculation-id]").count() == 0
+    page.locator("#accFinancialSetupTabBalanceSheet").click()
     page.locator("#accFinancialSetupClose").click()
     choose_financial_category(page, "20-15-50-0001", 42)
     page.wait_for_function("document.querySelector('#accStatus')?.textContent.includes('20-15-50-0001')")
@@ -436,6 +524,21 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     page.wait_for_function("document.querySelector('#accStatus')?.textContent.includes('20-15-50-0002')")
     choose_financial_category(page, "10-15-115-10-0001", 41)
     page.wait_for_function("document.querySelector('#accStatus')?.textContent.includes('10-15-115-10-0001')")
+    page.locator("#accFinancialCategoryFilter").fill("Cash equivalents")
+    assert page.locator("#accFinancialRows tr").count() == 4
+    page.locator("#accFinancialFilterLoad").click()
+    financial_filtered_rows = page.locator("#accFinancialRows tr")
+    assert financial_filtered_rows.count() == 3
+    assert "Local creditors" in financial_filtered_rows.all_text_contents()[0]
+    assert all("Cash equivalents" in page.locator("#accFinancialRows tr").nth(index).locator("[data-fs-picker-value-label]").text_content() for index in (0, 1, 2))
+    page.locator("#accFinancialFilter").fill("Supplier A")
+    assert page.locator("#accFinancialRows tr").count() == 3
+    page.locator("#accFinancialFilterLoad").click()
+    assert page.locator("#accFinancialRows tr").count() == 2
+    assert "Local creditors" in page.locator("#accFinancialRows tr").nth(0).text_content()
+    page.locator("#accFinancialFilter").fill("")
+    page.locator("#accFinancialCategoryFilter").fill("")
+    page.locator("#accFinancialFilterLoad").click()
     page.locator("#accTabNotes").click()
     notes_parent = page.locator("#accNotesRows tr").filter(has_text="Local creditors")
     assert notes_parent.locator(".acc2-note-source").text_content().endswith("Cash equivalents")
@@ -453,6 +556,21 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     note_menu.locator("[data-fs-picker-option][data-fs-picker-value='23']").click()
     page.wait_for_function("document.querySelector('#accNotesRows [data-acc-note-result=\"20-15-50-0001\"]')?.textContent === 'Saved'")
     assert any(call[0] == "PUT" and call[2].get("note_category_id") == 23 and "verification_workstream" not in call[2] and "financial_statement_category_id" not in call[2] for call in calls)
+    page.locator("#accNotesCategoryFilter").fill("Opening stock")
+    assert page.locator("#accNotesRows tr").count() == 4
+    page.locator("#accNotesFilterLoad").click()
+    note_filtered_rows = page.locator("#accNotesRows tr")
+    assert note_filtered_rows.count() == 2
+    assert "Local creditors" in note_filtered_rows.nth(0).text_content()
+    assert "Supplier A" in note_filtered_rows.nth(1).text_content()
+    page.locator("#accNotesCategoryFilter").fill("")
+    page.locator("#accNotesFilter").fill("Cash in hand")
+    assert page.locator("#accNotesRows tr").count() == 2
+    page.locator("#accNotesFilterLoad").click()
+    assert page.locator("#accNotesRows tr").count() == 1
+    assert "Cash in hand" in page.locator("#accNotesRows tr").first.text_content()
+    page.locator("#accNotesFilter").fill("")
+    page.locator("#accNotesFilterLoad").click()
     cash_row = page.locator("#accNotesRows tr:has(select.acc2-note-category[data-acc-code='10-15-115-10-0001'])")
     assert cash_row.locator(".acc2-note-source").text_content().endswith("Stock")
     assert cash_row.locator("[data-fs-picker-trigger]").is_disabled()

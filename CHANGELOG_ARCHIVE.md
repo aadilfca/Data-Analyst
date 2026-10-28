@@ -8680,6 +8680,14 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 
 **Verification:** New Playwright checks pass for concurrent expansion, fallback, and stale-response rejection. The performance module passes 32 tests. The full UI run passed 186 tests and exposed four assertions tied to old cache/version/request behavior; after updating them, all eight affected and new UI checks pass. Syntax, compilation and whitespace checks pass. Local-server timing remains for Aadil; the extra unfiltered read is an intentional per-report cost.
 
+## Cashflows ledger coverage alerts - 2026-10-26
+
+**Implementation:** Added accessible coverage alerts to the Cashflows report and reconciliation pages. Both reuse the existing verified balance evidence; no endpoint or database read was added. Alerts show the last contiguous complete period or direct users to source diagnostics when no period is complete. Reconciliation script cache version is 58.
+
+**Verification:** Three focused Playwright/API regression tests pass; JavaScript syntax and `git diff --check` pass. Broader suites were not completed; an outdated script-version assertion was updated from 57 to 58. No live data or financial configuration changed.
+
+**Acceptance/Git:** Aadil's local-server acceptance remains pending. No staging, commit, or push.
+
 ## Financial Statements development
 
 Record phase decisions, implementation, verification, and acceptance here as the report is developed.
@@ -8753,3 +8761,27 @@ Record phase decisions, implementation, verification, and acceptance here as the
 **Implementation:** Restored the Notes account-head table with read-only Financial Statement context and a searchable picker limited to active terminal notes under the assigned statement category (the linked note root is selectable when it has no breakdowns). Leaf assignments use the existing mapping API; parent assignments apply to descendants. No Trial Balance rows, backend schema, or saved assignments are moved or cleared. Account remapping across statement categories and its parent/subtotal consequences are deferred; do not infer or automate note reassignment in this phase. Account Control Centre script cache version is 18.
 
 **Verification:** Focused Account Control Centre browser suite passes (2 tests), including parent inheritance, effective note filtering, nested paths after a source move, and leaf/parent saves. JavaScript syntax and `git diff --check` pass. No backend-only work; local-server acceptance remains pending.
+
+### Financial Statement and Notes assignment filters - 2026-10-27
+
+**Implementation:** Added category and note searches beside account search in each tab's toolbar. Filters apply only after clicking Load, combine with one another, match displayed category/note paths, and retain parent rows for matching descendants. Picker searches remain unchanged. Stylesheet/script cache versions are 75/20.
+
+**Verification:** Focused Account Control Centre browser suite passes (2 tests), including category/note filtering and parent context. JavaScript syntax and `git diff --check` pass. Local-server acceptance remains pending.
+
+### Balance Sheet totals and subtotals - 2026-10-28
+
+**Implementation:** Added client-scoped subtotal and total configuration in the ACC Balance Sheet popup, stored separately from account categories. A heading subtotal uses all of its direct categories, with per-category `+`/`−` treatment; statement totals combine selected subtotals. Category moves update subtotal membership, and deleting referenced rows is guarded. Income Statement, Notes, account assignments, and report amounts remain unchanged.
+
+**Verification:** Account Control Centre backend and browser suites pass (49 tests); Python compilation, JavaScript syntax, and `git diff --check` pass. The shared stylesheet cache version is 76 across all 21 pages that load it. Local-server acceptance is pending.
+
+### Balance Sheet total placement - 2026-10-28
+
+**Implementation:** Statement totals now appear after the last Balance Sheet heading whose subtotal is included, following the current heading order. The total editor previews this placement and updates it as included subtotals change. Totals without a resolvable source heading remain visible in an editable recovery section.
+
+**Verification:** Focused Account Control Centre browser coverage checks live placement preview and confirms a total appears between its included sections and a later unrelated heading. JavaScript syntax and `git diff --check` pass. No backend or database changes; local-server acceptance is pending.
+
+### Balance Sheet totals from categories - 2026-10-28
+
+**Implementation:** The Total editor groups choices by Balance Sheet heading and allows a section subtotal or individual categories. Selecting one mode disables the other for that heading; the API independently rejects subtotal/category overlap. Direct category sources retain their labels and follow their current parent heading in the placement preview and outline. Deleting a referenced category is guarded, and moving one retains its Total reference unless it would overlap a destination subtotal. No schema change.
+
+**Verification:** Account Control Centre API tests pass (52 tests) and the focused browser suite passes (2 tests), including mixed sources, overlap prevention, placement, and direct category persistence. JavaScript syntax and `git diff --check` pass. Local-server acceptance is pending.

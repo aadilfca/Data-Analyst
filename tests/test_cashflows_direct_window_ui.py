@@ -313,7 +313,7 @@ def test_cashflows_summary_contains_inline_category_ledger_contract():
     assert 'cashflows-inline-ledger-link' in inline_styles
     assert 'cashflows-inline-expand-icon' not in inline_script
     assert 'cashflows-inline-expand-icon' not in inline_styles
-    assert 'style.css?v=71' in inline_html
+    assert 'style.css?v=76' in inline_html
     assert 'cashflows-summary-table-host' in inline_html
     assert 'renderCashflowSummaryPaneLayout' in inline_script
     assert 'syncCashflowSummaryPaneRows' in inline_script
@@ -393,8 +393,8 @@ def test_cashflows_report_preserves_current_default_period_and_monthly_grouping(
     assert "setCashflowSummaryFilterVisibility(false);" in reconciliation_script
     assert "cashflowPreviewPeriods" in reconciliation_script
     assert "syncCashflowZeroRowsButton" in reconciliation_script
-    assert "style.css?v=71" in reconciliation_html
-    assert "reconciliation.js?v=57" in reconciliation_html
+    assert "style.css?v=76" in reconciliation_html
+    assert "reconciliation.js?v=58" in reconciliation_html
     assert "cashflowsSummaryBasis" not in reconciliation_html
     assert "cashflows-transactions-note" not in reconciliation_html
     assert "renderCashflowSummary" in reconciliation_script
@@ -664,6 +664,7 @@ def ledger_cache_page():
         setView: function (view) {cashflowTreasuryView=view;renderCashflowAccountOptions();},
         reconcile: openCashflowReconciliation,
         reconciliationLoad: loadCashflowReconciliation,
+        coverageAlert: function (id, balance) {renderCashflowCoverageAlert(id, balance);},
         reconciliationCache: function () {return Array.from(reconciliationCache.entries());},
         reconciliationState: function () {return {scope: reconciliationState.scope, result: reconciliationState.result,
             pending: !!reconciliationState.pending, loading: !!reconciliationState.loading, opener: !!reconciliationState.opener};},
@@ -2092,6 +2093,38 @@ def test_incomplete_fallback_response_is_not_cached_or_displayed(ledger_cache_pa
     assert 'Incomplete account details' in page.locator('.cashflows-inline-ledger-error').inner_text()
     assert page.locator('.cashflows-inline-ledger-link').count() == 0
     assert page.evaluate('() => ledgerFixture.stats()') == []
+
+
+def test_cashflow_coverage_alert_uses_verified_complete_prefix_on_both_pages(ledger_cache_page, reconciliation_payload):
+    page = ledger_cache_page
+    report, parent, _, _ = reconciliation_payload()
+    evidence = dict(coverage_complete=False, periods=[
+        dict(key='2026-01', start='2026-01-01', end='2026-01-31', complete=True),
+        dict(key='2026-02', start='2026-02-01', end='2026-02-28', complete=False),
+    ])
+    report['preview']['balance_reconciliation'] = evidence
+    parent['views']['combined']['balance_controls'] = evidence
+    page.route('**/api/reconciliation/cashflows/reconciliation?*', lambda route: route.fulfill(json=parent))
+    page.evaluate('result => ledgerFixture.load(result)', report)
+    report_alert = page.locator('#cashflowsLedgerCoverageAlert')
+    assert report_alert.is_visible()
+    assert report_alert.inner_text() == (
+        'Not fully reconciled: verified ledger coverage is complete through 31 Jan 2026; '
+        'later periods are partial or missing.'
+    )
+
+    page.locator('#cashflowsReconciliationButton').click()
+    page.wait_for_selector('#reconWorking table')
+    reconciliation_alert = page.locator('#cashflowReconciliationCoverageAlert')
+    assert reconciliation_alert.is_visible()
+    assert reconciliation_alert.inner_text() == report_alert.inner_text()
+
+    page.locator('#reconClose').click()
+    assert report_alert.is_visible()
+    page.evaluate("ledgerFixture.coverageAlert('cashflowsLedgerCoverageAlert', {coverage_complete: true, periods: []})")
+    assert report_alert.is_hidden()
+    page.evaluate("ledgerFixture.coverageAlert('cashflowReconciliationCoverageAlert', {coverage_complete: true, periods: []})")
+    assert reconciliation_alert.is_hidden()
 
 
 def _balance_report(view='combined', month='2026-01', two_periods=False):

@@ -41,6 +41,8 @@ class AccountSetSchemaTests(unittest.TestCase):
                         "account_set_versions",
                         "account_set_selectors",
                         "account_control_categories",
+                        "account_control_statement_calculations",
+                        "account_control_statement_calculation_components",
                         "account_control_assignments",
                         "account_control_cashflow_categories",
                         "account_control_cashflow_category_assignments",
@@ -58,6 +60,7 @@ class AccountSetSchemaTests(unittest.TestCase):
                         "idx_account_set_versions_upload",
                         "idx_account_set_selectors_version",
                         "idx_account_control_categories_client_type",
+                        "idx_statement_subtotal_heading",
                         "idx_account_control_assignments_client",
                         "idx_account_control_assignments_workstream",
                         "idx_account_control_cashflow_categories_client",
@@ -100,6 +103,9 @@ class AccountSetPostgresMigrationTests(unittest.TestCase):
         database._ensure_postgres_account_set_tables(connection)
         sql = "\n".join(connection.cursor_instance.statements)
         self.assertIn("CREATE TABLE IF NOT EXISTS account_control_categories", sql)
+        self.assertIn("CREATE TABLE IF NOT EXISTS account_control_statement_calculations", sql)
+        self.assertIn("CREATE TABLE IF NOT EXISTS account_control_statement_calculation_components", sql)
+        self.assertIn("idx_statement_subtotal_heading", sql)
         self.assertIn("ADD COLUMN IF NOT EXISTS statement_section", sql)
         self.assertIn("ADD COLUMN IF NOT EXISTS row_type", sql)
         self.assertIn("ADD COLUMN IF NOT EXISTS parent_category_id", sql)
@@ -511,7 +517,7 @@ class FinancialStatementControlTests(unittest.TestCase):
             control_center, "pg_transaction", return_value=nullcontext()
         ), patch.object(
             control_center, "execute_query_pg", side_effect=[
-                [], [{"id": 31, "label": "Unused", "statement_section": None, "row_type": "category"}], [], [],
+                [], [{"id": 31, "label": "Unused", "statement_section": None, "row_type": "category"}], [], [], [],
                 [{"account_code": "OLD-1"}],
             ]
         ), patch.object(control_center, "execute_write_pg") as write:
@@ -519,10 +525,11 @@ class FinancialStatementControlTests(unittest.TestCase):
                 31, client_id=1, session={"username": "Admin"}
             )
         self.assertEqual(result, {"deleted": True, "category_id": 31, "deleted_child_count": 0, "orphan_assignments_cleared": 1})
-        self.assertEqual(write.call_count, 2)
+        self.assertEqual(write.call_count, 3)
         self.assertIn("UPDATE account_control_assignments", write.call_args_list[0].args[0])
         self.assertIn("SET financial_statement_category_id = NULL", write.call_args_list[0].args[0])
-        self.assertIn("DELETE FROM account_control_categories", write.call_args_list[1].args[0])
+        self.assertIn("calculation_components", write.call_args_list[1].args[0])
+        self.assertIn("DELETE FROM account_control_categories", write.call_args_list[2].args[0])
 
     def test_delete_heading_cascades_unassigned_child_categories(self):
         children = [{"id": 32, "label": "Land"}, {"id": 33, "label": "Equipment"}]
@@ -532,7 +539,7 @@ class FinancialStatementControlTests(unittest.TestCase):
             control_center, "execute_query_pg", side_effect=[
                 [],
                 [{"id": 31, "label": "Fixed assets", "statement_section": "balance_sheet", "row_type": "heading"}],
-                children, [], [], [],
+                children, [], [], [], [], [],
             ]
         ), patch.object(control_center, "execute_write_pg") as write:
             result = control_center.delete_account_control_category(
@@ -540,9 +547,10 @@ class FinancialStatementControlTests(unittest.TestCase):
             )
         self.assertEqual(result["deleted_child_count"], 2)
         self.assertEqual(result["orphan_assignments_cleared"], 0)
-        self.assertEqual(write.call_count, 2)
-        self.assertIn("parent_category_id = %s", write.call_args_list[0].args[0])
-        self.assertIn("DELETE FROM account_control_categories", write.call_args_list[1].args[0])
+        self.assertEqual(write.call_count, 3)
+        self.assertIn("calculation_components", write.call_args_list[0].args[0])
+        self.assertIn("parent_category_id = %s", write.call_args_list[1].args[0])
+        self.assertIn("DELETE FROM account_control_categories", write.call_args_list[2].args[0])
 
     def test_delete_heading_is_blocked_when_child_category_has_real_account_assignment(self):
         with patch.object(control_center, "_require_active_client"), patch.object(
@@ -551,7 +559,7 @@ class FinancialStatementControlTests(unittest.TestCase):
             control_center, "execute_query_pg", side_effect=[
                 [],
                 [{"id": 31, "label": "Fixed assets", "statement_section": "balance_sheet", "row_type": "heading"}],
-                [{"id": 32, "label": "Land"}], [], [{"account_code": "10-01"}],
+                [{"id": 32, "label": "Land"}], [], [], [], [{"account_code": "10-01"}],
             ]
         ), patch.object(control_center, "execute_write_pg") as write:
             with self.assertRaises(HTTPException) as raised:
@@ -567,7 +575,7 @@ class FinancialStatementControlTests(unittest.TestCase):
             control_center, "pg_transaction", return_value=nullcontext()
         ), patch.object(
             control_center, "execute_query_pg", side_effect=[
-                [], [{"id": 31, "statement_section": None, "row_type": "category"}], [], [{"id": 5}],
+                [], [{"id": 31, "statement_section": None, "row_type": "category"}], [], [], [{"id": 5}],
             ]
         ), patch.object(control_center, "execute_write_pg") as write:
             with self.assertRaises(HTTPException) as raised:
@@ -575,6 +583,48 @@ class FinancialStatementControlTests(unittest.TestCase):
                     31, client_id=1, session={"username": "Admin"}
                 )
         self.assertEqual(raised.exception.status_code, 409)
+        write.assert_not_called()
+
+    def test_delete_category_rejects_direct_total_reference(self):
+        with patch.object(control_center, "_require_active_client"), patch.object(
+            control_center, "pg_transaction", return_value=nullcontext()
+        ), patch.object(control_center, "execute_query_pg", side_effect=[
+            [], [{"id": 31, "statement_section": "balance_sheet", "row_type": "category"}], [], [{"id": 9}],
+        ]), patch.object(control_center, "execute_write_pg") as write:
+            with self.assertRaises(HTTPException) as raised:
+                control_center.delete_account_control_category(31, client_id=1, session={"username": "Admin"})
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("Remove this category from its Total line", raised.exception.detail)
+        write.assert_not_called()
+
+    def test_moving_direct_total_category_preserves_reference(self):
+        payload = control_center.AccountControlCategoryUpdatePayload(
+            client_id=1, category_type="financial_statement", label="Cash and Bank",
+            statement_section="balance_sheet", row_type="category", parent_category_id=30,
+        )
+        with patch.object(control_center, "execute_query_pg", side_effect=[
+            [{"id": 31, "source_statement_category_id": None, "statement_section": "balance_sheet", "row_type": "category", "parent_category_id": 20}],
+            [{"statement_section": "balance_sheet", "row_type": "heading", "is_active": True}],
+            [{"calculation_id": 88}], [],
+        ]), patch.object(control_center, "execute_write_pg") as write:
+            result = control_center.update_account_control_category(31, payload, session={"username": "Admin"})
+        self.assertTrue(result["saved"])
+        self.assertIn("calculation_type = 'subtotal'", write.call_args_list[0].args[0])
+
+    def test_moving_category_cannot_overlap_destination_subtotal_in_total(self):
+        payload = control_center.AccountControlCategoryUpdatePayload(
+            client_id=1, category_type="financial_statement", label="Cash and Bank",
+            statement_section="balance_sheet", row_type="category", parent_category_id=30,
+        )
+        with patch.object(control_center, "execute_query_pg", side_effect=[
+            [{"id": 31, "source_statement_category_id": None, "statement_section": "balance_sheet", "row_type": "category", "parent_category_id": 20}],
+            [{"statement_section": "balance_sheet", "row_type": "heading", "is_active": True}],
+            [{"calculation_id": 88}], [{"id": 90}],
+        ]), patch.object(control_center, "execute_write_pg") as write:
+            with self.assertRaises(HTTPException) as raised:
+                control_center.update_account_control_category(31, payload, session={"username": "Admin"})
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("destination heading subtotal", raised.exception.detail)
         write.assert_not_called()
 
     def test_statement_outline_payload_keeps_section_kind_and_parent(self):
@@ -672,6 +722,137 @@ class FinancialStatementControlTests(unittest.TestCase):
                 client_id=1, category_type="financial_statement", include_inactive=True, session={"username": "Admin"}
             )
         self.assertEqual(result["categories"][0]["category_key"], "assets")
+
+
+class FinancialStatementCalculationTests(unittest.TestCase):
+    def test_subtotal_persists_signed_direct_categories(self):
+        payload = control_center.StatementCalculationPayload(
+            client_id=1,
+            statement_section="balance_sheet",
+            calculation_type="subtotal",
+            label="Total Fixed Assets",
+            parent_heading_id=30,
+            components=[
+                control_center.StatementCalculationComponentPayload(source_category_id=31, operator="add"),
+                control_center.StatementCalculationComponentPayload(source_category_id=32, operator="subtract"),
+            ],
+        )
+        with patch.object(control_center, "_require_active_client"), patch.object(
+            control_center, "execute_query_pg", side_effect=[
+                [{"id": 30, "statement_section": "balance_sheet", "row_type": "heading", "is_active": True}],
+                [{"id": 31}, {"id": 32}],
+                [],
+            ]
+        ), patch.object(control_center, "execute_write_pg", side_effect=[77, None, None]) as write, patch.object(
+            control_center, "pg_transaction", return_value=nullcontext()
+        ):
+            result = control_center.create_statement_calculation(payload, session={"username": "Admin"})
+        self.assertEqual(result, {"saved": True, "calculation_id": 77})
+        component_calls = [call for call in write.call_args_list if "calculation_components" in call.args[0]]
+        self.assertEqual([call.args[1][3] for call in component_calls], ["add", "subtract"])
+
+    def test_subtotal_rejects_stale_or_cross_heading_categories(self):
+        calculation = {
+            "client_id": 1,
+            "calculation_type": "subtotal",
+            "parent_heading_id": 30,
+            "components": [control_center.StatementCalculationComponentPayload(source_category_id=31)],
+        }
+        with patch.object(control_center, "execute_query_pg", side_effect=[
+            [{"id": 30, "statement_section": "balance_sheet", "row_type": "heading", "is_active": True}],
+            [{"id": 31}, {"id": 32}],
+        ]):
+            with self.assertRaises(HTTPException) as raised:
+                control_center._validate_statement_calculation_components(calculation)
+        self.assertEqual(raised.exception.status_code, 409)
+
+    def test_statement_total_accepts_subtotals_and_direct_categories(self):
+        payload = control_center.StatementCalculationPayload(
+            client_id=1,
+            statement_section="balance_sheet",
+            calculation_type="total",
+            label="Total Assets",
+            components=[
+                control_center.StatementCalculationComponentPayload(source_calculation_id=77, operator="add"),
+                control_center.StatementCalculationComponentPayload(source_category_id=31, operator="subtract"),
+            ],
+        )
+        with patch.object(control_center, "_require_active_client"), patch.object(
+            control_center, "execute_query_pg", side_effect=[
+                [{"id": 77, "parent_heading_id": 30}],
+                [{"id": 31, "parent_category_id": 40}],
+                [{"last_order": 0}],
+            ]
+        ), patch.object(control_center, "execute_write_pg", side_effect=[88, None, None]) as write, patch.object(
+            control_center, "pg_transaction", return_value=nullcontext()
+        ):
+            result = control_center.create_statement_calculation(payload, session={"username": "Admin"})
+        self.assertEqual(result["calculation_id"], 88)
+        self.assertEqual(write.call_args_list[0].args[1][-1], 1)
+        component_calls = [call for call in write.call_args_list if "calculation_components" in call.args[0]]
+        self.assertEqual([(call.args[1][1], call.args[1][2], call.args[1][3]) for call in component_calls], [
+            (None, 77, "add"), (31, None, "subtract"),
+        ])
+
+    def test_total_rejects_subtotal_and_category_from_same_heading(self):
+        calculation = {
+            "client_id": 1,
+            "calculation_type": "total",
+            "parent_heading_id": None,
+            "components": [
+                control_center.StatementCalculationComponentPayload(source_calculation_id=77),
+                control_center.StatementCalculationComponentPayload(source_category_id=31),
+            ],
+        }
+        with patch.object(control_center, "execute_query_pg", side_effect=[
+            [{"id": 77, "parent_heading_id": 30}],
+            [{"id": 31, "parent_category_id": 30}],
+        ]):
+            with self.assertRaises(HTTPException) as raised:
+                control_center._validate_statement_calculation_components(calculation)
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertIn("either a heading subtotal or its categories", raised.exception.detail)
+
+    def test_subtotal_list_includes_new_direct_categories_with_plus_by_default(self):
+        with patch.object(control_center, "_require_active_client"), patch.object(
+            control_center, "execute_query_pg", side_effect=[
+                [{"id": 77, "client_id": 1, "statement_section": "balance_sheet", "calculation_type": "subtotal", "label": "Total Assets", "parent_heading_id": 30, "sort_order": 0}],
+                [{"source_category_id": 31, "source_calculation_id": None, "operator": "subtract"}],
+                [{"id": 31, "label": "Land"}, {"id": 32, "label": "New equipment"}],
+            ]
+        ):
+            result = control_center.list_statement_calculations(client_id=1, statement_section="balance_sheet", session={"username": "Admin"})
+        components = result["calculations"][0]["components"]
+        self.assertEqual([(row["source_category_id"], row["operator"]) for row in components], [(31, "subtract"), (32, "add")])
+
+    def test_total_list_returns_subtotal_and_category_components(self):
+        with patch.object(control_center, "_require_active_client"), patch.object(
+            control_center, "execute_query_pg", side_effect=[
+                [{"id": 88, "client_id": 1, "statement_section": "balance_sheet", "calculation_type": "total", "label": "Total Assets", "parent_heading_id": None, "sort_order": 0}],
+                [
+                    {"source_category_id": None, "source_calculation_id": 77, "operator": "add", "sort_order": 0},
+                    {"source_category_id": 31, "source_calculation_id": None, "operator": "subtract", "sort_order": 1},
+                ],
+                [{"id": 77, "label": "Total Current Assets"}],
+                [{"id": 31, "label": "Cash and Bank"}],
+            ]
+        ):
+            result = control_center.list_statement_calculations(client_id=1, statement_section="balance_sheet", session={"username": "Admin"})
+        components = result["calculations"][0]["components"]
+        self.assertEqual([(row["label"], row["source_category_id"], row["source_calculation_id"], row["operator"]) for row in components], [
+            ("Total Current Assets", None, 77, "add"), ("Cash and Bank", 31, None, "subtract"),
+        ])
+
+    def test_calculations_are_rejected_for_income_statement_in_this_phase(self):
+        payload = control_center.StatementCalculationPayload(
+            client_id=1,
+            statement_section="income_statement",
+            calculation_type="total",
+            label="Profit",
+        )
+        with self.assertRaises(HTTPException) as raised:
+            control_center._clean_statement_calculation(payload)
+        self.assertEqual(raised.exception.status_code, 400)
 
 
 if __name__ == "__main__":

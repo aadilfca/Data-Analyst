@@ -2587,7 +2587,7 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "setActiveCashflowWindow" in javascript
     assert "const CASHFLOW_DEFAULT_START = '2026-01-01';" in javascript
     assert "const CASHFLOW_DEFAULT_END = '2026-06-30';" in javascript
-    assert "<script src='/static/reconciliation.js?v=53'></script>" in html
+    assert "<script src='/static/reconciliation.js?v=58'></script>" in html
     assert "id='reconReportPeriod'" in html
     assert "Linked to the loaded Cashflows Report" in html
     assert "id='reconPeriod'" not in html
@@ -2624,7 +2624,7 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "cashflowSummaryPaneRowParts" in javascript
     assert "cashflows-summary-sticky-header { position: sticky; top: 72.5px;" in stylesheet
     assert ".cashflows-summary-scroll-pane { min-width: 0; overflow-x: auto; overflow-y: clip; }" in stylesheet
-    assert "style.css?v=71" in html
+    assert "style.css?v=76" in html
     assert "table.style.width = fillAvailable ? 'max(100%, ' + totalWidth + 'px)' : totalWidth + 'px';" in javascript
 
     assert "color: #7E350E" in stylesheet

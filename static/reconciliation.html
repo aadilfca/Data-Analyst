@@ -4,7 +4,7 @@
     <meta charset='UTF-8'>
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
     <title>Reports | Internal Audit App</title>
-    <link rel='stylesheet' href='/static/style.css?v=71'>
+    <link rel='stylesheet' href='/static/style.css?v=76'>
     <style>
         /* Scope this compact toolbar/picker to Cashflows, without changing shared pages. */
         #cashflowsSummaryControlsPanel .cashflows-filter-bar { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -85,6 +85,9 @@
         #cashflowReconciliation .recon-body { padding: 16px 24px 24px; }
         #cashflowReconciliation .recon-status { padding: 12px; border: 1px solid #cbd5e1; background: #f8fafc; border-radius: 6px; line-height: 1.6; font-size: 13px; }
         #cashflowReconciliation .recon-status.is-error { border-color: #dc2626; background: #fef2f2; }
+        .cashflow-coverage-alert { box-sizing: border-box; margin: 8px 12px; padding: 9px 12px; border: 1px solid #e8c878; border-radius: 6px; background: #fff8e7; color: #5f4a18; font-size: 13px; line-height: 1.5; }
+        .cashflow-coverage-alert[hidden] { display: none !important; }
+        #cashflowReconciliationCoverageAlert { margin: 12px 24px 0; }
         #cashflowReconciliation .recon-loading-panel { padding: 20px; border: 1px solid #cbd5e1; border-radius: 8px; background: #f8fafc; }
         #cashflowReconciliation .recon-loading-title { margin: 0 0 14px; font-size: 17px; color: #24536e; }
         #cashflowReconciliation .recon-loading-skeleton { margin-top: 20px; }
@@ -157,6 +160,7 @@
             #cashflowReconciliation .recon-money { width: auto; }
             #cashflowReconciliation th, #cashflowReconciliation td { padding: 9px 8px; }
             #cashflowReconciliation label { flex-wrap: wrap; }
+            #cashflowReconciliationCoverageAlert { margin-inline: 12px; }
         }
     </style>
 </head>
@@ -208,6 +212,7 @@
         <section id='cashflowsView' class='cashflows-report' aria-label='Cashflows report' hidden>
         <div class='cashflows-notification-stack'>
             <div id='cashflowsFreshnessAlert' class='cashflows-freshness-alert' role='status' aria-live='polite' hidden><span id='cashflowsFreshnessStatus'></span><button type='button' id='cashflowsFreshnessAlertClose' class='cashflows-freshness-alert-close' aria-label='Dismiss snapshot status'>&times;</button></div>
+            <div id='cashflowsLedgerCoverageAlert' class='cashflow-coverage-alert' role='status' aria-live='polite' hidden></div>
             <div id='cashflowsToast' class='cashflows-toast' role='status' aria-live='polite' hidden></div>
         </div>
     <div id='cashflowsSummaryControlsPanel' class='cashflows-report-header'>
@@ -423,6 +428,7 @@
             <button type='button' id='reconExport' class='cashflows-secondary' disabled>Export reconciliation</button>
             <button type='button' id='reconClose' class='cashflows-secondary recon-return'>Cashflows Report</button>
         </div>
+        <div id='cashflowReconciliationCoverageAlert' class='cashflow-coverage-alert' role='status' aria-live='polite' hidden></div>
         <div class='recon-body'>
             <div id='reconProcessing' hidden></div>
             <div id='reconExportProcessing' aria-label='Reconciliation Excel preparation' hidden></div>
@@ -461,6 +467,6 @@
     </section>
     <script src='/static/client_context.js?v=21'></script>
     <script src='/static/loading_ui.js?v=ce6d21ca20c8'></script>
-    <script src='/static/reconciliation.js?v=57'></script>
+    <script src='/static/reconciliation.js?v=58'></script>
 </body>
 </html>

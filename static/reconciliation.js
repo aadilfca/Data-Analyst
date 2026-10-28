@@ -3507,6 +3507,7 @@
         if (!result) return;
         const part = result.views[state.view];
         const proof = part.overall_balance_proof;
+        renderCashflowCoverageAlert('cashflowReconciliationCoverageAlert', part.balance_controls);
         let rows = reconciliationRow('Opening balance as per ledgers', proof.ledger_opening);
         const totals = part.overall;
         rows += reconciliationRow('Add: Receipts as per Cashflow report', totals.receipts.cashflow);
@@ -4152,6 +4153,7 @@
         const fingerprint = child ? state.result.evidence_fingerprint : '';
         if (!child) {
             state.result = null; clearReconciliationChildren();
+            renderCashflowCoverageAlert('cashflowReconciliationCoverageAlert', null);
             element('reconViewLabel').hidden = true; element('reconView').replaceChildren();
             element('reconWorking').innerHTML = '';
             reconciliationSetTab('working');
@@ -4496,9 +4498,34 @@
             if (button.hasAttribute('data-adjustment-reload')) {closeReconciliationAdjustment(false); reloadCashflowReconciliation();}
         });
     }
+    function cashflowCoverageAlertText(balance) {
+        if (!balance || balance.coverage_complete !== false) return '';
+        const periods = Array.isArray(balance.periods) ? balance.periods : [];
+        let completeThrough = '';
+        for (const period of periods) {
+            if (!period || period.complete !== true) break;
+            completeThrough = String(period.end || '');
+        }
+        if (completeThrough) {
+            const date = new Date(completeThrough.slice(0, 10) + 'T00:00:00Z');
+            const label = Number.isNaN(date.getTime()) ? completeThrough : new Intl.DateTimeFormat('en-GB', {
+                day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC'
+            }).format(date);
+            return 'Not fully reconciled: verified ledger coverage is complete through ' + label + '; later periods are partial or missing.';
+        }
+        return 'Not fully reconciled: complete ledger coverage could not be confirmed for this period. See Source and coverage diagnostics.';
+    }
+    function renderCashflowCoverageAlert(id, balance) {
+        const alert = element(id);
+        if (!alert) return;
+        const message = cashflowCoverageAlertText(balance);
+        alert.textContent = message;
+        alert.hidden = !message;
+    }
     function renderResult(result) {
         if (!syncCashflowReportRevision(result)) return;
         closeCashflowReconciliation();
+        renderCashflowCoverageAlert('cashflowsLedgerCoverageAlert', (result.preview || {}).balance_reconciliation);
         const summaryResult = cashflowSummaryWithoutLedgers(result);
         rememberCashflowSummary(summaryResult);
         lastCashflowsResult = summaryResult;
@@ -4626,6 +4653,7 @@
         closeCashflowAccountPopover(false);
         closeCashflowReconciliation();
         element('cashflowsReconciliationButton').hidden = true;
+        renderCashflowCoverageAlert('cashflowsLedgerCoverageAlert', null);
         const forceRefresh = !!(options && options.forceRefresh);
         const generation = ++cashflowSummaryGeneration;
         if (cashflowSummaryController) cashflowSummaryController.abort();
@@ -4697,6 +4725,7 @@
             }
             if (ownsProcessing) setCashflowProcessingStep('render', 'Rendering the grouped Cashflows summary.');
             cashflowBalancesPending = false;
+            renderCashflowCoverageAlert('cashflowsLedgerCoverageAlert', (result.preview || {}).balance_reconciliation);
             const sameMovements = renderedCached && lastCashflowsResult
                 && cashflowReportRevisionFromResult(result) > 0
                 && cashflowReportRevisionFromResult(result) === cashflowReportRevision

@@ -10105,6 +10105,9 @@ body {
 .acc2-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .acc2-table th, .acc2-table td { border-bottom: 1px solid #e2e8f0; padding: 9px 10px; text-align: left; vertical-align: middle; }
 .acc2-table th { position: sticky; top: 0; z-index: 1; background: #f8fafc; color: #64748b; font-size: 10px; letter-spacing: .04em; text-transform: uppercase; }
+.acc2-assignment-toolbar { flex-wrap: wrap; }
+.acc2-toolbar .acc2-assignment-search { width: min(100%, 230px); padding: 7px 8px; font-size: 12px; }
+.acc2-assignment-toolbar .acc2-action-btn { flex: 0 0 auto; white-space: nowrap; }
 .acc2-table tr:last-child td { border-bottom: 0; }
 .acc2-table tr.acc2-parent td { background: #f8fafc; font-weight: 600; }
 .acc2-type.historical { background: #dbeafe; color: #124d7d; }
@@ -10131,6 +10134,7 @@ body {
     .acc2-guidance-popover { right: auto; left: 0; }
     .acc2-source { margin-top: 12px; max-width: none; }
     .acc2-toolbar label, .acc2-toolbar input { display: block; width: 100%; margin-bottom: 7px; }
+    .acc2-assignment-toolbar .acc2-action-btn { margin-bottom: 7px; }
     .acc2-count { display: block; margin: 4px 0 0; }
     .acc2-panel { padding: 14px; }
 }
@@ -10212,6 +10216,26 @@ body {
 #accFinancialSetupModal .acc2-fs-heading-list, #accFinancialSetupModal .acc2-fs-children, #accFinancialSetupModal .acc2-fs-sort-list > div { display: grid; gap: 7px; }
 #accFinancialSetupModal .acc2-fs-category { padding: 10px 16px 10px 32px; border-top: 1px solid #edf1f4; color: #34495e; }
 #accFinancialSetupModal .acc2-fs-children .acc2-fs-category { border: 1px solid #edf1f4; border-radius: 7px; background: #fff; }
+#accFinancialSetupModal .acc2-fs-calculation-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border: 1px solid #d9e4eb; border-radius: 7px; background: #f7fafc; color: #18344b; }
+#accFinancialSetupModal .acc2-fs-calculation-line.subtotal { margin-top: 2px; border-top: 2px solid #9fb5c5; background: #f4f8fb; }
+#accFinancialSetupModal .acc2-fs-calculation-line.total { border-top: 2px solid #69869b; background: #eef4f8; }
+#accFinancialSetupModal .acc2-fs-calculation-label { display: flex; min-width: 0; align-items: center; gap: 10px; }
+#accFinancialSetupModal .acc2-fs-calculation-label > span:last-child { display: grid; gap: 3px; min-width: 0; }
+#accFinancialSetupModal .acc2-fs-calculation-label small { overflow-wrap: anywhere; color: #617589; font-size: 12px; }
+#accFinancialSetupModal .acc2-fs-sigma { display: inline-grid; width: 25px; height: 25px; flex: 0 0 25px; place-items: center; border-radius: 6px; background: #e2edf4; color: #1769aa; font-weight: 700; }
+#accFinancialSetupModal .acc2-fs-total-list { display: grid; gap: 7px; margin-top: 22px; padding-top: 14px; border-top: 1px solid #dbe4ea; }
+#accFinancialSetupModal .acc2-fs-total-list h3 { margin: 0 0 3px; color: #536577; font-size: 13px; letter-spacing: .04em; text-transform: uppercase; }
+#accFinancialSetupModal .acc2-fs-calc-editor { display: grid; gap: 12px; margin: 0 0 18px; padding: 16px; border: 1px solid #bdd2e0; border-radius: 10px; background: #f8fbfd; }
+#accFinancialSetupModal .acc2-fs-calc-editor-head small { display: block; margin-top: 3px; color: #617589; }
+#accFinancialSetupModal .acc2-fs-calc-label { display: grid; gap: 5px; color: #34495e; font-size: 13px; font-weight: 600; }
+#accFinancialSetupModal .acc2-fs-calc-label input { width: 100%; max-width: 460px; min-height: 38px; padding: 8px 10px; border: 1px solid #cad8e2; border-radius: 7px; background: #fff; color: #18344b; font: inherit; font-weight: 400; }
+#accFinancialSetupModal .acc2-fs-calc-choices { display: grid; gap: 6px; max-height: 230px; overflow: auto; }
+#accFinancialSetupModal .acc2-fs-calc-choice { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; border: 1px solid #e1e9ef; border-radius: 7px; background: #fff; color: #34495e; }
+#accFinancialSetupModal .acc2-fs-calc-choice > span { display: flex; min-width: 0; align-items: center; gap: 9px; }
+#accFinancialSetupModal .acc2-fs-calc-choice > span > span { overflow-wrap: anywhere; }
+#accFinancialSetupModal .acc2-fs-calc-choice input[type="checkbox"] { accent-color: #1769aa; }
+#accFinancialSetupModal .acc2-fs-calc-choice select { width: 48px; min-height: 30px; border: 1px solid #cbd9e3; border-radius: 6px; background: #fff; color: #18344b; font-weight: 700; text-align: center; }
+#accFinancialSetupModal .acc2-fs-calc-editor-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 #accFinancialSetupModal .acc2-fs-standalone { margin-top: 22px; }
 #accFinancialSetupModal .acc2-fs-standalone h3 { color: #536577; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; }
 #accFinancialSetupModal .acc2-fs-empty, #accFinancialSetupModal .acc2-fs-empty-state { padding: 14px 16px; color: #718096; font-size: 13px; }
@@ -10234,6 +10258,7 @@ body {
 #accFinancialSetupModal [data-notes-section][aria-busy="true"] .acc2-fs-drag-handle { cursor: progress; opacity: .55; }
 #accFinancialSetupModal .acc2-notes-group.legacy > h3 { background: #fafafa; color: #64748b; }
 @media (max-width: 700px) { #accFinancialSetupModal .acc2-notes-source-row { gap: 5px; } #accFinancialSetupModal .acc2-note-row { flex-wrap: wrap; } }
+@media (max-width: 700px) { #accFinancialSetupModal .acc2-fs-calculation-line { align-items: flex-start; flex-wrap: wrap; } #accFinancialSetupModal .acc2-fs-calculation-line > span:last-child { margin-left: 35px; } #accFinancialSetupModal .acc2-fs-calc-choice { align-items: flex-start; } }
 .acc2-modal-tab { border: 0; border-bottom: 3px solid transparent; padding: 10px 12px; background: transparent; color: #536575; cursor: pointer; }
 .acc2-modal-tab.active { border-bottom-color: #1769aa; color: #124d7d; font-weight: 700; }
 .acc2-modal-search { width: 100%; margin: 8px 0 14px; }

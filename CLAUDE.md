@@ -34,9 +34,9 @@ One line per file group: what it is now. Full build history for every entry live
 - static/procedure_modal.js → shared Verification/Audit Workbook Procedure modal for grouped Data Table search, evidence/Forms, procedures, and observations. See CHANGELOG_ARCHIVE.md.
 - static/audit_workbook.js, static/audit_workbook.html → Audit Workbook: session rows, filtering, totals, shared Procedure Modal, and cached evidence/Form completion badges. See CHANGELOG_ARCHIVE.md.
 - routers/trial_balance.py → Trial Balance upload, hierarchy, categories, deletion, and shared latest parsed-upload lookup. See CHANGELOG_ARCHIVE.md.
-- routers/account_control_center.py → account mappings, Financial Statement outline order and orphan-safe cascade deletion, Cash Flow configuration, and treasury setup. See CHANGELOG_ARCHIVE.md.
+- routers/account_control_center.py → account mappings, Financial Statement outlines and Balance Sheet calculations, Cash Flow configuration, and treasury setup. See CHANGELOG_ARCHIVE.md.
 - static/trial_balance.html, static/trial_balance.js → Trial Balance upload/review with loading feedback; Period End supplies `as_of_date` without a separate input. See CHANGELOG_ARCHIVE.md.
-- static/account_control_center.html, static/account_control_center.js → central account mapping, Financial Statement/Notes outlines, filtered note assignments, and Cash Flow setup. See CHANGELOG_ARCHIVE.md.
+- static/account_control_center.html, static/account_control_center.js → central mapping, statement outlines and Balance Sheet calculations, filtered Notes assignments, and Cash Flow setup. See CHANGELOG_ARCHIVE.md.
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Two-pane Audit Rules editor for Documents, Cross-checks, Categories, Voucher Checks and Assertions, plus Assign Categories. See CHANGELOG_ARCHIVE.md.
 - category_control_center_prototype.html → standalone review-only prototype for the Category Control Center redesign; sample data only, no backend connection.
@@ -58,7 +58,7 @@ One line per file group: what it is now. Full build history for every entry live
 - experiments/cashflow_fetch/*.py + tests/test_cashflow_fetch_benchmark.py → Standalone read-only transport benchmarks with exact source/report/export comparisons; never loaded by the app. See CHANGELOG_ARCHIVE.md.
 
 
-- static/reconciliation.html, static/reconciliation.js → Cashflow selection, completeness, background shared ledger preparation, inline category expansion, freshness checks, and bounded caches. See CHANGELOG_ARCHIVE.md.
+- static/reconciliation.html, static/reconciliation.js → Cashflow selection, completeness, coverage alerts, background ledger preparation, category expansion, freshness checks, and bounded caches. See CHANGELOG_ARCHIVE.md.
 
 ## Commands
 - Run app: [your actual run command]
@@ -257,7 +257,9 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
-- 2026-10-27: Notes account dropdowns show effective breakdowns under each mapped statement category; category-change reassignment remains deferred. See CHANGELOG_ARCHIVE.md.
+- 2026-10-28: ACC Balance Sheet totals support subtotals or categories per heading, prevent overlap, and follow the last included section. See CHANGELOG_ARCHIVE.md.
+- 2026-10-27: Financial Statement and Notes account tables filter by assignment; matching descendants retain parent context. See CHANGELOG_ARCHIVE.md.
+- 2026-10-26: Cashflows shows verified ledger-coverage alerts on the report and reconciliation pages. See CHANGELOG_ARCHIVE.md, Cashflows ledger coverage alerts.
 - 2026-10-26: Cashflows builds shared category ledger details after summary render; inline expansion remains available during build. See CHANGELOG_ARCHIVE.md.
 - 2026-10-25: Reconciliation keeps detail rows during coalesced tab-return checks; stale or unverifiable evidence stays locked. See CHANGELOG_ARCHIVE.md.
 - 2026-10-25: Isolated application recovery verified and locally accepted; complete rows, settings, numbering and object permissions match. See CHANGELOG_ARCHIVE.md.

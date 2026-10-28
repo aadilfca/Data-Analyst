@@ -3058,6 +3058,37 @@ def init_db():
                 UNIQUE(client_id, category_type, category_key)
             )
         ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_statement_calculations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                statement_section TEXT NOT NULL CHECK (statement_section IN ('balance_sheet', 'income_statement')),
+                calculation_type TEXT NOT NULL CHECK (calculation_type IN ('subtotal', 'total')),
+                label TEXT NOT NULL,
+                parent_heading_id INTEGER REFERENCES account_control_categories(id) ON DELETE RESTRICT,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                CHECK ((calculation_type = 'subtotal' AND parent_heading_id IS NOT NULL) OR
+                       (calculation_type = 'total' AND parent_heading_id IS NULL))
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE UNIQUE INDEX IF NOT EXISTS idx_statement_subtotal_heading ON account_control_statement_calculations (client_id, parent_heading_id) WHERE calculation_type = 'subtotal'")
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_statement_calculation_components (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                calculation_id INTEGER NOT NULL REFERENCES account_control_statement_calculations(id) ON DELETE CASCADE,
+                source_category_id INTEGER REFERENCES account_control_categories(id) ON DELETE RESTRICT,
+                source_calculation_id INTEGER REFERENCES account_control_statement_calculations(id) ON DELETE RESTRICT,
+                operator TEXT NOT NULL CHECK (operator IN ('add', 'subtract')),
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                CHECK ((source_category_id IS NOT NULL AND source_calculation_id IS NULL) OR
+                       (source_category_id IS NULL AND source_calculation_id IS NOT NULL)),
+                UNIQUE(calculation_id, source_category_id),
+                UNIQUE(calculation_id, source_calculation_id)
+            )
+        ''')
         category_columns = {row[1] for row in conn.execute("PRAGMA table_info(account_control_categories)").fetchall()}
         if "statement_section" not in category_columns:
             conn.execute("ALTER TABLE account_control_categories ADD COLUMN statement_section TEXT")
@@ -4181,6 +4212,36 @@ def _ensure_postgres_account_set_tables(conn):
                 created_at TIMESTAMPTZ DEFAULT now(),
                 updated_at TIMESTAMPTZ DEFAULT now(),
                 UNIQUE(client_id, category_type, category_key)
+            )
+        ''')
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_statement_calculations (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                statement_section TEXT NOT NULL CHECK (statement_section IN ('balance_sheet', 'income_statement')),
+                calculation_type TEXT NOT NULL CHECK (calculation_type IN ('subtotal', 'total')),
+                label TEXT NOT NULL,
+                parent_heading_id INTEGER REFERENCES account_control_categories(id) ON DELETE RESTRICT,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                updated_at TIMESTAMPTZ DEFAULT now(),
+                CHECK ((calculation_type = 'subtotal' AND parent_heading_id IS NOT NULL) OR
+                       (calculation_type = 'total' AND parent_heading_id IS NULL))
+            )
+        ''')
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_statement_subtotal_heading ON account_control_statement_calculations (client_id, parent_heading_id) WHERE calculation_type = 'subtotal'")
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_statement_calculation_components (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                calculation_id INTEGER NOT NULL REFERENCES account_control_statement_calculations(id) ON DELETE CASCADE,
+                source_category_id INTEGER REFERENCES account_control_categories(id) ON DELETE RESTRICT,
+                source_calculation_id INTEGER REFERENCES account_control_statement_calculations(id) ON DELETE RESTRICT,
+                operator TEXT NOT NULL CHECK (operator IN ('add', 'subtract')),
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                CHECK ((source_category_id IS NOT NULL AND source_calculation_id IS NULL) OR
+                       (source_category_id IS NULL AND source_calculation_id IS NOT NULL)),
+                UNIQUE(calculation_id, source_category_id),
+                UNIQUE(calculation_id, source_calculation_id)
             )
         ''')
         cur.execute("ALTER TABLE account_control_categories ADD COLUMN IF NOT EXISTS statement_section TEXT")

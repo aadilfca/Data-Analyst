@@ -551,6 +551,22 @@ class AccountControlCategoryReorderPayload(BaseModel):
     parent_category_id: Optional[int] = Field(default=None, ge=1)
 
 
+class StatementCalculationComponentPayload(BaseModel):
+    source_category_id: Optional[int] = Field(default=None, ge=1)
+    source_calculation_id: Optional[int] = Field(default=None, ge=1)
+    operator: str = "add"
+
+
+class StatementCalculationPayload(BaseModel):
+    client_id: int = Field(..., ge=1)
+    statement_section: str = "balance_sheet"
+    calculation_type: str
+    label: str
+    parent_heading_id: Optional[int] = Field(default=None, ge=1)
+    sort_order: int = Field(default=0, ge=0)
+    components: list[StatementCalculationComponentPayload] = Field(default_factory=list)
+
+
 _ACCOUNT_CONTROL_ASSIGNMENT_FIELDS = (
     "verification_workstream", "financial_statement_category_id", "note_category_id",
 )
@@ -1031,6 +1047,244 @@ def list_account_control_categories(
     return {"client_id": client_id, "category_type": cleaned_type, "categories": [dict(row) for row in rows]}
 
 
+def _clean_statement_calculation(payload: StatementCalculationPayload) -> dict[str, Any]:
+    section = _normalise_text(payload.statement_section).casefold()
+    calculation_type = _normalise_text(payload.calculation_type).casefold()
+    label = _normalise_text(payload.label)
+    if section != "balance_sheet":
+        raise HTTPException(400, "This phase supports Balance Sheet calculations only")
+    if calculation_type not in {"subtotal", "total"}:
+        raise HTTPException(400, "Calculation type must be subtotal or total")
+    if not label or len(label) > 120:
+        raise HTTPException(400, "Calculation label is required and must be 120 characters or fewer")
+    if (calculation_type == "subtotal") != (payload.parent_heading_id is not None):
+        raise HTTPException(400, "A subtotal must belong to a heading; a total must be statement-level")
+    return {
+        "client_id": payload.client_id,
+        "statement_section": section,
+        "calculation_type": calculation_type,
+        "label": label,
+        "parent_heading_id": payload.parent_heading_id,
+        "sort_order": payload.sort_order,
+        "components": payload.components,
+    }
+
+
+def _validate_statement_calculation_components(calculation: dict[str, Any]) -> list[dict[str, Any]]:
+    components = calculation["components"]
+    cleaned: list[dict[str, Any]] = []
+    seen: set[tuple[str, int]] = set()
+    for component in components:
+        operator = _normalise_text(component.operator).casefold()
+        if operator not in {"add", "subtract"}:
+            raise HTTPException(400, "Each calculation line must use + or −")
+        source_category_id = component.source_category_id
+        source_calculation_id = component.source_calculation_id
+        if calculation["calculation_type"] == "subtotal":
+            if source_category_id is None or source_calculation_id is not None:
+                raise HTTPException(400, "A subtotal can include only categories under its heading")
+            key = ("category", source_category_id)
+        else:
+            if (source_category_id is None) == (source_calculation_id is None):
+                raise HTTPException(400, "A total row must reference one category or subtotal")
+            key = ("category", source_category_id) if source_category_id is not None else ("calculation", source_calculation_id)
+        if key in seen:
+            raise HTTPException(400, "A calculation row can be included only once")
+        seen.add(key)
+        cleaned.append({
+            "source_category_id": source_category_id,
+            "source_calculation_id": source_calculation_id,
+            "operator": operator,
+            "sort_order": len(cleaned),
+        })
+    if not cleaned:
+        raise HTTPException(400, "Add at least one row to the calculation")
+    if calculation["calculation_type"] == "subtotal":
+        heading_rows = execute_query_pg(
+            "SELECT id, statement_section, row_type, is_active FROM account_control_categories WHERE id = %s AND client_id = %s AND category_type = 'financial_statement'",
+            (calculation["parent_heading_id"], calculation["client_id"]),
+        )
+        if not heading_rows or heading_rows[0]["row_type"] != "heading" or heading_rows[0]["statement_section"] != "balance_sheet":
+            raise HTTPException(400, "Choose a Balance Sheet heading for this subtotal")
+        children = execute_query_pg(
+            "SELECT id FROM account_control_categories WHERE client_id = %s AND category_type = 'financial_statement' AND statement_section = 'balance_sheet' AND row_type = 'category' AND parent_category_id = %s ORDER BY sort_order, id",
+            (calculation["client_id"], calculation["parent_heading_id"]),
+        )
+        child_ids = {int(row["id"]) for row in children}
+        if not child_ids:
+            raise HTTPException(400, "Add at least one category under the heading before creating a subtotal")
+        if {row["source_category_id"] for row in cleaned} != child_ids:
+            raise HTTPException(409, "The heading categories changed. Reload and try again")
+    else:
+        source_ids = [row["source_calculation_id"] for row in cleaned if row["source_calculation_id"] is not None]
+        category_ids = [row["source_category_id"] for row in cleaned if row["source_category_id"] is not None]
+        subtotal_rows = execute_query_pg(
+            "SELECT id, parent_heading_id FROM account_control_statement_calculations WHERE client_id = %s AND statement_section = 'balance_sheet' AND calculation_type = 'subtotal' AND id = ANY(%s)",
+            (calculation["client_id"], source_ids),
+        ) if source_ids else []
+        if {int(row["id"]) for row in subtotal_rows} != set(source_ids):
+            raise HTTPException(400, "Totals can include only existing Balance Sheet subtotals")
+        category_rows = execute_query_pg(
+            """SELECT c.id, c.parent_category_id
+               FROM account_control_categories c
+               JOIN account_control_categories h ON h.id = c.parent_category_id AND h.client_id = c.client_id
+                    AND h.category_type = 'financial_statement' AND h.statement_section = 'balance_sheet' AND h.row_type = 'heading'
+               WHERE c.client_id = %s AND c.category_type = 'financial_statement'
+                 AND c.statement_section = 'balance_sheet' AND c.row_type = 'category' AND c.id = ANY(%s)""",
+            (calculation["client_id"], category_ids),
+        ) if category_ids else []
+        if {int(row["id"]) for row in category_rows} != set(category_ids):
+            raise HTTPException(400, "Totals can include only categories under Balance Sheet headings")
+        # A subtotal already represents its heading's categories; mixing both would double-count them.
+        subtotal_headings = {int(row["parent_heading_id"]) for row in subtotal_rows}
+        category_headings = {int(row["parent_category_id"]) for row in category_rows}
+        if subtotal_headings & category_headings:
+            raise HTTPException(400, "Choose either a heading subtotal or its categories, not both")
+    return cleaned
+
+
+@router.get("/api/account-control-center/statement-calculations")
+def list_statement_calculations(
+    client_id: int = Query(..., ge=1),
+    statement_section: str = Query("balance_sheet"),
+    session=Depends(require_admin),
+):
+    _require_active_client(client_id)
+    if _normalise_text(statement_section).casefold() != "balance_sheet":
+        raise HTTPException(400, "This phase supports Balance Sheet calculations only")
+    calculations = execute_query_pg(
+        "SELECT id, client_id, statement_section, calculation_type, label, parent_heading_id, sort_order FROM account_control_statement_calculations WHERE client_id = %s AND statement_section = 'balance_sheet' ORDER BY calculation_type, sort_order, id",
+        (client_id,),
+    )
+    result: list[dict[str, Any]] = []
+    for calculation in calculations:
+        saved_components = execute_query_pg(
+            "SELECT source_category_id, source_calculation_id, operator, sort_order FROM account_control_statement_calculation_components WHERE calculation_id = %s",
+            (calculation["id"],),
+        )
+        if calculation["calculation_type"] == "subtotal":
+            categories = execute_query_pg(
+                "SELECT id, label FROM account_control_categories WHERE client_id = %s AND category_type = 'financial_statement' AND statement_section = 'balance_sheet' AND row_type = 'category' AND parent_category_id = %s ORDER BY sort_order, LOWER(label), category_key",
+                (client_id, calculation["parent_heading_id"]),
+            )
+            operators = {int(row["source_category_id"]): row["operator"] for row in saved_components if row["source_category_id"] is not None}
+            components = [
+                {"source_category_id": int(category["id"]), "source_calculation_id": None,
+                 "label": category["label"], "operator": operators.get(int(category["id"]), "add")}
+                for category in categories
+            ]
+        else:
+            source_ids = [int(row["source_calculation_id"]) for row in saved_components if row["source_calculation_id"] is not None]
+            category_ids = [int(row["source_category_id"]) for row in saved_components if row["source_category_id"] is not None]
+            sources = execute_query_pg(
+                "SELECT id, label FROM account_control_statement_calculations WHERE client_id = %s AND id = ANY(%s)",
+                (client_id, source_ids or [0]),
+            ) if source_ids else []
+            categories = execute_query_pg(
+                "SELECT id, label FROM account_control_categories WHERE client_id = %s AND category_type = 'financial_statement' AND statement_section = 'balance_sheet' AND row_type = 'category' AND id = ANY(%s)",
+                (client_id, category_ids),
+            ) if category_ids else []
+            subtotal_labels = {int(row["id"]): row["label"] for row in sources}
+            category_labels = {int(row["id"]): row["label"] for row in categories}
+            components = []
+            for row in sorted(saved_components, key=lambda item: int(item.get("sort_order") or 0)):
+                category_id = row["source_category_id"]
+                calculation_id = row["source_calculation_id"]
+                label = category_labels.get(int(category_id)) if category_id is not None else subtotal_labels.get(int(calculation_id))
+                if label is None:
+                    continue
+                components.append({
+                    "source_category_id": int(category_id) if category_id is not None else None,
+                    "source_calculation_id": int(calculation_id) if calculation_id is not None else None,
+                    "label": label,
+                    "operator": row["operator"],
+                })
+        result.append({**dict(calculation), "components": components})
+    return {"client_id": client_id, "statement_section": "balance_sheet", "calculations": result}
+
+
+def _persist_statement_calculation(calculation_id: Optional[int], payload: StatementCalculationPayload, session) -> dict[str, Any]:
+    calculation = _clean_statement_calculation(payload)
+    _require_active_client(calculation["client_id"])
+    with pg_transaction():
+        existing = []
+        if calculation_id is not None:
+            existing = execute_query_pg(
+                "SELECT id, calculation_type, parent_heading_id FROM account_control_statement_calculations WHERE id = %s AND client_id = %s AND statement_section = 'balance_sheet'",
+                (calculation_id, calculation["client_id"]),
+            )
+            if not existing:
+                raise HTTPException(404, "Calculation line not found")
+            if existing[0]["calculation_type"] != calculation["calculation_type"] or existing[0]["parent_heading_id"] != calculation["parent_heading_id"]:
+                raise HTTPException(400, "A calculation line's type and position cannot be changed")
+        components = _validate_statement_calculation_components(calculation)
+        if calculation_id is None:
+            if calculation["calculation_type"] == "subtotal":
+                duplicate = execute_query_pg(
+                    "SELECT id FROM account_control_statement_calculations WHERE client_id = %s AND calculation_type = 'subtotal' AND parent_heading_id = %s",
+                    (calculation["client_id"], calculation["parent_heading_id"]),
+                )
+                if duplicate:
+                    raise HTTPException(409, "This heading already has a subtotal")
+            if calculation["calculation_type"] == "total":
+                existing_totals = execute_query_pg(
+                    "SELECT COALESCE(MAX(sort_order), -1) AS last_order FROM account_control_statement_calculations WHERE client_id = %s AND statement_section = 'balance_sheet' AND calculation_type = 'total'",
+                    (calculation["client_id"],),
+                )
+                calculation["sort_order"] = int(existing_totals[0]["last_order"] if existing_totals and existing_totals[0]["last_order"] is not None else -1) + 1
+            calculation_id = execute_write_pg(
+                "INSERT INTO account_control_statement_calculations (client_id, statement_section, calculation_type, label, parent_heading_id, sort_order, updated_at) VALUES (%s, 'balance_sheet', %s, %s, %s, %s, CURRENT_TIMESTAMP) RETURNING id",
+                (calculation["client_id"], calculation["calculation_type"], calculation["label"], calculation["parent_heading_id"], calculation["sort_order"]),
+            )
+        else:
+            execute_write_pg(
+                "UPDATE account_control_statement_calculations SET label = %s, sort_order = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s AND client_id = %s",
+                (calculation["label"], calculation["sort_order"], calculation_id, calculation["client_id"]),
+            )
+            execute_write_pg("DELETE FROM account_control_statement_calculation_components WHERE calculation_id = %s", (calculation_id,))
+        for component in components:
+            execute_write_pg(
+                "INSERT INTO account_control_statement_calculation_components (calculation_id, source_category_id, source_calculation_id, operator, sort_order) VALUES (%s, %s, %s, %s, %s)",
+                (calculation_id, component["source_category_id"], component["source_calculation_id"], component["operator"], component["sort_order"]),
+            )
+    return {"saved": True, "calculation_id": calculation_id}
+
+
+@router.post("/api/account-control-center/statement-calculations")
+def create_statement_calculation(payload: StatementCalculationPayload, session=Depends(require_admin)):
+    return _persist_statement_calculation(None, payload, session)
+
+
+@router.put("/api/account-control-center/statement-calculations/{calculation_id}")
+def update_statement_calculation(calculation_id: int, payload: StatementCalculationPayload, session=Depends(require_admin)):
+    return _persist_statement_calculation(calculation_id, payload, session)
+
+
+@router.delete("/api/account-control-center/statement-calculations/{calculation_id}")
+def delete_statement_calculation(
+    calculation_id: int,
+    client_id: int = Query(..., ge=1),
+    session=Depends(require_admin),
+):
+    _require_active_client(client_id)
+    with pg_transaction():
+        rows = execute_query_pg(
+            "SELECT calculation_type FROM account_control_statement_calculations WHERE id = %s AND client_id = %s AND statement_section = 'balance_sheet'",
+            (calculation_id, client_id),
+        )
+        if not rows:
+            raise HTTPException(404, "Calculation line not found")
+        if rows[0]["calculation_type"] == "subtotal":
+            used = execute_query_pg(
+                "SELECT id FROM account_control_statement_calculation_components WHERE source_calculation_id = %s LIMIT 1",
+                (calculation_id,),
+            )
+            if used:
+                raise HTTPException(409, "Remove this subtotal from its Total line before deleting it")
+        execute_write_pg("DELETE FROM account_control_statement_calculations WHERE id = %s AND client_id = %s", (calculation_id, client_id))
+    return {"deleted": True, "calculation_id": calculation_id}
+
+
 @router.post("/api/account-control-center/categories")
 def create_account_control_category(payload: AccountControlCategoryPayload, session=Depends(require_admin)):
     category = _clean_category_payload(payload)
@@ -1129,7 +1383,7 @@ def reorder_account_control_categories(payload: AccountControlCategoryReorderPay
 def update_account_control_category(category_id: int, payload: AccountControlCategoryUpdatePayload, session=Depends(require_admin)):
     category = _clean_category_update(payload)
     rows = execute_query_pg(
-        "SELECT id, source_statement_category_id FROM account_control_categories WHERE id = %s AND client_id = %s AND category_type = %s",
+        "SELECT id, source_statement_category_id, statement_section, row_type, parent_category_id FROM account_control_categories WHERE id = %s AND client_id = %s AND category_type = %s",
         (category_id, category["client_id"], category["category_type"]),
     )
     if not rows:
@@ -1147,6 +1401,39 @@ def update_account_control_category(category_id: int, payload: AccountControlCat
         if not new_source or old_section != new_source[0]["statement_section"]:
             raise HTTPException(400, "Notes can move only within the same statement")
     _validate_statement_parent(category, current_id=category_id)
+    if (
+        category["category_type"] == "financial_statement"
+        and category["row_type"] == "category"
+        and (rows[0].get("parent_category_id") != category["parent_category_id"] or rows[0].get("statement_section") != category["statement_section"])
+    ):
+        total_rows = execute_query_pg(
+            """SELECT DISTINCT component.calculation_id
+               FROM account_control_statement_calculation_components component
+               JOIN account_control_statement_calculations calculation ON calculation.id = component.calculation_id
+               WHERE calculation.client_id = %s AND calculation.calculation_type = 'total'
+                 AND component.source_category_id = %s""",
+            (category["client_id"], category_id),
+        )
+        total_ids = [int(row["calculation_id"]) for row in total_rows]
+        if total_ids and category["parent_category_id"] is not None:
+            overlaps = execute_query_pg(
+                """SELECT component.id
+                   FROM account_control_statement_calculation_components component
+                   JOIN account_control_statement_calculations subtotal ON subtotal.id = component.source_calculation_id
+                   WHERE component.calculation_id = ANY(%s) AND subtotal.calculation_type = 'subtotal'
+                     AND subtotal.parent_heading_id = %s LIMIT 1""",
+                (total_ids, category["parent_category_id"]),
+            )
+            if overlaps:
+                raise HTTPException(409, "Remove either this category or the destination heading subtotal from the Total line before moving it")
+        # Keep direct Total references, while dropping the moved category's old subtotal operator.
+        execute_write_pg(
+            """DELETE FROM account_control_statement_calculation_components component
+               USING account_control_statement_calculations calculation
+               WHERE calculation.id = component.calculation_id AND calculation.calculation_type = 'subtotal'
+                 AND component.source_category_id = %s""",
+            (category_id,),
+        )
     execute_write_pg(
         """UPDATE account_control_categories
            SET label = %s, statement_section = %s, row_type = %s, parent_category_id = %s, source_statement_category_id = %s,
@@ -1222,7 +1509,29 @@ def delete_account_control_category(
         )
         if linked_notes:
             raise HTTPException(409, "Delete the linked note breakdown first")
+        direct_total_reference = execute_query_pg(
+            """SELECT component.id FROM account_control_statement_calculation_components component
+               JOIN account_control_statement_calculations calculation ON calculation.id = component.calculation_id
+               WHERE calculation.client_id = %s AND calculation.calculation_type = 'total'
+                 AND component.source_category_id = ANY(%s) LIMIT 1""",
+            (client_id, delete_ids),
+        )
+        if direct_total_reference:
+            raise HTTPException(409, "Remove this category from its Total line before deleting it")
         id_placeholders = ", ".join(["%s"] * len(delete_ids))
+
+        subtotal_rows = execute_query_pg(
+            "SELECT id FROM account_control_statement_calculations WHERE client_id = %s AND statement_section = 'balance_sheet' AND calculation_type = 'subtotal' AND parent_heading_id = %s",
+            (client_id, category_id),
+        ) if category["row_type"] == "heading" else []
+        subtotal_ids = [int(row["id"]) for row in subtotal_rows]
+        if subtotal_ids:
+            referenced = execute_query_pg(
+                "SELECT id FROM account_control_statement_calculation_components WHERE source_calculation_id = ANY(%s) LIMIT 1",
+                (subtotal_ids,),
+            )
+            if referenced:
+                raise HTTPException(409, "Remove this heading subtotal from its Total line before deleting the heading")
 
         # Preserve categories used by any account code in any Trial Balance upload.
         current_assignments = execute_query_pg(
@@ -1262,6 +1571,18 @@ def delete_account_control_category(
                            AND t.account_code = account_control_assignments.account_code
                      )""".format(id_placeholders),
                 tuple([str((session or {}).get("username") or "Admin"), client_id, *delete_ids]),
+            )
+
+        if subtotal_ids:
+            execute_write_pg(
+                "DELETE FROM account_control_statement_calculations WHERE client_id = %s AND id = ANY(%s)",
+                (client_id, subtotal_ids),
+            )
+        else:
+            # Remove saved +/− overrides before deleting any category they refer to.
+            execute_write_pg(
+                f"DELETE FROM account_control_statement_calculation_components WHERE source_category_id IN ({id_placeholders})",
+                tuple(delete_ids),
             )
 
         if child_categories:
