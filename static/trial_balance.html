@@ -401,6 +401,21 @@
             border-radius: 8px;
         }
 
+        /* Keep the Available Trial Balances amount columns readable on narrow screens. */
+        #availableAccountsTableWrapper {
+            overflow-x: auto;
+        }
+
+        #availableAccountsTableWrapper .tb-review-table {
+            min-width: 1240px;
+        }
+
+        #availableAccountsTableWrapper .tb-amount-cell {
+            text-align: right;
+            white-space: nowrap;
+            font-variant-numeric: tabular-nums;
+        }
+
         /* ---------- COLUMN MAPPING (Section 1, Phase 2) ---------- */
         /* Reuses .tb-review-table/.tb-review-table-wrapper as-is for both the mapping
            table and the preview table; this is the one style addition needed since
@@ -616,12 +631,9 @@
     </div>
     <!-- /uploadViewContainer -->
 
-    <!-- Available Trial Balances (Section 1, Phase 2): read-only browsing view -- an
-         upload-selection dropdown (fed by GET /api/trial-balance/uploads, Phase 1) and
-         a Code/Name/Classification table for whichever upload is selected (fed by the
-         existing GET /api/trial-balance/accounts, unchanged). No override controls here
-         -- that's the Review Classifications screen above, this is purely a reference
-         view. Hidden by default; toggled with uploadViewContainer above. -->
+    <!-- Available Trial Balances is a read-only browsing view for a selected upload,
+         including the account hierarchy and its six stored opening/period/closing amounts.
+         Classification changes remain in the Review Classifications screen above. -->
     <div class="tb-form-group" id="availableTrialBalancesSection" style="display:none;">
         <div class="tb-field-row" style="margin-bottom:8px;">
             <button class="btn-secondary-action" id="closeAvailableTrialBalancesBtn" type="button">← Back</button>
@@ -648,6 +660,12 @@
                     <tr>
                         <th>Code</th>
                         <th>Name</th>
+                        <th class="tb-amount-cell">Opening Dr</th>
+                        <th class="tb-amount-cell">Opening Cr</th>
+                        <th class="tb-amount-cell">Period Dr</th>
+                        <th class="tb-amount-cell">Period Cr</th>
+                        <th class="tb-amount-cell">Closing Dr</th>
+                        <th class="tb-amount-cell">Closing Cr</th>
                         <th>Classification</th>
                     </tr>
                 </thead>
@@ -660,7 +678,8 @@
 
     <script src="/static/loading_ui.js?v=2"></script>
     <script src="/static/client_context.js?v=21"></script>
-    <script src="/static/trial_balance.js?v=7"></script>
+    <script src="/static/utils.js"></script>
+    <script src="/static/trial_balance.js?v=8"></script>
 </body>
 
 </html>

@@ -741,7 +741,9 @@ def list_trial_balance_accounts(upload_id: int, is_leaf: Optional[bool] = None):
     """
     _require_upload(upload_id)
 
-    query = "SELECT id, account_code, account_name, level, classification, manually_overridden FROM trial_balance_accounts WHERE upload_id = %s"
+    query = """SELECT id, account_code, account_name, level, classification, manually_overridden,
+                      opening_dr, opening_cr, period_dr, period_cr, closing_dr, closing_cr
+               FROM trial_balance_accounts WHERE upload_id = %s"""
     params = [upload_id]
     if is_leaf is not None:
         # classification is stored as the text 'leaf'/'parent' (Phase 1/2) -
@@ -760,6 +762,12 @@ def list_trial_balance_accounts(upload_id: int, is_leaf: Optional[bool] = None):
             "level": r["level"],
             "is_leaf": r["classification"] == "leaf",
             "manually_overridden": bool(r["manually_overridden"]),
+            "opening_dr": r["opening_dr"],
+            "opening_cr": r["opening_cr"],
+            "period_dr": r["period_dr"],
+            "period_cr": r["period_cr"],
+            "closing_dr": r["closing_dr"],
+            "closing_cr": r["closing_cr"],
         }
         for r in rows
     ]

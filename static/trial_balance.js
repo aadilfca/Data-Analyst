@@ -994,12 +994,14 @@ async function loadAvailableUploadAccounts(uploadId, target = availableUploadsDr
     }
 }
 
-// Read-only Code/Name/Classification rows -- reuses buildClassificationCellContent()
+// Read-only account and amount rows -- reuses buildClassificationCellContent()
 // (the same Leaf/Parent badge + "Overridden" tag builder the Review Classifications
 // screen uses) so a manually-overridden account still shows that fact here, without
 // any of the toggle/Action column that screen adds on top of it.
 function renderAvailableAccountsTable(accounts) {
     availableAccountsTableBody.innerHTML = '';
+
+    const amountFields = ['opening_dr', 'opening_cr', 'period_dr', 'period_cr', 'closing_dr', 'closing_cr'];
 
     accounts.forEach(function (account) {
         const tr = document.createElement('tr');
@@ -1011,6 +1013,15 @@ function renderAvailableAccountsTable(accounts) {
         const tdName = document.createElement('td');
         tdName.textContent = account.account_name || '—';
         tr.appendChild(tdName);
+
+        amountFields.forEach(function (field) {
+            const tdAmount = document.createElement('td');
+            tdAmount.className = 'tb-amount-cell';
+            tdAmount.textContent = typeof window.formatAmount === 'function'
+                ? window.formatAmount(account[field])
+                : (account[field] === null || account[field] === undefined ? '—' : String(account[field]));
+            tr.appendChild(tdAmount);
+        });
 
         const tdClassification = document.createElement('td');
         tdClassification.appendChild(buildClassificationCellContent(account));
@@ -1116,5 +1127,6 @@ window.onload = async function () {
     // await, getSelectedClientId() returns null here and the page shows its "no client selected"
     // warning with Upload permanently disabled, despite a valid session.
     if (window.clientContextReady) await window.clientContextReady;
+    if (typeof window.initUtils === 'function') await window.initUtils();
     updateClientDependentUI();
 };
