@@ -505,6 +505,7 @@ _VERIFICATION_WORKSTREAMS = frozenset({
 
 class AccountControlAssignmentPayload(BaseModel):
     client_id: int = Field(..., ge=1)
+    trial_balance_upload_id: Optional[int] = Field(default=None, ge=1)
     account_code: str
     verification_workstream: Optional[str] = None
     financial_statement_category_id: Optional[int] = Field(default=None, ge=1)
@@ -513,6 +514,7 @@ class AccountControlAssignmentPayload(BaseModel):
 
 class AccountControlBulkAssignmentPayload(BaseModel):
     client_id: int = Field(..., ge=1)
+    trial_balance_upload_id: Optional[int] = Field(default=None, ge=1)
     parent_account_code: str
     verification_workstream: Optional[str] = None
     financial_statement_category_id: Optional[int] = Field(default=None, ge=1)
@@ -586,6 +588,7 @@ _CASHFLOW_ROLE_CATEGORY_KEYS = (
 
 class CashFlowAssignmentPayload(BaseModel):
     client_id: int = Field(..., ge=1)
+    trial_balance_upload_id: Optional[int] = Field(default=None, ge=1)
     account_code: str
     section: str = "unassigned"
     category_label: Optional[str] = None
@@ -595,6 +598,7 @@ class CashFlowAssignmentPayload(BaseModel):
 
 class CashFlowBulkAssignmentPayload(BaseModel):
     client_id: int = Field(..., ge=1)
+    trial_balance_upload_id: Optional[int] = Field(default=None, ge=1)
     parent_account_code: str
     section: str = "unassigned"
     category_label: Optional[str] = None
@@ -619,18 +623,21 @@ class CashFlowCategoryUpdatePayload(BaseModel):
 
 class CashFlowCategoryAssignmentPayload(BaseModel):
     client_id: int = Field(..., ge=1)
+    trial_balance_upload_id: Optional[int] = Field(default=None, ge=1)
     account_code: str
     category_id: Optional[int] = Field(default=None, ge=1)
 
 
 class CashFlowCategoryBulkAssignmentPayload(BaseModel):
     client_id: int = Field(..., ge=1)
+    trial_balance_upload_id: Optional[int] = Field(default=None, ge=1)
     parent_account_code: str
     category_id: Optional[int] = Field(default=None, ge=1)
 
 
 class CashFlowTreasuryAccountsPayload(BaseModel):
     client_id: int = Field(..., ge=1)
+    trial_balance_upload_id: Optional[int] = Field(default=None, ge=1)
     cash_account_codes: list[str] = Field(default_factory=list)
     bank_account_codes: list[str] = Field(default_factory=list)
 
@@ -812,6 +819,33 @@ def _latest_control_accounts(client_id: int) -> tuple[dict[str, Any], list[dict[
     if not upload:
         raise HTTPException(404, "No parsed Trial Balance found for this client")
     return upload, _accounts_for_upload(upload["id"])
+
+
+def _selected_control_accounts(client_id: int, upload_id: Optional[int] = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    if upload_id is None:
+        return _latest_control_accounts(client_id)
+    _require_active_client(client_id)
+    rows = execute_query_pg(
+        """SELECT id, client_id, as_of_date, period_start, period_end, period_type,
+                  uploaded_at, file_name, row_count
+           FROM trial_balance_uploads
+           WHERE id = %s AND client_id = %s AND status = 'parsed'""",
+        (upload_id, client_id),
+    )
+    if not rows:
+        raise HTTPException(400, "Selected Trial Balance is unavailable; refresh and choose an available upload")
+    return rows[0], _accounts_for_upload(upload_id)
+
+
+def _control_upload_options(client_id: int) -> list[dict[str, Any]]:
+    return execute_query_pg(
+        """SELECT id, as_of_date, period_start, period_end, period_type, uploaded_at,
+                  file_name, row_count
+           FROM trial_balance_uploads
+           WHERE client_id = %s AND status = 'parsed'
+           ORDER BY (period_end IS NULL), period_end DESC, uploaded_at DESC""",
+        (client_id,),
+    )
 
 
 def _validate_control_categories(client_id: int, assignment: dict[str, Any]) -> None:
@@ -1724,9 +1758,9 @@ def delete_account_control_category(
     }
 
 @router.get("/api/account-control-center/mapping")
-def get_account_control_mapping(client_id: int = Query(..., ge=1), session=Depends(require_admin)):
-    """Return the latest Trial Balance tree with one simplified assignment object per account."""
-    upload, accounts = _latest_control_accounts(client_id)
+def get_account_control_mapping(client_id: int = Query(..., ge=1), trial_balance_upload_id: Optional[int] = Query(default=None, ge=1), session=Depends(require_admin)):
+    """Return the selected Trial Balance tree with one shared assignment per account."""
+    upload, accounts = _selected_control_accounts(client_id, trial_balance_upload_id)
     rows = execute_query_pg(
         """SELECT account_code, verification_workstream, financial_statement_category_id, note_category_id
            FROM account_control_assignments WHERE client_id = %s""",
@@ -1736,6 +1770,7 @@ def get_account_control_mapping(client_id: int = Query(..., ge=1), session=Depen
     return {
         "client_id": client_id,
         "upload": upload,
+        "uploads": _control_upload_options(client_id),
         "verification_workstreams": sorted(_VERIFICATION_WORKSTREAMS),
         "accounts": [
             {
@@ -1760,13 +1795,13 @@ def get_account_control_mapping(client_id: int = Query(..., ge=1), session=Depen
 def save_account_control_mapping(payload: AccountControlAssignmentPayload, session=Depends(require_admin)):
     """Save one leaf-account assignment; parent-to-child application is a separate bulk operation."""
     assignment = _clean_control_assignment(payload)
-    _upload, accounts = _latest_control_accounts(assignment["client_id"])
+    _upload, accounts = _selected_control_accounts(assignment["client_id"], payload.trial_balance_upload_id)
     account = next(
         (row for row in accounts if _normalise_account_code(row["account_code"]) == assignment["account_code"]),
         None,
     )
     if not account:
-        raise HTTPException(400, "Account code is not present in the latest Trial Balance")
+        raise HTTPException(400, "Account code is not present in the selected Trial Balance")
     if account["classification"] != "leaf":
         raise HTTPException(400, "Assign the parent through the bulk child operation; direct assignments require a leaf account")
     _validate_control_categories(assignment["client_id"], assignment)
@@ -1779,17 +1814,19 @@ def apply_account_control_mapping_to_children(payload: AccountControlBulkAssignm
     """Apply one assignment to every latest-Trial-Balance leaf below a selected parent."""
     parent_code = _clean_control_account_code(payload.parent_account_code)
     internal_payload = {"client_id": payload.client_id, "account_code": parent_code}
+    if payload.trial_balance_upload_id is not None:
+        internal_payload["trial_balance_upload_id"] = payload.trial_balance_upload_id
     for field in _ACCOUNT_CONTROL_ASSIGNMENT_FIELDS:
         if field in getattr(payload, "model_fields_set", set()):
             internal_payload[field] = getattr(payload, field)
     assignment = _clean_control_assignment(AccountControlAssignmentPayload(**internal_payload))
-    _upload, accounts = _latest_control_accounts(assignment["client_id"])
+    _upload, accounts = _selected_control_accounts(assignment["client_id"], payload.trial_balance_upload_id)
     parent = next(
         (row for row in accounts if _normalise_account_code(row["account_code"]) == parent_code),
         None,
     )
     if not parent:
-        raise HTTPException(400, "Parent account is not present in the latest Trial Balance")
+        raise HTTPException(400, "Parent account is not present in the selected Trial Balance")
     leaves = [
         row for row in accounts
         if row["classification"] == "leaf"
@@ -1809,9 +1846,9 @@ def apply_account_control_mapping_to_children(payload: AccountControlBulkAssignm
     return {"saved": True, "parent_account_code": parent_code, "leaf_count": len(leaves)}
 
 @router.get("/api/account-control-center/cashflow")
-def get_account_control_cashflow(client_id: int = Query(..., ge=1), session=Depends(require_admin)):
-    """Return the latest Trial Balance tree with separate Cash Flow Setup rules."""
-    upload, accounts = _latest_control_accounts(client_id)
+def get_account_control_cashflow(client_id: int = Query(..., ge=1), trial_balance_upload_id: Optional[int] = Query(default=None, ge=1), session=Depends(require_admin)):
+    """Return the selected Trial Balance tree with separate Cash Flow Setup rules."""
+    upload, accounts = _selected_control_accounts(client_id, trial_balance_upload_id)
     rows = execute_query_pg(
         """SELECT account_code, section, category_label, cash_bank_role, treatment_type
            FROM account_control_cashflow_assignments WHERE client_id = %s""",
@@ -1848,13 +1885,13 @@ def get_account_control_cashflow(client_id: int = Query(..., ge=1), session=Depe
 def save_account_control_cashflow(payload: CashFlowAssignmentPayload, session=Depends(require_admin)):
     """Save one leaf-account Cash Flow Setup rule."""
     assignment = _clean_cashflow_assignment(payload)
-    _upload, accounts = _latest_control_accounts(assignment["client_id"])
+    _upload, accounts = _selected_control_accounts(assignment["client_id"], payload.trial_balance_upload_id)
     account = next(
         (row for row in accounts if _normalise_account_code(row["account_code"]) == assignment["account_code"]),
         None,
     )
     if not account:
-        raise HTTPException(400, "Account code is not present in the latest Trial Balance")
+        raise HTTPException(400, "Account code is not present in the selected Trial Balance")
     if account["classification"] != "leaf":
         raise HTTPException(400, "Assign the parent through the bulk child operation; direct assignments require a leaf account")
     _upsert_cashflow_assignment(assignment, _actor_name(session))
@@ -1868,6 +1905,7 @@ def apply_account_control_cashflow_to_children(payload: CashFlowBulkAssignmentPa
     assignment = _clean_cashflow_assignment(
         CashFlowAssignmentPayload(
             client_id=payload.client_id,
+            trial_balance_upload_id=payload.trial_balance_upload_id,
             account_code=parent_code,
             section=payload.section,
             category_label=payload.category_label,
@@ -1875,13 +1913,13 @@ def apply_account_control_cashflow_to_children(payload: CashFlowBulkAssignmentPa
             treatment_type=payload.treatment_type,
         )
     )
-    _upload, accounts = _latest_control_accounts(assignment["client_id"])
+    _upload, accounts = _selected_control_accounts(assignment["client_id"], payload.trial_balance_upload_id)
     parent = next(
         (row for row in accounts if _normalise_account_code(row["account_code"]) == parent_code),
         None,
     )
     if not parent:
-        raise HTTPException(400, "Parent account is not present in the latest Trial Balance")
+        raise HTTPException(400, "Parent account is not present in the selected Trial Balance")
     leaves = [
         row for row in accounts
         if row["classification"] == "leaf"
@@ -1903,8 +1941,8 @@ def apply_account_control_cashflow_to_children(payload: CashFlowBulkAssignmentPa
     return {"saved": True, "parent_account_code": parent_code, "leaf_count": len(leaves)}
 
 @router.get("/api/account-control-center/cashflow/setup")
-def get_cashflow_setup(client_id: int = Query(..., ge=1), session=Depends(require_admin)):
-    upload, accounts = _latest_control_accounts(client_id)
+def get_cashflow_setup(client_id: int = Query(..., ge=1), trial_balance_upload_id: Optional[int] = Query(default=None, ge=1), session=Depends(require_admin)):
+    upload, accounts = _selected_control_accounts(client_id, trial_balance_upload_id)
     historical_orphans = discover_historical_orphan_accounts_postgres(client_id, accounts)
     categories = execute_query_pg(
         """SELECT id, client_id, category_key, label, sort_order, is_active
@@ -1953,6 +1991,7 @@ def get_cashflow_setup(client_id: int = Query(..., ge=1), session=Depends(requir
     return {
         "client_id": client_id,
         "upload": upload,
+        "uploads": _control_upload_options(client_id),
         "categories": [dict(row) for row in categories],
         "accounts": [
             {
@@ -2031,12 +2070,12 @@ def update_cashflow_category(category_id: int, payload: CashFlowCategoryUpdatePa
 def save_cashflow_category_assignment(payload: CashFlowCategoryAssignmentPayload, session=Depends(require_admin), background_tasks: BackgroundTasks = None):
     assignment = _clean_cashflow_category_assignment(payload)
     _validate_cashflow_category(assignment["client_id"], assignment["category_id"])
-    _upload, accounts = _latest_control_accounts(assignment["client_id"])
+    _upload, accounts = _selected_control_accounts(assignment["client_id"], payload.trial_balance_upload_id)
     historical_orphans = discover_historical_orphan_accounts_postgres(assignment["client_id"], accounts)
     account = next((row for row in accounts if _normalise_account_code(row["account_code"]) == assignment["account_code"]), None)
     orphan = next((row for row in historical_orphans if _normalise_account_code(row["account_code"]) == assignment["account_code"]), None)
     if not account and not orphan:
-        raise HTTPException(400, "Account code is not present in the latest Trial Balance or historical transaction history")
+        raise HTTPException(400, "Account code is not present in the selected Trial Balance or historical transaction history")
     if account and account["classification"] != "leaf":
         raise HTTPException(400, "Assign the parent through the bulk child operation; direct assignments require a leaf account")
     _upsert_cashflow_category_assignment(assignment, _actor_name(session))
@@ -2059,10 +2098,10 @@ def save_cashflow_category_assignment(payload: CashFlowCategoryAssignmentPayload
 def apply_cashflow_category_to_children(payload: CashFlowCategoryBulkAssignmentPayload, session=Depends(require_admin), background_tasks: BackgroundTasks = None):
     parent_code = _clean_control_account_code(payload.parent_account_code)
     _validate_cashflow_category(payload.client_id, payload.category_id)
-    _upload, accounts = _latest_control_accounts(payload.client_id)
+    _upload, accounts = _selected_control_accounts(payload.client_id, payload.trial_balance_upload_id)
     parent = next((row for row in accounts if _normalise_account_code(row["account_code"]) == parent_code), None)
     if not parent:
-        raise HTTPException(400, "Parent account is not present in the latest Trial Balance")
+        raise HTTPException(400, "Parent account is not present in the selected Trial Balance")
     leaves = [
         row for row in accounts
         if row["classification"] == "leaf"
@@ -2098,11 +2137,11 @@ def save_cashflow_treasury_accounts(payload: CashFlowTreasuryAccountsPayload, se
     bank_codes = {_clean_control_account_code(code) for code in payload.bank_account_codes}
     if cash_codes & bank_codes:
         raise HTTPException(400, "An account cannot be selected as both Cash and Bank")
-    _upload, accounts = _latest_control_accounts(payload.client_id)
+    _upload, accounts = _selected_control_accounts(payload.client_id, payload.trial_balance_upload_id)
     leaves = {_normalise_account_code(row["account_code"]) for row in accounts if row["classification"] == "leaf"}
     invalid = (cash_codes | bank_codes) - leaves
     if invalid:
-        raise HTTPException(400, "Cash and Bank selections must be leaf accounts from the latest Trial Balance")
+        raise HTTPException(400, "Cash and Bank selections must be leaf accounts from the selected Trial Balance")
     actor = _actor_name(session)
     early_change_codes = _cashflow_treasury_change_codes(
         payload.client_id,

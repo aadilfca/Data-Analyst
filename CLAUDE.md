@@ -257,6 +257,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-10-28: ACC places each page's searches, filters, actions, and selected Trial Balance in a shared toolbar below the four tabs. See CHANGELOG_ARCHIVE.md.
 - 2026-10-28: ACC totals chain earlier lines, block overlapping source roll-ups, and protect referenced lines. See CHANGELOG_ARCHIVE.md.
 - 2026-10-28: ACC statement totals now render directly after their last selected category or subtotal. See CHANGELOG_ARCHIVE.md.
 - 2026-10-28: ACC Income Statement totals now accept standalone categories and place totals after their group. See CHANGELOG_ARCHIVE.md.

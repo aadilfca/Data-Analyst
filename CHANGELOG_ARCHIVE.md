@@ -1,5 +1,9 @@
 # Changelog Archive
 
+## ACC shared page toolbar — 2026-10-28
+
+The four ACC page tabs now precede one responsive toolbar. It shows each active page's account search, Financial Statement category or Notes filter and Load control where applicable, the selected Trial Balance period/file, and the relevant toolbar actions. Financial Statement and Notes search fields are sized to keep Load beside the category filter; account counts are hidden. The Cash Flow category shortcut and Financial Statement/Notes setup buttons are restored as floating plus buttons. Redundant panel headings and descriptions remain removed; contextual modal guidance and conditional notices remain. JavaScript syntax and whitespace checks pass; local visual acceptance is pending.
+
 ## Voucher detail tab-return validation — 2026-10-25
 
 Focus and visible-tab events now coalesce into one read-only identity check. Open detail rows remain visible while controls are locked; success unlocks them without rerendering. A source change retains the existing close/reload gate; a network failure keeps rows locked with an explicit retry. Nested completeness/detail dialogs and accounting/data paths are unchanged. Twenty-seven focused browser regressions pass, including stale-source rejection and failure/retry; JavaScript syntax and whitespace checks pass. Aadil confirmed the local test and approved Git closeout.
