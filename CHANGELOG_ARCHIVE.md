@@ -1,5 +1,13 @@
 # Changelog Archive
 
+## Trial Balance validation header layout — 2026-10-29
+
+Rearranged the validation header so its title, filename, actions and subtotal controls share the first row on desktop, with the validation alert spanning the next row. Shortened the subtotal count label to “N subtotal rows excluded” while retaining the treated-as-account count when applicable. Trial Balance script cache version is 20. Desktop and narrow viewport Playwright layout checks, JavaScript syntax and whitespace checks pass; local UI acceptance is pending.
+
+## Trial Balance subtotal-row handling — 2026-10-29
+
+Populated rows with a blank mapped Account # are identified as subtotal candidates; fully blank mapped rows stay ignored. The review hides excluded candidates by default, shows their count and a reveal control, and allows a candidate to be treated as an account for normal code correction and validation. Original source rows remain intact so displayed Excel row numbers do not shift. The validation and upload endpoints validate the submitted original row numbers and apply the same exclusions to balance checks and stored accounts; the upload notes report the excluded count. An in-memory workbook check confirmed subtotal amounts do not affect validation, invalid exclusions are rejected, and account counts exclude subtotals. Playwright confirmed hide/reveal, restore-as-account, re-exclude and row-number preservation. JavaScript/Python syntax and whitespace checks pass; local upload acceptance is pending.
+
 ## Trial Balance validation/upload view isolation — 2026-10-29
 
 Validation now hides the upload view explicitly, including when it carries an inline `display:block`, and hides the validation view again on Back. Playwright with mocked validation confirmed only one view is visible and the filename and period values survive both transitions. No upload or backend behavior changed; JavaScript syntax and whitespace checks pass. Local-server acceptance is pending.

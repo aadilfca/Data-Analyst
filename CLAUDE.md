@@ -33,9 +33,9 @@ One line per file group: what it is now. Full build history for every entry live
 - static/client_select.html, static/client_select.js → standalone Client Cards page with guarded selection, admin entry, and loading feedback. See CHANGELOG_ARCHIVE.md.
 - static/procedure_modal.js → shared Verification/Audit Workbook Procedure modal for grouped Data Table search, evidence/Forms, procedures, and observations. See CHANGELOG_ARCHIVE.md.
 - static/audit_workbook.js, static/audit_workbook.html → Audit Workbook: session rows, filtering, totals, shared Procedure Modal, and cached evidence/Form completion badges. See CHANGELOG_ARCHIVE.md.
-- routers/trial_balance.py → Non-saving Trial Balance reconciliation validation, client-saved column mapping, gated upload/classification, hierarchy, categories, deletion, and shared latest-upload lookup. See CHANGELOG_ARCHIVE.md.
+- routers/trial_balance.py → Trial Balance validation/upload, client-saved mappings, source subtotal exclusions, hierarchy, categories, account corrections and latest-upload lookup. See CHANGELOG_ARCHIVE.md.
 - routers/account_control_center.py → account mappings, Financial Statement outlines and Balance Sheet/Income Statement totals and subtotals, Cash Flow configuration, and treasury setup. See CHANGELOG_ARCHIVE.md.
-- static/trial_balance.html, static/trial_balance.js → Trial Balance mapping, saved client maps, isolated validation, responsive review table, sticky headings, pre-save corrections and shared loading. See CHANGELOG_ARCHIVE.md.
+- static/trial_balance.html, static/trial_balance.js → Trial Balance mapping, saved client maps, isolated validation, subtotal controls, responsive table, sticky headings, and pre-save corrections. See CHANGELOG_ARCHIVE.md.
 - static/account_control_center.html, static/account_control_center.js → central mapping, statement outlines and row-anchored totals/subtotals, filtered Notes assignments, and Cash Flow setup. See CHANGELOG_ARCHIVE.md.
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Two-pane Audit Rules editor for Documents, Cross-checks, Categories, Voucher Checks and Assertions, plus Assign Categories. See CHANGELOG_ARCHIVE.md.
@@ -257,6 +257,8 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-10-29: Trial Balance validation puts controls and subtotal count on row one, with a full-width issue alert below. See CHANGELOG_ARCHIVE.md.
+- 2026-10-29: Trial Balance excludes blank-code subtotal rows by original Excel row number and permits reviewers to restore candidates as accounts. See CHANGELOG_ARCHIVE.md.
 - 2026-10-29: Trial Balance validation now hides upload controls explicitly and restores the preserved upload state on Back. See CHANGELOG_ARCHIVE.md.
 - 2026-10-29: Trial Balance validation contains wide columns and keeps sticky headings aligned through local horizontal scrolling. See CHANGELOG_ARCHIVE.md.
 - 2026-10-29: Trial Balance validation opens as a separate view with shared processing feedback and preserves mapping state on Back. See CHANGELOG_ARCHIVE.md.

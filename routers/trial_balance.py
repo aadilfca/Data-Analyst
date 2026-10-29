@@ -313,7 +313,36 @@ def _load_row_overrides(raw_value, row_count, allowed_values, label):
     return result
 
 
-def validate_trial_balance_contents(contents, filename, mapping, code_overrides=None, classification_overrides=None):
+def _load_excluded_excel_rows(raw_value, row_count):
+    """Validate source subtotal exclusions supplied by original Excel row number."""
+    try:
+        parsed = json.loads(raw_value or '[]') if isinstance(raw_value, str) or raw_value is None else raw_value
+    except json.JSONDecodeError as exc:
+        raise ValueError('Excluded subtotal rows were invalid. Reopen the file review and try again.') from exc
+    if not isinstance(parsed, list):
+        raise ValueError('Excluded subtotal rows must be supplied as an Excel row-number list.')
+
+    excluded = set()
+    for value in parsed:
+        if isinstance(value, bool):
+            raise ValueError('Excluded subtotal rows contain an invalid Excel row number.')
+        try:
+            row_number = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError('Excluded subtotal rows contain an invalid Excel row number.') from exc
+        if str(row_number) != str(value).strip():
+            raise ValueError('Excluded subtotal rows contain an invalid Excel row number.')
+        if row_number < 2 or row_number > row_count + 1:
+            raise ValueError(f'Excluded subtotal row {row_number} is outside the uploaded file.')
+        if row_number in excluded:
+            raise ValueError(f'Excluded subtotal row {row_number} was supplied more than once.')
+        excluded.add(row_number)
+    return excluded
+
+
+def validate_trial_balance_contents(
+    contents, filename, mapping, code_overrides=None, classification_overrides=None, excluded_excel_rows=None
+):
     """Parse and reconcile a Trial Balance without writing any database records."""
     df = read_trial_balance_excel(contents, filename)
     headers = df.columns.tolist()
@@ -323,6 +352,7 @@ def validate_trial_balance_contents(contents, filename, mapping, code_overrides=
     classification_overrides = _load_row_overrides(
         classification_overrides, len(rows), {'leaf', 'parent'}, 'Classification corrections'
     )
+    excluded_excel_rows = _load_excluded_excel_rows(excluded_excel_rows, len(rows))
     errors = []
     error_count = 0
     candidates = []
@@ -349,6 +379,16 @@ def validate_trial_balance_contents(contents, filename, mapping, code_overrides=
         code = str(code_overrides.get(excel_row, source_code) or '').strip()
         row_has_data = any(str(row.get(column, '') or '').strip() for column in mapping.values() if column)
         if not row_has_data:
+            if excel_row in excluded_excel_rows:
+                raise ValueError(f'Excel row {excel_row} is empty and cannot be marked as a subtotal.')
+            continue
+        if excel_row in excluded_excel_rows:
+            if source_code:
+                raise ValueError(f'Excel row {excel_row} has an Account Code and cannot be excluded as a subtotal.')
+            if code_overrides.get(excel_row):
+                raise ValueError(f'Excel row {excel_row} has an account-code correction and cannot be excluded as a subtotal.')
+            if excel_row in classification_overrides:
+                raise ValueError(f'Excel row {excel_row} has a classification correction and cannot be excluded as a subtotal.')
             continue
         if not code:
             add_error(excel_row, 'Account Code', 'Account code is blank.')
@@ -446,6 +486,8 @@ def validate_trial_balance_contents(contents, filename, mapping, code_overrides=
         'parent_count': len(candidates) - len(valid_amount_rows),
         'auto_classification': {str(row['excel_row']): row['auto_classification'] for row in candidates},
         'classification_overrides': {str(row_number): value for row_number, value in classification_overrides.items()},
+        'excluded_subtotal_rows': sorted(excluded_excel_rows),
+        'excluded_subtotal_count': len(excluded_excel_rows),
         'issue_count': error_count,
         'omitted_issue_count': 0,
         'tolerance': 0.01,
@@ -663,6 +705,7 @@ def validate_trial_balance_upload(
     closing_cr_column: Optional[str] = Form(None),
     account_code_overrides: Optional[str] = Form(None),
     account_classification_overrides: Optional[str] = Form(None),
+    excluded_excel_rows: Optional[str] = Form(None),
 ):
     """Validate a Trial Balance without creating or replacing an upload."""
     if not file.filename or not file.filename.lower().endswith(('.xlsx', '.xls')):
@@ -681,7 +724,7 @@ def validate_trial_balance_upload(
     try:
         return validate_trial_balance_contents(
             file.file.read(), file.filename, mapping,
-            account_code_overrides, account_classification_overrides,
+            account_code_overrides, account_classification_overrides, excluded_excel_rows,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc))
@@ -720,6 +763,7 @@ def upload_trial_balance(
     progress_key: Optional[str] = Form(None),
     account_code_overrides: Optional[str] = Form(None),
     account_classification_overrides: Optional[str] = Form(None),
+    excluded_excel_rows: Optional[str] = Form(None),
 ):
     """
     Save a Trial Balance only after the same non-writing validation used by
@@ -787,7 +831,7 @@ def upload_trial_balance(
     try:
         validation = validate_trial_balance_contents(
             file.file.read(), file.filename, mapping,
-            account_code_overrides, account_classification_overrides,
+            account_code_overrides, account_classification_overrides, excluded_excel_rows,
         )
     except ValueError as exc:
         raise HTTPException(400, f"Trial balance validation failed: {exc}")
@@ -869,6 +913,8 @@ def upload_trial_balance(
         seen_codes = set()
         accounts = []  # list of dicts, pre-classification
         skipped_blank_count = 0
+        skipped_subtotal_count = len(validation['excluded_subtotal_rows'])
+        excluded_subtotal_rows = set(validation['excluded_subtotal_rows'])
 
         for idx, row in enumerate(rows):
             if progress_key:
@@ -876,6 +922,8 @@ def upload_trial_balance(
             row_number = idx + 2
             source_code = str(row.get(account_code_column, '')).strip()
             code = code_overrides.get(row_number, source_code)
+            if row_number in excluded_subtotal_rows:
+                continue
             if code == '':
                 skipped_blank_count += 1
                 continue
@@ -948,7 +996,9 @@ def upload_trial_balance(
         # Summarize blank-code rows skipped from the source file.
         notes_parts = []
         if skipped_blank_count:
-            notes_parts.append(f"{skipped_blank_count} blank-code row(s) skipped")
+            notes_parts.append(f"{skipped_blank_count} blank row(s) skipped")
+        if skipped_subtotal_count:
+            notes_parts.append(f"{skipped_subtotal_count} source subtotal row(s) excluded")
         notes = "; ".join(notes_parts) if notes_parts else None
 
         # 9. Replace and insert in one transaction, so a parse/duplicate/mapping error

@@ -57,6 +57,8 @@ let filePreviewRows = [];
 let fileAllRows = [];
 let accountCodeCorrections = {};
 let accountClassificationOverrides = {};
+let includedSubtotalRows = new Set();
+let showExcludedSubtotalRows = false;
 let validationResult = null;
 let validationDirty = true;
 let validationRequestToken = 0;
@@ -120,6 +122,9 @@ const tbValidationHead = getElement('tbValidationHead');
 const tbValidationBody = getElement('tbValidationBody');
 const tbValidationTableWrap = getElement('tbValidationTableWrap');
 const tbValidationStickyHead = getElement('tbValidationStickyHead');
+const tbSubtotalToolbar = getElement('tbSubtotalToolbar');
+const tbSubtotalSummary = getElement('tbSubtotalSummary');
+const tbSubtotalToggleBtn = getElement('tbSubtotalToggleBtn');
 const downloadStandardTemplateBtn = getElement('downloadStandardTemplateBtn');
 
 // Available Trial Balances (Section 1, Phase 2) elements.
@@ -254,6 +259,7 @@ function buildTrialBalanceFormData() {
     });
     formData.append('account_code_overrides', JSON.stringify(accountCodeCorrections));
     formData.append('account_classification_overrides', JSON.stringify(accountClassificationOverrides));
+    formData.append('excluded_excel_rows', JSON.stringify(getExcludedSubtotalRowNumbers()));
     return formData;
 }
 
@@ -364,6 +370,37 @@ async function runTrialBalanceValidation(options) {
     }
 }
 
+function getMappedColumnIndexes() {
+    return Array.from(new Set(TB_MAPPING_FIELDS
+        .map(function (field) { return fileHeaders.indexOf(tbColumnMapping[field.role]); })
+        .filter(function (index) { return index >= 0; })));
+}
+
+function isMappedSourceRowEmpty(row) {
+    return !getMappedColumnIndexes().some(function (index) {
+        return accountCodeCellText(row[index]) !== '';
+    });
+}
+
+function getSourceSubtotalRowNumbers() {
+    // Keep the raw row array intact so filtered lines retain their original Excel row numbers.
+    const codeIndex = fileHeaders.indexOf(tbColumnMapping.account_code_column);
+    if (codeIndex < 0) return new Set();
+    const subtotalRows = new Set();
+    fileAllRows.forEach(function (row, rowIndex) {
+        if (!accountCodeCellText(row[codeIndex]) && !isMappedSourceRowEmpty(row)) {
+            subtotalRows.add(rowIndex + 2);
+        }
+    });
+    return subtotalRows;
+}
+
+function getExcludedSubtotalRowNumbers() {
+    return Array.from(getSourceSubtotalRowNumbers())
+        .filter(function (rowNumber) { return !includedSubtotalRows.has(rowNumber); })
+        .sort(function (left, right) { return left - right; });
+}
+
 function renderTrialBalanceValidationGrid() {
     if (!tbValidationHead || !tbValidationBody) return;
     tbValidationHead.innerHTML = '';
@@ -397,10 +434,24 @@ function renderTrialBalanceValidationGrid() {
         });
     }
     const codeIndex = fileHeaders.indexOf(tbColumnMapping.account_code_column);
+    const subtotalRows = getSourceSubtotalRowNumbers();
+    const excludedSubtotalRows = getExcludedSubtotalRowNumbers();
+    if (tbSubtotalToolbar && tbSubtotalSummary && tbSubtotalToggleBtn) {
+        tbSubtotalToolbar.hidden = subtotalRows.size === 0;
+        const includedCount = subtotalRows.size - excludedSubtotalRows.length;
+        tbSubtotalSummary.textContent = `${excludedSubtotalRows.length} subtotal rows excluded${includedCount ? ` · ${includedCount} treated as accounts` : ''}`;
+        tbSubtotalToggleBtn.textContent = showExcludedSubtotalRows ? 'Hide excluded subtotal rows' : 'Show excluded subtotal rows';
+        tbSubtotalToggleBtn.hidden = excludedSubtotalRows.length === 0;
+    }
     const fragment = document.createDocumentFragment();
     fileAllRows.forEach(function (row, rowIndex) {
         const excelRow = rowIndex + 2;
+        if (isMappedSourceRowEmpty(row)) return;
+        const isSubtotalCandidate = subtotalRows.has(excelRow);
+        const isExcludedSubtotal = isSubtotalCandidate && !includedSubtotalRows.has(excelRow);
+        if (isExcludedSubtotal && !showExcludedSubtotalRows) return;
         const tr = document.createElement('tr');
+        if (isExcludedSubtotal) tr.classList.add('tb-subtotal-row');
         const rowCell = document.createElement('td');
         rowCell.textContent = String(excelRow);
         tr.appendChild(rowCell);
@@ -413,48 +464,66 @@ function renderTrialBalanceValidationGrid() {
         const sourceCode = codeIndex >= 0 ? accountCodeCellText(row[codeIndex]) : '';
         const codeCell = document.createElement('td');
         codeCell.className = 'tb-code-correction-cell';
-        const codeInput = document.createElement('input');
-        codeInput.type = 'text';
-        codeInput.className = 'tb-code-review-input';
-        codeInput.maxLength = 120;
-        codeInput.value = Object.prototype.hasOwnProperty.call(accountCodeCorrections, excelRow)
-            ? accountCodeCorrections[excelRow] : sourceCode;
-        codeInput.dataset.excelRow = String(excelRow);
-        codeInput.dataset.sourceCode = sourceCode;
-        codeInput.setAttribute('aria-label', 'Corrected account code for Excel row ' + excelRow);
-        codeCell.appendChild(codeInput);
-        const suggestion = suggestedCodeForDate(row[codeIndex]);
-        if (suggestion) {
-            const useSuggestion = document.createElement('button');
-            useSuggestion.type = 'button';
-            useSuggestion.className = 'btn-secondary-action tb-code-review-suggestion';
-            useSuggestion.textContent = 'Use ' + suggestion;
-            useSuggestion.dataset.suggestedCode = suggestion;
-            useSuggestion.dataset.excelRow = String(excelRow);
-            codeCell.appendChild(useSuggestion);
+        if (isExcludedSubtotal) {
+            codeCell.textContent = 'Source subtotal';
+        } else {
+            const codeInput = document.createElement('input');
+            codeInput.type = 'text';
+            codeInput.className = 'tb-code-review-input';
+            codeInput.maxLength = 120;
+            codeInput.value = Object.prototype.hasOwnProperty.call(accountCodeCorrections, excelRow)
+                ? accountCodeCorrections[excelRow] : sourceCode;
+            codeInput.dataset.excelRow = String(excelRow);
+            codeInput.dataset.sourceCode = sourceCode;
+            codeInput.setAttribute('aria-label', 'Corrected account code for Excel row ' + excelRow);
+            codeCell.appendChild(codeInput);
+            const suggestion = suggestedCodeForDate(row[codeIndex]);
+            if (suggestion) {
+                const useSuggestion = document.createElement('button');
+                useSuggestion.type = 'button';
+                useSuggestion.className = 'btn-secondary-action tb-code-review-suggestion';
+                useSuggestion.textContent = 'Use ' + suggestion;
+                useSuggestion.dataset.suggestedCode = suggestion;
+                useSuggestion.dataset.excelRow = String(excelRow);
+                codeCell.appendChild(useSuggestion);
+            }
         }
         tr.appendChild(codeCell);
 
         const classificationCell = document.createElement('td');
-        const classification = document.createElement('select');
-        classification.className = 'tb-classification-review';
-        classification.dataset.excelRow = String(excelRow);
-        [['leaf', 'Leaf'], ['parent', 'Parent']].forEach(function (optionData) {
-            const option = document.createElement('option');
-            option.value = optionData[0];
-            option.textContent = optionData[1];
-            classification.appendChild(option);
-        });
-        const automaticClass = validationResult && validationResult.auto_classification
-            ? validationResult.auto_classification[String(excelRow)] : 'leaf';
-        classification.value = accountClassificationOverrides[excelRow] || automaticClass || 'leaf';
-        classification.dataset.automatic = automaticClass || 'leaf';
-        classificationCell.appendChild(classification);
-        tr.appendChild(classificationCell);
+        if (isExcludedSubtotal) {
+            classificationCell.textContent = 'Excluded';
+            tr.appendChild(classificationCell);
+        } else {
+            const classification = document.createElement('select');
+            classification.className = 'tb-classification-review';
+            classification.dataset.excelRow = String(excelRow);
+            [['leaf', 'Leaf'], ['parent', 'Parent']].forEach(function (optionData) {
+                const option = document.createElement('option');
+                option.value = optionData[0];
+                option.textContent = optionData[1];
+                classification.appendChild(option);
+            });
+            const automaticClass = validationResult && validationResult.auto_classification
+                ? validationResult.auto_classification[String(excelRow)] : 'leaf';
+            classification.value = accountClassificationOverrides[excelRow] || automaticClass || 'leaf';
+            classification.dataset.automatic = automaticClass || 'leaf';
+            classificationCell.appendChild(classification);
+            tr.appendChild(classificationCell);
+        }
 
         const issuesCell = document.createElement('td');
         issuesCell.className = 'tb-validation-issue-cell';
         issuesCell.textContent = (issuesByRow.get(String(excelRow)) || []).join(' ');
+        if (isSubtotalCandidate) {
+            const treatmentButton = document.createElement('button');
+            treatmentButton.type = 'button';
+            treatmentButton.className = 'btn-secondary-action tb-subtotal-row-action';
+            treatmentButton.dataset.excelRow = String(excelRow);
+            treatmentButton.dataset.subtotalAction = isExcludedSubtotal ? 'include' : 'exclude';
+            treatmentButton.textContent = isExcludedSubtotal ? 'Treat as account' : 'Mark as subtotal';
+            issuesCell.appendChild(treatmentButton);
+        }
         tr.appendChild(issuesCell);
         fragment.appendChild(tr);
     });
@@ -480,12 +549,34 @@ if (tbValidationBody) {
         invalidateTrialBalanceValidation('Classification changed. Revalidate before saving.');
     });
     tbValidationBody.addEventListener('click', function (event) {
+        const treatmentButton = event.target.closest('.tb-subtotal-row-action');
+        if (treatmentButton) {
+            const rowNumber = Number(treatmentButton.dataset.excelRow);
+            if (treatmentButton.dataset.subtotalAction === 'include') {
+                includedSubtotalRows.add(rowNumber);
+                invalidateTrialBalanceValidation('Subtotal row selected as an account. Enter its account code, then revalidate.');
+            } else {
+                includedSubtotalRows.delete(rowNumber);
+                delete accountCodeCorrections[rowNumber];
+                delete accountClassificationOverrides[rowNumber];
+                invalidateTrialBalanceValidation('Row excluded as a source subtotal. Revalidate before saving.');
+            }
+            renderTrialBalanceValidationGrid();
+            return;
+        }
         const button = event.target.closest('.tb-code-review-suggestion');
         if (!button) return;
         const input = tbValidationBody.querySelector('.tb-code-review-input[data-excel-row="' + button.dataset.excelRow + '"]');
         if (!input) return;
         input.value = button.dataset.suggestedCode;
         input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+}
+
+if (tbSubtotalToggleBtn) {
+    tbSubtotalToggleBtn.addEventListener('click', function () {
+        showExcludedSubtotalRows = !showExcludedSubtotalRows;
+        renderTrialBalanceValidationGrid();
     });
 }
 
@@ -550,6 +641,8 @@ function resetColumnMapping() {
     fileAllRows = [];
     accountCodeCorrections = {};
     accountClassificationOverrides = {};
+    includedSubtotalRows = new Set();
+    showExcludedSubtotalRows = false;
     validationResult = null;
     validationDirty = true;
     closeTrialBalanceValidation();
@@ -780,6 +873,8 @@ async function loadColumnMappingForFile(file) {
         filePreviewRows = rawRows.slice(1, PREVIEW_ROW_COUNT + 1); // header row dropped
         accountCodeCorrections = {};
         accountClassificationOverrides = {};
+        includedSubtotalRows = new Set();
+        showExcludedSubtotalRows = false;
         invalidateTrialBalanceValidation('File mapping ready. Validate before saving.');
         const suggestedMapping = {
             account_code_column: suggestResult.suggestions.account_code_column || null,
@@ -862,10 +957,10 @@ function renderMappingDropdowns() {
 
         select.addEventListener('change', function () {
             tbColumnMapping[field.role] = this.value || null;
-            if (field.role === 'account_code_column') {
-                accountCodeCorrections = {};
-                accountClassificationOverrides = {};
-            }
+            accountCodeCorrections = {};
+            accountClassificationOverrides = {};
+            includedSubtotalRows = new Set();
+            showExcludedSubtotalRows = false;
             invalidateTrialBalanceValidation('Column mapping changed. Validate again before saving.');
             renderMappingDropdowns(); // full re-render so other rows' exclusions/status update
             checkMappingComplete();
@@ -1122,6 +1217,7 @@ async function uploadTrialBalance() {
         formData.append('progress_key', progressKey);
         formData.append('account_code_overrides', JSON.stringify(accountCodeCorrections));
         formData.append('account_classification_overrides', JSON.stringify(accountClassificationOverrides));
+        formData.append('excluded_excel_rows', JSON.stringify(getExcludedSubtotalRowNumbers()));
 
         const res = await fetch(API_BASE + '/api/trial-balance/upload', {
             method: 'POST',
