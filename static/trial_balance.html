@@ -624,15 +624,14 @@
             flex: 1 1 100%;
         }
 
-        .tb-validation-table-wrap { width: 100%; min-width: 0; }
-        .tb-validation-sticky-head { display: none; }
-        .tb-validation-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 11px; }
-        .tb-validation-table .tb-validation-row-number { width: 4.5%; }
-        .tb-validation-table .tb-validation-account-code { width: 9.5%; }
-        .tb-validation-table .tb-validation-account-name { width: 11.5%; }
-        .tb-validation-table .tb-validation-classification { width: 8%; }
-        .tb-validation-table .tb-validation-amount { width: 7.5%; }
-        .tb-validation-table .tb-validation-issue-column { width: 21.5%; }
+        .tb-validation-table-wrap { width: 100%; min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; }
+        .tb-validation-table { width: 100%; min-width: 1800px; table-layout: fixed; border-collapse: collapse; font-size: 11px; }
+        .tb-validation-table .tb-validation-row-number { width: 58px; }
+        .tb-validation-table .tb-validation-account-code { width: 145px; }
+        .tb-validation-table .tb-validation-account-name { width: 220px; }
+        .tb-validation-table .tb-validation-classification { width: 110px; }
+        .tb-validation-table .tb-validation-amount { width: 160px; }
+        .tb-validation-table .tb-validation-issue-column { width: 280px; }
         .tb-validation-table th {
             position: sticky;
             top: 70px;
@@ -650,7 +649,7 @@
             overflow-wrap: anywhere;
             background: #fff;
         }
-        .tb-validation-table td.tb-validation-amount { white-space: nowrap; }
+        .tb-validation-table td.tb-validation-amount { white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
         .tb-validation-table tr:nth-child(even) td { background: #fafcff; }
         .tb-validation-table .tb-validation-issue-cell { white-space: normal; min-width: 0; color: #b91c1c; }
         .tb-validation-issue-content > span { display: block; }
@@ -744,22 +743,19 @@
             .tb-validation-table tr.tb-critical-row-highlight > td { animation-duration: .01ms; }
         }
 
-        @media (max-width: 1100px) {
-            .tb-validation-table-wrap { overflow-x: auto; overscroll-behavior-x: contain; }
-            .tb-validation-table { min-width: 1200px; }
-            .tb-validation-sticky-head {
-                position: sticky;
-                top: 70px;
-                z-index: 3;
-                display: block;
-                width: 100%;
-                overflow: hidden;
-                background: #f1f5f9;
-            }
-            .tb-validation-sticky-head .tb-validation-table { transform: translateX(0); }
-            .tb-validation-sticky-head .tb-validation-table th { position: static; }
-            .tb-validation-table-wrap .tb-validation-table thead { display: none; }
+        /* Reuse the synchronized heading whenever the readable table needs scrolling. */
+        .tb-validation-sticky-head {
+            position: sticky;
+            top: 70px;
+            z-index: 3;
+            display: block;
+            width: 100%;
+            overflow: hidden;
+            background: #f1f5f9;
         }
+        .tb-validation-sticky-head .tb-validation-table { transform: translateX(0); }
+        .tb-validation-sticky-head .tb-validation-table th { position: static; }
+        .tb-validation-table-wrap .tb-validation-table thead { display: none; }
 
         @media (max-width: 850px) {
             .tb-mapping-review-grid { grid-template-columns: minmax(0, 1fr); }
@@ -797,9 +793,6 @@
         }
         .tb-validation-controls { max-height: 180px; overflow: auto; padding: 6px 12px; background: #f8fafc; }
         .tb-validation-controls p { margin: 4px 0; }
-        #tbFootingDialog { max-width: 740px; border: 1px solid #cbd5e1; border-radius: 12px; padding: 24px; }
-        #tbFootingDialog::backdrop { background: rgba(15, 23, 42, .5); }
-        #tbFootingProposal { color: #b91c1c; font-weight: 700; }
         .tb-total-mapping { background: #f5f8fc; }
         .tb-total-mapping small { display: block; font-size: 11px; color: #64748b; }
         .tb-total-choice { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
@@ -1078,18 +1071,10 @@
         </div>
     </div>
 
-    <dialog id="tbFootingDialog" aria-labelledby="tbFootingTitle">
-        <h2 id="tbFootingTitle">Confirm Trial Balance differences</h2>
-        <p>These amounts balance the leaf totals. Closing includes the effect of opening and period entries. Original source figures are retained.</p>
-        <div id="tbFootingProposal"></div>
-        <p>Global differences remain unassigned until their account category is identified.</p>
-        <button type="button" id="tbFootingCancel" class="btn-secondary-action">Cancel</button>
-        <button type="button" id="tbFootingAccept" class="btn-primary-action">Confirm differences and revalidate</button>
-    </dialog>
     <script src="/static/loading_ui.js?v=2"></script>
     <script src="/static/client_context.js?v=21"></script>
     <script src="/static/utils.js"></script>
-    <script src="/static/trial_balance.js?v=28"></script>
+    <script src="/static/trial_balance.js?v=30"></script>
 
 </body>
 

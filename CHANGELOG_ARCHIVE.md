@@ -8765,7 +8765,9 @@ Record phase decisions, implementation, verification, and acceptance here as the
 ### Financial Statement operating rules
 
 - Match Trial Balance hierarchy by dash-delimited segments; ignore leading zeros in numeric segments for matching only. Parent rows have recognized descendants; rows without descendants default to Leaf. Preserve the account code and editable Parent/Leaf correction. Skip ambiguous normalized matches.
-- Financial account assignments and Trial Balance footing/roll-forward checks use Leaf rows only. A Parent assignment applies to its descendant Leaf accounts; Parent totals are not counted again. Reviewer-selected ERP control totals compare original Leaf figures before adjustments; global differences remain unassigned until traced.
+- Financial assignments and Trial Balance footing/roll-forward checks use Leaf rows only. Parent assignments cascade to descendant Leaves without counting Parent amounts.
+- Selected ERP totals compare original Leaf sums before adjustments; ERP mismatches and required Leaf code corrections block saving.
+- Horizontal/vertical differences are advisory and save as separate automatic entries. Global differences remain unassigned until traced.
 - Assign each account to a client-scoped Balance Sheet or Income Statement category. Headings organize categories. Subtotals combine direct categories under a heading with signed treatment; totals combine categories, subtotals, or earlier totals, with overlapping sources blocked.
 - The current Financial Statement preview aggregates ledger movements by category and month. Full statement production and closing logic are not implemented.
 
@@ -8938,3 +8940,21 @@ Opening/period counter-entries carry their effects into closing; accumulated tol
 **Verification:** All six focused browser tests pass, including reordered source columns, original-versus-adjusted totals, large decimal values, zero/nonzero differences, pending/N/A states and existing mapping/approval flows. JavaScript loads successfully in Chromium; whitespace checks pass. No backend/schema change.
 
 **Acceptance/Git:** Aadil accepted the footer refinement and authorized combined commit/push on 2026-10-29.
+
+
+### Trial Balance footer precision and column fit - 2026-10-29
+
+**Implementation:** Footer totals display two decimal places without converting exact totals to floating-point numbers. Each comparison carries the server's existing Decimal tolerance decision; differences within 0.01 show green 0.00, while failures remain red. Hover retains the unrounded value. Source figures, validation calculations and saved amounts are unchanged. Amount columns have readable fixed widths and right alignment; the existing horizontal scrolling and synchronized heading now apply at every screen size. Script version: 29. No schema change.
+
+**Verification:** ACME's source workbook produces six green zero differences and no footer overflow at 1920/1280/900px; its file hash remains unchanged. All 98 focused backend/browser tests and nine subtests pass, including tolerance boundaries, scientific notation, large decimal rounding, real mismatches and scrolling alignment. Python compilation and whitespace checks pass; the existing TestClient dependency warning remains. No live database writes.
+
+**Acceptance/Git:** Aadil accepted local testing and authorized commit/push on 2026-10-29.
+
+
+### Trial Balance advisory amount differences - 2026-10-29
+
+**Implementation:** Removed the global-difference confirmation lock, review button, popup and token handling. Horizontal and vertical differences retain observations and separate automatic entries; upload recalculates them before saving. ERP-total mismatches, required Leaf code corrections and invalid inputs remain blocking. Fresh metadata records automatic adjustment origin rather than user confirmation; existing saved metadata remains readable. Original amounts, categories, footer precision and hierarchy behaviour remain intact. Script version: 30; no schema change.
+
+**Verification:** All 99 focused backend/browser tests and nine subtests pass. Coverage includes automatic difference persistence, enabled saving, removed controls, recalculation, and retained ERP/code rejection before writes. BFW produces four horizontal and one vertical difference lines with zero blocking errors and an enabled Save button. Workbook hash is unchanged; no live upload/database writes. Python compilation and whitespace checks pass; the existing TestClient dependency warning remains.
+
+**Acceptance/Git:** Aadil accepted local testing and authorized combined commit/push with the precision/layout fix on 2026-10-29.

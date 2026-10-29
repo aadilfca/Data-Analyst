@@ -192,7 +192,7 @@ class TrialBalanceRollforwardAdjustmentTests(unittest.TestCase):
         self.assertEqual(result["rollforward_differences"][1]["closing_cr_adjustment"], 10.0)
         self.assertEqual(next(c for c in result["checks"] if c["key"] == "roll_forward")["status"], "adjusted")
 
-    def test_whole_file_footing_difference_still_blocks_a_row_adjustment(self):
+    def test_whole_file_footing_difference_is_saved_as_an_advisory_adjustment(self):
         frame = pd.DataFrame([{
             "Code": "A1", "Name": "Cash", "Opening Dr": 100, "Opening Cr": 0,
             "Period Dr": 0, "Period Cr": 0, "Closing Dr": 90, "Closing Cr": 0,
@@ -208,9 +208,11 @@ class TrialBalanceRollforwardAdjustmentTests(unittest.TestCase):
 
         result = trial_balance.validate_trial_balance_contents(workbook.getvalue(), "tb.xlsx", mapping, no_total_row=True)
 
-        self.assertFalse(result["valid"])
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["errors"], [])
         self.assertEqual(result["rollforward_difference_count"], 1)
-        self.assertTrue(any(issue["excel_row"] is None for issue in result["errors"]))
+        self.assertTrue(any(issue["field"] == "Footings" for issue in result["warnings"]))
+        self.assertEqual(result["global_adjustments"][0]["opening_cr_adjustment"], "100")
 
     def test_saved_adjustments_are_returned_separately_from_source_amounts(self):
         account_row = {
@@ -1381,30 +1383,30 @@ class TrialBalanceOrderedControlTests(unittest.TestCase):
         self.assertEqual(fixed['checks'][0]['status'], 'pass')
         self.assertTrue(fixed['global_adjustments'])
 
-    def test_confirmation_binds_exact_source_and_balances_all_pairs(self):
+    def test_automatic_differences_balance_pairs_and_recalculate_source_changes(self):
         rows = [['A', 'Cash', 100, 0, 0, 20, 70, 0]]
-        pending = self.validate(rows)
-        self.assertFalse(pending['valid'])
-        self.assertEqual(pending['rollforward_difference_count'], 1)
-        self.assertEqual(pending['global_adjustments'][0]['opening_cr_adjustment'], '100')
-        self.assertEqual(pending['global_adjustments'][1]['period_dr_adjustment'], '20')
-        accepted = self.validate(rows, adjustment_confirmation=pending['adjustment_confirmation_token'])
-        self.assertTrue(accepted['valid'])
-        self.assertTrue(accepted['adjustments_confirmed'])
-        for check in accepted['checks'][-3:]:
+        result = self.validate(rows)
+        self.assertTrue(result['valid'])
+        self.assertEqual(result['errors'], [])
+        self.assertEqual(result['rollforward_difference_count'], 1)
+        self.assertEqual(result['global_adjustments'][0]['opening_cr_adjustment'], '100')
+        self.assertEqual(result['global_adjustments'][1]['period_dr_adjustment'], '20')
+        self.assertTrue(result['global_adjustments_automatic'])
+        for check in result['checks'][-3:]:
             self.assertEqual(check['debit_total'], check['credit_total'])
-        changed = self.validate([['A', 'Cash', 101, 0, 0, 20, 70, 0]],
-                                adjustment_confirmation=pending['adjustment_confirmation_token'])
-        self.assertFalse(changed['valid'])
-        self.assertFalse(changed['adjustments_confirmed'])
+            self.assertIn(check['status'], ('pass', 'adjusted'))
+        changed = self.validate([['A', 'Cash', 101, 0, 0, 20, 70, 0]])
+        self.assertTrue(changed['valid'])
+        self.assertEqual(changed['global_adjustments'][0]['opening_cr_adjustment'], '101')
+        self.assertEqual(changed['source_leaf_totals']['closing_dr_column'], '70')
 
     def test_saved_controls_are_read_from_upload_metadata(self):
-        controls = {'global_adjustments': [{'opening_cr_adjustment': '100'}], 'adjustments_confirmed': True}
+        controls = {'global_adjustments': [{'opening_cr_adjustment': '100'}], 'global_adjustments_automatic': True}
         with patch.object(trial_balance, 'execute_query_pg', return_value=[{'id': 1, 'validation_controls': json.dumps(controls)}]):
             self.assertEqual(trial_balance._require_upload(1), controls)
 
 
-    def test_upload_rechecks_confirmation_and_persists_controls_without_footer_account(self):
+    def test_upload_recalculates_and_persists_automatic_differences_without_footer_account(self):
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
         pending = self.validate([['A', 'Cash', 100, 0, 0, 0, 100, 0],
@@ -1422,11 +1424,12 @@ class TrialBalanceOrderedControlTests(unittest.TestCase):
              patch.object(trial_balance, 'execute_batch_pg') as batch, \
              patch.object(trial_balance, 'log_audit'), \
              patch.object(trial_balance, 'invalidate_category_for_account_cache'):
-            rejected = client.post('/api/trial-balance/upload', data=data, files=files)
-            self.assertEqual(rejected.status_code, 400)
+            validated = client.post('/api/trial-balance/validate', data=data, files=files)
+            self.assertEqual(validated.status_code, 200, validated.text)
+            self.assertTrue(validated.json()['valid'])
+            self.assertNotIn('adjustment_confirmation_token', validated.json())
             write.assert_not_called()
-            accepted = client.post('/api/trial-balance/upload',
-                                   data={**data, 'adjustment_confirmation': pending['adjustment_confirmation_token']}, files=files)
+            accepted = client.post('/api/trial-balance/upload', data=data, files=files)
             self.assertEqual(accepted.status_code, 200, accepted.text)
             self.assertEqual(accepted.json()['global_adjustment_count'], 1)
             saved_rows = batch.call_args.args[2]
@@ -1435,7 +1438,7 @@ class TrialBalanceOrderedControlTests(unittest.TestCase):
             self.assertEqual(saved_rows[0][7], 100)
             metadata_call = next(c for c in write.call_args_list if 'validation_controls = ' in c.args[0])
             controls = json.loads(metadata_call.args[1][2])
-            self.assertTrue(controls['adjustments_confirmed'])
+            self.assertTrue(controls['global_adjustments_automatic'])
             self.assertEqual(controls['source_total_rows'], [3])
             self.assertEqual(controls['global_adjustments'][0]['closing_cr_adjustment'], '100')
 
@@ -1470,12 +1473,43 @@ class TrialBalanceOrderedControlTests(unittest.TestCase):
         self.assertEqual(result['source_total_rows'], [])
         self.assertEqual(result['account_count'], 1)
 
-    def test_changing_selected_total_row_requires_new_difference_confirmation(self):
+    def test_changing_selected_total_row_recalculates_without_a_confirmation_gate(self):
         rows = [['A', 'Cash', 100, 0, 0, 0, 100, 0],
                 ['', '', 100, 0, 0, 0, 100, 0],
                 ['', '', 100, 0, 0, 0, 100, 0]]
-        pending = self.validate(rows, total_excel_row='3', excluded_excel_rows=[4])
-        changed = self.validate(rows, total_excel_row='4', excluded_excel_rows=[3],
-                                adjustment_confirmation=pending['adjustment_confirmation_token'])
-        self.assertFalse(changed['adjustments_confirmed'])
-        self.assertFalse(changed['valid'])
+        initial = self.validate(rows, total_excel_row='3', excluded_excel_rows=[4])
+        changed = self.validate(rows, total_excel_row='4', excluded_excel_rows=[3])
+        self.assertTrue(initial['valid'])
+        self.assertTrue(changed['valid'])
+        self.assertEqual(changed['source_total_rows'], [4])
+        self.assertEqual(changed['global_adjustments'], initial['global_adjustments'])
+
+    def test_source_comparison_exposes_exact_tolerance_decision(self):
+        rows=[['A','Debit',1,0,0,0,1,0],['B','Credit',0,1,0,0,0,1],
+              ['', 'Total', '1.0100000000000000000001',1,0,0,1,1]]
+        result=self.validate(rows,total_excel_row='4')
+        self.assertFalse(result['valid'])
+        self.assertFalse(result['source_total_comparison'][0]['within_tolerance'])
+        rows[-1][2]='1.0000000000000000000001'
+        result=self.validate(rows,total_excel_row='4')
+        self.assertTrue(result['valid'])
+        self.assertTrue(result['source_total_comparison'][0]['within_tolerance'])
+
+
+    def test_upload_still_blocks_erp_mismatches_and_leaf_code_errors_before_writing(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        app=FastAPI(); app.include_router(trial_balance.router)
+        client=TestClient(app)
+        cases=[([['A','Cash',100,0,0,0,100,0],['','Total',99,0,0,0,100,0]], {'total_excel_row':'3'}),
+               ([['2026-01-01','Cash',100,0,0,0,100,0]], {'no_total_row':'true'})]
+        for rows,choice in cases:
+            self.validate(rows, **({'total_excel_row':'3'} if 'total_excel_row' in choice else {'no_total_row':True}))
+            data={'client_id':'1','as_of_date':'2026-06-30',**self._last_mapping,**choice}
+            files={'file':('tb.xlsx',self._last_contents,'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')}
+            with patch.object(trial_balance,'execute_query_pg',return_value=[{'id':1}]), \
+                 patch.object(trial_balance,'execute_write_pg') as write:
+                response=client.post('/api/trial-balance/upload',data=data,files=files)
+                self.assertEqual(response.status_code,400,response.text)
+                self.assertFalse(response.json()['detail']['validation']['valid'])
+                write.assert_not_called()

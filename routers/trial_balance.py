@@ -23,7 +23,6 @@ classification override.
 """
 
 import json
-import hashlib
 import re
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -351,7 +350,7 @@ def _load_excluded_excel_rows(raw_value, row_count):
 
 
 def validate_trial_balance_contents(
-    contents, filename, mapping, code_overrides=None, classification_overrides=None, excluded_excel_rows=None, adjustment_confirmation=None,
+    contents, filename, mapping, code_overrides=None, classification_overrides=None, excluded_excel_rows=None,
     total_excel_row=None, no_total_row=False
 ):
     """Parse and reconcile a Trial Balance without writing any database records."""
@@ -506,7 +505,8 @@ def validate_trial_balance_contents(
             total = control_rows[0]['amounts'][role]
             difference = source_totals[role] - total
             source_comparison.append({'field': label, 'source_total': str(total),
-                                      'leaf_total': str(source_totals[role]), 'difference': str(difference)})
+                                      'leaf_total': str(source_totals[role]), 'difference': str(difference),
+                                      'within_tolerance': abs(difference) <= tolerance})
         source_status = 'pass' if all(abs(Decimal(r['difference'])) <= tolerance for r in source_comparison) else 'fail'
         if source_status == 'fail':
             add_error(None, 'ERP total', 'Imported leaf totals differ from the ERP total. Review mapping and leaf selection, or correct and re-import the source file.')
@@ -549,19 +549,16 @@ def validate_trial_balance_contents(
                                        **{role.replace('_column', '_adjustment'): str(value) for role, value in values.items()}})
             for role, value in values.items():
                 adjusted_totals[role] += value
-    # Confirmation binds to source bytes, mapping, corrections and exact proposals.
-    token_mapping = {role: mapping.get(role) or None for role in
-                     ['account_code_column', 'account_name_column', 'type_column'] + [role for role, _ in amount_roles]}
-    token_data = [hashlib.sha256(contents).hexdigest(), token_mapping, code_overrides,
-                  classification_overrides, sorted(excluded_excel_rows), sorted(control_row_numbers), bool(no_total_row), global_adjustments]
-    confirmation_token = hashlib.sha256(json.dumps(token_data, sort_keys=True).encode()).hexdigest() if global_adjustments else None
-    confirmed = bool(confirmation_token and adjustment_confirmation == confirmation_token)
-    if global_adjustments and not confirmed:
-        add_error(None, 'Footings', 'Review and confirm the proposed global differences before saving.')
+    # Amount differences are advisory: keep their separate entries and observations
+    # while the earlier source-total, account-code and input checks remain blocking.
+    if global_adjustments:
+        add_warning(None, 'Footings', 'Vertical debit/credit differences are recorded as separate Difference lines; original amounts remain unchanged.')
     for period, label in (('opening', 'Opening'), ('period', 'Period movement'), ('closing', 'Closing')):
         debit, credit = adjusted_totals[period + '_dr_column'], adjusted_totals[period + '_cr_column']
         checks.append({'key': period + '_balance', 'label': label + ' debits equal credits',
-                       'status': 'blocked' if errors and not global_adjustments else ('confirmation_required' if global_adjustments and not confirmed else 'pass'),
+                       'status': 'blocked' if errors else ('adjusted' if any(
+                           Decimal(row[period + '_' + side + '_adjustment']) != 0
+                           for row in global_adjustments for side in ('dr', 'cr')) else 'pass'),
                        'debit_total': float(debit), 'credit_total': float(credit), 'difference': float(debit-credit),
                        'original_debit_total': str(source_totals[period + '_dr_column']),
                        'original_credit_total': str(source_totals[period + '_cr_column']),
@@ -581,8 +578,7 @@ def validate_trial_balance_contents(
         'source_total_comparison': source_comparison,
         'source_leaf_totals': {key: str(value) for key, value in source_totals.items()},
         'global_adjustments': global_adjustments,
-        'adjustment_confirmation_token': confirmation_token,
-        'adjustments_confirmed': confirmed,
+        'global_adjustments_automatic': bool(global_adjustments),
         'rollforward_differences': rollforward_differences,
         'rollforward_difference_count': len(rollforward_differences),
         'account_count': len(candidates),
@@ -856,7 +852,6 @@ def validate_trial_balance_upload(
     account_code_overrides: Optional[str] = Form(None),
     account_classification_overrides: Optional[str] = Form(None),
     excluded_excel_rows: Optional[str] = Form(None),
-    adjustment_confirmation: Optional[str] = Form(None),
     total_excel_row: Optional[str] = Form(None),
     no_total_row: bool = Form(False),
 ):
@@ -877,7 +872,7 @@ def validate_trial_balance_upload(
     try:
         return validate_trial_balance_contents(
             file.file.read(), file.filename, mapping,
-            account_code_overrides, account_classification_overrides, excluded_excel_rows, adjustment_confirmation, total_excel_row, no_total_row,
+            account_code_overrides, account_classification_overrides, excluded_excel_rows, total_excel_row, no_total_row,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc))
@@ -917,7 +912,6 @@ def upload_trial_balance(
     account_code_overrides: Optional[str] = Form(None),
     account_classification_overrides: Optional[str] = Form(None),
     excluded_excel_rows: Optional[str] = Form(None),
-    adjustment_confirmation: Optional[str] = Form(None),
     total_excel_row: Optional[str] = Form(None),
     no_total_row: bool = Form(False),
 ):
@@ -987,7 +981,7 @@ def upload_trial_balance(
     try:
         validation = validate_trial_balance_contents(
             file.file.read(), file.filename, mapping,
-            account_code_overrides, account_classification_overrides, excluded_excel_rows, adjustment_confirmation, total_excel_row, no_total_row,
+            account_code_overrides, account_classification_overrides, excluded_excel_rows, total_excel_row, no_total_row,
         )
     except ValueError as exc:
         raise HTTPException(400, f"Trial balance validation failed: {exc}")
@@ -1243,7 +1237,7 @@ def upload_trial_balance(
                     'source_total_comparison': validation['source_total_comparison'],
                     'checks': validation['checks'], 'global_adjustments': validation['global_adjustments'],
                     'account_classifications': validation['account_classifications'],
-                    'adjustments_confirmed': validation['adjustments_confirmed'],
+                    'global_adjustments_automatic': validation['global_adjustments_automatic'],
                 }), upload_id)
             )
         if conflicts:

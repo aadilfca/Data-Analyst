@@ -133,38 +133,39 @@ def test_rollforward_differences_render_as_red_section_without_changing_source_r
     page.close()
 
 
-def test_global_difference_popup_requires_confirmation_and_edits_invalidate_it(browser):
+def test_global_differences_allow_save_without_review_controls(browser):
     import re
-    html = (PROJECT_ROOT / 'static' / 'trial_balance.html').read_text(encoding='utf-8')
-    page = browser.new_page()
+    html=(PROJECT_ROOT / 'static' / 'trial_balance.html').read_text(encoding='utf-8')
+    page=browser.new_page()
     page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
-    page.evaluate("""() => {
-        tbValidationSheet.hidden = false;
-        tbValidationSheet.classList.add('active');
-        tbValidationSheet.setAttribute('aria-hidden', 'false');
-        window.revalidationCount = 0;
-        runTrialBalanceValidation = () => { window.revalidationCount++; };
-        validationResult = {
-            checks: [{label: 'ERP total', status: 'not_applicable'}],
-            global_adjustments: [{account_name: 'Opening footing', global_adjustment: true,
-                opening_cr_adjustment: '100', closing_cr_adjustment: '100'}],
-            adjustment_confirmation_token: 'exact-proposal', adjustments_confirmed: false
-        };
-        renderTrialBalanceControls(validationResult);
+    page.evaluate("""async () => {
+        window.API_BASE=''; window.isClientSelected=()=>true;
+        selectedFile=new File(['demo'],'tb.xlsx');
+        periodStartInput.value='2026-01-01'; periodEndInput.value='2026-06-30';
+        tbNoTotalRow.checked=true;
+        fileHeaders=['Code','Name','OD','OC','PD','PC','CD','CC'];
+        tbColumnMapping=Object.fromEntries(TB_MAPPING_FIELDS.map((field,index)=>[field.role,fileHeaders[index]]));
+        fileAllRows=[['A','Cash',100,0,0,0,90,0]];
+        tbValidationSheet.hidden=false;tbValidationSheet.classList.add('active');
+        const result={valid:true,errors:[],issue_count:0,warning_count:2,account_count:1,no_total_row:true,
+            auto_classification:{'2':'leaf'},checks:[{key:'account_codes',status:'pass'}],
+            warnings:[{excel_row:2,field:'Roll-forward',message:'Row difference'},{field:'Footings',message:'Vertical difference'}],
+            rollforward_difference_count:1,rollforward_differences:[{excel_row:2,account_code:'A',account_name:'Cash',closing_dr_adjustment:10}],
+            global_adjustments:[{account_name:'Opening footing',global_adjustment:true,opening_cr_adjustment:'100',closing_cr_adjustment:'100'}]};
+        window.fetch=async()=>({ok:true,json:async()=>result});
+        await runTrialBalanceValidation();
     }""")
-    page.get_by_role('button', name='Review global differences').click()
-    assert page.locator('#tbFootingDialog').is_visible()
-    assert 'opening CR: 100; closing CR: 100' in page.locator('#tbFootingProposal').inner_text()
-    page.locator('#tbFootingCancel').click()
-    assert page.evaluate('footingConfirmation') == ''
-    assert page.evaluate('window.revalidationCount') == 0
-    page.get_by_role('button', name='Review global differences').click()
-    page.locator('#tbFootingAccept').click()
-    assert page.evaluate('footingConfirmation') == 'exact-proposal'
-    assert page.evaluate('window.revalidationCount') == 1
+    assert page.locator('#uploadTrialBalanceBtn').is_enabled()
+    assert page.get_by_role('button',name='Review global differences').count()==0
+    assert page.locator('#tbFootingDialog').count()==0
+    assert page.locator('.tb-generated-difference').count()==2
+    status=page.locator('#tbValidationStatus').inner_text()
+    assert 'ready to save' in status and 'global footing difference line(s)' in status
+    assert 'Parent account-code' not in status and 'blocking issue' not in status
+    assert not page.evaluate("buildTrialBalanceFormData().has('adjustment_confirmation')")
     page.evaluate("invalidateTrialBalanceValidation('Changed')")
-    assert page.evaluate('footingConfirmation') == ''
+    assert page.locator('#uploadTrialBalanceBtn').is_disabled()
     page.close()
 
 
@@ -205,13 +206,13 @@ def test_manual_total_row_mapping_preview_gating_and_file_reset(browser):
     assert page.locator('#tbTotalRowAmounts').all_text_contents() == ['OpeningDr 10Cr 10PeriodDr 0Cr 0ClosingDr 10Cr 10']
     assert page.evaluate("buildTrialBalanceFormData().get('total_excel_row')") == '4'
     assert page.evaluate("buildTrialBalanceFormData().get('no_total_row')") == 'false'
-    page.evaluate("validationResult = {valid:true}; validationDirty = false; footingConfirmation = 'old';")
+    page.evaluate("validationResult = {valid:true}; validationDirty = false;")
     page.locator('#tbNoTotalRow').check()
     assert page.locator('#tbTotalExcelRow').is_disabled()
     assert page.locator('#tbTotalRowPreview').is_hidden()
     assert page.evaluate("buildTrialBalanceFormData().get('total_excel_row')") is None
     assert page.evaluate("buildTrialBalanceFormData().get('no_total_row')") == 'true'
-    assert page.evaluate('validationDirty && footingConfirmation === ""')
+    assert page.evaluate('validationDirty && !validationResult')
     page.locator('#tbNoTotalRow').uncheck()
     page.locator('#tbTotalExcelRow').fill('99')
     assert page.locator('#validateTrialBalanceBtn').is_disabled()
@@ -278,7 +279,75 @@ def test_erp_control_footer_aligns_six_columns_and_keeps_original_leaf_totals(br
     assert result['matched']['zeroCells'] == 6
     assert result['matched']['footerEditors'] == 0
     assert result['matched']['exact'] == '9,007,199,254,740,993.01'
-    assert result['nonzero'] == {'value': '0.004', 'red': 1}
+    assert result['nonzero'] == {'value': '0.00', 'red': 0}
     assert result['pending'] == ['Pending'] * 6
     assert result['notApplicable'] == ['N/A'] * 6
+    page.close()
+
+
+def test_control_rounding_and_difference_colours_follow_server_tolerance(browser):
+    page=browser.new_page()
+    page.set_content('<table><thead id="tbValidationHead"></thead><tbody id="tbValidationBody"></tbody></table>')
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
+    result=page.evaluate("""() => {
+        fileHeaders=['Code','Name','OD','OC','PD','PC','CD','CC'];
+        tbColumnMapping=Object.fromEntries(TB_MAPPING_FIELDS.map((field,index)=>[field.role,fileHeaders[index]]));
+        fileAllRows=[['A','Debit',1,0,0,0,1,0],['B','Credit',0,1,0,0,0,1],['','Total',1,1,0,0,1,1]];
+        const differences=['-8.97E-8','-0.004','0.01','-0.01','0.02','0.0100000000000000000001'];
+        validationResult={tolerance:0.01,source_total_rows:[4],source_leaf_totals:{},
+            checks:[{key:'account_codes',status:'pass'}],
+            source_total_comparison:['Opening Dr','Opening Cr','Period Dr','Period Cr','Closing Dr','Closing Cr']
+                .map((field,i)=>({field,source_total:'1',difference:differences[i],within_tolerance:i<4}))};
+        const original=JSON.stringify(validationResult);
+        renderTrialBalanceValidationGrid();
+        return {amounts:['1234567890.1970003','9007199254740993.015','-1.005','9.995e2','-8.97E-8']
+                    .map(formatTrialBalanceControlAmount),
+            cells:Array.from(document.querySelectorAll('.tb-control-difference .tb-validation-amount'))
+                .map(cell=>({text:cell.textContent,red:cell.classList.contains('tb-footing-nonzero'),title:cell.title})),
+            unchanged:JSON.stringify(validationResult)===original};
+    }""")
+    assert result['amounts']==['1,234,567,890.20','9,007,199,254,740,993.02','-1.01','999.50','0.00']
+    assert [cell['text'] for cell in result['cells']]==['0.00','0.00','0.00','0.00','0.02','0.01']
+    assert [cell['red'] for cell in result['cells']]==[False,False,False,False,True,True]
+    assert '0.0100000000000000000001' in result['cells'][-1]['title']
+    assert result['unchanged']
+    page.close()
+
+
+@pytest.mark.parametrize('width',[1920,1280,900])
+def test_control_totals_fit_and_scrolling_keeps_headers_aligned(browser,width):
+    import re
+    html=(PROJECT_ROOT / 'static' / 'trial_balance.html').read_text(encoding='utf-8')
+    page=browser.new_page(viewport={'width':width,'height':1080})
+    page.set_content(re.sub(r'<script[\s\S]*?</script>','',html))
+    page.add_style_tag(path=str(PROJECT_ROOT / 'static' / 'style.css'))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
+    page.evaluate("""() => {
+        fileHeaders=['Code','Name','OD','OC','PD','PC','CD','CC'];
+        tbColumnMapping=Object.fromEntries(TB_MAPPING_FIELDS.map((field,index)=>[field.role,fileHeaders[index]]));
+        fileAllRows=[['A','Debit',1,0,0,0,1,0],['B','Credit',0,1,0,0,0,1],['','Total',1,1,0,0,1,1]];
+        autoClassificationByRow={'2':'leaf','3':'leaf'};
+        const roles=['opening_dr_column','opening_cr_column','period_dr_column','period_cr_column','closing_dr_column','closing_cr_column'];
+        validationResult={source_total_rows:[4],source_leaf_totals:Object.fromEntries(roles.map(role=>[role,'9007199254740993.015'])),
+            checks:[{key:'account_codes',status:'pass'}],source_total_comparison:
+            ['Opening Dr','Opening Cr','Period Dr','Period Cr','Closing Dr','Closing Cr']
+            .map(field=>({field,source_total:'9007199254740993.015',difference:'-2.97E-7',within_tolerance:true}))};
+        tbValidationSheet.hidden=false;tbValidationSheet.classList.add('active');renderTrialBalanceValidationGrid();
+        tbValidationTableWrap.scrollLeft=250;
+    }""")
+    page.wait_for_function("document.querySelector('#tbValidationStickyHead table').style.transform.includes('-250px')")
+    measurements=page.evaluate("""() => {
+        const cells=Array.from(document.querySelectorAll('.tb-control-leaf td'));
+        const headers=Array.from(document.querySelectorAll('#tbValidationStickyHead th'));
+        return cells.map((cell,i)=>{
+            const range=document.createRange();range.selectNodeContents(cell);
+            const style=getComputedStyle(cell);
+            return {amount:cell.classList.contains('tb-validation-amount'),
+                fits:range.getBoundingClientRect().width<=cell.clientWidth-parseFloat(style.paddingLeft)-parseFloat(style.paddingRight)+1,
+                aligned:Math.abs(cell.getBoundingClientRect().left-headers[i].getBoundingClientRect().left)<1,
+                right:style.textAlign==='right'};
+        });
+    }""")
+    assert all(cell['aligned'] for cell in measurements)
+    assert all(cell['fits'] and cell['right'] for cell in measurements if cell['amount'])
     page.close()
