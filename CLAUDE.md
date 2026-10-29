@@ -33,9 +33,9 @@ One line per file group: what it is now. Full build history for every entry live
 - static/client_select.html, static/client_select.js → standalone Client Cards page with guarded selection, admin entry, and loading feedback. See CHANGELOG_ARCHIVE.md.
 - static/procedure_modal.js → shared Verification/Audit Workbook Procedure modal for grouped Data Table search, evidence/Forms, procedures, and observations. See CHANGELOG_ARCHIVE.md.
 - static/audit_workbook.js, static/audit_workbook.html → Audit Workbook: session rows, filtering, totals, shared Procedure Modal, and cached evidence/Form completion badges. See CHANGELOG_ARCHIVE.md.
-- routers/trial_balance.py → Trial Balance validation/upload, client-saved mappings, subtotal exclusions, parent code warnings, hierarchy, categories and latest-upload lookup. See CHANGELOG_ARCHIVE.md.
+- routers/trial_balance.py → Trial Balance mapping/validation, mapped-column import, parent/leaf hierarchy, subtotal exclusions, categories and latest-upload lookup. See CHANGELOG_ARCHIVE.md.
 - routers/account_control_center.py → account mappings, Financial Statement outlines and Balance Sheet/Income Statement totals and subtotals, Cash Flow configuration, and treasury setup. See CHANGELOG_ARCHIVE.md.
-- static/trial_balance.html, static/trial_balance.js → Trial Balance mapping, isolated validation, subtotal controls, position-preserving edits, retained issue queue and observations, responsive table and sticky headings. See CHANGELOG_ARCHIVE.md.
+- static/trial_balance.html, static/trial_balance.js → Trial Balance mapping, full source preview, mapped-column validation, subtotal controls, row correction and issue review. See CHANGELOG_ARCHIVE.md.
 - static/account_control_center.html, static/account_control_center.js → central mapping, statement outlines and row-anchored totals/subtotals, filtered Notes assignments, and Cash Flow setup. See CHANGELOG_ARCHIVE.md.
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Two-pane Audit Rules editor for Documents, Cross-checks, Categories, Voucher Checks and Assertions, plus Assign Categories. See CHANGELOG_ARCHIVE.md.
@@ -53,7 +53,7 @@ One line per file group: what it is now. Full build history for every entry live
 - services/reconciliation_balance_source.py → Independent balances, scoped voucher completeness, adjustment membership, posting comparisons and coverage controls. See CHANGELOG_ARCHIVE.md.
 - services/upload_lifecycle.py + drive_archive.py + upload_observation_report.py → Scope proofs, complete-voucher Excel evidence, verified external archives and compact receipts. See CHANGELOG_ARCHIVE.md.
 - routers/database_backup.py + services/database_backup.py + static/setup.* + scripts/rehearse_database_backup.py → Local backups, resumable Drive verification, processing feedback and isolated recovery rehearsals. See CHANGELOG_ARCHIVE.md.
-- tests/test_account_control_center*.py, test_cashflows*.py, test_reconciliation*.py → Setup, accounting, voucher completeness, API/UI parity, workbook evidence and bounded export ownership checks. See CHANGELOG_ARCHIVE.md.
+- tests/test_account_control_center*.py, test_trial_balance_ui.py, test_cashflows*.py, test_reconciliation*.py → Setup, accounting, import mapping, API/UI parity, and workbook evidence/export checks. See CHANGELOG_ARCHIVE.md.
 - tests/test_upload_lifecycle.py + test_data_deletion.py + test_import_duplicate_gates.py → Upload/archive lifecycle, rollback, retry, deletion and identity regression tests.
 - experiments/cashflow_fetch/*.py + tests/test_cashflow_fetch_benchmark.py → Standalone read-only transport benchmarks with exact source/report/export comparisons; never loaded by the app. See CHANGELOG_ARCHIVE.md.
 
@@ -257,6 +257,9 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-10-29: Trial Balance validation shows mapped columns only while preserving the complete source preview. See CHANGELOG_ARCHIVE.md.
+- 2026-10-29: Trial Balance import stores mapped columns only; unmapped workbook columns remain visible in the source preview. See CHANGELOG_ARCHIVE.md.
+- 2026-10-29: Trial Balance hierarchy now matches zero-padded numeric segments across import and Account Control Centre assignment. See Financial Statement operating rules in CHANGELOG_ARCHIVE.md.
 - 2026-10-29: Trial Balance keeps last-run row observations visible while code/classification edits await revalidation. See CHANGELOG_ARCHIVE.md.
 - 2026-10-29: Trial Balance retains its critical-row review queue across corrections and returns to Revalidate after all rows are visited. See CHANGELOG_ARCHIVE.md.
 - 2026-10-29: Trial Balance adds a floating navigator that cycles through row-level blocking issues and highlights each target. See CHANGELOG_ARCHIVE.md.

@@ -11,6 +11,119 @@ from fastapi import HTTPException
 
 import database
 from routers import account_control_center as control_center
+from routers import trial_balance
+
+
+class TrialBalanceHierarchyTests(unittest.TestCase):
+    def test_numeric_zero_padding_does_not_hide_a_parent(self):
+        codes = {"1", "01-0001", "01-0001-0002", "01-0001-0002-0006"}
+
+        hierarchy = trial_balance.build_account_code_hierarchy(codes)
+
+        self.assertEqual(hierarchy["classification"]["1"], "parent")
+        self.assertEqual(hierarchy["classification"]["01-0001"], "parent")
+        self.assertEqual(hierarchy["classification"]["01-0001-0002"], "parent")
+        self.assertEqual(hierarchy["classification"]["01-0001-0002-0006"], "leaf")
+        self.assertEqual(hierarchy["parent_account_code"]["01-0001"], "1")
+        self.assertEqual(hierarchy["parent_account_code"]["01-0001-0002"], "01-0001")
+
+    def test_exact_parent_wins_when_normalized_codes_collide(self):
+        hierarchy = trial_balance.build_account_code_hierarchy({"1", "01", "01-0001"})
+
+        self.assertEqual(hierarchy["parent_account_code"]["01-0001"], "01")
+        self.assertEqual(hierarchy["classification"]["01"], "parent")
+        self.assertEqual(hierarchy["classification"]["1"], "leaf")
+
+    def test_account_control_tree_refreshes_old_stored_classification(self):
+        stored_accounts = [
+            {"id": 1, "account_code": "1", "account_name": "Assets", "parent_account_code": None, "level": 1, "classification": "leaf", "manually_overridden": False, "sort_order": 1},
+            {"id": 2, "account_code": "01-0001", "account_name": "Current assets", "parent_account_code": "01", "level": 2, "classification": "leaf", "manually_overridden": False, "sort_order": 2},
+            {"id": 3, "account_code": "01-0001-0001", "account_name": "Cash", "parent_account_code": "01-0001", "level": 3, "classification": "leaf", "manually_overridden": False, "sort_order": 3},
+            {"id": 4, "account_code": "2", "account_name": "Liabilities", "parent_account_code": None, "level": 1, "classification": "leaf", "manually_overridden": True, "sort_order": 4},
+        ]
+
+        with patch.object(control_center, "execute_query_pg", return_value=stored_accounts):
+            accounts = control_center._accounts_for_upload(77)
+
+        self.assertEqual(accounts[0]["classification"], "parent")
+        self.assertEqual(accounts[1]["parent_account_code"], "1")
+        self.assertEqual(accounts[1]["classification"], "parent")
+        self.assertEqual(accounts[3]["classification"], "leaf")
+
+    def test_financial_statement_parent_assignment_reaches_padded_descendants(self):
+        payload = control_center.AccountControlBulkAssignmentPayload(
+            client_id=1,
+            parent_account_code="1",
+            financial_statement_category_id=41,
+        )
+        accounts = [
+            {"id": 1, "account_code": "1", "classification": "parent"},
+            {"id": 2, "account_code": "01-0001", "classification": "parent"},
+            {"id": 3, "account_code": "01-0001-0002", "classification": "leaf"},
+            {"id": 4, "account_code": "01-0001-0002-0006", "classification": "leaf"},
+            {"id": 5, "account_code": "10-0001", "classification": "leaf"},
+        ]
+        with patch.object(control_center, "_selected_control_accounts", return_value=({"id": 77}, accounts)), patch.object(
+            control_center, "_validate_control_categories"
+        ), patch.object(control_center, "_upsert_control_assignment") as upsert, patch.object(
+            control_center, "pg_transaction", return_value=nullcontext()
+        ):
+            result = control_center.apply_account_control_mapping_to_children(payload, session={"username": "Admin"})
+
+        self.assertEqual(result["leaf_count"], 2)
+        self.assertEqual(
+            {call.args[0]["account_code"] for call in upsert.call_args_list},
+            {"01-0001-0002", "01-0001-0002-0006"},
+        )
+
+
+class TrialBalanceMappedColumnsTests(unittest.TestCase):
+    def test_unmapped_source_columns_are_not_retained_in_imported_raw_row(self):
+        row = {
+            "Account Code": "1",
+            "Account Name": "ASSETS",
+            "Opening Debit": "148701915",
+            "Opening Credit": "64486535",
+            "Period Debit": "1721855708",
+            "Period Credit": "1664962705",
+            "Closing Debit": "0",
+            "Closing Credit": "0",
+            "Start Date": "2025-07-01 00:00:00",
+            "End Date ": "2026-06-30 00:00:00",
+            "Unnamed: 10": "",
+        }
+        mapping = {
+            "account_code_column": "Account Code",
+            "account_name_column": "Account Name",
+            "opening_dr_column": "Opening Debit",
+            "opening_cr_column": "Opening Credit",
+            "period_dr_column": "Period Debit",
+            "period_cr_column": "Period Credit",
+            "closing_dr_column": "Closing Debit",
+            "closing_cr_column": "Closing Credit",
+            "type_column": None,
+        }
+
+        imported_raw_row = trial_balance._mapped_raw_row_data(row, mapping)
+
+        self.assertEqual(imported_raw_row, {header: value for header, value in row.items() if header in mapping.values()})
+        self.assertNotIn("Start Date", imported_raw_row)
+        self.assertNotIn("End Date ", imported_raw_row)
+        self.assertNotIn("Unnamed: 10", imported_raw_row)
+
+    def test_optional_mapped_column_is_retained_with_its_exact_header(self):
+        row = {"Account Code": "1", "Account Name": "ASSETS", "End Date ": "2026-06-30"}
+        mapping = {
+            "account_code_column": "Account Code",
+            "account_name_column": "Account Name",
+            "optional_period_column": "End Date ",
+            "unused_column": None,
+        }
+
+        self.assertEqual(
+            trial_balance._mapped_raw_row_data(row, mapping),
+            {"Account Code": "1", "Account Name": "ASSETS", "End Date ": "2026-06-30"},
+        )
 
 
 class AccountSetSchemaTests(unittest.TestCase):
@@ -249,8 +362,9 @@ class CashFlowControlTests(unittest.TestCase):
             [],
             [],
             [],
+            [],
         ]):
-            result = control_center.get_cashflow_setup(1, session={"username": "Admin"})
+            result = control_center.get_cashflow_setup(1, trial_balance_upload_id=None, session={"username": "Admin"})
 
         self.assertEqual(result["historical_orphans"][0]["account_code"], "60-10-70-0007")
         self.assertEqual(result["historical_orphans"][0]["category_id"], 4)

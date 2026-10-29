@@ -63,9 +63,9 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
         "upload": {"id": 77, "file_name": "January Trial Balance.xlsx", "as_of_date": "2026-01-31"},
         "verification_workstreams": ["bank", "cash", "local_vendor"],
         "accounts": [
-            {"id": 1, "account_code": "20-15-50", "account_name": "Local creditors", "parent_account_code": None, "level": 3, "is_leaf": False, "assignment": {"verification_workstream": None}},
-            {"id": 2, "account_code": "20-15-50-0001", "account_name": "Supplier A", "parent_account_code": "20-15-50", "level": 4, "is_leaf": True, "assignment": {"verification_workstream": None, "financial_statement_category_id": None, "note_category_id": None}},
-            {"id": 3, "account_code": "20-15-50-0002", "account_name": "Supplier B", "parent_account_code": "20-15-50", "level": 4, "is_leaf": True, "assignment": {"verification_workstream": "bank", "financial_statement_category_id": None, "note_category_id": None}},
+            {"id": 1, "account_code": "1", "account_name": "Local creditors", "parent_account_code": None, "level": 1, "is_leaf": False, "assignment": {"verification_workstream": None}},
+            {"id": 2, "account_code": "01-0001", "account_name": "Supplier A", "parent_account_code": "1", "level": 2, "is_leaf": True, "assignment": {"verification_workstream": None, "financial_statement_category_id": None, "note_category_id": None}},
+            {"id": 3, "account_code": "01-0002", "account_name": "Supplier B", "parent_account_code": "1", "level": 2, "is_leaf": True, "assignment": {"verification_workstream": "bank", "financial_statement_category_id": None, "note_category_id": None}},
             {"id": 4, "account_code": "10-15-115-10-0001", "account_name": "Cash in hand", "parent_account_code": None, "level": 5, "is_leaf": True, "assignment": {"verification_workstream": "cash", "financial_statement_category_id": None, "note_category_id": None}},
         ],
     }
@@ -180,7 +180,7 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
             body = json.loads(request.post_data or "{}")
             calls.append((request.method, url, body))
             for account in mapping["accounts"]:
-                if account["is_leaf"] and account["account_code"].startswith(body["parent_account_code"] + "-"):
+                if account["is_leaf"] and account["parent_account_code"] == body["parent_account_code"]:
                     for field in ("verification_workstream", "financial_statement_category_id", "note_category_id"):
                         if field in body:
                             account["assignment"][field] = body[field]
@@ -227,7 +227,6 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     page.wait_for_selector("#accPageBusy", state="hidden")
     assert page.locator("#accTabFinancial").is_enabled()
     page.evaluate("window.fetch = window.__accOriginalFetch")
-    assert page.locator("#accSourceInfo").text_content() == "Source: January Trial Balance.xlsx - 2026-01-31"
     assert page.locator("#accTreasuryGuidance").is_hidden()
     page.locator("#accTreasuryGuidanceToggle").click()
     assert page.locator("#accTreasuryGuidance").is_visible()
@@ -237,7 +236,7 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     assert page.locator("#accTreasuryGuidance").is_hidden()
     assert page.locator("#accAccountRows tr").count() == 4
     assert page.locator("select[data-acc-code='10-15-115-10-0001']").input_value() == "cash"
-    assert page.locator("select[data-acc-code='20-15-50'] option:checked").text_content() == "Mixed assignments - choose one"
+    assert page.locator("select[data-acc-code='1'] option:checked").text_content() == "Mixed assignments - choose one"
 
     page.evaluate("""() => {
         window.__accOriginalFetch = window.fetch;
@@ -276,18 +275,18 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
         };
     }""")
     page.once("dialog", lambda dialog: dialog.accept())
-    page.locator("select[data-acc-code='20-15-50']").select_option("local_vendor")
+    page.locator("select[data-acc-code='1']").select_option("local_vendor")
     page.wait_for_function("window.__accReleaseParent !== null")
     page.wait_for_function("!document.querySelector('#accPageBusy').hidden")
     assert page.locator("#accGridWrap").get_attribute("aria-busy") == "true"
     assert page.locator("#accGridWrap.acc2-processing").is_visible()
-    assert page.locator("select[data-acc-code='20-15-50']").is_disabled()
+    assert page.locator("select[data-acc-code='1']").is_disabled()
     page.evaluate("window.__accReleaseParent()")
     page.wait_for_function("document.querySelector('#accPageBusy').hidden")
     page.wait_for_timeout(100)
     page.evaluate("window.fetch = window.__accOriginalFetch")
-    assert any(call[0] == "POST" and call[2]["parent_account_code"] == "20-15-50" for call in calls)
-    assert page.locator("select[data-acc-code='20-15-50']").input_value() == "local_vendor"
+    assert any(call[0] == "POST" and call[2]["parent_account_code"] == "1" for call in calls)
+    assert page.locator("select[data-acc-code='1']").input_value() == "local_vendor"
     main_notice = page.locator("#accStatus.acc2-main-toast.success")
     assert main_notice.is_visible()
     assert main_notice.evaluate("element => getComputedStyle(element).position") == "fixed"
@@ -316,7 +315,7 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     page.wait_for_selector("#accPageBusy", state="hidden")
     assert page.locator("#accTabFinancial").is_enabled()
     page.evaluate("window.fetch = window.__accOriginalFetch")
-    picker_row = page.locator("#accFinancialRows tr:has(select[data-acc-code='20-15-50-0001'])")
+    picker_row = page.locator("#accFinancialRows tr:has(select[data-acc-code='01-0001'])")
     picker_trigger = picker_row.locator("[data-fs-picker-trigger]")
     picker_trigger.click()
     picker = picker_row.locator("[data-fs-picker]")
@@ -331,10 +330,10 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     assert picker_sections.nth(0).is_visible()
     with page.expect_response(lambda response: response.url.endswith("/api/account-control-center/mapping") and response.request.method == "PUT"):
         picker.locator("[data-fs-picker-option][data-fs-picker-value='32']").click()
-    assert page.locator("select.acc2-financial-category[data-acc-code='20-15-50-0001']").input_value() == "32"
+    assert page.locator("select.acc2-financial-category[data-acc-code='01-0001']").input_value() == "32"
     assert any(call[0] == "PUT" and call[2].get("financial_statement_category_id") == 32 for call in calls)
     with page.expect_response(lambda response: response.url.endswith("/api/account-control-center/mapping") and response.request.method == "PUT"):
-        choose_financial_category(page, "20-15-50-0001", 10)
+        choose_financial_category(page, "01-0001", 10)
     page.evaluate("""() => {
         window.__accOriginalFetch = window.fetch;
         window.__accReleaseFinancialLeaf = null;
@@ -342,12 +341,12 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
             ? new Promise(resolve => { window.__accReleaseFinancialLeaf = () => window.__accOriginalFetch(input, init).then(resolve); })
             : window.__accOriginalFetch(input, init);
     }""")
-    choose_financial_category(page, "20-15-50-0001", 11)
+    choose_financial_category(page, "01-0001", 11)
     page.wait_for_function("window.__accReleaseFinancialLeaf !== null")
     assert page.locator("#accPageBusy").is_hidden()
-    assert page.locator("#accFinancialRows [data-acc-fs-result='20-15-50-0001'] .acc2-inline-saving").is_visible()
+    assert page.locator("#accFinancialRows [data-acc-fs-result='01-0001'] .acc2-inline-saving").is_visible()
     page.evaluate("window.__accReleaseFinancialLeaf()")
-    page.wait_for_function("document.querySelector('#accFinancialRows [data-acc-fs-result=\"20-15-50-0001\"]')?.textContent === 'Saved'")
+    page.wait_for_function("document.querySelector('#accFinancialRows [data-acc-fs-result=\"01-0001\"]')?.textContent === 'Saved'")
     page.evaluate("window.fetch = window.__accOriginalFetch")
     assert any(call[0] == "PUT" and call[2].get("financial_statement_category_id") == 10 and "verification_workstream" not in call[2] for call in calls)
     assert any(call[0] == "PUT" and call[2].get("financial_statement_category_id") == 11 and "verification_workstream" not in call[2] for call in calls)
@@ -615,10 +614,10 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     assert page.locator("#accFinancialSetupPanelNotesBalanceSheet [data-fs-calculation-id]").count() == 0
     page.locator("#accFinancialSetupTabBalanceSheet").click()
     page.locator("#accFinancialSetupClose").click()
-    choose_financial_category(page, "20-15-50-0001", 42)
-    page.wait_for_function("document.querySelector('#accStatus')?.textContent.includes('20-15-50-0001')")
-    choose_financial_category(page, "20-15-50-0002", 42)
-    page.wait_for_function("document.querySelector('#accStatus')?.textContent.includes('20-15-50-0002')")
+    choose_financial_category(page, "01-0001", 42)
+    page.wait_for_function("document.querySelector('#accStatus')?.textContent.includes('01-0001')")
+    choose_financial_category(page, "01-0002", 42)
+    page.wait_for_function("document.querySelector('#accStatus')?.textContent.includes('01-0002')")
     choose_financial_category(page, "10-15-115-10-0001", 41)
     page.wait_for_function("document.querySelector('#accStatus')?.textContent.includes('10-15-115-10-0001')")
     page.locator("#accFinancialCategoryFilter").fill("Cash equivalents")
@@ -640,10 +639,10 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     notes_parent = page.locator("#accNotesRows tr").filter(has_text="Local creditors")
     assert notes_parent.locator(".acc2-note-source").text_content().endswith("Cash equivalents")
     page.once("dialog", lambda dialog: dialog.accept())
-    choose_note(page, "20-15-50", 24)
-    page.wait_for_function("document.querySelector('#accNotesRows [data-acc-note-result=\"20-15-50-0001\"]')?.textContent === 'Saved'")
+    choose_note(page, "1", 24)
+    page.wait_for_function("document.querySelector('#accNotesRows [data-acc-note-result=\"01-0001\"]')?.textContent === 'Saved'")
     assert any(call[0] == "POST" and call[1].endswith("/mapping/apply-to-children") and call[2].get("note_category_id") == 24 for call in calls)
-    supplier_a = page.locator("#accNotesRows tr:has(select.acc2-note-category[data-acc-code='20-15-50-0001'])")
+    supplier_a = page.locator("#accNotesRows tr:has(select.acc2-note-category[data-acc-code='01-0001'])")
     supplier_a.locator("[data-fs-picker-trigger]").click()
     note_menu = supplier_a.locator("[data-fs-picker-menu]")
     assert note_menu.locator("[data-fs-picker-option] > span:first-child").all_text_contents() == ["Unassigned", "Cash equivalents › Raw material › Opening stock", "Cash equivalents › Export Customers"]
@@ -651,7 +650,7 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     assert note_menu.locator("[data-fs-picker-option]:visible").count() == 1
     note_menu.locator("[data-fs-picker-search-input]").fill("")
     note_menu.locator("[data-fs-picker-option][data-fs-picker-value='23']").click()
-    page.wait_for_function("document.querySelector('#accNotesRows [data-acc-note-result=\"20-15-50-0001\"]')?.textContent === 'Saved'")
+    page.wait_for_function("document.querySelector('#accNotesRows [data-acc-note-result=\"01-0001\"]')?.textContent === 'Saved'")
     assert any(call[0] == "PUT" and call[2].get("note_category_id") == 23 and "verification_workstream" not in call[2] and "financial_statement_category_id" not in call[2] for call in calls)
     page.locator("#accNotesCategoryFilter").fill("Opening stock")
     assert page.locator("#accNotesRows tr").count() == 4

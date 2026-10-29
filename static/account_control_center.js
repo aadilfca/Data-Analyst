@@ -180,11 +180,25 @@ async function accApi(url, options) {
     return payload;
 }
 function accAssignment(account) { return account.assignment || {}; }
+function accAccountIsWithin(account, parentCode) {
+    const selectedCode = accNormaliseCode(parentCode);
+    let ancestor = accNormaliseCode(account.account_code) === selectedCode
+        ? selectedCode
+        : accNormaliseCode(account.parent_account_code);
+    const visited = new Set();
+    while (ancestor && !visited.has(ancestor)) {
+        if (ancestor === selectedCode) return true;
+        visited.add(ancestor);
+        const parent = accAccounts.find(function (candidate) {
+            return accNormaliseCode(candidate.account_code) === ancestor;
+        });
+        ancestor = parent ? accNormaliseCode(parent.parent_account_code) : '';
+    }
+    return false;
+}
 function accLeavesBelow(parentCode) {
-    const prefix = accNormaliseCode(parentCode) + '-';
     return accAccounts.filter(function (account) {
-        const code = accNormaliseCode(account.account_code);
-        return account.is_leaf && (code === accNormaliseCode(parentCode) || code.indexOf(prefix) === 0);
+        return account.is_leaf && accAccountIsWithin(account, parentCode);
     });
 }
 function accEffectiveWorkstream(account) {
@@ -224,10 +238,8 @@ function accFilterAccountRows(accountQuery, assignmentQuery, getAssignmentText) 
     const visible = new Set(matched);
     if (accountTerm || assignmentTerm) {
         matched.forEach(function (match) {
-            const code = accNormaliseCode(match.account_code);
             accAccounts.forEach(function (candidate) {
-                const parentCode = accNormaliseCode(candidate.account_code);
-                if (!candidate.is_leaf && code.indexOf(parentCode + '-') === 0) visible.add(candidate);
+                if (!candidate.is_leaf && accAccountIsWithin(match, candidate.account_code)) visible.add(candidate);
             });
         });
     }
@@ -815,7 +827,7 @@ function accCashflowVisibleAccounts(search) {
         if (!account.is_leaf) {
             accAccounts.forEach(function (child) {
                 const childCode = accNormaliseCode(child.account_code);
-                if (childCode === accountCode || childCode.indexOf(accountCode + '-') === 0) visibleCodes.add(childCode);
+                if (accAccountIsWithin(child, accountCode)) visibleCodes.add(childCode);
             });
         }
         let current = account;

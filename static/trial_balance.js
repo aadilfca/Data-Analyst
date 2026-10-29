@@ -457,12 +457,16 @@ function renderTrialBalanceValidationGrid() {
     const codeIndex = fileHeaders.indexOf(tbColumnMapping.account_code_column);
     const nameIndex = fileHeaders.indexOf(tbColumnMapping.account_name_column);
     const mappingRoleByIndex = new Map();
+    const mappedSourceIndexes = new Set(getMappedColumnIndexes());
     TB_MAPPING_FIELDS.forEach(function (field) {
         const index = fileHeaders.indexOf(tbColumnMapping[field.role]);
         if (index >= 0) mappingRoleByIndex.set(index, field.role);
     });
     const columns = [{ kind: 'row', label: 'Excel Row', className: 'tb-validation-row-number' }];
     fileHeaders.forEach(function (label, index) {
+        // Keep the validation view aligned with the import mapping. The mapping
+        // pane remains the full source preview for checking unmapped columns.
+        if (!mappedSourceIndexes.has(index)) return;
         const role = mappingRoleByIndex.get(index);
         let className = 'tb-validation-source-column';
         if (index === codeIndex) className += ' tb-validation-account-code';

@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from database import execute_query_pg, execute_write_pg, log_audit, pg_transaction
 from routers.auth import require_admin
-from routers.trial_balance import find_latest_parsed_upload
+from routers.trial_balance import build_account_code_hierarchy, find_latest_parsed_upload
 from services.cash_bank_classification import (
     discover_historical_orphan_accounts_postgres,
     synchronize_treasury_accounts_postgres,
@@ -314,15 +314,46 @@ def get_published_account_set_leaf_accounts(client_id: int, set_key: str) -> Opt
         "accounts": resolved,
     }
 def _accounts_for_upload(upload_id: int) -> list[dict[str, Any]]:
-    return execute_query_pg(
+    accounts = execute_query_pg(
         """
-        SELECT id, account_code, account_name, parent_account_code, level, classification, sort_order
+        SELECT id, account_code, account_name, parent_account_code, level, classification, manually_overridden, sort_order
         FROM trial_balance_accounts
         WHERE upload_id = %s
         ORDER BY sort_order, account_code
         """,
         (upload_id,),
     )
+    hierarchy = build_account_code_hierarchy(row["account_code"] for row in accounts)
+    for account in accounts:
+        code = account["account_code"]
+        account["parent_account_code"] = hierarchy["parent_account_code"].get(code)
+        if not account["manually_overridden"]:
+            account["classification"] = hierarchy["classification"][code]
+    return accounts
+
+
+def _leaf_accounts_below(accounts: list[dict[str, Any]], parent_code: str) -> list[dict[str, Any]]:
+    """Return a selected account and its descendant leaves from the code tree."""
+    normalized_parent = _normalise_account_code(parent_code)
+    hierarchy = build_account_code_hierarchy(row["account_code"] for row in accounts)
+    parent_codes = hierarchy["parent_account_code"]
+    leaves = []
+    for account in accounts:
+        if account["classification"] != "leaf":
+            continue
+        code = _normalise_account_code(account["account_code"])
+        if code == normalized_parent:
+            leaves.append(account)
+            continue
+        ancestor = parent_codes.get(code)
+        visited = set()
+        while ancestor and ancestor not in visited:
+            if _normalise_account_code(ancestor) == normalized_parent:
+                leaves.append(account)
+                break
+            visited.add(ancestor)
+            ancestor = parent_codes.get(ancestor)
+    return leaves
 
 
 def _require_client_upload(client_id: int, upload_id: int) -> dict[str, Any]:
@@ -1827,14 +1858,7 @@ def apply_account_control_mapping_to_children(payload: AccountControlBulkAssignm
     )
     if not parent:
         raise HTTPException(400, "Parent account is not present in the selected Trial Balance")
-    leaves = [
-        row for row in accounts
-        if row["classification"] == "leaf"
-        and (
-            _normalise_account_code(row["account_code"]) == parent_code
-            or _normalise_account_code(row["account_code"]).startswith(parent_code + "-")
-        )
-    ]
+    leaves = _leaf_accounts_below(accounts, parent_code)
     if not leaves:
         raise HTTPException(400, "No leaf accounts were found below the selected account")
     _validate_control_categories(assignment["client_id"], assignment)
@@ -1920,14 +1944,7 @@ def apply_account_control_cashflow_to_children(payload: CashFlowBulkAssignmentPa
     )
     if not parent:
         raise HTTPException(400, "Parent account is not present in the selected Trial Balance")
-    leaves = [
-        row for row in accounts
-        if row["classification"] == "leaf"
-        and (
-            _normalise_account_code(row["account_code"]) == parent_code
-            or _normalise_account_code(row["account_code"]).startswith(parent_code + "-")
-        )
-    ]
+    leaves = _leaf_accounts_below(accounts, parent_code)
     if not leaves:
         raise HTTPException(400, "No leaf accounts were found below the selected account")
     actor = _actor_name(session)
@@ -2102,11 +2119,7 @@ def apply_cashflow_category_to_children(payload: CashFlowCategoryBulkAssignmentP
     parent = next((row for row in accounts if _normalise_account_code(row["account_code"]) == parent_code), None)
     if not parent:
         raise HTTPException(400, "Parent account is not present in the selected Trial Balance")
-    leaves = [
-        row for row in accounts
-        if row["classification"] == "leaf"
-        and (_normalise_account_code(row["account_code"]) == parent_code or _normalise_account_code(row["account_code"]).startswith(parent_code + "-"))
-    ]
+    leaves = _leaf_accounts_below(accounts, parent_code)
     historical_orphans = discover_historical_orphan_accounts_postgres(payload.client_id, accounts)
     historical_children = [
         row for row in historical_orphans

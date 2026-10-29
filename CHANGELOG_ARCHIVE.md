@@ -8762,6 +8762,13 @@ Begin the next feature chat with: "Cashflows performance balancing is complete a
 
 Record phase decisions, implementation, verification, and acceptance here as the report is developed.
 
+### Financial Statement operating rules
+
+- Match Trial Balance hierarchy by dash-delimited segments; ignore leading zeros in numeric segments for matching only. Parent rows have recognized descendants; rows without descendants default to Leaf. Preserve the account code and editable Parent/Leaf correction. Skip ambiguous normalized matches.
+- Financial account assignments and Trial Balance footing/roll-forward checks use Leaf rows only. A Parent assignment applies to its descendant Leaf accounts; Parent totals are not counted again.
+- Assign each account to a client-scoped Balance Sheet or Income Statement category. Headings organize categories. Subtotals combine direct categories under a heading with signed treatment; totals combine categories, subtotals, or earlier totals, with overlapping sources blocked.
+- The current Financial Statement preview aggregates ledger movements by category and month. Full statement production and closing logic are not implemented.
+
 ### Account Control Centre setup shell - 2026-10-26
 
 **Implementation:** Removed the Financial Statements category-management block while retaining category data for account assignment. Added a fixed + button and wide modal with four selectable, blank tabs: Balance Sheet, Notes to Balance Sheet, Income Statement, and Notes to Income Statement. No schema or API changes; existing Cash Flow UI is unchanged.
@@ -8879,3 +8886,27 @@ Record phase decisions, implementation, verification, and acceptance here as the
 **Implementation:** Statement totals can use earlier totals as sources, with dependent lines displayed after their selected source. The picker disables categories or subtotals already included through a selected total, and the API recursively rejects overlapping source roll-ups—including downstream overlaps after editing a referenced total. Referenced totals cannot be deleted. No schema change.
 
 **Verification:** Account Control Centre API and browser tests pass (65), including picker disable/restore, recursive overlap rejection and row placement. Python/JavaScript syntax checks and `git diff --check` pass. Pytest reports a non-blocking cache-directory warning; local-server acceptance is pending.
+
+### Zero-padded Trial Balance hierarchy - 2026-10-29
+
+**Implementation:** Hierarchy matching now compares dash-delimited segments and ignores leading zeros in numeric segments only when matching. The original code remains unchanged; ambiguous normalized matches do not create a parent link. Parent links and classifications are recomputed for Trial Balance reads and code corrections, preserving manual overrides. Account Control Centre parent assignment now follows the same descendant tree.
+
+**Verification:** Account Control Centre API and browser tests pass (69), including zero-padded hierarchy refresh and BFW-style parent assignment. Python/JavaScript syntax checks and `git diff --check` pass. Pytest reports a non-blocking cache-directory warning; local-server acceptance is pending.
+
+**Acceptance:** Local-server acceptance is pending. No staging, commit, or push.
+
+### Trial Balance mapped-column import boundary - 2026-10-29
+
+**Implementation:** The source preview still shows the complete workbook for review, but `trial_balance_accounts.raw_row_data` now retains only columns explicitly selected in the mapping. Unmapped dates and extra columns are not imported; no schema or financial calculation changed. The preview label states this boundary.
+
+**Verification:** Account Control Centre backend suite passes 69 tests, including checks that unmapped columns are omitted and an explicitly mapped header with trailing space is retained. Python/JavaScript syntax checks and `git diff --check` pass; pytest reports a non-blocking cache warning. Local-server acceptance is pending.
+
+**Acceptance:** No staging, commit, or push; awaiting Aadil's local-server test and explicit Git approval.
+
+### Trial Balance validation mapped-field view - 2026-10-29
+
+**Implementation:** The validation grid now displays only mapped source columns, alongside Excel row number, Classification, and Validation Issues. The mapping pane keeps the full source preview. Source row arrays and Excel row numbering remain unchanged, preserving subtotal exclusion and correction behavior.
+
+**Verification:** Hermetic Playwright coverage confirms extra populated columns remain visible in the source preview but are absent from validation, with the original Excel row number retained. JavaScript syntax and `git diff --check` pass. Local-server acceptance is pending.
+
+**Acceptance:** No staging, commit, or push; awaiting Aadil's local-server test and explicit Git approval.

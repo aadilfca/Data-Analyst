@@ -244,6 +244,15 @@ def validate_column_mapping(mapping: dict, headers: list) -> None:
         raise ValueError(" ".join(problems))
 
 
+def _mapped_raw_row_data(row: dict, mapping: dict) -> dict:
+    """Keep only explicitly mapped source columns in the stored raw-row copy."""
+    mapped_columns = dict.fromkeys(
+        column for column in mapping.values()
+        if isinstance(column, str) and column.strip()
+    )
+    return {column: row.get(column) for column in mapped_columns}
+
+
 def parse_amount(raw_value):
     """
     Best-effort parse of a Debit/Credit cell into a float. Never raises -
@@ -570,29 +579,56 @@ def _serialize_conflicting_upload(row) -> dict:
     }
 
 
-def classify_accounts(codes: set) -> dict:
-    """
-    Classify every code as 'parent' or 'leaf' per the locked rule: a code is
-    a leaf unless some OTHER code in the same file starts with
-    "this code + '-'".
+def _account_code_path_key(code: str) -> tuple[str, ...]:
+    """Normalize numeric segment padding for hierarchy matching only."""
+    parts = str(code or '').strip().split('-')
+    return tuple(
+        (part.lstrip('0') or '0') if part.isascii() and part.isdigit() else part
+        for part in parts
+    )
 
-    Implemented by walking every code's own proper prefixes (dash-delimited,
-    e.g. "1-100-001" has proper prefixes "1" and "1-100") and marking any
-    prefix that is itself a real code in this file as 'parent'. This is
-    mathematically equivalent to the "any other code starts with mine + '-'"
-    rule: if some code Y starts with X + '-', then X is necessarily one of
-    Y's dash-delimited proper prefixes (since X ends exactly at a dash
-    boundary within Y), so walking every code's prefix chain and marking
-    matches covers every such X - without an O(n^2) any-other-code scan.
-    """
-    classification = {code: 'leaf' for code in codes}
-    for code in codes:
+
+def build_account_code_hierarchy(codes) -> dict:
+    """Return classifications and nearest present parent codes for one TB."""
+    code_set = {str(code).strip() for code in codes if str(code or '').strip()}
+    codes_by_path = {}
+    for code in code_set:
+        codes_by_path.setdefault(_account_code_path_key(code), []).append(code)
+
+    parent_by_code = {}
+    for code in code_set:
         parts = code.split('-')
-        for i in range(1, len(parts)):
-            prefix = '-'.join(parts[:i])
-            if prefix in classification:
-                classification[prefix] = 'parent'
-    return classification
+        parent = None
+        for length in range(len(parts) - 1, 0, -1):
+            raw_prefix = '-'.join(parts[:length])
+            if raw_prefix in code_set:
+                parent = raw_prefix
+                break
+            matches = codes_by_path.get(_account_code_path_key(raw_prefix), ())
+            # A normalized match is useful only when it identifies one real row.
+            if len(matches) == 1:
+                parent = matches[0]
+                break
+        parent_by_code[code] = parent
+
+    classification = {code: 'leaf' for code in code_set}
+    for code in code_set:
+        parent = parent_by_code[code]
+        visited = set()
+        while parent and parent not in visited:
+            classification[parent] = 'parent'
+            visited.add(parent)
+            parent = parent_by_code.get(parent)
+
+    return {
+        'classification': classification,
+        'parent_account_code': parent_by_code,
+    }
+
+
+def classify_accounts(codes: set) -> dict:
+    """Classify codes from their delimiter-separated account-code hierarchy."""
+    return build_account_code_hierarchy(codes)['classification']
 
 
 def _copy_shared_code_assignments(client_id: int, source_code: str, target_code: str, upload_id: Optional[int] = None) -> None:
@@ -970,19 +1006,19 @@ def upload_trial_balance(
                 "closing_dr": closing_dr_value,
                 "closing_cr": closing_cr_value,
                 "sort_order": row_number,
-                # raw_row_data is a JSON safety net (mirrors client_data.row_data's
-                # existing convention) since TB formats vary across clients -
-                # every cell is already a plain string thanks to dtype=str above.
-                # JSONB column - wrapped in Json(...) so psycopg2/Postgres own the
-                # actual encoding, not a pre-encoded JSON string.
-                "raw_row_data": Json(row),
+                # Keep a raw-value safety net for mapped source fields only.
+                # Unmapped workbook columns are preview-only and are not imported.
+                # Json(...) leaves encoding to psycopg2/Postgres for JSONB.
+                "raw_row_data": Json(_mapped_raw_row_data(row, mapping)),
             })
 
         if not accounts:
             raise ValueError("No valid account rows found in the file (every row had a blank Account Code)")
 
         # 8. Classify every distinct code from its dash-delimited hierarchy.
-        classification = classify_accounts(seen_codes)
+        hierarchy = build_account_code_hierarchy(seen_codes)
+        classification = hierarchy['classification']
+        parent_account_codes = hierarchy['parent_account_code']
         classification_overrides = validation['classification_overrides']
 
         # 8b. Carry-forward (Verification link, Phase 2): look up this
@@ -999,9 +1035,8 @@ def upload_trial_balance(
 
         for account in accounts:
             code = account["account_code"]
-            parts = code.split('-')
-            account["level"] = len(parts)
-            account["parent_account_code"] = '-'.join(parts[:-1]) if len(parts) > 1 else None
+            account["level"] = len(code.split('-'))
+            account["parent_account_code"] = parent_account_codes.get(code)
             account["classification"] = classification_overrides.get(str(account["sort_order"]), classification[code])
             account["manually_overridden"] = str(account["sort_order"]) in classification_overrides
             account["category_id"] = carried_categories.get(code)
@@ -1271,24 +1306,23 @@ def list_trial_balance_accounts(upload_id: int, is_leaf: Optional[bool] = None):
     query = """SELECT id, account_code, source_account_code, account_name, level, classification, manually_overridden,
                       opening_dr, opening_cr, period_dr, period_cr, closing_dr, closing_cr
                FROM trial_balance_accounts WHERE upload_id = %s"""
-    params = [upload_id]
-    if is_leaf is not None:
-        # classification is stored as the text 'leaf'/'parent' (Phase 1/2) -
-        # is_leaf is the boolean shape the brief asks the response to expose.
-        query += " AND classification = %s"
-        params.append('leaf' if is_leaf else 'parent')
     query += " ORDER BY sort_order"
 
-    rows = execute_query_pg(query, tuple(params))
-
-    accounts = [
-        {
+    rows = execute_query_pg(query, (upload_id,))
+    auto_classification = classify_accounts({row['account_code'] for row in rows})
+    accounts = []
+    for r in rows:
+        classification = r['classification'] if r['manually_overridden'] else auto_classification[r['account_code']]
+        account_is_leaf = classification == 'leaf'
+        if is_leaf is not None and account_is_leaf != is_leaf:
+            continue
+        accounts.append({
             "id": r["id"],
             "account_code": r["account_code"],
             "source_account_code": r["source_account_code"],
             "account_name": r["account_name"],
             "level": r["level"],
-            "is_leaf": r["classification"] == "leaf",
+            "is_leaf": account_is_leaf,
             "manually_overridden": bool(r["manually_overridden"]),
             "opening_dr": r["opening_dr"],
             "opening_cr": r["opening_cr"],
@@ -1296,9 +1330,7 @@ def list_trial_balance_accounts(upload_id: int, is_leaf: Optional[bool] = None):
             "period_cr": r["period_cr"],
             "closing_dr": r["closing_dr"],
             "closing_cr": r["closing_cr"],
-        }
-        for r in rows
-    ]
+        })
 
     return {"upload_id": upload_id, "accounts": accounts}
 
@@ -1470,7 +1502,9 @@ def update_trial_balance_account_code(account_id: int, payload: AccountCodeEditR
         (account["upload_id"],),
     )
     all_codes = {corrected_code if row["id"] == account_id else row["account_code"] for row in upload_accounts}
-    classification = classify_accounts(all_codes)
+    hierarchy = build_account_code_hierarchy(all_codes)
+    classification = hierarchy['classification']
+    parent_account_codes = hierarchy['parent_account_code']
     client_id = account["client_id"]
 
     with pg_transaction():
@@ -1482,7 +1516,7 @@ def update_trial_balance_account_code(account_id: int, payload: AccountCodeEditR
         for row in upload_accounts:
             code = corrected_code if row["id"] == account_id else row["account_code"]
             parts = code.split('-')
-            parent_code = '-'.join(parts[:-1]) if len(parts) > 1 else None
+            parent_code = parent_account_codes.get(code)
             execute_write_pg(
                 """UPDATE trial_balance_accounts
                    SET parent_account_code = %s, level = %s, classification = %s
@@ -1682,6 +1716,17 @@ def assign_trial_balance_category(payload: CategoryAssignmentRequest):
         raise HTTPException(404, "Trial balance account not found")
     target = account_rows[0]
 
+    hierarchy_rows = execute_query_pg(
+        "SELECT id, account_code, classification, manually_overridden FROM trial_balance_accounts WHERE upload_id = %s",
+        (target["upload_id"],),
+    )
+    hierarchy = build_account_code_hierarchy(row["account_code"] for row in hierarchy_rows)
+    effective_classification = {
+        row["id"]: row["classification"] if row["manually_overridden"] else hierarchy['classification'][row["account_code"]]
+        for row in hierarchy_rows
+    }
+    parent_account_codes = hierarchy['parent_account_code']
+
     # category_id is nullable (confirmed fix) - null means "Not assigned", so
     # the active-category check only applies when a real category is given.
     if payload.category_id is not None:
@@ -1706,7 +1751,7 @@ def assign_trial_balance_category(payload: CategoryAssignmentRequest):
     if client_id is not None:
         upsert_account_category_assignment(client_id, target["account_code"], payload.category_id)
 
-    is_leaf = target["classification"] == "leaf"
+    is_leaf = effective_classification.get(target["id"], target["classification"]) == "leaf"
     descendants_updated = []
     descendants_skipped = []
 
@@ -1722,6 +1767,7 @@ def assign_trial_balance_category(payload: CategoryAssignmentRequest):
         sibling_rows = execute_query_pg(
             """
             SELECT s.id, s.account_code, s.parent_account_code, s.category_id,
+                   s.classification, s.manually_overridden,
                    c.is_active AS category_is_active
             FROM trial_balance_accounts s
             LEFT JOIN audit_rule_categories c ON c.id = s.category_id
@@ -1731,7 +1777,7 @@ def assign_trial_balance_category(payload: CategoryAssignmentRequest):
         )
         children_by_parent_code = {}
         for row in sibling_rows:
-            parent_code = row["parent_account_code"]
+            parent_code = parent_account_codes.get(row["account_code"])
             if parent_code:
                 children_by_parent_code.setdefault(parent_code, []).append(row)
 
@@ -1748,9 +1794,10 @@ def assign_trial_balance_category(payload: CategoryAssignmentRequest):
             # stale assignment pointing at an inactive Category is no more
             # a real categorization than no assignment at all (confirmed).
             currently_empty = row["category_id"] is None or not row["category_is_active"]
-            if payload.force_apply or currently_empty:
+            row_is_leaf = effective_classification.get(row["id"], row["classification"]) == "leaf"
+            if row_is_leaf and (payload.force_apply or currently_empty):
                 descendants_updated.append(row["id"])
-            else:
+            elif row_is_leaf:
                 descendants_skipped.append(row["id"])
 
         if descendants_updated:
