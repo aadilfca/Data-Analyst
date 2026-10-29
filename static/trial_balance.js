@@ -61,8 +61,6 @@ let validationResult = null;
 let validationDirty = true;
 let validationRequestToken = 0;
 let validationRevision = 0;
-let validationCurrentPage = 1;
-const validationPageSize = 50;
 
 // Current mapping selection, keyed by role -- seeded from suggest-mapping's
 // suggestions, then mutated in place by each dropdown's change listener.
@@ -120,10 +118,8 @@ const tbValidationStatus = getElement('tbValidationStatus');
 const tbValidationFileInfo = getElement('tbValidationFileInfo');
 const tbValidationHead = getElement('tbValidationHead');
 const tbValidationBody = getElement('tbValidationBody');
-const tbValidationPrevBtn = getElement('tbValidationPrevBtn');
-const tbValidationNextBtn = getElement('tbValidationNextBtn');
-const tbValidationRowRange = getElement('tbValidationRowRange');
-const tbValidationPageInfo = getElement('tbValidationPageInfo');
+const tbValidationTableWrap = getElement('tbValidationTableWrap');
+const tbValidationStickyHead = getElement('tbValidationStickyHead');
 const downloadStandardTemplateBtn = getElement('downloadStandardTemplateBtn');
 
 // Available Trial Balances (Section 1, Phase 2) elements.
@@ -131,10 +127,22 @@ const uploadViewContainer = getElement('uploadViewContainer');
 const availableTrialBalancesBtn = getElement('availableTrialBalancesBtn');
 const availableTrialBalancesSection = getElement('availableTrialBalancesSection');
 const closeAvailableTrialBalancesBtn = getElement('closeAvailableTrialBalancesBtn');
+const tbPageContainer = getElement('tbPageContainer');
 const availableUploadsDropdown = getElement('availableUploadsDropdown');
 const availableUploadsEmptyHint = getElement('availableUploadsEmptyHint');
 const availableAccountsTableWrapper = getElement('availableAccountsTableWrapper');
 const availableAccountsTableBody = getElement('availableAccountsTableBody');
+
+// Keep the narrow-screen heading aligned while its table scrolls horizontally.
+function syncTrialBalanceStickyHeader() {
+    if (!tbValidationTableWrap || !tbValidationStickyHead) return;
+    const stickyTable = tbValidationStickyHead.querySelector('.tb-validation-table');
+    if (stickyTable) stickyTable.style.transform = `translateX(-${tbValidationTableWrap.scrollLeft}px)`;
+}
+
+if (tbValidationTableWrap) {
+    tbValidationTableWrap.addEventListener('scroll', syncTrialBalanceStickyHeader, { passive: true });
+}
 const deleteUploadBtn = getElement('deleteUploadBtn');
 
 // Mutation keys prevent duplicate writes for the same Trial Balance resource while leaving
@@ -151,6 +159,26 @@ function stopTrialBalanceLoading(token) {
     if (token && window.LoadingUI && typeof window.LoadingUI.stopGlobalLoading === 'function') {
         window.LoadingUI.stopGlobalLoading(token);
     }
+}
+
+function showTrialBalanceActionSpinner(target, message) {
+    if (!target || !window.LoadingUI || typeof window.LoadingUI.showSpinner !== 'function') return false;
+    window.LoadingUI.showSpinner(target, message, { escalate: false });
+    return true;
+}
+
+function hideTrialBalanceActionSpinner(target) {
+    if (target && window.LoadingUI && typeof window.LoadingUI.hideSpinner === 'function') {
+        window.LoadingUI.hideSpinner(target);
+    }
+}
+
+function waitForTrialBalancePaint() {
+    return new Promise(function (resolve) {
+        requestAnimationFrame(function () {
+            requestAnimationFrame(resolve);
+        });
+    });
 }
 
 // ---------- STATUS BAR ----------
@@ -229,43 +257,66 @@ function buildTrialBalanceFormData() {
     return formData;
 }
 
-function openTrialBalanceValidation() {
-    if (!uploadViewContainer || !tbValidationSheet) return;
+async function openTrialBalanceValidation() {
+    if (!tbPageContainer || !uploadViewContainer || !tbValidationSheet) return;
     invalidateTrialBalanceValidation();
-    uploadViewContainer.classList.add('tb-validation-active');
+
+    const transitionToken = startTrialBalanceLoading(validateTrialBalanceBtn);
+    showTrialBalanceActionSpinner(validateTrialBalanceBtn, 'Opening validation…');
+    await waitForTrialBalancePaint();
+    hideTrialBalanceActionSpinner(validateTrialBalanceBtn);
+    stopTrialBalanceLoading(transitionToken);
+
+    tbPageContainer.classList.add('tb-validation-active');
+    uploadViewContainer.hidden = true;
+    tbValidationSheet.hidden = false;
     tbValidationSheet.classList.add('active');
     tbValidationSheet.setAttribute('aria-hidden', 'false');
     if (tbValidationFileInfo) tbValidationFileInfo.textContent = selectedFile ? selectedFile.name : '';
-    validationCurrentPage = 1;
+    window.scrollTo(0, 0);
+
+    setValidationStatus('Preparing the full Trial Balance for review…', 'loading');
+    const validationToken = startTrialBalanceLoading(tbValidationRunBtn);
+    const spinnerShown = showTrialBalanceActionSpinner(tbValidationRunBtn, 'Preparing validation…');
+    await waitForTrialBalancePaint();
     renderTrialBalanceValidationGrid();
-    runTrialBalanceValidation();
+    await runTrialBalanceValidation({ loadingToken: validationToken, spinnerShown: spinnerShown });
 }
 
 function closeTrialBalanceValidation() {
-    if (uploadViewContainer) uploadViewContainer.classList.remove('tb-validation-active');
+    if (tbPageContainer) tbPageContainer.classList.remove('tb-validation-active');
+    if (uploadViewContainer) uploadViewContainer.hidden = false;
     if (tbValidationSheet) {
         tbValidationSheet.classList.remove('active');
+        tbValidationSheet.hidden = true;
         tbValidationSheet.setAttribute('aria-hidden', 'true');
     }
+    window.scrollTo(0, 0);
 }
 
 if (validateTrialBalanceBtn) {
     validateTrialBalanceBtn.addEventListener('click', openTrialBalanceValidation);
 }
 if (tbValidationBackBtn) tbValidationBackBtn.addEventListener('click', closeTrialBalanceValidation);
-if (tbValidationRunBtn) tbValidationRunBtn.addEventListener('click', runTrialBalanceValidation);
+if (tbValidationRunBtn) tbValidationRunBtn.addEventListener('click', function () {
+    runTrialBalanceValidation();
+});
 if (uploadTrialBalanceBtn) uploadTrialBalanceBtn.addEventListener('click', uploadTrialBalance);
 
-async function runTrialBalanceValidation() {
+async function runTrialBalanceValidation(options) {
+    const opts = options || {};
     const hasClient = typeof window.isClientSelected === 'function' && window.isClientSelected();
     const hasPeriod = !!(periodStartInput && periodEndInput && periodStartInput.value && periodEndInput.value);
     if (!hasClient || !selectedFile || !hasPeriod || !checkMappingComplete()) {
         setValidationStatus('Select a client, file and period, then complete the required column mappings.', 'error');
+        if (opts.spinnerShown) hideTrialBalanceActionSpinner(tbValidationRunBtn);
+        stopTrialBalanceLoading(opts.loadingToken);
         return;
     }
     const token = ++validationRequestToken;
     const revision = validationRevision;
-    const loadingToken = startTrialBalanceLoading(tbValidationRunBtn || validateTrialBalanceBtn);
+    const loadingToken = opts.loadingToken || startTrialBalanceLoading(tbValidationRunBtn || validateTrialBalanceBtn);
+    const spinnerShown = opts.spinnerShown || showTrialBalanceActionSpinner(tbValidationRunBtn, 'Validating Trial Balance…');
     if (tbValidationRunBtn) tbValidationRunBtn.disabled = true;
     if (uploadTrialBalanceBtn) uploadTrialBalanceBtn.disabled = true;
     validationResult = null;
@@ -288,7 +339,6 @@ async function runTrialBalanceValidation() {
         }
         validationResult = result;
         validationDirty = false;
-        validationCurrentPage = 1;
         renderTrialBalanceValidationGrid();
         const issueCount = Number(result.issue_count || 0);
         if (result.valid) {
@@ -309,6 +359,7 @@ async function runTrialBalanceValidation() {
         updateClientDependentUI();
     } finally {
         if (token === validationRequestToken && tbValidationRunBtn) tbValidationRunBtn.disabled = false;
+        if (spinnerShown) hideTrialBalanceActionSpinner(tbValidationRunBtn);
         stopTrialBalanceLoading(loadingToken);
     }
 }
@@ -324,12 +375,18 @@ function renderTrialBalanceValidationGrid() {
         header.appendChild(th);
     });
     tbValidationHead.appendChild(header);
+    if (tbValidationStickyHead) {
+        tbValidationStickyHead.innerHTML = '';
+        const stickyTable = document.createElement('table');
+        stickyTable.className = 'tb-validation-table';
+        const stickyThead = document.createElement('thead');
+        const stickyHead = header.cloneNode(true);
+        stickyThead.appendChild(stickyHead);
+        stickyTable.appendChild(stickyThead);
+        tbValidationStickyHead.appendChild(stickyTable);
+        syncTrialBalanceStickyHeader();
+    }
 
-    const totalRows = fileAllRows.length;
-    const totalPages = Math.max(1, Math.ceil(totalRows / validationPageSize));
-    validationCurrentPage = Math.max(1, Math.min(validationCurrentPage, totalPages));
-    const startIndex = (validationCurrentPage - 1) * validationPageSize;
-    const endIndex = Math.min(startIndex + validationPageSize, totalRows);
     const issuesByRow = new Map();
     if (validationResult && Array.isArray(validationResult.errors)) {
         validationResult.errors.forEach(function (issue) {
@@ -341,8 +398,7 @@ function renderTrialBalanceValidationGrid() {
     }
     const codeIndex = fileHeaders.indexOf(tbColumnMapping.account_code_column);
     const fragment = document.createDocumentFragment();
-    fileAllRows.slice(startIndex, endIndex).forEach(function (row, localIndex) {
-        const rowIndex = startIndex + localIndex;
+    fileAllRows.forEach(function (row, rowIndex) {
         const excelRow = rowIndex + 2;
         const tr = document.createElement('tr');
         const rowCell = document.createElement('td');
@@ -403,20 +459,8 @@ function renderTrialBalanceValidationGrid() {
         fragment.appendChild(tr);
     });
     tbValidationBody.appendChild(fragment);
-    if (tbValidationRowRange) tbValidationRowRange.textContent = totalRows ? `Showing ${startIndex + 1}–${endIndex} of ${totalRows} rows` : '0 rows';
-    if (tbValidationPageInfo) tbValidationPageInfo.textContent = `Page ${validationCurrentPage} of ${totalPages}`;
-    if (tbValidationPrevBtn) tbValidationPrevBtn.disabled = validationCurrentPage <= 1;
-    if (tbValidationNextBtn) tbValidationNextBtn.disabled = validationCurrentPage >= totalPages;
 }
 
-if (tbValidationPrevBtn) tbValidationPrevBtn.addEventListener('click', function () {
-    validationCurrentPage -= 1;
-    renderTrialBalanceValidationGrid();
-});
-if (tbValidationNextBtn) tbValidationNextBtn.addEventListener('click', function () {
-    validationCurrentPage += 1;
-    renderTrialBalanceValidationGrid();
-});
 if (tbValidationBody) {
     tbValidationBody.addEventListener('input', function (event) {
         const input = event.target.closest('.tb-code-review-input');
@@ -1090,7 +1134,6 @@ async function uploadTrialBalance() {
             if (detail && typeof detail === 'object' && detail.validation) {
                 validationResult = detail.validation;
                 validationDirty = false;
-                validationCurrentPage = 1;
                 renderTrialBalanceValidationGrid();
                 updateClientDependentUI();
             }

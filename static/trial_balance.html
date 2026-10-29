@@ -578,33 +578,27 @@
         .tb-preview-pane .tb-review-table th,
         .tb-preview-pane .tb-review-table td { white-space: nowrap; }
 
-        #uploadViewContainer.tb-validation-active {
-            position: relative;
-            height: calc(100vh - 70px);
-            overflow: hidden;
-        }
+        .main-container.tb-validation-active > :not(#tbValidationSheet) { display: none !important; }
+        #uploadViewContainer[hidden],
+        #tbValidationSheet[hidden] { display: none !important; }
 
         .tb-validation-sheet {
             display: none;
-            position: fixed;
-            inset: 70px 0 0;
-            z-index: 99;
             box-sizing: border-box;
             padding: 18px 24px 16px;
             background: #fff;
-            flex-direction: column;
-            gap: 12px;
-            overflow: hidden;
+            width: 100%;
+            min-width: 0;
         }
 
-        .tb-validation-sheet.active { display: flex; }
-        .tb-validation-header,
-        .tb-validation-footer {
+        .tb-validation-sheet.active { display: block; }
+        .tb-validation-header {
             display: flex;
             align-items: center;
             justify-content: space-between;
+            flex-wrap: wrap;
             gap: 12px;
-            flex-shrink: 0;
+            margin-bottom: 12px;
         }
 
         .tb-validation-header h2 { margin: 0 0 3px; font-size: 20px; color: #1e293b; }
@@ -613,49 +607,72 @@
             display: flex;
             align-items: center;
             justify-content: flex-end;
+            flex-wrap: wrap;
             gap: 10px;
             min-width: 0;
+            flex: 1 1 auto;
         }
         .tb-validation-status {
             box-sizing: border-box;
             width: fit-content;
-            max-width: min(68vw, 920px);
+            max-width: min(48vw, 720px);
             margin: 0;
             flex: 0 1 auto;
         }
 
-        .tb-validation-table-wrapper {
-            flex: 1;
-            min-height: 0;
-            overflow: auto;
-            border: 1px solid #e2e8f0;
-            border-radius: 7px;
-        }
-
-        .tb-validation-table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px; }
+        .tb-validation-table-wrap { width: 100%; min-width: 0; }
+        .tb-validation-sticky-head { display: none; }
+        .tb-validation-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 11px; }
+        .tb-validation-table th:nth-child(1), .tb-validation-table td:nth-child(1) { width: 4.5%; }
+        .tb-validation-table th:nth-child(2), .tb-validation-table td:nth-child(2) { width: 9.5%; }
+        .tb-validation-table th:nth-child(3), .tb-validation-table td:nth-child(3) { width: 11.5%; }
+        .tb-validation-table th:nth-child(n+4):nth-child(-n+9),
+        .tb-validation-table td:nth-child(n+4):nth-child(-n+9) { width: 7.5%; }
+        .tb-validation-table th:nth-child(10), .tb-validation-table td:nth-child(10) { width: 12%; }
+        .tb-validation-table th:nth-child(11), .tb-validation-table td:nth-child(11) { width: 9%; }
+        .tb-validation-table th:nth-child(12), .tb-validation-table td:nth-child(12) { width: 8.5%; }
         .tb-validation-table th {
             position: sticky;
-            top: 0;
+            top: 70px;
             z-index: 2;
             padding: 8px 10px;
             background: #f1f5f9;
             border: 1px solid #e2e8f0;
             text-align: left;
-            white-space: nowrap;
+            overflow-wrap: anywhere;
         }
+        .tb-validation-table th:nth-child(11) { overflow-wrap: normal; }
         .tb-validation-table td {
             padding: 6px 8px;
             border: 1px solid #e2e8f0;
-            white-space: nowrap;
+            overflow-wrap: anywhere;
             background: #fff;
         }
+        .tb-validation-table td:nth-child(n+4):nth-child(-n+9) { white-space: nowrap; }
         .tb-validation-table tr:nth-child(even) td { background: #fafcff; }
-        .tb-validation-table .tb-validation-issue-cell { white-space: normal; min-width: 220px; color: #b91c1c; }
+        .tb-validation-table .tb-validation-issue-cell { white-space: normal; min-width: 0; color: #b91c1c; }
         .tb-validation-table input,
-        .tb-validation-table select { box-sizing: border-box; min-width: 120px; padding: 5px 7px; }
-        .tb-validation-table .tb-code-review-input { width: 160px; }
+        .tb-validation-table select { box-sizing: border-box; width: 100%; min-width: 0; padding: 5px 4px; }
+        .tb-validation-table .tb-code-review-input { width: 100%; }
         .tb-validation-actions { display: flex; align-items: center; gap: 8px; }
-        .tb-validation-pages { display: flex; align-items: center; gap: 8px; color: #64748b; font-size: 12px; }
+        .tb-validation-progress { margin: 0 0 12px; }
+
+        @media (max-width: 1100px) {
+            .tb-validation-table-wrap { overflow-x: auto; overscroll-behavior-x: contain; }
+            .tb-validation-table { min-width: 1200px; }
+            .tb-validation-sticky-head {
+                position: sticky;
+                top: 70px;
+                z-index: 3;
+                display: block;
+                width: 100%;
+                overflow: hidden;
+                background: #f1f5f9;
+            }
+            .tb-validation-sticky-head .tb-validation-table { transform: translateX(0); }
+            .tb-validation-sticky-head .tb-validation-table th { position: static; }
+            .tb-validation-table-wrap .tb-validation-table thead { display: none; }
+        }
 
         @media (max-width: 850px) {
             .tb-mapping-review-grid { grid-template-columns: minmax(0, 1fr); }
@@ -663,10 +680,9 @@
 
         @media (max-width: 560px) {
             .tb-validation-sheet { padding: 12px; }
-            .tb-validation-header,
-            .tb-validation-footer { align-items: flex-start; flex-direction: column; }
+            .tb-validation-header { align-items: flex-start; flex-direction: column; }
             .tb-validation-header-actions { width: 100%; justify-content: flex-start; }
-            .tb-validation-status { max-width: calc(100% - 150px); }
+            .tb-validation-status { max-width: 100%; }
             .tb-validation-actions { flex-wrap: wrap; }
         }
 
@@ -707,12 +723,9 @@
         </div>
     </nav>
 
-    <div class="main-container">
-    <!-- Available Trial Balances (Section 1, Phase 2): the whole normal upload flow is
-         wrapped in this container so it can be hidden as one unit while the selected-upload
-         correction view below is shown, and restored unchanged via "Back" -- no in-progress
-         file/mapping state is lost, since it all lives inside this container, untouched
-         while hidden. -->
+    <div class="main-container" id="tbPageContainer">
+    <!-- Upload/mapping remains intact while hidden for validation or Available Trial Balances,
+         preserving the selected file, period and mapping when the user returns. -->
     <div id="uploadViewContainer">
         <div id="clientSelectionWarning" class="client-warning">
             <span class="icon">⚠️</span>
@@ -816,41 +829,6 @@
 
         </div>
 
-        <div class="tb-validation-sheet" id="tbValidationSheet" aria-hidden="true">
-            <div class="tb-validation-header">
-                <div>
-                    <h2>Trial Balance Validation</h2>
-                    <p id="tbValidationFileInfo"></p>
-                </div>
-                <div class="tb-validation-header-actions">
-                    <div class="status-bar info tb-validation-status" id="tbValidationStatus" role="status">Run validation to review the complete Trial Balance.</div>
-                    <button class="btn-secondary-action" id="tbValidationBackBtn" type="button">← Back to mapping</button>
-                </div>
-            </div>
-            <div class="tb-validation-table-wrapper">
-                <table class="tb-validation-table">
-                    <thead id="tbValidationHead"></thead>
-                    <tbody id="tbValidationBody"></tbody>
-                </table>
-            </div>
-            <div class="tb-validation-footer">
-                <div class="tb-validation-pages">
-                    <span id="tbValidationRowRange">0 rows</span>
-                    <button class="btn-secondary-action" id="tbValidationPrevBtn" type="button">Previous</button>
-                    <span id="tbValidationPageInfo">Page 0 of 0</span>
-                    <button class="btn-secondary-action" id="tbValidationNextBtn" type="button">Next</button>
-                </div>
-                <div class="tb-validation-actions">
-                    <button class="btn-secondary-action" id="tbValidationRunBtn" type="button">Revalidate</button>
-                    <button class="btn-primary-action" id="uploadTrialBalanceBtn" type="button" disabled>Save &amp; Classify</button>
-                </div>
-            </div>
-            <div id="tbUploadProgressBar" class="import-progress-bar" style="display:none;">
-                <div class="import-progress-track"><div class="import-progress-fill" id="tbUploadProgressFill"></div></div>
-                <div class="import-progress-label" id="tbUploadProgressLabel">0 of 0 accounts uploaded</div>
-            </div>
-        </div>
-
         <div class="status-bar info" id="statusBar" style="display:none;">
             <span class="icon" id="statusIcon">ℹ️</span>
             <span id="statusMessage"></span>
@@ -877,6 +855,34 @@
 
     </div>
     <!-- /uploadViewContainer -->
+
+    <div class="tb-validation-sheet" id="tbValidationSheet" aria-hidden="true" hidden>
+        <div class="tb-validation-header">
+            <div>
+                <h2>Trial Balance Validation</h2>
+                <p id="tbValidationFileInfo"></p>
+            </div>
+            <div class="tb-validation-header-actions">
+                <div class="status-bar info tb-validation-status" id="tbValidationStatus" role="status">Run validation to review the complete Trial Balance.</div>
+                <div class="tb-validation-actions">
+                    <button class="btn-secondary-action" id="tbValidationRunBtn" type="button">Revalidate</button>
+                    <button class="btn-primary-action" id="uploadTrialBalanceBtn" type="button" disabled>Save &amp; Classify</button>
+                </div>
+                <button class="btn-secondary-action" id="tbValidationBackBtn" type="button">← Back to mapping</button>
+            </div>
+        </div>
+        <div id="tbUploadProgressBar" class="import-progress-bar tb-validation-progress" style="display:none;">
+            <div class="import-progress-track"><div class="import-progress-fill" id="tbUploadProgressFill"></div></div>
+            <div class="import-progress-label" id="tbUploadProgressLabel">0 of 0 accounts uploaded</div>
+        </div>
+        <div class="tb-validation-sticky-head" id="tbValidationStickyHead" aria-hidden="true"></div>
+        <div class="tb-validation-table-wrap" id="tbValidationTableWrap">
+            <table class="tb-validation-table">
+                <thead id="tbValidationHead"></thead>
+                <tbody id="tbValidationBody"></tbody>
+            </table>
+        </div>
+    </div>
 
     <!-- Available Trial Balances supports account-code corrections within one selected upload. -->
     <div class="tb-form-group" id="availableTrialBalancesSection" style="display:none;">
@@ -925,7 +931,7 @@
     <script src="/static/loading_ui.js?v=2"></script>
     <script src="/static/client_context.js?v=21"></script>
     <script src="/static/utils.js"></script>
-    <script src="/static/trial_balance.js?v=13"></script>
+    <script src="/static/trial_balance.js?v=18"></script>
 </body>
 
 </html>

@@ -1,5 +1,17 @@
 # Changelog Archive
 
+## Trial Balance validation/upload view isolation — 2026-10-29
+
+Validation now hides the upload view explicitly, including when it carries an inline `display:block`, and hides the validation view again on Back. Playwright with mocked validation confirmed only one view is visible and the filename and period values survive both transitions. No upload or backend behavior changed; JavaScript syntax and whitespace checks pass. Local-server acceptance is pending.
+
+## Trial Balance validation table containment — 2026-10-29
+
+The desktop validation table now fits the page with readable columns. On narrower screens, horizontal scrolling stays inside the table viewport and a synchronized sticky heading remains below the app navbar. Playwright rendered synthetic Trial Balance rows through the page and its JavaScript; desktop and narrow checks confirmed no page-level horizontal overflow, sticky headings, and header alignment during scrolling. JavaScript syntax and whitespace checks pass; user acceptance is pending. No backend or upload behavior changed.
+
+## Trial Balance full-page validation table — 2026-10-29
+
+Validation is now a sibling page-level view, toggled separately from upload/mapping while preserving file and mapping state. Shared `LoadingUI` spinners appear on Validate during transition and Revalidate until the response; status stays in the validation header. Playwright used a synthetic file and mocked response to confirm exclusive view display, spinner feedback, Save gating, and Back retaining file/period/mapping. No app data was written. JavaScript syntax and whitespace checks pass; client-specific acceptance is pending.
+
 ## Trial Balance saved mapping startup migration — 2026-10-29
 
 The saved-mapping GET/PUT routes returned 500 on databases that had already completed PostgreSQL bootstrap: their startup fast path skipped the full table-creation list, and the new table was missing from that path. Added an idempotent `_ensure_postgres_trial_balance_column_mappings()` migration there, with a startup note when it creates the table. New databases continue to create it through the full bootstrap. No route or UI behavior changed. Python compilation and `git diff --check` pass; restart and mapping-save acceptance are pending.
