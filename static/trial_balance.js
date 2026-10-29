@@ -63,6 +63,7 @@ let showExcludedSubtotalRows = false;
 let validationResult = null;
 let validationIssueSnapshot = { errors: [], warnings: [] };
 let validationDirty = true;
+let footingConfirmation = '';
 let validationRequestToken = 0;
 let validationRevision = 0;
 let criticalIssueRows = [];
@@ -117,6 +118,8 @@ const mappingSection = getElement('mappingSection');
 const mappingValidationMessage = getElement('mappingValidationMessage');
 const mappingValidationText = getElement('mappingValidationText');
 const mappingTableBody = getElement('mappingTableBody');
+const tbTotalExcelRow = getElement('tbTotalExcelRow');
+const tbNoTotalRow = getElement('tbNoTotalRow');
 const saveTrialBalanceMappingBtn = getElement('saveTrialBalanceMappingBtn');
 const mappingPreviewHead = getElement('mappingPreviewHead');
 const mappingPreviewBody = getElement('mappingPreviewBody');
@@ -233,15 +236,16 @@ function updateClientDependentUI() {
     // be considered mapped -- checkMappingComplete() alone would incorrectly pass on
     // an all-null tbColumnMapping before fileHeaders has ever been populated.
     const hasMapping = fileHeaders.length > 0 && checkMappingComplete();
+    const hasTotalChoice = checkTotalRowChoice();
 
     if (validateTrialBalanceBtn) {
-        validateTrialBalanceBtn.disabled = !(hasClient && hasFile && hasPeriod && hasMapping);
+        validateTrialBalanceBtn.disabled = !(hasClient && hasFile && hasPeriod && hasMapping && hasTotalChoice);
     }
     if (uploadTrialBalanceBtn) {
         uploadTrialBalanceBtn.disabled = !(hasClient && hasPeriod && validationResult && validationResult.valid && !validationDirty);
     }
     if (saveTrialBalanceMappingBtn) {
-        saveTrialBalanceMappingBtn.disabled = !(hasClient && hasFile && hasMapping)
+        saveTrialBalanceMappingBtn.disabled = !(hasClient && hasFile && hasMapping && hasTotalChoice)
             || trialBalanceActionsInFlight.has('saved-column-mapping');
     }
 }
@@ -254,6 +258,7 @@ function setValidationStatus(message, type) {
 
 function invalidateTrialBalanceValidation(message, preserveCriticalQueue) {
     validationRevision += 1;
+    footingConfirmation = '';
     validationDirty = true;
     validationResult = null;
     if (preserveCriticalQueue) {
@@ -278,6 +283,8 @@ function buildTrialBalanceFormData() {
     formData.append('account_code_overrides', JSON.stringify(accountCodeCorrections));
     formData.append('account_classification_overrides', JSON.stringify(accountClassificationOverrides));
     formData.append('excluded_excel_rows', JSON.stringify(getExcludedSubtotalRowNumbers()));
+    formData.append('adjustment_confirmation', footingConfirmation);
+    appendTotalRowChoice(formData);
     return formData;
 }
 
@@ -331,7 +338,7 @@ async function runTrialBalanceValidation(options) {
     const opts = options || {};
     const hasClient = typeof window.isClientSelected === 'function' && window.isClientSelected();
     const hasPeriod = !!(periodStartInput && periodEndInput && periodStartInput.value && periodEndInput.value);
-    if (!hasClient || !selectedFile || !hasPeriod || !checkMappingComplete()) {
+    if (!hasClient || !selectedFile || !hasPeriod || (!checkMappingComplete() || !checkTotalRowChoice(true))) {
         setValidationStatus('Select a client, file and period, then complete the required column mappings.', 'error');
         if (opts.spinnerShown) hideTrialBalanceActionSpinner(tbValidationRunBtn);
         stopTrialBalanceLoading(opts.loadingToken);
@@ -364,6 +371,7 @@ async function runTrialBalanceValidation(options) {
             throw new Error(typeof detail === 'string' ? detail : (detail && detail.message) || 'Trial Balance validation failed.');
         }
         validationResult = result;
+        renderTrialBalanceControls(result);
         validationIssueSnapshot = {
             errors: Array.isArray(result.errors) ? result.errors.slice() : [],
             warnings: Array.isArray(result.warnings) ? result.warnings.slice() : [],
@@ -535,6 +543,8 @@ function renderTrialBalanceValidationGrid() {
     fileAllRows.forEach(function (row, rowIndex) {
         const excelRow = rowIndex + 2;
         if (isMappedSourceRowEmpty(row)) return;
+        const isControlTotal = validationResult && (validationResult.source_total_rows || []).includes(excelRow);
+        if (isControlTotal) return;
         const isSubtotalCandidate = subtotalRows.has(excelRow);
         const isExcludedSubtotal = isSubtotalCandidate && !includedSubtotalRows.has(excelRow);
         if (isExcludedSubtotal && !showExcludedSubtotalRows) return;
@@ -595,14 +605,14 @@ function renderTrialBalanceValidationGrid() {
         fragment.appendChild(tr);
     });
     tbValidationBody.appendChild(fragment);
-    const differences = validationResult && Array.isArray(validationResult.rollforward_differences)
-        ? validationResult.rollforward_differences : [];
+    const differences = validationResult
+        ? (validationResult.rollforward_differences || []).concat(validationResult.global_adjustments || []) : [];
     if (differences.length) {
         const sectionRow = document.createElement('tr');
         sectionRow.className = 'tb-difference-section';
         const sectionCell = document.createElement('td');
         sectionCell.colSpan = columns.length;
-        sectionCell.textContent = `System-generated differences (${differences.length}) — linked to the affected leaf accounts; source amounts are unchanged.`;
+        sectionCell.textContent = `System-generated differences (${differences.length}) — leaf corrections and unassigned global differences; source amounts are unchanged.`;
         sectionRow.appendChild(sectionCell);
         tbValidationBody.appendChild(sectionRow);
 
@@ -613,30 +623,32 @@ function renderTrialBalanceValidationGrid() {
                 const cell = document.createElement('td');
                 cell.className = column.className;
                 if (column.kind === 'row') {
-                    cell.textContent = String(difference.excel_row);
+                    cell.textContent = difference.global_adjustment ? 'System' : String(difference.excel_row);
                 } else if (column.kind === 'source') {
                     const role = mappingRoleByIndex.get(column.index);
                     let value = '';
                     if (role === 'account_code_column') value = difference.account_code || '';
                     else if (role === 'account_name_column') value = 'Difference — ' + (difference.account_name || difference.account_code || 'Leaf account');
-                    else if (role === 'closing_dr_column') value = difference.closing_dr_adjustment || '';
-                    else if (role === 'closing_cr_column') value = difference.closing_cr_adjustment || '';
-                    if (role === 'closing_dr_column' || role === 'closing_cr_column') {
+                    else if (role && role.endsWith('_column')) value = Number(difference[role.replace('_column', '_adjustment')] || 0) || '';
+                    if (role && /_(dr|cr)_column$/.test(role)) {
                         cell.classList.add('tb-validation-amount');
                         cell.textContent = value === '' ? '' : (typeof window.formatAmount === 'function' ? window.formatAmount(value) : String(value));
                     } else {
                         cell.textContent = String(value);
                     }
                 } else if (column.kind === 'classification') {
-                    cell.textContent = 'Leaf adjustment';
+                    cell.textContent = difference.global_adjustment ? 'Unassigned global difference' : 'Leaf adjustment';
                 } else if (column.kind === 'issues') {
-                    cell.textContent = 'Roll-forward difference recorded separately; original source figures and observation are retained.';
+                    cell.textContent = difference.global_adjustment
+                        ? 'Global footing difference — ' + (validationResult.adjustments_confirmed ? 'confirmed' : 'awaiting confirmation')
+                        : 'Roll-forward difference recorded separately; original source figures and observation are retained.';
                 }
                 tr.appendChild(cell);
             });
             tbValidationBody.appendChild(tr);
         });
     }
+    renderTrialBalanceControlFooter(columns, mappingRoleByIndex);
     updateCriticalIssueNavigator();
 }
 
@@ -923,6 +935,10 @@ function resetColumnMapping() {
     fileHeaders = [];
     filePreviewRows = [];
     fileAllRows = [];
+    if (tbTotalExcelRow) tbTotalExcelRow.value = '';
+    if (tbNoTotalRow) tbNoTotalRow.checked = false;
+    renderTotalRowPreview();
+    checkTotalRowChoice(false);
     accountCodeCorrections = {};
     accountClassificationOverrides = {};
     autoClassificationByRow = {};
@@ -1207,6 +1223,7 @@ async function loadColumnMappingForFile(file) {
 // (static/upload.js's renderMapping()) -- full re-render on any change so every row's
 // exclusion list and status stay in sync.
 function renderMappingDropdowns() {
+    renderTotalRowPreview();
     if (!mappingTableBody) return;
     mappingTableBody.innerHTML = '';
 
@@ -1330,7 +1347,7 @@ function checkMappingComplete() {
 
 async function saveTrialBalanceColumnMapping() {
     const clientId = window.getSelectedClientId ? window.getSelectedClientId() : null;
-    if (!clientId || !selectedFile || !fileHeaders.length || !checkMappingComplete()) {
+    if (!clientId || !selectedFile || !fileHeaders.length || (!checkMappingComplete() || !checkTotalRowChoice(true))) {
         showStatus('Select a client and file, then map all required Trial Balance fields before saving.', 'error');
         return;
     }
@@ -1438,7 +1455,7 @@ async function uploadTrialBalance() {
     // Defensive re-check of the column mapping too, same reasoning as the guard above --
     // the button is disabled unless mapping is complete, but re-verify directly in case
     // of a race (e.g. a stale click event from before the last dropdown change).
-    if (!checkMappingComplete()) {
+    if ((!checkMappingComplete() || !checkTotalRowChoice(true))) {
         return;
     }
 
@@ -1496,6 +1513,8 @@ async function uploadTrialBalance() {
         formData.append('account_code_overrides', JSON.stringify(accountCodeCorrections));
         formData.append('account_classification_overrides', JSON.stringify(accountClassificationOverrides));
         formData.append('excluded_excel_rows', JSON.stringify(getExcludedSubtotalRowNumbers()));
+        formData.append('adjustment_confirmation', footingConfirmation);
+        appendTotalRowChoice(formData);
 
         const res = await fetch(API_BASE + '/api/trial-balance/upload', {
             method: 'POST',
@@ -1516,10 +1535,10 @@ async function uploadTrialBalance() {
 
         currentUploadId = result.upload_id;
         closeTrialBalanceValidation();
-        const adjustmentCount = Number(result.rollforward_adjustment_count || 0);
+        const adjustmentCount = Number(result.rollforward_adjustment_count || 0) + Number(result.global_adjustment_count || 0);
         showStatus(
             adjustmentCount
-                ? `✅ Uploaded and classified. ${adjustmentCount} roll-forward difference(s) were saved separately; original amounts were retained.`
+                ? `✅ Uploaded and classified. ${adjustmentCount} difference line(s) were saved separately; original amounts were retained.`
                 : '✅ Uploaded and classified successfully',
             'success'
         );
@@ -1679,7 +1698,8 @@ async function loadAvailableUploadAccounts(uploadId, target = availableUploadsDr
             throw new Error(result.detail || 'Failed to load accounts');
         }
 
-        renderAvailableAccountsTable(result.accounts, result.adjustments || []);
+        renderTrialBalanceControls(result.validation_controls || {}, 'tbSavedValidationControls');
+        renderAvailableAccountsTable(result.accounts, (result.adjustments || []).concat(result.global_adjustments || []));
         availableAccountsTableWrapper.style.display = 'block';
     } catch (error) {
         showStatus('❌ ' + error.message, 'error');
@@ -1761,16 +1781,16 @@ function renderAvailableAccountsTable(accounts, adjustments) {
         const values = [
             adjustment.account_code || '—',
             'Difference — ' + (adjustment.account_name || adjustment.account_code || 'Leaf account'),
-            '', '', '', '',
-            adjustment.closing_dr_adjustment || '',
-            adjustment.closing_cr_adjustment || '',
-            'Leaf adjustment',
+            Number(adjustment.opening_dr_adjustment || 0) || '', Number(adjustment.opening_cr_adjustment || 0) || '',
+            Number(adjustment.period_dr_adjustment || 0) || '', Number(adjustment.period_cr_adjustment || 0) || '',
+            Number(adjustment.closing_dr_adjustment || 0) || '', Number(adjustment.closing_cr_adjustment || 0) || '',
+            adjustment.global_adjustment ? 'Unassigned global difference' : 'Leaf adjustment',
             'Original amounts unchanged',
         ];
         values.forEach(function (value, index) {
             const td = document.createElement('td');
             if (index >= 2 && index <= 7) td.className = 'tb-amount-cell';
-            td.textContent = value === '' ? '' : (index === 6 || index === 7
+            td.textContent = value === '' ? '' : (index >= 2 && index <= 7
                 ? (typeof window.formatAmount === 'function' ? window.formatAmount(value) : String(value))
                 : String(value));
             tr.appendChild(td);
@@ -1912,3 +1932,196 @@ window.onload = async function () {
     if (typeof window.initUtils === 'function') await window.initUtils();
     updateClientDependentUI();
 };
+
+// All confirmation values come from the server's calculation; edits invalidate approval.
+function renderTrialBalanceControls(result, targetId) {
+    const container = getElement(targetId || 'tbValidationControls');
+    if (!container) return;
+    container.replaceChildren();
+    if (result.stale) {
+        container.textContent = 'Account codes or leaf selection changed after validation. These are the original saved differences; re-import the file to validate the revised selection.';
+        return;
+    }
+    if ((result.global_adjustments || []).length && !result.adjustments_confirmed) {
+        const button = document.createElement('button');
+        button.type = 'button'; button.className = 'btn-primary-action';
+        button.textContent = 'Review global differences';
+        button.addEventListener('click', function () { showFootingConfirmation(result); });
+        container.appendChild(button);
+    }
+}
+function showFootingConfirmation(result) {
+    const dialog = getElement('tbFootingDialog');
+    const body = getElement('tbFootingProposal');
+    if (!dialog || !body) return;
+    body.replaceChildren();
+    (result.global_adjustments || []).forEach(function (adjustment) {
+        const line = document.createElement('p');
+        const values = [];
+        ['opening', 'period', 'closing'].forEach(function (period) {
+            ['dr', 'cr'].forEach(function (side) {
+                const value = Number(adjustment[period + '_' + side + '_adjustment'] || 0);
+                if (value) values.push(period + ' ' + side.toUpperCase() + ': ' + value);
+            });
+        });
+        line.textContent = 'Difference — ' + adjustment.account_name + ' — ' + values.join('; ');
+        body.appendChild(line);
+    });
+    const revision = validationRevision;
+    // Replace the listener with the current proposal without stacking old approvals.
+    getElement('tbFootingAccept').onConfirmFooting = function () {
+        dialog.close();
+        if (revision !== validationRevision || validationResult !== result) return;
+        footingConfirmation = result.adjustment_confirmation_token;
+        runTrialBalanceValidation();
+    };
+    dialog.showModal();
+}
+const footingAcceptButton = getElement('tbFootingAccept');
+if (footingAcceptButton) footingAcceptButton.addEventListener('click', function () {
+    if (typeof footingAcceptButton.onConfirmFooting === 'function') footingAcceptButton.onConfirmFooting();
+});
+const footingCancelButton = getElement('tbFootingCancel');
+if (footingCancelButton) footingCancelButton.addEventListener('click', function () { getElement('tbFootingDialog').close(); });
+
+// Total-row selection belongs to the current workbook, never the saved client mapping.
+function checkTotalRowChoice(showError) {
+    const noTotal = !!(tbNoTotalRow && tbNoTotalRow.checked);
+    const raw = tbTotalExcelRow ? tbTotalExcelRow.value.trim() : '';
+    const rowNumber = Number(raw);
+    const hasRow = /^[0-9]+$/.test(raw) && rowNumber >= 2 && rowNumber <= fileAllRows.length + 1;
+    const source = hasRow ? fileAllRows[rowNumber - 2] : null;
+    const amountFields = TB_MAPPING_FIELDS.filter(function (field) { return /_(dr|cr)_column$/.test(field.role); });
+    const hasAmounts = source && amountFields.some(function (field) {
+        const index = fileHeaders.indexOf(tbColumnMapping[field.role]);
+        return index >= 0 && String(source[index] ?? '').trim() !== '';
+    });
+    const valid = noTotal || (hasRow && !!hasAmounts);
+    const error = getElement('tbTotalRowError');
+    if (error) {
+        if (valid) error.hidden = true;
+        else if (showError !== undefined) error.hidden = !showError;
+        error.textContent = !hasRow ? 'Enter a whole Excel row number from 2 to ' + (fileAllRows.length + 1) + ', or select No total row.'
+            : 'The selected row has no mapped amounts. Check its Excel row number.';
+    }
+    if (tbTotalExcelRow) tbTotalExcelRow.setAttribute('aria-invalid', String(!!showError && !valid));
+    return valid;
+}
+function appendTotalRowChoice(formData) {
+    const noTotal = !!(tbNoTotalRow && tbNoTotalRow.checked);
+    formData.append('no_total_row', noTotal ? 'true' : 'false');
+    if (!noTotal && tbTotalExcelRow) formData.append('total_excel_row', tbTotalExcelRow.value.trim());
+}
+function renderTotalRowPreview() {
+    if (!tbTotalExcelRow || !tbNoTotalRow) return;
+    tbTotalExcelRow.disabled = tbNoTotalRow.checked;
+    tbTotalExcelRow.required = !tbNoTotalRow.checked;
+    tbTotalExcelRow.max = String(fileAllRows.length + 1);
+    const valid = checkTotalRowChoice();
+    const status = getElement('tbTotalRowStatus');
+    if (status) status.textContent = tbNoTotalRow.checked ? 'N/A' : valid ? 'Selected' : 'Required';
+    const preview = getElement('tbTotalRowPreview');
+    const amounts = getElement('tbTotalRowAmounts');
+    if (!preview || !amounts) return;
+    preview.hidden = tbNoTotalRow.checked || !valid;
+    amounts.replaceChildren();
+    if (preview.hidden) return;
+    const source = fileAllRows[Number(tbTotalExcelRow.value) - 2];
+    const code = source[fileHeaders.indexOf(tbColumnMapping.account_code_column)] || '';
+    const name = source[fileHeaders.indexOf(tbColumnMapping.account_name_column)] || '';
+    getElement('tbTotalRowPreviewLabel').textContent = 'Row ' + tbTotalExcelRow.value + ' · ' + (name || code || 'Total');
+    ['opening', 'period', 'closing'].forEach(function (period) {
+        const group = document.createElement('div');
+        const title = document.createElement('strong');
+        title.textContent = period === 'period' ? 'Period' : period.charAt(0).toUpperCase() + period.slice(1);
+        group.appendChild(title);
+        ['dr', 'cr'].forEach(function (side) {
+            const line = document.createElement('span');
+            const value = source[fileHeaders.indexOf(tbColumnMapping[period + '_' + side + '_column'])];
+            line.textContent = side === 'dr' ? 'Dr ' : 'Cr ';
+            line.textContent += value === undefined || value === null || String(value).trim() === '' ? '—' : String(value);
+            group.appendChild(line);
+        });
+        amounts.appendChild(group);
+    });
+}
+function totalRowChoiceChanged() {
+    invalidateTrialBalanceValidation('Total row selection changed. Revalidate before saving.');
+    renderTotalRowPreview();
+    checkTotalRowChoice(true);
+    updateClientDependentUI();
+}
+if (tbTotalExcelRow) tbTotalExcelRow.addEventListener('input', totalRowChoiceChanged);
+if (tbNoTotalRow) tbNoTotalRow.addEventListener('change', totalRowChoiceChanged);
+
+// Control figures compare the unadjusted leaf set with the client's ERP footer.
+// Keep backend decimal strings intact so small nonzero differences cannot round to zero.
+function formatTrialBalanceControlAmount(value) {
+    const text = String(value ?? '').replaceAll(',', '').trim();
+    if (!/^[+-]?\d+(?:\.\d+)?$/.test(text)) return text || '-';
+    const parts = text.split('.');
+    const fraction = (parts[1] || '').replace(/0+$/, '').padEnd(2, '0');
+    return parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',') + '.' + fraction;
+}
+function renderTrialBalanceControlFooter(columns, mappingRoleByIndex) {
+    const result = validationResult;
+    if (!result) return;
+    const sourceRows = result.source_total_rows || [];
+    if (!sourceRows.length && !result.no_total_row) return;
+    const labels = {
+        opening_dr_column: 'Opening Dr', opening_cr_column: 'Opening Cr',
+        period_dr_column: 'Period Dr', period_cr_column: 'Period Cr',
+        closing_dr_column: 'Closing Dr', closing_cr_column: 'Closing Cr'
+    };
+    const comparison = result.source_total_comparison || [];
+    const byField = new Map(comparison.map(function (entry) { return [entry.field, entry]; }));
+    const source = sourceRows.length ? fileAllRows[sourceRows[0] - 2] || [] : [];
+    const accountCheck = (result.checks || []).find(function (check) { return check.key === 'account_codes'; });
+    const leafTotalsReady = accountCheck && accountCheck.status === 'pass';
+    const section = document.createElement('tr');
+    section.className = 'tb-control-heading';
+    const heading = document.createElement('td');
+    heading.colSpan = columns.length;
+    heading.textContent = 'ERP control total';
+    section.appendChild(heading);
+    tbValidationBody.appendChild(section);
+    [
+        {label: 'App leaf total', kind: 'leaf'},
+        {label: 'Client ERP total', kind: 'erp'},
+        {label: 'Footing difference', kind: 'difference'}
+    ].forEach(function (definition) {
+        const tr = document.createElement('tr');
+        tr.className = 'tb-control-total tb-control-' + definition.kind;
+        columns.forEach(function (column) {
+            const cell = document.createElement('td');
+            cell.className = column.className;
+            if (column.kind === 'row' && definition.kind === 'erp') {
+                cell.textContent = sourceRows.length ? String(sourceRows[0]) : '';
+            } else if (column.kind === 'source') {
+                const role = mappingRoleByIndex.get(column.index);
+                if (role === 'account_name_column') cell.textContent = definition.label;
+                else if (labels[role]) {
+                    cell.classList.add('tb-validation-amount');
+                    const entry = byField.get(labels[role]);
+                    let value;
+                    if (definition.kind === 'leaf') value = leafTotalsReady ? (result.source_leaf_totals || {})[role] : 'Pending';
+                    else if (definition.kind === 'erp') value = result.no_total_row ? 'N/A' : entry ? entry.source_total : source[column.index];
+                    else value = result.no_total_row ? 'N/A' : entry ? entry.difference : 'Pending';
+                    cell.textContent = formatTrialBalanceControlAmount(value);
+                    if (definition.kind === 'difference' && entry) {
+                        cell.classList.add(Number(entry.difference) === 0 ? 'tb-footing-zero' : 'tb-footing-nonzero');
+                    }
+                }
+            } else if (column.kind === 'classification') {
+                cell.textContent = definition.kind === 'leaf' ? 'Leaf rows only' : 'Control';
+            } else if (column.kind === 'issues') {
+                if (definition.kind === 'leaf') cell.textContent = 'Original amounts before adjustments';
+                else if (result.no_total_row) cell.textContent = 'No ERP total row selected';
+                else if (definition.kind === 'difference') cell.textContent = comparison.length === 6
+                    ? 'App leaf total minus Client ERP total' : 'Complete account checks to compare totals';
+            }
+            tr.appendChild(cell);
+        });
+        tbValidationBody.appendChild(tr);
+    });
+}

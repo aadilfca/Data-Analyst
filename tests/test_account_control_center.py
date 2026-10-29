@@ -3,6 +3,7 @@
 import os
 import sqlite3
 import tempfile
+import json
 import unittest
 from contextlib import nullcontext
 from decimal import Decimal
@@ -177,7 +178,7 @@ class TrialBalanceRollforwardAdjustmentTests(unittest.TestCase):
             "closing_dr_column": "Closing Dr", "closing_cr_column": "Closing Cr",
         }
 
-        result = trial_balance.validate_trial_balance_contents(workbook.getvalue(), "tb.xlsx", mapping)
+        result = trial_balance.validate_trial_balance_contents(workbook.getvalue(), "tb.xlsx", mapping, no_total_row=True)
 
         self.assertTrue(result["valid"])
         self.assertEqual(result["errors"], [])
@@ -189,7 +190,7 @@ class TrialBalanceRollforwardAdjustmentTests(unittest.TestCase):
         )
         self.assertEqual(result["rollforward_differences"][0]["closing_dr_adjustment"], 10.0)
         self.assertEqual(result["rollforward_differences"][1]["closing_cr_adjustment"], 10.0)
-        self.assertEqual(result["checks"][-1]["status"], "fail")
+        self.assertEqual(next(c for c in result["checks"] if c["key"] == "roll_forward")["status"], "adjusted")
 
     def test_whole_file_footing_difference_still_blocks_a_row_adjustment(self):
         frame = pd.DataFrame([{
@@ -205,7 +206,7 @@ class TrialBalanceRollforwardAdjustmentTests(unittest.TestCase):
             "closing_dr_column": "Closing Dr", "closing_cr_column": "Closing Cr",
         }
 
-        result = trial_balance.validate_trial_balance_contents(workbook.getvalue(), "tb.xlsx", mapping)
+        result = trial_balance.validate_trial_balance_contents(workbook.getvalue(), "tb.xlsx", mapping, no_total_row=True)
 
         self.assertFalse(result["valid"])
         self.assertEqual(result["rollforward_difference_count"], 1)
@@ -253,8 +254,10 @@ class AccountSetSchemaTests(unittest.TestCase):
                             "SELECT name FROM sqlite_master WHERE type = 'index'"
                         ).fetchall()
                     }
+                    upload_columns = {row[1] for row in conn.execute("PRAGMA table_info(trial_balance_uploads)").fetchall()}
                     category_columns = {row[1] for row in conn.execute("PRAGMA table_info(account_control_categories)").fetchall()}
                 conn.close()
+                self.assertIn("validation_controls", upload_columns)
                 self.assertTrue(
                     {
                         "account_sets",
@@ -378,6 +381,7 @@ class AccountSetPostgresMigrationTests(unittest.TestCase):
         sql = "\n".join(connection.cursor_instance.statements)
 
         self.assertIn("CREATE TABLE IF NOT EXISTS trial_balance_rollforward_adjustments", sql)
+        self.assertIn("ALTER TABLE trial_balance_uploads ADD COLUMN IF NOT EXISTS validation_controls TEXT", sql)
         self.assertIn("closing_dr_adjustment NUMERIC NOT NULL DEFAULT 0", sql)
         self.assertIn("closing_cr_adjustment NUMERIC NOT NULL DEFAULT 0", sql)
         self.assertIn("idx_trial_balance_rollforward_adjustments_upload", sql)
@@ -1319,3 +1323,159 @@ class FinancialStatementCalculationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TrialBalanceOrderedControlTests(unittest.TestCase):
+    def validate(self, rows, **kwargs):
+        columns = ['Code', 'Name', 'OD', 'OC', 'PD', 'PC', 'CD', 'CC']
+        frame = pd.DataFrame(rows, columns=columns)
+        cache = getattr(self, '_workbook_cache', {})
+        key = json.dumps(rows)
+        if key not in cache:
+            stream = BytesIO()
+            frame.to_excel(stream, index=False)
+            cache[key] = stream.getvalue()
+        self._workbook_cache = cache
+        mapping = dict(zip(['account_code_column', 'account_name_column', 'opening_dr_column',
+                            'opening_cr_column', 'period_dr_column', 'period_cr_column',
+                            'closing_dr_column', 'closing_cr_column'], columns))
+        self._last_contents, self._last_mapping = cache[key], mapping
+        kwargs.setdefault('no_total_row', 'total_excel_row' not in kwargs)
+        return trial_balance.validate_trial_balance_contents(cache[key], 'tb.xlsx', mapping, **kwargs)
+
+    def test_explicit_erp_total_is_excluded_and_compared_before_adjustments(self):
+        result = self.validate([
+            ['1', 'Parent', 900, 0, 0, 0, 900, 0],
+            ['1-1', 'Cash', 100, 0, 20, 0, 110, 0],
+            ['B', 'Credit', 0, 100, 0, 20, 0, 110],
+            ['Totals :', '', 100, 100, 20, 20, 110, 110],
+        ], total_excel_row='5')
+        self.assertTrue(result['valid'])
+        self.assertEqual(result['account_count'], 3)
+        self.assertEqual(result['source_total_rows'], [5])
+        self.assertEqual(result['checks'][1]['status'], 'pass')
+        self.assertEqual(result['rollforward_difference_count'], 2)
+        self.assertEqual(result['source_total_comparison'][-2]['leaf_total'], '110')
+
+    def test_footer_without_code_and_no_total_are_supported(self):
+        rows = [['A', 'Debit', 10, 0, 0, 0, 10, 0], ['B', 'Credit', 0, 10, 0, 0, 0, 10]]
+        self.assertEqual(self.validate(rows)['checks'][1]['status'], 'not_applicable')
+        result = self.validate(rows + [['', '', 10, 10, 0, 0, 10, 10]], total_excel_row='4')
+        self.assertTrue(result['valid'])
+        self.assertEqual(result['source_total_rows'], [4])
+
+    def test_erp_mismatch_blocks_both_adjustment_stages(self):
+        result = self.validate([['A', 'Cash', 100, 0, 20, 0, 110, 0],
+                                ['Total', '', 99, 0, 20, 0, 110, 0]], total_excel_row='3')
+        self.assertFalse(result['valid'])
+        self.assertEqual(result['checks'][1]['status'], 'fail')
+        self.assertEqual(result['rollforward_differences'], [])
+        self.assertEqual(result['global_adjustments'], [])
+
+    def test_code_correction_releases_later_checks(self):
+        rows = [['2025-01-01', 'Cash', 100, 0, 0, 0, 100, 0]]
+        result = self.validate(rows)
+        self.assertEqual(result['checks'][0]['status'], 'fail')
+        self.assertEqual(result['rollforward_differences'], [])
+        fixed = self.validate(rows, code_overrides={'2': 'A1'})
+        self.assertEqual(fixed['checks'][0]['status'], 'pass')
+        self.assertTrue(fixed['global_adjustments'])
+
+    def test_confirmation_binds_exact_source_and_balances_all_pairs(self):
+        rows = [['A', 'Cash', 100, 0, 0, 20, 70, 0]]
+        pending = self.validate(rows)
+        self.assertFalse(pending['valid'])
+        self.assertEqual(pending['rollforward_difference_count'], 1)
+        self.assertEqual(pending['global_adjustments'][0]['opening_cr_adjustment'], '100')
+        self.assertEqual(pending['global_adjustments'][1]['period_dr_adjustment'], '20')
+        accepted = self.validate(rows, adjustment_confirmation=pending['adjustment_confirmation_token'])
+        self.assertTrue(accepted['valid'])
+        self.assertTrue(accepted['adjustments_confirmed'])
+        for check in accepted['checks'][-3:]:
+            self.assertEqual(check['debit_total'], check['credit_total'])
+        changed = self.validate([['A', 'Cash', 101, 0, 0, 20, 70, 0]],
+                                adjustment_confirmation=pending['adjustment_confirmation_token'])
+        self.assertFalse(changed['valid'])
+        self.assertFalse(changed['adjustments_confirmed'])
+
+    def test_saved_controls_are_read_from_upload_metadata(self):
+        controls = {'global_adjustments': [{'opening_cr_adjustment': '100'}], 'adjustments_confirmed': True}
+        with patch.object(trial_balance, 'execute_query_pg', return_value=[{'id': 1, 'validation_controls': json.dumps(controls)}]):
+            self.assertEqual(trial_balance._require_upload(1), controls)
+
+
+    def test_upload_rechecks_confirmation_and_persists_controls_without_footer_account(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        pending = self.validate([['A', 'Cash', 100, 0, 0, 0, 100, 0],
+                                 ['Totals :', '', 100, 0, 0, 0, 100, 0]], total_excel_row='3')
+        app = FastAPI()
+        app.include_router(trial_balance.router)
+        client = TestClient(app)
+        data = {'client_id': '1', 'as_of_date': '2026-06-30', 'total_excel_row': '3', **self._last_mapping}
+        files = {'file': ('tb.xlsx', self._last_contents, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')}
+        with patch.object(trial_balance, 'execute_query_pg', side_effect=lambda sql, args: [{'id': 1}] if 'FROM clients' in sql else []), \
+             patch.object(trial_balance, 'execute_write_pg', return_value=77) as write, \
+             patch.object(trial_balance, 'pg_transaction', side_effect=nullcontext), \
+             patch.object(trial_balance, 'get_raw_conn_pg', return_value=object()), \
+             patch.object(trial_balance, 'release_raw_conn_pg'), \
+             patch.object(trial_balance, 'execute_batch_pg') as batch, \
+             patch.object(trial_balance, 'log_audit'), \
+             patch.object(trial_balance, 'invalidate_category_for_account_cache'):
+            rejected = client.post('/api/trial-balance/upload', data=data, files=files)
+            self.assertEqual(rejected.status_code, 400)
+            write.assert_not_called()
+            accepted = client.post('/api/trial-balance/upload',
+                                   data={**data, 'adjustment_confirmation': pending['adjustment_confirmation_token']}, files=files)
+            self.assertEqual(accepted.status_code, 200, accepted.text)
+            self.assertEqual(accepted.json()['global_adjustment_count'], 1)
+            saved_rows = batch.call_args.args[2]
+            self.assertEqual(len(saved_rows), 1)
+            self.assertEqual(saved_rows[0][1], 'A')
+            self.assertEqual(saved_rows[0][7], 100)
+            metadata_call = next(c for c in write.call_args_list if 'validation_controls = ' in c.args[0])
+            controls = json.loads(metadata_call.args[1][2])
+            self.assertTrue(controls['adjustments_confirmed'])
+            self.assertEqual(controls['source_total_rows'], [3])
+            self.assertEqual(controls['global_adjustments'][0]['closing_cr_adjustment'], '100')
+
+
+    def test_total_choice_is_required_and_rejects_invalid_or_conflicting_choices(self):
+        rows = [['A', 'Cash', 10, 0, 0, 0, 10, 0]]
+        for value in (None, '', '1', '3', '2.5', '2e0', '-2'):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.validate(rows, total_excel_row=value, no_total_row=False)
+        with self.assertRaisesRegex(ValueError, 'not both'):
+            self.validate(rows, total_excel_row='2', no_total_row=True)
+
+    def test_manual_selection_uses_excel_position_and_ignores_row_labels(self):
+        rows = [['A', 'Debit', 10, 0, 0, 0, 10, 0],
+                ['B', 'Credit', 0, 10, 0, 0, 0, 10],
+                ['', '', '', '', '', '', '', ''],
+                ['ERP footer code', 'Summary without a total label', 10, 10, 0, 0, 10, 10]]
+        result = self.validate(rows, total_excel_row='5')
+        self.assertTrue(result['valid'])
+        self.assertEqual(result['account_count'], 2)
+        self.assertEqual(result['source_total_rows'], [5])
+        with self.assertRaisesRegex(ValueError, 'no mapped amounts'):
+            self.validate(rows, total_excel_row='4')
+        invalid = rows[:]
+        invalid[-1] = ['Footer', '', 'invalid amount', 10, 0, 0, 10, 10]
+        with self.assertRaisesRegex(ValueError, 'invalid mapped amount'):
+            self.validate(invalid, total_excel_row='5')
+
+    def test_no_total_does_not_guess_from_account_name_or_code(self):
+        result = self.validate([['Total', 'A real ledger', 0, 0, 0, 0, 0, 0]], no_total_row=True)
+        self.assertTrue(result['valid'])
+        self.assertEqual(result['source_total_rows'], [])
+        self.assertEqual(result['account_count'], 1)
+
+    def test_changing_selected_total_row_requires_new_difference_confirmation(self):
+        rows = [['A', 'Cash', 100, 0, 0, 0, 100, 0],
+                ['', '', 100, 0, 0, 0, 100, 0],
+                ['', '', 100, 0, 0, 0, 100, 0]]
+        pending = self.validate(rows, total_excel_row='3', excluded_excel_rows=[4])
+        changed = self.validate(rows, total_excel_row='4', excluded_excel_rows=[3],
+                                adjustment_confirmation=pending['adjustment_confirmation_token'])
+        self.assertFalse(changed['adjustments_confirmed'])
+        self.assertFalse(changed['valid'])

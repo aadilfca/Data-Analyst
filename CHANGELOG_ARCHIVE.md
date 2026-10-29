@@ -8765,7 +8765,7 @@ Record phase decisions, implementation, verification, and acceptance here as the
 ### Financial Statement operating rules
 
 - Match Trial Balance hierarchy by dash-delimited segments; ignore leading zeros in numeric segments for matching only. Parent rows have recognized descendants; rows without descendants default to Leaf. Preserve the account code and editable Parent/Leaf correction. Skip ambiguous normalized matches.
-- Financial account assignments and Trial Balance footing/roll-forward checks use Leaf rows only. A Parent assignment applies to its descendant Leaf accounts; Parent totals are not counted again.
+- Financial account assignments and Trial Balance footing/roll-forward checks use Leaf rows only. A Parent assignment applies to its descendant Leaf accounts; Parent totals are not counted again. Reviewer-selected ERP control totals compare original Leaf figures before adjustments; global differences remain unassigned until traced.
 - Assign each account to a client-scoped Balance Sheet or Income Statement category. Headings organize categories. Subtotals combine direct categories under a heading with signed treatment; totals combine categories, subtotals, or earlier totals, with overlapping sources blocked.
 - The current Financial Statement preview aggregates ledger movements by category and month. Full statement production and closing logic are not implemented.
 
@@ -8917,4 +8917,24 @@ Record phase decisions, implementation, verification, and acceptance here as the
 
 **Verification:** Focused Account Control Centre and Trial Balance UI suites pass (78 tests plus 2 subtests). Coverage includes debit/credit adjustment sides, tolerance, leaf-only classification, blocking global footing differences, persisted schema, separate API output, and red UI rows with unchanged source values. Python and JavaScript syntax checks and `git diff --check` pass. Pytest reports a non-blocking cache-directory warning. Local-server acceptance is pending.
 
-**Acceptance:** No staging, commit, or push; awaiting Aadil's local-server test and explicit Git approval.
+**Acceptance:** Aadil confirmed local testing; committed locally as `e9851b8`. Combined push remains pending.
+
+
+### Trial Balance ordered controls and global differences - 2026-10-29
+
+**Implementation:** Validation checks account rows/codes and corrected hierarchy, compares six original Leaf sums with ERP control totals, records per-leaf roll-forward differences, then checks vertical pairs including those adjustments. The mapping pane requires an Excel total-row number or explicit No total row choice, replacing automatic detection. A collapsible preview shows that row's mapped description and six amounts. The selected row is excluded from accounts regardless of its label or position; No total row is Not applicable. Missing/conflicting choices, out-of-range, empty or invalid-amount rows are rejected; mismatching totals block later calculations and saving. Choices reset on a new file and are not saved as client column defaults.
+
+Opening/period counter-entries carry their effects into closing; accumulated tolerated row rounding can produce a separately labelled closing difference. A popup shows exact proposed columns/amounts. Confirmation binds to file bytes, mapping, code/classification edits and exclusions; upload independently repeats validation. Originals and observations remain intact. Compact upload metadata stores controls and confirmed global adjustments in SQLite/PostgreSQL; saved views show red Difference rows across all six columns. Subsequent saved code/hierarchy changes mark the control snapshot stale. Global differences have no Financial Statement category and do not change category totals. Script version: 27.
+
+**Verification:** 92 focused backend/browser tests and nine subtests pass, including manual row choice, invalid/empty rows, original Excel positions, six-value preview, file reset, source totals, ordered gates, exact confirmation and upload persistence. Mapping layout was checked at 1280/850/560px. SQLite schema and PostgreSQL migration SQL are covered in isolation; no live PostgreSQL migration ran. Python compilation and whitespace checks pass. TestClient emitted one dependency deprecation warning; no package was installed.
+
+**Acceptance/Git:** Aadil accepted local testing and authorized combined commit/push on 2026-10-29; Phase 1 is already committed locally.
+
+
+### Trial Balance control footer - 2026-10-29
+
+**Implementation:** Replaced the verbose validation/saved-view check report with a quiet action area retaining required global-difference approval and stale-data notices. The validation table ends with ERP control total, App leaf total, Client ERP total and Footing difference rows. Six mapped columns compare original Leaf sums before adjustments; decimal strings preserve small nonzero differences. Unfinished comparisons show Pending; absent ERP totals show N/A. Source control rows remain excluded from accounts. Script version: 28.
+
+**Verification:** All six focused browser tests pass, including reordered source columns, original-versus-adjusted totals, large decimal values, zero/nonzero differences, pending/N/A states and existing mapping/approval flows. JavaScript loads successfully in Chromium; whitespace checks pass. No backend/schema change.
+
+**Acceptance/Git:** Aadil accepted the footer refinement and authorized combined commit/push on 2026-10-29.

@@ -795,6 +795,31 @@
         .tb-inline-link-btn:hover {
             color: #1d4ed8;
         }
+        .tb-validation-controls { max-height: 180px; overflow: auto; padding: 6px 12px; background: #f8fafc; }
+        .tb-validation-controls p { margin: 4px 0; }
+        #tbFootingDialog { max-width: 740px; border: 1px solid #cbd5e1; border-radius: 12px; padding: 24px; }
+        #tbFootingDialog::backdrop { background: rgba(15, 23, 42, .5); }
+        #tbFootingProposal { color: #b91c1c; font-weight: 700; }
+        .tb-total-mapping { background: #f5f8fc; }
+        .tb-total-mapping small { display: block; font-size: 11px; color: #64748b; }
+        .tb-total-choice { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+        .tb-total-choice input[type="number"] { width: 112px; min-width: 0; padding: 7px; border: 1px solid #cbd5e1; border-radius: 5px; }
+        .tb-total-checkbox { display: flex; gap: 5px; align-items: center; white-space: nowrap; font-size: 12px; }
+        #tbTotalRowStatus { font-size: 11px; color: #64748b; }
+        #tbTotalRowError { color: #b91c1c; margin: 6px 0; font-size: 12px; }
+        #tbTotalRowPreview { margin-top: 8px; border-top: 1px solid #dce3ec; padding-top: 8px; }
+        #tbTotalRowPreview summary { color: #205fba; cursor: pointer; font-size: 12px; }
+        .tb-total-amounts { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,130px),1fr)); gap: 12px; padding: 10px 0; }
+        .tb-total-amounts strong { display: block; font-size: 12px; margin-bottom: 4px; }
+        .tb-total-amounts span { display: block; overflow-wrap: anywhere; font-size: 12px; font-variant-numeric: tabular-nums; }
+        .tb-total-mapping [hidden] { display: none !important; }
+        @media (max-width: 650px) { .tb-total-amounts { grid-template-columns: 1fr; } }
+        .tb-validation-controls:empty { display: none; }
+        .tb-validation-table tr.tb-control-heading td { background: #e2e8f0; font-weight: 700; border-top: 2px solid #94a3b8; }
+        .tb-validation-table tr.tb-control-total td { background: #f8fafc; font-weight: 600; }
+        .tb-validation-table tr.tb-control-difference td { border-top: 2px solid #cbd5e1; }
+        .tb-validation-table tr.tb-control-difference td.tb-footing-zero { color: #166534; }
+        .tb-validation-table tr.tb-control-difference td.tb-footing-nonzero { color: #b91c1c; }
     </style>
 </head>
 
@@ -889,6 +914,25 @@
                                 <tr><th>Field</th><th>Excel Column</th><th>Status</th></tr>
                             </thead>
                             <tbody id="mappingTableBody"></tbody>
+                            <tfoot class="tb-total-mapping">
+                                <tr>
+                                    <td><label for="tbTotalExcelRow">Row no. of Total</label><small>Required</small></td>
+                                    <td><div class="tb-total-choice">
+                                        <input id="tbTotalExcelRow" type="number" min="2" step="1" required placeholder="Excel row no." aria-describedby="tbTotalRowHelp tbTotalRowError">
+                                        <label class="tb-total-checkbox"><input id="tbNoTotalRow" type="checkbox"> No total row</label>
+                                    </div></td>
+                                    <td id="tbTotalRowStatus">Required</td>
+                                </tr>
+                                <tr><td colspan="3">
+                                    <p id="tbTotalRowHelp" class="group-hint">Use the row number shown in Excel, including the header row.</p>
+                                    <p id="tbTotalRowError" role="alert" hidden></p>
+                                    <details id="tbTotalRowPreview" hidden>
+                                        <summary id="tbTotalRowPreviewLabel">Selected total row</summary>
+                                        <div id="tbTotalRowAmounts" class="tb-total-amounts"></div>
+                                        <p class="group-hint">Used to check leaf totals; excluded from account imports.</p>
+                                    </details>
+                                </td></tr>
+                            </tfoot>
                         </table>
                     </div>
                 </section>
@@ -963,6 +1007,7 @@
                     </div>
                 </div>
             </div>
+            <div id="tbValidationControls" class="tb-validation-controls" aria-live="polite"></div>
             <div class="status-bar info tb-validation-status" id="tbValidationStatus" role="status">Run validation to review the complete Trial Balance.</div>
         </div>
         <div id="tbUploadProgressBar" class="import-progress-bar tb-validation-progress" style="display:none;">
@@ -1009,6 +1054,7 @@
 
         <p class="group-hint" id="availableUploadsEmptyHint" style="display:none;">No classified Trial Balance uploads found for this client yet.</p>
 
+        <div id="tbSavedValidationControls" class="tb-validation-controls" aria-live="polite"></div>
         <div class="tb-review-table-wrapper" id="availableAccountsTableWrapper" style="display:none;">
             <table class="tb-review-table">
                 <thead>
@@ -1032,10 +1078,19 @@
         </div>
     </div>
 
+    <dialog id="tbFootingDialog" aria-labelledby="tbFootingTitle">
+        <h2 id="tbFootingTitle">Confirm Trial Balance differences</h2>
+        <p>These amounts balance the leaf totals. Closing includes the effect of opening and period entries. Original source figures are retained.</p>
+        <div id="tbFootingProposal"></div>
+        <p>Global differences remain unassigned until their account category is identified.</p>
+        <button type="button" id="tbFootingCancel" class="btn-secondary-action">Cancel</button>
+        <button type="button" id="tbFootingAccept" class="btn-primary-action">Confirm differences and revalidate</button>
+    </dialog>
     <script src="/static/loading_ui.js?v=2"></script>
     <script src="/static/client_context.js?v=21"></script>
     <script src="/static/utils.js"></script>
-    <script src="/static/trial_balance.js?v=25"></script>
+    <script src="/static/trial_balance.js?v=28"></script>
+
 </body>
 
 </html>

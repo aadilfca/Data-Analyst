@@ -23,6 +23,7 @@ classification override.
 """
 
 import json
+import hashlib
 import re
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -350,7 +351,8 @@ def _load_excluded_excel_rows(raw_value, row_count):
 
 
 def validate_trial_balance_contents(
-    contents, filename, mapping, code_overrides=None, classification_overrides=None, excluded_excel_rows=None
+    contents, filename, mapping, code_overrides=None, classification_overrides=None, excluded_excel_rows=None, adjustment_confirmation=None,
+    total_excel_row=None, no_total_row=False
 ):
     """Parse and reconcile a Trial Balance without writing any database records."""
     df = read_trial_balance_excel(contents, filename)
@@ -380,9 +382,36 @@ def validate_trial_balance_contents(
         issue = {'excel_row': excel_row, 'field': field, 'message': message, 'severity': 'warning'}
         warnings.append(issue)
 
+    # The reviewer identifies the control row explicitly; its label and position
+    # are never used to guess whether it is an account or an ERP total.
+    control_rows = []
+    if no_total_row:
+        if total_excel_row is not None and str(total_excel_row).strip():
+            raise ValueError('Choose either an ERP total row number or No total row, not both.')
+    else:
+        value = str(total_excel_row or '').strip()
+        if not re.fullmatch(r'[0-9]+', value):
+            raise ValueError('Enter the Excel row number of Total, or explicitly select No total row.')
+        row_number = int(value)
+        if row_number < 2 or row_number > len(rows) + 1:
+            raise ValueError(f'Total row must be an Excel row from 2 to {len(rows) + 1}.')
+        if row_number in code_overrides or row_number in classification_overrides:
+            raise ValueError('The selected Total row has account corrections. Clear them or choose another Total row.')
+        row = rows[row_number - 2]
+        if not any(str(row.get(mapping[role], '') or '').strip() for role, _ in amount_roles):
+            raise ValueError('The selected Total row contains no mapped amounts. Choose its actual Excel row number.')
+        amounts = {role: _parse_validation_amount(row.get(mapping[role])) for role, _ in amount_roles}
+        if any(value is None for value in amounts.values()):
+            raise ValueError('The selected Total row contains an invalid mapped amount. Correct the source file or row selection.')
+        control_rows.append({'excel_row': row_number, 'amounts': amounts})
+    control_row_numbers = {row['excel_row'] for row in control_rows}
+    excluded_excel_rows -= control_row_numbers
+
     date_code_pattern = re.compile(r'^(\d{4})-(\d{1,2})-(\d{1,2})(?: 00:00:00)?$')
     for index, row in enumerate(rows):
         excel_row = index + 2
+        if excel_row in control_row_numbers:
+            continue
         source_code = str(row.get(mapping['account_code_column'], '') or '').strip()
         code = str(code_overrides.get(excel_row, source_code) or '').strip()
         row_has_data = any(str(row.get(column, '') or '').strip() for column in mapping.values() if column)
@@ -463,50 +492,81 @@ def validate_trial_balance_contents(
     errors = blocking_errors
 
     valid_amount_rows = [row for row in candidates if row['classification'] == 'leaf']
+    if not valid_amount_rows:
+        add_error(None, 'Rows', 'At least one Leaf account is required for validation.')
     tolerance = Decimal('0.01')
-    checks = []
-    for period_key, label in (('opening', 'Opening'), ('period', 'Period movement'), ('closing', 'Closing')):
-        debit = sum((row['amounts'][period_key + '_dr_column'] for row in valid_amount_rows), Decimal('0'))
-        credit = sum((row['amounts'][period_key + '_cr_column'] for row in valid_amount_rows), Decimal('0'))
-        difference = debit - credit
-        passed = not invalid_amounts and abs(difference) <= tolerance
-        checks.append({
-            'key': period_key + '_balance',
-            'label': f'{label} debits equal credits',
-            'status': 'pass' if passed else ('blocked' if invalid_amounts else 'fail'),
-            'debit_total': float(debit),
-            'credit_total': float(credit),
-            'difference': float(difference),
-        })
-        if not invalid_amounts and abs(difference) > tolerance:
-            add_error(None, label, f'{label} debit and credit totals differ by {abs(difference):,.2f}.')
-
-    rollforward_count = 0
+    checks = [{'key': 'account_codes', 'label': 'Account codes and leaf selection',
+               'status': 'fail' if errors else 'pass'}]
+    source_totals = {role: sum((r['amounts'][role] for r in valid_amount_rows), Decimal('0'))
+                     for role, _ in amount_roles}
+    source_status = 'not_applicable' if not control_rows else 'blocked'
+    source_comparison = []
+    if control_rows and not errors:
+        for role, label in amount_roles:
+            total = control_rows[0]['amounts'][role]
+            difference = source_totals[role] - total
+            source_comparison.append({'field': label, 'source_total': str(total),
+                                      'leaf_total': str(source_totals[role]), 'difference': str(difference)})
+        source_status = 'pass' if all(abs(Decimal(r['difference'])) <= tolerance for r in source_comparison) else 'fail'
+        if source_status == 'fail':
+            add_error(None, 'ERP total', 'Imported leaf totals differ from the ERP total. Review mapping and leaf selection, or correct and re-import the source file.')
+    checks.append({'key': 'source_total', 'label': 'Original leaf totals match ERP total',
+                   'status': source_status, 'columns': source_comparison})
     rollforward_differences = []
-    if invalid_amounts:
-        rollforward_status = 'blocked'
-    else:
+    if not errors:
         for account in valid_amount_rows:
-            amounts = account['amounts']
-            adjustment = calculate_rollforward_adjustment(amounts, tolerance)
+            adjustment = calculate_rollforward_adjustment(account['amounts'], tolerance)
             if adjustment:
-                rollforward_count += 1
                 rollforward_differences.append({
-                    'excel_row': account['excel_row'],
-                    'account_code': account['account_code'],
+                    'excel_row': account['excel_row'], 'account_code': account['account_code'],
                     'account_name': str(rows[account['excel_row'] - 2].get(mapping['account_name_column'], '') or '').strip() or None,
                     **{key: float(value) for key, value in adjustment.items()},
                     **{f'{key}_exact': str(value) for key, value in adjustment.items()},
                 })
                 add_warning(account['excel_row'], 'Roll-forward', 'Opening balance plus period movement does not equal closing balance within 0.01.')
-        rollforward_status = 'pass' if rollforward_count == 0 and candidates else ('fail' if candidates else 'blocked')
-    checks.append({
-        'key': 'roll_forward',
-        'label': 'Opening plus period movement equals closing',
-        'status': rollforward_status,
-        'affected_rows': rollforward_count,
-        'tolerance': 0.01,
-    })
+    checks.append({'key': 'roll_forward', 'label': 'Opening plus period movement equals closing',
+                   'status': 'blocked' if errors else ('adjusted' if rollforward_differences else 'pass'),
+                   'affected_rows': len(rollforward_differences), 'tolerance': 0.01})
+    adjusted_totals = dict(source_totals)
+    for difference in rollforward_differences:
+        for side in ('dr', 'cr'):
+            adjusted_totals['closing_' + side + '_column'] += Decimal(difference['closing_' + side + '_adjustment_exact'])
+    leaf_adjusted_totals = dict(adjusted_totals)
+    global_adjustments = []
+    if not errors:
+        # Each opening/movement counter-entry carries its net effect into closing.
+        # A final closing control catches accumulated tolerated row-rounding differences.
+        for period, label in (('opening', 'Opening'), ('period', 'Period movement'), ('closing', 'Closing rounding')):
+            net = adjusted_totals[period + '_dr_column'] - adjusted_totals[period + '_cr_column']
+            if abs(net) <= tolerance:
+                continue
+            side = 'cr' if net > 0 else 'dr'
+            values = {role: Decimal('0') for role, _ in amount_roles}
+            values[period + '_' + side + '_column'] = abs(net)
+            if period != 'closing':
+                values['closing_' + side + '_column'] = abs(net)
+            global_adjustments.append({'account_name': label + ' footing', 'global_adjustment': True,
+                                       **{role.replace('_column', '_adjustment'): str(value) for role, value in values.items()}})
+            for role, value in values.items():
+                adjusted_totals[role] += value
+    # Confirmation binds to source bytes, mapping, corrections and exact proposals.
+    token_mapping = {role: mapping.get(role) or None for role in
+                     ['account_code_column', 'account_name_column', 'type_column'] + [role for role, _ in amount_roles]}
+    token_data = [hashlib.sha256(contents).hexdigest(), token_mapping, code_overrides,
+                  classification_overrides, sorted(excluded_excel_rows), sorted(control_row_numbers), bool(no_total_row), global_adjustments]
+    confirmation_token = hashlib.sha256(json.dumps(token_data, sort_keys=True).encode()).hexdigest() if global_adjustments else None
+    confirmed = bool(confirmation_token and adjustment_confirmation == confirmation_token)
+    if global_adjustments and not confirmed:
+        add_error(None, 'Footings', 'Review and confirm the proposed global differences before saving.')
+    for period, label in (('opening', 'Opening'), ('period', 'Period movement'), ('closing', 'Closing')):
+        debit, credit = adjusted_totals[period + '_dr_column'], adjusted_totals[period + '_cr_column']
+        checks.append({'key': period + '_balance', 'label': label + ' debits equal credits',
+                       'status': 'blocked' if errors and not global_adjustments else ('confirmation_required' if global_adjustments and not confirmed else 'pass'),
+                       'debit_total': float(debit), 'credit_total': float(credit), 'difference': float(debit-credit),
+                       'original_debit_total': str(source_totals[period + '_dr_column']),
+                       'original_credit_total': str(source_totals[period + '_cr_column']),
+                       'leaf_adjusted_debit_total': str(leaf_adjusted_totals[period + '_dr_column']),
+                       'leaf_adjusted_credit_total': str(leaf_adjusted_totals[period + '_cr_column'])})
 
     error_count = len(errors)
     return {
@@ -514,6 +574,15 @@ def validate_trial_balance_contents(
         'errors': errors,
         'warnings': warnings,
         'checks': checks,
+        'account_classifications': sorted((r['account_code'], r['classification']) for r in candidates),
+        'total_excel_row': next(iter(control_row_numbers), None),
+        'no_total_row': bool(no_total_row),
+        'source_total_rows': sorted(control_row_numbers),
+        'source_total_comparison': source_comparison,
+        'source_leaf_totals': {key: str(value) for key, value in source_totals.items()},
+        'global_adjustments': global_adjustments,
+        'adjustment_confirmation_token': confirmation_token,
+        'adjustments_confirmed': confirmed,
         'rollforward_differences': rollforward_differences,
         'rollforward_difference_count': len(rollforward_differences),
         'account_count': len(candidates),
@@ -787,6 +856,9 @@ def validate_trial_balance_upload(
     account_code_overrides: Optional[str] = Form(None),
     account_classification_overrides: Optional[str] = Form(None),
     excluded_excel_rows: Optional[str] = Form(None),
+    adjustment_confirmation: Optional[str] = Form(None),
+    total_excel_row: Optional[str] = Form(None),
+    no_total_row: bool = Form(False),
 ):
     """Validate a Trial Balance without creating or replacing an upload."""
     if not file.filename or not file.filename.lower().endswith(('.xlsx', '.xls')):
@@ -805,7 +877,7 @@ def validate_trial_balance_upload(
     try:
         return validate_trial_balance_contents(
             file.file.read(), file.filename, mapping,
-            account_code_overrides, account_classification_overrides, excluded_excel_rows,
+            account_code_overrides, account_classification_overrides, excluded_excel_rows, adjustment_confirmation, total_excel_row, no_total_row,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc))
@@ -845,6 +917,9 @@ def upload_trial_balance(
     account_code_overrides: Optional[str] = Form(None),
     account_classification_overrides: Optional[str] = Form(None),
     excluded_excel_rows: Optional[str] = Form(None),
+    adjustment_confirmation: Optional[str] = Form(None),
+    total_excel_row: Optional[str] = Form(None),
+    no_total_row: bool = Form(False),
 ):
     """
     Save a Trial Balance only after the same non-writing validation used by
@@ -912,7 +987,7 @@ def upload_trial_balance(
     try:
         validation = validate_trial_balance_contents(
             file.file.read(), file.filename, mapping,
-            account_code_overrides, account_classification_overrides, excluded_excel_rows,
+            account_code_overrides, account_classification_overrides, excluded_excel_rows, adjustment_confirmation, total_excel_row, no_total_row,
         )
     except ValueError as exc:
         raise HTTPException(400, f"Trial balance validation failed: {exc}")
@@ -995,7 +1070,7 @@ def upload_trial_balance(
         accounts = []  # list of dicts, pre-classification
         skipped_blank_count = 0
         skipped_subtotal_count = len(validation['excluded_subtotal_rows'])
-        excluded_subtotal_rows = set(validation['excluded_subtotal_rows'])
+        excluded_subtotal_rows = set(validation['excluded_subtotal_rows']) | set(validation['source_total_rows'])
 
         for idx, row in enumerate(rows):
             if progress_key:
@@ -1160,8 +1235,16 @@ def upload_trial_balance(
                 finally:
                     release_raw_conn_pg(adjustment_conn)
             execute_write_pg(
-                "UPDATE trial_balance_uploads SET status = 'parsed', row_count = %s, notes = %s WHERE id = %s",
-                (len(accounts), notes, upload_id)
+                "UPDATE trial_balance_uploads SET status = 'parsed', row_count = %s, notes = %s, validation_controls = %s WHERE id = %s",
+                (len(accounts), notes, json.dumps({
+                    'total_excel_row': validation['total_excel_row'],
+                    'no_total_row': validation['no_total_row'],
+                    'source_total_rows': validation['source_total_rows'],
+                    'source_total_comparison': validation['source_total_comparison'],
+                    'checks': validation['checks'], 'global_adjustments': validation['global_adjustments'],
+                    'account_classifications': validation['account_classifications'],
+                    'adjustments_confirmed': validation['adjustments_confirmed'],
+                }), upload_id)
             )
         if conflicts:
             log_audit("Analyst", "Delete", "TrialBalance",
@@ -1191,6 +1274,7 @@ def upload_trial_balance(
             "duplicate_code_count": 0,
             "corrected_code_count": corrected_code_count,
             "rollforward_adjustment_count": rollforward_adjustment_count,
+            "global_adjustment_count": len(validation["global_adjustments"]),
         }
 
     except HTTPException as e:
@@ -1356,9 +1440,10 @@ def _require_upload(upload_id: int):
     genuinely had none) is NOT an error here - it just returns an empty
     list / all-zero counts, since that's a legitimate state, not a bad request.
     """
-    upload_rows = execute_query_pg("SELECT id FROM trial_balance_uploads WHERE id = %s", (upload_id,))
+    upload_rows = execute_query_pg("SELECT id, validation_controls FROM trial_balance_uploads WHERE id = %s", (upload_id,))
     if not upload_rows:
         raise HTTPException(404, "Trial balance upload not found")
+    return json.loads(upload_rows[0].get("validation_controls") or "{}")
 
 
 # ---------- RETRIEVAL ENDPOINTS (Phase 3 of 5: store + retrieve classified accounts) ----------
@@ -1373,7 +1458,8 @@ def list_trial_balance_accounts(upload_id: int, is_leaf: Optional[bool] = None):
     accounts, so the Upload UI (Phase 4) and Review screen (Phase 5) can
     show either the full hierarchy or a ledger-only view.
     """
-    _require_upload(upload_id)
+    controls = _require_upload(upload_id)
+    controls = controls if isinstance(controls, dict) else {}
 
     query = """SELECT id, account_code, source_account_code, account_name, level, classification, manually_overridden,
                       opening_dr, opening_cr, period_dr, period_cr, closing_dr, closing_cr
@@ -1416,6 +1502,10 @@ def list_trial_balance_accounts(upload_id: int, is_leaf: Optional[bool] = None):
             "closing_cr": r["closing_cr"],
         })
 
+    current_classifications = sorted([r['account_code'], r['classification'] if r['manually_overridden'] else auto_classification[r['account_code']]] for r in rows)
+    if controls.get('account_classifications') and current_classifications != controls['account_classifications']:
+        controls['stale'] = True
+
     adjustments = [
         {
             "account_id": row["account_id"],
@@ -1430,7 +1520,8 @@ def list_trial_balance_accounts(upload_id: int, is_leaf: Optional[bool] = None):
         }
         for row in adjustment_rows
     ]
-    return {"upload_id": upload_id, "accounts": accounts, "adjustments": adjustments}
+    return {"upload_id": upload_id, "accounts": accounts, "adjustments": adjustments,
+            "global_adjustments": controls.get("global_adjustments", []), "validation_controls": controls}
 
 
 @router.get("/api/trial-balance/uploads")

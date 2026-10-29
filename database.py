@@ -3024,7 +3024,7 @@ def init_db():
         try:
             cur = conn.execute("PRAGMA table_info(trial_balance_uploads)")
             existing_columns = [row[1] for row in cur.fetchall()]
-            for new_col in ('period_start', 'period_end', 'period_type'):
+            for new_col in ('period_start', 'period_end', 'period_type', 'validation_controls'):
                 if new_col not in existing_columns:
                     conn.execute(f"ALTER TABLE trial_balance_uploads ADD COLUMN {new_col} TEXT")
             print("✅ Added period_start/period_end/period_type columns to trial_balance_uploads")
@@ -4273,6 +4273,7 @@ def _ensure_postgres_trial_balance_rollforward_adjustments(conn):
     """Create the persisted, source-preserving roll-forward adjustment layer."""
     cur = conn.cursor()
     try:
+        cur.execute("ALTER TABLE trial_balance_uploads ADD COLUMN IF NOT EXISTS validation_controls TEXT")
         cur.execute('''
             CREATE TABLE IF NOT EXISTS trial_balance_rollforward_adjustments (
                 id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
