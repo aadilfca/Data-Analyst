@@ -75,3 +75,59 @@ def test_validation_grid_shows_mapped_columns_only_and_preserves_source_preview(
     assert result["validationExcelRow"] == "2"
 
     page.close()
+
+
+def test_rollforward_differences_render_as_red_section_without_changing_source_row(browser):
+    page = browser.new_page()
+    page.set_content("""
+        <table><thead id="tbValidationHead"></thead><tbody id="tbValidationBody"></tbody></table>
+        <table><tbody id="availableAccountsTableBody"></tbody></table>
+    """)
+    page.add_script_tag(path=str(PROJECT_ROOT / "static" / "trial_balance.js"))
+
+    result = page.evaluate("""() => {
+        fileHeaders = [
+            'Account Code', 'Account Name', 'Opening Debit', 'Opening Credit',
+            'Period Debit', 'Period Credit', 'Closing Debit', 'Closing Credit'
+        ];
+        tbColumnMapping = {
+            account_code_column: 'Account Code', account_name_column: 'Account Name',
+            opening_dr_column: 'Opening Debit', opening_cr_column: 'Opening Credit',
+            period_dr_column: 'Period Debit', period_cr_column: 'Period Credit',
+            closing_dr_column: 'Closing Debit', closing_cr_column: 'Closing Credit'
+        };
+        fileAllRows = [['A1', 'Cash', '100', '0', '20', '0', '110', '0']];
+        validationResult = {rollforward_differences: [{
+            excel_row: 2, account_code: 'A1', account_name: 'Cash',
+            closing_dr_adjustment: 10, closing_cr_adjustment: 0
+        }]};
+        validationIssueSnapshot = {errors: [], warnings: [{
+            excel_row: 2, field: 'Roll-forward',
+            message: 'Opening balance plus period movement does not equal closing balance within 0.01.'
+        }]};
+        autoClassificationByRow = {'2': 'leaf'};
+        renderTrialBalanceValidationGrid();
+        const sourceRow = document.querySelector('#tbValidationBody tr[data-excel-row="2"]');
+        const originalClosingDebit = sourceRow.children[8].textContent;
+        const differenceRow = document.querySelector('#tbValidationBody tr.tb-generated-difference');
+        renderAvailableAccountsTable([], validationResult.rollforward_differences);
+        return {
+            originalClosingDebit,
+            differenceLabel: differenceRow.children[2].textContent,
+            differenceClosingDebit: differenceRow.children[8].textContent,
+            validationSection: document.querySelector('#tbValidationBody tr.tb-difference-section')?.textContent,
+            savedSection: document.querySelector('#availableAccountsTableBody tr.tb-difference-section')?.textContent,
+            savedLabel: document.querySelector('#availableAccountsTableBody tr.tb-generated-difference td:nth-child(2)')?.textContent,
+            savedDebit: document.querySelector('#availableAccountsTableBody tr.tb-generated-difference td:nth-child(7)')?.textContent
+        };
+    }""")
+
+    assert result["originalClosingDebit"] == "110"
+    assert result["differenceLabel"] == "Difference — Cash"
+    assert result["differenceClosingDebit"] == "10"
+    assert "System-generated differences (1)" in result["validationSection"]
+    assert "System-generated differences (1)" in result["savedSection"]
+    assert result["savedLabel"] == "Difference — Cash"
+    assert result["savedDebit"] == "10"
+
+    page.close()

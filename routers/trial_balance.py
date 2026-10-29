@@ -376,6 +376,10 @@ def validate_trial_balance_contents(
         issue = {'excel_row': excel_row, 'field': field, 'message': message, 'severity': 'error'}
         errors.append(issue)
 
+    def add_warning(excel_row, field, message):
+        issue = {'excel_row': excel_row, 'field': field, 'message': message, 'severity': 'warning'}
+        warnings.append(issue)
+
     date_code_pattern = re.compile(r'^(\d{4})-(\d{1,2})-(\d{1,2})(?: 00:00:00)?$')
     for index, row in enumerate(rows):
         excel_row = index + 2
@@ -478,17 +482,23 @@ def validate_trial_balance_contents(
             add_error(None, label, f'{label} debit and credit totals differ by {abs(difference):,.2f}.')
 
     rollforward_count = 0
+    rollforward_differences = []
     if invalid_amounts:
         rollforward_status = 'blocked'
     else:
         for account in valid_amount_rows:
             amounts = account['amounts']
-            opening_net = amounts['opening_dr_column'] - amounts['opening_cr_column']
-            movement_net = amounts['period_dr_column'] - amounts['period_cr_column']
-            closing_net = amounts['closing_dr_column'] - amounts['closing_cr_column']
-            if abs((opening_net + movement_net) - closing_net) > tolerance:
+            adjustment = calculate_rollforward_adjustment(amounts, tolerance)
+            if adjustment:
                 rollforward_count += 1
-                add_error(account['excel_row'], 'Roll-forward', 'Opening balance plus period movement does not equal closing balance within 0.01.')
+                rollforward_differences.append({
+                    'excel_row': account['excel_row'],
+                    'account_code': account['account_code'],
+                    'account_name': str(rows[account['excel_row'] - 2].get(mapping['account_name_column'], '') or '').strip() or None,
+                    **{key: float(value) for key, value in adjustment.items()},
+                    **{f'{key}_exact': str(value) for key, value in adjustment.items()},
+                })
+                add_warning(account['excel_row'], 'Roll-forward', 'Opening balance plus period movement does not equal closing balance within 0.01.')
         rollforward_status = 'pass' if rollforward_count == 0 and candidates else ('fail' if candidates else 'blocked')
     checks.append({
         'key': 'roll_forward',
@@ -504,6 +514,8 @@ def validate_trial_balance_contents(
         'errors': errors,
         'warnings': warnings,
         'checks': checks,
+        'rollforward_differences': rollforward_differences,
+        'rollforward_difference_count': len(rollforward_differences),
         'account_count': len(candidates),
         'leaf_count': len(valid_amount_rows),
         'parent_count': len(candidates) - len(valid_amount_rows),
@@ -515,6 +527,24 @@ def validate_trial_balance_contents(
         'warning_count': len(warnings),
         'omitted_issue_count': 0,
         'tolerance': 0.01,
+    }
+
+
+def calculate_rollforward_adjustment(amounts, tolerance=Decimal('0.01')):
+    """Return the closing-side adjustment that reconciles one account's roll-forward."""
+    opening_net = amounts['opening_dr_column'] - amounts['opening_cr_column']
+    movement_net = amounts['period_dr_column'] - amounts['period_cr_column']
+    original_closing_net = amounts['closing_dr_column'] - amounts['closing_cr_column']
+    expected_closing_net = opening_net + movement_net
+    difference_net = expected_closing_net - original_closing_net
+    if abs(difference_net) <= tolerance:
+        return None
+    return {
+        'expected_closing_net': expected_closing_net,
+        'original_closing_net': original_closing_net,
+        'difference_net': difference_net,
+        'closing_dr_adjustment': difference_net if difference_net > 0 else Decimal('0'),
+        'closing_cr_adjustment': -difference_net if difference_net < 0 else Decimal('0'),
     }
 
 
@@ -1060,6 +1090,7 @@ def upload_trial_balance(
         # marks the upload status='error' exactly as before.
         with pg_transaction():
             for old_upload in conflicts:
+                execute_write_pg("DELETE FROM trial_balance_rollforward_adjustments WHERE upload_id = %s", (old_upload["id"],))
                 execute_write_pg("DELETE FROM trial_balance_accounts WHERE upload_id = %s", (old_upload["id"],))
                 execute_write_pg("DELETE FROM trial_balance_uploads WHERE id = %s", (old_upload["id"],))
             for account in accounts:
@@ -1090,6 +1121,44 @@ def upload_trial_balance(
                 )
             finally:
                 release_raw_conn_pg(conn)
+            if validation['rollforward_differences']:
+                account_ids_by_row = {
+                    row['sort_order']: row['id']
+                    for row in execute_query_pg(
+                        "SELECT id, sort_order FROM trial_balance_accounts WHERE upload_id = %s",
+                        (upload_id,),
+                    )
+                }
+                adjustment_params = []
+                for difference in validation['rollforward_differences']:
+                    account_id = account_ids_by_row.get(difference['excel_row'])
+                    if account_id is None:
+                        raise ValueError(f"Could not find the leaf account for Excel row {difference['excel_row']}.")
+                    adjustment_params.append((
+                        upload_id,
+                        account_id,
+                        difference['excel_row'],
+                        difference['expected_closing_net_exact'],
+                        difference['original_closing_net_exact'],
+                        difference['difference_net_exact'],
+                        difference['closing_dr_adjustment_exact'],
+                        difference['closing_cr_adjustment_exact'],
+                    ))
+                adjustment_conn = get_raw_conn_pg()
+                try:
+                    execute_batch_pg(
+                        adjustment_conn,
+                        """
+                        INSERT INTO trial_balance_rollforward_adjustments
+                            (upload_id, account_id, source_excel_row, expected_closing_net,
+                             original_closing_net, difference_net, closing_dr_adjustment,
+                             closing_cr_adjustment)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        adjustment_params,
+                    )
+                finally:
+                    release_raw_conn_pg(adjustment_conn)
             execute_write_pg(
                 "UPDATE trial_balance_uploads SET status = 'parsed', row_count = %s, notes = %s WHERE id = %s",
                 (len(accounts), notes, upload_id)
@@ -1103,10 +1172,12 @@ def upload_trial_balance(
         parent_count = sum(1 for a in accounts if a["classification"] == "parent")
         leaf_count = len(accounts) - parent_count
         corrected_code_count = sum(1 for a in accounts if a["source_account_code"] != a["account_code"])
+        rollforward_adjustment_count = len(validation['rollforward_differences'])
 
         log_audit("Analyst", "Upload", "TrialBalance",
                    f"Uploaded trial balance for client {client_id}: {len(accounts)} accounts "
-                   f"({parent_count} parent, {leaf_count} leaf; {corrected_code_count} code correction(s))")
+                   f"({parent_count} parent, {leaf_count} leaf; {corrected_code_count} code correction(s); "
+                   f"{rollforward_adjustment_count} roll-forward difference(s))")
 
         if progress_key:
             TB_UPLOAD_PROGRESS[progress_key]["status"] = "complete"
@@ -1119,6 +1190,7 @@ def upload_trial_balance(
             "skipped_blank_count": skipped_blank_count,
             "duplicate_code_count": 0,
             "corrected_code_count": corrected_code_count,
+            "rollforward_adjustment_count": rollforward_adjustment_count,
         }
 
     except HTTPException as e:
@@ -1309,6 +1381,18 @@ def list_trial_balance_accounts(upload_id: int, is_leaf: Optional[bool] = None):
     query += " ORDER BY sort_order"
 
     rows = execute_query_pg(query, (upload_id,))
+    adjustment_rows = execute_query_pg(
+        """
+        SELECT a.id AS account_id, a.account_code, a.account_name, x.source_excel_row,
+               x.expected_closing_net, x.original_closing_net, x.difference_net,
+               x.closing_dr_adjustment, x.closing_cr_adjustment
+        FROM trial_balance_rollforward_adjustments x
+        JOIN trial_balance_accounts a ON a.id = x.account_id
+        WHERE x.upload_id = %s
+        ORDER BY x.source_excel_row
+        """,
+        (upload_id,),
+    )
     auto_classification = classify_accounts({row['account_code'] for row in rows})
     accounts = []
     for r in rows:
@@ -1332,7 +1416,21 @@ def list_trial_balance_accounts(upload_id: int, is_leaf: Optional[bool] = None):
             "closing_cr": r["closing_cr"],
         })
 
-    return {"upload_id": upload_id, "accounts": accounts}
+    adjustments = [
+        {
+            "account_id": row["account_id"],
+            "account_code": row["account_code"],
+            "account_name": row["account_name"],
+            "source_excel_row": row["source_excel_row"],
+            "expected_closing_net": float(row["expected_closing_net"]),
+            "original_closing_net": float(row["original_closing_net"]),
+            "difference_net": float(row["difference_net"]),
+            "closing_dr_adjustment": float(row["closing_dr_adjustment"]),
+            "closing_cr_adjustment": float(row["closing_cr_adjustment"]),
+        }
+        for row in adjustment_rows
+    ]
+    return {"upload_id": upload_id, "accounts": accounts, "adjustments": adjustments}
 
 
 @router.get("/api/trial-balance/uploads")
@@ -1412,6 +1510,7 @@ def delete_trial_balance_upload(upload_id: int):
     )
     account_count = count_rows[0]["count"] if count_rows else 0
 
+    execute_write_pg("DELETE FROM trial_balance_rollforward_adjustments WHERE upload_id = %s", (upload_id,))
     execute_write_pg("DELETE FROM trial_balance_accounts WHERE upload_id = %s", (upload_id,))
     execute_write_pg("DELETE FROM trial_balance_uploads WHERE id = %s", (upload_id,))
 

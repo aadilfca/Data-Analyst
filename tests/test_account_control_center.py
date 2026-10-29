@@ -5,7 +5,11 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import nullcontext
+from decimal import Decimal
 from unittest.mock import patch
+from io import BytesIO
+
+import pandas as pd
 
 from fastapi import HTTPException
 
@@ -126,6 +130,109 @@ class TrialBalanceMappedColumnsTests(unittest.TestCase):
         )
 
 
+class TrialBalanceRollforwardAdjustmentTests(unittest.TestCase):
+    def test_debit_shortfall_is_recorded_on_closing_debit_side(self):
+        result = trial_balance.calculate_rollforward_adjustment({
+            "opening_dr_column": Decimal("100"), "opening_cr_column": Decimal("0"),
+            "period_dr_column": Decimal("20"), "period_cr_column": Decimal("0"),
+            "closing_dr_column": Decimal("110"), "closing_cr_column": Decimal("0"),
+        })
+
+        self.assertEqual(result["difference_net"], Decimal("10"))
+        self.assertEqual(result["closing_dr_adjustment"], Decimal("10"))
+        self.assertEqual(result["closing_cr_adjustment"], Decimal("0"))
+
+    def test_credit_shortfall_is_recorded_on_closing_credit_side(self):
+        result = trial_balance.calculate_rollforward_adjustment({
+            "opening_dr_column": Decimal("0"), "opening_cr_column": Decimal("100"),
+            "period_dr_column": Decimal("0"), "period_cr_column": Decimal("20"),
+            "closing_dr_column": Decimal("0"), "closing_cr_column": Decimal("110"),
+        })
+
+        self.assertEqual(result["difference_net"], Decimal("-10"))
+        self.assertEqual(result["closing_dr_adjustment"], Decimal("0"))
+        self.assertEqual(result["closing_cr_adjustment"], Decimal("10"))
+
+    def test_difference_within_tolerance_does_not_create_adjustment(self):
+        amounts = {
+            "opening_dr_column": Decimal("100"), "opening_cr_column": Decimal("0"),
+            "period_dr_column": Decimal("0"), "period_cr_column": Decimal("0"),
+            "closing_dr_column": Decimal("99.995"), "closing_cr_column": Decimal("0"),
+        }
+
+        self.assertIsNone(trial_balance.calculate_rollforward_adjustment(amounts))
+
+    def test_row_differences_are_warnings_and_do_not_replace_source_amounts(self):
+        frame = pd.DataFrame([
+            {"Code": "1", "Name": "Assets parent", "Opening Dr": 999, "Opening Cr": 0, "Period Dr": 0, "Period Cr": 0, "Closing Dr": 0, "Closing Cr": 0},
+            {"Code": "1-01", "Name": "Debit leaf", "Opening Dr": 100, "Opening Cr": 0, "Period Dr": 0, "Period Cr": 0, "Closing Dr": 90, "Closing Cr": 0},
+            {"Code": "B1", "Name": "Credit leaf", "Opening Dr": 0, "Opening Cr": 100, "Period Dr": 0, "Period Cr": 0, "Closing Dr": 0, "Closing Cr": 90},
+        ])
+        workbook = BytesIO()
+        frame.to_excel(workbook, index=False)
+        mapping = {
+            "account_code_column": "Code", "account_name_column": "Name", "type_column": None,
+            "opening_dr_column": "Opening Dr", "opening_cr_column": "Opening Cr",
+            "period_dr_column": "Period Dr", "period_cr_column": "Period Cr",
+            "closing_dr_column": "Closing Dr", "closing_cr_column": "Closing Cr",
+        }
+
+        result = trial_balance.validate_trial_balance_contents(workbook.getvalue(), "tb.xlsx", mapping)
+
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(result["rollforward_difference_count"], 2)
+        self.assertEqual([item["severity"] for item in result["warnings"]], ["warning", "warning"])
+        self.assertEqual(
+            {item["account_code"] for item in result["rollforward_differences"]},
+            {"1-01", "B1"},
+        )
+        self.assertEqual(result["rollforward_differences"][0]["closing_dr_adjustment"], 10.0)
+        self.assertEqual(result["rollforward_differences"][1]["closing_cr_adjustment"], 10.0)
+        self.assertEqual(result["checks"][-1]["status"], "fail")
+
+    def test_whole_file_footing_difference_still_blocks_a_row_adjustment(self):
+        frame = pd.DataFrame([{
+            "Code": "A1", "Name": "Cash", "Opening Dr": 100, "Opening Cr": 0,
+            "Period Dr": 0, "Period Cr": 0, "Closing Dr": 90, "Closing Cr": 0,
+        }])
+        workbook = BytesIO()
+        frame.to_excel(workbook, index=False)
+        mapping = {
+            "account_code_column": "Code", "account_name_column": "Name", "type_column": None,
+            "opening_dr_column": "Opening Dr", "opening_cr_column": "Opening Cr",
+            "period_dr_column": "Period Dr", "period_cr_column": "Period Cr",
+            "closing_dr_column": "Closing Dr", "closing_cr_column": "Closing Cr",
+        }
+
+        result = trial_balance.validate_trial_balance_contents(workbook.getvalue(), "tb.xlsx", mapping)
+
+        self.assertFalse(result["valid"])
+        self.assertEqual(result["rollforward_difference_count"], 1)
+        self.assertTrue(any(issue["excel_row"] is None for issue in result["errors"]))
+
+    def test_saved_adjustments_are_returned_separately_from_source_amounts(self):
+        account_row = {
+            "id": 10, "account_code": "A1", "source_account_code": "A1", "account_name": "Cash",
+            "level": 1, "classification": "leaf", "manually_overridden": False,
+            "opening_dr": 100, "opening_cr": 0, "period_dr": 20, "period_cr": 0,
+            "closing_dr": 110, "closing_cr": 0,
+        }
+        adjustment_row = {
+            "account_id": 10, "account_code": "A1", "account_name": "Cash", "source_excel_row": 2,
+            "expected_closing_net": 120, "original_closing_net": 110, "difference_net": 10,
+            "closing_dr_adjustment": 10, "closing_cr_adjustment": 0,
+        }
+        with patch.object(trial_balance, "_require_upload"), patch.object(
+            trial_balance, "execute_query_pg", side_effect=[[account_row], [adjustment_row]]
+        ):
+            result = trial_balance.list_trial_balance_accounts(77)
+
+        self.assertEqual(result["accounts"][0]["closing_dr"], 110)
+        self.assertEqual(result["adjustments"][0]["closing_dr_adjustment"], 10)
+        self.assertEqual(result["adjustments"][0]["account_id"], 10)
+
+
 class AccountSetSchemaTests(unittest.TestCase):
     def test_sqlite_initialisation_creates_account_set_tables_and_indexes(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -163,6 +270,7 @@ class AccountSetSchemaTests(unittest.TestCase):
                         "account_control_cashflow_settings",
                         "account_control_cashflow_config_versions",
                         "account_control_cashflow_config_entries",
+                        "trial_balance_rollforward_adjustments",
                     }.issubset(tables)
                 )
                 self.assertIn("source_statement_category_id", category_columns)
@@ -181,6 +289,7 @@ class AccountSetSchemaTests(unittest.TestCase):
                         "idx_account_control_cashflow_treasury_client",
                         "idx_account_control_cashflow_config_versions_client",
                         "idx_account_control_cashflow_config_entries_version",
+                        "idx_trial_balance_rollforward_adjustments_upload",
                     }.issubset(indexes)
                 )
             finally:
@@ -238,6 +347,40 @@ class AccountSetPostgresMigrationTests(unittest.TestCase):
         self.assertIn("account_control_cashflow_config_versions", sql)
         self.assertIn("account_control_cashflow_config_entries", sql)
         self.assertIn("is_active BOOLEAN NOT NULL DEFAULT TRUE", sql)
+        self.assertTrue(connection.cursor_instance.closed)
+        self.assertFalse(connection.rollback_called)
+
+    def test_postgres_rollforward_adjustment_migration_creates_table_and_index(self):
+        class Cursor:
+            def __init__(self):
+                self.statements = []
+                self.closed = False
+
+            def execute(self, statement):
+                self.statements.append(statement)
+
+            def close(self):
+                self.closed = True
+
+        class Connection:
+            def __init__(self):
+                self.cursor_instance = Cursor()
+                self.rollback_called = False
+
+            def cursor(self):
+                return self.cursor_instance
+
+            def rollback(self):
+                self.rollback_called = True
+
+        connection = Connection()
+        database._ensure_postgres_trial_balance_rollforward_adjustments(connection)
+        sql = "\n".join(connection.cursor_instance.statements)
+
+        self.assertIn("CREATE TABLE IF NOT EXISTS trial_balance_rollforward_adjustments", sql)
+        self.assertIn("closing_dr_adjustment NUMERIC NOT NULL DEFAULT 0", sql)
+        self.assertIn("closing_cr_adjustment NUMERIC NOT NULL DEFAULT 0", sql)
+        self.assertIn("idx_trial_balance_rollforward_adjustments_upload", sql)
         self.assertTrue(connection.cursor_instance.closed)
         self.assertFalse(connection.rollback_called)
 class AccountSetResolverTests(unittest.TestCase):

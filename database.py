@@ -2942,6 +2942,26 @@ def init_db():
             )
         ''')
 
+        # Keep per-leaf roll-forward differences as a separate adjustment layer.
+        # Imported Trial Balance amounts remain the original source figures.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS trial_balance_rollforward_adjustments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                upload_id INTEGER NOT NULL,
+                account_id INTEGER NOT NULL,
+                source_excel_row INTEGER NOT NULL,
+                expected_closing_net REAL NOT NULL,
+                original_closing_net REAL NOT NULL,
+                difference_net REAL NOT NULL,
+                closing_dr_adjustment REAL NOT NULL DEFAULT 0,
+                closing_cr_adjustment REAL NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (upload_id) REFERENCES trial_balance_uploads(id) ON DELETE CASCADE,
+                FOREIGN KEY (account_id) REFERENCES trial_balance_accounts(id) ON DELETE CASCADE,
+                UNIQUE(upload_id, account_id)
+            )
+        ''')
+
         # Schema upgrade: Trial Balance mapping fix - expand the single debit_amount/
         # credit_amount pair into the standard 3-pair Dr/Cr shape (Opening, Period,
         # Closing). This table already existed with data from the completed 5-phase
@@ -3014,6 +3034,7 @@ def init_db():
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_trial_balance_uploads_client ON trial_balance_uploads (client_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_trial_balance_accounts_upload ON trial_balance_accounts (upload_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_trial_balance_accounts_parent ON trial_balance_accounts (upload_id, parent_account_code)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_trial_balance_rollforward_adjustments_upload ON trial_balance_rollforward_adjustments (upload_id)")
         print("✅ Created Trial Balance module tables (Phase 1 of 5: schema foundation)")
 
         # ---------- ACCOUNT CATEGORY ASSIGNMENTS (Verification <-> Assign Categories link, Phase 1 of 5: schema) ----------
@@ -4248,6 +4269,33 @@ def _ensure_postgres_trial_balance_column_mappings(conn):
         cur.close()
 
 
+def _ensure_postgres_trial_balance_rollforward_adjustments(conn):
+    """Create the persisted, source-preserving roll-forward adjustment layer."""
+    cur = conn.cursor()
+    try:
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS trial_balance_rollforward_adjustments (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                upload_id INTEGER NOT NULL REFERENCES trial_balance_uploads(id) ON DELETE CASCADE,
+                account_id INTEGER NOT NULL REFERENCES trial_balance_accounts(id) ON DELETE CASCADE,
+                source_excel_row INTEGER NOT NULL,
+                expected_closing_net NUMERIC NOT NULL,
+                original_closing_net NUMERIC NOT NULL,
+                difference_net NUMERIC NOT NULL,
+                closing_dr_adjustment NUMERIC NOT NULL DEFAULT 0,
+                closing_cr_adjustment NUMERIC NOT NULL DEFAULT 0,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(upload_id, account_id)
+            )
+        ''')
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_trial_balance_rollforward_adjustments_upload ON trial_balance_rollforward_adjustments (upload_id)")
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
+
 def _ensure_postgres_account_set_tables(conn):
     """Create Account Set foundation tables on fresh and existing Postgres schemas."""
     cur = conn.cursor()
@@ -5194,6 +5242,7 @@ def init_db_postgres(conn):
         _ensure_postgres_account_set_tables(conn)
         _ensure_postgres_trial_balance_source_code(conn)
         migrated_tb_column_mappings = _ensure_postgres_trial_balance_column_mappings(conn)
+        _ensure_postgres_trial_balance_rollforward_adjustments(conn)
         _ensure_postgres_cash_bank_transaction_classifications(conn)
         _ensure_postgres_cashflow_voucher_occurrences(conn)
         _ensure_postgres_cashflow_prepared_tables(conn)
@@ -6200,6 +6249,23 @@ def init_db_postgres(conn):
     run("CREATE INDEX IF NOT EXISTS idx_trial_balance_accounts_upload ON trial_balance_accounts (upload_id)")
     run("CREATE INDEX IF NOT EXISTS idx_trial_balance_accounts_parent ON trial_balance_accounts (upload_id, parent_account_code)")
 
+    run('''
+        CREATE TABLE IF NOT EXISTS trial_balance_rollforward_adjustments (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            upload_id INTEGER NOT NULL REFERENCES trial_balance_uploads(id) ON DELETE CASCADE,
+            account_id INTEGER NOT NULL REFERENCES trial_balance_accounts(id) ON DELETE CASCADE,
+            source_excel_row INTEGER NOT NULL,
+            expected_closing_net NUMERIC NOT NULL,
+            original_closing_net NUMERIC NOT NULL,
+            difference_net NUMERIC NOT NULL,
+            closing_dr_adjustment NUMERIC NOT NULL DEFAULT 0,
+            closing_cr_adjustment NUMERIC NOT NULL DEFAULT 0,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE(upload_id, account_id)
+        )
+    ''', "trial_balance_rollforward_adjustments")
+    run("CREATE INDEX IF NOT EXISTS idx_trial_balance_rollforward_adjustments_upload ON trial_balance_rollforward_adjustments (upload_id)")
+
     # ---------- 31. account_category_assignments ----------
     # category_id has no FK in the SQLite source - left as a plain column here too.
     run('''
@@ -6301,6 +6367,7 @@ def init_db_postgres(conn):
     )
 
     _ensure_postgres_trial_balance_source_code(conn)
+    _ensure_postgres_trial_balance_rollforward_adjustments(conn)
     _ensure_postgres_account_set_tables(conn)
     # ---------- 34. voucher_line_documents ----------
     run('''

@@ -679,6 +679,17 @@
         .tb-validation-subtotal-toolbar[hidden] { display: none !important; }
         .tb-validation-subtotal-toolbar button[hidden] { display: none !important; }
         .tb-validation-table tr.tb-subtotal-row td { background: #f8fafc; color: #64748b; }
+        .tb-validation-table tr.tb-difference-section td,
+        .tb-review-table tr.tb-difference-section td {
+            background: #fef2f2;
+            color: #991b1b;
+            font-weight: 700;
+        }
+        .tb-validation-table tr.tb-generated-difference td,
+        .tb-review-table tr.tb-generated-difference td {
+            color: #b91c1c;
+            font-weight: 700;
+        }
         .tb-subtotal-row-action { max-width: 100%; white-space: normal; padding: 4px 6px; font-size: 11px; }
         .tb-critical-issue-navigator {
             position: fixed;
@@ -1024,7 +1035,7 @@
     <script src="/static/loading_ui.js?v=2"></script>
     <script src="/static/client_context.js?v=21"></script>
     <script src="/static/utils.js"></script>
-    <script src="/static/trial_balance.js?v=24"></script>
+    <script src="/static/trial_balance.js?v=25"></script>
 </body>
 
 </html>

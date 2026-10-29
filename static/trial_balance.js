@@ -374,15 +374,22 @@ async function runTrialBalanceValidation(options) {
         renderTrialBalanceValidationGrid();
         const issueCount = Number(result.issue_count || 0);
         const warningCount = Number(result.warning_count || 0);
+        const rollforwardCount = Number(result.rollforward_difference_count || 0);
+        const otherWarningCount = Math.max(0, warningCount - rollforwardCount);
         if (result.valid) {
-            const warningNote = warningCount
-                ? ` ⚠️ ${warningCount} non-blocking Parent account-code warning(s); review the source rows.` : '';
-            setValidationStatus(`✅ Validation passed for ${result.account_count} accounts. Opening, movement, closing and roll-forward checks use leaf accounts with a 0.01 tolerance.${warningNote}`, warningCount ? 'info' : 'success');
+            const notes = [];
+            if (rollforwardCount) notes.push(`${rollforwardCount} leaf roll-forward difference(s) are listed below and will be saved separately.`);
+            if (otherWarningCount) notes.push(`${otherWarningCount} non-blocking Parent account-code warning(s) are also shown.`);
+            const note = notes.length ? ` ⚠️ ${notes.join(' ')}` : '';
+            setValidationStatus(`✅ Trial Balance is ready to save. ${result.account_count} accounts checked; source amounts remain unchanged and row-level differences use leaf accounts with a 0.01 tolerance.${note}`, warningCount ? 'info' : 'success');
         } else {
             const globalIssues = (result.errors || []).filter(function (issue) { return issue.excel_row == null; })
                 .map(function (issue) { return issue.message; }).join(' ');
             const omitted = result.omitted_issue_count ? ` ${result.omitted_issue_count} additional issue(s) are not listed individually.` : '';
-            const warningNote = warningCount ? ` ${warningCount} non-blocking Parent account-code warning(s) are also shown.` : '';
+            const warningNotes = [];
+            if (rollforwardCount) warningNotes.push(`${rollforwardCount} leaf roll-forward difference(s) are listed below.`);
+            if (otherWarningCount) warningNotes.push(`${otherWarningCount} non-blocking Parent account-code warning(s) are also shown.`);
+            const warningNote = warningNotes.length ? ` ${warningNotes.join(' ')}` : '';
             setValidationStatus(`⚠️ ${issueCount} blocking issue(s) found. ${globalIssues} Resolve the listed issues, then revalidate before saving.${warningNote}${omitted}`, 'error');
         }
         updateClientDependentUI();
@@ -588,6 +595,48 @@ function renderTrialBalanceValidationGrid() {
         fragment.appendChild(tr);
     });
     tbValidationBody.appendChild(fragment);
+    const differences = validationResult && Array.isArray(validationResult.rollforward_differences)
+        ? validationResult.rollforward_differences : [];
+    if (differences.length) {
+        const sectionRow = document.createElement('tr');
+        sectionRow.className = 'tb-difference-section';
+        const sectionCell = document.createElement('td');
+        sectionCell.colSpan = columns.length;
+        sectionCell.textContent = `System-generated differences (${differences.length}) — linked to the affected leaf accounts; source amounts are unchanged.`;
+        sectionRow.appendChild(sectionCell);
+        tbValidationBody.appendChild(sectionRow);
+
+        differences.forEach(function (difference) {
+            const tr = document.createElement('tr');
+            tr.className = 'tb-generated-difference';
+            columns.forEach(function (column) {
+                const cell = document.createElement('td');
+                cell.className = column.className;
+                if (column.kind === 'row') {
+                    cell.textContent = String(difference.excel_row);
+                } else if (column.kind === 'source') {
+                    const role = mappingRoleByIndex.get(column.index);
+                    let value = '';
+                    if (role === 'account_code_column') value = difference.account_code || '';
+                    else if (role === 'account_name_column') value = 'Difference — ' + (difference.account_name || difference.account_code || 'Leaf account');
+                    else if (role === 'closing_dr_column') value = difference.closing_dr_adjustment || '';
+                    else if (role === 'closing_cr_column') value = difference.closing_cr_adjustment || '';
+                    if (role === 'closing_dr_column' || role === 'closing_cr_column') {
+                        cell.classList.add('tb-validation-amount');
+                        cell.textContent = value === '' ? '' : (typeof window.formatAmount === 'function' ? window.formatAmount(value) : String(value));
+                    } else {
+                        cell.textContent = String(value);
+                    }
+                } else if (column.kind === 'classification') {
+                    cell.textContent = 'Leaf adjustment';
+                } else if (column.kind === 'issues') {
+                    cell.textContent = 'Roll-forward difference recorded separately; original source figures and observation are retained.';
+                }
+                tr.appendChild(cell);
+            });
+            tbValidationBody.appendChild(tr);
+        });
+    }
     updateCriticalIssueNavigator();
 }
 
@@ -1467,7 +1516,13 @@ async function uploadTrialBalance() {
 
         currentUploadId = result.upload_id;
         closeTrialBalanceValidation();
-        showStatus('✅ Uploaded and classified successfully', 'success');
+        const adjustmentCount = Number(result.rollforward_adjustment_count || 0);
+        showStatus(
+            adjustmentCount
+                ? `✅ Uploaded and classified. ${adjustmentCount} roll-forward difference(s) were saved separately; original amounts were retained.`
+                : '✅ Uploaded and classified successfully',
+            'success'
+        );
         await loadSummary(result.upload_id);
     } catch (error) {
         setValidationStatus(error.message, 'error');
@@ -1624,7 +1679,7 @@ async function loadAvailableUploadAccounts(uploadId, target = availableUploadsDr
             throw new Error(result.detail || 'Failed to load accounts');
         }
 
-        renderAvailableAccountsTable(result.accounts);
+        renderAvailableAccountsTable(result.accounts, result.adjustments || []);
         availableAccountsTableWrapper.style.display = 'block';
     } catch (error) {
         showStatus('❌ ' + error.message, 'error');
@@ -1635,7 +1690,7 @@ async function loadAvailableUploadAccounts(uploadId, target = availableUploadsDr
 
 // Account and amount rows -- codes remain editable in the selected upload; classification
 // still reuses the same Leaf/Parent badge as the Review Classifications screen.
-function renderAvailableAccountsTable(accounts) {
+function renderAvailableAccountsTable(accounts, adjustments) {
     availableAccountsTableBody.innerHTML = '';
 
     const amountFields = ['opening_dr', 'opening_cr', 'period_dr', 'period_cr', 'closing_dr', 'closing_cr'];
@@ -1687,6 +1742,39 @@ function renderAvailableAccountsTable(accounts) {
         }
         tr.appendChild(tdAction);
 
+        availableAccountsTableBody.appendChild(tr);
+    });
+
+    const savedAdjustments = Array.isArray(adjustments) ? adjustments : [];
+    if (!savedAdjustments.length) return;
+    const sectionRow = document.createElement('tr');
+    sectionRow.className = 'tb-difference-section';
+    const sectionCell = document.createElement('td');
+    sectionCell.colSpan = 10;
+    sectionCell.textContent = `System-generated differences (${savedAdjustments.length}) — separate from original Trial Balance amounts.`;
+    sectionRow.appendChild(sectionCell);
+    availableAccountsTableBody.appendChild(sectionRow);
+
+    savedAdjustments.forEach(function (adjustment) {
+        const tr = document.createElement('tr');
+        tr.className = 'tb-generated-difference';
+        const values = [
+            adjustment.account_code || '—',
+            'Difference — ' + (adjustment.account_name || adjustment.account_code || 'Leaf account'),
+            '', '', '', '',
+            adjustment.closing_dr_adjustment || '',
+            adjustment.closing_cr_adjustment || '',
+            'Leaf adjustment',
+            'Original amounts unchanged',
+        ];
+        values.forEach(function (value, index) {
+            const td = document.createElement('td');
+            if (index >= 2 && index <= 7) td.className = 'tb-amount-cell';
+            td.textContent = value === '' ? '' : (index === 6 || index === 7
+                ? (typeof window.formatAmount === 'function' ? window.formatAmount(value) : String(value))
+                : String(value));
+            tr.appendChild(td);
+        });
         availableAccountsTableBody.appendChild(tr);
     });
 }

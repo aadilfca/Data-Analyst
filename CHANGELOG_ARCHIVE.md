@@ -8910,3 +8910,11 @@ Record phase decisions, implementation, verification, and acceptance here as the
 **Verification:** Hermetic Playwright coverage confirms extra populated columns remain visible in the source preview but are absent from validation, with the original Excel row number retained. JavaScript syntax and `git diff --check` pass. Local-server acceptance is pending.
 
 **Acceptance:** No staging, commit, or push; awaiting Aadil's local-server test and explicit Git approval.
+
+### Trial Balance leaf roll-forward adjustments - 2026-10-29
+
+**Implementation:** Leaf opening net plus movement net is compared with the original closing net. Differences beyond 0.01 become non-blocking roll-forward observations and persisted adjustment rows on the required closing debit/credit side. Source amounts remain unchanged. Validation and saved-upload views show red adjustment rows after source accounts; adjustment records remain linked to their leaf. Global opening/period/closing footing failures still block saving. Account Control Centre continues to own category assignment; this phase adds no statement calculation.
+
+**Verification:** Focused Account Control Centre and Trial Balance UI suites pass (78 tests plus 2 subtests). Coverage includes debit/credit adjustment sides, tolerance, leaf-only classification, blocking global footing differences, persisted schema, separate API output, and red UI rows with unchanged source values. Python and JavaScript syntax checks and `git diff --check` pass. Pytest reports a non-blocking cache-directory warning. Local-server acceptance is pending.
+
+**Acceptance:** No staging, commit, or push; awaiting Aadil's local-server test and explicit Git approval.

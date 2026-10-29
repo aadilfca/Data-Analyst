@@ -22,7 +22,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/settings.py + static/settings.* → application settings and the firm-wide Holiday list; header/tabs rendered by `client_context.js`. See CHANGELOG_ARCHIVE.md.
 - routers/templates.py + static/templates.*, static/columns.* → Master columns, transactional ledger setup, role configuration, mapping/reordering, rate rules and backup/restore. See CHANGELOG_ARCHIVE.md.
 - static/client_settings.html, static/client_settings.js -> retired direct-bookmark information page; all Verification account routing is configured centrally in Account Control Centre. See CHANGELOG_ARCHIVE.md.
-- database.py, main.py → Schemas, source metadata, guarded pools, diagnostics, routing, Rulebook snapshots, export-worker lifecycle, Trial Balance code provenance, and client-saved column mappings. See CHANGELOG_ARCHIVE.md.
+- database.py, main.py → Schemas, source metadata, guarded pools, diagnostics, routing, Rulebook snapshots, export lifecycle, and Trial Balance provenance, mappings and adjustments. See CHANGELOG_ARCHIVE.md.
 - backfill_extract_amount.py → SQLite backfill, PostgreSQL assessment, portable repair plans and isolated local repair rehearsals; live apply remains disabled. See CHANGELOG_ARCHIVE.md.
 - database.py (users/sessions) → authenticated users and session records for Login → Client Cards → Dashboard; bcrypt, session-stored selected client, seeded placeholder admin. See CHANGELOG_ARCHIVE.md.
 - routers/auth.py → login/logout, current-session lookup, client selection, `get_current_user()`/`require_admin()` guards; timezone-aware session expiry. See CHANGELOG_ARCHIVE.md.
@@ -33,9 +33,9 @@ One line per file group: what it is now. Full build history for every entry live
 - static/client_select.html, static/client_select.js → standalone Client Cards page with guarded selection, admin entry, and loading feedback. See CHANGELOG_ARCHIVE.md.
 - static/procedure_modal.js → shared Verification/Audit Workbook Procedure modal for grouped Data Table search, evidence/Forms, procedures, and observations. See CHANGELOG_ARCHIVE.md.
 - static/audit_workbook.js, static/audit_workbook.html → Audit Workbook: session rows, filtering, totals, shared Procedure Modal, and cached evidence/Form completion badges. See CHANGELOG_ARCHIVE.md.
-- routers/trial_balance.py → Trial Balance mapping/validation, mapped-column import, parent/leaf hierarchy, subtotal exclusions, categories and latest-upload lookup. See CHANGELOG_ARCHIVE.md.
+- routers/trial_balance.py → Trial Balance mapping, validation, mapped import, hierarchy, persisted leaf roll-forward adjustments, categories and latest-upload lookup. See CHANGELOG_ARCHIVE.md.
 - routers/account_control_center.py → account mappings, Financial Statement outlines and Balance Sheet/Income Statement totals and subtotals, Cash Flow configuration, and treasury setup. See CHANGELOG_ARCHIVE.md.
-- static/trial_balance.html, static/trial_balance.js → Trial Balance mapping, full source preview, mapped-column validation, subtotal controls, row correction and issue review. See CHANGELOG_ARCHIVE.md.
+- static/trial_balance.html, static/trial_balance.js → Trial Balance mapping, source preview, validation, leaf-adjustment sections, saved upload browsing and row correction. See CHANGELOG_ARCHIVE.md.
 - static/account_control_center.html, static/account_control_center.js → central mapping, statement outlines and row-anchored totals/subtotals, filtered Notes assignments, and Cash Flow setup. See CHANGELOG_ARCHIVE.md.
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Two-pane Audit Rules editor for Documents, Cross-checks, Categories, Voucher Checks and Assertions, plus Assign Categories. See CHANGELOG_ARCHIVE.md.
@@ -257,6 +257,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-10-29: Trial Balance saves leaf roll-forward differences separately and shows red adjustment rows while preserving original amounts. See CHANGELOG_ARCHIVE.md.
 - 2026-10-29: Trial Balance validation shows mapped columns only while preserving the complete source preview. See CHANGELOG_ARCHIVE.md.
 - 2026-10-29: Trial Balance import stores mapped columns only; unmapped workbook columns remain visible in the source preview. See CHANGELOG_ARCHIVE.md.
 - 2026-10-29: Trial Balance hierarchy now matches zero-padded numeric segments across import and Account Control Centre assignment. See Financial Statement operating rules in CHANGELOG_ARCHIVE.md.
