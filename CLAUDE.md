@@ -22,7 +22,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/settings.py + static/settings.* → application settings and the firm-wide Holiday list; header/tabs rendered by `client_context.js`. See CHANGELOG_ARCHIVE.md.
 - routers/templates.py + static/templates.*, static/columns.* → Master columns, transactional ledger setup, role configuration, mapping/reordering, rate rules and backup/restore. See CHANGELOG_ARCHIVE.md.
 - static/client_settings.html, static/client_settings.js -> retired direct-bookmark information page; all Verification account routing is configured centrally in Account Control Centre. See CHANGELOG_ARCHIVE.md.
-- database.py, main.py → Schemas, source metadata, guarded pools, diagnostics, routing, Rulebook snapshots and export-worker lifecycle. See CHANGELOG_ARCHIVE.md.
+- database.py, main.py → Schemas, source metadata, guarded pools, diagnostics, routing, Rulebook snapshots, export-worker lifecycle, Trial Balance code provenance, and client-saved column mappings. See CHANGELOG_ARCHIVE.md.
 - backfill_extract_amount.py → SQLite backfill, PostgreSQL assessment, portable repair plans and isolated local repair rehearsals; live apply remains disabled. See CHANGELOG_ARCHIVE.md.
 - database.py (users/sessions) → authenticated users and session records for Login → Client Cards → Dashboard; bcrypt, session-stored selected client, seeded placeholder admin. See CHANGELOG_ARCHIVE.md.
 - routers/auth.py → login/logout, current-session lookup, client selection, `get_current_user()`/`require_admin()` guards; timezone-aware session expiry. See CHANGELOG_ARCHIVE.md.
@@ -33,9 +33,9 @@ One line per file group: what it is now. Full build history for every entry live
 - static/client_select.html, static/client_select.js → standalone Client Cards page with guarded selection, admin entry, and loading feedback. See CHANGELOG_ARCHIVE.md.
 - static/procedure_modal.js → shared Verification/Audit Workbook Procedure modal for grouped Data Table search, evidence/Forms, procedures, and observations. See CHANGELOG_ARCHIVE.md.
 - static/audit_workbook.js, static/audit_workbook.html → Audit Workbook: session rows, filtering, totals, shared Procedure Modal, and cached evidence/Form completion badges. See CHANGELOG_ARCHIVE.md.
-- routers/trial_balance.py → Trial Balance upload, hierarchy, categories, deletion, and shared latest parsed-upload lookup. See CHANGELOG_ARCHIVE.md.
+- routers/trial_balance.py → Non-saving Trial Balance reconciliation validation, client-saved column mapping, gated upload/classification, hierarchy, categories, deletion, and shared latest-upload lookup. See CHANGELOG_ARCHIVE.md.
 - routers/account_control_center.py → account mappings, Financial Statement outlines and Balance Sheet/Income Statement totals and subtotals, Cash Flow configuration, and treasury setup. See CHANGELOG_ARCHIVE.md.
-- static/trial_balance.html, static/trial_balance.js → Trial Balance upload/review with loading feedback; Period End supplies `as_of_date` without a separate input. See CHANGELOG_ARCHIVE.md.
+- static/trial_balance.html, static/trial_balance.js → Trial Balance mapping with client-specific save/reuse, full-screen validation and pre-save code/classification edits; Period End supplies `as_of_date`. See CHANGELOG_ARCHIVE.md.
 - static/account_control_center.html, static/account_control_center.js → central mapping, statement outlines and row-anchored totals/subtotals, filtered Notes assignments, and Cash Flow setup. See CHANGELOG_ARCHIVE.md.
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Two-pane Audit Rules editor for Documents, Cross-checks, Categories, Voucher Checks and Assertions, plus Assign Categories. See CHANGELOG_ARCHIVE.md.
@@ -257,6 +257,14 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-10-29: Existing PostgreSQL startup now creates the saved Trial Balance mapping table before client-scoped mapping routes use it.
+- 2026-10-29: Trial Balance can save one eight-field column map per client and reuse it when future file headers match.
+- 2026-10-29: Trial Balance preview shows 10 Client Excel rows with mirror wording, filling the mapping pane more closely.
+- 2026-10-29: Trial Balance mapping and preview use page scrolling; validation status sits beside Back, with accounting-check cards hidden.
+- 2026-10-29: Trial Balance validates mapped amounts and roll-forward before saving; full-file review keeps code and hierarchy corrections pre-save. See CHANGELOG_ARCHIVE.md.
+- 2026-10-29: Compressed historical Status entries into dated summaries; full project history remains in CHANGELOG_ARCHIVE.md.
+- 2026-10-29: Trial Balance period fields and selected-file details appear after file selection; toolbar wraps on narrow screens. See CHANGELOG_ARCHIVE.md.
+- 2026-10-28: Trial Balance flags date-formatted codes, retains imported codes, and supports selected-upload corrections with hierarchy and mapping checks. See CHANGELOG_ARCHIVE.md.
 - 2026-10-28: ACC places each page's searches, filters, actions, and selected Trial Balance in a shared toolbar below the four tabs. See CHANGELOG_ARCHIVE.md.
 - 2026-10-28: ACC totals chain earlier lines, block overlapping source roll-ups, and protect referenced lines. See CHANGELOG_ARCHIVE.md.
 - 2026-10-28: ACC statement totals now render directly after their last selected category or subtotal. See CHANGELOG_ARCHIVE.md.
@@ -296,27 +304,17 @@ One line per file group: what it is now. Full build history for every entry live
 - 2026-10-19: Fixed Cashflows transaction windows to read canonical Client Data; removed retired preview fallbacks and added source/filter regression coverage.
 - 2026-10-19: Added isolated read-only Cashflows fetching experiments and safety/parity tests; production integration remains separate. See CHANGELOG_ARCHIVE.md, Cashflows fetching sandbox.
 - Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; performance findings reference the investigation documents.
-- 2026-10-12: Cashflows Phase 1 now reads active `client_data` derived rows directly; report caches, prepared lines, and targeted prepared drilldowns are inactive.
-- 2026-10-12: Cashflows canonical debit/credit fields now use PostgreSQL double precision; canonical-only repair restores exact amounts without legacy classification inserts.
-- 2026-10-10: Phase 1 documented single-source policies; Phase 2 added canonical identities, derived columns, indexes, and active-row state.
-- 2026-10-09: Phase 3 verified current-only upload comparison and idempotent unchanged imports; targeted regression coverage passes 10/10.
-- 2026-10-09: Fixed maiden-upload Cash/Bank DATE casting; added regression coverage and documented failed-import index-bloat monitoring.
-- 2026-10-09: Hardened upload conflicts with unique stored paths, surfaced 409 details, and reset stale validation state after conflict.
-- 2026-10-09: Phase 1 documented Supabase working-set, backup-before-delete, external archive, index/vacuum, and 500 MB safety rules in `CLAUDE.md`.
-- 2026-10-08: Phase 1 added idempotent Cashflows prepared-line, rollup, state, and job schema in SQLite/PostgreSQL with focused tests.
-- 2026-10-08: Phase 2 added full initial prepared Cashflows backfill service, operator script, eligibility/category rules, and regression coverage.
-- 2026-10-08: Phase 3 added affected-occurrence upload preparation, exact-duplicate no-op handling, copy-on-write revisions, and affected rollup refreshes.
-- 2026-10-08: Phase 4 added incremental category-assignment and Cash/Bank eligibility preparation with affected-voucher rollup refreshes.
-- 2026-10-09: Durable preparation jobs now normalize nullable scopes, isolate failed transactions, preserve active revisions, and recover safely after restart.
-- 2026-10-08: Phase 2A fixed filename-based overlap selection; derived preview and Cashflows now share latest normalized Voucher ID selection.
-- 2026-10-08: Cashflows canonical source selection and cache identity are revision-safe; the report still has a controlled fallback.
-- 2026-10-07/08: Canonical voucher register, resolver, occurrence store, and upload-time audit maintenance were added without report cutover.
-- 2026-10-06: Cashflows read models, classification, summary controls, account labels, and freshness/loading safeguards were refined.
-- 2026-10-01/02: Cash Flow historical-orphan alignment and Account Control Centre processing feedback were added.
-- 2026-09-26/30: Cashflows setup, source intake, upload classification, period settings, cache, balancing, and export parity progressed.
-- 2026-09-01/25: Database sizing, Ledger Reconciliation, Rulebook, Account Sets, Verification, Forms, vendor/import, and cleanup work progressed.
-- 2026-08-05/31: Verification fixtures, database/performance work, Postgres migration, administration, Client Data, and shared Loading UI shipped.
-- 2026-07-09/08-02: Upload, Verification, Audit Rules, navigation, Client Data Bank, Trial Balance, templates, Categories, and foundational requirements shipped.
+- 2026-10-12: Cashflows uses canonical `client_data`, bounded Data Bank previews and evidence-gated PostgreSQL index/storage review; unsafe maintenance remains blocked. See CHANGELOG_ARCHIVE.md.
+- 2026-10-11: Cashflows cleanup and Client Data import/deletion gained canonical-source, identity, validation, correction and reference safeguards; deferred gaps remain documented. See CHANGELOG_ARCHIVE.md.
+- 2026-10-10: Cashflows single-source processing and administrator period/XLSX settings shipped; Storage Cleanup became available for guarded development review. See CHANGELOG_ARCHIVE.md.
+- 2026-10-09: Upload validation uses expiring action plans; imports apply approved changes with stale-plan guards and compact reports. See CHANGELOG_ARCHIVE.md.
+- 2026-10-08: Cashflows preparation added schema, backfill, incremental refresh, recovery and revision-safe source selection. See CHANGELOG_ARCHIVE.md.
+- 2026-10-06/07: Cashflows canonical voucher selection, classification, labels, summary controls and freshness safeguards advanced. See CHANGELOG_ARCHIVE.md.
+- 2026-10-01/02: Cashflows historical rows and ACC Trial Balance sharing, account search and processing feedback improved. See CHANGELOG_ARCHIVE.md.
+- 2026-09-26/30: Cashflows setup, intake, period settings, balancing, exports and speed backlog progressed. See CHANGELOG_ARCHIVE.md.
+- 2026-09-01/25: Database sizing, Reconciliation, Rulebook, Account Sets, Verification, Forms, vendor/import and cleanup work progressed. See CHANGELOG_ARCHIVE.md.
+- 2026-08-05/31: PostgreSQL migration, administration, Client Data, Verification and shared Loading UI advanced. See CHANGELOG_ARCHIVE.md.
+- 2026-07-09/08-02: Upload, Verification, Audit Rules, Data Bank, Trial Balance, templates and navigation foundations shipped. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
@@ -324,32 +322,3 @@ One line per file group: what it is now. Full build history for every entry live
 - If new files were created, add them to the Architecture/file map (this file's own Architecture section) AND to `File_Map.md` (same folder as this file, git-tracked alongside it — a separate, more detailed one-line-per-file reference) if a file was added, removed, or repurposed. This is the only File_Map.md in the project — do not create or update a second copy elsewhere.
 - If a new convention or rule emerges from a mistake, add it under Conventions
 Do this automatically at the end of the session without being asked.
-- 2026-09-29: Cashflows speed work is paused after commit 2b90255; deferred work and the next feature backlog are recorded in CHANGELOG_ARCHIVE.md.
-- 2026-09-30: Cashflows gained administrator-default period settings and XLSX export parity; export timing is server-side report preparation under the existing performance freeze.
-- 2026-10-01: Cash Flow historical/orphan rows now align with current rows and inherit parent category changes; regression coverage added.
-- 2026-10-01: Account Control Centre now reuses one page-scoped Trial Balance across tabs and searches; deferred bootstrap endpoint recorded.
-- 2026-10-02: Cash Flow account search now matches category keys, labels, and unassigned rows; regression coverage added.
-- 2026-10-02: Account Control Centre Phase 1 added accessible busy feedback for startup and lazy tab loading; regression coverage added.
-- 2026-10-02: Account Control Centre Phase 2 added inline leaf-save and parent-bulk processing feedback; regression coverage added.
-- 2026-10-02: Account Control Centre Phase 3 added processing feedback for category actions, Cash Flow settings, Treasury saves, and template mapping; regression coverage added.
-- 2026-10-09: Upload Validate now creates expiring server-side action plans; Import applies only approved additions, changes, and removals with stale-plan guards.
-- 2026-10-09: Phase 3 adds compact upload summaries, authenticated uploader metadata, changed-field old/new report values, and downloadable reports without storing detailed report copies.
-- 2026-10-09: Phase 4 makes prepared Cashflows and report invalidation current-only; incremental work no longer creates new copies.
-- 2026-10-09: Phase 5 adds table-level Cashflows sizing, stale-revision candidates, and reference-guarded cleanup preview/apply.
-- 2026-10-10: Storage Cleanup is unlocked for development testing; uploaded-data deletion remains available while Audit Rules and current operational data stay protected.
-- 2026-10-11: Phase 3 makes `client_data` the enforced Cashflows source, stops legacy transaction-copy writes, and adds guarded cleanup preview/apply for obsolete copies.
-- 2026-10-11: Strict upload gates track file hashes, block identity conflicts and defer uniqueness activation for unresolved legacy duplicates. See CHANGELOG_ARCHIVE.md.
-- 2026-10-11: Phase 1 adds guarded permanent-data deletion preview/apply, blocks new soft-delete/restore calls, protects verification references, and verifies staged-file cleanup after commit.
-- 2026-10-11: Phase 2 hardens upload identity preservation, hash lookup indexing, duplicate-line messaging, and row-level validation errors.
-- 2026-10-11: Upload now uses a local SheetJS bundle, removing the blocked CDN dependency that prevented Excel files from being read.
-- 2026-10-11: Upload validation now detects workbook date formats and excludes marked summary rows while preserving strict delta and duplicate gates.
-- 2026-10-11: Verified single-set imports, unchanged no-ops, in-place corrections and guarded permanent deletion; physical reclamation remains separate. See CHANGELOG_ARCHIVE.md.
-- 2026-10-11: Storage policy compacts audit payloads, removes completed validation plans and separately gates PostgreSQL maintenance. See CHANGELOG_ARCHIVE.md.
-- 2026-10-11: Deferred gaps are explicit: quota-stop enforcement, production backup/export gating, stable source line IDs for reorder-safe corrections, and Data Bank wiring to permanent purge.
-- 2026-10-12: Phase 1 adds read-only PostgreSQL index inventory, overlap signals, and duplicate blockers in audit and storage review tools.
-- 2026-10-12: Phase 2 adds planner-only evidence gates and allow-listed concurrent index maintenance without changing canonical transaction rows.
-- 2026-10-12: Phase 3 adds optional bloat evidence, concurrent index reindexing, and post-maintenance invariants for storage optimization.
-- 2026-10-12: Index review exposes planner, bloat and invariant evidence; unavailable measurements block unsafe maintenance. Live optimization remains uncertified. See CHANGELOG_ARCHIVE.md.
-- 2026-10-12: Storage previews log safe failure context; unavailable optional probes never enable maintenance, and core failures remain blocked. See CHANGELOG_ARCHIVE.md.
-- 2026-10-12: Data Bank caches availability and bounded preview pages with in-flight deduplication, next-page prefetch, invalidation, and Playwright regression coverage.
-- 2026-10-12: Qualified the index inventory's ambiguous column; live Storage Cleanup renders successfully while unavailable bloat evidence blocks reindexing. See CHANGELOG_ARCHIVE.md.

@@ -17,25 +17,26 @@ display value). The normalized synonym lists (clean_header(), MAPPING_ROLES)
 are kept and reused only for suggest_column_mapping()'s best-guess pre-fill,
 not for auto-driving the upload itself.
 
-Endpoints: mapping suggestion (POST /suggest-mapping), upload+classify
-(POST /upload), read-only list/summary (GET /accounts, GET /summary), and a
-row-level manual classification override (PUT /accounts/{id}/override) for
-correcting a misclassified account after review.
+Endpoints: mapping suggestion, upload+classify with confirmed code corrections,
+account and summary reads, selected-upload account-code correction, and manual
+classification override.
 """
 
 import json
 import re
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from typing import Optional
 
 import pandas as pd
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from database import execute_query_pg, execute_write_pg, execute_batch_pg, get_raw_conn_pg, release_raw_conn_pg, log_audit
+from database import execute_query_pg, execute_write_pg, execute_batch_pg, get_raw_conn_pg, release_raw_conn_pg, log_audit, pg_transaction
 from psycopg2.extras import Json
+from routers.auth import require_admin
 from routers.audit_rules import invalidate_category_for_account_cache
 
 router = APIRouter()
@@ -52,6 +53,17 @@ TB_UPLOAD_PROGRESS: dict = {}
 class AccountOverrideRequest(BaseModel):
     """Body for the Phase 5 row-level classification override endpoint."""
     is_leaf: bool
+
+
+class AccountCodeEditRequest(BaseModel):
+    """Body for correcting an account code within one selected upload."""
+    account_code: str
+
+
+class TrialBalanceColumnMappingPayload(BaseModel):
+    """One explicitly saved Trial Balance column mapping for a client."""
+    client_id: int
+    mapping: dict[str, str]
 
 
 class CategoryAssignmentRequest(BaseModel):
@@ -147,12 +159,11 @@ def read_trial_balance_excel(contents: bytes, filename: str) -> pd.DataFrame:
     """
     Shared file-reading helper used by both the upload endpoint and the
     suggest-mapping endpoint, so the two can never disagree on how a sheet is
-    read. dtype=str forces the ENTIRE sheet to raw strings at the pandas layer
-    itself - not just the code column - which is the only way to guarantee
-    Excel's date/number auto-conversion (the exact bug that corrupted a code
-    like 10-10-25-10 in the Leather Crop sample file) can never happen.
-    keep_default_na=False turns blank cells into '' instead of NaN, so blank
-    checks are plain string checks.
+    read. dtype=str converts parsed values to text but cannot recover an
+    intended account code when Excel has already stored that cell as a date;
+    the upload review separately inspects workbook cell types and lets the
+    user confirm a correction. keep_default_na=False maps blanks to '' rather
+    than NaN.
     """
     engine = "xlrd" if filename.lower().endswith('.xls') else "openpyxl"
     try:
@@ -225,6 +236,10 @@ def validate_column_mapping(mapping: dict, headers: list) -> None:
                 f"a column in the uploaded file."
             )
 
+    mapped_required = [mapping.get(role) for role in REQUIRED_MAPPING_ROLES if mapping.get(role)]
+    if len(mapped_required) != len(set(mapped_required)):
+        problems.append("Each required Trial Balance field must use a different Excel column.")
+
     if problems:
         raise ValueError(" ".join(problems))
 
@@ -251,6 +266,190 @@ def parse_amount(raw_value):
     except ValueError:
         return None
     return -value if negative else value
+
+
+def _parse_validation_amount(raw_value):
+    """Return a precise Decimal, zero for an empty cell, or None for bad input."""
+    text = str(raw_value or '').strip()
+    if not text:
+        return Decimal('0')
+    negative = text.startswith('(') and text.endswith(')')
+    if negative:
+        text = text[1:-1]
+    text = text.replace(',', '').strip()
+    try:
+        value = Decimal(text)
+    except InvalidOperation:
+        return None
+    if not value.is_finite():
+        return None
+    return -value if negative else value
+
+
+def _load_row_overrides(raw_value, row_count, allowed_values, label):
+    if isinstance(raw_value, dict):
+        parsed = raw_value
+    else:
+        try:
+            parsed = json.loads(raw_value or '{}')
+        except json.JSONDecodeError as exc:
+            raise ValueError(f'{label} were invalid. Reopen the file review and try again.') from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(f'{label} must be supplied by Excel row number.')
+    result = {}
+    for row_key, value in parsed.items():
+        try:
+            row_number = int(row_key)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f'{label} contain an invalid Excel row number.') from exc
+        if row_number < 2 or row_number > row_count + 1:
+            raise ValueError(f'{label} refer to row {row_number}, outside the uploaded file.')
+        value = str(value or '').strip()
+        if allowed_values is not None and value not in allowed_values:
+            raise ValueError(f'{label} for Excel row {row_number} must be one of: {", ".join(sorted(allowed_values))}.')
+        if allowed_values is None and (not value or len(value) > 120):
+            raise ValueError(f'Account code on Excel row {row_number} must contain 1 to 120 characters.')
+        result[row_number] = value
+    return result
+
+
+def validate_trial_balance_contents(contents, filename, mapping, code_overrides=None, classification_overrides=None):
+    """Parse and reconcile a Trial Balance without writing any database records."""
+    df = read_trial_balance_excel(contents, filename)
+    headers = df.columns.tolist()
+    validate_column_mapping(mapping, headers)
+    rows = df.to_dict('records')
+    code_overrides = _load_row_overrides(code_overrides, len(rows), None, 'Account code corrections')
+    classification_overrides = _load_row_overrides(
+        classification_overrides, len(rows), {'leaf', 'parent'}, 'Classification corrections'
+    )
+    errors = []
+    error_count = 0
+    candidates = []
+    seen_codes = {}
+    invalid_amounts = False
+    amount_roles = (
+        ('opening_dr_column', 'Opening Dr'), ('opening_cr_column', 'Opening Cr'),
+        ('period_dr_column', 'Period Dr'), ('period_cr_column', 'Period Cr'),
+        ('closing_dr_column', 'Closing Dr'), ('closing_cr_column', 'Closing Cr'),
+    )
+
+    def add_error(excel_row, field, message, suggested_code=None):
+        nonlocal error_count
+        error_count += 1
+        issue = {'excel_row': excel_row, 'field': field, 'message': message, 'severity': 'error'}
+        if suggested_code:
+            issue['suggested_code'] = suggested_code
+        errors.append(issue)
+
+    date_code_pattern = re.compile(r'^(\d{4})-(\d{1,2})-(\d{1,2})(?: 00:00:00)?$')
+    for index, row in enumerate(rows):
+        excel_row = index + 2
+        source_code = str(row.get(mapping['account_code_column'], '') or '').strip()
+        code = str(code_overrides.get(excel_row, source_code) or '').strip()
+        row_has_data = any(str(row.get(column, '') or '').strip() for column in mapping.values() if column)
+        if not row_has_data:
+            continue
+        if not code:
+            add_error(excel_row, 'Account Code', 'Account code is blank.')
+            continue
+        if len(code) > 120:
+            add_error(excel_row, 'Account Code', 'Account code cannot exceed 120 characters.')
+        date_match = date_code_pattern.match(source_code)
+        if date_match and excel_row not in code_overrides:
+            try:
+                date_value = datetime(int(date_match.group(1)), int(date_match.group(2)), int(date_match.group(3)))
+                suggestion = f'{date_value.month:02d}-{str(date_value.year)[-2:]}'
+                add_error(excel_row, 'Account Code', 'This code appears to have been converted to an Excel date. Correct it before saving.', suggestion)
+            except ValueError:
+                pass
+        if code in seen_codes:
+            add_error(excel_row, 'Account Code', f'Account code {code} duplicates Excel row {seen_codes[code]}.')
+        else:
+            seen_codes[code] = excel_row
+
+        amount_values = {}
+        for role, label in amount_roles:
+            raw_value = row.get(mapping[role])
+            parsed_value = _parse_validation_amount(raw_value)
+            if parsed_value is None:
+                invalid_amounts = True
+                add_error(excel_row, label, f'{label} must be a number or blank; found {str(raw_value).strip()!r}.')
+                amount_values[role] = Decimal('0')
+            else:
+                amount_values[role] = parsed_value
+        candidates.append({
+            'excel_row': excel_row,
+            'account_code': code,
+            'source_account_code': source_code,
+            'classification': None,
+            'amounts': amount_values,
+        })
+
+    if not candidates:
+        add_error(None, 'Rows', 'No Trial Balance account rows were found in the selected sheet.')
+
+    code_set = {row['account_code'] for row in candidates}
+    auto_classification = classify_accounts(code_set)
+    for account in candidates:
+        row_number = account['excel_row']
+        auto_value = auto_classification.get(account['account_code'], 'leaf')
+        account['classification'] = classification_overrides.get(row_number, auto_value)
+        account['auto_classification'] = auto_value
+
+    valid_amount_rows = [row for row in candidates if row['classification'] == 'leaf']
+    tolerance = Decimal('0.01')
+    checks = []
+    for period_key, label in (('opening', 'Opening'), ('period', 'Period movement'), ('closing', 'Closing')):
+        debit = sum((row['amounts'][period_key + '_dr_column'] for row in valid_amount_rows), Decimal('0'))
+        credit = sum((row['amounts'][period_key + '_cr_column'] for row in valid_amount_rows), Decimal('0'))
+        difference = debit - credit
+        passed = not invalid_amounts and abs(difference) <= tolerance
+        checks.append({
+            'key': period_key + '_balance',
+            'label': f'{label} debits equal credits',
+            'status': 'pass' if passed else ('blocked' if invalid_amounts else 'fail'),
+            'debit_total': float(debit),
+            'credit_total': float(credit),
+            'difference': float(difference),
+        })
+        if not invalid_amounts and abs(difference) > tolerance:
+            add_error(None, label, f'{label} debit and credit totals differ by {abs(difference):,.2f}.')
+
+    rollforward_count = 0
+    if invalid_amounts:
+        rollforward_status = 'blocked'
+    else:
+        for account in valid_amount_rows:
+            amounts = account['amounts']
+            opening_net = amounts['opening_dr_column'] - amounts['opening_cr_column']
+            movement_net = amounts['period_dr_column'] - amounts['period_cr_column']
+            closing_net = amounts['closing_dr_column'] - amounts['closing_cr_column']
+            if abs((opening_net + movement_net) - closing_net) > tolerance:
+                rollforward_count += 1
+                add_error(account['excel_row'], 'Roll-forward', 'Opening balance plus period movement does not equal closing balance within 0.01.')
+        rollforward_status = 'pass' if rollforward_count == 0 and candidates else ('fail' if candidates else 'blocked')
+    checks.append({
+        'key': 'roll_forward',
+        'label': 'Opening plus period movement equals closing',
+        'status': rollforward_status,
+        'affected_rows': rollforward_count,
+        'tolerance': 0.01,
+    })
+
+    return {
+        'valid': error_count == 0,
+        'errors': errors,
+        'checks': checks,
+        'account_count': len(candidates),
+        'leaf_count': len(valid_amount_rows),
+        'parent_count': len(candidates) - len(valid_amount_rows),
+        'auto_classification': {str(row['excel_row']): row['auto_classification'] for row in candidates},
+        'classification_overrides': {str(row_number): value for row_number, value in classification_overrides.items()},
+        'issue_count': error_count,
+        'omitted_issue_count': 0,
+        'tolerance': 0.01,
+    }
 
 
 def find_conflicting_uploads(client_id: int, period_start: str, period_end: str) -> list:
@@ -339,6 +538,155 @@ def classify_accounts(codes: set) -> dict:
     return classification
 
 
+def _copy_shared_code_assignments(client_id: int, source_code: str, target_code: str, upload_id: Optional[int] = None) -> None:
+    """Carry shared category and ACC mappings to a corrected code without overwriting."""
+    mappings = (
+        ("account_category_assignments", ("category_id",)),
+        ("account_control_assignments", (
+            "verification_workstream", "financial_statement_category_id", "note_category_id",
+        )),
+        ("account_control_cashflow_assignments", (
+            "section", "category_label", "cash_bank_role", "treatment_type",
+        )),
+        ("account_control_cashflow_category_assignments", ("category_id",)),
+    )
+    for table, value_columns in mappings:
+        columns = ", ".join(value_columns)
+        source_rows = execute_query_pg(
+            f"SELECT {columns} FROM {table} WHERE client_id = %s AND account_code = %s",
+            (client_id, source_code),
+        )
+        target_rows = execute_query_pg(
+            f"SELECT {columns} FROM {table} WHERE client_id = %s AND account_code = %s",
+            (client_id, target_code),
+        )
+        if not source_rows:
+            continue
+        source_values = tuple(source_rows[0].get(c) for c in value_columns)
+        has_assignment = any(value is not None for value in source_values)
+        if table == "account_control_cashflow_assignments":
+            source = source_rows[0]
+            has_assignment = bool(
+                source.get("section") not in (None, "unassigned")
+                or source.get("category_label")
+                or source.get("cash_bank_role") not in (None, "none")
+                or source.get("treatment_type") not in (None, "standard")
+            )
+        if not has_assignment:
+            continue
+        if target_rows:
+            if source_values != tuple(target_rows[0].get(c) for c in value_columns):
+                raise HTTPException(
+                    409,
+                    f"Account code {target_code} already has a different {table.replace('_', ' ')} assignment. "
+                    "Resolve that assignment before correcting this code.",
+                )
+            continue
+        insert_columns = ["client_id", "account_code", *value_columns]
+        if table != "account_category_assignments":
+            insert_columns.extend(("updated_by", "updated_at"))
+        placeholders = ", ".join(["%s"] * (2 + len(value_columns)))
+        if table != "account_category_assignments":
+            placeholders += ", 'Analyst', CURRENT_TIMESTAMP"
+        execute_write_pg(
+            f"INSERT INTO {table} ({', '.join(insert_columns)}) VALUES ({placeholders})",
+            (client_id, target_code, *(source_rows[0].get(c) for c in value_columns)),
+        )
+
+    for table, key_columns, value_columns in (
+        ("account_groups", ("group_label",), ("is_active",)),
+        ("report_account_category_assignments", ("category_set_id",), ("category_id",)),
+        ("account_control_cashflow_treasury_accounts", ("treasury_type",), ("is_active",)),
+    ):
+        columns = [*key_columns, *value_columns]
+        source_rows = execute_query_pg(
+            f"SELECT {', '.join(columns)} FROM {table} WHERE client_id = %s AND account_code = %s",
+            (client_id, source_code),
+        )
+        for source in source_rows:
+            key_where = " AND ".join(f"{column} = %s" for column in key_columns)
+            key_values = tuple(source[column] for column in key_columns)
+            target_rows = execute_query_pg(
+                f"SELECT {', '.join(value_columns)} FROM {table} "
+                f"WHERE client_id = %s AND account_code = %s AND {key_where}",
+                (client_id, target_code, *key_values),
+            )
+            source_values = tuple(source[column] for column in value_columns)
+            if target_rows:
+                if tuple(target_rows[0][column] for column in value_columns) != source_values:
+                    raise HTTPException(409, f"Account code {target_code} has a conflicting {table.replace('_', ' ')} assignment.")
+                continue
+            insert_columns = ["client_id", "account_code", *columns]
+            values = [client_id, target_code, *(source[column] for column in columns)]
+            placeholders = ", ".join(["%s"] * len(insert_columns))
+            if table != "account_groups":
+                insert_columns.append("updated_at")
+                placeholders += ", CURRENT_TIMESTAMP"
+            if table == "account_control_cashflow_treasury_accounts":
+                insert_columns.append("updated_by")
+                placeholders += ", 'Analyst'"
+            execute_write_pg(
+                f"INSERT INTO {table} ({', '.join(insert_columns)}) VALUES ({placeholders})",
+                tuple(values),
+            )
+
+    if upload_id is not None:
+        selector_rows = execute_query_pg(
+            """SELECT s.id, s.account_set_version_id, s.selector_type
+               FROM account_set_selectors s
+               JOIN account_set_versions v ON v.id = s.account_set_version_id
+               WHERE v.source_upload_id = %s AND s.account_code = %s""",
+            (upload_id, source_code),
+        )
+        for selector in selector_rows:
+            conflict = execute_query_pg(
+                """SELECT id FROM account_set_selectors
+                   WHERE account_set_version_id = %s AND selector_type = %s AND account_code = %s""",
+                (selector["account_set_version_id"], selector["selector_type"], target_code),
+            )
+            if conflict:
+                raise HTTPException(409, f"Account code {target_code} is already in an account set for this upload.")
+            execute_write_pg("UPDATE account_set_selectors SET account_code = %s WHERE id = %s", (target_code, selector["id"]))
+
+
+@router.post("/api/trial-balance/validate")
+def validate_trial_balance_upload(
+    file: UploadFile = File(...),
+    account_code_column: Optional[str] = Form(None),
+    account_name_column: Optional[str] = Form(None),
+    type_column: Optional[str] = Form(None),
+    opening_dr_column: Optional[str] = Form(None),
+    opening_cr_column: Optional[str] = Form(None),
+    period_dr_column: Optional[str] = Form(None),
+    period_cr_column: Optional[str] = Form(None),
+    closing_dr_column: Optional[str] = Form(None),
+    closing_cr_column: Optional[str] = Form(None),
+    account_code_overrides: Optional[str] = Form(None),
+    account_classification_overrides: Optional[str] = Form(None),
+):
+    """Validate a Trial Balance without creating or replacing an upload."""
+    if not file.filename or not file.filename.lower().endswith(('.xlsx', '.xls')):
+        raise HTTPException(400, "Only .xlsx and .xls files are supported")
+    mapping = {
+        "account_code_column": account_code_column,
+        "account_name_column": account_name_column,
+        "type_column": type_column,
+        "opening_dr_column": opening_dr_column,
+        "opening_cr_column": opening_cr_column,
+        "period_dr_column": period_dr_column,
+        "period_cr_column": period_cr_column,
+        "closing_dr_column": closing_dr_column,
+        "closing_cr_column": closing_cr_column,
+    }
+    try:
+        return validate_trial_balance_contents(
+            file.file.read(), file.filename, mapping,
+            account_code_overrides, account_classification_overrides,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
 @router.post("/api/trial-balance/upload")
 def upload_trial_balance(
     client_id: int = Form(...),
@@ -370,11 +718,13 @@ def upload_trial_balance(
     # poll (GET /api/trial-balance/upload-status/{progress_key}) - see TB_UPLOAD_PROGRESS
     # above. Entirely optional, so a caller omitting it (e.g. a test) sees no behavior change.
     progress_key: Optional[str] = Form(None),
+    account_code_overrides: Optional[str] = Form(None),
+    account_classification_overrides: Optional[str] = Form(None),
 ):
     """
-    Upload a client's Trial Balance Excel file, classify every account as
-    parent/leaf from its code hierarchy, and store the result. One pass:
-    upload + classify + store (no separate retrieval/review endpoint yet).
+    Save a Trial Balance only after the same non-writing validation used by
+    the review screen has passed; classification and optional overrides are
+    stored with the accepted upload.
     """
     # 1. Client must exist and be active.
     client_rows = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
@@ -396,6 +746,7 @@ def upload_trial_balance(
     if bool(period_start) != bool(period_end):
         raise HTTPException(400, "period_start and period_end must both be provided together, or neither.")
 
+    conflicts = []
     if period_start and period_end:
         try:
             _validate_period_dates(period_start, period_end)
@@ -419,19 +770,33 @@ def upload_trial_balance(
                     "conflicting_upload_count": len(conflicts),
                 })
 
-            # Confirmed overwrite: true delete, not just superseding by
-            # convention - the prior exact-period upload(s) and their
-            # accounts are removed before the new one is created. Explicit
-            # two-step delete rather than relying on ON DELETE CASCADE, since
-            # this app's connections don't enable PRAGMA foreign_keys = ON
-            # (documented elsewhere in this codebase's own conventions), so a
-            # bare parent-row delete would silently leave orphaned account rows.
-            for old_upload in conflicts:
-                execute_write_pg("DELETE FROM trial_balance_accounts WHERE upload_id = %s", (old_upload["id"],))
-                execute_write_pg("DELETE FROM trial_balance_uploads WHERE id = %s", (old_upload["id"],))
-            log_audit("Analyst", "Delete", "TrialBalance",
-                       f"Overwrote {len(conflicts)} prior trial balance upload(s) for client "
-                       f"{client_id}, exact period {period_start} to {period_end}")
+            # Defer deletion until parsing, code corrections, and assignment-conflict
+            # checks all pass. Replacement and new rows are committed together below.
+
+    mapping = {
+        "account_code_column": account_code_column,
+        "account_name_column": account_name_column,
+        "type_column": type_column,
+        "opening_dr_column": opening_dr_column,
+        "opening_cr_column": opening_cr_column,
+        "period_dr_column": period_dr_column,
+        "period_cr_column": period_cr_column,
+        "closing_dr_column": closing_dr_column,
+        "closing_cr_column": closing_cr_column,
+    }
+    try:
+        validation = validate_trial_balance_contents(
+            file.file.read(), file.filename, mapping,
+            account_code_overrides, account_classification_overrides,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, f"Trial balance validation failed: {exc}")
+    if not validation['valid']:
+        raise HTTPException(400, detail={
+            'message': 'Trial Balance validation failed. Resolve the listed issues before saving.',
+            'validation': validation,
+        })
+    file.file.seek(0)
 
     # 4. Create the upload row immediately (status='pending') so even a
     # failed parse below leaves a visible, queryable record rather than
@@ -472,6 +837,24 @@ def upload_trial_balance(
         }
         validate_column_mapping(mapping, df.columns.tolist())
         rows = df.to_dict('records')
+        try:
+            submitted_overrides = json.loads(account_code_overrides or "{}")
+        except json.JSONDecodeError:
+            raise ValueError("Account code corrections were invalid. Reopen the file review and try again.")
+        if not isinstance(submitted_overrides, dict):
+            raise ValueError("Account code corrections must be supplied by Excel row number.")
+        code_overrides = {}
+        for row_key, corrected_code in submitted_overrides.items():
+            try:
+                row_number = int(row_key)
+            except (TypeError, ValueError):
+                raise ValueError("An account code correction had an invalid Excel row number.")
+            if row_number < 2 or row_number > len(rows) + 1:
+                raise ValueError(f"Account code correction row {row_number} is outside the uploaded file.")
+            corrected_code = str(corrected_code or "").strip()
+            if not corrected_code:
+                raise ValueError(f"Account code on Excel row {row_number} cannot be blank.")
+            code_overrides[row_number] = corrected_code
 
         # Fast Trial Balance upload: row-parse progress tracking, mirroring
         # import_export.py's IMPORT_PROGRESS. Increments during this loop (fast, in-memory),
@@ -480,25 +863,27 @@ def upload_trial_balance(
         if progress_key:
             TB_UPLOAD_PROGRESS[progress_key] = {"current": 0, "total": len(rows), "status": "processing"}
 
-        # Walk every row once: skip blanks/duplicates, capture the rest.
+        # Walk every row once: skip blank codes, reject duplicates, and capture the rest.
         # sort_order uses the same "header=1, first data row=2" Excel row
         # numbering convention already established elsewhere in this app.
         seen_codes = set()
         accounts = []  # list of dicts, pre-classification
         skipped_blank_count = 0
-        duplicate_code_count = 0
 
         for idx, row in enumerate(rows):
             if progress_key:
                 TB_UPLOAD_PROGRESS[progress_key]["current"] = idx + 1
             row_number = idx + 2
-            code = str(row.get(account_code_column, '')).strip()
+            source_code = str(row.get(account_code_column, '')).strip()
+            code = code_overrides.get(row_number, source_code)
             if code == '':
                 skipped_blank_count += 1
                 continue
             if code in seen_codes:
-                duplicate_code_count += 1
-                continue
+                raise ValueError(
+                    f"Account code '{code}' appears more than once after corrections (including Excel row {row_number}). "
+                    "Edit the codes so every account code is unique, then upload again."
+                )
             seen_codes.add(code)
 
             name_value = str(row.get(account_name_column, '')).strip() if account_name_column else ''
@@ -512,6 +897,7 @@ def upload_trial_balance(
 
             accounts.append({
                 "account_code": code,
+                "source_account_code": source_code,
                 "account_name": name_value or None,
                 "source_account_type": type_value or None,
                 "opening_dr": opening_dr_value,
@@ -534,6 +920,7 @@ def upload_trial_balance(
 
         # 8. Classify every distinct code from its dash-delimited hierarchy.
         classification = classify_accounts(seen_codes)
+        classification_overrides = validation['classification_overrides']
 
         # 8b. Carry-forward (Verification link, Phase 2): look up this
         # client's persistent account_category_assignments once (a single
@@ -552,61 +939,74 @@ def upload_trial_balance(
             parts = code.split('-')
             account["level"] = len(parts)
             account["parent_account_code"] = '-'.join(parts[:-1]) if len(parts) > 1 else None
-            account["classification"] = classification[code]
+            account["classification"] = classification_overrides.get(str(account["sort_order"]), classification[code])
+            account["manually_overridden"] = str(account["sort_order"]) in classification_overrides
             account["category_id"] = carried_categories.get(code)
+            if account["category_id"] is None and code != account["source_account_code"]:
+                account["category_id"] = carried_categories.get(account["source_account_code"])
 
-        # 9. Bulk insert, batched (Fast Trial Balance upload) - one execute_batch_pg() call
+        # Summarize blank-code rows skipped from the source file.
+        notes_parts = []
+        if skipped_blank_count:
+            notes_parts.append(f"{skipped_blank_count} blank-code row(s) skipped")
+        notes = "; ".join(notes_parts) if notes_parts else None
+
+        # 9. Replace and insert in one transaction, so a parse/duplicate/mapping error
+        # never removes the previously confirmed period upload.
         # instead of one INSERT round-trip per account row, same fix already proven for
         # Data Bank's own import (routers/import_export.py). execute_batch_pg() commits/
         # rolls back per chunk internally, so no separate outer try/except is needed here -
         # this function's own outer except Exception (below) still catches any failure and
         # marks the upload status='error' exactly as before.
-        conn = get_raw_conn_pg()
-        try:
-            params_list = [
-                (upload_id, account["account_code"], account["account_name"],
-                 account["parent_account_code"], account["level"], account["classification"],
-                 account["opening_dr"], account["opening_cr"], account["period_dr"], account["period_cr"],
-                 account["closing_dr"], account["closing_cr"], account["source_account_type"],
-                 account["sort_order"], account["raw_row_data"], account["category_id"])
-                for account in accounts
-            ]
-            execute_batch_pg(
-                conn,
-                """
-                INSERT INTO trial_balance_accounts
-                    (upload_id, account_code, account_name, parent_account_code, level,
-                     classification, opening_dr, opening_cr, period_dr, period_cr,
-                     closing_dr, closing_cr, source_account_type, sort_order, raw_row_data,
-                     category_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                params_list
+        with pg_transaction():
+            for old_upload in conflicts:
+                execute_write_pg("DELETE FROM trial_balance_accounts WHERE upload_id = %s", (old_upload["id"],))
+                execute_write_pg("DELETE FROM trial_balance_uploads WHERE id = %s", (old_upload["id"],))
+            for account in accounts:
+                if account["source_account_code"] != account["account_code"]:
+                    _copy_shared_code_assignments(client_id, account["source_account_code"], account["account_code"], upload_id)
+            conn = get_raw_conn_pg()
+            try:
+                params_list = [
+                    (upload_id, account["account_code"], account["source_account_code"], account["account_name"],
+                     account["parent_account_code"], account["level"], account["classification"],
+                     account["opening_dr"], account["opening_cr"], account["period_dr"], account["period_cr"],
+                     account["closing_dr"], account["closing_cr"], account["source_account_type"],
+                     account["sort_order"], account["raw_row_data"], account["category_id"],
+                     account["manually_overridden"])
+                    for account in accounts
+                ]
+                execute_batch_pg(
+                    conn,
+                    """
+                    INSERT INTO trial_balance_accounts
+                        (upload_id, account_code, source_account_code, account_name, parent_account_code, level,
+                         classification, opening_dr, opening_cr, period_dr, period_cr,
+                         closing_dr, closing_cr, source_account_type, sort_order, raw_row_data,
+                         category_id, manually_overridden)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    params_list
+                )
+            finally:
+                release_raw_conn_pg(conn)
+            execute_write_pg(
+                "UPDATE trial_balance_uploads SET status = 'parsed', row_count = %s, notes = %s WHERE id = %s",
+                (len(accounts), notes, upload_id)
             )
-        finally:
-            release_raw_conn_pg(conn)
-
-        # Summarize any skipped/duplicate rows in notes - visible without
-        # having blocked the rest of the file.
-        notes_parts = []
-        if skipped_blank_count:
-            notes_parts.append(f"{skipped_blank_count} blank-code row(s) skipped")
-        if duplicate_code_count:
-            notes_parts.append(f"{duplicate_code_count} duplicate code row(s) skipped")
-        notes = "; ".join(notes_parts) if notes_parts else None
-
-        execute_write_pg(
-            "UPDATE trial_balance_uploads SET status = 'parsed', row_count = %s, notes = %s WHERE id = %s",
-            (len(accounts), notes, upload_id)
-        )
+        if conflicts:
+            log_audit("Analyst", "Delete", "TrialBalance",
+                      f"Overwrote {len(conflicts)} prior trial balance upload(s) for client "
+                      f"{client_id}, exact period {period_start} to {period_end}")
         invalidate_category_for_account_cache(client_id)
 
         parent_count = sum(1 for a in accounts if a["classification"] == "parent")
         leaf_count = len(accounts) - parent_count
+        corrected_code_count = sum(1 for a in accounts if a["source_account_code"] != a["account_code"])
 
         log_audit("Analyst", "Upload", "TrialBalance",
                    f"Uploaded trial balance for client {client_id}: {len(accounts)} accounts "
-                   f"({parent_count} parent, {leaf_count} leaf)")
+                   f"({parent_count} parent, {leaf_count} leaf; {corrected_code_count} code correction(s))")
 
         if progress_key:
             TB_UPLOAD_PROGRESS[progress_key]["status"] = "complete"
@@ -617,9 +1017,18 @@ def upload_trial_balance(
             "parent_count": parent_count,
             "leaf_count": leaf_count,
             "skipped_blank_count": skipped_blank_count,
-            "duplicate_code_count": duplicate_code_count,
+            "duplicate_code_count": 0,
+            "corrected_code_count": corrected_code_count,
         }
 
+    except HTTPException as e:
+        execute_write_pg(
+            "UPDATE trial_balance_uploads SET status = 'error', notes = %s WHERE id = %s",
+            (str(e.detail), upload_id)
+        )
+        if progress_key:
+            TB_UPLOAD_PROGRESS[progress_key]["status"] = "error"
+        raise
     except Exception as e:
         # Leave the upload row visible with status='error' rather than
         # deleting it - the 'error' status + notes column exist for exactly
@@ -690,6 +1099,60 @@ async def suggest_trial_balance_mapping(file: UploadFile = File(...)):
     }
 
 
+@router.get("/api/trial-balance/saved-column-mapping")
+def get_saved_trial_balance_column_mapping(
+    client_id: int = Query(..., ge=1),
+    session=Depends(require_admin),
+):
+    """Return the single saved Trial Balance column map for this client, if any."""
+    rows = execute_query_pg(
+        "SELECT mapping_json FROM trial_balance_column_mappings WHERE client_id = %s",
+        (client_id,),
+    )
+    if not rows:
+        return {"mapping": None}
+    mapping = rows[0]["mapping_json"]
+    if isinstance(mapping, str):
+        try:
+            mapping = json.loads(mapping)
+        except json.JSONDecodeError:
+            raise HTTPException(500, "The saved Trial Balance mapping is unreadable.")
+    return {"mapping": mapping}
+
+
+@router.put("/api/trial-balance/saved-column-mapping")
+def save_trial_balance_column_mapping(
+    payload: TrialBalanceColumnMappingPayload,
+    session=Depends(require_admin),
+):
+    """Create or replace the one explicitly saved Trial Balance map for a client."""
+    expected_roles = set(REQUIRED_MAPPING_ROLES)
+    if set(payload.mapping) != expected_roles:
+        raise HTTPException(400, "Provide a mapping for all eight required Trial Balance fields.")
+    values = [payload.mapping.get(role) for role in REQUIRED_MAPPING_ROLES]
+    if any(not isinstance(value, str) or not value.strip() for value in values):
+        raise HTTPException(400, "All eight Trial Balance fields must be mapped before saving.")
+    if len(values) != len(set(values)):
+        raise HTTPException(400, "Each Trial Balance field must use a different Excel column.")
+    clients = execute_query_pg(
+        "SELECT id FROM clients WHERE id = %s AND is_active = TRUE",
+        (payload.client_id,),
+    )
+    if not clients:
+        raise HTTPException(404, "Active client not found.")
+
+    execute_write_pg(
+        """
+        INSERT INTO trial_balance_column_mappings (client_id, mapping_json)
+        VALUES (%s, %s)
+        ON CONFLICT (client_id) DO UPDATE
+        SET mapping_json = EXCLUDED.mapping_json, updated_at = now()
+        """,
+        (payload.client_id, Json(payload.mapping)),
+    )
+    return {"saved": True, "client_id": payload.client_id, "mapping": payload.mapping}
+
+
 @router.get("/api/trial-balance/download-template")
 def download_trial_balance_template():
     """
@@ -727,9 +1190,8 @@ def _require_upload(upload_id: int):
 
 
 # ---------- RETRIEVAL ENDPOINTS (Phase 3 of 5: store + retrieve classified accounts) ----------
-# Read-only - no editing/override logic yet (that's Phase 5). Both endpoints
-# are scoped to a single upload_id at a time, matching the classification
-# engine's own one-upload-at-a-time scope (no cross-period comparison).
+# Listing remains read-only; account-code and classification writes use their
+# separate endpoints. Each list request is scoped to one upload_id.
 
 @router.get("/api/trial-balance/accounts")
 def list_trial_balance_accounts(upload_id: int, is_leaf: Optional[bool] = None):
@@ -741,7 +1203,7 @@ def list_trial_balance_accounts(upload_id: int, is_leaf: Optional[bool] = None):
     """
     _require_upload(upload_id)
 
-    query = """SELECT id, account_code, account_name, level, classification, manually_overridden,
+    query = """SELECT id, account_code, source_account_code, account_name, level, classification, manually_overridden,
                       opening_dr, opening_cr, period_dr, period_cr, closing_dr, closing_cr
                FROM trial_balance_accounts WHERE upload_id = %s"""
     params = [upload_id]
@@ -758,6 +1220,7 @@ def list_trial_balance_accounts(upload_id: int, is_leaf: Optional[bool] = None):
         {
             "id": r["id"],
             "account_code": r["account_code"],
+            "source_account_code": r["source_account_code"],
             "account_name": r["account_name"],
             "level": r["level"],
             "is_leaf": r["classification"] == "leaf",
@@ -901,11 +1364,84 @@ def get_trial_balance_summary(upload_id: int):
     }
 
 
-# ---------- REVIEW / OVERRIDE ENDPOINT (Phase 5 of 5: review screen + dashboard link) ----------
-# The classification engine (Phase 2) is automatic and can occasionally be wrong on an
-# ambiguous code hierarchy - this is the one write endpoint that lets an auditor correct
-# a single row after reviewing it. One row at a time, per the locked "keep it simple" scope
-# (no bulk-edit/bulk-approve endpoint).
+# ---------- ACCOUNT CODE / CLASSIFICATION CORRECTIONS ----------
+# Code corrections are scoped to one selected upload. Classification overrides remain
+# row-level and preserve their explicit manual status across later code corrections.
+
+@router.put("/api/trial-balance/accounts/{account_id}/code")
+def update_trial_balance_account_code(account_id: int, payload: AccountCodeEditRequest):
+    """Correct one account code in its upload, retaining the imported source code."""
+    corrected_code = str(payload.account_code or "").strip()
+    if not corrected_code:
+        raise HTTPException(400, "Account code cannot be blank.")
+    if len(corrected_code) > 120:
+        raise HTTPException(400, "Account code cannot exceed 120 characters.")
+
+    rows = execute_query_pg(
+        """SELECT a.id, a.upload_id, a.account_code, a.source_account_code, a.category_id, u.client_id, u.status
+           FROM trial_balance_accounts a
+           JOIN trial_balance_uploads u ON u.id = a.upload_id
+           WHERE a.id = %s""",
+        (account_id,),
+    )
+    if not rows:
+        raise HTTPException(404, "Trial balance account not found")
+    account = rows[0]
+    if account["status"] != "parsed":
+        raise HTTPException(409, "Only a successfully parsed Trial Balance can be corrected.")
+    old_code = account["account_code"]
+    if corrected_code == old_code:
+        return {"updated": False, "account_id": account_id, "account_code": old_code}
+
+    sibling = execute_query_pg(
+        "SELECT id FROM trial_balance_accounts WHERE upload_id = %s AND account_code = %s AND id <> %s",
+        (account["upload_id"], corrected_code, account_id),
+    )
+    if sibling:
+        raise HTTPException(409, f"Account code {corrected_code} already exists in this Trial Balance.")
+
+    upload_accounts = execute_query_pg(
+        "SELECT id, account_code, classification, manually_overridden FROM trial_balance_accounts WHERE upload_id = %s ORDER BY sort_order",
+        (account["upload_id"],),
+    )
+    all_codes = {corrected_code if row["id"] == account_id else row["account_code"] for row in upload_accounts}
+    classification = classify_accounts(all_codes)
+    client_id = account["client_id"]
+
+    with pg_transaction():
+        _copy_shared_code_assignments(client_id, old_code, corrected_code, account["upload_id"])
+        execute_write_pg(
+            "UPDATE trial_balance_accounts SET account_code = %s WHERE id = %s",
+            (corrected_code, account_id),
+        )
+        for row in upload_accounts:
+            code = corrected_code if row["id"] == account_id else row["account_code"]
+            parts = code.split('-')
+            parent_code = '-'.join(parts[:-1]) if len(parts) > 1 else None
+            execute_write_pg(
+                """UPDATE trial_balance_accounts
+                   SET parent_account_code = %s, level = %s, classification = %s
+                   WHERE id = %s""",
+                (
+                    parent_code,
+                    len(parts),
+                    row["classification"] if row["manually_overridden"] else classification[code],
+                    row["id"],
+                ),
+            )
+
+    invalidate_category_for_account_cache(client_id)
+    log_audit(
+        "Analyst", "Update", "TrialBalance",
+        f"Corrected account code in upload {account['upload_id']}: {old_code} -> {corrected_code}",
+    )
+    return {
+        "updated": True,
+        "account_id": account_id,
+        "upload_id": account["upload_id"],
+        "source_account_code": account.get("source_account_code") or old_code,
+        "account_code": corrected_code,
+    }
 
 @router.put("/api/trial-balance/accounts/{account_id}/override")
 def override_account_classification(account_id: int, payload: AccountOverrideRequest):

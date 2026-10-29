@@ -2888,6 +2888,18 @@ def init_db():
             )
         ''')
 
+        # Keep one explicitly saved column-to-role mapping per client. A later
+        # Trial Balance upload may reuse it when all saved source headers match.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS trial_balance_column_mappings (
+                client_id INTEGER PRIMARY KEY,
+                mapping_json TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+            )
+        ''')
+
         # One row per account line, per upload. classification (parent vs leaf) is
         # derived from account_code's dash-delimited hierarchy at parse time (Phase 2) -
         # source_account_type is a cross-check only, never authoritative for
@@ -2906,6 +2918,7 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 upload_id INTEGER NOT NULL,
                 account_code TEXT NOT NULL,
+                source_account_code TEXT,
                 account_name TEXT,
                 parent_account_code TEXT,
                 level INTEGER NOT NULL DEFAULT 1,
@@ -2944,6 +2957,16 @@ def init_db():
             print("✅ Added opening_dr/opening_cr/period_dr/period_cr/closing_dr/closing_cr columns to trial_balance_accounts")
         except Exception as e:
             print("⚠️ Could not add new amount columns to trial_balance_accounts:", e)
+
+        # Retain the code exactly as imported so later corrections remain auditable.
+        try:
+            cur = conn.execute("PRAGMA table_info(trial_balance_accounts)")
+            existing_columns = [row[1] for row in cur.fetchall()]
+            if 'source_account_code' not in existing_columns:
+                conn.execute("ALTER TABLE trial_balance_accounts ADD COLUMN source_account_code TEXT")
+            conn.execute("UPDATE trial_balance_accounts SET source_account_code = account_code WHERE source_account_code IS NULL")
+        except Exception as e:
+            print("⚠️ Could not add source_account_code to trial_balance_accounts:", e)
 
         # Schema upgrade: Audit Rules "Assign Categories", Section 2 Phase 3 - add a
         # nullable category_id link from trial_balance_accounts to
@@ -4196,6 +4219,35 @@ def _ensure_postgres_report_category_tables(conn):
     finally:
         cur.close()
 
+def _ensure_postgres_trial_balance_source_code(conn):
+    """Keep the originally imported account code alongside its editable code."""
+    with conn.cursor() as cur:
+        cur.execute("ALTER TABLE trial_balance_accounts ADD COLUMN IF NOT EXISTS source_account_code TEXT")
+        cur.execute("UPDATE trial_balance_accounts SET source_account_code = account_code WHERE source_account_code IS NULL")
+
+
+def _ensure_postgres_trial_balance_column_mappings(conn):
+    """Create per-client saved Trial Balance mappings on already-bootstrapped schemas."""
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT to_regclass('public.trial_balance_column_mappings')")
+        was_missing = cur.fetchone()[0] is None
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS trial_balance_column_mappings (
+                client_id INTEGER PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE,
+                mapping_json JSONB NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                updated_at TIMESTAMPTZ DEFAULT now()
+            )
+        ''')
+        return was_missing
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
+
 def _ensure_postgres_account_set_tables(conn):
     """Create Account Set foundation tables on fresh and existing Postgres schemas."""
     cur = conn.cursor()
@@ -5140,6 +5192,8 @@ def init_db_postgres(conn):
         _ensure_upload_lifecycle_schema(conn)
         _ensure_postgres_report_category_tables(conn)
         _ensure_postgres_account_set_tables(conn)
+        _ensure_postgres_trial_balance_source_code(conn)
+        migrated_tb_column_mappings = _ensure_postgres_trial_balance_column_mappings(conn)
         _ensure_postgres_cash_bank_transaction_classifications(conn)
         _ensure_postgres_cashflow_voucher_occurrences(conn)
         _ensure_postgres_cashflow_prepared_tables(conn)
@@ -5172,6 +5226,8 @@ def init_db_postgres(conn):
             migration_notes.append("audit_rule_voucher_check_assertions created")
         if migrated_ruleset_hash:
             migration_notes.append("applied_ruleset_hash column added to verification_details")
+        if migrated_tb_column_mappings:
+            migration_notes.append("trial_balance_column_mappings created")
         print(
             "[postgres] existing schema verified; skipped bootstrap"
             + (f" ({'; '.join(migration_notes)})" if migration_notes else "")
@@ -6101,6 +6157,16 @@ def init_db_postgres(conn):
     ''', "trial_balance_uploads")
     run("CREATE INDEX IF NOT EXISTS idx_trial_balance_uploads_client ON trial_balance_uploads (client_id)")
 
+    # One explicitly saved Trial Balance column map per client, shared across periods.
+    run('''
+        CREATE TABLE IF NOT EXISTS trial_balance_column_mappings (
+            client_id INTEGER PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE,
+            mapping_json JSONB NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now()
+        )
+    ''', "trial_balance_column_mappings")
+
     # ---------- 30. trial_balance_accounts ----------
     # category_id has no FK in the SQLite source (soft link to
     # audit_rule_categories.id) - left as a plain column here too.
@@ -6109,6 +6175,7 @@ def init_db_postgres(conn):
             id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             upload_id INTEGER NOT NULL REFERENCES trial_balance_uploads(id) ON DELETE CASCADE,
             account_code TEXT NOT NULL,
+            source_account_code TEXT,
             account_name TEXT,
             parent_account_code TEXT,
             level INTEGER NOT NULL DEFAULT 1,
@@ -6233,6 +6300,7 @@ def init_db_postgres(conn):
         "ON report_balance_inputs (client_id, group_label, period_month)"
     )
 
+    _ensure_postgres_trial_balance_source_code(conn)
     _ensure_postgres_account_set_tables(conn)
     # ---------- 34. voucher_line_documents ----------
     run('''

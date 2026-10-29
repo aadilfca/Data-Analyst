@@ -1,5 +1,29 @@
 # Changelog Archive
 
+## Trial Balance saved mapping startup migration — 2026-10-29
+
+The saved-mapping GET/PUT routes returned 500 on databases that had already completed PostgreSQL bootstrap: their startup fast path skipped the full table-creation list, and the new table was missing from that path. Added an idempotent `_ensure_postgres_trial_balance_column_mappings()` migration there, with a startup note when it creates the table. New databases continue to create it through the full bootstrap. No route or UI behavior changed. Python compilation and `git diff --check` pass; restart and mapping-save acceptance are pending.
+
+## Trial Balance client column mapping save/reuse — 2026-10-29
+
+Added one persistent Trial Balance column mapping per client, stored in the SQLite and PostgreSQL schemas. The Column Mapping panel now has a **Save Mapping** button that replaces the same client's saved map on explicit action. When a later file is selected, the saved map is applied only if all eight saved source headers exist and are distinct; otherwise the existing suggested/manual mapping flow remains in place. Client-specific GET/PUT endpoints require an administrator session and validate complete, distinct field assignments. Existing uploads and mappings are unchanged. Python compilation, JavaScript syntax and whitespace checks pass; local database/UI acceptance is pending.
+
+## Trial Balance validation-first upload — 2026-10-29
+
+Column mapping and an eight-row file preview now share aligned, scrollable panes. Validate opens a full-screen, paginated view of every source column and row, with editable effective account codes, date-code suggestions, and leaf/parent classification overrides. The new non-writing validation endpoint checks required mappings, blank/duplicate/date-converted codes, invalid amounts, opening/period/closing debit-credit agreement, and account roll-forward using leaf rows and a 0.01 tolerance. Save & Classify is available only after a passing validation; the upload endpoint repeats the same checks before any insert or exact-period replacement and stores manual classification choices. Removed the separate Account Code Review and post-save account table. Python compilation, JavaScript syntax and whitespace checks pass; local visual/accounting-rule acceptance is pending.
+
+**Layout follow-up:** Mapping and preview panes now grow to their content at equal grid height; the mapping table no longer scrolls internally, so the page scrolls vertically. Wide previews retain horizontal scrolling. Validation status now sits immediately before Back to mapping and sizes to its text; the accounting-check cards are removed from the screen while backend checks and the save gate remain. Browser visual acceptance is pending.
+
+**Client Excel preview follow-up:** The preview now displays the first 10 data rows and is labelled “Client Excel Preview,” with a note that it mirrors the uploaded workbook. This gives the preview more height beside the mapping pane; no mapping, validation, or accounting behavior changed.
+
+## Trial Balance upload toolbar — 2026-10-29
+
+The redundant upload title is removed. Before file selection, the toolbar shows the file picker and Available Trial Balances action; after selection, the file chip and period fields appear between them. The row wraps cleanly on narrow screens; long filenames truncate visually and show the full name on hover. Existing upload behavior is preserved. JavaScript syntax and whitespace checks pass; local visual acceptance is pending.
+
+## Trial Balance account-code correction — 2026-10-28
+
+Upload review inspects all mapped account-code cells, flags Excel dates with an `MM-YY` suggestion, and lets the user edit any code before upload. Suggestions require explicit selection; duplicate effective codes block upload. Exact-period replacement now waits until validation and commits with the new rows, preserving the prior upload on failure. The database retains imported code separately from the working code. Available Trial Balances permits selected-upload code edits; save recalculates hierarchy and carries shared categories/ACC mappings only when they do not conflict. SQLite and PostgreSQL add/backfill imported-code provenance. Python compilation, JavaScript syntax and `git diff --check` pass; test suite and local UI/database acceptance are pending.
+
 ## ACC shared page toolbar — 2026-10-28
 
 The four ACC page tabs now precede one responsive toolbar. It shows each active page's account search, Financial Statement category or Notes filter and Load control where applicable, the selected Trial Balance period/file, and the relevant toolbar actions. Financial Statement and Notes search fields are sized to keep Load beside the category filter; account counts are hidden. The Cash Flow category shortcut and Financial Statement/Notes setup buttons are restored as floating plus buttons. Redundant panel headings and descriptions remain removed; contextual modal guidance and conditional notices remain. JavaScript syntax and whitespace checks pass; local visual acceptance is pending.
@@ -4695,6 +4719,8 @@ untouched; `git diff` shows no `## ` heading added or removed; zero dated entrie
 `## Self-maintenance`; the Self-maintenance block itself diffs identically; and every one of the 73
 entries was word-counted programmatically against the ~25-word rule — none over. Net file size
 645 → 252 lines.
+
+**Follow-up, 2026-10-29.** A later append again split the Status log below `## Self-maintenance`; 29 older entries were restored under the correct heading and grouped into dated summaries. The log now has 53 entries, with detailed history retained in this archive.
 
 ---
 

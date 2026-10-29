@@ -70,6 +70,106 @@
             margin-bottom: 16px;
         }
 
+        .tb-upload-toolbar {
+            display: grid;
+            grid-template-columns: minmax(280px, 1.8fr) minmax(140px, 0.85fr)
+                minmax(140px, 0.85fr) minmax(140px, 0.85fr) auto;
+            align-items: end;
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+
+        .tb-upload-field {
+            display: none;
+            flex-direction: column;
+            gap: 4px;
+            min-width: 0;
+        }
+
+        .tb-upload-toolbar.has-selected-file .tb-upload-field {
+            display: flex;
+        }
+
+        .tb-upload-field label {
+            color: #64748b;
+            font-size: 11px;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .tb-upload-field input[type="date"],
+        .tb-upload-field select {
+            box-sizing: border-box;
+            width: 100%;
+            min-width: 0;
+            height: 36px;
+        }
+
+        .tb-upload-file-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+        }
+
+        .tb-upload-file-group .file-detail {
+            box-sizing: border-box;
+            flex: 1 1 auto;
+            min-width: 0;
+            max-width: 100%;
+        }
+
+        .tb-upload-file-group .file-detail .name {
+            overflow: hidden;
+            min-width: 0;
+            max-width: 230px;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .tb-upload-toolbar #availableTrialBalancesBtn {
+            justify-self: end;
+            margin-left: 0;
+        }
+
+        @media (max-width: 1100px) {
+            .tb-upload-toolbar {
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+            }
+
+            .tb-upload-file-group {
+                grid-column: span 2;
+            }
+        }
+
+        @media (max-width: 720px) {
+            .tb-upload-toolbar {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .tb-upload-file-group {
+                grid-column: 1 / -1;
+            }
+
+            .tb-upload-toolbar #availableTrialBalancesBtn {
+                justify-self: start;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .tb-upload-toolbar {
+                grid-template-columns: minmax(0, 1fr);
+            }
+
+            .tb-upload-toolbar > * {
+                grid-column: 1;
+            }
+
+            .tb-upload-file-group {
+                flex-wrap: wrap;
+            }
+        }
+
         .tb-field-row label {
             font-weight: 600;
             font-size: 13px;
@@ -429,6 +529,147 @@
             max-width: 280px;
         }
 
+        .tb-code-review-input { min-width: 150px; width: 100%; }
+        .tb-code-review-suggestion { margin-left: 6px; white-space: nowrap; }
+        .tb-code-correction-cell { min-width: 210px; }
+
+        .tb-mapping-review-grid {
+            display: grid;
+            grid-template-columns: minmax(320px, 0.85fr) minmax(0, 1.15fr);
+            gap: 16px;
+            align-items: stretch;
+        }
+
+        .tb-mapping-pane {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+
+        .tb-mapping-pane h3 { margin: 0 0 6px; }
+        .tb-mapping-pane .group-hint { margin-bottom: 10px; }
+        .tb-mapping-heading {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .tb-mapping-heading > div { min-width: 0; }
+        .tb-mapping-pane .tb-review-table-wrapper {
+            flex: 1;
+            max-height: none;
+            overflow: visible;
+        }
+
+        .tb-preview-heading {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 12px;
+        }
+
+        .tb-preview-heading .group-hint { margin-bottom: 10px; }
+        .tb-preview-pane .tb-review-table-wrapper {
+            max-height: none;
+            overflow-x: auto;
+            overflow-y: visible;
+        }
+        .tb-preview-pane .tb-review-table { min-width: max-content; }
+        .tb-preview-pane .tb-review-table th,
+        .tb-preview-pane .tb-review-table td { white-space: nowrap; }
+
+        #uploadViewContainer.tb-validation-active {
+            position: relative;
+            height: calc(100vh - 70px);
+            overflow: hidden;
+        }
+
+        .tb-validation-sheet {
+            display: none;
+            position: fixed;
+            inset: 70px 0 0;
+            z-index: 99;
+            box-sizing: border-box;
+            padding: 18px 24px 16px;
+            background: #fff;
+            flex-direction: column;
+            gap: 12px;
+            overflow: hidden;
+        }
+
+        .tb-validation-sheet.active { display: flex; }
+        .tb-validation-header,
+        .tb-validation-footer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            flex-shrink: 0;
+        }
+
+        .tb-validation-header h2 { margin: 0 0 3px; font-size: 20px; color: #1e293b; }
+        .tb-validation-header p { margin: 0; color: #64748b; font-size: 12px; }
+        .tb-validation-header-actions {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 10px;
+            min-width: 0;
+        }
+        .tb-validation-status {
+            box-sizing: border-box;
+            width: fit-content;
+            max-width: min(68vw, 920px);
+            margin: 0;
+            flex: 0 1 auto;
+        }
+
+        .tb-validation-table-wrapper {
+            flex: 1;
+            min-height: 0;
+            overflow: auto;
+            border: 1px solid #e2e8f0;
+            border-radius: 7px;
+        }
+
+        .tb-validation-table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px; }
+        .tb-validation-table th {
+            position: sticky;
+            top: 0;
+            z-index: 2;
+            padding: 8px 10px;
+            background: #f1f5f9;
+            border: 1px solid #e2e8f0;
+            text-align: left;
+            white-space: nowrap;
+        }
+        .tb-validation-table td {
+            padding: 6px 8px;
+            border: 1px solid #e2e8f0;
+            white-space: nowrap;
+            background: #fff;
+        }
+        .tb-validation-table tr:nth-child(even) td { background: #fafcff; }
+        .tb-validation-table .tb-validation-issue-cell { white-space: normal; min-width: 220px; color: #b91c1c; }
+        .tb-validation-table input,
+        .tb-validation-table select { box-sizing: border-box; min-width: 120px; padding: 5px 7px; }
+        .tb-validation-table .tb-code-review-input { width: 160px; }
+        .tb-validation-actions { display: flex; align-items: center; gap: 8px; }
+        .tb-validation-pages { display: flex; align-items: center; gap: 8px; color: #64748b; font-size: 12px; }
+
+        @media (max-width: 850px) {
+            .tb-mapping-review-grid { grid-template-columns: minmax(0, 1fr); }
+        }
+
+        @media (max-width: 560px) {
+            .tb-validation-sheet { padding: 12px; }
+            .tb-validation-header,
+            .tb-validation-footer { align-items: flex-start; flex-direction: column; }
+            .tb-validation-header-actions { width: 100%; justify-content: flex-start; }
+            .tb-validation-status { max-width: calc(100% - 150px); }
+            .tb-validation-actions { flex-wrap: wrap; }
+        }
+
         /* ---------- STANDARD TEMPLATE DOWNLOAD (Section 1, Phase 3) ---------- */
         /* Escape-hatch link, styled as plain inline text (not a prominent button)
            since it's a fallback for a rare case, not the primary mapping flow. */
@@ -468,8 +709,8 @@
 
     <div class="main-container">
     <!-- Available Trial Balances (Section 1, Phase 2): the whole normal upload flow is
-         wrapped in this container so it can be hidden as one unit while the read-only
-         browsing view below is shown, and restored unchanged via "Back" -- no in-progress
+         wrapped in this container so it can be hidden as one unit while the selected-upload
+         correction view below is shown, and restored unchanged via "Back" -- no in-progress
          file/mapping state is lost, since it all lives inside this container, untouched
          while hidden. -->
     <div id="uploadViewContainer">
@@ -479,107 +720,133 @@
         </div>
 
         <div class="tb-form-group">
-            <h3>📤 Upload Trial Balance</h3>
-
             <!-- Period Start/End/Type is now the sole date source for an upload -- it supersedes
                  the old standalone As of Date field. Both dates are required (see
                  updateClientDependentUI()/uploadTrialBalance() in trial_balance.js): Period End's
                  value is what actually gets sent to the backend as as_of_date. When both dates are
                  filled, the page checks with the backend (Phase 5) whether an upload already exists
                  for this exact period before allowing the upload to proceed. -->
-            <div class="tb-field-row">
-                <label for="periodStartInput">Period Start</label>
-                <input type="date" id="periodStartInput">
-                <label for="periodEndInput">Period End</label>
-                <input type="date" id="periodEndInput">
-                <label for="periodTypeSelect">Period Type</label>
-                <select id="periodTypeSelect">
-                    <option value="monthly">Monthly</option>
-                    <option value="quarterly">Quarterly</option>
-                    <option value="half_yearly">Half-Yearly</option>
-                    <option value="annual">Annual</option>
-                </select>
-                <!-- Available Trial Balances (Section 1, Phase 2): opens the read-only
-                     browsing view below. Pushed to the far right of this row via
-                     margin-left:auto on .btn-secondary-action. -->
-                <button class="btn-secondary-action" id="availableTrialBalancesBtn" type="button">📊 Available Trial Balances</button>
-            </div>
-
-            <div class="tb-field-row">
-                <button class="btn-upload-file" id="uploadFileBtn" type="button">
-                    <span class="upload-file-btn-main">Choose File</span>
-                    <span class="upload-file-btn-sub">.xlsx, .xls</span>
-                </button>
-                <div class="file-detail" id="fileInfo" style="display:none;">
-                    <span class="name" id="fileName"></span>
-                    <span class="size" id="fileSize"></span>
-                    <button class="clear" id="clearBtn" title="Remove file" type="button">✕</button>
+            <div class="tb-upload-toolbar" id="uploadToolbar">
+                <div class="tb-upload-file-group">
+                    <button class="btn-upload-file" id="uploadFileBtn" type="button">
+                        <span class="upload-file-btn-main">Choose File</span>
+                        <span class="upload-file-btn-sub">.xlsx, .xls</span>
+                    </button>
+                    <div class="file-detail" id="fileInfo" style="display:none;">
+                        <span class="name" id="fileName"></span>
+                        <span class="size" id="fileSize"></span>
+                        <button class="clear" id="clearBtn" title="Remove file" type="button">✕</button>
+                    </div>
+                    <input type="file" id="fileInput" accept=".xlsx,.xls" style="display:none;">
                 </div>
-                <input type="file" id="fileInput" accept=".xlsx,.xls" style="display:none;">
+
+                <div class="tb-upload-field">
+                    <label for="periodStartInput">Period Start</label>
+                    <input type="date" id="periodStartInput">
+                </div>
+
+                <div class="tb-upload-field">
+                    <label for="periodEndInput">Period End</label>
+                    <input type="date" id="periodEndInput">
+                </div>
+
+                <div class="tb-upload-field">
+                    <label for="periodTypeSelect">Period Type</label>
+                    <select id="periodTypeSelect">
+                        <option value="monthly">Monthly</option>
+                        <option value="quarterly">Quarterly</option>
+                        <option value="half_yearly">Half-Yearly</option>
+                        <option value="annual">Annual</option>
+                    </select>
+                </div>
+
+                <!-- Available Trial Balances (Section 1, Phase 2): opens the selected-upload
+                     browsing view below; kept at the right end of the upload toolbar. -->
+                <button class="btn-secondary-action" id="availableTrialBalancesBtn" type="button">📊 Available Trial Balances</button>
             </div>
         </div>
 
-        <!-- Column Mapping (Section 1, Phase 2) -- hidden until a file is selected and
-             suggest-mapping/preview parsing complete. Upload & Classify lives at the
-             bottom of this section so the natural flow reads: pick file -> review/correct
-             mapping -> click Upload & Classify. -->
+        <!-- Column mapping and a short file preview appear after a file is selected. -->
         <div class="tb-form-group" id="mappingSection" style="display:none;">
-            <h3>🔗 Column Mapping</h3>
-            <p class="group-hint">Confirm which column in the file is which field. Suggested matches are pre-filled below -- review and correct before uploading.</p>
-
-            <!-- Section 1, Phase 3: escape hatch for a source file too irregular to
-                 map cleanly (e.g. ambiguous repeated headers). A file built from this
-                 template still goes through this exact same mapping window on upload. -->
-            <p class="group-hint tb-escape-hatch">
-                File too irregular to map cleanly?
-                <button type="button" id="downloadStandardTemplateBtn" class="tb-inline-link-btn">Download the standard template</button>
-                instead, and re-upload using that format.
-            </p>
-
             <div id="mappingValidationMessage" class="status-bar error" style="display:none;">
                 <span class="icon">⚠️</span>
                 <span id="mappingValidationText"></span>
             </div>
 
-            <div class="tb-review-table-wrapper">
-                <table class="tb-review-table">
-                    <thead>
-                        <tr>
-                            <th>Field</th>
-                            <th>Excel Column</th>
-                            <th>Status</th>
-                        </tr>
-                    </thead>
-                    <tbody id="mappingTableBody">
-                        <!-- Populated by renderMappingDropdowns() in trial_balance.js -->
-                    </tbody>
-                </table>
-            </div>
+            <div class="tb-mapping-review-grid">
+                <section class="tb-mapping-pane">
+                    <div class="tb-mapping-heading">
+                        <div>
+                            <h3>🔗 Column Mapping</h3>
+                            <p class="group-hint">Confirm the source column for each Trial Balance field.</p>
+                        </div>
+                        <button class="btn-secondary-action" id="saveTrialBalanceMappingBtn" type="button" disabled>Save Mapping</button>
+                    </div>
+                    <div class="tb-review-table-wrapper">
+                        <table class="tb-review-table">
+                            <thead>
+                                <tr><th>Field</th><th>Excel Column</th><th>Status</th></tr>
+                            </thead>
+                            <tbody id="mappingTableBody"></tbody>
+                        </table>
+                    </div>
+                </section>
 
-            <h3 style="margin-top:20px;">👁️ Preview (first 5 rows)</h3>
-            <p class="group-hint">A quick look at the file's actual data, so you can visually confirm each column choice above.</p>
-            <div class="tb-review-table-wrapper">
-                <table class="tb-review-table">
-                    <thead id="mappingPreviewHead">
-                        <!-- Populated by renderMappingPreviewTable() in trial_balance.js -->
-                    </thead>
-                    <tbody id="mappingPreviewBody">
-                        <!-- Populated by renderMappingPreviewTable() in trial_balance.js -->
-                    </tbody>
-                </table>
+                <section class="tb-mapping-pane tb-preview-pane">
+                    <div class="tb-preview-heading">
+                        <div>
+                            <h3>👁️ Client Excel Preview (first 10 rows)</h3>
+                            <p class="group-hint">A mirror of the uploaded Excel file.</p>
+                        </div>
+                        <button class="btn-primary-action" id="validateTrialBalanceBtn" type="button" disabled>Validate</button>
+                    </div>
+                    <div class="tb-review-table-wrapper">
+                        <table class="tb-review-table">
+                            <thead id="mappingPreviewHead"></thead>
+                            <tbody id="mappingPreviewBody"></tbody>
+                        </table>
+                    </div>
+                </section>
             </div>
+            <p class="group-hint tb-escape-hatch">
+                File too irregular to map cleanly?
+                <button type="button" id="downloadStandardTemplateBtn" class="tb-inline-link-btn">Download the standard template</button>
+                instead, then map and validate the re-uploaded file.
+            </p>
 
-            <div class="tb-field-row" style="margin-top:20px; margin-bottom:0;">
-                <button class="btn-primary-action" id="uploadTrialBalanceBtn" type="button" disabled>Upload &amp; Classify</button>
-            </div>
+        </div>
 
-            <!-- Fast Trial Balance upload: polls GET /api/trial-balance/upload-status/{progress_key}
-                 (routers/trial_balance.py) while uploadTrialBalance()'s POST is in flight - see
-                 pollTbUploadProgress() in trial_balance.js. Mirrors upload.html's #importProgressBar. -->
-            <div id="tbUploadProgressBar" class="import-progress-bar" style="display:none;">
-                <div class="import-progress-track">
-                    <div class="import-progress-fill" id="tbUploadProgressFill"></div>
+        <div class="tb-validation-sheet" id="tbValidationSheet" aria-hidden="true">
+            <div class="tb-validation-header">
+                <div>
+                    <h2>Trial Balance Validation</h2>
+                    <p id="tbValidationFileInfo"></p>
                 </div>
+                <div class="tb-validation-header-actions">
+                    <div class="status-bar info tb-validation-status" id="tbValidationStatus" role="status">Run validation to review the complete Trial Balance.</div>
+                    <button class="btn-secondary-action" id="tbValidationBackBtn" type="button">← Back to mapping</button>
+                </div>
+            </div>
+            <div class="tb-validation-table-wrapper">
+                <table class="tb-validation-table">
+                    <thead id="tbValidationHead"></thead>
+                    <tbody id="tbValidationBody"></tbody>
+                </table>
+            </div>
+            <div class="tb-validation-footer">
+                <div class="tb-validation-pages">
+                    <span id="tbValidationRowRange">0 rows</span>
+                    <button class="btn-secondary-action" id="tbValidationPrevBtn" type="button">Previous</button>
+                    <span id="tbValidationPageInfo">Page 0 of 0</span>
+                    <button class="btn-secondary-action" id="tbValidationNextBtn" type="button">Next</button>
+                </div>
+                <div class="tb-validation-actions">
+                    <button class="btn-secondary-action" id="tbValidationRunBtn" type="button">Revalidate</button>
+                    <button class="btn-primary-action" id="uploadTrialBalanceBtn" type="button" disabled>Save &amp; Classify</button>
+                </div>
+            </div>
+            <div id="tbUploadProgressBar" class="import-progress-bar" style="display:none;">
+                <div class="import-progress-track"><div class="import-progress-fill" id="tbUploadProgressFill"></div></div>
                 <div class="import-progress-label" id="tbUploadProgressLabel">0 of 0 accounts uploaded</div>
             </div>
         </div>
@@ -608,38 +875,16 @@
             </div>
         </div>
 
-        <div class="tb-form-group" id="reviewContainer" style="display:none;">
-            <h3>📝 Review Classifications</h3>
-            <p class="group-hint">Check the auto-classified accounts below. If a code was misclassified, click the toggle to flip it between Leaf and Parent.</p>
-            <div class="tb-review-table-wrapper">
-                <table class="tb-review-table">
-                    <thead>
-                        <tr>
-                            <th>Code</th>
-                            <th>Name</th>
-                            <th>Level</th>
-                            <th>Classification</th>
-                            <th>Action</th>
-                        </tr>
-                    </thead>
-                    <tbody id="reviewTableBody">
-                        <!-- Populated by renderReviewTable() in trial_balance.js -->
-                    </tbody>
-                </table>
-            </div>
-        </div>
     </div>
     <!-- /uploadViewContainer -->
 
-    <!-- Available Trial Balances is a read-only browsing view for a selected upload,
-         including the account hierarchy and its six stored opening/period/closing amounts.
-         Classification changes remain in the Review Classifications screen above. -->
+    <!-- Available Trial Balances supports account-code corrections within one selected upload. -->
     <div class="tb-form-group" id="availableTrialBalancesSection" style="display:none;">
         <div class="tb-field-row" style="margin-bottom:8px;">
             <button class="btn-secondary-action" id="closeAvailableTrialBalancesBtn" type="button">← Back</button>
             <h3 style="margin-bottom:0;">📊 Available Trial Balances</h3>
         </div>
-        <p class="group-hint">Browse a previously uploaded and classified Trial Balance for this client. Read-only -- to correct a classification, use the Review Classifications screen right after an upload.</p>
+        <p class="group-hint">Browse a previously uploaded Trial Balance and correct account codes for this upload.</p>
 
         <div class="tb-field-row">
             <label for="availableUploadsDropdown">Upload</label>
@@ -667,6 +912,7 @@
                         <th class="tb-amount-cell">Closing Dr</th>
                         <th class="tb-amount-cell">Closing Cr</th>
                         <th>Classification</th>
+                        <th>Code correction</th>
                     </tr>
                 </thead>
                 <tbody id="availableAccountsTableBody">
@@ -679,7 +925,7 @@
     <script src="/static/loading_ui.js?v=2"></script>
     <script src="/static/client_context.js?v=21"></script>
     <script src="/static/utils.js"></script>
-    <script src="/static/trial_balance.js?v=8"></script>
+    <script src="/static/trial_balance.js?v=13"></script>
 </body>
 
 </html>

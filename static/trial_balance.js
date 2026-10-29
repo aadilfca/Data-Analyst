@@ -1,11 +1,6 @@
 // ============================================================
-// Trial Balance module — Phase 5 of 5, FINAL: Review screen
-// Lets the auditor upload a client's Trial Balance Excel file
-// (with an as-of date), triggers the backend's upload+classify
-// endpoint (Phase 2), fetches and displays the classification
-// summary (Phase 3), and now (Phase 5) lists every classified
-// account so the auditor can flip a misclassified row between
-// Leaf/Parent via the new per-row override endpoint.
+// Trial Balance module: map source fields, validate the full workbook without
+// saving, then persist the reconciled Trial Balance with code/classification edits.
 //
 // Column mapping & standard template, Section 1, Phase 2 (standard 8-field fix):
 // once a file is selected, suggest-mapping (Phase 1 backend) is called to
@@ -22,8 +17,7 @@
 
 let selectedFile = null;
 
-// Which upload's accounts are currently on screen in the review table -- needed so the
-// row-toggle handler knows which upload's summary tiles to refresh after a flip.
+// Which saved upload is currently active for the Available Trial Balances view.
 let currentUploadId = null;
 
 // ---------- PERIOD TRACKING + OVERWRITE CONFLICT STATE (Section 2, Phase 6) ----------
@@ -35,7 +29,7 @@ let currentUploadId = null;
 let lastConflictCheckPeriod = null; // { start, end } the cached result below applies to
 let lastConflictCheckResult = null; // 'no_conflict' | 'confirmed' | 'declined' | 'error'
 
-// ---------- COLUMN MAPPING STATE (Section 1, Phase 2 -- standard 8-field fix) ----------
+// ---------- COLUMN MAPPING STATE (standard 8-field Trial Balance mapping) ----------
 // The 8 required mapping fields this UI surfaces, matching the standard trial
 // balance shape (Opening/Period/Closing Dr+Cr pairs). Type is supported by the
 // backend as an optional role but isn't part of the standard 8, so it's simply
@@ -57,9 +51,18 @@ const TB_MAPPING_FIELDS = [
 // column labels, since it's exactly what the upload endpoint will validate against.
 let fileHeaders = [];
 
-// First 5 data rows (arrays, header row already dropped), from a client-side SheetJS
-// parse of the same file -- matched to fileHeaders purely by column index.
+// First 10 data rows for the compact Client Excel mirror plus all rows for full validation.
+const PREVIEW_ROW_COUNT = 10;
 let filePreviewRows = [];
+let fileAllRows = [];
+let accountCodeCorrections = {};
+let accountClassificationOverrides = {};
+let validationResult = null;
+let validationDirty = true;
+let validationRequestToken = 0;
+let validationRevision = 0;
+let validationCurrentPage = 1;
+const validationPageSize = 50;
 
 // Current mapping selection, keyed by role -- seeded from suggest-mapping's
 // suggestions, then mutated in place by each dropdown's change listener.
@@ -84,6 +87,7 @@ function getElement(id) {
 }
 
 const clientSelectionWarning = getElement('clientSelectionWarning');
+const uploadToolbar = getElement('uploadToolbar');
 const periodStartInput = getElement('periodStartInput');
 const periodEndInput = getElement('periodEndInput');
 const periodTypeSelect = getElement('periodTypeSelect');
@@ -101,14 +105,25 @@ const summaryContainer = getElement('summaryContainer');
 const summaryTotalCount = getElement('summaryTotalCount');
 const summaryLeafCount = getElement('summaryLeafCount');
 const summaryParentCount = getElement('summaryParentCount');
-const reviewContainer = getElement('reviewContainer');
-const reviewTableBody = getElement('reviewTableBody');
 const mappingSection = getElement('mappingSection');
 const mappingValidationMessage = getElement('mappingValidationMessage');
 const mappingValidationText = getElement('mappingValidationText');
 const mappingTableBody = getElement('mappingTableBody');
+const saveTrialBalanceMappingBtn = getElement('saveTrialBalanceMappingBtn');
 const mappingPreviewHead = getElement('mappingPreviewHead');
 const mappingPreviewBody = getElement('mappingPreviewBody');
+const validateTrialBalanceBtn = getElement('validateTrialBalanceBtn');
+const tbValidationSheet = getElement('tbValidationSheet');
+const tbValidationBackBtn = getElement('tbValidationBackBtn');
+const tbValidationRunBtn = getElement('tbValidationRunBtn');
+const tbValidationStatus = getElement('tbValidationStatus');
+const tbValidationFileInfo = getElement('tbValidationFileInfo');
+const tbValidationHead = getElement('tbValidationHead');
+const tbValidationBody = getElement('tbValidationBody');
+const tbValidationPrevBtn = getElement('tbValidationPrevBtn');
+const tbValidationNextBtn = getElement('tbValidationNextBtn');
+const tbValidationRowRange = getElement('tbValidationRowRange');
+const tbValidationPageInfo = getElement('tbValidationPageInfo');
 const downloadStandardTemplateBtn = getElement('downloadStandardTemplateBtn');
 
 // Available Trial Balances (Section 1, Phase 2) elements.
@@ -126,7 +141,6 @@ const deleteUploadBtn = getElement('deleteUploadBtn');
 // unrelated controls usable. The shared cursor token is deliberately owned by each complete
 // action, including any confirmation check and post-write refresh it triggers.
 const trialBalanceActionsInFlight = new Set();
-const trialBalanceOverrideInFlight = new Set();
 
 function startTrialBalanceLoading(target) {
     if (!window.LoadingUI || typeof window.LoadingUI.startGlobalLoading !== 'function') return null;
@@ -157,10 +171,8 @@ function formatFileSize(bytes) {
 }
 
 // ---------- CLIENT-DEPENDENT UI ----------
-// Enables the Upload & Classify button only once a client is selected, a file
-// is chosen, and Period Start/End are filled in (Period End's value is what gets
-// sent to the backend as as_of_date -- the old standalone As of Date field is gone,
-// so both period dates are now the required date source). Client switching on this
+// Enables validation after a client, file, period and complete mapping exist.
+// Save & Classify additionally requires a current, passing validation result. Client switching on this
 // app always navigates away to the dashboard (confirmSwitchClient() in
 // client_context.js), so this only needs to run on load and after each of
 // the relevant inputs changes — no live cross-page client-change listener needed.
@@ -178,9 +190,259 @@ function updateClientDependentUI() {
     // an all-null tbColumnMapping before fileHeaders has ever been populated.
     const hasMapping = fileHeaders.length > 0 && checkMappingComplete();
 
-    if (uploadTrialBalanceBtn) {
-        uploadTrialBalanceBtn.disabled = !(hasClient && hasFile && hasPeriod && hasMapping);
+    if (validateTrialBalanceBtn) {
+        validateTrialBalanceBtn.disabled = !(hasClient && hasFile && hasPeriod && hasMapping);
     }
+    if (uploadTrialBalanceBtn) {
+        uploadTrialBalanceBtn.disabled = !(hasClient && hasPeriod && validationResult && validationResult.valid && !validationDirty);
+    }
+    if (saveTrialBalanceMappingBtn) {
+        saveTrialBalanceMappingBtn.disabled = !(hasClient && hasFile && hasMapping)
+            || trialBalanceActionsInFlight.has('saved-column-mapping');
+    }
+}
+
+function setValidationStatus(message, type) {
+    if (!tbValidationStatus) return;
+    tbValidationStatus.textContent = message;
+    tbValidationStatus.className = 'status-bar ' + (type || 'info') + ' tb-validation-status';
+}
+
+function invalidateTrialBalanceValidation(message) {
+    validationRevision += 1;
+    validationDirty = true;
+    validationResult = null;
+    updateClientDependentUI();
+    if (tbValidationSheet && tbValidationSheet.classList.contains('active')) {
+        setValidationStatus(message || 'Changes detected. Revalidate before saving.', 'info');
+    }
+}
+
+function buildTrialBalanceFormData() {
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+    TB_MAPPING_FIELDS.forEach(function (field) {
+        formData.append(field.role, tbColumnMapping[field.role]);
+    });
+    formData.append('account_code_overrides', JSON.stringify(accountCodeCorrections));
+    formData.append('account_classification_overrides', JSON.stringify(accountClassificationOverrides));
+    return formData;
+}
+
+function openTrialBalanceValidation() {
+    if (!uploadViewContainer || !tbValidationSheet) return;
+    invalidateTrialBalanceValidation();
+    uploadViewContainer.classList.add('tb-validation-active');
+    tbValidationSheet.classList.add('active');
+    tbValidationSheet.setAttribute('aria-hidden', 'false');
+    if (tbValidationFileInfo) tbValidationFileInfo.textContent = selectedFile ? selectedFile.name : '';
+    validationCurrentPage = 1;
+    renderTrialBalanceValidationGrid();
+    runTrialBalanceValidation();
+}
+
+function closeTrialBalanceValidation() {
+    if (uploadViewContainer) uploadViewContainer.classList.remove('tb-validation-active');
+    if (tbValidationSheet) {
+        tbValidationSheet.classList.remove('active');
+        tbValidationSheet.setAttribute('aria-hidden', 'true');
+    }
+}
+
+if (validateTrialBalanceBtn) {
+    validateTrialBalanceBtn.addEventListener('click', openTrialBalanceValidation);
+}
+if (tbValidationBackBtn) tbValidationBackBtn.addEventListener('click', closeTrialBalanceValidation);
+if (tbValidationRunBtn) tbValidationRunBtn.addEventListener('click', runTrialBalanceValidation);
+if (uploadTrialBalanceBtn) uploadTrialBalanceBtn.addEventListener('click', uploadTrialBalance);
+
+async function runTrialBalanceValidation() {
+    const hasClient = typeof window.isClientSelected === 'function' && window.isClientSelected();
+    const hasPeriod = !!(periodStartInput && periodEndInput && periodStartInput.value && periodEndInput.value);
+    if (!hasClient || !selectedFile || !hasPeriod || !checkMappingComplete()) {
+        setValidationStatus('Select a client, file and period, then complete the required column mappings.', 'error');
+        return;
+    }
+    const token = ++validationRequestToken;
+    const revision = validationRevision;
+    const loadingToken = startTrialBalanceLoading(tbValidationRunBtn || validateTrialBalanceBtn);
+    if (tbValidationRunBtn) tbValidationRunBtn.disabled = true;
+    if (uploadTrialBalanceBtn) uploadTrialBalanceBtn.disabled = true;
+    validationResult = null;
+    validationDirty = true;
+    setValidationStatus('Validating mapped rows and Trial Balance controls…', 'loading');
+    try {
+        const res = await fetch(API_BASE + '/api/trial-balance/validate', {
+            method: 'POST',
+            body: buildTrialBalanceFormData()
+        });
+        const result = await res.json();
+        if (token !== validationRequestToken) return;
+        if (revision !== validationRevision) {
+            setValidationStatus('Values changed while validation was running. Revalidate before saving.', 'info');
+            return;
+        }
+        if (!res.ok) {
+            const detail = result.detail;
+            throw new Error(typeof detail === 'string' ? detail : (detail && detail.message) || 'Trial Balance validation failed.');
+        }
+        validationResult = result;
+        validationDirty = false;
+        validationCurrentPage = 1;
+        renderTrialBalanceValidationGrid();
+        const issueCount = Number(result.issue_count || 0);
+        if (result.valid) {
+            setValidationStatus(`✅ Validation passed for ${result.account_count} accounts. Opening, movement, closing and roll-forward checks use leaf accounts with a 0.01 tolerance.`, 'success');
+        } else {
+            const globalIssues = (result.errors || []).filter(function (issue) { return issue.excel_row == null; })
+                .map(function (issue) { return issue.message; }).join(' ');
+            const omitted = result.omitted_issue_count ? ` ${result.omitted_issue_count} additional issue(s) are not listed individually.` : '';
+            setValidationStatus(`⚠️ ${issueCount} issue(s) found. ${globalIssues} Resolve the listed issues, then revalidate before saving.${omitted}`, 'error');
+        }
+        updateClientDependentUI();
+    } catch (error) {
+        if (token !== validationRequestToken) return;
+        validationResult = null;
+        validationDirty = true;
+        renderTrialBalanceValidationGrid();
+        setValidationStatus(error.message, 'error');
+        updateClientDependentUI();
+    } finally {
+        if (token === validationRequestToken && tbValidationRunBtn) tbValidationRunBtn.disabled = false;
+        stopTrialBalanceLoading(loadingToken);
+    }
+}
+
+function renderTrialBalanceValidationGrid() {
+    if (!tbValidationHead || !tbValidationBody) return;
+    tbValidationHead.innerHTML = '';
+    tbValidationBody.innerHTML = '';
+    const header = document.createElement('tr');
+    ['Excel Row'].concat(fileHeaders, ['Corrected Account Code', 'Classification', 'Validation Issues']).forEach(function (label) {
+        const th = document.createElement('th');
+        th.textContent = label;
+        header.appendChild(th);
+    });
+    tbValidationHead.appendChild(header);
+
+    const totalRows = fileAllRows.length;
+    const totalPages = Math.max(1, Math.ceil(totalRows / validationPageSize));
+    validationCurrentPage = Math.max(1, Math.min(validationCurrentPage, totalPages));
+    const startIndex = (validationCurrentPage - 1) * validationPageSize;
+    const endIndex = Math.min(startIndex + validationPageSize, totalRows);
+    const issuesByRow = new Map();
+    if (validationResult && Array.isArray(validationResult.errors)) {
+        validationResult.errors.forEach(function (issue) {
+            if (issue.excel_row == null) return;
+            const key = String(issue.excel_row);
+            if (!issuesByRow.has(key)) issuesByRow.set(key, []);
+            issuesByRow.get(key).push(issue.message);
+        });
+    }
+    const codeIndex = fileHeaders.indexOf(tbColumnMapping.account_code_column);
+    const fragment = document.createDocumentFragment();
+    fileAllRows.slice(startIndex, endIndex).forEach(function (row, localIndex) {
+        const rowIndex = startIndex + localIndex;
+        const excelRow = rowIndex + 2;
+        const tr = document.createElement('tr');
+        const rowCell = document.createElement('td');
+        rowCell.textContent = String(excelRow);
+        tr.appendChild(rowCell);
+        fileHeaders.forEach(function (_header, columnIndex) {
+            const cell = document.createElement('td');
+            cell.textContent = accountCodeCellText(row[columnIndex]);
+            tr.appendChild(cell);
+        });
+
+        const sourceCode = codeIndex >= 0 ? accountCodeCellText(row[codeIndex]) : '';
+        const codeCell = document.createElement('td');
+        codeCell.className = 'tb-code-correction-cell';
+        const codeInput = document.createElement('input');
+        codeInput.type = 'text';
+        codeInput.className = 'tb-code-review-input';
+        codeInput.maxLength = 120;
+        codeInput.value = Object.prototype.hasOwnProperty.call(accountCodeCorrections, excelRow)
+            ? accountCodeCorrections[excelRow] : sourceCode;
+        codeInput.dataset.excelRow = String(excelRow);
+        codeInput.dataset.sourceCode = sourceCode;
+        codeInput.setAttribute('aria-label', 'Corrected account code for Excel row ' + excelRow);
+        codeCell.appendChild(codeInput);
+        const suggestion = suggestedCodeForDate(row[codeIndex]);
+        if (suggestion) {
+            const useSuggestion = document.createElement('button');
+            useSuggestion.type = 'button';
+            useSuggestion.className = 'btn-secondary-action tb-code-review-suggestion';
+            useSuggestion.textContent = 'Use ' + suggestion;
+            useSuggestion.dataset.suggestedCode = suggestion;
+            useSuggestion.dataset.excelRow = String(excelRow);
+            codeCell.appendChild(useSuggestion);
+        }
+        tr.appendChild(codeCell);
+
+        const classificationCell = document.createElement('td');
+        const classification = document.createElement('select');
+        classification.className = 'tb-classification-review';
+        classification.dataset.excelRow = String(excelRow);
+        [['leaf', 'Leaf'], ['parent', 'Parent']].forEach(function (optionData) {
+            const option = document.createElement('option');
+            option.value = optionData[0];
+            option.textContent = optionData[1];
+            classification.appendChild(option);
+        });
+        const automaticClass = validationResult && validationResult.auto_classification
+            ? validationResult.auto_classification[String(excelRow)] : 'leaf';
+        classification.value = accountClassificationOverrides[excelRow] || automaticClass || 'leaf';
+        classification.dataset.automatic = automaticClass || 'leaf';
+        classificationCell.appendChild(classification);
+        tr.appendChild(classificationCell);
+
+        const issuesCell = document.createElement('td');
+        issuesCell.className = 'tb-validation-issue-cell';
+        issuesCell.textContent = (issuesByRow.get(String(excelRow)) || []).join(' ');
+        tr.appendChild(issuesCell);
+        fragment.appendChild(tr);
+    });
+    tbValidationBody.appendChild(fragment);
+    if (tbValidationRowRange) tbValidationRowRange.textContent = totalRows ? `Showing ${startIndex + 1}–${endIndex} of ${totalRows} rows` : '0 rows';
+    if (tbValidationPageInfo) tbValidationPageInfo.textContent = `Page ${validationCurrentPage} of ${totalPages}`;
+    if (tbValidationPrevBtn) tbValidationPrevBtn.disabled = validationCurrentPage <= 1;
+    if (tbValidationNextBtn) tbValidationNextBtn.disabled = validationCurrentPage >= totalPages;
+}
+
+if (tbValidationPrevBtn) tbValidationPrevBtn.addEventListener('click', function () {
+    validationCurrentPage -= 1;
+    renderTrialBalanceValidationGrid();
+});
+if (tbValidationNextBtn) tbValidationNextBtn.addEventListener('click', function () {
+    validationCurrentPage += 1;
+    renderTrialBalanceValidationGrid();
+});
+if (tbValidationBody) {
+    tbValidationBody.addEventListener('input', function (event) {
+        const input = event.target.closest('.tb-code-review-input');
+        if (!input) return;
+        const rowNumber = Number(input.dataset.excelRow);
+        const corrected = input.value.trim();
+        if (corrected === input.dataset.sourceCode) delete accountCodeCorrections[rowNumber];
+        else accountCodeCorrections[rowNumber] = corrected;
+        invalidateTrialBalanceValidation('Account code changed. Revalidate before saving.');
+    });
+    tbValidationBody.addEventListener('change', function (event) {
+        const select = event.target.closest('.tb-classification-review');
+        if (!select) return;
+        const rowNumber = Number(select.dataset.excelRow);
+        if (select.value === select.dataset.automatic) delete accountClassificationOverrides[rowNumber];
+        else accountClassificationOverrides[rowNumber] = select.value;
+        invalidateTrialBalanceValidation('Classification changed. Revalidate before saving.');
+    });
+    tbValidationBody.addEventListener('click', function (event) {
+        const button = event.target.closest('.tb-code-review-suggestion');
+        if (!button) return;
+        const input = tbValidationBody.querySelector('.tb-code-review-input[data-excel-row="' + button.dataset.excelRow + '"]');
+        if (!input) return;
+        input.value = button.dataset.suggestedCode;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
 }
 
 // ---------- FILE SELECTION ----------
@@ -206,7 +468,13 @@ function handleFileSelected(file) {
         return;
     }
     selectedFile = file;
+    resetColumnMapping();
+    accountCodeCorrections = {};
+    accountClassificationOverrides = {};
+    invalidateTrialBalanceValidation('File changed. Validate the selected Trial Balance before saving.');
+    if (uploadToolbar) uploadToolbar.classList.add('has-selected-file');
     if (fileName) fileName.textContent = file.name;
+    if (fileName) fileName.title = file.name;
     if (fileSize) fileSize.textContent = formatFileSize(file.size);
     if (fileInfo) fileInfo.style.display = 'flex';
     updateClientDependentUI();
@@ -235,6 +503,12 @@ function handleFileSelected(file) {
 function resetColumnMapping() {
     fileHeaders = [];
     filePreviewRows = [];
+    fileAllRows = [];
+    accountCodeCorrections = {};
+    accountClassificationOverrides = {};
+    validationResult = null;
+    validationDirty = true;
+    closeTrialBalanceValidation();
     tbColumnMapping = {
         account_code_column: null, account_name_column: null,
         opening_dr_column: null, opening_cr_column: null,
@@ -248,8 +522,10 @@ function resetColumnMapping() {
 if (clearBtn) {
     clearBtn.addEventListener('click', function () {
         selectedFile = null;
+        if (uploadToolbar) uploadToolbar.classList.remove('has-selected-file');
         if (fileInfo) fileInfo.style.display = 'none';
         if (fileName) fileName.textContent = '';
+        if (fileName) fileName.removeAttribute('title');
         if (fileSize) fileSize.textContent = '';
         resetColumnMapping();
         updateClientDependentUI();
@@ -285,6 +561,7 @@ function handlePeriodDateChanged() {
     updatePeriodTypeSuggestion();
     lastConflictCheckPeriod = null;
     lastConflictCheckResult = null;
+    invalidateTrialBalanceValidation('Period changed. Validate again before saving.');
     updateClientDependentUI();
 }
 
@@ -293,6 +570,11 @@ if (periodStartInput) {
 }
 if (periodEndInput) {
     periodEndInput.addEventListener('change', handlePeriodDateChanged);
+}
+if (periodTypeSelect) {
+    periodTypeSelect.addEventListener('change', function () {
+        invalidateTrialBalanceValidation('Period type changed. Validate again before saving.');
+    });
 }
 
 // ---------- OVERWRITE-CONFLICT CHECK + CONFIRMATION (Section 2, Phase 6) ----------
@@ -382,6 +664,22 @@ async function suggestColumnMapping(file) {
     return result;
 }
 
+async function fetchSavedTrialBalanceColumnMapping(clientId) {
+    const url = API_BASE + '/api/trial-balance/saved-column-mapping?client_id=' + encodeURIComponent(clientId);
+    const res = await fetch(url);
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.detail || 'Could not load the saved client mapping.');
+    return result.mapping;
+}
+
+function savedMappingMatchesHeaders(mapping, headers) {
+    if (!mapping || typeof mapping !== 'object') return false;
+    const mappedHeaders = TB_MAPPING_FIELDS.map(function (field) { return mapping[field.role]; });
+    return mappedHeaders.every(function (header) {
+        return typeof header === 'string' && header.length > 0 && headers.includes(header);
+    }) && new Set(mappedHeaders).size === TB_MAPPING_FIELDS.length;
+}
+
 // Reads the selected file client-side via SheetJS to get its first sheet's raw rows
 // (array of arrays, header row included at index 0) -- used only for the preview
 // table's cell values; the header labels themselves come from suggestColumnMapping()
@@ -392,7 +690,7 @@ function readFileRowsForPreview(file) {
         reader.onload = function (e) {
             try {
                 const data = new Uint8Array(e.target.result);
-                const workbook = XLSX.read(data, { type: 'array' });
+                const workbook = XLSX.read(data, { type: 'array', cellDates: true });
                 const sheet = workbook.Sheets[workbook.SheetNames[0]];
                 const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
                 resolve(rows);
@@ -415,21 +713,31 @@ function readFileRowsForPreview(file) {
 async function loadColumnMappingForFile(file) {
     const token = ++mappingRequestToken;
     const loadingToken = startTrialBalanceLoading(uploadFileBtn);
+    const clientId = window.getSelectedClientId ? window.getSelectedClientId() : null;
     showStatus('Reading file and suggesting column mapping...', 'loading');
 
     try {
         const results = await Promise.all([
             suggestColumnMapping(file),
-            readFileRowsForPreview(file)
+            readFileRowsForPreview(file),
+            clientId
+                ? fetchSavedTrialBalanceColumnMapping(clientId).then(function (mapping) { return { mapping: mapping }; })
+                    .catch(function (error) { return { error: error }; })
+                : Promise.resolve({ mapping: null })
         ]);
         if (token !== mappingRequestToken) return; // a newer file was selected meanwhile
 
         const suggestResult = results[0];
         const rawRows = results[1];
+        const savedMappingResult = results[2];
 
         fileHeaders = suggestResult.headers || [];
-        filePreviewRows = rawRows.slice(1, 6); // first 5 data rows, header row dropped
-        tbColumnMapping = {
+        fileAllRows = rawRows.slice(1);
+        filePreviewRows = rawRows.slice(1, PREVIEW_ROW_COUNT + 1); // header row dropped
+        accountCodeCorrections = {};
+        accountClassificationOverrides = {};
+        invalidateTrialBalanceValidation('File mapping ready. Validate before saving.');
+        const suggestedMapping = {
             account_code_column: suggestResult.suggestions.account_code_column || null,
             account_name_column: suggestResult.suggestions.account_name_column || null,
             opening_dr_column: suggestResult.suggestions.opening_dr_column || null,
@@ -439,12 +747,22 @@ async function loadColumnMappingForFile(file) {
             closing_dr_column: suggestResult.suggestions.closing_dr_column || null,
             closing_cr_column: suggestResult.suggestions.closing_cr_column || null,
         };
+        const savedMappingApplied = savedMappingMatchesHeaders(savedMappingResult.mapping, fileHeaders);
+        tbColumnMapping = savedMappingApplied ? savedMappingResult.mapping : suggestedMapping;
 
         renderMappingDropdowns();
         renderMappingPreviewTable();
         checkMappingComplete();
         if (mappingSection) mappingSection.style.display = 'block';
-        showStatus('✅ Column mapping suggested -- review and correct below if needed.', 'success');
+        if (savedMappingApplied) {
+            showStatus('✅ Saved mapping for this client applied. Review the columns, then validate the Trial Balance.', 'success');
+        } else if (savedMappingResult.error) {
+            showStatus('⚠️ Could not load this client’s saved mapping. Review the suggested columns before validating.', 'error');
+        } else if (savedMappingResult.mapping) {
+            showStatus('⚠️ This file’s headers do not match the saved client mapping. Review the suggested columns before validating.', 'info');
+        } else {
+            showStatus('✅ Column mapping suggested. Review the sample rows, then validate the full Trial Balance.', 'success');
+        }
     } catch (error) {
         if (token !== mappingRequestToken) return;
         showStatus('❌ Could not read file for column mapping: ' + error.message, 'error');
@@ -500,6 +818,11 @@ function renderMappingDropdowns() {
 
         select.addEventListener('change', function () {
             tbColumnMapping[field.role] = this.value || null;
+            if (field.role === 'account_code_column') {
+                accountCodeCorrections = {};
+                accountClassificationOverrides = {};
+            }
+            invalidateTrialBalanceValidation('Column mapping changed. Validate again before saving.');
             renderMappingDropdowns(); // full re-render so other rows' exclusions/status update
             checkMappingComplete();
             updateClientDependentUI();
@@ -516,7 +839,8 @@ function renderMappingDropdowns() {
     });
 }
 
-// Renders the small "first 5 rows" preview: column labels from fileHeaders (the same
+// Renders the first PREVIEW_ROW_COUNT rows as a mirror of the uploaded Client Excel file:
+// column labels come from fileHeaders (the same
 // list the mapping dropdowns use), cell values from filePreviewRows indexed by
 // column position -- not by re-matching header text.
 function renderMappingPreviewTable() {
@@ -537,14 +861,37 @@ function renderMappingPreviewTable() {
         fileHeaders.forEach(function (_header, idx) {
             const td = document.createElement('td');
             const value = rowArray[idx];
-            td.textContent = value !== undefined ? String(value) : '';
+            td.textContent = accountCodeCellText(value);
             tr.appendChild(td);
         });
         mappingPreviewBody.appendChild(tr);
     });
 }
 
-// Checks all 4 required fields are mapped; shows/hides the inline validation message
+function accountCodeCellText(value) {
+    if (value instanceof Date && !Number.isNaN(value.getTime())) {
+        const year = value.getFullYear();
+        const month = String(value.getMonth() + 1).padStart(2, '0');
+        const day = String(value.getDate()).padStart(2, '0');
+        const hours = String(value.getHours()).padStart(2, '0');
+        const minutes = String(value.getMinutes()).padStart(2, '0');
+        const seconds = String(value.getSeconds()).padStart(2, '0');
+        return year + '-' + month + '-' + day + ' ' + hours + ':' + minutes + ':' + seconds;
+    }
+    return value === undefined || value === null ? '' : String(value).trim();
+}
+
+function suggestedCodeForDate(value) {
+    let date = value instanceof Date ? value : null;
+    if (!date && typeof value === 'string') {
+        const match = value.trim().match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[ T].*)?$/);
+        if (match) date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    }
+    if (!date || Number.isNaN(date.getTime())) return '';
+    return String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getFullYear()).slice(-2);
+}
+
+// Checks all 8 required fields are mapped; shows/hides the inline validation message
 // naming every still-missing field (a frontend mirror of Phase 1's backend
 // validate_column_mapping() -- the backend remains the authoritative check on the
 // actual upload call, this is just an earlier, clearer signal to the user).
@@ -557,11 +904,50 @@ function checkMappingComplete() {
         if (missing.length === 0) {
             mappingValidationMessage.style.display = 'none';
         } else {
-            mappingValidationText.textContent = 'Please map the following required field(s) before uploading: ' + missing.join(', ') + '.';
+            mappingValidationText.textContent = 'Map the following required field(s) before validation: ' + missing.join(', ') + '.';
             mappingValidationMessage.style.display = 'flex';
         }
     }
     return missing.length === 0;
+}
+
+async function saveTrialBalanceColumnMapping() {
+    const clientId = window.getSelectedClientId ? window.getSelectedClientId() : null;
+    if (!clientId || !selectedFile || !fileHeaders.length || !checkMappingComplete()) {
+        showStatus('Select a client and file, then map all required Trial Balance fields before saving.', 'error');
+        return;
+    }
+    const mappedHeaders = TB_MAPPING_FIELDS.map(function (field) { return tbColumnMapping[field.role]; });
+    if (mappedHeaders.some(function (header) { return !fileHeaders.includes(header); })
+        || new Set(mappedHeaders).size !== TB_MAPPING_FIELDS.length) {
+        showStatus('The current mapping must use distinct columns from the selected file.', 'error');
+        return;
+    }
+    const actionKey = 'saved-column-mapping';
+    if (trialBalanceActionsInFlight.has(actionKey)) return;
+    trialBalanceActionsInFlight.add(actionKey);
+    const loadingToken = startTrialBalanceLoading(saveTrialBalanceMappingBtn);
+    updateClientDependentUI();
+    try {
+        const res = await fetch(API_BASE + '/api/trial-balance/saved-column-mapping', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ client_id: clientId, mapping: tbColumnMapping })
+        });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || 'Could not save the client mapping.');
+        showStatus('✅ Column mapping saved for this client. Matching future files will reuse it.', 'success');
+    } catch (error) {
+        showStatus('❌ ' + error.message, 'error');
+    } finally {
+        trialBalanceActionsInFlight.delete(actionKey);
+        updateClientDependentUI();
+        stopTrialBalanceLoading(loadingToken);
+    }
+}
+
+if (saveTrialBalanceMappingBtn) {
+    saveTrialBalanceMappingBtn.addEventListener('click', saveTrialBalanceColumnMapping);
 }
 
 // ---------- IMPORT PROGRESS BAR (Fast Trial Balance upload) ----------
@@ -617,10 +1003,6 @@ function stopTbUploadProgressPoll() {
 }
 
 // ---------- UPLOAD & CLASSIFY ----------
-if (uploadTrialBalanceBtn) {
-    uploadTrialBalanceBtn.addEventListener('click', uploadTrialBalance);
-}
-
 async function uploadTrialBalance() {
     // Defensive guard -- the button is disabled unless all of these are present,
     // but re-check directly in case of a race (e.g. a stale click event). Period
@@ -629,7 +1011,11 @@ async function uploadTrialBalance() {
     const clientId = window.getSelectedClientId ? window.getSelectedClientId() : null;
     const hasPeriod = !!(periodStartInput && periodEndInput && periodStartInput.value && periodEndInput.value);
     if (!clientId || !selectedFile || !hasPeriod) {
-        showStatus('⚠️ Select a client, a Period Start/End, and a file first.', 'error');
+        setValidationStatus('Select a client, a Period Start/End, and a file first.', 'error');
+        return;
+    }
+    if (!validationResult || !validationResult.valid || validationDirty) {
+        setValidationStatus('Run validation and resolve all issues before saving.', 'error');
         return;
     }
     // Defensive re-check of the column mapping too, same reasoning as the guard above --
@@ -655,14 +1041,13 @@ async function uploadTrialBalance() {
         if (conflictResult === 'declined' || conflictResult === 'error') {
             // No request sent -- the form stays exactly as the auditor left it so
             // they can adjust the period (or try again) themselves.
-            showStatus('Upload cancelled.', 'info');
+            setValidationStatus('Upload cancelled.', 'info');
             return;
         }
         const confirmOverwrite = conflictResult === 'confirmed';
 
         if (summaryContainer) summaryContainer.style.display = 'none';
-        if (reviewContainer) reviewContainer.style.display = 'none';
-        showStatus('Uploading and classifying...', 'loading');
+        setValidationStatus('Saving the validated Trial Balance…', 'loading');
 
         // Fast Trial Balance upload: client-generated progress key (TB upload is a single
         // one-shot endpoint, so there's no server-issued file_id the way Data Bank's two-step
@@ -691,6 +1076,8 @@ async function uploadTrialBalance() {
         formData.append('period_type', periodTypeSelect ? periodTypeSelect.value : '');
         formData.append('confirm_overwrite', confirmOverwrite ? 'true' : 'false');
         formData.append('progress_key', progressKey);
+        formData.append('account_code_overrides', JSON.stringify(accountCodeCorrections));
+        formData.append('account_classification_overrides', JSON.stringify(accountClassificationOverrides));
 
         const res = await fetch(API_BASE + '/api/trial-balance/upload', {
             method: 'POST',
@@ -699,14 +1086,23 @@ async function uploadTrialBalance() {
         const result = await res.json();
 
         if (!res.ok) {
-            throw new Error(result.detail || 'Upload failed');
+            const detail = result.detail;
+            if (detail && typeof detail === 'object' && detail.validation) {
+                validationResult = detail.validation;
+                validationDirty = false;
+                validationCurrentPage = 1;
+                renderTrialBalanceValidationGrid();
+                updateClientDependentUI();
+            }
+            throw new Error(typeof detail === 'string' ? detail : (detail && detail.message) || 'Upload failed');
         }
 
+        currentUploadId = result.upload_id;
+        closeTrialBalanceValidation();
         showStatus('✅ Uploaded and classified successfully', 'success');
         await loadSummary(result.upload_id);
-        await loadAccounts(result.upload_id);
     } catch (error) {
-        showStatus('❌ ' + error.message, 'error');
+        setValidationStatus(error.message, 'error');
     } finally {
         // Always stop polling and hide the bar no matter how the request ends -- covers
         // both a successful upload and a thrown error the same way.
@@ -740,62 +1136,6 @@ async function loadSummary(uploadId) {
     }
 }
 
-// ---------- REVIEW TABLE (Phase 5: list + manual classification override) ----------
-
-// Fetches every classified account for an upload (Phase 3's read-only list endpoint)
-// and renders the review table. Same non-fatal-on-error convention as loadSummary() --
-// the upload itself already succeeded, so a failure here shouldn't overwrite that status.
-async function loadAccounts(uploadId) {
-    try {
-        const res = await fetch(API_BASE + '/api/trial-balance/accounts?upload_id=' + uploadId);
-        const result = await res.json();
-
-        if (!res.ok) {
-            throw new Error(result.detail || 'Failed to load accounts');
-        }
-
-        currentUploadId = uploadId;
-        renderReviewTable(result.accounts);
-        if (reviewContainer) reviewContainer.style.display = 'block';
-    } catch (error) {
-        console.warn('⚠️ Could not load Trial Balance accounts:', error.message);
-    }
-}
-
-// Builds one <tr> per account. Uses createElement/textContent throughout (no innerHTML)
-// since account codes/names come from the uploaded file, not from this app's own control.
-function renderReviewTable(accounts) {
-    if (!reviewTableBody) return;
-    reviewTableBody.innerHTML = '';
-
-    accounts.forEach(function (account) {
-        const tr = document.createElement('tr');
-        tr.dataset.accountId = account.id;
-
-        const tdCode = document.createElement('td');
-        tdCode.textContent = account.account_code;
-        tr.appendChild(tdCode);
-
-        const tdName = document.createElement('td');
-        tdName.textContent = account.account_name || '—';
-        tr.appendChild(tdName);
-
-        const tdLevel = document.createElement('td');
-        tdLevel.textContent = account.level;
-        tr.appendChild(tdLevel);
-
-        const tdClassification = document.createElement('td');
-        tdClassification.appendChild(buildClassificationCellContent(account));
-        tr.appendChild(tdClassification);
-
-        const tdAction = document.createElement('td');
-        tdAction.appendChild(buildToggleButton(account));
-        tr.appendChild(tdAction);
-
-        reviewTableBody.appendChild(tr);
-    });
-}
-
 // Badge + optional "overridden" tag, grouped in one fragment so both the initial render
 // and the in-place row update (after a toggle) can build/replace this cell's content identically.
 function buildClassificationCellContent(account) {
@@ -816,79 +1156,10 @@ function buildClassificationCellContent(account) {
     return fragment;
 }
 
-function buildToggleButton(account) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'tb-toggle-btn';
-    btn.dataset.accountId = account.id;
-    btn.dataset.currentIsLeaf = account.is_leaf;
-    btn.textContent = account.is_leaf ? 'Flip to Parent' : 'Flip to Leaf';
-    return btn;
-}
-
-// Single delegated click listener on the table body (added once, not per-row) -- reads the
-// clicked button's data attributes rather than each row carrying its own listener.
-if (reviewTableBody) {
-    reviewTableBody.addEventListener('click', function (event) {
-        const btn = event.target.closest('.tb-toggle-btn');
-        if (!btn) return;
-
-        const accountId = btn.dataset.accountId;
-        const currentIsLeaf = btn.dataset.currentIsLeaf === 'true';
-        toggleAccountClassification(accountId, !currentIsLeaf, btn);
-    });
-}
-
-// PUTs the new classification to the Phase 5 override endpoint, then updates just that
-// row in place (no full table re-render) and refreshes the summary tiles so the
-// Leaf/Parent counts stay correct after the flip.
-async function toggleAccountClassification(accountId, newIsLeaf, triggerBtn) {
-    const actionKey = 'override:' + accountId;
-    if (trialBalanceOverrideInFlight.has(actionKey)) return;
-    trialBalanceOverrideInFlight.add(actionKey);
-    const loadingToken = startTrialBalanceLoading(triggerBtn);
-    const previousDisabled = triggerBtn ? triggerBtn.disabled : false;
-    if (triggerBtn) triggerBtn.disabled = true;
-    try {
-        const res = await fetch(API_BASE + '/api/trial-balance/accounts/' + accountId + '/override', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ is_leaf: newIsLeaf })
-        });
-        const result = await res.json();
-
-        if (!res.ok) {
-            throw new Error(result.detail || 'Failed to update classification');
-        }
-
-        const row = reviewTableBody.querySelector('tr[data-account-id="' + accountId + '"]');
-        if (row) {
-            const tdClassification = row.children[3];
-            tdClassification.innerHTML = '';
-            tdClassification.appendChild(buildClassificationCellContent(result));
-
-            const tdAction = row.children[4];
-            tdAction.innerHTML = '';
-            tdAction.appendChild(buildToggleButton(result));
-        }
-
-        if (currentUploadId) await loadSummary(currentUploadId);
-    } catch (error) {
-        showStatus('❌ ' + error.message, 'error');
-    } finally {
-        if (triggerBtn) triggerBtn.disabled = previousDisabled;
-        stopTrialBalanceLoading(loadingToken);
-        trialBalanceOverrideInFlight.delete(actionKey);
-    }
-}
-
-// ---------- AVAILABLE TRIAL BALANCES (Section 1, Phase 2: read-only browsing view) ----------
+// ---------- AVAILABLE TRIAL BALANCES (Section 1, Phase 2: account-code correction view) ----------
 // A separate, self-contained in-page view: an upload-selection dropdown (fed by Phase 1's
-// list-uploads endpoint) and a read-only Code/Name/Classification table for whichever
-// upload is selected. Deliberately kept independent from currentUploadId/reviewTableBody/
-// loadAccounts()/renderReviewTable() above -- those back the override-capable Review
-// Classifications screen that appears right after an upload, and must not be disturbed by
-// browsing here (this view has no toggle buttons, nothing to override).
+// list-uploads endpoint) and a Code/Name/Classification table for whichever upload is selected.
+// Deliberately kept independent from the temporary full-file validation sheet.
 
 // Human-readable period-type labels for the dropdown -- mirrors periodTypeSelect's own
 // option text so a listed upload's period type reads the same way here as it does on
@@ -994,10 +1265,8 @@ async function loadAvailableUploadAccounts(uploadId, target = availableUploadsDr
     }
 }
 
-// Read-only account and amount rows -- reuses buildClassificationCellContent()
-// (the same Leaf/Parent badge + "Overridden" tag builder the Review Classifications
-// screen uses) so a manually-overridden account still shows that fact here, without
-// any of the toggle/Action column that screen adds on top of it.
+// Account and amount rows -- codes remain editable in the selected upload; classification
+// still reuses the same Leaf/Parent badge as the Review Classifications screen.
 function renderAvailableAccountsTable(accounts) {
     availableAccountsTableBody.innerHTML = '';
 
@@ -1007,7 +1276,13 @@ function renderAvailableAccountsTable(accounts) {
         const tr = document.createElement('tr');
 
         const tdCode = document.createElement('td');
-        tdCode.textContent = account.account_code;
+        const codeInput = document.createElement('input');
+        codeInput.type = 'text';
+        codeInput.className = 'tb-code-review-input';
+        codeInput.value = account.account_code;
+        codeInput.maxLength = 120;
+        codeInput.setAttribute('aria-label', 'Account code for ' + (account.account_name || account.account_code));
+        tdCode.appendChild(codeInput);
         tr.appendChild(tdCode);
 
         const tdName = document.createElement('td');
@@ -1027,8 +1302,59 @@ function renderAvailableAccountsTable(accounts) {
         tdClassification.appendChild(buildClassificationCellContent(account));
         tr.appendChild(tdClassification);
 
+        const tdAction = document.createElement('td');
+        const saveCodeBtn = document.createElement('button');
+        saveCodeBtn.type = 'button';
+        saveCodeBtn.className = 'btn-secondary-action';
+        saveCodeBtn.textContent = 'Save code';
+        saveCodeBtn.addEventListener('click', function () {
+            saveAvailableAccountCode(account, codeInput.value, saveCodeBtn);
+        });
+        tdAction.appendChild(saveCodeBtn);
+        if (account.source_account_code && account.source_account_code !== account.account_code) {
+            const sourceNote = document.createElement('small');
+            sourceNote.textContent = 'Imported: ' + account.source_account_code;
+            sourceNote.style.display = 'block';
+            tdAction.appendChild(sourceNote);
+        }
+        tr.appendChild(tdAction);
+
         availableAccountsTableBody.appendChild(tr);
     });
+}
+
+async function saveAvailableAccountCode(account, accountCode, triggerBtn) {
+    const uploadId = availableUploadsDropdown ? availableUploadsDropdown.value : null;
+    if (!uploadId) return;
+    const actionKey = 'account-code-upload:' + uploadId;
+    if (trialBalanceActionsInFlight.has(actionKey)) return;
+    trialBalanceActionsInFlight.add(actionKey);
+    const loadingToken = startTrialBalanceLoading(triggerBtn);
+    const previousDisabled = triggerBtn.disabled;
+    triggerBtn.disabled = true;
+    try {
+        const res = await fetch(API_BASE + '/api/trial-balance/accounts/' + account.id + '/code', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ account_code: accountCode })
+        });
+        const result = await res.json();
+        if (!res.ok) {
+            const detail = typeof result.detail === 'string' ? result.detail : 'Could not save account code';
+            throw new Error(detail);
+        }
+        showStatus('✅ Account code saved for this upload.', 'success');
+        await loadAvailableUploadAccounts(uploadId, triggerBtn);
+        if (String(currentUploadId) === String(uploadId)) {
+            await loadSummary(currentUploadId);
+        }
+    } catch (error) {
+        showStatus('❌ ' + error.message, 'error');
+    } finally {
+        triggerBtn.disabled = previousDisabled;
+        stopTrialBalanceLoading(loadingToken);
+        trialBalanceActionsInFlight.delete(actionKey);
+    }
 }
 
 if (availableUploadsDropdown) {
