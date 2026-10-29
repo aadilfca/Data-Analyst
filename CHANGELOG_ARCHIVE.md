@@ -1,5 +1,25 @@
 # Changelog Archive
 
+## Trial Balance observations persist until revalidation — 2026-10-29
+
+Stored the last completed validation's row messages separately from the current pass/fail result. Account Code and Classification edits can now invalidate Save while preserving the visible observations and navigator targets; successful revalidation replaces both snapshots, while source/mapping changes clear them. JavaScript syntax and whitespace checks pass; local UI acceptance is pending.
+
+## Trial Balance persistent critical-row review queue — 2026-10-29
+
+The navigator now retains the last completed validation's row-level blocking issues while Account Code and Classification edits make results stale. Its `visited/total` count tracks rows examined, not rows resolved. Once all rows have been visited, the next click scrolls to and focuses Revalidate; successful revalidation replaces the queue with current blocking rows. Changing file, mapping, period or subtotal treatment clears the stale queue. Trial Balance script cache version is 24. JavaScript syntax and whitespace checks pass; live interaction acceptance is pending.
+
+## Trial Balance critical issue navigator — 2026-10-29
+
+Added a viewport-fixed round target button to the validation view. It cycles through unique rows with blocking errors, centers and briefly highlights each target, and shows the current position/count. Non-blocking warnings and global checks are not navigation targets; the button remains visible but disabled when no row-level critical findings exist. Trial Balance script cache version is 23. JavaScript syntax and whitespace checks pass; local interaction acceptance is pending.
+
+## Trial Balance inline editor scroll preservation — 2026-10-29
+
+Code and Parent/Leaf blur handlers now replace only the active cell content instead of rebuilding the validation table. Editing invalidates the validation result, disables saving, and clears stale row issues without moving the viewport. JavaScript syntax and whitespace checks pass. Playwright and live authenticated acceptance were not run; user verification is pending.
+
+## Trial Balance validation editing and parent code warnings — 2026-10-29
+
+Removed guessed account-code suggestions and the separate Corrected Account Code column. The source Account # cell now opens an inline editor on double-click and commits on blur; Classification is placed after Account Title and changes from its display badge to a Parent/Leaf selector on double-click, closing on blur. Parent/leaf identification remains the existing code-hierarchy rule; no client-specific title marker was added, and broader identification work is deferred. Date-conversion and other non-duplicate account-code format findings on rows currently classified as Parent are warnings, while duplicate identities and all other critical validation issues still block upload. The reviewer can reclassify a row before revalidating. Trial Balance script cache version is 22. Python compilation, JavaScript syntax and whitespace checks pass; local validation/upload acceptance is pending.
+
 ## Trial Balance validation header layout — 2026-10-29
 
 Rearranged the validation header so its title, filename, actions and subtotal controls share the first row on desktop, with the validation alert spanning the next row. Shortened the subtotal count label to “N subtotal rows excluded” while retaining the treated-as-account count when applicable. Trial Balance script cache version is 20. Desktop and narrow viewport Playwright layout checks, JavaScript syntax and whitespace checks pass; local UI acceptance is pending.

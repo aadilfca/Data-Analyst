@@ -57,12 +57,20 @@ let filePreviewRows = [];
 let fileAllRows = [];
 let accountCodeCorrections = {};
 let accountClassificationOverrides = {};
+let autoClassificationByRow = {};
 let includedSubtotalRows = new Set();
 let showExcludedSubtotalRows = false;
 let validationResult = null;
+let validationIssueSnapshot = { errors: [], warnings: [] };
 let validationDirty = true;
 let validationRequestToken = 0;
 let validationRevision = 0;
+let criticalIssueRows = [];
+let criticalIssueIndex = -1;
+let criticalIssueVisitedRows = new Set();
+let criticalIssueReviewComplete = false;
+let criticalIssueValidationRunning = false;
+let criticalIssueHighlightTimer = null;
 
 // Current mapping selection, keyed by role -- seeded from suggest-mapping's
 // suggestions, then mutated in place by each dropdown's change listener.
@@ -116,12 +124,15 @@ const validateTrialBalanceBtn = getElement('validateTrialBalanceBtn');
 const tbValidationSheet = getElement('tbValidationSheet');
 const tbValidationBackBtn = getElement('tbValidationBackBtn');
 const tbValidationRunBtn = getElement('tbValidationRunBtn');
+const tbValidationHeader = getElement('tbValidationHeader');
 const tbValidationStatus = getElement('tbValidationStatus');
 const tbValidationFileInfo = getElement('tbValidationFileInfo');
 const tbValidationHead = getElement('tbValidationHead');
 const tbValidationBody = getElement('tbValidationBody');
 const tbValidationTableWrap = getElement('tbValidationTableWrap');
 const tbValidationStickyHead = getElement('tbValidationStickyHead');
+const tbCriticalIssueNavigator = getElement('tbCriticalIssueNavigator');
+const tbCriticalIssueCount = getElement('tbCriticalIssueCount');
 const tbSubtotalToolbar = getElement('tbSubtotalToolbar');
 const tbSubtotalSummary = getElement('tbSubtotalSummary');
 const tbSubtotalToggleBtn = getElement('tbSubtotalToggleBtn');
@@ -241,10 +252,17 @@ function setValidationStatus(message, type) {
     tbValidationStatus.className = 'status-bar ' + (type || 'info') + ' tb-validation-status';
 }
 
-function invalidateTrialBalanceValidation(message) {
+function invalidateTrialBalanceValidation(message, preserveCriticalQueue) {
     validationRevision += 1;
     validationDirty = true;
     validationResult = null;
+    if (preserveCriticalQueue) {
+        criticalIssueReviewComplete = false;
+    } else {
+        clearCriticalIssueQueue();
+        validationIssueSnapshot = { errors: [], warnings: [] };
+    }
+    updateCriticalIssueNavigator();
     updateClientDependentUI();
     if (tbValidationSheet && tbValidationSheet.classList.contains('active')) {
         setValidationStatus(message || 'Changes detected. Revalidate before saving.', 'info');
@@ -326,6 +344,8 @@ async function runTrialBalanceValidation(options) {
     if (tbValidationRunBtn) tbValidationRunBtn.disabled = true;
     if (uploadTrialBalanceBtn) uploadTrialBalanceBtn.disabled = true;
     validationResult = null;
+    criticalIssueValidationRunning = true;
+    updateCriticalIssueNavigator();
     validationDirty = true;
     setValidationStatus('Validating mapped rows and Trial Balance controls…', 'loading');
     try {
@@ -344,16 +364,26 @@ async function runTrialBalanceValidation(options) {
             throw new Error(typeof detail === 'string' ? detail : (detail && detail.message) || 'Trial Balance validation failed.');
         }
         validationResult = result;
+        validationIssueSnapshot = {
+            errors: Array.isArray(result.errors) ? result.errors.slice() : [],
+            warnings: Array.isArray(result.warnings) ? result.warnings.slice() : [],
+        };
+        autoClassificationByRow = result.auto_classification || {};
+        setCriticalIssueQueue(result.errors);
         validationDirty = false;
         renderTrialBalanceValidationGrid();
         const issueCount = Number(result.issue_count || 0);
+        const warningCount = Number(result.warning_count || 0);
         if (result.valid) {
-            setValidationStatus(`✅ Validation passed for ${result.account_count} accounts. Opening, movement, closing and roll-forward checks use leaf accounts with a 0.01 tolerance.`, 'success');
+            const warningNote = warningCount
+                ? ` ⚠️ ${warningCount} non-blocking Parent account-code warning(s); review the source rows.` : '';
+            setValidationStatus(`✅ Validation passed for ${result.account_count} accounts. Opening, movement, closing and roll-forward checks use leaf accounts with a 0.01 tolerance.${warningNote}`, warningCount ? 'info' : 'success');
         } else {
             const globalIssues = (result.errors || []).filter(function (issue) { return issue.excel_row == null; })
                 .map(function (issue) { return issue.message; }).join(' ');
             const omitted = result.omitted_issue_count ? ` ${result.omitted_issue_count} additional issue(s) are not listed individually.` : '';
-            setValidationStatus(`⚠️ ${issueCount} issue(s) found. ${globalIssues} Resolve the listed issues, then revalidate before saving.${omitted}`, 'error');
+            const warningNote = warningCount ? ` ${warningCount} non-blocking Parent account-code warning(s) are also shown.` : '';
+            setValidationStatus(`⚠️ ${issueCount} blocking issue(s) found. ${globalIssues} Resolve the listed issues, then revalidate before saving.${warningNote}${omitted}`, 'error');
         }
         updateClientDependentUI();
     } catch (error) {
@@ -364,6 +394,10 @@ async function runTrialBalanceValidation(options) {
         setValidationStatus(error.message, 'error');
         updateClientDependentUI();
     } finally {
+        if (token === validationRequestToken) {
+            criticalIssueValidationRunning = false;
+            updateCriticalIssueNavigator();
+        }
         if (token === validationRequestToken && tbValidationRunBtn) tbValidationRunBtn.disabled = false;
         if (spinnerShown) hideTrialBalanceActionSpinner(tbValidationRunBtn);
         stopTrialBalanceLoading(loadingToken);
@@ -401,14 +435,56 @@ function getExcludedSubtotalRowNumbers() {
         .sort(function (left, right) { return left - right; });
 }
 
+function renderValidationClassificationBadge(cell, rowNumber, value, automaticClass) {
+    const classification = value || automaticClass || 'leaf';
+    const badge = buildClassificationCellContent({
+        is_leaf: classification === 'leaf',
+        manually_overridden: Object.prototype.hasOwnProperty.call(accountClassificationOverrides, rowNumber),
+    });
+    const badgeElement = badge.querySelector('.tb-classification-badge');
+    badgeElement.classList.add('tb-validation-classification-display');
+    badgeElement.title = 'Double-click to change';
+    cell.dataset.excelRow = String(rowNumber);
+    cell.dataset.value = classification;
+    cell.dataset.automatic = automaticClass || 'leaf';
+    cell.replaceChildren(badge);
+}
+
 function renderTrialBalanceValidationGrid() {
     if (!tbValidationHead || !tbValidationBody) return;
     tbValidationHead.innerHTML = '';
     tbValidationBody.innerHTML = '';
+    const codeIndex = fileHeaders.indexOf(tbColumnMapping.account_code_column);
+    const nameIndex = fileHeaders.indexOf(tbColumnMapping.account_name_column);
+    const mappingRoleByIndex = new Map();
+    TB_MAPPING_FIELDS.forEach(function (field) {
+        const index = fileHeaders.indexOf(tbColumnMapping[field.role]);
+        if (index >= 0) mappingRoleByIndex.set(index, field.role);
+    });
+    const columns = [{ kind: 'row', label: 'Excel Row', className: 'tb-validation-row-number' }];
+    fileHeaders.forEach(function (label, index) {
+        const role = mappingRoleByIndex.get(index);
+        let className = 'tb-validation-source-column';
+        if (index === codeIndex) className += ' tb-validation-account-code';
+        if (index === nameIndex) className += ' tb-validation-account-name';
+        if (role && role.endsWith('_column') && role !== 'account_code_column' && role !== 'account_name_column') {
+            className += ' tb-validation-amount';
+        }
+        columns.push({ kind: 'source', label: label, index: index, className: className });
+        if (index === nameIndex) {
+            columns.push({ kind: 'classification', label: 'Classification', className: 'tb-validation-classification' });
+        }
+    });
+    if (nameIndex < 0) {
+        columns.push({ kind: 'classification', label: 'Classification', className: 'tb-validation-classification' });
+    }
+    columns.push({ kind: 'issues', label: 'Validation Issues', className: 'tb-validation-issue-column' });
+
     const header = document.createElement('tr');
-    ['Excel Row'].concat(fileHeaders, ['Corrected Account Code', 'Classification', 'Validation Issues']).forEach(function (label) {
+    columns.forEach(function (column) {
         const th = document.createElement('th');
-        th.textContent = label;
+        th.textContent = column.label;
+        th.className = column.className;
         header.appendChild(th);
     });
     tbValidationHead.appendChild(header);
@@ -425,15 +501,16 @@ function renderTrialBalanceValidationGrid() {
     }
 
     const issuesByRow = new Map();
-    if (validationResult && Array.isArray(validationResult.errors)) {
-        validationResult.errors.forEach(function (issue) {
+    function collectRowIssues(items, severity) {
+        (Array.isArray(items) ? items : []).forEach(function (issue) {
             if (issue.excel_row == null) return;
             const key = String(issue.excel_row);
             if (!issuesByRow.has(key)) issuesByRow.set(key, []);
-            issuesByRow.get(key).push(issue.message);
+            issuesByRow.get(key).push({ message: issue.message, severity: severity });
         });
     }
-    const codeIndex = fileHeaders.indexOf(tbColumnMapping.account_code_column);
+    collectRowIssues(validationIssueSnapshot.errors, 'error');
+    collectRowIssues(validationIssueSnapshot.warnings, 'warning');
     const subtotalRows = getSourceSubtotalRowNumbers();
     const excludedSubtotalRows = getExcludedSubtotalRowNumbers();
     if (tbSubtotalToolbar && tbSubtotalSummary && tbSubtotalToggleBtn) {
@@ -451,70 +528,16 @@ function renderTrialBalanceValidationGrid() {
         const isExcludedSubtotal = isSubtotalCandidate && !includedSubtotalRows.has(excelRow);
         if (isExcludedSubtotal && !showExcludedSubtotalRows) return;
         const tr = document.createElement('tr');
+        tr.dataset.excelRow = String(excelRow);
         if (isExcludedSubtotal) tr.classList.add('tb-subtotal-row');
-        const rowCell = document.createElement('td');
-        rowCell.textContent = String(excelRow);
-        tr.appendChild(rowCell);
-        fileHeaders.forEach(function (_header, columnIndex) {
-            const cell = document.createElement('td');
-            cell.textContent = accountCodeCellText(row[columnIndex]);
-            tr.appendChild(cell);
+        const issuesContent = document.createElement('div');
+        issuesContent.className = 'tb-validation-issue-content';
+        (issuesByRow.get(String(excelRow)) || []).forEach(function (issue) {
+            const message = document.createElement('span');
+            message.className = issue.severity === 'warning' ? 'tb-validation-warning' : 'tb-validation-error';
+            message.textContent = issue.message;
+            issuesContent.appendChild(message);
         });
-
-        const sourceCode = codeIndex >= 0 ? accountCodeCellText(row[codeIndex]) : '';
-        const codeCell = document.createElement('td');
-        codeCell.className = 'tb-code-correction-cell';
-        if (isExcludedSubtotal) {
-            codeCell.textContent = 'Source subtotal';
-        } else {
-            const codeInput = document.createElement('input');
-            codeInput.type = 'text';
-            codeInput.className = 'tb-code-review-input';
-            codeInput.maxLength = 120;
-            codeInput.value = Object.prototype.hasOwnProperty.call(accountCodeCorrections, excelRow)
-                ? accountCodeCorrections[excelRow] : sourceCode;
-            codeInput.dataset.excelRow = String(excelRow);
-            codeInput.dataset.sourceCode = sourceCode;
-            codeInput.setAttribute('aria-label', 'Corrected account code for Excel row ' + excelRow);
-            codeCell.appendChild(codeInput);
-            const suggestion = suggestedCodeForDate(row[codeIndex]);
-            if (suggestion) {
-                const useSuggestion = document.createElement('button');
-                useSuggestion.type = 'button';
-                useSuggestion.className = 'btn-secondary-action tb-code-review-suggestion';
-                useSuggestion.textContent = 'Use ' + suggestion;
-                useSuggestion.dataset.suggestedCode = suggestion;
-                useSuggestion.dataset.excelRow = String(excelRow);
-                codeCell.appendChild(useSuggestion);
-            }
-        }
-        tr.appendChild(codeCell);
-
-        const classificationCell = document.createElement('td');
-        if (isExcludedSubtotal) {
-            classificationCell.textContent = 'Excluded';
-            tr.appendChild(classificationCell);
-        } else {
-            const classification = document.createElement('select');
-            classification.className = 'tb-classification-review';
-            classification.dataset.excelRow = String(excelRow);
-            [['leaf', 'Leaf'], ['parent', 'Parent']].forEach(function (optionData) {
-                const option = document.createElement('option');
-                option.value = optionData[0];
-                option.textContent = optionData[1];
-                classification.appendChild(option);
-            });
-            const automaticClass = validationResult && validationResult.auto_classification
-                ? validationResult.auto_classification[String(excelRow)] : 'leaf';
-            classification.value = accountClassificationOverrides[excelRow] || automaticClass || 'leaf';
-            classification.dataset.automatic = automaticClass || 'leaf';
-            classificationCell.appendChild(classification);
-            tr.appendChild(classificationCell);
-        }
-
-        const issuesCell = document.createElement('td');
-        issuesCell.className = 'tb-validation-issue-cell';
-        issuesCell.textContent = (issuesByRow.get(String(excelRow)) || []).join(' ');
         if (isSubtotalCandidate) {
             const treatmentButton = document.createElement('button');
             treatmentButton.type = 'button';
@@ -522,12 +545,154 @@ function renderTrialBalanceValidationGrid() {
             treatmentButton.dataset.excelRow = String(excelRow);
             treatmentButton.dataset.subtotalAction = isExcludedSubtotal ? 'include' : 'exclude';
             treatmentButton.textContent = isExcludedSubtotal ? 'Treat as account' : 'Mark as subtotal';
-            issuesCell.appendChild(treatmentButton);
+            issuesContent.appendChild(treatmentButton);
         }
-        tr.appendChild(issuesCell);
+
+        columns.forEach(function (column) {
+            const cell = document.createElement('td');
+            cell.className = column.className;
+            if (column.kind === 'row') {
+                cell.textContent = String(excelRow);
+            } else if (column.kind === 'source') {
+                const sourceValue = accountCodeCellText(row[column.index]);
+                if (column.index === codeIndex && !isExcludedSubtotal) {
+                    const display = document.createElement('span');
+                    display.className = 'tb-account-code-display';
+                    display.textContent = Object.prototype.hasOwnProperty.call(accountCodeCorrections, excelRow)
+                        ? accountCodeCorrections[excelRow] : sourceValue;
+                    display.title = 'Double-click to edit';
+                    display.dataset.excelRow = String(excelRow);
+                    display.dataset.sourceCode = sourceValue;
+                    cell.appendChild(display);
+                } else {
+                    cell.textContent = sourceValue;
+                }
+            } else if (column.kind === 'classification') {
+                if (isExcludedSubtotal) {
+                    cell.textContent = 'Excluded';
+                } else {
+                    const automaticClass = autoClassificationByRow[String(excelRow)] || 'leaf';
+                    const classification = accountClassificationOverrides[excelRow] || automaticClass || 'leaf';
+                    renderValidationClassificationBadge(cell, excelRow, classification, automaticClass);
+                }
+            } else if (column.kind === 'issues') {
+                cell.classList.add('tb-validation-issue-cell');
+                cell.appendChild(issuesContent);
+            }
+            tr.appendChild(cell);
+        });
         fragment.appendChild(tr);
     });
     tbValidationBody.appendChild(fragment);
+    updateCriticalIssueNavigator();
+}
+
+// The queue is a snapshot from the last completed validation and survives local edits until revalidation.
+function setCriticalIssueQueue(issues) {
+    const rowNumbers = new Set();
+    (Array.isArray(issues) ? issues : []).forEach(function (issue) {
+        const rowNumber = Number(issue.excel_row);
+        if (Number.isInteger(rowNumber) && rowNumber > 0) rowNumbers.add(rowNumber);
+    });
+    criticalIssueRows = Array.from(rowNumbers).sort(function (left, right) { return left - right; });
+    criticalIssueIndex = -1;
+    criticalIssueVisitedRows = new Set();
+    criticalIssueReviewComplete = false;
+    updateCriticalIssueNavigator();
+}
+
+function clearCriticalIssueQueue() {
+    criticalIssueRows = [];
+    criticalIssueIndex = -1;
+    criticalIssueVisitedRows = new Set();
+    criticalIssueReviewComplete = false;
+    updateCriticalIssueNavigator();
+}
+
+function markCriticalIssueVisited(rowNumber) {
+    if (!criticalIssueRows.includes(rowNumber)) return;
+    criticalIssueVisitedRows.add(rowNumber);
+    criticalIssueReviewComplete = false;
+    updateCriticalIssueNavigator();
+}
+
+function findNextUnvisitedCriticalIssueIndex() {
+    if (!criticalIssueRows.length) return -1;
+    for (let offset = 1; offset <= criticalIssueRows.length; offset += 1) {
+        const index = (criticalIssueIndex + offset) % criticalIssueRows.length;
+        if (!criticalIssueVisitedRows.has(criticalIssueRows[index])) return index;
+    }
+    return -1;
+}
+
+function focusRevalidateControl() {
+    if (!tbValidationHeader) return;
+    const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    tbValidationHeader.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+    window.requestAnimationFrame(function () {
+        if (!tbValidationRunBtn) return;
+        try { tbValidationRunBtn.focus({ preventScroll: true }); } catch (_error) { tbValidationRunBtn.focus(); }
+    });
+}
+
+// Navigate only through row-level blocking findings from the last completed validation.
+function updateCriticalIssueNavigator() {
+    if (!tbCriticalIssueNavigator) return;
+    const allVisited = criticalIssueRows.length > 0 && criticalIssueVisitedRows.size >= criticalIssueRows.length;
+    tbCriticalIssueNavigator.disabled = criticalIssueRows.length === 0
+        || criticalIssueValidationRunning || criticalIssueReviewComplete;
+    const visitedCount = criticalIssueVisitedRows.size;
+    const accessibleLabel = criticalIssueValidationRunning
+        ? `Revalidation in progress, ${visitedCount} of ${criticalIssueRows.length} rows reviewed`
+        : criticalIssueReviewComplete
+            ? 'Revalidate to refresh critical issues'
+            : allVisited
+                ? `Go to Revalidate, all ${criticalIssueRows.length} critical rows reviewed`
+                : criticalIssueRows.length
+                    ? `Next critical issue, ${visitedCount} of ${criticalIssueRows.length} rows reviewed`
+        : 'No row-level critical issues to navigate';
+    tbCriticalIssueNavigator.setAttribute('aria-label', accessibleLabel);
+    tbCriticalIssueNavigator.title = accessibleLabel;
+    if (tbCriticalIssueCount) tbCriticalIssueCount.textContent = `${visitedCount}/${criticalIssueRows.length}`;
+}
+
+if (tbCriticalIssueNavigator) {
+    tbCriticalIssueNavigator.addEventListener('click', function () {
+        if (!criticalIssueRows.length || !tbValidationBody || criticalIssueValidationRunning || criticalIssueReviewComplete) return;
+        const nextIndex = findNextUnvisitedCriticalIssueIndex();
+        if (nextIndex < 0) {
+            criticalIssueReviewComplete = true;
+            updateCriticalIssueNavigator();
+            focusRevalidateControl();
+            return;
+        }
+        criticalIssueIndex = nextIndex;
+        const rowNumber = criticalIssueRows[criticalIssueIndex];
+        const row = tbValidationBody.querySelector('tr[data-excel-row="' + rowNumber + '"]');
+        if (!row) {
+            criticalIssueVisitedRows.add(rowNumber);
+            updateCriticalIssueNavigator();
+            return;
+        }
+
+        tbValidationBody.querySelectorAll('.tb-critical-row-highlight').forEach(function (highlightedRow) {
+            highlightedRow.classList.remove('tb-critical-row-highlight');
+        });
+        if (criticalIssueHighlightTimer) clearTimeout(criticalIssueHighlightTimer);
+        criticalIssueVisitedRows.add(rowNumber);
+        row.tabIndex = -1;
+        try { row.focus({ preventScroll: true }); } catch (_error) { row.focus(); }
+        const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        row.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'center', inline: 'nearest' });
+        row.classList.remove('tb-critical-row-highlight');
+        void row.offsetWidth;
+        row.classList.add('tb-critical-row-highlight');
+        criticalIssueHighlightTimer = setTimeout(function () {
+            row.classList.remove('tb-critical-row-highlight');
+            criticalIssueHighlightTimer = null;
+        }, 1900);
+        updateCriticalIssueNavigator();
+    });
 }
 
 if (tbValidationBody) {
@@ -535,18 +700,88 @@ if (tbValidationBody) {
         const input = event.target.closest('.tb-code-review-input');
         if (!input) return;
         const rowNumber = Number(input.dataset.excelRow);
+        markCriticalIssueVisited(rowNumber);
         const corrected = input.value.trim();
         if (corrected === input.dataset.sourceCode) delete accountCodeCorrections[rowNumber];
         else accountCodeCorrections[rowNumber] = corrected;
-        invalidateTrialBalanceValidation('Account code changed. Revalidate before saving.');
+        invalidateTrialBalanceValidation('Account code changed. Revalidate before saving.', true);
     });
     tbValidationBody.addEventListener('change', function (event) {
         const select = event.target.closest('.tb-classification-review');
         if (!select) return;
         const rowNumber = Number(select.dataset.excelRow);
+        markCriticalIssueVisited(rowNumber);
         if (select.value === select.dataset.automatic) delete accountClassificationOverrides[rowNumber];
         else accountClassificationOverrides[rowNumber] = select.value;
-        invalidateTrialBalanceValidation('Classification changed. Revalidate before saving.');
+        invalidateTrialBalanceValidation('Classification changed. Revalidate before saving.', true);
+    });
+    // Keep both correction controls quiet until a deliberate double-click; blur commits/closes them.
+    tbValidationBody.addEventListener('dblclick', function (event) {
+        const codeDisplay = event.target.closest('.tb-account-code-display');
+        if (codeDisplay) {
+            const cell = codeDisplay.parentElement;
+            if (!cell || cell.querySelector('.tb-code-review-input')) return;
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'tb-code-review-input';
+            input.maxLength = 120;
+            input.value = codeDisplay.textContent;
+            input.dataset.excelRow = codeDisplay.dataset.excelRow;
+            input.dataset.sourceCode = codeDisplay.dataset.sourceCode;
+            input.setAttribute('aria-label', 'Account code for Excel row ' + input.dataset.excelRow);
+            cell.replaceChildren(input);
+            input.focus();
+            input.select();
+            input.addEventListener('keydown', function (keyEvent) {
+                if (keyEvent.key === 'Enter') input.blur();
+                if (keyEvent.key === 'Escape') {
+                    input.value = codeDisplay.textContent;
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.blur();
+                }
+            });
+            input.addEventListener('blur', function () {
+                if (!cell.contains(input)) return;
+                const display = document.createElement('span');
+                display.className = 'tb-account-code-display';
+                display.textContent = input.value.trim();
+                display.title = 'Double-click to edit';
+                display.dataset.excelRow = input.dataset.excelRow;
+                display.dataset.sourceCode = input.dataset.sourceCode;
+                cell.replaceChildren(display);
+            });
+            return;
+        }
+
+        const cell = event.target.closest('td.tb-validation-classification');
+        if (!cell || !cell.dataset.excelRow) return;
+        if (!cell || cell.querySelector('.tb-classification-review')) return;
+        const select = document.createElement('select');
+        select.className = 'tb-classification-review';
+        select.dataset.excelRow = cell.dataset.excelRow;
+        select.dataset.automatic = cell.dataset.automatic;
+        [['leaf', 'Leaf'], ['parent', 'Parent']].forEach(function (optionData) {
+            const option = document.createElement('option');
+            option.value = optionData[0];
+            option.textContent = optionData[1];
+            select.appendChild(option);
+        });
+        select.value = cell.dataset.value;
+        cell.replaceChildren(select);
+        select.focus();
+        if (typeof select.showPicker === 'function') {
+            try { select.showPicker(); } catch (_error) { /* Focus still exposes the native selector. */ }
+        }
+        select.addEventListener('blur', function () {
+            if (cell.contains(select)) {
+                renderValidationClassificationBadge(
+                    cell,
+                    Number(select.dataset.excelRow),
+                    select.value,
+                    select.dataset.automatic
+                );
+            }
+        });
     });
     tbValidationBody.addEventListener('click', function (event) {
         const treatmentButton = event.target.closest('.tb-subtotal-row-action');
@@ -564,12 +799,6 @@ if (tbValidationBody) {
             renderTrialBalanceValidationGrid();
             return;
         }
-        const button = event.target.closest('.tb-code-review-suggestion');
-        if (!button) return;
-        const input = tbValidationBody.querySelector('.tb-code-review-input[data-excel-row="' + button.dataset.excelRow + '"]');
-        if (!input) return;
-        input.value = button.dataset.suggestedCode;
-        input.dispatchEvent(new Event('input', { bubbles: true }));
     });
 }
 
@@ -606,6 +835,8 @@ function handleFileSelected(file) {
     resetColumnMapping();
     accountCodeCorrections = {};
     accountClassificationOverrides = {};
+    autoClassificationByRow = {};
+    validationIssueSnapshot = { errors: [], warnings: [] };
     invalidateTrialBalanceValidation('File changed. Validate the selected Trial Balance before saving.');
     if (uploadToolbar) uploadToolbar.classList.add('has-selected-file');
     if (fileName) fileName.textContent = file.name;
@@ -641,6 +872,8 @@ function resetColumnMapping() {
     fileAllRows = [];
     accountCodeCorrections = {};
     accountClassificationOverrides = {};
+    autoClassificationByRow = {};
+    clearCriticalIssueQueue();
     includedSubtotalRows = new Set();
     showExcludedSubtotalRows = false;
     validationResult = null;
@@ -873,6 +1106,7 @@ async function loadColumnMappingForFile(file) {
         filePreviewRows = rawRows.slice(1, PREVIEW_ROW_COUNT + 1); // header row dropped
         accountCodeCorrections = {};
         accountClassificationOverrides = {};
+        autoClassificationByRow = {};
         includedSubtotalRows = new Set();
         showExcludedSubtotalRows = false;
         invalidateTrialBalanceValidation('File mapping ready. Validate before saving.');
@@ -959,6 +1193,7 @@ function renderMappingDropdowns() {
             tbColumnMapping[field.role] = this.value || null;
             accountCodeCorrections = {};
             accountClassificationOverrides = {};
+            autoClassificationByRow = {};
             includedSubtotalRows = new Set();
             showExcludedSubtotalRows = false;
             invalidateTrialBalanceValidation('Column mapping changed. Validate again before saving.');
@@ -1018,16 +1253,6 @@ function accountCodeCellText(value) {
         return year + '-' + month + '-' + day + ' ' + hours + ':' + minutes + ':' + seconds;
     }
     return value === undefined || value === null ? '' : String(value).trim();
-}
-
-function suggestedCodeForDate(value) {
-    let date = value instanceof Date ? value : null;
-    if (!date && typeof value === 'string') {
-        const match = value.trim().match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[ T].*)?$/);
-        if (match) date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-    }
-    if (!date || Number.isNaN(date.getTime())) return '';
-    return String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getFullYear()).slice(-2);
 }
 
 // Checks all 8 required fields are mapped; shows/hides the inline validation message

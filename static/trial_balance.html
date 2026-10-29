@@ -530,7 +530,6 @@
         }
 
         .tb-code-review-input { min-width: 150px; width: 100%; }
-        .tb-code-review-suggestion { margin-left: 6px; white-space: nowrap; }
         .tb-code-correction-cell { min-width: 210px; }
 
         .tb-mapping-review-grid {
@@ -595,6 +594,7 @@
         .tb-validation-header {
             display: block;
             margin-bottom: 12px;
+            scroll-margin-top: 88px;
         }
         .tb-validation-top-row {
             display: flex;
@@ -627,14 +627,12 @@
         .tb-validation-table-wrap { width: 100%; min-width: 0; }
         .tb-validation-sticky-head { display: none; }
         .tb-validation-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 11px; }
-        .tb-validation-table th:nth-child(1), .tb-validation-table td:nth-child(1) { width: 4.5%; }
-        .tb-validation-table th:nth-child(2), .tb-validation-table td:nth-child(2) { width: 9.5%; }
-        .tb-validation-table th:nth-child(3), .tb-validation-table td:nth-child(3) { width: 11.5%; }
-        .tb-validation-table th:nth-child(n+4):nth-child(-n+9),
-        .tb-validation-table td:nth-child(n+4):nth-child(-n+9) { width: 7.5%; }
-        .tb-validation-table th:nth-child(10), .tb-validation-table td:nth-child(10) { width: 12%; }
-        .tb-validation-table th:nth-child(11), .tb-validation-table td:nth-child(11) { width: 9%; }
-        .tb-validation-table th:nth-child(12), .tb-validation-table td:nth-child(12) { width: 8.5%; }
+        .tb-validation-table .tb-validation-row-number { width: 4.5%; }
+        .tb-validation-table .tb-validation-account-code { width: 9.5%; }
+        .tb-validation-table .tb-validation-account-name { width: 11.5%; }
+        .tb-validation-table .tb-validation-classification { width: 8%; }
+        .tb-validation-table .tb-validation-amount { width: 7.5%; }
+        .tb-validation-table .tb-validation-issue-column { width: 21.5%; }
         .tb-validation-table th {
             position: sticky;
             top: 70px;
@@ -645,16 +643,23 @@
             text-align: left;
             overflow-wrap: anywhere;
         }
-        .tb-validation-table th:nth-child(11) { overflow-wrap: normal; }
+        .tb-validation-table th.tb-validation-classification { overflow-wrap: normal; }
         .tb-validation-table td {
             padding: 6px 8px;
             border: 1px solid #e2e8f0;
             overflow-wrap: anywhere;
             background: #fff;
         }
-        .tb-validation-table td:nth-child(n+4):nth-child(-n+9) { white-space: nowrap; }
+        .tb-validation-table td.tb-validation-amount { white-space: nowrap; }
         .tb-validation-table tr:nth-child(even) td { background: #fafcff; }
         .tb-validation-table .tb-validation-issue-cell { white-space: normal; min-width: 0; color: #b91c1c; }
+        .tb-validation-issue-content > span { display: block; }
+        .tb-validation-issue-content .tb-validation-warning { color: #a16207; }
+        .tb-validation-classification-display,
+        .tb-account-code-display { cursor: pointer; }
+        .tb-validation-table td.tb-validation-classification[data-excel-row] { cursor: pointer; }
+        .tb-validation-classification-display:hover,
+        .tb-account-code-display:hover { outline: 1px dashed #64748b; outline-offset: 2px; }
         .tb-validation-table input,
         .tb-validation-table select { box-sizing: border-box; width: 100%; min-width: 0; padding: 5px 4px; }
         .tb-validation-table .tb-code-review-input { width: 100%; }
@@ -675,6 +680,58 @@
         .tb-validation-subtotal-toolbar button[hidden] { display: none !important; }
         .tb-validation-table tr.tb-subtotal-row td { background: #f8fafc; color: #64748b; }
         .tb-subtotal-row-action { max-width: 100%; white-space: normal; padding: 4px 6px; font-size: 11px; }
+        .tb-critical-issue-navigator {
+            position: fixed;
+            right: 24px;
+            bottom: 24px;
+            z-index: 1100;
+            display: grid;
+            place-items: center;
+            width: 58px;
+            height: 58px;
+            padding: 0;
+            border: 0;
+            border-radius: 50%;
+            color: #fff;
+            background: #1e3a8a;
+            box-shadow: 0 6px 18px rgba(15, 23, 42, .28);
+            cursor: pointer;
+            transition: transform .16s ease, background-color .16s ease, box-shadow .16s ease;
+        }
+        .tb-critical-issue-navigator:hover:not(:disabled) {
+            background: #1d4ed8;
+            box-shadow: 0 8px 22px rgba(15, 23, 42, .34);
+            transform: translateY(-2px);
+        }
+        .tb-critical-issue-navigator:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }
+        .tb-critical-issue-navigator:disabled { background: #64748b; box-shadow: 0 3px 10px rgba(15, 23, 42, .18); cursor: not-allowed; }
+        .tb-critical-issue-icon { width: 25px; height: 25px; }
+        .tb-critical-issue-count {
+            position: absolute;
+            right: -7px;
+            bottom: -4px;
+            min-width: 28px;
+            padding: 2px 5px;
+            border: 2px solid #fff;
+            border-radius: 999px;
+            color: #fff;
+            background: #b91c1c;
+            font-size: 9px;
+            font-weight: 700;
+            line-height: 1.2;
+            text-align: center;
+        }
+        @keyframes tb-critical-row-highlight {
+            0%, 100% { background-color: transparent; }
+            18%, 72% { background-color: #fecaca; }
+        }
+        .tb-validation-table tr.tb-critical-row-highlight > td {
+            animation: tb-critical-row-highlight 1.8s ease-out;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .tb-critical-issue-navigator { transition: none; }
+            .tb-validation-table tr.tb-critical-row-highlight > td { animation-duration: .01ms; }
+        }
 
         @media (max-width: 1100px) {
             .tb-validation-table-wrap { overflow-x: auto; overscroll-behavior-x: contain; }
@@ -877,7 +934,7 @@
     <!-- /uploadViewContainer -->
 
     <div class="tb-validation-sheet" id="tbValidationSheet" aria-hidden="true" hidden>
-        <div class="tb-validation-header">
+        <div class="tb-validation-header" id="tbValidationHeader">
             <div class="tb-validation-top-row">
                 <div class="tb-validation-title">
                     <h2>Trial Balance Validation</h2>
@@ -908,6 +965,16 @@
                 <tbody id="tbValidationBody"></tbody>
             </table>
         </div>
+        <button class="tb-critical-issue-navigator" id="tbCriticalIssueNavigator" type="button"
+                aria-label="No row-level critical issues to navigate" aria-controls="tbValidationBody"
+                title="No row-level critical issues to navigate" disabled>
+            <svg class="tb-critical-issue-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                <circle cx="10" cy="10" r="6.5"></circle>
+                <circle cx="10" cy="10" r="2"></circle>
+                <path d="M14.8 14.8 21 21M10 1.5v2M1.5 10h2M10 16.5v2M16.5 10h2"></path>
+            </svg>
+            <span class="tb-critical-issue-count" id="tbCriticalIssueCount" aria-hidden="true">0/0</span>
+        </button>
     </div>
 
     <!-- Available Trial Balances supports account-code corrections within one selected upload. -->
@@ -957,7 +1024,7 @@
     <script src="/static/loading_ui.js?v=2"></script>
     <script src="/static/client_context.js?v=21"></script>
     <script src="/static/utils.js"></script>
-    <script src="/static/trial_balance.js?v=20"></script>
+    <script src="/static/trial_balance.js?v=24"></script>
 </body>
 
 </html>

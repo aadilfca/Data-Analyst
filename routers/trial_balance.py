@@ -354,7 +354,6 @@ def validate_trial_balance_contents(
     )
     excluded_excel_rows = _load_excluded_excel_rows(excluded_excel_rows, len(rows))
     errors = []
-    error_count = 0
     candidates = []
     seen_codes = {}
     invalid_amounts = False
@@ -364,12 +363,8 @@ def validate_trial_balance_contents(
         ('closing_dr_column', 'Closing Dr'), ('closing_cr_column', 'Closing Cr'),
     )
 
-    def add_error(excel_row, field, message, suggested_code=None):
-        nonlocal error_count
-        error_count += 1
+    def add_error(excel_row, field, message):
         issue = {'excel_row': excel_row, 'field': field, 'message': message, 'severity': 'error'}
-        if suggested_code:
-            issue['suggested_code'] = suggested_code
         errors.append(issue)
 
     date_code_pattern = re.compile(r'^(\d{4})-(\d{1,2})-(\d{1,2})(?: 00:00:00)?$')
@@ -399,8 +394,7 @@ def validate_trial_balance_contents(
         if date_match and excel_row not in code_overrides:
             try:
                 date_value = datetime(int(date_match.group(1)), int(date_match.group(2)), int(date_match.group(3)))
-                suggestion = f'{date_value.month:02d}-{str(date_value.year)[-2:]}'
-                add_error(excel_row, 'Account Code', 'This code appears to have been converted to an Excel date. Correct it before saving.', suggestion)
+                add_error(excel_row, 'Account Code', 'This code appears to have been converted to an Excel date. Check the source workbook and correct it if needed.')
             except ValueError:
                 pass
         if code in seen_codes:
@@ -436,6 +430,24 @@ def validate_trial_balance_contents(
         auto_value = auto_classification.get(account['account_code'], 'leaf')
         account['classification'] = classification_overrides.get(row_number, auto_value)
         account['auto_classification'] = auto_value
+
+    # Only code-format findings on rows classified as Parent are advisory. The
+    # current hierarchy rule remains authoritative; broader parent/leaf detection
+    # is a separate phase. Duplicate identities remain blocking for every row.
+    warnings = []
+    blocking_errors = []
+    parent_rows = {
+        account['excel_row'] for account in candidates
+        if account['classification'] == 'parent'
+    }
+    for issue in errors:
+        is_duplicate = issue['message'].startswith('Account code ') and ' duplicates Excel row ' in issue['message']
+        if issue['field'] == 'Account Code' and issue['excel_row'] in parent_rows and not is_duplicate:
+            issue['severity'] = 'warning'
+            warnings.append(issue)
+        else:
+            blocking_errors.append(issue)
+    errors = blocking_errors
 
     valid_amount_rows = [row for row in candidates if row['classification'] == 'leaf']
     tolerance = Decimal('0.01')
@@ -477,9 +489,11 @@ def validate_trial_balance_contents(
         'tolerance': 0.01,
     })
 
+    error_count = len(errors)
     return {
         'valid': error_count == 0,
         'errors': errors,
+        'warnings': warnings,
         'checks': checks,
         'account_count': len(candidates),
         'leaf_count': len(valid_amount_rows),
@@ -489,6 +503,7 @@ def validate_trial_balance_contents(
         'excluded_subtotal_rows': sorted(excluded_excel_rows),
         'excluded_subtotal_count': len(excluded_excel_rows),
         'issue_count': error_count,
+        'warning_count': len(warnings),
         'omitted_issue_count': 0,
         'tolerance': 0.01,
     }
