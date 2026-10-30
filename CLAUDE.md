@@ -58,7 +58,7 @@ One line per file group: what it is now. Full build history for every entry live
 - experiments/cashflow_fetch/*.py + tests/test_cashflow_fetch_benchmark.py → Standalone read-only transport benchmarks with exact source/report/export comparisons; never loaded by the app. See CHANGELOG_ARCHIVE.md.
 
 
-- static/reconciliation.html, static/reconciliation.js → Cashflow selection, completeness, coverage alerts, background ledger preparation, category expansion, freshness checks, and bounded caches. See CHANGELOG_ARCHIVE.md.
+- static/reconciliation.html, static/reconciliation.js → Reports, Cashflow reconciliation and evidence, and a read-only Balance Sheet outline with blank amounts. See CHANGELOG_ARCHIVE.md.
 
 ## Commands
 - Run app: [your actual run command]
@@ -257,10 +257,10 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-10-30: Reports adds Financial Statements and a read-only ACC Balance Sheet outline with blank amounts; shared navigation assets refreshed. See CHANGELOG_ARCHIVE.md.
 - 2026-10-30: Added isolated Trial Balance-to-ACC, Verification, and Financial Statement data-flow safety tests; application source remains unchanged. See CHANGELOG_ARCHIVE.md.
 - 2026-10-30: ACC loads upload options first and opens account details on each tab's Load action. See CHANGELOG_ARCHIVE.md.
-- 2026-10-30: ACC indexes Trial Balance hierarchy once per load, reducing repeated assignment scans while preserving account and filter results. See CHANGELOG_ARCHIVE.md.
-- 2026-10-30: ACC adds opt-in database timings and batches statement-calculation reads to remove per-calculation SQL queries. See CHANGELOG_ARCHIVE.md.
+- 2026-10-30: ACC indexes Trial Balance hierarchy, batches statement-calculation reads, and adds opt-in timings while preserving assignment results. See CHANGELOG_ARCHIVE.md.
 - 2026-10-30: Trial Balance and ACC Financial Statement/Notes views now link directly while preserving the selected upload. See CHANGELOG_ARCHIVE.md.
 - 2026-10-30: Saved Trial Balance review aligns with validation, including inline corrections and a floating scrollbar. See CHANGELOG_ARCHIVE.md.
 - 2026-10-30: Trial Balance validation adds a floating horizontal scrollbar synchronized with table and sticky headings. See CHANGELOG_ARCHIVE.md.

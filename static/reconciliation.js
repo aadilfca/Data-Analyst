@@ -1,4 +1,4 @@
-/* Reports centre and the first simple Cashflows report. */
+/* Reports centre, Cashflows and the read-only Balance Sheet outline. */
 (function () {
     'use strict';
     let clientId = null;
@@ -5004,7 +5004,128 @@
             renderCashflowChild(section, cashflowChildPreviews[section]);
         }
     }
+    let balanceSheetRequest = null;
+    let balanceSheetGeneration = 0;
+    function cancelBalanceSheetLoad() {
+        balanceSheetGeneration += 1;
+        if (balanceSheetRequest) balanceSheetRequest.abort();
+        balanceSheetRequest = null;
+    }
+    // Reproduce ACC's source-based placement without evaluating any financial amounts.
+    function balanceSheetOutline(categories, calculations) {
+        const ordered = function (rows) { return rows.slice().sort(function (a, b) { return Number(a.sort_order || 0) - Number(b.sort_order || 0) || Number(a.id) - Number(b.id); }); };
+        const rows = ordered(categories.filter(function (item) { return item.statement_section === 'balance_sheet'; }));
+        const headings = rows.filter(function (item) { return item.row_type === 'heading'; });
+        const leaves = rows.filter(function (item) { return item.row_type === 'category'; });
+        const calcs = ordered(calculations.filter(function (item) { return item.statement_section === 'balance_sheet'; }));
+        const outline = [], positions = new Map(), after = new Map();
+        function add(item, kind, key) {
+            positions.set(key, outline.length * 100000);
+            outline.push({ item: item, kind: kind, key: key });
+        }
+        headings.forEach(function (heading) {
+            add(heading, 'heading', 'heading:' + heading.id);
+            leaves.filter(function (item) { return Number(item.parent_category_id) === Number(heading.id); }).forEach(function (item) { add(item, 'category', 'category:' + item.id); });
+            calcs.filter(function (item) { return item.calculation_type === 'subtotal' && Number(item.parent_heading_id) === Number(heading.id); }).forEach(function (item) { add(item, 'subtotal', 'calculation:' + item.id); });
+        });
+        leaves.filter(function (item) { return item.parent_category_id == null; }).forEach(function (item) { add(item, 'category', 'category:' + item.id); });
+        const unresolved = [];
+        calcs.filter(function (item) { return item.calculation_type === 'total'; }).forEach(function (total) {
+            const keys = (total.components || []).map(function (part) {
+                if (part.source_category_id != null) return 'category:' + part.source_category_id;
+                if (part.source_calculation_id != null) return 'calculation:' + part.source_calculation_id;
+                return null;
+            }).filter(function (key) { return positions.has(key); });
+            const anchor = keys.sort(function (a, b) { return positions.get(b) - positions.get(a); })[0];
+            const row = { item: total, kind: 'total', key: 'calculation:' + total.id };
+            if (!anchor) { unresolved.push(row); return; }
+            const siblings = after.get(anchor) || [];
+            positions.set(row.key, positions.get(anchor) + 1 + siblings.length);
+            siblings.push(row);
+            after.set(anchor, siblings);
+        });
+        const result = [];
+        function append(row) {
+            result.push(row);
+            (after.get(row.key) || []).forEach(append);
+        }
+        outline.forEach(append);
+        // Keep broken or legacy configuration visible for review rather than silently dropping it.
+        const included = new Set(result.map(function (row) { return row.key; }));
+        leaves.filter(function (item) { return !included.has('category:' + item.id); }).forEach(function (item) { result.push({ item: item, kind: 'category' }); });
+        unresolved.forEach(function (row) { result.push(row); });
+        return result;
+    }
+    async function loadBalanceSheetOutline() {
+        cancelBalanceSheetLoad();
+        const generation = balanceSheetGeneration, requestedClient = clientId;
+        const controller = new AbortController();
+        balanceSheetRequest = controller;
+        const status = element('balanceSheetStatus'), table = element('balanceSheetTable'), reload = element('balanceSheetReload');
+        table.hidden = true;
+        element('balanceSheetRows').replaceChildren();
+        status.hidden = false;
+        status.classList.remove('is-error');
+        status.textContent = 'Loading Balance Sheet outline…';
+        element('balanceSheetClient').textContent = window.getSelectedClientName ? window.getSelectedClientName() : '';
+        reload.disabled = true;
+        element('balanceSheetView').setAttribute('aria-busy', 'true');
+        const timeout = window.setTimeout(function () { controller.abort(); }, 30000);
+        try {
+            if (!requestedClient) throw new Error('Select a client to view its Balance Sheet outline.');
+            const suffix = '?client_id=' + encodeURIComponent(requestedClient);
+            const responses = await Promise.allSettled([
+                api('/api/account-control-center/categories' + suffix + '&category_type=financial_statement&include_inactive=true', { signal: controller.signal }),
+                api('/api/account-control-center/statement-calculations' + suffix + '&statement_section=balance_sheet', { signal: controller.signal }),
+            ]);
+            if (generation !== balanceSheetGeneration || requestedClient !== clientId) return;
+            if (responses.some(function (response) { return response.status === 'rejected'; })) throw new Error('The Balance Sheet outline could not be loaded. Please retry.');
+            const categories = responses[0].value.categories, calculations = responses[1].value.calculations;
+            if (!Array.isArray(categories) || !Array.isArray(calculations)) throw new Error('The Balance Sheet outline could not be read. Please retry.');
+            const rows = balanceSheetOutline(categories, calculations);
+            element('balanceSheetRows').innerHTML = rows.map(function (row) {
+                const inactive = row.item.is_active === false || row.item.is_active === 0;
+                const label = escapeHtml(row.item.label) + (inactive ? '<span class="bs-inactive-label">Inactive</span>' : '');
+                return '<tr class="bs-' + row.kind + (inactive ? ' bs-inactive' : '') + '"><th scope="row"' + (row.kind === 'heading' ? ' colspan="2"' : '') + '>' + label + '</th>' + (row.kind === 'heading' ? '' : '<td class="balance-sheet-amount"></td>') + '</tr>';
+            }).join('');
+            table.hidden = !rows.length;
+            status.hidden = !!rows.length;
+            status.textContent = rows.length ? '' : 'No Balance Sheet outline is configured yet. Set up headings and categories in Account Control Centre.';
+            reload.textContent = 'Reload outline';
+        } catch (error) {
+            if (generation !== balanceSheetGeneration) return;
+            status.classList.add('is-error');
+            status.textContent = controller.signal.aborted ? 'Loading took too long. Please retry.' : error.message;
+            reload.textContent = 'Retry outline';
+        } finally {
+            window.clearTimeout(timeout);
+            if (generation === balanceSheetGeneration) {
+                balanceSheetRequest = null;
+                reload.disabled = false;
+                element('balanceSheetView').setAttribute('aria-busy', 'false');
+            }
+        }
+    }
+    function showFinancialStatements(balanceSheet) {
+        setReportView(false);
+        element('reportsView').hidden = true;
+        element('financialStatementsView').hidden = balanceSheet;
+        element('balanceSheetView').hidden = !balanceSheet;
+        const params = new URLSearchParams(window.location.search);
+        params.set('view', 'reports');
+        params.set('report', balanceSheet ? 'balance-sheet' : 'financial-statements');
+        params.delete('feature');
+        window.history.replaceState({}, '', window.location.pathname + '?' + params.toString());
+        if (typeof window.setNavModule === 'function') window.setNavModule(balanceSheet ? 'Balance Sheet' : 'Financial Statements');
+        if (typeof window.setUpOverride === 'function') window.setUpOverride(balanceSheet ? function () { showFinancialStatements(false); } : showReportsHub);
+        element(balanceSheet ? 'balanceSheetHeading' : 'financialStatementsHeading').focus({ preventScroll: true });
+        window.scrollTo(0, 0);
+        if (balanceSheet) loadBalanceSheetOutline();
+    }
     function setReportView(isReport) {
+        cancelBalanceSheetLoad();
+        element('financialStatementsView').hidden = true;
+        element('balanceSheetView').hidden = true;
         element('reportsView').hidden = isReport;
         element('cashflowsView').hidden = !isReport;
         const shell = document.querySelector('.reconciliation-shell');
@@ -5013,6 +5134,10 @@
         if (typeof window.setUpOverride === 'function') window.setUpOverride(isReport ? showReportsHub : null);
     }
     function setSelection(card) {
+        if (card.dataset.reportKey === 'financial-statements' || card.dataset.reportKey === 'balance-sheet') {
+            showFinancialStatements(card.dataset.reportKey === 'balance-sheet');
+            return;
+        }
         if (card.dataset.reportKey !== 'cashflows') return;
         document.querySelectorAll('[data-report-key]').forEach(function (item) { item.classList.toggle('is-selected', item === card); });
         const params = new URLSearchParams(window.location.search);
@@ -5041,6 +5166,9 @@
         defaultPeriods();
     }
     async function initialise() {
+        element('financialStatementsBack').addEventListener('click', showReportsHub);
+        element('balanceSheetBack').addEventListener('click', function () { showFinancialStatements(false); });
+        element('balanceSheetReload').addEventListener('click', loadBalanceSheetOutline);
         initialiseCashflowAccounts();
         initialiseCashflowReconciliation();
         setCashflowSummaryFilterVisibility(false);

@@ -6,6 +6,38 @@
     <title>Reports | Internal Audit App</title>
     <link rel='stylesheet' href='/static/style.css?v=76'>
     <style>
+        /* Read-only statement presentation follows the ACC outline's colours and hierarchy. */
+        #financialStatementsView[hidden], #balanceSheetView[hidden] { display: none !important; }
+        .balance-sheet-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
+        .balance-sheet-toolbar h2 { margin: 0; font-size: 21px; color: #18344b; }
+        .balance-sheet-toolbar h2:focus { outline: none; }
+        .balance-sheet-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+        #balanceSheetView { max-width: 1080px; margin: 0 auto; color: #1a1a2e; }
+        #balanceSheetView .balance-sheet-paper { padding: 24px; border: 1px solid #dbe4ea; border-radius: 12px; background: #fff; }
+        #balanceSheetView .balance-sheet-caption { margin: 0 0 20px; }
+        #balanceSheetClient { margin: 0 0 5px; color: #18344b; font-size: 18px; overflow-wrap: anywhere; }
+        #balanceSheetView .balance-sheet-caption p { margin: 0; color: #64748b; font-size: 13px; }
+        #balanceSheetStatus { margin: 0; padding: 20px 0; color: #64748b; font-size: 13px; }
+        #balanceSheetStatus[hidden], #balanceSheetTable[hidden], #balanceSheetReload[hidden] { display: none; }
+        #balanceSheetStatus.is-error { color: #b91c1c; }
+        #balanceSheetTable { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; font-size: 14px; }
+        #balanceSheetTable th, #balanceSheetTable td { padding: 12px 16px; overflow-wrap: anywhere; }
+        #balanceSheetTable thead th { color: #64748b; font-weight: 500; text-align: left; border-bottom: 1px solid #dbe4ea; }
+        #balanceSheetTable .balance-sheet-amount { width: 24%; text-align: right; }
+        #balanceSheetTable .bs-heading th { padding-top: 14px; padding-bottom: 14px; border-top: 12px solid #fff; border-radius: 8px 8px 0 0; background: #f3f7fa; color: #18344b; text-align: left; }
+        #balanceSheetTable .bs-category th { padding-left: 32px; font-weight: 400; text-align: left; color: #34495e; }
+        #balanceSheetTable .bs-category > * { border-bottom: 1px solid #edf1f4; }
+        #balanceSheetTable .bs-subtotal > *, #balanceSheetTable .bs-total > * { border-top: 2px solid #9fb5c5; background: #f4f8fb; color: #18344b; text-align: left; }
+        #balanceSheetTable .bs-total > * { border-top-color: #69869b; background: #eef4f8; }
+        #balanceSheetTable .bs-inactive { opacity: .58; }
+        #balanceSheetTable .bs-inactive-label { margin-left: 8px; font-size: 11px; font-weight: 400; color: #64748b; }
+        #balanceSheetView button:focus-visible, #financialStatementsView [role=button]:focus-visible { outline: 2px solid #1769aa; outline-offset: 3px; }
+        @media (max-width: 600px) {
+            #balanceSheetView .balance-sheet-paper { padding: 14px; }
+            #balanceSheetTable th, #balanceSheetTable td { padding: 10px; }
+            #balanceSheetTable .bs-category th { padding-left: 20px; }
+            #balanceSheetTable .balance-sheet-amount { width: 28%; }
+        }
         /* Scope this compact toolbar/picker to Cashflows, without changing shared pages. */
         #cashflowsSummaryControlsPanel .cashflows-filter-bar { display: flex; flex-wrap: wrap; gap: 8px; }
         #cashflowsSummaryControlsPanel .cashflows-report-scope { flex: 1 1 auto; min-width: 0; gap: 9px; }
@@ -183,6 +215,12 @@
                         <p>Summarise money in, money out, transfers, and closing cash and bank balances.</p>
                         <span id='cashflowsStatus' class='module-status'>Next build</span>
                     </div>
+                    <div id='financialStatementsCard' class='module-card' data-report-key='financial-statements' role='button' tabindex='0' aria-label='Open Financial Statements'>
+                        <div class='module-icon' aria-hidden='true'>FS</div>
+                        <h3>Financial Statements</h3>
+                        <p>View the Balance Sheet outline.</p>
+                        <span class='module-status'>UI preview</span>
+                    </div>
                 </div>
             </section>
             <section class='hub-group' aria-labelledby='planned-reports-heading'>
@@ -200,14 +238,24 @@
                         <p>Review customer receipts, deductions, balances, and collection movements.</p>
                         <span class='module-status coming'>Coming soon</span>
                     </div>
-                    <div class='module-card coming-soon' aria-label='Financial Statements coming soon'>
-                        <div class='module-icon' aria-hidden='true'>FS</div>
-                        <h3>Financial Statements</h3>
-                        <p>Prepare financial statement outputs, including the related notes section.</p>
-                        <span class='module-status coming'>Coming soon</span>
-                    </div>
                 </div>
             </section>
+        </section>
+        <section id='financialStatementsView' aria-labelledby='financialStatementsHeading' hidden>
+            <header class='balance-sheet-toolbar'><h2 id='financialStatementsHeading' tabindex='-1'>Financial Statements</h2><button type='button' id='financialStatementsBack' class='cashflows-secondary'>Reports</button></header>
+            <div class='module-grid'>
+                <div id='balanceSheetCard' class='module-card' data-report-key='balance-sheet' role='button' tabindex='0' aria-label='Open Balance Sheet'>
+                    <div class='module-icon' aria-hidden='true'>BS</div><h3>Balance Sheet</h3><p>Headings, categories, subtotals and totals from Account Control Centre.</p><span class='module-status'>UI preview</span>
+                </div>
+            </div>
+        </section>
+        <section id='balanceSheetView' aria-labelledby='balanceSheetHeading' hidden>
+            <header class='balance-sheet-toolbar'><h2 id='balanceSheetHeading' tabindex='-1'>Balance Sheet</h2><div class='balance-sheet-actions'><button type='button' id='balanceSheetReload' class='cashflows-secondary'>Reload outline</button><button type='button' id='balanceSheetBack' class='cashflows-secondary'>Financial Statements</button></div></header>
+            <article class='balance-sheet-paper'>
+                <header class='balance-sheet-caption'><h3 id='balanceSheetClient'></h3><p>Layout preview · Amounts will be added in a later phase.</p></header>
+                <p id='balanceSheetStatus' role='status' aria-live='polite'></p>
+                <table id='balanceSheetTable' aria-label='Balance Sheet outline with blank current-period amounts' hidden><thead><tr><th scope='col'>Particulars</th><th scope='col' class='balance-sheet-amount'>Current period</th></tr></thead><tbody id='balanceSheetRows'></tbody></table>
+            </article>
         </section>
         <section id='cashflowsView' class='cashflows-report' aria-label='Cashflows report' hidden>
         <div class='cashflows-notification-stack'>
@@ -465,8 +513,8 @@
             </dialog>
         </div>
     </section>
-    <script src='/static/client_context.js?v=21'></script>
+    <script src='/static/client_context.js?v=22'></script>
     <script src='/static/loading_ui.js?v=ce6d21ca20c8'></script>
-    <script src='/static/reconciliation.js?v=58'></script>
+    <script src='/static/reconciliation.js?v=59'></script>
 </body>
 </html>

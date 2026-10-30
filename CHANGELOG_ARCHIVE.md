@@ -9019,3 +9019,12 @@ An admin-only upload-options endpoint supports lightweight startup with a blurre
 **Verification:** Calculation output tests cover subtotal defaults/operators, total category and chained-total labels, and fixed query count at 1 and 12 calculations. ACC backend tests pass (94 plus 9 subtests); ACC browser and app smoke tests pass (18 plus 8 subtests). OpenAPI confirms `perf` is registered on all five diagnostic GET routes. Python compilation and `git diff --check` pass. Pytest reported environment warnings, including blocked outbound Supabase access; live database timing was not available.
 
 **Acceptance:** Local-server acceptance remains pending. No staging, commit, or push.
+
+
+## Simplified Balance Sheet UI — 2026-10-30
+
+**Implementation:** Reports → Financial Statements → Balance Sheet displays the selected client’s ACC headings, categories, subtotals and totals in source order. Amounts remain blank; no Trial Balance, adjustment or financial calculation links were added. Includes keyboard opening, return navigation, direct links, loading/empty/error/retry states and cancelled-response guards. Inactive rows remain labelled. Report styles are page-scoped; shared navigation version 22 is applied to all 19 consumers, and Reports script version is 59.
+
+**Verification:** Isolated browser checks passed for desktop/mobile layout, blank amounts, GET-only outline reads, navigation, safe labels, empty/error/retry and late responses. Source-placement parity against ACC, JavaScript syntax and whitespace checks passed. Existing Reports regressions: 129 passed, 1 skipped, 2 failed because they assert script version 58 and the retired placeholder description; updating that test file awaits scope approval. One existing Starlette/httpx deprecation warning. No backend/database changes or package installation. Two existing ACC Status entries were consolidated to retain the 80-line budget; File_Map.md remains over its existing guard at 158 lines and was not changed.
+
+**Acceptance:** Aadil authorized commit and push on 2026-10-30; the two obsolete test assertions remain documented and unchanged.
