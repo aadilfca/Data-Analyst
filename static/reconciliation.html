@@ -44,6 +44,10 @@
         #balanceSheetDiagnostics { margin: 12px 0; padding: 12px 12px 12px 30px; border: 1px solid #e8c878; border-radius: 7px; background: #fff8e7; color: #5f4a18; font-size: 12px; line-height: 1.6; }
         #balanceSheetDiagnostics[hidden] { display: none; }
         #balanceSheetDate { margin-top: 5px; }
+        #statementClosingControls[hidden] { display: none; }
+        #statementClosingStatus { max-width: 100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; }
+        #balanceSheetRows .statement-capital-breakdown { display: block; margin-top: 5px; color: #64748b; font-size: 11px; font-weight: 400; }
+
         #balanceSheetView .balance-sheet-amount { font-variant-numeric: tabular-nums; white-space: nowrap; }
         #balanceSheetTable .balance-sheet-amount { text-align: right; }
         /* Scope this compact toolbar/picker to Cashflows, without changing shared pages. */
@@ -255,11 +259,15 @@
                 <div id='balanceSheetCard' class='module-card' data-report-key='balance-sheet' role='button' tabindex='0' aria-label='Open Balance Sheet'>
                     <div class='module-icon' aria-hidden='true'>BS</div><h3>Balance Sheet</h3><p>ERP closing balances linked through Account Control Centre.</p><span class='module-status'>Draft accounts</span>
                 </div>
+                <div id='incomeStatementCard' class='module-card' data-report-key='income-statement' role='button' tabindex='0' aria-label='Open Income Statement'>
+                    <div class='module-icon' aria-hidden='true'>IS</div><h3>Income Statement</h3><p>Statement of profit or loss from the selected Trial Balance.</p><span class='module-status'>Draft accounts</span>
+                </div>
             </div>
         </section>
         <section id='balanceSheetView' aria-labelledby='balanceSheetHeading' hidden>
             <header class='balance-sheet-toolbar'><h2 id='balanceSheetHeading' tabindex='-1'>Balance Sheet</h2><div class='balance-sheet-actions'><button type='button' id='balanceSheetReload' class='cashflows-secondary'>Reload Balance Sheet</button><button type='button' id='balanceSheetBack' class='cashflows-secondary'>Financial Statements</button></div></header>
             <div class='balance-sheet-source'><label for='balanceSheetUpload'>Trial Balance</label><select id='balanceSheetUpload'><option value=''>Select a Trial Balance</option></select></div>
+            <div id='statementClosingControls' class='balance-sheet-source' hidden><label for='statementClosingStatus'>Profit closing status for this TB</label><select id='statementClosingStatus'><option value='not_confirmed'>Not confirmed</option><option value='not_in_capital'>Profit is not yet included in ERP capital</option><option value='already_in_capital'>Profit is already included in ERP capital</option></select><button type='button' id='statementClosingSave' class='cashflows-secondary'>Save closing status</button></div>
             <article class='balance-sheet-paper'>
                 <header class='balance-sheet-caption'><h3 id='balanceSheetClient'></h3><p>Draft — before audit adjustments</p><p id='balanceSheetDate'></p><p>Amounts rounded to whole units; hover to see exact values.</p></header>
                 <ul id='balanceSheetDiagnostics' aria-label='Balance Sheet review items' hidden></ul>
@@ -523,8 +531,8 @@
             </dialog>
         </div>
     </section>
-    <script src='/static/client_context.js?v=22'></script>
+    <script src='/static/client_context.js?v=23'></script>
     <script src='/static/loading_ui.js?v=ce6d21ca20c8'></script>
-    <script src='/static/reconciliation.js?v=60'></script>
+    <script src='/static/reconciliation.js?v=61'></script>
 </body>
 </html>

@@ -25,7 +25,7 @@ from services.reconciliation_export_jobs import export_jobs, ExportJobError
 
 from database import execute_query_pg, execute_write_pg, log_audit, pg_transaction, run_read_snapshot_pg
 from routers.auth import require_admin
-from services.financial_statement_balances import build_balance_sheet, BalanceSheetInputError
+from services.financial_statement_balances import (build_balance_sheet, build_income_statement, financial_statement_context_key, BalanceSheetInputError)
 from services.ledger_group_summary import LedgerBalanceError, build_cashflow_summary, build_cross_group_check, build_financial_statement_summary, build_group_summary, normalize_cashflow_grouping
 from services.ledger_report_source import (
     CASHFLOW_CHILD_DETAILS_VERSION,
@@ -2925,20 +2925,24 @@ def balance_sheet_report(
     client_id: int = Query(..., ge=1),
     trial_balance_upload_id: int = Query(..., ge=1),
     session=Depends(require_admin),
+    statement_section: str = "balance_sheet",
 ):
-    """Compute one selected ERP TB and its current ACC configuration in one snapshot."""
+    """Compute one selected ERP TB and current statement configuration in one snapshot."""
     def read(_connection):
         _require_active_client(client_id)
         uploads = execute_query_pg(
-            """SELECT id, client_id, file_name, as_of_date, period_start, period_end,
-                      uploaded_at, validation_controls
-               FROM trial_balance_uploads
-               WHERE id = %s AND client_id = %s AND status = 'parsed'""",
+            """SELECT u.id, u.client_id, u.file_name, u.as_of_date, u.period_start, u.period_end,
+                      u.uploaded_at, u.validation_controls, p.closing_status, p.context_key AS confirmed_context_key
+               FROM trial_balance_uploads u
+               LEFT JOIN trial_balance_profit_status p ON p.upload_id = u.id AND p.client_id = u.client_id
+               WHERE u.id = %s AND u.client_id = %s AND u.status = 'parsed'""",
             (trial_balance_upload_id, client_id),
         )
         if not uploads:
             raise HTTPException(404, "Selected Trial Balance is unavailable for this client; select an available upload")
         upload = dict(uploads[0])
+        closing_status = upload.pop("closing_status", "not_confirmed")
+        confirmed_context_key = upload.pop("confirmed_context_key", None)
         controls = upload.pop("validation_controls", None) or {}
         if isinstance(controls, str):
             try:
@@ -2968,7 +2972,7 @@ def balance_sheet_report(
         calculations = execute_query_pg(
             """SELECT id, label, statement_section, calculation_type, parent_heading_id, sort_order
                FROM account_control_statement_calculations
-               WHERE client_id = %s AND statement_section = 'balance_sheet'
+               WHERE client_id = %s AND statement_section IN ('balance_sheet', 'income_statement')
                ORDER BY calculation_type, sort_order, id""",
             (client_id,),
         )
@@ -2977,7 +2981,7 @@ def balance_sheet_report(
                       component.source_calculation_id, component.operator, component.sort_order
                FROM account_control_statement_calculation_components component
                JOIN account_control_statement_calculations calculation ON calculation.id = component.calculation_id
-               WHERE calculation.client_id = %s AND calculation.statement_section = 'balance_sheet'
+               WHERE calculation.client_id = %s AND calculation.statement_section IN ('balance_sheet', 'income_statement')
                ORDER BY component.calculation_id, component.sort_order, component.id""",
             (client_id,),
         )
@@ -2985,13 +2989,29 @@ def balance_sheet_report(
             "SELECT COUNT(*) AS count FROM trial_balance_rollforward_adjustments WHERE upload_id = %s",
             (trial_balance_upload_id,),
         )
+        links = execute_query_pg("SELECT source_calculation_id, target_category_id FROM account_control_profit_links WHERE client_id = %s", (client_id,))
+        profit_link = dict(links[0]) if links else None
+        context_key = financial_statement_context_key(accounts, assignments, categories, calculations, components, profit_link)
+        if statement_section not in {"balance_sheet", "income_statement"}:
+            raise HTTPException(400, "Choose Balance Sheet or Income Statement")
         try:
-            result = build_balance_sheet(accounts, assignments, categories, calculations, components,
-                                         controls, int(adjustment_counts[0]["count"]) if adjustment_counts else 0)
+            builder = build_income_statement if statement_section == "income_statement" else build_balance_sheet
+            result = builder(accounts, assignments, categories, calculations, components,
+                             controls, int(adjustment_counts[0]["count"]) if adjustment_counts else 0,
+                             profit_link=profit_link, closing_status=closing_status,
+                             context_key=context_key, confirmed_context_key=confirmed_context_key)
         except BalanceSheetInputError as error:
             raise HTTPException(409, str(error)) from error
-        return {"client_id": client_id, "upload": upload, **result}
+        return {"client_id": client_id, "upload": upload, "context_key": context_key, "closing_status": closing_status if context_key == confirmed_context_key else "not_confirmed", **result}
     return run_read_snapshot_pg(read)
+
+
+@router.get("/api/reconciliation/financial-statements/income-statement")
+def income_statement_report(
+    client_id: int = Query(..., ge=1), trial_balance_upload_id: int = Query(..., ge=1),
+    session=Depends(require_admin),
+):
+    return balance_sheet_report(client_id, trial_balance_upload_id, session, statement_section="income_statement")
 
 
 @router.get("/api/reconciliation/financial-statements/preview")

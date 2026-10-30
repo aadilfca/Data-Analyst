@@ -6,6 +6,13 @@
     <title>Account Control Centre</title>
     <link rel="stylesheet" href="/static/style.css?v=79">
     <style>
+        #accFinancialSetupModal .acc2-profit-link { margin-bottom: 18px; padding: 14px; border: 1px solid #dbe4ea; border-radius: 8px; background: #f8fafc; }
+        #accFinancialSetupModal .acc2-profit-link h3 { margin: 0 0 6px; font-size: 15px; }
+        #accFinancialSetupModal .acc2-profit-link p { color: #617589; font-size: 12px; line-height: 1.5; }
+        #accFinancialSetupModal .acc2-profit-link > div { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; }
+        #accFinancialSetupModal .acc2-profit-link label { flex: 1; min-width: 0; font-size: 12px; }
+        #accFinancialSetupModal .acc2-profit-link select { width: 100%; min-width: 0; max-width: 100%; }
+
         .acc-bootstrap-overlay { position: fixed; inset: 0; z-index: 1200; display: grid; place-items: center; background: rgba(15, 23, 42, .25); backdrop-filter: blur(3px); }
         .acc-bootstrap-overlay[hidden] { display: none; }
         .acc-bootstrap-message { display: flex; align-items: center; gap: 12px; padding: 18px 24px; border-radius: 10px; background: white; color: #1e293b; box-shadow: 0 8px 30px rgba(15,23,42,.2); }
@@ -97,8 +104,8 @@
             <button type="button" id="accNotesSetupFab" class="acc2-cashflow-fab" aria-label="Open Notes to Financial Statements setup" title="Notes to Financial Statements setup" hidden>+</button>
         </section>
         <div id="accCashflowTemplateModal" class="acc2-modal-backdrop" hidden><section class="acc2-modal acc2-modal-wide" role="dialog" aria-modal="true" aria-labelledby="accCashflowTemplateModalTitle"><div class="acc2-modal-header"><div><h2 id="accCashflowTemplateModalTitle">Cashflows transaction template</h2><p>Select the Client Data Bank template and map its columns to the Cashflows report fields.</p></div><button type="button" id="accCashflowTemplateClose" class="acc2-modal-close" aria-label="Close transaction template setup">&times;</button></div><div class="acc2-template-source"><label for="accCashflowTemplateSelect">Client Data Bank template</label><select id="accCashflowTemplateSelect" class="acc2-select"><option value="">Loading templates...</option></select><p id="accCashflowTemplateHint" class="acc2-category-hint" role="status"></p></div><div id="accCashflowTemplateMappingState" class="acc2-grid-state">Select a template to view its columns.</div><div id="accCashflowTemplateMapping" class="acc2-template-mapping" hidden></div><div class="acc2-modal-footer"><button type="button" id="accCashflowTemplateSave" class="acc2-action-btn" disabled>Save template mapping</button></div></section></div>    </main>
-    <script src="/static/client_context.js?v=22"></script>
+    <script src="/static/client_context.js?v=23"></script>
     <script src="/static/loading_ui.js"></script>
-    <script src="/static/account_control_center.js?v=36"></script>
+    <script src="/static/account_control_center.js?v=37"></script>
 </body>
 </html>

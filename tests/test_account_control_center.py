@@ -286,6 +286,7 @@ class AccountSetSchemaTests(unittest.TestCase):
                         "account_control_categories",
                         "account_control_statement_calculations",
                         "account_control_statement_calculation_components",
+                        "account_control_profit_links", "trial_balance_profit_status",
                         "account_control_assignments",
                         "account_control_cashflow_categories",
                         "account_control_cashflow_category_assignments",
@@ -350,6 +351,8 @@ class AccountSetPostgresMigrationTests(unittest.TestCase):
         sql = "\n".join(connection.cursor_instance.statements)
         self.assertIn("CREATE TABLE IF NOT EXISTS account_control_categories", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS account_control_statement_calculations", sql)
+        self.assertIn("CREATE TABLE IF NOT EXISTS account_control_profit_links", sql)
+        self.assertIn("CREATE TABLE IF NOT EXISTS trial_balance_profit_status", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS account_control_statement_calculation_components", sql)
         self.assertIn("idx_statement_subtotal_heading", sql)
         self.assertIn("ADD COLUMN IF NOT EXISTS statement_section", sql)
@@ -799,7 +802,7 @@ class FinancialStatementControlTests(unittest.TestCase):
         with patch.object(control_center, "_require_active_client"), patch.object(
             control_center, "pg_transaction", return_value=nullcontext()
         ), patch.object(
-            control_center, "execute_query_pg", side_effect=[
+            control_center, "execute_query_pg", side_effect=[[],
                 [], [{"id": 31, "label": "Unused", "statement_section": None, "row_type": "category"}], [], [], [],
                 [{"account_code": "OLD-1"}],
             ]
@@ -819,7 +822,7 @@ class FinancialStatementControlTests(unittest.TestCase):
         with patch.object(control_center, "_require_active_client"), patch.object(
             control_center, "pg_transaction", return_value=nullcontext()
         ), patch.object(
-            control_center, "execute_query_pg", side_effect=[
+            control_center, "execute_query_pg", side_effect=[[],
                 [],
                 [{"id": 31, "label": "Fixed assets", "statement_section": "balance_sheet", "row_type": "heading"}],
                 children, [], [], [], [], [],
@@ -839,7 +842,7 @@ class FinancialStatementControlTests(unittest.TestCase):
         with patch.object(control_center, "_require_active_client"), patch.object(
             control_center, "pg_transaction", return_value=nullcontext()
         ), patch.object(
-            control_center, "execute_query_pg", side_effect=[
+            control_center, "execute_query_pg", side_effect=[[],
                 [],
                 [{"id": 31, "label": "Fixed assets", "statement_section": "balance_sheet", "row_type": "heading"}],
                 [{"id": 32, "label": "Land"}], [], [], [], [{"account_code": "10-01"}],
@@ -857,7 +860,7 @@ class FinancialStatementControlTests(unittest.TestCase):
         with patch.object(control_center, "_require_active_client"), patch.object(
             control_center, "pg_transaction", return_value=nullcontext()
         ), patch.object(
-            control_center, "execute_query_pg", side_effect=[
+            control_center, "execute_query_pg", side_effect=[[],
                 [], [{"id": 31, "statement_section": None, "row_type": "category"}], [], [], [{"id": 5}],
             ]
         ), patch.object(control_center, "execute_write_pg") as write:
@@ -871,7 +874,7 @@ class FinancialStatementControlTests(unittest.TestCase):
     def test_delete_category_rejects_direct_total_reference(self):
         with patch.object(control_center, "_require_active_client"), patch.object(
             control_center, "pg_transaction", return_value=nullcontext()
-        ), patch.object(control_center, "execute_query_pg", side_effect=[
+        ), patch.object(control_center, "execute_query_pg", side_effect=[[],
             [], [{"id": 31, "statement_section": "balance_sheet", "row_type": "category"}], [], [{"id": 9}],
         ]), patch.object(control_center, "execute_write_pg") as write:
             with self.assertRaises(HTTPException) as raised:
@@ -1165,6 +1168,7 @@ class FinancialStatementCalculationTests(unittest.TestCase):
                     {"id": 77, "client_id": 1, "statement_section": "income_statement", "calculation_type": "total", "label": "Gross Profit", "parent_heading_id": None, "sort_order": 0},
                     {"id": 88, "client_id": 1, "statement_section": "income_statement", "calculation_type": "total", "label": "Operating Profit", "parent_heading_id": None, "sort_order": 1},
                 ],
+                [],
                 [{"calculation_id": 88, "source_category_id": None, "source_calculation_id": 77, "operator": "add", "sort_order": 0}],
                 [],
             ]
@@ -1219,7 +1223,7 @@ class FinancialStatementCalculationTests(unittest.TestCase):
 
     def test_referenced_total_cannot_be_deleted(self):
         with patch.object(control_center, "_require_active_client"), patch.object(
-            control_center, "execute_query_pg", side_effect=[[{"calculation_type": "total"}], [{"id": 1}]]
+            control_center, "execute_query_pg", side_effect=[[], [{"calculation_type": "total"}], [{"id": 1}]]
         ), patch.object(control_center, "execute_write_pg") as write, patch.object(
             control_center, "pg_transaction", return_value=nullcontext()
         ):
@@ -1272,7 +1276,7 @@ class FinancialStatementCalculationTests(unittest.TestCase):
                 for index in range(1, count + 1)
             ]
             with patch.object(control_center, "_require_active_client"), patch.object(
-                control_center, "execute_query_pg", side_effect=[calculations, [], []]
+                control_center, "execute_query_pg", side_effect=[calculations, [], [], []]
             ) as query, patch.object(control_center, "start_db_metrics", return_value="metrics-token") as start, patch.object(
                 control_center, "get_db_metrics", return_value={"calls": 7, "reads": 7, "writes": 0, "db_time": 0.125}
             ), patch.object(
@@ -1282,7 +1286,7 @@ class FinancialStatementCalculationTests(unittest.TestCase):
                     client_id=1, statement_section="income_statement", session={"username": "Admin"}, perf=True
                 )
             self.assertEqual(len(response["calculations"]), count)
-            self.assertEqual(query.call_count, 3)
+            self.assertEqual(query.call_count, 4)
             self.assertEqual(response["performance"]["db_calls"], 7)
             self.assertEqual(response["performance"]["db_ms"], 125.0)
             self.assertEqual(response["performance"]["queries"][0]["ms"], 20.0)
@@ -1290,7 +1294,7 @@ class FinancialStatementCalculationTests(unittest.TestCase):
             stop.assert_called_once_with("metrics-token")
 
         with patch.object(control_center, "_require_active_client"), patch.object(
-            control_center, "execute_query_pg", side_effect=[[calculations[0]], [], []]
+            control_center, "execute_query_pg", side_effect=[[calculations[0]], [], [], []]
         ), patch.object(control_center, "start_db_metrics") as start:
             response = control_center.list_statement_calculations(
                 client_id=1, statement_section="income_statement", session={"username": "Admin"}
@@ -1665,6 +1669,8 @@ class BalanceSheetExistingSchemaTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(database, 'DB_NAME', os.path.join(directory, 'legacy.db')):
             database.init_db()
             with closing(sqlite3.connect(database.DB_NAME)) as connection, connection:
+                connection.execute("DROP TABLE trial_balance_profit_status")
+                connection.execute("DROP TABLE account_control_profit_links")
                 connection.execute("ALTER TABLE account_control_categories DROP COLUMN presentation_role")
                 connection.execute("INSERT INTO account_control_categories (client_id, category_type, category_key, label) VALUES (1, 'financial_statement', 'existing', 'Existing category')")
             database.init_db()

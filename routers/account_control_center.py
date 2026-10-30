@@ -642,6 +642,19 @@ class StatementCalculationPayload(BaseModel):
     components: list[StatementCalculationComponentPayload] = Field(default_factory=list)
 
 
+class ProfitLinkPayload(BaseModel):
+    client_id: int = Field(..., ge=1)
+    source_calculation_id: Optional[int] = Field(default=None, ge=1)
+    target_category_id: Optional[int] = Field(default=None, ge=1)
+
+
+class ProfitClosingStatusPayload(BaseModel):
+    client_id: int = Field(..., ge=1)
+    trial_balance_upload_id: int = Field(..., ge=1)
+    closing_status: str
+    context_key: str = Field(..., min_length=64, max_length=64)
+
+
 _ACCOUNT_CONTROL_ASSIGNMENT_FIELDS = (
     "verification_workstream", "financial_statement_category_id", "note_category_id",
 )
@@ -1135,6 +1148,55 @@ def _note_statement_section(category_id: int, client_id: int) -> Optional[str]:
     return None
 
 
+@router.put("/api/account-control-center/profit-link")
+def save_profit_link(payload: ProfitLinkPayload, session=Depends(require_admin)):
+    """One explicit final IS total and one active BS equity destination per client."""
+    _require_active_client(payload.client_id)
+    if (payload.source_calculation_id is None) != (payload.target_category_id is None):
+        raise HTTPException(400, "Choose both the final profit total and its capital destination")
+    with pg_transaction():
+        if payload.source_calculation_id is None:
+            execute_write_pg("DELETE FROM account_control_profit_links WHERE client_id = %s", (payload.client_id,))
+        else:
+            sources = execute_query_pg("SELECT id FROM account_control_statement_calculations WHERE id = %s AND client_id = %s AND statement_section = 'income_statement' AND calculation_type = 'total' FOR UPDATE", (payload.source_calculation_id, payload.client_id))
+            targets = execute_query_pg("""SELECT c.id FROM account_control_categories c
+                LEFT JOIN account_control_categories p ON p.id = c.parent_category_id AND p.client_id = c.client_id
+                WHERE c.id = %s AND c.client_id = %s AND c.category_type = 'financial_statement'
+                  AND c.statement_section = 'balance_sheet' AND c.row_type = 'category' AND c.is_active = TRUE
+                  AND ((c.parent_category_id IS NULL AND c.presentation_role = 'equity') OR
+                       (p.row_type = 'heading' AND p.statement_section = 'balance_sheet' AND p.is_active = TRUE AND p.presentation_role = 'equity'))
+                FOR UPDATE OF c""", (payload.target_category_id, payload.client_id))
+            if not sources or not targets:
+                raise HTTPException(400, "Choose a final Income Statement total and an active Balance Sheet equity category for this client")
+            execute_write_pg("""INSERT INTO account_control_profit_links (client_id, source_calculation_id, target_category_id, updated_by, updated_at)
+                VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (client_id) DO UPDATE SET source_calculation_id = EXCLUDED.source_calculation_id,
+                target_category_id = EXCLUDED.target_category_id, updated_by = EXCLUDED.updated_by, updated_at = CURRENT_TIMESTAMP""",
+                (payload.client_id, payload.source_calculation_id, payload.target_category_id, _actor_name(session)))
+    log_audit(_actor_name(session), "Update", "Financial Statements", f"Updated profit-link configuration for client {payload.client_id}")
+    return {"saved": True}
+
+
+@router.put("/api/account-control-center/profit-status")
+def save_profit_closing_status(payload: ProfitClosingStatusPayload, session=Depends(require_admin)):
+    if payload.closing_status not in {'not_confirmed', 'not_in_capital', 'already_in_capital'}:
+        raise HTTPException(400, "Choose a valid TB profit closing status")
+    # Rebuild under the same protected read snapshot as reporting. A subsequent
+    # source change invalidates the saved fingerprint on every report read.
+    from routers.reconciliation import income_statement_report
+    current = income_statement_report(payload.client_id, payload.trial_balance_upload_id, session)
+    if current['context_key'] != payload.context_key:
+        raise HTTPException(409, "The TB or statement configuration changed. Reload before confirming closing status")
+    execute_write_pg("""INSERT INTO trial_balance_profit_status (upload_id, client_id, closing_status, context_key, updated_by, updated_at)
+        VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+        ON CONFLICT (upload_id) DO UPDATE SET closing_status = EXCLUDED.closing_status, context_key = EXCLUDED.context_key,
+        updated_by = EXCLUDED.updated_by, updated_at = CURRENT_TIMESTAMP
+        WHERE trial_balance_profit_status.client_id = EXCLUDED.client_id""",
+        (payload.trial_balance_upload_id, payload.client_id, payload.closing_status, payload.context_key, _actor_name(session)))
+    log_audit(_actor_name(session), "Update", "Financial Statements", f"Confirmed TB profit closing status for upload {payload.trial_balance_upload_id}: {payload.closing_status}")
+    return {"saved": True}
+
+
 @router.get("/api/account-control-center/categories")
 @_with_optional_account_control_performance
 def list_account_control_categories(
@@ -1398,8 +1460,10 @@ def list_statement_calculations(
         "SELECT id, client_id, statement_section, calculation_type, label, parent_heading_id, sort_order FROM account_control_statement_calculations WHERE client_id = %s AND statement_section = %s ORDER BY calculation_type, sort_order, id",
         (client_id, section),
     )
+    links = execute_query_pg("SELECT source_calculation_id, target_category_id FROM account_control_profit_links WHERE client_id = %s", (client_id,)) if section == "income_statement" else []
+    profit_link = dict(links[0]) if links else None
     if not calculations:
-        return {"client_id": client_id, "statement_section": section, "calculations": []}
+        return {"client_id": client_id, "statement_section": section, "calculations": [], "profit_link": profit_link}
 
     calculation_ids = [int(row["id"]) for row in calculations]
     saved_component_rows = execute_query_pg(
@@ -1452,7 +1516,7 @@ def list_statement_calculations(
                     "operator": row["operator"],
                 })
         result.append({**dict(calculation), "components": components})
-    return {"client_id": client_id, "statement_section": section, "calculations": result}
+    return {"client_id": client_id, "statement_section": section, "calculations": result, "profit_link": profit_link}
 
 
 def _persist_statement_calculation(calculation_id: Optional[int], payload: StatementCalculationPayload, session) -> dict[str, Any]:
@@ -1523,6 +1587,8 @@ def delete_statement_calculation(
 ):
     _require_active_client(client_id)
     with pg_transaction():
+        if execute_query_pg("SELECT client_id FROM account_control_profit_links WHERE client_id = %s AND source_calculation_id = %s", (client_id, calculation_id)):
+            raise HTTPException(409, "Change or remove the profit-to-capital link before deleting its final profit total")
         rows = execute_query_pg(
             "SELECT calculation_type FROM account_control_statement_calculations WHERE id = %s AND client_id = %s",
             (calculation_id, client_id),
@@ -1712,6 +1778,10 @@ def delete_account_control_category(
     """Delete an unassigned Financial Statement row, cascading through an empty heading."""
     _require_active_client(client_id)
     with pg_transaction():
+        if execute_query_pg("""SELECT link.client_id FROM account_control_profit_links link
+            JOIN account_control_categories target ON target.id = link.target_category_id
+            WHERE link.client_id = %s AND (target.id = %s OR target.parent_category_id = %s)""", (client_id, category_id, category_id)):
+            raise HTTPException(409, "Change or remove the profit-to-capital link before deleting its capital destination")
         note_rows = execute_query_pg(
             "SELECT id, label, parent_category_id FROM account_control_categories WHERE id = %s AND client_id = %s AND category_type = 'note'",
             (category_id, client_id),

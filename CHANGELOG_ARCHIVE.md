@@ -8773,7 +8773,7 @@ Record phase decisions, implementation, verification, and acceptance here as the
 - Selected ERP totals compare original Leaf sums before adjustments; ERP mismatches and required Leaf code corrections block saving.
 - Horizontal/vertical differences are advisory and save separately. Draft totals include these entries without altering ERP totals; global differences remain unassigned until traced.
 - Assign each account to a client-scoped Balance Sheet or Income Statement category. Headings organize categories. Subtotals combine direct categories under a heading with signed treatment; totals combine categories, subtotals, or earlier totals, with overlapping sources blocked.
-- The legacy Financial Statement preview aggregates ledger movements. Balance Sheet reporting separately uses a selected ERP closing TB; audit journals and automatic profit-to-equity closing remain deferred.
+- Financial statements use selected ERP closing Leaves; Income Statement reverses Dr−Cr. A configured final profit reconciles to mapped P&L accounts before source-confirmed capital linking; audit journals remain deferred.
 - Safety reference: `tests/test_trial_balance_account_flow_safety.py` is the maintained regression checkpoint for Trial Balance-to-ACC-to-Financial Statement links; extend it as statement building progresses.
 
 ### Account Control Centre setup shell - 2026-10-26
@@ -9041,3 +9041,16 @@ The report requires explicit TB selection, shows its closing date, rounds statem
 **Documentation:** Existing grouped File_Map entries register the new service/tests without adding rows; its existing 158-line guard excess remains. The latest Balance Sheet Status entry was rewritten in place.
 
 **Acceptance:** Aadil confirmed successful local Balance Sheet testing and authorized commit/push on 2026-10-30. Income Statement and the profit-to-capital link are the next phase; source diagnostics remain unresolved.
+
+
+## Income Statement and reconciled profit linking — 2026-10-30
+
+**Implementation:** Extended the shared decimal engine and selected-TB snapshot endpoint to Income Statement. Display reverses ERP closing Dr−Cr, uses parentheses for expenses/losses, preserves ACC ordering/formulas and rounds only presentation. Nonzero opening P&L balances and subtraction of negative expenses are flagged. Audit adjustments remain zero.
+
+ACC selects one final Income Statement total and one active equity category. The final amount is checked independently against mapped TB P&L net, with category coverage preventing offsetting omissions. Nonzero unmapped accounts, invalid/incomplete sources, mismatches or unconfirmed closing status prevent linking. Profit/loss changes reported capital once, with ERP capital and the addition disclosed; no source journal is posted. Already-in-capital status prevents an additional link. ERP imbalances remain visible.
+
+SQLite/PostgreSQL add compact client configuration and per-upload closing-status tables. Confirmation fingerprints bind source accounts, assignments and configuration; changed inputs require confirmation again. Linked-source deletion is guarded. Existing snapshots now use nine data reads independent of account count; Income Statement setup uses four reads. Reports/ACC/shared navigation versions are 61/37/23; all 19 navigation consumers are updated.
+
+**Verification:** Calculation/API checks cover signs, formulas, profit/loss, closing states, stale confirmations, omitted categories, source/client scope, deletion protection and unchanged ERP amounts. Browser checks cover both statements, parentheses, setup, explicit closing confirmation, capital disclosure, already-posted exclusion, source switching and mobile containment. Desktop/mobile screenshots reviewed. Schema bootstrap/upgrade/idempotence checks passed; the final suite passed 294 tests and 17 subtests, with 1 skip and existing Starlette/httpx/FastAPI deprecation warnings. Syntax and whitespace checks passed. A 10,000-Leaf synthetic fingerprint plus both-statement/profit-link calculation took 1,223.4 ms, excluding database/network time. No new packages or live data writes; live PostgreSQL performance is unverified. Existing Status/map entries were rewritten without adding rows; File_Map remains 158 lines.
+
+**Acceptance:** Aadil confirmed consistent local Income Statement/Balance Sheet results and authorized commit/push on 2026-10-30. Profit reconciles and links once; source accounting warnings remain for review.

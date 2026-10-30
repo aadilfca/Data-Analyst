@@ -155,6 +155,8 @@ def report_api(monkeypatch):
             return [category(1, "asset"), category(2, "liability")]
         if "FROM account_control_statement_calculations" in sql or "FROM account_control_statement_calculation_components" in sql:
             return []
+        if "FROM account_control_profit_links" in sql:
+            return []
         if "FROM trial_balance_rollforward_adjustments" in sql:
             return [{"count": 1}]
         raise AssertionError(sql)
@@ -177,14 +179,14 @@ def test_report_api_requires_explicit_upload_and_reads_one_snapshot_without_n_pl
     result = client.get(url, params={"client_id": 7, "trial_balance_upload_id": 55})
     assert result.status_code == 200, result.text
     assert result.json()["categories"][0]["amount"] == "25"
-    assert len(calls) == 8 and len(snapshots) == 1
+    assert len(calls) == 9 and len(snapshots) == 1
     assert all(sql.lstrip().startswith("SELECT") for sql, _ in calls)
     calls.clear()
     state.update(debit="40", mapping=2, size=50)
     refreshed = client.get(url, params={"client_id": 7, "trial_balance_upload_id": 55}).json()
     assert refreshed["categories"][1]["amount"] == "-2000"
     assert refreshed["controls"]["leaf_count"] == 50
-    assert len(calls) == 8
+    assert len(calls) == 9
 
 
 def test_missing_or_foreign_upload_is_refused_without_fallback(report_api):

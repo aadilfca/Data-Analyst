@@ -1116,6 +1116,7 @@ async function accLoadCashflow() {
     accElement('accCashflowMatchTransfers').checked = !!accCashflowSettings.match_internal_transfers;
     accElement('accCashflowReceiptPresentation').value = accCashflowSettings.receipt_presentation || 'net';
 }
+let accProfitLink = null;
 async function accLoadFinancialCategories() {
     const results = await Promise.all([
         accApi('/api/account-control-center/categories?client_id=' + encodeURIComponent(accClientId) + '&category_type=financial_statement&include_inactive=true'),
@@ -1125,11 +1126,35 @@ async function accLoadFinancialCategories() {
     const result = results[0];
     accFinancialCategories = result.categories || [];
     accFinancialCalculations = results.slice(1).flatMap(function (item) { return item.calculations || []; });
+    accProfitLink = results[2].profit_link || null;
     accFinancialLoaded = true;
     accRenderFinancialRows();
     if (accNotesLoaded) accRenderNotesRows();
     accRenderFinancialOutlines();
     accRenderNotesOutlines();
+}
+function accProfitLinkMarkup() {
+    const totals = accFinancialCalculations.filter(function (item) { return item.statement_section === 'income_statement' && item.calculation_type === 'total'; });
+    const targets = accFinancialCategories.filter(function (item) {
+        if (item.statement_section !== 'balance_sheet' || item.row_type !== 'category' || !item.is_active) return false;
+        const parent = item.parent_category_id == null ? null : accFinancialCategories.find(function (row) { return Number(row.id) === Number(item.parent_category_id); });
+        return item.parent_category_id == null ? item.presentation_role === 'equity' : parent && parent.is_active && parent.presentation_role === 'equity';
+    });
+    function options(rows, key) { return '<option value="">Select...</option>' + rows.map(function (row) { return '<option value="' + row.id + '"' + (accProfitLink && Number(accProfitLink[key]) === Number(row.id) ? ' selected' : '') + '>' + accEscape(row.label) + '</option>'; }).join(''); }
+    return '<section class="acc2-profit-link" aria-label="Profit to capital link"><h3>Profit to capital</h3><p>Select the final Profit after taxation total and its equity destination. Confirm closing status separately for each Trial Balance in Reports.</p><div><label>Final profit total<select id="accProfitSource" class="acc2-select">' + options(totals, 'source_calculation_id') + '</select></label><label>Capital category<select id="accProfitTarget" class="acc2-select">' + options(targets, 'target_category_id') + '</select></label></div><button type="button" class="acc2-action-btn" data-profit-link-action="save">Save profit link</button> <button type="button" class="acc2-action-btn secondary" data-profit-link-action="clear">Remove link</button></section>';
+}
+async function accHandleProfitLinkAction(event) {
+    const button = event.target.closest('[data-profit-link-action]');
+    if (!button) return;
+    const source = Number(accElement('accProfitSource').value) || null, target = Number(accElement('accProfitTarget').value) || null;
+    if (button.dataset.profitLinkAction === 'save' && (!source || !target)) { accShowStatus('Choose both the final profit total and an equity category.', 'error'); return; }
+    button.disabled = true;
+    try {
+        await accApi('/api/account-control-center/profit-link', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({client_id: accClientId, source_calculation_id: button.dataset.profitLinkAction === 'clear' ? null : source, target_category_id: button.dataset.profitLinkAction === 'clear' ? null : target}) });
+        await accLoadFinancialCategories();
+        accShowStatus('Profit link saved. Reload the statements and confirm the selected TB closing status.', 'success');
+    } catch (error) { accShowStatus(error.message, 'error'); }
+    finally { button.disabled = false; }
 }
 // Presentation is explicit configuration, never inferred from a balance's sign.
 function accPresentationMarkup(item, readOnly) {
@@ -1205,7 +1230,7 @@ function accRenderFinancialOutlines() {
         const toolbarMessage = readOnly ? 'Read-only reference. Edit statement structure from Financial Statement accounts.' : 'Drag the ☰ handle to reorder within a statement or parent.';
         const emptyMessage = readOnly ? 'No categories are available in this statement yet.' : 'Start with a heading, or add a standalone category.';
         const unplacedTotalMarkup = !readOnly && unplacedTotals.length ? '<section class="acc2-fs-total-list"><h3>Totals needing a source heading</h3>' + unplacedTotals.map(function (item) { return calculationMarkup(item, 'total'); }).join('') + '</section>' : '';
-        panel.innerHTML = accFinancialCalculationEditorMarkup(section) + '<div class="acc2-fs-toolbar"><span>' + toolbarMessage + '</span><span class="acc2-fs-order-status" data-fs-order-status role="status" aria-live="polite"></span>' + toolbarActions + '</div>' + (outline ? '<div class="acc2-fs-heading-list" data-fs-sort-group="headings:' + accEscape(section) + '">' + outline + '</div>' : '') + standaloneMarkup + (unplaced.length ? '<div class="acc2-fs-standalone acc2-fs-unplaced acc2-fs-sort-list"><h3>Unplaced categories</h3><div data-fs-sort-group="unplaced">' + unplacedRows + '</div></div>' : '') + unplacedTotalMarkup + (!outline && !standalone.length && !unplaced.length ? '<div class="acc2-fs-empty-state">' + emptyMessage + '</div>' : '');
+        panel.innerHTML = (section === 'income_statement' && !readOnly ? accProfitLinkMarkup() : '') + accFinancialCalculationEditorMarkup(section) + '<div class="acc2-fs-toolbar"><span>' + toolbarMessage + '</span><span class="acc2-fs-order-status" data-fs-order-status role="status" aria-live="polite"></span>' + toolbarActions + '</div>' + (outline ? '<div class="acc2-fs-heading-list" data-fs-sort-group="headings:' + accEscape(section) + '">' + outline + '</div>' : '') + standaloneMarkup + (unplaced.length ? '<div class="acc2-fs-standalone acc2-fs-unplaced acc2-fs-sort-list"><h3>Unplaced categories</h3><div data-fs-sort-group="unplaced">' + unplacedRows + '</div></div>' : '') + unplacedTotalMarkup + (!outline && !standalone.length && !unplaced.length ? '<div class="acc2-fs-empty-state">' + emptyMessage + '</div>' : '');
         accUpdateFinancialTotalChoiceAvailability(panel.querySelector('[data-fs-calc-editor]'));
     });
 }
@@ -2259,6 +2284,7 @@ function accBindEvents() {
         panel.addEventListener('click', function (event) { accHandleFinancialCalculationAction(event).catch(function (error) { accShowStatus(error.message, 'error'); }); });
         panel.addEventListener('change', accHandleCalculationIncludeChange);
         panel.addEventListener('change', accHandlePresentationChange);
+        panel.addEventListener('click', accHandleProfitLinkAction);
         panel.addEventListener('click', function (event) { accHandleFinancialOutlineAction(event).catch(function (error) { accShowStatus(error.message, 'error'); }); });
         panel.addEventListener('dragstart', accHandleFinancialDragStart);
         panel.addEventListener('dragover', accHandleFinancialDragOver);

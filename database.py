@@ -3119,6 +3119,24 @@ def init_db():
                        (calculation_type = 'total' AND parent_heading_id IS NULL))
             )
         ''')
+        # Compact profit-link configuration and upload-specific closing confirmations.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_profit_links (
+                client_id INTEGER PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE,
+                source_calculation_id INTEGER NOT NULL REFERENCES account_control_statement_calculations(id) ON DELETE RESTRICT,
+                target_category_id INTEGER NOT NULL REFERENCES account_control_categories(id) ON DELETE RESTRICT,
+                updated_by TEXT, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS trial_balance_profit_status (
+                upload_id INTEGER PRIMARY KEY REFERENCES trial_balance_uploads(id) ON DELETE CASCADE,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                closing_status TEXT NOT NULL CHECK (closing_status IN ('not_confirmed', 'not_in_capital', 'already_in_capital')),
+                context_key TEXT NOT NULL,
+                updated_by TEXT, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
         create_index_with_retry(conn, "CREATE UNIQUE INDEX IF NOT EXISTS idx_statement_subtotal_heading ON account_control_statement_calculations (client_id, parent_heading_id) WHERE calculation_type = 'subtotal'")
         conn.execute('''
             CREATE TABLE IF NOT EXISTS account_control_statement_calculation_components (
@@ -4331,6 +4349,24 @@ def _ensure_postgres_account_set_tables(conn):
                 updated_at TIMESTAMPTZ DEFAULT now(),
                 CHECK ((calculation_type = 'subtotal' AND parent_heading_id IS NOT NULL) OR
                        (calculation_type = 'total' AND parent_heading_id IS NULL))
+            )
+        ''')
+        # Compact profit-link configuration and upload-specific closing confirmations.
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_profit_links (
+                client_id INTEGER PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE,
+                source_calculation_id INTEGER NOT NULL REFERENCES account_control_statement_calculations(id) ON DELETE RESTRICT,
+                target_category_id INTEGER NOT NULL REFERENCES account_control_categories(id) ON DELETE RESTRICT,
+                updated_by TEXT, updated_at TIMESTAMPTZ DEFAULT now()
+            )
+        ''')
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS trial_balance_profit_status (
+                upload_id INTEGER PRIMARY KEY REFERENCES trial_balance_uploads(id) ON DELETE CASCADE,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                closing_status TEXT NOT NULL CHECK (closing_status IN ('not_confirmed', 'not_in_capital', 'already_in_capital')),
+                context_key TEXT NOT NULL,
+                updated_by TEXT, updated_at TIMESTAMPTZ DEFAULT now()
             )
         ''')
         cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_statement_subtotal_heading ON account_control_statement_calculations (client_id, parent_heading_id) WHERE calculation_type = 'subtotal'")
