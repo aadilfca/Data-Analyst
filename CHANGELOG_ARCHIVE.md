@@ -8985,3 +8985,12 @@ Opening/period counter-entries carry their effects into closing; accumulated tol
 **Verification:** All 15 Trial Balance browser tests pass. The new regression covers overflow visibility, hidden native bar, Home/End keys, track-click, thumb drag, aria position, sticky-heading sync and hiding/reappearing while scrolling vertically. No backend/schema change; Cashflow reference files were unchanged.
 
 **Acceptance/Git:** Aadil authorized commit/push on 2026-10-30.
+## Saved Trial Balance review alignment — 2026-10-30
+
+Saved uploads now use a single toolbar, page scrolling with a synchronized sticky heading, subdued grid styling and Classification after Name. Double-click account codes to edit and save on blur; existing correction safeguards, imported-code provenance, differences and reconciliation remain available. Trial Balance script version 34. Focused browser tests cover column positions, inline editing and scrolling; local-server acceptance remains pending.
+
+Follow-up: Classification also opens on double-click and saves through the existing override API. Six equal amount columns fit displayed footings, and a floating scrollbar replaces the bottom bar. Script version 35; 17 focused browser tests pass with simulated API responses. Local-server acceptance remains pending.
+
+## Trial Balance and ACC navigation — 2026-10-30
+
+Available Trial Balances links to Financial Statement assignments; Financial Statement and Notes toolbars link back, preserving the selected upload and originating ACC tab. Missing uploads require an explicit new selection. Script versions: Trial Balance 36, ACC 33. Twenty focused UI tests pass; local-server acceptance remains pending.

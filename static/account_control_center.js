@@ -757,7 +757,7 @@ function accRenderSource() {
         return period + ' — ' + (item.file_name || 'Trial Balance #' + item.id);
     };
     accAvailableUploads = accTrialBalanceCache.uploads || accAvailableUploads;
-    select.innerHTML = accAvailableUploads.length ? accAvailableUploads.map(function (item) {
+    select.innerHTML = accAvailableUploads.length ? (!upload ? '<option value="" selected>— Select a Trial Balance —</option>' : '') + accAvailableUploads.map(function (item) {
         return '<option value="' + item.id + '"' + (upload && String(item.id) === String(upload.id) ? ' selected' : '') + '>' + accEscape(label(item)) + '</option>';
     }).join('') : '<option value="">No parsed Trial Balances</option>';
     select.disabled = !accAvailableUploads.length;
@@ -2113,6 +2113,13 @@ function accBindTreasuryGuidance() {
 }
 function accBindEvents() {
     accBindTreasuryGuidance();
+    document.querySelectorAll('[data-acc-trial-balance-link]').forEach(function (button) {
+        button.addEventListener('click', function () {
+            const params = new URLSearchParams({view: 'available', acc_tab: button.closest('[data-acc-toolbar-actions]').dataset.accToolbarActions});
+            if (accSelectedUploadId) params.set('upload_id', accSelectedUploadId);
+            window.location.href = '/static/trial_balance.html?' + params.toString();
+        });
+    });
     accElement('accTrialBalanceSelect').addEventListener('change', async function (event) {
         accSelectedUploadId = event.target.value || null;
         accInvalidateTrialBalanceCache();
@@ -2208,7 +2215,24 @@ async function initAccountControlCentre() {
         accIsAdmin = await window.isAdminUser();
         if (!accIsAdmin) accElement('accAdminWarning').hidden = false;
         accSetGridState('Loading Trial Balance...', false, true);
-        try { await accLoadMapping(); } catch (error) { accSetGridState(error.message, true); }
+        try {
+            await accLoadMapping();
+            const params = new URLSearchParams(window.location.search);
+            const requestedUpload = params.get('upload_id');
+            if (requestedUpload) {
+                const found = accAvailableUploads.some(function (upload) { return String(upload.id) === requestedUpload; });
+                if (found && requestedUpload !== String(accSelectedUploadId || '')) {
+                    accSelectedUploadId = requestedUpload;
+                    await accLoadMapping(true);
+                } else if (!found) {
+                    accSelectedUploadId = null; accLatestUpload = null; accAccounts = [];
+                    accInvalidateTrialBalanceCache(); accRenderSource(); accRenderRows();
+                    accShowStatus('The requested Trial Balance is not available for this client. Select another upload.', 'error');
+                }
+            }
+            const tab = params.get('tab');
+            if (tab === 'financial' || tab === 'notes') accSetTab(tab);
+        } catch (error) { accSetGridState(error.message, true); }
     });
 }
 document.addEventListener('DOMContentLoaded', initAccountControlCentre);

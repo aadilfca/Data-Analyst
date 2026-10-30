@@ -515,6 +515,22 @@
             white-space: nowrap;
             font-variant-numeric: tabular-nums;
         }
+        #availableTrialBalancesSection { padding: 0; background: transparent; box-shadow: none; }
+        .tb-saved-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+        .tb-saved-toolbar h3 { margin: 0; }
+        #availableAccountsTableWrapper { max-height: none; overflow-y: visible; border: 0; border-radius: 0; }
+        #availableAccountsTableWrapper { scrollbar-width: none; }
+        #availableAccountsTableWrapper::-webkit-scrollbar { display: none; }
+        .tb-saved-sticky { position: sticky; top: 70px; z-index: 3; overflow: hidden; background: #f1f5f9; }
+        .tb-saved-sticky[hidden] { display: none; }
+        .tb-saved-table { width: 100%; min-width: 1240px; table-layout: fixed; border-collapse: collapse; font-size: 11px; }
+        .tb-saved-table th, .tb-saved-table td { box-sizing: border-box; padding: 6px 8px; border: 1px solid #e2e8f0; overflow-wrap: anywhere; }
+        .tb-saved-table th { background: #f1f5f9; text-align: left; padding: 8px 10px; }
+        .tb-saved-table td { background: #fff; }
+        .tb-saved-table tbody tr:nth-child(even) td { background: #fafcff; }
+        .tb-saved-table .tb-amount-cell { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+        .tb-saved-table input { box-sizing: border-box; width: 100%; }
+        #availableAccountsTableWrapper thead { display: none; }
 
         /* ---------- COLUMN MAPPING (Section 1, Phase 2) ---------- */
         /* Reuses .tb-review-table/.tb-review-table-wrapper as-is for both the mapping
@@ -1039,17 +1055,14 @@
 
     <!-- Available Trial Balances supports account-code corrections within one selected upload. -->
     <div class="tb-form-group" id="availableTrialBalancesSection" style="display:none;">
-        <div class="tb-field-row" style="margin-bottom:8px;">
+        <div class="tb-saved-toolbar">
             <button class="btn-secondary-action" id="closeAvailableTrialBalancesBtn" type="button">← Back</button>
             <h3 style="margin-bottom:0;">📊 Available Trial Balances</h3>
-        </div>
-        <p class="group-hint">Browse a previously uploaded Trial Balance and correct account codes for this upload.</p>
-
-        <div class="tb-field-row">
             <label for="availableUploadsDropdown">Upload</label>
             <select id="availableUploadsDropdown">
                 <option value="">— Select an upload —</option>
             </select>
+            <button class="btn-secondary-action" id="tbAssignCategoriesBtn" type="button">Assign categories →</button>
             <!-- Confirmed fix: deletes the selected upload + all its accounts. Hidden
                  until an upload is actually selected (same visibility pattern as
                  availableAccountsTableWrapper below). -->
@@ -1058,21 +1071,22 @@
 
         <p class="group-hint" id="availableUploadsEmptyHint" style="display:none;">No classified Trial Balance uploads found for this client yet.</p>
 
+        <div id="tbSavedStatus" class="status-bar" role="status" style="display:none;"></div>
         <div id="tbSavedValidationControls" class="tb-validation-controls" aria-live="polite"></div>
+        <div id="tbSavedStickyHead" class="tb-saved-sticky" hidden aria-hidden="true"></div>
         <div class="tb-review-table-wrapper" id="availableAccountsTableWrapper" style="display:none;">
-            <table class="tb-review-table">
+            <table class="tb-review-table tb-saved-table">
                 <thead>
                     <tr>
                         <th>Code</th>
                         <th>Name</th>
+                        <th>Classification</th>
                         <th class="tb-amount-cell">Opening Dr</th>
                         <th class="tb-amount-cell">Opening Cr</th>
                         <th class="tb-amount-cell">Period Dr</th>
                         <th class="tb-amount-cell">Period Cr</th>
                         <th class="tb-amount-cell">Closing Dr</th>
                         <th class="tb-amount-cell">Closing Cr</th>
-                        <th>Classification</th>
-                        <th>Code correction</th>
                     </tr>
                 </thead>
                 <tbody id="availableAccountsTableBody">
@@ -1085,7 +1099,7 @@
     <script src="/static/loading_ui.js?v=2"></script>
     <script src="/static/client_context.js?v=21"></script>
     <script src="/static/utils.js"></script>
-    <script src="/static/trial_balance.js?v=33"></script>
+    <script src="/static/trial_balance.js?v=36"></script>
 
 </body>
 

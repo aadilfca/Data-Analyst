@@ -118,7 +118,7 @@ def test_rollforward_differences_render_as_red_section_without_changing_source_r
             validationSection: document.querySelector('#tbValidationBody tr.tb-difference-section')?.textContent,
             savedSection: document.querySelector('#availableAccountsTableBody tr.tb-difference-section')?.textContent,
             savedLabel: document.querySelector('#availableAccountsTableBody tr.tb-generated-difference td:nth-child(2)')?.textContent,
-            savedDebit: document.querySelector('#availableAccountsTableBody tr.tb-generated-difference td:nth-child(7)')?.textContent
+            savedDebit: document.querySelector('#availableAccountsTableBody tr.tb-generated-difference td:nth-child(8)')?.textContent
         };
     }""")
 
@@ -176,8 +176,91 @@ def test_global_difference_preserves_all_six_saved_columns(browser):
     page.evaluate("""() => renderAvailableAccountsTable([], [{account_name: 'Opening footing',
         global_adjustment: true, opening_cr_adjustment: '100', closing_cr_adjustment: '100'}])""")
     cells = page.locator('.tb-generated-difference td').all_text_contents()
-    assert cells[2:8] == ['', '100', '', '', '', '100']
-    assert cells[8] == 'Unassigned global difference'
+    assert cells[3:9] == ['', '100', '', '', '', '100']
+    assert cells[2] == 'Unassigned global difference'
+    page.close()
+
+
+def test_saved_view_inline_edit_and_sticky_heading(browser):
+    import re
+    html = (PROJECT_ROOT / 'static' / 'trial_balance.html').read_text(encoding='utf-8')
+    page = browser.new_page(viewport={'width': 900, 'height': 600})
+    page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
+    page.evaluate("""() => {
+        availableTrialBalancesSection.style.display='block';
+        availableAccountsTableWrapper.style.display='block'; tbSavedStickyHead.hidden=false;
+        window.savedCode=null;
+        saveAvailableAccountCode=async (account, value) => { window.savedCode=value; return true; };
+        renderAvailableAccountsTable(Array.from({length: 40}, (_, i) => ({id:i, account_code:'A'+i,
+            account_name:'Cash', is_leaf:true})), []);
+    }""")
+    assert page.locator('#availableAccountsTableBody tr:first-child td').nth(2).inner_text() == 'Leaf'
+    code = page.locator('#availableAccountsTableBody tr:first-child .tb-account-code-display')
+    code.dblclick()
+    editor = page.locator('#availableAccountsTableBody tr:first-child input')
+    editor.fill('B0')
+    editor.press('Enter')
+    assert page.evaluate('window.savedCode') == 'B0'
+    page.evaluate('availableAccountsTableWrapper.scrollLeft=200; window.scrollTo(0, 500)')
+    page.wait_for_function("tbSavedStickyHead.querySelector('table').style.transform === `translateX(-${availableAccountsTableWrapper.scrollLeft}px)`")
+    assert page.locator('#tbSavedStickyHead').evaluate('el => getComputedStyle(el).position') == 'sticky'
+    assert page.locator('#availableAccountsTableWrapper').evaluate('el => getComputedStyle(el).maxHeight') == 'none'
+    page.close()
+
+
+def test_saved_classification_and_amount_widths_and_floating_scroll(browser):
+    import re
+    html = (PROJECT_ROOT / 'static' / 'trial_balance.html').read_text(encoding='utf-8')
+    page = browser.new_page(viewport={'width': 900, 'height': 700})
+    page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
+    page.evaluate("""() => {
+        window.API_BASE=''; window.requests=[]; window.failOverride=false;
+        const large='123456789012345678901234567890.00';
+        const account={id:1,account_code:'A',account_name:'Cash',is_leaf:true,opening_dr:'1'};
+        const totals=Object.fromEntries(['opening','period','closing'].flatMap(p=>['dr','cr'].map(s=>[p+'_'+s+'_column',large])));
+        const controls={stale:false,draft_reconciliation:{original_totals:totals,adjustment_totals:totals,adjusted_totals:totals,pair_differences:{}}};
+        window.fetch=async (url, options={}) => {
+            window.requests.push({url,body:options.body});
+            if (url.includes('/override')) {
+                if (window.failOverride) return {ok:false,json:async()=>({detail:'Override rejected'})};
+                account.is_leaf=JSON.parse(options.body).is_leaf;
+                controls.stale=true;
+                return {ok:true,json:async()=>account};
+            }
+            return {ok:true,json:async()=>({accounts:[account],adjustments:[],validation_controls:controls})};
+        };
+        availableTrialBalancesSection.style.display='block';
+        availableUploadsDropdown.innerHTML='<option value="1">One</option>';
+        return loadAvailableUploadAccounts('1');
+    }""")
+    classification = page.locator('#availableAccountsTableBody tr:first-child td').nth(2)
+    widths = page.locator('#availableAccountsTableBody tr:first-child td.tb-amount-cell').evaluate_all('cells => cells.map(c => c.getBoundingClientRect().width)')
+    assert len(widths) == 6 and max(widths) - min(widths) < 1
+    assert page.locator('#availableAccountsTableBody .tb-draft-adjusted_totals td.tb-amount-cell').first.evaluate('el => el.scrollWidth <= el.clientWidth')
+    bar = page.locator('.tb-saved-floating-scroll')
+    assert bar.is_visible()
+    assert page.locator('#availableAccountsTableWrapper').evaluate('el => getComputedStyle(el).scrollbarWidth') == 'none'
+    bar.focus(); bar.press('End')
+    page.wait_for_function('availableAccountsTableWrapper.scrollLeft > 0')
+    page.wait_for_function("tbSavedStickyHead.querySelector('table').style.transform === `translateX(-${availableAccountsTableWrapper.scrollLeft}px)`")
+    bar.press('Home')
+    page.wait_for_function('availableAccountsTableWrapper.scrollLeft === 0')
+    classification.dblclick()
+    classification.locator('select').select_option('parent')
+    classification.locator('select').press('Enter')
+    page.wait_for_function("document.querySelector('#availableAccountsTableBody tr:first-child td:nth-child(3)').textContent.includes('Parent')")
+    assert page.evaluate("JSON.parse(window.requests.find(r => r.url.includes('/override')).body).is_leaf") is False
+    assert 'changed after validation' in page.locator('#tbSavedValidationControls').inner_text()
+    page.evaluate('window.failOverride=true')
+    classification.dblclick()
+    classification.locator('select').select_option('leaf')
+    classification.locator('select').press('Enter')
+    page.wait_for_function("document.querySelector('#tbSavedStatus').textContent.includes('Override rejected')")
+    assert 'Parent' in classification.inner_text()
+    page.locator('#closeAvailableTrialBalancesBtn').click()
+    assert bar.is_hidden()
     page.close()
 
 
@@ -399,7 +482,7 @@ def test_draft_footer_preserves_erp_values_and_shows_balanced_totals_in_both_vie
             pairs:values('#tbValidationBody .tb-draft-pairs'),
             warning:document.querySelector('#tbValidationBody .tb-control-difference').nextElementSibling.textContent};
         renderAvailableAccountsTable([],[],validationResult);
-        const saved=Array.from(document.querySelectorAll('#availableAccountsTableBody .tb-draft-adjusted_totals td')).slice(2,8).map(c=>c.textContent);
+        const saved=Array.from(document.querySelectorAll('#availableAccountsTableBody .tb-draft-adjusted_totals td')).slice(3,9).map(c=>c.textContent);
         validationResult.draft_reconciliation.pair_differences.opening={difference:'-0.02',within_tolerance:false};
         renderTrialBalanceValidationGrid();
         const smallPair={text:values('#tbValidationBody .tb-draft-pairs')[0],
@@ -441,25 +524,25 @@ def test_validation_floating_scrollbar_tracks_table_and_supports_pointer_keyboar
         tbValidationSheet.hidden=false;tbValidationSheet.classList.add('active');
         renderTrialBalanceValidationGrid();
     }""")
-    bar=page.locator('.tb-validation-universal-scrollbar')
+    bar=page.locator('.tb-validation-floating-scroll')
     assert bar.is_visible()
     assert page.locator('#tbValidationTableWrap').evaluate("el=>getComputedStyle(el).scrollbarWidth")=='none'
 
     bar.focus()
     bar.press('End')
     page.wait_for_function("tbValidationTableWrap.scrollLeft > 0 && document.querySelector('.tb-validation-universal-scrollbar').getAttribute('aria-valuenow') === String(Math.round(tbValidationTableWrap.scrollLeft))")
-    assert page.locator('.tb-validation-universal-scrollbar').get_attribute('aria-valuenow')==page.locator('#tbValidationTableWrap').evaluate('el=>String(Math.round(el.scrollLeft))')
+    assert bar.get_attribute('aria-valuenow')==page.locator('#tbValidationTableWrap').evaluate('el=>String(Math.round(el.scrollLeft))')
     assert page.locator('#tbValidationStickyHead table').evaluate("el=>el.style.transform")==page.locator('#tbValidationTableWrap').evaluate("el=>`translateX(-${el.scrollLeft}px)`")
 
     bar.press('Home')
     page.wait_for_function("tbValidationTableWrap.scrollLeft === 0")
-    track=page.locator('.tb-validation-universal-scrollbar-track')
+    track=bar.locator('.tb-validation-universal-scrollbar-track')
     box=track.bounding_box()
     page.mouse.click(box['x']+box['width']*.8,box['y']+box['height']/2)
     page.wait_for_function("tbValidationTableWrap.scrollLeft > 0")
     assert float(bar.get_attribute('aria-valuenow'))>0
 
-    thumb=page.locator('.tb-validation-universal-scrollbar-thumb')
+    thumb=bar.locator('.tb-validation-universal-scrollbar-thumb')
     thumb_box=thumb.bounding_box()
     page.mouse.move(thumb_box['x']+thumb_box['width']/2,thumb_box['y']+3)
     page.mouse.down()

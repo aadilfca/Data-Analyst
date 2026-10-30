@@ -57,6 +57,66 @@ def choose_note(page, account_code, note_id):
     row.locator("[data-fs-picker-option][data-fs-picker-value='{}']".format(note_id)).click()
 
 
+def test_trial_balance_navigation_preserves_upload_and_reports_missing(browser, static_server):
+    uploads = [{'id': 77, 'status': 'parsed', 'file_name': 'Older.xlsx'},
+               {'id': 88, 'status': 'parsed', 'file_name': 'Latest.xlsx'}]
+    page = browser.new_page(viewport={'width': 1600, 'height': 900})
+
+    def api(route, request):
+        from urllib.parse import urlparse, parse_qs
+        path = urlparse(request.url).path
+        query = parse_qs(urlparse(request.url).query)
+        if path.endswith('/api/auth/current-client'):
+            result = {'client_id': 1, 'client_name': 'Client', 'client_code': 'C'}
+        elif path.endswith('/api/users'):
+            result = []
+        elif path.endswith('/api/account-control-center/mapping'):
+            selected = int(query.get('trial_balance_upload_id', ['88'])[0])
+            result = {'upload': next(u for u in uploads if u['id'] == selected), 'uploads': uploads, 'accounts': []}
+        elif path.endswith('/api/trial-balance/uploads'):
+            result = {'uploads': uploads}
+        elif path.endswith('/api/trial-balance/accounts'):
+            result = {'accounts': [], 'adjustments': [], 'validation_controls': {}}
+        else:
+            result = {'categories': [], 'calculations': [], 'settings': []}
+        route.fulfill(status=200, content_type='application/json', body=json.dumps(result))
+
+    page.route('**/api/**', api)
+    page.goto(static_server + '/static/account_control_center.html?tab=financial&upload_id=77', wait_until='load')
+    page.wait_for_function("document.querySelector('#accTabFinancial').getAttribute('aria-selected') === 'true'")
+    assert page.locator('#accTrialBalanceSelect').input_value() == '77'
+    financial_button = page.locator('[data-acc-toolbar-actions="financial"] [data-acc-trial-balance-link]')
+    assert financial_button.is_visible()
+    assert abs(financial_button.bounding_box()['y'] - page.locator('#accTrialBalanceSelect').bounding_box()['y']) < 10
+    page.set_viewport_size({'width': 1280, 'height': 900})
+    assert abs(financial_button.bounding_box()['y'] - page.locator('#accTrialBalanceSelect').bounding_box()['y']) < 10
+    financial_button.click()
+    page.wait_for_url('**/trial_balance.html?**')
+    page.wait_for_function("availableUploadsDropdown.value === '77'")
+    assert page.locator('#availableTrialBalancesSection').is_visible()
+    page.locator('#tbAssignCategoriesBtn').click()
+    page.wait_for_url('**/account_control_center.html?**')
+    page.wait_for_function("document.querySelector('#accTabFinancial').getAttribute('aria-selected') === 'true'")
+    assert page.locator('#accTrialBalanceSelect').input_value() == '77'
+    page.locator('#accTabNotes').click()
+    notes_button = page.locator('[data-acc-toolbar-actions="notes"] [data-acc-trial-balance-link]')
+    assert notes_button.is_visible()
+    notes_button.click()
+    page.wait_for_url('**/trial_balance.html?**')
+    page.wait_for_function("availableUploadsDropdown.value === '77'")
+    page.locator('#tbAssignCategoriesBtn').click()
+    page.wait_for_url('**/account_control_center.html?**')
+    page.wait_for_function("document.querySelector('#accTabNotes').getAttribute('aria-selected') === 'true'")
+    assert page.locator('#accTrialBalanceSelect').input_value() == '77'
+    page.goto(static_server + '/static/account_control_center.html?tab=financial&upload_id=999', wait_until='load')
+    page.wait_for_function("document.querySelector('#accStatus').textContent.includes('not available')")
+    assert page.locator('#accTrialBalanceSelect').input_value() == ''
+    page.goto(static_server + '/static/trial_balance.html?view=available&upload_id=999', wait_until='load')
+    page.wait_for_function("document.querySelector('#tbSavedStatus').textContent.includes('not available')")
+    assert page.locator('#availableUploadsDropdown').input_value() == ''
+    page.close()
+
+
 def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, static_server):
     mapping = {
         "client_id": 1,

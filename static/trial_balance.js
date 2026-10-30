@@ -150,6 +150,16 @@ const availableUploadsDropdown = getElement('availableUploadsDropdown');
 const availableUploadsEmptyHint = getElement('availableUploadsEmptyHint');
 const availableAccountsTableWrapper = getElement('availableAccountsTableWrapper');
 const availableAccountsTableBody = getElement('availableAccountsTableBody');
+const tbSavedStickyHead = getElement('tbSavedStickyHead');
+if (availableAccountsTableWrapper && tbSavedStickyHead) {
+    const savedTable = availableAccountsTableWrapper.querySelector('table');
+    const heading = savedTable.cloneNode(false);
+    heading.appendChild(savedTable.querySelector('thead').cloneNode(true));
+    tbSavedStickyHead.appendChild(heading);
+    availableAccountsTableWrapper.addEventListener('scroll', function () {
+        heading.style.transform = `translateX(-${availableAccountsTableWrapper.scrollLeft}px)`;
+    }, { passive: true });
+}
 
 // Keep the heading aligned while its table scrolls horizontally at any screen size.
 function syncTrialBalanceStickyHeader() {
@@ -159,14 +169,14 @@ function syncTrialBalanceStickyHeader() {
     updateTrialBalanceUniversalScrollbar();
 }
 
-function syncTrialBalanceUniversalScrollbar() {
-    if (!tbValidationTableWrap || tbValidationTableWrap.dataset.floatingScrollBound === 'true') return;
+function bindTrialBalanceFloatingScrollbar(wrapper, isActive, label, marker) {
+    if (!wrapper || wrapper.dataset.floatingScrollBound === 'true') return;
     const scrollbar = document.createElement('div');
-    scrollbar.className = 'tb-validation-universal-scrollbar';
+    scrollbar.className = 'tb-validation-universal-scrollbar ' + marker;
     scrollbar.setAttribute('role', 'scrollbar');
     scrollbar.setAttribute('tabindex', '0');
     scrollbar.setAttribute('aria-orientation', 'horizontal');
-    scrollbar.setAttribute('aria-label', 'Trial Balance validation horizontal scroll');
+    scrollbar.setAttribute('aria-label', label);
     scrollbar.setAttribute('aria-hidden', 'true');
     const track = document.createElement('div');
     track.className = 'tb-validation-universal-scrollbar-track';
@@ -177,11 +187,11 @@ function syncTrialBalanceUniversalScrollbar() {
     document.body.appendChild(scrollbar);
 
     const update = function () {
-        const table = tbValidationTableWrap.querySelector('.tb-validation-table');
-        const wrapperRect = tbValidationTableWrap.getBoundingClientRect();
-        const activeView = tbValidationSheet && !tbValidationSheet.hidden && tbValidationSheet.classList.contains('active');
+        const table = wrapper.querySelector('table');
+        const wrapperRect = wrapper.getBoundingClientRect();
+        const activeView = isActive();
         const visible = activeView && wrapperRect.bottom > 72.5 && wrapperRect.top < window.innerHeight;
-        const overflowing = table && tbValidationTableWrap.scrollWidth > tbValidationTableWrap.clientWidth + 1;
+        const overflowing = table && wrapper.scrollWidth > wrapper.clientWidth + 1;
         const active = Boolean(visible && overflowing);
         scrollbar.hidden = !active;
         scrollbar.setAttribute('aria-hidden', active ? 'false' : 'true');
@@ -190,26 +200,26 @@ function syncTrialBalanceUniversalScrollbar() {
         scrollbar.style.left = Math.max(12, Math.round(wrapperRect.left)) + 'px';
         scrollbar.style.right = Math.max(12, Math.round(viewportWidth - wrapperRect.right)) + 'px';
         const trackWidth = track.clientWidth;
-        const maxScroll = Math.max(0, tbValidationTableWrap.scrollWidth - tbValidationTableWrap.clientWidth);
-        const thumbWidth = Math.min(trackWidth, Math.max(48, Math.round(trackWidth * tbValidationTableWrap.clientWidth / tbValidationTableWrap.scrollWidth)));
+        const maxScroll = Math.max(0, wrapper.scrollWidth - wrapper.clientWidth);
+        const thumbWidth = Math.min(trackWidth, Math.max(48, Math.round(trackWidth * wrapper.clientWidth / wrapper.scrollWidth)));
         const travel = Math.max(0, trackWidth - thumbWidth);
         thumb.style.width = thumbWidth + 'px';
-        thumb.style.transform = 'translateX(' + Math.round(travel * (maxScroll ? tbValidationTableWrap.scrollLeft / maxScroll : 0)) + 'px)';
+        thumb.style.transform = 'translateX(' + Math.round(travel * (maxScroll ? wrapper.scrollLeft / maxScroll : 0)) + 'px)';
         scrollbar.setAttribute('aria-valuemin', '0');
         scrollbar.setAttribute('aria-valuemax', String(maxScroll));
-        scrollbar.setAttribute('aria-valuenow', String(Math.round(tbValidationTableWrap.scrollLeft)));
+        scrollbar.setAttribute('aria-valuenow', String(Math.round(wrapper.scrollLeft)));
     };
     const scrollToTrackPoint = function (clientX) {
         const trackRect = track.getBoundingClientRect();
         const travel = Math.max(0, track.clientWidth - thumb.getBoundingClientRect().width);
-        const maxScroll = Math.max(0, tbValidationTableWrap.scrollWidth - tbValidationTableWrap.clientWidth);
+        const maxScroll = Math.max(0, wrapper.scrollWidth - wrapper.clientWidth);
         if (!travel || !maxScroll) return;
         const offset = clientX - trackRect.left - thumb.getBoundingClientRect().width / 2;
-        tbValidationTableWrap.scrollLeft = Math.max(0, Math.min(maxScroll, offset / travel * maxScroll));
+        wrapper.scrollLeft = Math.max(0, Math.min(maxScroll, offset / travel * maxScroll));
     };
     let dragState = null;
     thumb.addEventListener('pointerdown', function (event) {
-        dragState = {pointerId:event.pointerId, startX:event.clientX, startScroll:tbValidationTableWrap.scrollLeft};
+        dragState = {pointerId:event.pointerId, startX:event.clientX, startScroll:wrapper.scrollLeft};
         thumb.classList.add('is-dragging');
         thumb.setPointerCapture(event.pointerId);
         event.preventDefault();
@@ -217,8 +227,8 @@ function syncTrialBalanceUniversalScrollbar() {
     thumb.addEventListener('pointermove', function (event) {
         if (!dragState || dragState.pointerId !== event.pointerId) return;
         const travel = Math.max(0, track.clientWidth - thumb.getBoundingClientRect().width);
-        const maxScroll = Math.max(0, tbValidationTableWrap.scrollWidth - tbValidationTableWrap.clientWidth);
-        if (travel && maxScroll) tbValidationTableWrap.scrollLeft = Math.max(0, Math.min(maxScroll,
+        const maxScroll = Math.max(0, wrapper.scrollWidth - wrapper.clientWidth);
+        if (travel && maxScroll) wrapper.scrollLeft = Math.max(0, Math.min(maxScroll,
             dragState.startScroll + (event.clientX - dragState.startX) * maxScroll / travel));
     });
     const endDrag = function (event) {
@@ -230,21 +240,21 @@ function syncTrialBalanceUniversalScrollbar() {
     thumb.addEventListener('pointercancel', endDrag);
     track.addEventListener('pointerdown', function (event) { if (event.target !== thumb) scrollToTrackPoint(event.clientX); });
     scrollbar.addEventListener('keydown', function (event) {
-        const step = Math.max(48, Math.round(tbValidationTableWrap.clientWidth * .15));
+        const step = Math.max(48, Math.round(wrapper.clientWidth * .15));
         let next = null;
         if (event.key === 'Home') next = 0;
-        else if (event.key === 'End') next = tbValidationTableWrap.scrollWidth - tbValidationTableWrap.clientWidth;
-        else if (event.key === 'ArrowLeft' || event.key === 'PageUp') next = tbValidationTableWrap.scrollLeft - (event.key === 'PageUp' ? tbValidationTableWrap.clientWidth : step);
-        else if (event.key === 'ArrowRight' || event.key === 'PageDown') next = tbValidationTableWrap.scrollLeft + (event.key === 'PageDown' ? tbValidationTableWrap.clientWidth : step);
+        else if (event.key === 'End') next = wrapper.scrollWidth - wrapper.clientWidth;
+        else if (event.key === 'ArrowLeft' || event.key === 'PageUp') next = wrapper.scrollLeft - (event.key === 'PageUp' ? wrapper.clientWidth : step);
+        else if (event.key === 'ArrowRight' || event.key === 'PageDown') next = wrapper.scrollLeft + (event.key === 'PageDown' ? wrapper.clientWidth : step);
         if (next === null) return;
         event.preventDefault();
-        tbValidationTableWrap.scrollLeft = Math.max(0, Math.min(tbValidationTableWrap.scrollWidth - tbValidationTableWrap.clientWidth, next));
+        wrapper.scrollLeft = Math.max(0, Math.min(wrapper.scrollWidth - wrapper.clientWidth, next));
     });
-    tbValidationTableWrap.addEventListener('scroll', update, {passive:true});
+    wrapper.addEventListener('scroll', update, {passive:true});
     window.addEventListener('resize', update, {passive:true});
     window.addEventListener('scroll', update, {passive:true});
-    tbValidationTableWrap.dataset.floatingScrollBound = 'true';
-    tbValidationTableWrap._updateFloatingScrollbar = update;
+    wrapper.dataset.floatingScrollBound = 'true';
+    wrapper._updateFloatingScrollbar = update;
     update();
 }
 
@@ -255,8 +265,11 @@ function updateTrialBalanceUniversalScrollbar() {
 }
 
 if (tbValidationTableWrap) {
-    syncTrialBalanceUniversalScrollbar();
+    bindTrialBalanceFloatingScrollbar(tbValidationTableWrap, () => tbValidationSheet && !tbValidationSheet.hidden && tbValidationSheet.classList.contains('active'), 'Trial Balance validation horizontal scroll', 'tb-validation-floating-scroll');
     tbValidationTableWrap.addEventListener('scroll', syncTrialBalanceStickyHeader, { passive: true });
+}
+if (availableAccountsTableWrapper) {
+    bindTrialBalanceFloatingScrollbar(availableAccountsTableWrapper, () => availableTrialBalancesSection && availableTrialBalancesSection.style.display === 'block' && availableAccountsTableWrapper.style.display !== 'none', 'Saved Trial Balance horizontal scroll', 'tb-saved-floating-scroll');
 }
 const deleteUploadBtn = getElement('deleteUploadBtn');
 
@@ -299,6 +312,13 @@ function waitForTrialBalancePaint() {
 // ---------- STATUS BAR ----------
 // Same show/hide + color-coded classes convention as upload.js's showStatus().
 function showStatus(msg, type = 'info') {
+    const savedStatus = getElement('tbSavedStatus');
+    if (savedStatus && availableTrialBalancesSection && availableTrialBalancesSection.style.display === 'block') {
+        savedStatus.textContent = msg;
+        savedStatus.className = 'status-bar ' + type;
+        savedStatus.style.display = 'flex';
+        return;
+    }
     if (!statusBar || !statusMessage) return;
     const icons = { info: 'ℹ️', success: '✅', error: '❌', loading: '⏳' };
     if (statusIcon) statusIcon.textContent = icons[type] || icons.info;
@@ -1753,7 +1773,7 @@ function buildUploadLabel(upload) {
 // Fetches Phase 1's list-uploads endpoint and populates the dropdown. Only 'parsed'
 // uploads are listed -- an 'error'/'pending' upload has no accounts to browse, so
 // including it would just be a dead entry that returns an empty table on selection.
-async function loadAvailableUploads(target = availableTrialBalancesBtn) {
+async function loadAvailableUploads(target = availableTrialBalancesBtn, requestedUploadId = null) {
     const clientId = window.getSelectedClientId ? window.getSelectedClientId() : null;
     if (!availableUploadsDropdown || !clientId) return;
     const loadingToken = startTrialBalanceLoading(target);
@@ -1761,6 +1781,8 @@ async function loadAvailableUploads(target = availableTrialBalancesBtn) {
     availableUploadsDropdown.innerHTML = '<option value="">— Select an upload —</option>';
     if (availableUploadsEmptyHint) availableUploadsEmptyHint.style.display = 'none';
     if (availableAccountsTableWrapper) availableAccountsTableWrapper.style.display = 'none';
+    if (tbSavedStickyHead) tbSavedStickyHead.hidden = true;
+    if (availableAccountsTableWrapper && availableAccountsTableWrapper._updateFloatingScrollbar) availableAccountsTableWrapper._updateFloatingScrollbar();
     if (availableAccountsTableBody) availableAccountsTableBody.innerHTML = '';
     if (deleteUploadBtn) deleteUploadBtn.style.display = 'none';
 
@@ -1776,6 +1798,7 @@ async function loadAvailableUploads(target = availableTrialBalancesBtn) {
 
         if (parsedUploads.length === 0) {
             if (availableUploadsEmptyHint) availableUploadsEmptyHint.style.display = 'block';
+            if (requestedUploadId) showStatus('The requested Trial Balance is not available for this client. Select another upload.', 'error');
             return;
         }
 
@@ -1785,6 +1808,15 @@ async function loadAvailableUploads(target = availableTrialBalancesBtn) {
             option.textContent = buildUploadLabel(upload);
             availableUploadsDropdown.appendChild(option);
         });
+        if (requestedUploadId) {
+            if (parsedUploads.some(function (upload) { return String(upload.id) === requestedUploadId; })) {
+                availableUploadsDropdown.value = requestedUploadId;
+                if (deleteUploadBtn) deleteUploadBtn.style.display = 'inline-block';
+                await loadAvailableUploadAccounts(requestedUploadId);
+            } else {
+                showStatus('The requested Trial Balance is not available for this client. Select another upload.', 'error');
+            }
+        }
     } catch (error) {
         showStatus('❌ Could not load available trial balances: ' + error.message, 'error');
     } finally {
@@ -1810,6 +1842,8 @@ async function loadAvailableUploadAccounts(uploadId, target = availableUploadsDr
         renderTrialBalanceControls(result.validation_controls || {}, 'tbSavedValidationControls');
         renderAvailableAccountsTable(result.accounts, (result.adjustments || []).concat(result.global_adjustments || []), result.validation_controls || {});
         availableAccountsTableWrapper.style.display = 'block';
+        if (tbSavedStickyHead) tbSavedStickyHead.hidden = false;
+        fitSavedTrialBalanceAmountColumns();
     } catch (error) {
         showStatus('❌ ' + error.message, 'error');
     } finally {
@@ -1817,8 +1851,7 @@ async function loadAvailableUploadAccounts(uploadId, target = availableUploadsDr
     }
 }
 
-// Account and amount rows -- codes remain editable in the selected upload; classification
-// still reuses the same Leaf/Parent badge as the Review Classifications screen.
+// Saved account codes and classifications use the same deliberate editing gesture.
 function renderAvailableAccountsTable(accounts, adjustments, controls = {}) {
     availableAccountsTableBody.innerHTML = '';
 
@@ -1828,18 +1861,61 @@ function renderAvailableAccountsTable(accounts, adjustments, controls = {}) {
         const tr = document.createElement('tr');
 
         const tdCode = document.createElement('td');
-        const codeInput = document.createElement('input');
-        codeInput.type = 'text';
-        codeInput.className = 'tb-code-review-input';
-        codeInput.value = account.account_code;
-        codeInput.maxLength = 120;
-        codeInput.setAttribute('aria-label', 'Account code for ' + (account.account_name || account.account_code));
-        tdCode.appendChild(codeInput);
+        const display = document.createElement('span');
+        display.className = 'tb-account-code-display';
+        display.textContent = account.account_code || '';
+        display.title = 'Double-click to edit' + (account.source_account_code && account.source_account_code !== account.account_code ? '\nImported: ' + account.source_account_code : '');
+        tdCode.appendChild(display);
+        display.addEventListener('dblclick', function () {
+            const input = document.createElement('input');
+            input.type = 'text'; input.className = 'tb-code-review-input'; input.maxLength = 120;
+            input.value = account.account_code || '';
+            input.setAttribute('aria-label', 'Account code for ' + (account.account_name || account.account_code));
+            tdCode.replaceChildren(input); input.focus(); input.select();
+            input.addEventListener('keydown', function (event) {
+                if (event.key === 'Escape') input.value = account.account_code || '';
+                if (event.key === 'Enter' || event.key === 'Escape') input.blur();
+            });
+            input.addEventListener('blur', function () {
+                const value = input.value.trim();
+                if (value === (account.account_code || '')) { tdCode.replaceChildren(display); return; }
+                saveAvailableAccountCode(account, value, input).then(function (saved) {
+                    if (!saved && tdCode.contains(input)) tdCode.replaceChildren(display);
+                });
+            }, { once: true });
+        });
         tr.appendChild(tdCode);
 
         const tdName = document.createElement('td');
         tdName.textContent = account.account_name || '—';
         tr.appendChild(tdName);
+
+        const tdClassification = document.createElement('td');
+        tdClassification.appendChild(buildClassificationCellContent(account));
+        tdClassification.title = 'Double-click to edit';
+        tdClassification.addEventListener('dblclick', function () {
+            if (tdClassification.querySelector('select')) return;
+            const select = document.createElement('select');
+            select.setAttribute('aria-label', 'Classification for ' + (account.account_name || account.account_code));
+            [['leaf', 'Leaf'], ['parent', 'Parent']].forEach(function (item) {
+                const option = document.createElement('option'); option.value = item[0]; option.textContent = item[1];
+                select.appendChild(option);
+            });
+            const previous = account.is_leaf ? 'leaf' : 'parent';
+            select.value = previous;
+            tdClassification.replaceChildren(select); select.focus();
+            select.addEventListener('keydown', function (event) {
+                if (event.key === 'Escape') { select.value = previous; select.blur(); }
+                else if (event.key === 'Enter') select.blur();
+            });
+            select.addEventListener('blur', function () {
+                if (select.value === previous) { tdClassification.replaceChildren(buildClassificationCellContent(account)); return; }
+                saveAvailableClassification(account, select.value === 'leaf', select).then(function (saved) {
+                    if (!saved && tdClassification.contains(select)) tdClassification.replaceChildren(buildClassificationCellContent(account));
+                });
+            }, {once: true});
+        });
+        tr.appendChild(tdClassification);
 
         amountFields.forEach(function (field) {
             const tdAmount = document.createElement('td');
@@ -1849,27 +1925,6 @@ function renderAvailableAccountsTable(accounts, adjustments, controls = {}) {
                 : (account[field] === null || account[field] === undefined ? '—' : String(account[field]));
             tr.appendChild(tdAmount);
         });
-
-        const tdClassification = document.createElement('td');
-        tdClassification.appendChild(buildClassificationCellContent(account));
-        tr.appendChild(tdClassification);
-
-        const tdAction = document.createElement('td');
-        const saveCodeBtn = document.createElement('button');
-        saveCodeBtn.type = 'button';
-        saveCodeBtn.className = 'btn-secondary-action';
-        saveCodeBtn.textContent = 'Save code';
-        saveCodeBtn.addEventListener('click', function () {
-            saveAvailableAccountCode(account, codeInput.value, saveCodeBtn);
-        });
-        tdAction.appendChild(saveCodeBtn);
-        if (account.source_account_code && account.source_account_code !== account.account_code) {
-            const sourceNote = document.createElement('small');
-            sourceNote.textContent = 'Imported: ' + account.source_account_code;
-            sourceNote.style.display = 'block';
-            tdAction.appendChild(sourceNote);
-        }
-        tr.appendChild(tdAction);
 
         availableAccountsTableBody.appendChild(tr);
     });
@@ -1882,7 +1937,7 @@ function renderAvailableAccountsTable(accounts, adjustments, controls = {}) {
     const sectionRow = document.createElement('tr');
     sectionRow.className = 'tb-difference-section';
     const sectionCell = document.createElement('td');
-    sectionCell.colSpan = 10;
+    sectionCell.colSpan = 9;
     sectionCell.textContent = `System-generated differences (${savedAdjustments.length}) — separate from original Trial Balance amounts.`;
     sectionRow.appendChild(sectionCell);
     availableAccountsTableBody.appendChild(sectionRow);
@@ -1893,16 +1948,15 @@ function renderAvailableAccountsTable(accounts, adjustments, controls = {}) {
         const values = [
             adjustment.account_code || '—',
             'Difference — ' + (adjustment.account_name || adjustment.account_code || 'Leaf account'),
+            adjustment.global_adjustment ? 'Unassigned global difference' : 'Leaf adjustment',
             Number(adjustment.opening_dr_adjustment || 0) || '', Number(adjustment.opening_cr_adjustment || 0) || '',
             Number(adjustment.period_dr_adjustment || 0) || '', Number(adjustment.period_cr_adjustment || 0) || '',
             Number(adjustment.closing_dr_adjustment || 0) || '', Number(adjustment.closing_cr_adjustment || 0) || '',
-            adjustment.global_adjustment ? 'Unassigned global difference' : 'Leaf adjustment',
-            'Original amounts unchanged',
         ];
         values.forEach(function (value, index) {
             const td = document.createElement('td');
-            if (index >= 2 && index <= 7) td.className = 'tb-amount-cell';
-            td.textContent = value === '' ? '' : (index >= 2 && index <= 7
+            if (index >= 3 && index <= 8) td.className = 'tb-amount-cell';
+            td.textContent = value === '' ? '' : (index >= 3 && index <= 8
                 ? (typeof window.formatAmount === 'function' ? window.formatAmount(value) : String(value))
                 : String(value));
             tr.appendChild(td);
@@ -1937,8 +1991,10 @@ async function saveAvailableAccountCode(account, accountCode, triggerBtn) {
         if (String(currentUploadId) === String(uploadId)) {
             await loadSummary(currentUploadId);
         }
+        return true;
     } catch (error) {
         showStatus('❌ ' + error.message, 'error');
+        return false;
     } finally {
         triggerBtn.disabled = previousDisabled;
         stopTrialBalanceLoading(loadingToken);
@@ -1946,11 +2002,69 @@ async function saveAvailableAccountCode(account, accountCode, triggerBtn) {
     }
 }
 
+// Reload saved controls after a classification change so stale reconciliation is visible.
+async function saveAvailableClassification(account, isLeaf, trigger) {
+    const uploadId = availableUploadsDropdown ? availableUploadsDropdown.value : null;
+    const actionKey = 'account-code-upload:' + uploadId;
+    if (!uploadId || trialBalanceActionsInFlight.has(actionKey)) return false;
+    trialBalanceActionsInFlight.add(actionKey);
+    const loadingToken = startTrialBalanceLoading(trigger);
+    trigger.disabled = true;
+    try {
+        const response = await fetch(API_BASE + '/api/trial-balance/accounts/' + account.id + '/override', {
+            method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({is_leaf: isLeaf})
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Could not save classification');
+        showStatus('✅ Classification saved for this upload.', 'success');
+        await loadAvailableUploadAccounts(uploadId, trigger);
+        if (String(currentUploadId) === String(uploadId)) await loadSummary(uploadId);
+        return true;
+    } catch (error) {
+        showStatus('❌ ' + error.message, 'error');
+        return false;
+    } finally {
+        trigger.disabled = false;
+        stopTrialBalanceLoading(loadingToken);
+        trialBalanceActionsInFlight.delete(actionKey);
+    }
+}
+
+// Match the saved heading and body widths to the widest rendered amount, including footings.
+function fitSavedTrialBalanceAmountColumns() {
+    if (!availableAccountsTableWrapper || !availableAccountsTableBody || !tbSavedStickyHead) return;
+    const table = availableAccountsTableWrapper.querySelector('table');
+    const heading = tbSavedStickyHead.querySelector('table');
+    if (!table || !heading) return;
+    const cells = availableAccountsTableBody.querySelectorAll('td.tb-amount-cell');
+    const context = document.createElement('canvas').getContext('2d');
+    let amountWidth = 104;
+    if (context && cells.length) {
+        const style = getComputedStyle(cells[0]);
+        context.font = '700 ' + style.fontSize + ' ' + style.fontFamily;
+        new Set(Array.from(cells, cell => cell.textContent)).forEach(function (value) {
+            amountWidth = Math.max(amountWidth, Math.ceil(context.measureText(value).width) + 24);
+        });
+    }
+    const widths = [145, 220, 110, ...Array(6).fill(amountWidth)];
+    [table, heading].forEach(function (target) {
+        const group = document.createElement('colgroup');
+        widths.forEach(function (width) { const col = document.createElement('col'); col.style.width = width + 'px'; group.appendChild(col); });
+        const existing = target.querySelector('colgroup'); if (existing) existing.remove();
+        target.prepend(group);
+        target.style.minWidth = Math.max(1240, widths.reduce((sum, width) => sum + width, 0)) + 'px';
+    });
+    heading.style.transform = `translateX(-${availableAccountsTableWrapper.scrollLeft}px)`;
+    if (availableAccountsTableWrapper._updateFloatingScrollbar) availableAccountsTableWrapper._updateFloatingScrollbar();
+}
+
 if (availableUploadsDropdown) {
     availableUploadsDropdown.addEventListener('change', function () {
         const uploadId = this.value;
         if (!uploadId) {
             if (availableAccountsTableWrapper) availableAccountsTableWrapper.style.display = 'none';
+            if (tbSavedStickyHead) tbSavedStickyHead.hidden = true;
+            if (availableAccountsTableWrapper && availableAccountsTableWrapper._updateFloatingScrollbar) availableAccountsTableWrapper._updateFloatingScrollbar();
             if (availableAccountsTableBody) availableAccountsTableBody.innerHTML = '';
             if (deleteUploadBtn) deleteUploadBtn.style.display = 'none';
             return;
@@ -1996,6 +2110,8 @@ if (deleteUploadBtn) {
             // Reset this view's selection/table state, then reload the dropdown so
             // the deleted upload is gone from the list.
             if (availableAccountsTableWrapper) availableAccountsTableWrapper.style.display = 'none';
+            if (tbSavedStickyHead) tbSavedStickyHead.hidden = true;
+            if (availableAccountsTableWrapper && availableAccountsTableWrapper._updateFloatingScrollbar) availableAccountsTableWrapper._updateFloatingScrollbar();
             if (availableAccountsTableBody) availableAccountsTableBody.innerHTML = '';
             deleteUploadBtn.style.display = 'none';
             await loadAvailableUploads();
@@ -2020,15 +2136,30 @@ if (availableTrialBalancesBtn) {
     });
 }
 
+const tbAssignCategoriesBtn = getElement('tbAssignCategoriesBtn');
+if (tbAssignCategoriesBtn) {
+    tbAssignCategoriesBtn.addEventListener('click', function () {
+        const incoming = new URLSearchParams(window.location.search);
+        const tab = incoming.get('acc_tab') === 'notes' ? 'notes' : 'financial';
+        const params = new URLSearchParams({tab: tab});
+        if (availableUploadsDropdown && availableUploadsDropdown.value) params.set('upload_id', availableUploadsDropdown.value);
+        window.location.href = '/static/account_control_center.html?' + params.toString();
+    });
+}
+
 // Back affordance: restores the normal upload flow exactly as it was left (nothing in
 // uploadViewContainer was touched while hidden) and resets this view's own dropdown/table
 // so the next open starts clean rather than showing a stale selection.
 if (closeAvailableTrialBalancesBtn) {
     closeAvailableTrialBalancesBtn.addEventListener('click', function () {
+        const savedStatus = getElement('tbSavedStatus');
+        if (savedStatus) savedStatus.style.display = 'none';
         if (availableTrialBalancesSection) availableTrialBalancesSection.style.display = 'none';
         if (uploadViewContainer) uploadViewContainer.style.display = 'block';
         if (availableUploadsDropdown) availableUploadsDropdown.innerHTML = '<option value="">— Select an upload —</option>';
         if (availableAccountsTableWrapper) availableAccountsTableWrapper.style.display = 'none';
+        if (tbSavedStickyHead) tbSavedStickyHead.hidden = true;
+        if (availableAccountsTableWrapper && availableAccountsTableWrapper._updateFloatingScrollbar) availableAccountsTableWrapper._updateFloatingScrollbar();
         if (availableAccountsTableBody) availableAccountsTableBody.innerHTML = '';
         if (availableUploadsEmptyHint) availableUploadsEmptyHint.style.display = 'none';
         if (deleteUploadBtn) deleteUploadBtn.style.display = 'none';
@@ -2044,6 +2175,12 @@ window.onload = async function () {
     if (window.clientContextReady) await window.clientContextReady;
     if (typeof window.initUtils === 'function') await window.initUtils();
     updateClientDependentUI();
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('view') === 'available' && availableTrialBalancesSection) {
+        if (uploadViewContainer) uploadViewContainer.style.display = 'none';
+        availableTrialBalancesSection.style.display = 'block';
+        await loadAvailableUploads(availableTrialBalancesBtn, params.get('upload_id'));
+    }
 };
 
 // Keep the saved-control warning visible if account selection changes after saving.
@@ -2312,6 +2449,9 @@ function renderDraftReconciliation(body, columns, mappingRoleByIndex, controls, 
                 }
             } else if (column.kind === 'classification') {
                 cell.textContent = 'Control';
+                if (includeOriginal) cell.title = !summary ? 'Revalidate the source data' : definition.key === 'pairs'
+                    ? 'Opening / Period / Closing: debit minus credit'
+                    : definition.key === 'adjusted_totals' ? 'Draft totals including separate differences' : 'Source figures retained';
             } else if (column.kind === 'issues') {
                 cell.textContent = !summary ? 'Revalidate the source data' : definition.key === 'pairs'
                     ? 'Opening / Period / Closing: debit minus credit'
@@ -2325,10 +2465,10 @@ function renderDraftReconciliation(body, columns, mappingRoleByIndex, controls, 
 function renderSavedDraftReconciliation(controls) {
     const columns = [
         {kind:'source',role:'account_code_column'}, {kind:'source',role:'account_name_column'},
+        {kind:'classification'},
         ...['opening','period','closing'].flatMap(function (period) {
             return ['dr','cr'].map(function (side) { return {kind:'source',role:period+'_'+side+'_column',className:'tb-amount-cell'}; });
         }),
-        {kind:'classification'}, {kind:'issues'}
     ];
     renderDraftReconciliation(availableAccountsTableBody, columns, new Map(), controls, true);
 }
