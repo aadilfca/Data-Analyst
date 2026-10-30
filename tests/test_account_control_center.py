@@ -5,7 +5,7 @@ import sqlite3
 import tempfile
 import json
 import unittest
-from contextlib import nullcontext
+from contextlib import nullcontext, closing
 from decimal import Decimal
 from unittest.mock import patch
 from io import BytesIO
@@ -297,6 +297,7 @@ class AccountSetSchemaTests(unittest.TestCase):
                     }.issubset(tables)
                 )
                 self.assertIn("source_statement_category_id", category_columns)
+                self.assertIn("presentation_role", category_columns)
                 self.assertTrue(
                     {
                         "idx_account_sets_client",
@@ -352,6 +353,7 @@ class AccountSetPostgresMigrationTests(unittest.TestCase):
         self.assertIn("CREATE TABLE IF NOT EXISTS account_control_statement_calculation_components", sql)
         self.assertIn("idx_statement_subtotal_heading", sql)
         self.assertIn("ADD COLUMN IF NOT EXISTS statement_section", sql)
+        self.assertIn("ADD COLUMN IF NOT EXISTS presentation_role", sql)
         self.assertIn("ADD COLUMN IF NOT EXISTS row_type", sql)
         self.assertIn("ADD COLUMN IF NOT EXISTS parent_category_id", sql)
         self.assertIn("ADD COLUMN IF NOT EXISTS source_statement_category_id", sql)
@@ -1630,3 +1632,44 @@ class TrialBalanceOrderedControlTests(unittest.TestCase):
             stale=trial_balance.list_trial_balance_accounts(1)
         self.assertTrue(stale['validation_controls']['stale'])
         self.assertIsNone(stale['validation_controls']['draft_reconciliation'])
+
+
+class BalanceSheetPresentationTests(unittest.TestCase):
+    def test_valid_roles_and_unconfigured_default(self):
+        for role in (None, 'asset', 'liability', 'equity'):
+            payload = control_center.AccountControlCategoryPayload(client_id=1, category_key='heading', label='Heading', statement_section='balance_sheet', row_type='heading', presentation_role=role)
+            self.assertEqual(control_center._clean_category_payload(payload)['presentation_role'], role)
+
+    def test_role_rejects_children_income_statement_and_invalid_values(self):
+        for changes in ({'parent_category_id': 1}, {'statement_section': 'income_statement'}, {'presentation_role': 'guess'}):
+            values = dict(client_id=1, category_key='category', label='Category', statement_section='balance_sheet', presentation_role='asset')
+            values.update(changes)
+            with self.assertRaises(HTTPException):
+                control_center._clean_category_payload(control_center.AccountControlCategoryPayload(**values))
+
+    def test_old_update_preserves_role_and_explicit_null_clears_it(self):
+        for explicit in (False, True):
+            values = dict(client_id=1, label='Renamed', statement_section='balance_sheet', row_type='heading')
+            if explicit:
+                values['presentation_role'] = None
+            payload = control_center.AccountControlCategoryUpdatePayload(**values)
+            row = dict(id=9, source_statement_category_id=None, statement_section='balance_sheet', row_type='heading', parent_category_id=None, presentation_role='liability')
+            with patch.object(control_center, 'execute_query_pg', return_value=[row]), patch.object(control_center, '_validate_statement_parent'), patch.object(control_center, 'execute_write_pg') as write:
+                result = control_center.update_account_control_category(9, payload, session={'username':'Admin'})
+            self.assertEqual(result['category']['presentation_role'], None if explicit else 'liability')
+            self.assertIn('presentation_role = %s', write.call_args.args[0])
+
+
+class BalanceSheetExistingSchemaTests(unittest.TestCase):
+    def test_sqlite_upgrade_retains_existing_rows_and_stays_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(database, 'DB_NAME', os.path.join(directory, 'legacy.db')):
+            database.init_db()
+            with closing(sqlite3.connect(database.DB_NAME)) as connection, connection:
+                connection.execute("ALTER TABLE account_control_categories DROP COLUMN presentation_role")
+                connection.execute("INSERT INTO account_control_categories (client_id, category_type, category_key, label) VALUES (1, 'financial_statement', 'existing', 'Existing category')")
+            database.init_db()
+            database.init_db()
+            with closing(sqlite3.connect(database.DB_NAME)) as connection, connection:
+                self.assertEqual(connection.execute("SELECT label, presentation_role FROM account_control_categories WHERE category_key = 'existing'").fetchone(), ('Existing category', None))
+                with self.assertRaises(sqlite3.IntegrityError):
+                    connection.execute("UPDATE account_control_categories SET presentation_role = 'guessed'")

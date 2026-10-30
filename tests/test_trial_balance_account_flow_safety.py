@@ -220,3 +220,15 @@ def test_verification_category_resolution_prefers_latest_trial_balance_then_uses
         "TB-CODE": {"category_id": 51, "category_name": "TB Category"},
         "OLD-CODE": {"category_id": 52, "category_name": "Carried category"},
     }
+
+
+def test_balance_sheet_uses_leaf_closing_fields_without_changing_acc_metadata_contract():
+    from services.financial_statement_balances import build_balance_sheet
+    account = dict(account_code='100', classification='leaf', manually_overridden=False,
+                   closing_dr='120.50', closing_cr='0', opening_dr='100', opening_cr='0', period_dr='20.50', period_cr='0')
+    category = dict(id=31, label='Cash', row_type='category', parent_category_id=None,
+                    statement_section='balance_sheet', presentation_role='asset', is_active=True)
+    result = build_balance_sheet([account], [dict(account_code='100', financial_statement_category_id=31)], [category], [], [])
+    assert result['categories'][0]['amount'] == '120.50'
+    assert result['controls']['audit_adjustment_net'] == '0'
+    assert account['closing_dr'] == '120.50'

@@ -8773,7 +8773,7 @@ Record phase decisions, implementation, verification, and acceptance here as the
 - Selected ERP totals compare original Leaf sums before adjustments; ERP mismatches and required Leaf code corrections block saving.
 - Horizontal/vertical differences are advisory and save separately. Draft totals include these entries without altering ERP totals; global differences remain unassigned until traced.
 - Assign each account to a client-scoped Balance Sheet or Income Statement category. Headings organize categories. Subtotals combine direct categories under a heading with signed treatment; totals combine categories, subtotals, or earlier totals, with overlapping sources blocked.
-- The current Financial Statement preview aggregates ledger movements by category and month. Full statement production and closing logic are not implemented.
+- The legacy Financial Statement preview aggregates ledger movements. Balance Sheet reporting separately uses a selected ERP closing TB; audit journals and automatic profit-to-equity closing remain deferred.
 - Safety reference: `tests/test_trial_balance_account_flow_safety.py` is the maintained regression checkpoint for Trial Balance-to-ACC-to-Financial Statement links; extend it as statement building progresses.
 
 ### Account Control Centre setup shell - 2026-10-26
@@ -9028,3 +9028,16 @@ An admin-only upload-options endpoint supports lightweight startup with a blurre
 **Verification:** Isolated browser checks passed for desktop/mobile layout, blank amounts, GET-only outline reads, navigation, safe labels, empty/error/retry and late responses. Source-placement parity against ACC, JavaScript syntax and whitespace checks passed. Existing Reports regressions: 129 passed, 1 skipped, 2 failed because they assert script version 58 and the retired placeholder description; updating that test file awaits scope approval. One existing Starlette/httpx deprecation warning. No backend/database changes or package installation. Two existing ACC Status entries were consolidated to retain the 80-line budget; File_Map.md remains over its existing guard at 158 lines and was not changed.
 
 **Acceptance:** Aadil authorized commit and push on 2026-10-30; the two obsolete test assertions remain documented and unchanged.
+
+
+## Balance Sheet ERP amount linking — 2026-10-30
+
+**Implementation:** Added the shared decimal calculation service and admin-only, selected-upload report endpoint. Eight bounded reads share one read-only snapshot. Effective Leaf closing Dr minus Cr feeds ACC categories; headings/standalone categories explicitly select Asset, Liability or Equity, with child inheritance. Presentation precedes saved subtotal/total operators; missing roles propagate unavailable amounts, and invalid/circular/overlapping calculation sources refuse the report. Existing roles default to Not set; omitted fields preserve roles on older category updates. SQLite and PostgreSQL receive additive startup upgrades.
+
+The report requires explicit TB selection, shows its closing date, rounds statement presentation to whole units with exact hover values, and preserves exact source controls. Diagnostics cover missing/inactive mappings, missing roles, abnormal balances, source imbalance, stale controls, excluded automatic differences and unclosed Income Statement balances. Audit adjustments remain zero; ERP values and account assignments are unchanged. Report/ACC script versions are 60/36.
+
+**Verification:** Focused calculation/API, schema upgrade/idempotence and assignment tests pass. Browser checks cover source selection/switching, unavailable sources, error/retry, deep links, safe large decimal presentation, role inheritance and save rollback. ACC heading drag regression passed after constraining the new control. Desktop/mobile screenshots reviewed; the popup fits mobile. Existing ACC page/navbar width at 390px is unchanged (987px in baseline and current), outside this phase. Combined regressions passed: 273 tests and 17 subtests; 1 skipped. A follow-up query-count test passed at 1 and 50 accounts. Existing Starlette/httpx and FastAPI lifecycle deprecation warnings remain. A synthetic 10,000-Leaf calculation took 175.1 ms, excluding database/network time; live PostgreSQL timing remains unverified. No package installation or live data writes.
+
+**Documentation:** Existing grouped File_Map entries register the new service/tests without adding rows; its existing 158-line guard excess remains. The latest Balance Sheet Status entry was rewritten in place.
+
+**Acceptance:** Aadil confirmed successful local Balance Sheet testing and authorized commit/push on 2026-10-30. Income Statement and the profit-to-capital link are the next phase; source diagnostics remain unresolved.

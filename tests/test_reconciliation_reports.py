@@ -2587,7 +2587,7 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "setActiveCashflowWindow" in javascript
     assert "const CASHFLOW_DEFAULT_START = '2026-01-01';" in javascript
     assert "const CASHFLOW_DEFAULT_END = '2026-06-30';" in javascript
-    assert "<script src='/static/reconciliation.js?v=58'></script>" in html
+    assert "<script src='/static/reconciliation.js?v=60'></script>" in html
     assert "id='reconReportPeriod'" in html
     assert "Linked to the loaded Cashflows Report" in html
     assert "id='reconPeriod'" not in html
@@ -2735,7 +2735,9 @@ def test_reports_hub_exposes_requested_report_cards():
     assert "Vendor Reports" in html
     assert "Customer Reports" in html
     assert "Financial Statements" in html
-    assert "notes section" in html
+    assert "Draft — before audit adjustments" in html
+    assert "balanceSheetUpload" in html
+    assert "/api/reconciliation/financial-statements/balance-sheet" in javascript
     assert "<h1>Reports centre</h1>" not in html
     assert "reportsHubMessage" not in html
     assert "id='previewFinancialStatementsButton'" not in html

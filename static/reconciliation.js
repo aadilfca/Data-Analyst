@@ -5056,52 +5056,102 @@
         unresolved.forEach(function (row) { result.push(row); });
         return result;
     }
+    let balanceSheetUploadsLoaded = false;
+    // Round statement presentation only, using integer/string arithmetic; source
+    // controls and cell titles retain exact decimal values, including large ones.
+    function balanceSheetAmount(value, precise) {
+        if (value == null) return '—';
+        const match = String(value).match(/^(-?)(\d+)(?:\.(\d+))?$/);
+        if (!match) return '—';
+        if (!precise) {
+            const rounded = BigInt(match[2]) + ((match[3] || '')[0] >= '5' ? 1n : 0n);
+            return (rounded === 0n ? '' : match[1]) + String(rounded).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+        }
+        const fraction = (match[3] || '').replace(/0+$/, '');
+        const whole = match[2].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+        const sign = /^0+$/.test(match[2]) && !fraction ? '' : match[1];
+        return sign + whole + (fraction ? '.' + fraction : '');
+    }
     async function loadBalanceSheetOutline() {
         cancelBalanceSheetLoad();
         const generation = balanceSheetGeneration, requestedClient = clientId;
         const controller = new AbortController();
         balanceSheetRequest = controller;
         const status = element('balanceSheetStatus'), table = element('balanceSheetTable'), reload = element('balanceSheetReload');
+        const selector = element('balanceSheetUpload');
+        const selectedUpload = selector.value;
         table.hidden = true;
         element('balanceSheetRows').replaceChildren();
+        element('balanceSheetDiagnostics').replaceChildren();
+        element('balanceSheetDiagnostics').hidden = true;
+        element('balanceSheetDate').textContent = '';
         status.hidden = false;
         status.classList.remove('is-error');
-        status.textContent = 'Loading Balance Sheet outline…';
+        status.textContent = 'Loading Balance Sheet…';
         element('balanceSheetClient').textContent = window.getSelectedClientName ? window.getSelectedClientName() : '';
         reload.disabled = true;
+        selector.disabled = true;
         element('balanceSheetView').setAttribute('aria-busy', 'true');
         const timeout = window.setTimeout(function () { controller.abort(); }, 30000);
         try {
-            if (!requestedClient) throw new Error('Select a client to view its Balance Sheet outline.');
+            if (!requestedClient) throw new Error('Select a client to view its Balance Sheet.');
             const suffix = '?client_id=' + encodeURIComponent(requestedClient);
-            const responses = await Promise.allSettled([
-                api('/api/account-control-center/categories' + suffix + '&category_type=financial_statement&include_inactive=true', { signal: controller.signal }),
-                api('/api/account-control-center/statement-calculations' + suffix + '&statement_section=balance_sheet', { signal: controller.signal }),
-            ]);
+            // Revalidate available sources on each opening/reload; never silently fall
+            // back to the latest upload if a previously selected source was removed.
+            const options = await api('/api/account-control-center/uploads' + suffix, { signal: controller.signal });
+            if (generation !== balanceSheetGeneration) return;
+            if (!Array.isArray(options.uploads)) throw new Error('Trial Balance choices could not be loaded. Please retry.');
+            selector.innerHTML = '<option value="">Select a Trial Balance</option>' + options.uploads.map(function (upload) {
+                const label = (upload.file_name || 'Trial Balance') + ' · ' + (upload.period_start || '') + ' to ' + (upload.period_end || upload.as_of_date || '');
+                return '<option value="' + Number(upload.id) + '">' + escapeHtml(label) + '</option>';
+            }).join('');
+            const requested = selectedUpload || (!balanceSheetUploadsLoaded ? new URLSearchParams(window.location.search).get('trial_balance_upload_id') : '');
+            balanceSheetUploadsLoaded = true;
+            if (!requested) {
+                const params = new URLSearchParams(window.location.search);
+                params.delete('trial_balance_upload_id');
+                window.history.replaceState({}, '', window.location.pathname + '?' + params.toString());
+                status.textContent = options.uploads.length ? 'Select the Trial Balance to prepare this Balance Sheet.' : 'No parsed Trial Balance is available for this client.';
+                return;
+            }
+            if (!options.uploads.some(function (upload) { return String(upload.id) === requested; })) {
+                throw new Error('The selected Trial Balance is no longer available. Select an available upload.');
+            }
+            selector.value = requested;
+            const result = await api('/api/reconciliation/financial-statements/balance-sheet' + suffix + '&trial_balance_upload_id=' + encodeURIComponent(requested), { signal: controller.signal });
             if (generation !== balanceSheetGeneration || requestedClient !== clientId) return;
-            if (responses.some(function (response) { return response.status === 'rejected'; })) throw new Error('The Balance Sheet outline could not be loaded. Please retry.');
-            const categories = responses[0].value.categories, calculations = responses[1].value.calculations;
-            if (!Array.isArray(categories) || !Array.isArray(calculations)) throw new Error('The Balance Sheet outline could not be read. Please retry.');
-            const rows = balanceSheetOutline(categories, calculations);
+            if (Number(result.client_id) !== Number(requestedClient) || !result.upload || String(result.upload.id) !== requested || !Array.isArray(result.categories) || !Array.isArray(result.calculations) || result.basis !== 'erp_closing_before_audit_adjustments') {
+                throw new Error('The Balance Sheet source could not be verified. Please reload.');
+            }
+            const rows = balanceSheetOutline(result.categories, result.calculations);
             element('balanceSheetRows').innerHTML = rows.map(function (row) {
                 const inactive = row.item.is_active === false || row.item.is_active === 0;
                 const label = escapeHtml(row.item.label) + (inactive ? '<span class="bs-inactive-label">Inactive</span>' : '');
-                return '<tr class="bs-' + row.kind + (inactive ? ' bs-inactive' : '') + '"><th scope="row"' + (row.kind === 'heading' ? ' colspan="2"' : '') + '>' + label + '</th>' + (row.kind === 'heading' ? '' : '<td class="balance-sheet-amount"></td>') + '</tr>';
+                return '<tr class="bs-' + row.kind + (inactive ? ' bs-inactive' : '') + '"><th scope="row"' + (row.kind === 'heading' ? ' colspan="2"' : '') + '>' + label + '</th>' + (row.kind === 'heading' ? '' : '<td class="balance-sheet-amount" title="' + escapeHtml(row.item.amount == null ? 'Amount unavailable; review ACC configuration' : row.item.amount) + '">' + escapeHtml(balanceSheetAmount(row.item.amount)) + '</td>') + '</tr>';
             }).join('');
+            const controls = result.controls || {};
+            const diagnostics = (result.diagnostics || []).map(function (item) { return item.message; });
+            diagnostics.unshift('ERP closing Dr: ' + balanceSheetAmount(controls.closing_dr, true) + ' · Cr: ' + balanceSheetAmount(controls.closing_cr, true) + ' · Difference: ' + balanceSheetAmount(controls.closing_difference, true));
+            if (controls.unmapped_count) diagnostics.push('Unmapped account codes: ' + (controls.unmapped_account_codes || []).join(', ') + (controls.unmapped_count > 50 ? ' (first 50)' : ''));
+            element('balanceSheetDiagnostics').innerHTML = diagnostics.map(function (message) { return '<li>' + escapeHtml(message) + '</li>'; }).join('');
+            element('balanceSheetDiagnostics').hidden = false;
+            element('balanceSheetDate').textContent = 'As at ' + (result.upload.period_end || result.upload.as_of_date || 'date unavailable');
             table.hidden = !rows.length;
             status.hidden = !!rows.length;
             status.textContent = rows.length ? '' : 'No Balance Sheet outline is configured yet. Set up headings and categories in Account Control Centre.';
-            reload.textContent = 'Reload outline';
+            const params = new URLSearchParams(window.location.search);
+            params.set('trial_balance_upload_id', requested);
+            window.history.replaceState({}, '', window.location.pathname + '?' + params.toString());
         } catch (error) {
             if (generation !== balanceSheetGeneration) return;
             status.classList.add('is-error');
             status.textContent = controller.signal.aborted ? 'Loading took too long. Please retry.' : error.message;
-            reload.textContent = 'Retry outline';
         } finally {
             window.clearTimeout(timeout);
             if (generation === balanceSheetGeneration) {
                 balanceSheetRequest = null;
                 reload.disabled = false;
+                selector.disabled = false;
                 element('balanceSheetView').setAttribute('aria-busy', 'false');
             }
         }
@@ -5169,6 +5219,7 @@
         element('financialStatementsBack').addEventListener('click', showReportsHub);
         element('balanceSheetBack').addEventListener('click', function () { showFinancialStatements(false); });
         element('balanceSheetReload').addEventListener('click', loadBalanceSheetOutline);
+        element('balanceSheetUpload').addEventListener('change', loadBalanceSheetOutline);
         initialiseCashflowAccounts();
         initialiseCashflowReconciliation();
         setCashflowSummaryFilterVisibility(false);

@@ -1131,6 +1131,29 @@ async function accLoadFinancialCategories() {
     accRenderFinancialOutlines();
     accRenderNotesOutlines();
 }
+// Presentation is explicit configuration, never inferred from a balance's sign.
+function accPresentationMarkup(item, readOnly) {
+    if (item.statement_section !== 'balance_sheet' || (item.row_type === 'category' && item.parent_category_id != null)) return '';
+    const labels = { asset: 'Asset', liability: 'Liability', equity: 'Equity' };
+    if (readOnly) return '<span class="acc2-presentation-reference">' + (labels[item.presentation_role] || 'Not set') + '</span>';
+    return '<label class="acc2-presentation-control">Presentation <select class="acc2-select" data-fs-presentation="' + item.id + '" aria-label="Presentation for ' + accEscape(item.label) + '">' +
+        ['', 'asset', 'liability', 'equity'].map(function (role) { return '<option value="' + role + '"' + ((item.presentation_role || '') === role ? ' selected' : '') + '>' + (labels[role] || 'Not set') + '</option>'; }).join('') + '</select></label>';
+}
+async function accHandlePresentationChange(event) {
+    const select = event.target.closest('[data-fs-presentation]');
+    if (!select) return;
+    const item = accFinancialCategories.find(function (row) { return Number(row.id) === Number(select.dataset.fsPresentation); });
+    if (!item) return;
+    select.disabled = true;
+    try {
+        await accApi('/api/account-control-center/categories/' + item.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: accClientId, category_type: 'financial_statement', label: item.label, statement_section: item.statement_section, row_type: item.row_type, parent_category_id: item.parent_category_id, sort_order: item.sort_order, is_active: item.is_active, presentation_role: select.value || null }) });
+        item.presentation_role = select.value || null;
+        accShowStatus('Presentation saved. Reload the Balance Sheet to apply it.', 'success');
+    } catch (error) {
+        select.value = item.presentation_role || '';
+        accShowStatus(error.message, 'error');
+    } finally { select.disabled = false; }
+}
 function accRenderFinancialOutlines() {
     document.querySelectorAll('[data-fs-section]').forEach(function (panel) {
         const section = panel.dataset.fsSection;
@@ -1142,7 +1165,7 @@ function accRenderFinancialOutlines() {
         const totals = calculations.filter(function (item) { return item.calculation_type === 'total'; }).sort(function (a, b) { return Number(a.sort_order) - Number(b.sort_order) || Number(a.id) - Number(b.id); });
         const totalsAfterSourceRow = new Map();
         const unplacedTotals = [];
-        function actions(item) { return readOnly ? '' : '<button type="button" class="acc2-fs-small" data-fs-action="delete" data-fs-id="' + item.id + '">Delete</button><button type="button" class="acc2-fs-small" data-fs-action="rename" data-fs-id="' + item.id + '">Rename</button><button type="button" class="acc2-fs-small" data-fs-action="toggle" data-fs-id="' + item.id + '" data-fs-active="' + item.is_active + '">' + (item.is_active ? 'Deactivate' : 'Restore') + '</button>'; }
+        function actions(item) { return accPresentationMarkup(item, readOnly) + (readOnly ? '' : '<button type="button" class="acc2-fs-small" data-fs-action="delete" data-fs-id="' + item.id + '">Delete</button><button type="button" class="acc2-fs-small" data-fs-action="rename" data-fs-id="' + item.id + '">Rename</button><button type="button" class="acc2-fs-small" data-fs-action="toggle" data-fs-id="' + item.id + '" data-fs-active="' + item.is_active + '">' + (item.is_active ? 'Deactivate' : 'Restore') + '</button>'); }
         function dragHandle(item, kind) { return readOnly ? '' : '<button type="button" class="acc2-fs-drag-handle" draggable="true" data-fs-drag-handle data-fs-id="' + item.id + '" aria-label="Drag to reorder ' + kind + ' ' + accEscape(item.label) + '" title="Drag to reorder">☰</button>'; }
         function calculationMarkup(calculation, kind) {
             const summary = (calculation.components || []).map(function (component, index) {
@@ -2235,6 +2258,7 @@ function accBindEvents() {
     document.querySelectorAll('[data-fs-section]').forEach(function (panel) {
         panel.addEventListener('click', function (event) { accHandleFinancialCalculationAction(event).catch(function (error) { accShowStatus(error.message, 'error'); }); });
         panel.addEventListener('change', accHandleCalculationIncludeChange);
+        panel.addEventListener('change', accHandlePresentationChange);
         panel.addEventListener('click', function (event) { accHandleFinancialOutlineAction(event).catch(function (error) { accShowStatus(error.message, 'error'); }); });
         panel.addEventListener('dragstart', accHandleFinancialDragStart);
         panel.addEventListener('dragover', accHandleFinancialDragOver);

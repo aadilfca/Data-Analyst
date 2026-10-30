@@ -25,6 +25,7 @@ from services.reconciliation_export_jobs import export_jobs, ExportJobError
 
 from database import execute_query_pg, execute_write_pg, log_audit, pg_transaction, run_read_snapshot_pg
 from routers.auth import require_admin
+from services.financial_statement_balances import build_balance_sheet, BalanceSheetInputError
 from services.ledger_group_summary import LedgerBalanceError, build_cashflow_summary, build_cross_group_check, build_financial_statement_summary, build_group_summary, normalize_cashflow_grouping
 from services.ledger_report_source import (
     CASHFLOW_CHILD_DETAILS_VERSION,
@@ -2917,6 +2918,80 @@ def save_cashflow_source(
     )
     log_audit("Admin", "Update", "Cashflows", f"Selected source for client {payload.client_id}")
     return _cashflow_configuration(payload.client_id)
+
+
+@router.get("/api/reconciliation/financial-statements/balance-sheet")
+def balance_sheet_report(
+    client_id: int = Query(..., ge=1),
+    trial_balance_upload_id: int = Query(..., ge=1),
+    session=Depends(require_admin),
+):
+    """Compute one selected ERP TB and its current ACC configuration in one snapshot."""
+    def read(_connection):
+        _require_active_client(client_id)
+        uploads = execute_query_pg(
+            """SELECT id, client_id, file_name, as_of_date, period_start, period_end,
+                      uploaded_at, validation_controls
+               FROM trial_balance_uploads
+               WHERE id = %s AND client_id = %s AND status = 'parsed'""",
+            (trial_balance_upload_id, client_id),
+        )
+        if not uploads:
+            raise HTTPException(404, "Selected Trial Balance is unavailable for this client; select an available upload")
+        upload = dict(uploads[0])
+        controls = upload.pop("validation_controls", None) or {}
+        if isinstance(controls, str):
+            try:
+                controls = json.loads(controls)
+            except (ValueError, TypeError):
+                raise HTTPException(409, "Trial Balance validation controls cannot be read; review the source") from None
+        if not isinstance(controls, dict):
+            raise HTTPException(409, "Trial Balance validation controls cannot be read; review the source")
+        accounts = execute_query_pg(
+            """SELECT account_code, classification, manually_overridden,
+                      opening_dr, opening_cr, period_dr, period_cr, closing_dr, closing_cr
+               FROM trial_balance_accounts WHERE upload_id = %s ORDER BY sort_order, id""",
+            (trial_balance_upload_id,),
+        )
+        assignments = execute_query_pg(
+            "SELECT account_code, financial_statement_category_id FROM account_control_assignments WHERE client_id = %s",
+            (client_id,),
+        )
+        categories = execute_query_pg(
+            """SELECT id, label, statement_section, row_type, parent_category_id,
+                      presentation_role, sort_order, is_active
+               FROM account_control_categories
+               WHERE client_id = %s AND category_type = 'financial_statement'
+               ORDER BY sort_order, LOWER(label), category_key""",
+            (client_id,),
+        )
+        calculations = execute_query_pg(
+            """SELECT id, label, statement_section, calculation_type, parent_heading_id, sort_order
+               FROM account_control_statement_calculations
+               WHERE client_id = %s AND statement_section = 'balance_sheet'
+               ORDER BY calculation_type, sort_order, id""",
+            (client_id,),
+        )
+        components = execute_query_pg(
+            """SELECT component.calculation_id, component.source_category_id,
+                      component.source_calculation_id, component.operator, component.sort_order
+               FROM account_control_statement_calculation_components component
+               JOIN account_control_statement_calculations calculation ON calculation.id = component.calculation_id
+               WHERE calculation.client_id = %s AND calculation.statement_section = 'balance_sheet'
+               ORDER BY component.calculation_id, component.sort_order, component.id""",
+            (client_id,),
+        )
+        adjustment_counts = execute_query_pg(
+            "SELECT COUNT(*) AS count FROM trial_balance_rollforward_adjustments WHERE upload_id = %s",
+            (trial_balance_upload_id,),
+        )
+        try:
+            result = build_balance_sheet(accounts, assignments, categories, calculations, components,
+                                         controls, int(adjustment_counts[0]["count"]) if adjustment_counts else 0)
+        except BalanceSheetInputError as error:
+            raise HTTPException(409, str(error)) from error
+        return {"client_id": client_id, "upload": upload, **result}
+    return run_read_snapshot_pg(read)
 
 
 @router.get("/api/reconciliation/financial-statements/preview")

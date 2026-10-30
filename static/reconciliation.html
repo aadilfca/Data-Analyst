@@ -20,7 +20,8 @@
         #balanceSheetStatus { margin: 0; padding: 20px 0; color: #64748b; font-size: 13px; }
         #balanceSheetStatus[hidden], #balanceSheetTable[hidden], #balanceSheetReload[hidden] { display: none; }
         #balanceSheetStatus.is-error { color: #b91c1c; }
-        #balanceSheetTable { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; font-size: 14px; }
+        #balanceSheetView .balance-sheet-table-wrap { max-width: 100%; overflow-x: auto; }
+        #balanceSheetTable { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: auto; font-size: 14px; }
         #balanceSheetTable th, #balanceSheetTable td { padding: 12px 16px; overflow-wrap: anywhere; }
         #balanceSheetTable thead th { color: #64748b; font-weight: 500; text-align: left; border-bottom: 1px solid #dbe4ea; }
         #balanceSheetTable .balance-sheet-amount { width: 24%; text-align: right; }
@@ -38,6 +39,13 @@
             #balanceSheetTable .bs-category th { padding-left: 20px; }
             #balanceSheetTable .balance-sheet-amount { width: 28%; }
         }
+        #balanceSheetView .balance-sheet-source { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 16px; color: #536577; font-size: 13px; }
+        #balanceSheetUpload { flex: 1; min-width: 180px; max-width: 650px; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; font: inherit; }
+        #balanceSheetDiagnostics { margin: 12px 0; padding: 12px 12px 12px 30px; border: 1px solid #e8c878; border-radius: 7px; background: #fff8e7; color: #5f4a18; font-size: 12px; line-height: 1.6; }
+        #balanceSheetDiagnostics[hidden] { display: none; }
+        #balanceSheetDate { margin-top: 5px; }
+        #balanceSheetView .balance-sheet-amount { font-variant-numeric: tabular-nums; white-space: nowrap; }
+        #balanceSheetTable .balance-sheet-amount { text-align: right; }
         /* Scope this compact toolbar/picker to Cashflows, without changing shared pages. */
         #cashflowsSummaryControlsPanel .cashflows-filter-bar { display: flex; flex-wrap: wrap; gap: 8px; }
         #cashflowsSummaryControlsPanel .cashflows-report-scope { flex: 1 1 auto; min-width: 0; gap: 9px; }
@@ -218,8 +226,8 @@
                     <div id='financialStatementsCard' class='module-card' data-report-key='financial-statements' role='button' tabindex='0' aria-label='Open Financial Statements'>
                         <div class='module-icon' aria-hidden='true'>FS</div>
                         <h3>Financial Statements</h3>
-                        <p>View the Balance Sheet outline.</p>
-                        <span class='module-status'>UI preview</span>
+                        <p>Prepare the current-period Balance Sheet.</p>
+                        <span class='module-status'>Draft accounts</span>
                     </div>
                 </div>
             </section>
@@ -245,16 +253,18 @@
             <header class='balance-sheet-toolbar'><h2 id='financialStatementsHeading' tabindex='-1'>Financial Statements</h2><button type='button' id='financialStatementsBack' class='cashflows-secondary'>Reports</button></header>
             <div class='module-grid'>
                 <div id='balanceSheetCard' class='module-card' data-report-key='balance-sheet' role='button' tabindex='0' aria-label='Open Balance Sheet'>
-                    <div class='module-icon' aria-hidden='true'>BS</div><h3>Balance Sheet</h3><p>Headings, categories, subtotals and totals from Account Control Centre.</p><span class='module-status'>UI preview</span>
+                    <div class='module-icon' aria-hidden='true'>BS</div><h3>Balance Sheet</h3><p>ERP closing balances linked through Account Control Centre.</p><span class='module-status'>Draft accounts</span>
                 </div>
             </div>
         </section>
         <section id='balanceSheetView' aria-labelledby='balanceSheetHeading' hidden>
-            <header class='balance-sheet-toolbar'><h2 id='balanceSheetHeading' tabindex='-1'>Balance Sheet</h2><div class='balance-sheet-actions'><button type='button' id='balanceSheetReload' class='cashflows-secondary'>Reload outline</button><button type='button' id='balanceSheetBack' class='cashflows-secondary'>Financial Statements</button></div></header>
+            <header class='balance-sheet-toolbar'><h2 id='balanceSheetHeading' tabindex='-1'>Balance Sheet</h2><div class='balance-sheet-actions'><button type='button' id='balanceSheetReload' class='cashflows-secondary'>Reload Balance Sheet</button><button type='button' id='balanceSheetBack' class='cashflows-secondary'>Financial Statements</button></div></header>
+            <div class='balance-sheet-source'><label for='balanceSheetUpload'>Trial Balance</label><select id='balanceSheetUpload'><option value=''>Select a Trial Balance</option></select></div>
             <article class='balance-sheet-paper'>
-                <header class='balance-sheet-caption'><h3 id='balanceSheetClient'></h3><p>Layout preview · Amounts will be added in a later phase.</p></header>
+                <header class='balance-sheet-caption'><h3 id='balanceSheetClient'></h3><p>Draft — before audit adjustments</p><p id='balanceSheetDate'></p><p>Amounts rounded to whole units; hover to see exact values.</p></header>
+                <ul id='balanceSheetDiagnostics' aria-label='Balance Sheet review items' hidden></ul>
                 <p id='balanceSheetStatus' role='status' aria-live='polite'></p>
-                <table id='balanceSheetTable' aria-label='Balance Sheet outline with blank current-period amounts' hidden><thead><tr><th scope='col'>Particulars</th><th scope='col' class='balance-sheet-amount'>Current period</th></tr></thead><tbody id='balanceSheetRows'></tbody></table>
+                <div class='balance-sheet-table-wrap'><table id='balanceSheetTable' aria-label='Draft Balance Sheet before audit adjustments' hidden><thead><tr><th scope='col'>Particulars</th><th scope='col' class='balance-sheet-amount'>Current period</th></tr></thead><tbody id='balanceSheetRows'></tbody></table></div>
             </article>
         </section>
         <section id='cashflowsView' class='cashflows-report' aria-label='Cashflows report' hidden>
@@ -515,6 +525,6 @@
     </section>
     <script src='/static/client_context.js?v=22'></script>
     <script src='/static/loading_ui.js?v=ce6d21ca20c8'></script>
-    <script src='/static/reconciliation.js?v=59'></script>
+    <script src='/static/reconciliation.js?v=60'></script>
 </body>
 </html>
