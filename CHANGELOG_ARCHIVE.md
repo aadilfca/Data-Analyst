@@ -1,5 +1,9 @@
 # Changelog Archive
 
+## Trial Balance account-flow safety checks — 2026-10-30
+
+Added `tests/test_trial_balance_account_flow_safety.py` with synthetic records and mocked database reads. It verifies Trial Balance amount retention versus ACC's metadata-only response, ACC upload/client scope, Financial Statement category transfer and unmapped-review behavior, and Verification's latest-Trial-Balance-first category resolution. Follow-up checks confirm code corrections carry mappings forward but reject conflicting destination assignments (409). No application source or live data was changed. The initial focused Trial Balance, ACC, report, and hermetic Playwright suites passed: 252 passed, 1 skipped, and 9 subtests; the follow-up scope passed 105 tests and 9 subtests. Pytest emitted Starlette/httpx deprecation and cache-directory warnings. `File_map.md` is 158 lines (over its 150-line guard); its existing test row was updated without adding a row, and a later map compression review is advisable.
+
 ## Trial Balance observations persist until revalidation — 2026-10-29
 
 Stored the last completed validation's row messages separately from the current pass/fail result. Account Code and Classification edits can now invalidate Save while preserving the visible observations and navigator targets; successful revalidation replaces both snapshots, while source/mapping changes clear them. JavaScript syntax and whitespace checks pass; local UI acceptance is pending.
@@ -8770,6 +8774,7 @@ Record phase decisions, implementation, verification, and acceptance here as the
 - Horizontal/vertical differences are advisory and save separately. Draft totals include these entries without altering ERP totals; global differences remain unassigned until traced.
 - Assign each account to a client-scoped Balance Sheet or Income Statement category. Headings organize categories. Subtotals combine direct categories under a heading with signed treatment; totals combine categories, subtotals, or earlier totals, with overlapping sources blocked.
 - The current Financial Statement preview aggregates ledger movements by category and month. Full statement production and closing logic are not implemented.
+- Safety reference: `tests/test_trial_balance_account_flow_safety.py` is the maintained regression checkpoint for Trial Balance-to-ACC-to-Financial Statement links; extend it as statement building progresses.
 
 ### Account Control Centre setup shell - 2026-10-26
 

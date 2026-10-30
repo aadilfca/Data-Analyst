@@ -53,7 +53,7 @@ One line per file group: what it is now. Full build history for every entry live
 - services/reconciliation_balance_source.py → Independent balances, scoped voucher completeness, adjustment membership, posting comparisons and coverage controls. See CHANGELOG_ARCHIVE.md.
 - services/upload_lifecycle.py + drive_archive.py + upload_observation_report.py → Scope proofs, complete-voucher Excel evidence, verified external archives and compact receipts. See CHANGELOG_ARCHIVE.md.
 - routers/database_backup.py + services/database_backup.py + static/setup.* + scripts/rehearse_database_backup.py → Local backups, resumable Drive verification, processing feedback and isolated recovery rehearsals. See CHANGELOG_ARCHIVE.md.
-- tests/test_account_control_center*.py, test_trial_balance_ui.py, test_cashflows*.py, test_reconciliation*.py → Setup, accounting, import mapping, API/UI parity, and workbook evidence/export checks. See CHANGELOG_ARCHIVE.md.
+- tests/test_account_control_center*.py, test_trial_balance_account_flow_safety.py, test_trial_balance_ui.py, test_cashflows*.py, test_reconciliation*.py → Setup, accounting, account-flow safety, API/UI parity, and workbook evidence/export checks. See CHANGELOG_ARCHIVE.md.
 - tests/test_upload_lifecycle.py + test_data_deletion.py + test_import_duplicate_gates.py → Upload/archive lifecycle, rollback, retry, deletion and identity regression tests.
 - experiments/cashflow_fetch/*.py + tests/test_cashflow_fetch_benchmark.py → Standalone read-only transport benchmarks with exact source/report/export comparisons; never loaded by the app. See CHANGELOG_ARCHIVE.md.
 
@@ -257,6 +257,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-10-30: Added isolated Trial Balance-to-ACC, Verification, and Financial Statement data-flow safety tests; application source remains unchanged. See CHANGELOG_ARCHIVE.md.
 - 2026-10-30: ACC loads upload options first and opens account details on each tab's Load action. See CHANGELOG_ARCHIVE.md.
 - 2026-10-30: ACC indexes Trial Balance hierarchy once per load, reducing repeated assignment scans while preserving account and filter results. See CHANGELOG_ARCHIVE.md.
 - 2026-10-30: ACC adds opt-in database timings and batches statement-calculation reads to remove per-calculation SQL queries. See CHANGELOG_ARCHIVE.md.
