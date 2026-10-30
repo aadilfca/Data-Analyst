@@ -587,7 +587,12 @@ function renderTrialBalanceValidationGrid() {
                     display.dataset.sourceCode = sourceValue;
                     cell.appendChild(display);
                 } else {
-                    cell.textContent = sourceValue;
+                    if (column.className.includes('tb-validation-amount')) {
+                        cell.textContent = sourceValue === '' ? '' : formatTrialBalanceControlAmount(sourceValue, 0);
+                        cell.title = 'Unrounded amount: ' + sourceValue;
+                    } else {
+                        cell.textContent = sourceValue;
+                    }
                 }
             } else if (column.kind === 'classification') {
                 if (isExcludedSubtotal) {
@@ -630,10 +635,15 @@ function renderTrialBalanceValidationGrid() {
                     let value = '';
                     if (role === 'account_code_column') value = difference.account_code || '';
                     else if (role === 'account_name_column') value = 'Difference — ' + (difference.account_name || difference.account_code || 'Leaf account');
-                    else if (role && role.endsWith('_column')) value = Number(difference[role.replace('_column', '_adjustment')] || 0) || '';
+                    else if (role && role.endsWith('_column')) {
+                        const amount = difference[role.replace('_column', '_adjustment')] ?? 0;
+                        value = Number(amount) === 0 ? '' : amount;
+                    }
                     if (role && /_(dr|cr)_column$/.test(role)) {
                         cell.classList.add('tb-validation-amount');
-                        cell.textContent = value === '' ? '' : (typeof window.formatAmount === 'function' ? window.formatAmount(value) : String(value));
+                        const rounded = formatTrialBalanceControlAmount(value, 0);
+                        cell.textContent = value === '' ? '' : rounded === '0' ? '<1' : rounded;
+                        if (value !== '') cell.title = 'Unrounded adjustment: ' + value;
                     } else {
                         cell.textContent = String(value);
                     }
@@ -650,6 +660,7 @@ function renderTrialBalanceValidationGrid() {
         });
     }
     renderTrialBalanceControlFooter(columns, mappingRoleByIndex);
+    fitTrialBalanceValidationAmountColumns(columns);
     updateCriticalIssueNavigator();
 }
 
@@ -2018,26 +2029,64 @@ function totalRowChoiceChanged() {
 if (tbTotalExcelRow) tbTotalExcelRow.addEventListener('input', totalRowChoiceChanged);
 if (tbNoTotalRow) tbNoTotalRow.addEventListener('change', totalRowChoiceChanged);
 
-// Control figures retain their exact source strings; only presentation rounds to cents.
-// Integer arithmetic avoids losing cents for large totals or scientific notation.
-function formatTrialBalanceControlAmount(value) {
+// Source strings stay exact. Validation uses whole numbers; saved controls retain
+// their existing cents display. Round once with integer arithmetic at either scale.
+function formatTrialBalanceControlAmount(value, decimalPlaces = 2) {
     const text = String(value ?? '').replaceAll(',', '').trim();
     const match = /^([+-]?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(text);
     if (!match) return text || '-';
     const fraction = match[3] || '';
     const digits = match[2] + fraction;
-    const scale = 2 + Number(match[4] || 0) - fraction.length;
-    let cents;
+    const scale = decimalPlaces + Number(match[4] || 0) - fraction.length;
+    let units;
     if (scale >= 0) {
-        cents = BigInt(digits) * (10n ** BigInt(scale));
+        units = BigInt(digits) * (10n ** BigInt(scale));
     } else {
         const cut = digits.length + scale;
-        cents = BigInt(cut > 0 ? digits.slice(0, cut) : '0');
-        if (cut >= 0 && digits[cut] >= '5') cents += 1n;
+        units = BigInt(cut > 0 ? digits.slice(0, cut) : '0');
+        if (cut >= 0 && digits[cut] >= '5') units += 1n;
     }
-    const rounded = cents.toString().padStart(3, '0');
-    const whole = rounded.slice(0, -2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-    return (match[1] === '-' && cents !== 0n ? '-' : '') + whole + '.' + rounded.slice(-2);
+    const rounded = units.toString().padStart(decimalPlaces + 1, '0');
+    const whole = (decimalPlaces ? rounded.slice(0, -decimalPlaces) : rounded).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return (match[1] === '-' && units !== 0n ? '-' : '') + whole + (decimalPlaces ? '.' + rounded.slice(-decimalPlaces) : '');
+}
+
+// Measure all displayed amounts, including bold footing totals, once per render.
+// Identical colgroups keep the separate sticky heading and body aligned. The
+// issues column takes spare screen space; amount columns stay compact and equal.
+function fitTrialBalanceValidationAmountColumns(columns) {
+    const table = tbValidationBody.closest('.tb-validation-table');
+    if (!table) return;
+    const cells = tbValidationBody.querySelectorAll('td.tb-validation-amount');
+    const context = document.createElement('canvas').getContext('2d');
+    let amountWidth = 104;
+    if (context && cells.length) {
+        const style = getComputedStyle(cells[0]);
+        context.font = '700 ' + style.fontSize + ' ' + style.fontFamily;
+        new Set(Array.from(cells, cell => cell.textContent)).forEach(function (text) {
+            amountWidth = Math.max(amountWidth, Math.ceil(context.measureText(text).width) + 24);
+        });
+    }
+    const widths = {row: 58, classification: 110, issues: 280};
+    const columnWidths = columns.map(function (column) {
+        if (column.className.includes('tb-validation-amount')) return amountWidth;
+        if (column.className.includes('tb-validation-account-code')) return 145;
+        if (column.className.includes('tb-validation-account-name')) return 220;
+        return widths[column.kind];
+    });
+    [table, tbValidationStickyHead && tbValidationStickyHead.querySelector('table')].filter(Boolean).forEach(function (target) {
+        const group = document.createElement('colgroup');
+        columns.forEach(function (column, index) {
+            const col = document.createElement('col');
+            if (column.kind !== 'issues') col.style.width = columnWidths[index] + 'px';
+            group.appendChild(col);
+        });
+        const existing = target.querySelector('colgroup');
+        if (existing) existing.remove();
+        target.prepend(group);
+        target.style.minWidth = columnWidths.reduce((total, width) => total + width, 0) + 'px';
+    });
+    syncTrialBalanceStickyHeader();
 }
 function renderTrialBalanceControlFooter(columns, mappingRoleByIndex) {
     const result = validationResult;
@@ -2090,11 +2139,12 @@ function renderTrialBalanceControlFooter(columns, mappingRoleByIndex) {
                         const withinTolerance = typeof entry.within_tolerance === 'boolean'
                             ? entry.within_tolerance
                             : Math.abs(Number(entry.difference)) <= Number(result.tolerance ?? 0.01);
-                        cell.textContent = withinTolerance ? '0.00' : formatTrialBalanceControlAmount(value);
+                        const rounded = formatTrialBalanceControlAmount(value, 0);
+                        cell.textContent = withinTolerance ? '0' : rounded === '0' ? '<1' : rounded;
                         cell.classList.add(withinTolerance ? 'tb-footing-zero' : 'tb-footing-nonzero');
                         cell.title = 'Unrounded difference: ' + String(value) + '; tolerance: ' + String(result.tolerance ?? 0.01);
                     } else {
-                        cell.textContent = formatTrialBalanceControlAmount(value);
+                        cell.textContent = formatTrialBalanceControlAmount(value, 0);
                     }
                 }
             } else if (column.kind === 'classification') {
@@ -2118,6 +2168,7 @@ function renderTrialBalanceControlFooter(columns, mappingRoleByIndex) {
 function renderDraftReconciliation(body, columns, mappingRoleByIndex, controls, includeOriginal = false) {
     if (!Object.prototype.hasOwnProperty.call(controls, 'draft_reconciliation')) return;
     const summary = controls.stale ? null : controls.draft_reconciliation;
+    const decimalPlaces = body === tbValidationBody ? 0 : 2;
     function section(label, className) {
         const row = document.createElement('tr');
         row.className = className;
@@ -2147,7 +2198,10 @@ function renderDraftReconciliation(body, columns, mappingRoleByIndex, controls, 
                     // user's mapped source columns are arranged in a different order.
                     if (role.endsWith('_dr_column')) {
                         const pair = summary && summary.pair_differences[role.split('_')[0]];
-                        cell.textContent = !pair ? 'Pending' : pair.within_tolerance ? '0.00' : formatTrialBalanceControlAmount(pair.difference);
+                        const rounded = pair && formatTrialBalanceControlAmount(pair.difference, decimalPlaces);
+                        cell.textContent = !pair ? 'Pending' : pair.within_tolerance
+                            ? formatTrialBalanceControlAmount(0, decimalPlaces)
+                            : decimalPlaces === 0 && rounded === '0' ? '<1' : rounded;
                         if (pair) {
                             cell.classList.add(pair.within_tolerance ? 'tb-footing-zero' : 'tb-footing-nonzero');
                             cell.title = 'Unrounded debit minus credit: ' + pair.difference;
@@ -2155,7 +2209,7 @@ function renderDraftReconciliation(body, columns, mappingRoleByIndex, controls, 
                     }
                 } else {
                     const value = summary && summary[definition.key][role];
-                    cell.textContent = summary ? formatTrialBalanceControlAmount(value) : 'Pending';
+                    cell.textContent = summary ? formatTrialBalanceControlAmount(value, decimalPlaces) : 'Pending';
                     if (summary) cell.title = 'Unrounded amount: ' + value;
                 }
             } else if (column.kind === 'classification') {

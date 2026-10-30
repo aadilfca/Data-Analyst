@@ -625,13 +625,8 @@
         }
 
         .tb-validation-table-wrap { width: 100%; min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; }
-        .tb-validation-table { width: 100%; min-width: 1800px; table-layout: fixed; border-collapse: collapse; font-size: 11px; }
-        .tb-validation-table .tb-validation-row-number { width: 58px; }
-        .tb-validation-table .tb-validation-account-code { width: 145px; }
-        .tb-validation-table .tb-validation-account-name { width: 220px; }
-        .tb-validation-table .tb-validation-classification { width: 110px; }
-        .tb-validation-table .tb-validation-amount { width: 160px; }
-        .tb-validation-table .tb-validation-issue-column { width: 280px; }
+        .tb-validation-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 11px; }
+        .tb-validation-table th, .tb-validation-table td { box-sizing: border-box; }
         .tb-validation-table th {
             position: sticky;
             top: 70px;
@@ -649,7 +644,9 @@
             overflow-wrap: anywhere;
             background: #fff;
         }
+        .tb-validation-table th.tb-validation-amount,
         .tb-validation-table td.tb-validation-amount { white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
+        .tb-validation-table th.tb-validation-amount { white-space: normal; }
         .tb-validation-table tr:nth-child(even) td { background: #fafcff; }
         .tb-validation-table .tb-validation-issue-cell { white-space: normal; min-width: 0; color: #b91c1c; }
         .tb-validation-issue-content > span { display: block; }
@@ -1080,7 +1077,7 @@
     <script src="/static/loading_ui.js?v=2"></script>
     <script src="/static/client_context.js?v=21"></script>
     <script src="/static/utils.js"></script>
-    <script src="/static/trial_balance.js?v=31"></script>
+    <script src="/static/trial_balance.js?v=32"></script>
 
 </body>
 

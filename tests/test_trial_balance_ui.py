@@ -96,10 +96,10 @@ def test_rollforward_differences_render_as_red_section_without_changing_source_r
             period_dr_column: 'Period Debit', period_cr_column: 'Period Credit',
             closing_dr_column: 'Closing Debit', closing_cr_column: 'Closing Credit'
         };
-        fileAllRows = [['A1', 'Cash', '100', '0', '20', '0', '110', '0']];
+        fileAllRows = [['A1', 'Cash', '100', '0', '20', '0', '1234567.49', '0']];
         validationResult = {rollforward_differences: [{
             excel_row: 2, account_code: 'A1', account_name: 'Cash',
-            closing_dr_adjustment: 10, closing_cr_adjustment: 0
+            closing_dr_adjustment: '2345650.5', closing_cr_adjustment: 0
         }]};
         validationIssueSnapshot = {errors: [], warnings: [{
             excel_row: 2, field: 'Roll-forward',
@@ -122,13 +122,13 @@ def test_rollforward_differences_render_as_red_section_without_changing_source_r
         };
     }""")
 
-    assert result["originalClosingDebit"] == "110"
+    assert result["originalClosingDebit"] == "1,234,567"
     assert result["differenceLabel"] == "Difference — Cash"
-    assert result["differenceClosingDebit"] == "10"
+    assert result["differenceClosingDebit"] == "2,345,651"
     assert "System-generated differences (1)" in result["validationSection"]
     assert "System-generated differences (1)" in result["savedSection"]
     assert result["savedLabel"] == "Difference — Cash"
-    assert result["savedDebit"] == "10"
+    assert result["savedDebit"] == "2345650.5"
 
     page.close()
 
@@ -270,16 +270,16 @@ def test_erp_control_footer_aligns_six_columns_and_keeps_original_leaf_totals(br
         renderTrialBalanceValidationGrid();
         return {matched,nonzero,pending,notApplicable:values('.tb-control-difference')};
     }""")
-    assert result['matched']['leaf'] == ['100.00', '100.00', '20.00', '20.00', '110.00', '110.00']
+    assert result['matched']['leaf'] == ['100', '100', '20', '20', '110', '110']
     assert result['matched']['erp'] == result['matched']['leaf']
-    assert result['matched']['difference'] == ['0.00'] * 6
+    assert result['matched']['difference'] == ['0'] * 6
     assert result['matched']['label'] == 'Client ERP total'
     assert 'tb-control-difference' in result['matched']['lastRow']
     assert result['matched']['banner'] == ''
     assert result['matched']['zeroCells'] == 6
     assert result['matched']['footerEditors'] == 0
     assert result['matched']['exact'] == '9,007,199,254,740,993.01'
-    assert result['nonzero'] == {'value': '0.00', 'red': 0}
+    assert result['nonzero'] == {'value': '0', 'red': 0}
     assert result['pending'] == ['Pending'] * 6
     assert result['notApplicable'] == ['N/A'] * 6
     page.close()
@@ -301,13 +301,16 @@ def test_control_rounding_and_difference_colours_follow_server_tolerance(browser
         const original=JSON.stringify(validationResult);
         renderTrialBalanceValidationGrid();
         return {amounts:['1234567890.1970003','9007199254740993.015','-1.005','9.995e2','-8.97E-8']
-                    .map(formatTrialBalanceControlAmount),
+                    .map(value=>formatTrialBalanceControlAmount(value)),
+            wholeAmounts:['2345650.49','2345650.50','1.499','-1.5','-0.004','9007199254740993.5','9.995e2']
+                    .map(value=>formatTrialBalanceControlAmount(value,0)),
             cells:Array.from(document.querySelectorAll('.tb-control-difference .tb-validation-amount'))
                 .map(cell=>({text:cell.textContent,red:cell.classList.contains('tb-footing-nonzero'),title:cell.title})),
             unchanged:JSON.stringify(validationResult)===original};
     }""")
     assert result['amounts']==['1,234,567,890.20','9,007,199,254,740,993.02','-1.01','999.50','0.00']
-    assert [cell['text'] for cell in result['cells']]==['0.00','0.00','0.00','0.00','0.02','0.01']
+    assert result['wholeAmounts']==['2,345,650','2,345,651','1','-2','0','9,007,199,254,740,994','1,000']
+    assert [cell['text'] for cell in result['cells']]==['0','0','0','0','<1','<1']
     assert [cell['red'] for cell in result['cells']]==[False,False,False,False,True,True]
     assert '0.0100000000000000000001' in result['cells'][-1]['title']
     assert result['unchanged']
@@ -315,32 +318,36 @@ def test_control_rounding_and_difference_colours_follow_server_tolerance(browser
 
 
 @pytest.mark.parametrize('width',[1920,1280,900])
-def test_control_totals_fit_and_scrolling_keeps_headers_aligned(browser,width):
+@pytest.mark.parametrize('total',['1526512467.1970003','9007199254740993.015'])
+def test_control_totals_fit_and_scrolling_keeps_headers_aligned(browser,width,total):
     import re
     html=(PROJECT_ROOT / 'static' / 'trial_balance.html').read_text(encoding='utf-8')
     page=browser.new_page(viewport={'width':width,'height':1080})
     page.set_content(re.sub(r'<script[\s\S]*?</script>','',html))
     page.add_style_tag(path=str(PROJECT_ROOT / 'static' / 'style.css'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
-    page.evaluate("""() => {
+    page.evaluate("""total => {
         fileHeaders=['Code','Name','OD','OC','PD','PC','CD','CC'];
         tbColumnMapping=Object.fromEntries(TB_MAPPING_FIELDS.map((field,index)=>[field.role,fileHeaders[index]]));
-        fileAllRows=[['A','Debit',1,0,0,0,1,0],['B','Credit',0,1,0,0,0,1],['','Total',1,1,0,0,1,1]];
+        fileAllRows=[['A','Debit','2345650.49',0,'-1000.5',0,1,0],['B','Credit',0,1,0,0,0,1],['','Total',1,1,0,0,1,1]];
+        window.formatAmount=()=> 'unrelated global format';
         autoClassificationByRow={'2':'leaf','3':'leaf'};
         const roles=['opening_dr_column','opening_cr_column','period_dr_column','period_cr_column','closing_dr_column','closing_cr_column'];
-        validationResult={source_total_rows:[4],source_leaf_totals:Object.fromEntries(roles.map(role=>[role,'9007199254740993.015'])),
+        validationResult={source_total_rows:[4],source_leaf_totals:Object.fromEntries(roles.map(role=>[role,total])),
             checks:[{key:'account_codes',status:'pass'}],source_total_comparison:
             ['Opening Dr','Opening Cr','Period Dr','Period Cr','Closing Dr','Closing Cr']
-            .map(field=>({field,source_total:'9007199254740993.015',difference:'-2.97E-7',within_tolerance:true})),
+            .map(field=>({field,source_total:total,difference:'-2.97E-7',within_tolerance:true})),
             draft_reconciliation:{adjustment_totals:Object.fromEntries(roles.map(role=>[role,'0'])),
-                adjusted_totals:Object.fromEntries(roles.map(role=>[role,'9007199254740993.015'])),
+                adjusted_totals:Object.fromEntries(roles.map(role=>[role,total])),
                 pair_differences:Object.fromEntries(['opening','period','closing'].map(period=>[period,{difference:'0',within_tolerance:true}]))}};
+        const original=JSON.stringify(fileAllRows);
         tbValidationSheet.hidden=false;tbValidationSheet.classList.add('active');renderTrialBalanceValidationGrid();
+        window.sourceUnchanged=JSON.stringify(fileAllRows)===original;
         tbValidationTableWrap.scrollLeft=250;
-    }""")
-    page.wait_for_function("document.querySelector('#tbValidationStickyHead table').style.transform.includes('-250px')")
+    }""",total)
+    page.wait_for_function("document.querySelector('#tbValidationStickyHead table').style.transform === `translateX(-${tbValidationTableWrap.scrollLeft}px)`")
     measurements=page.evaluate("""() => {
-        const cells=Array.from(document.querySelectorAll('.tb-control-leaf td, .tb-draft-total td'));
+        const cells=Array.from(document.querySelectorAll('#tbValidationBody tr[data-excel-row] td, .tb-control-total td, .tb-draft-total td'));
         const headers=Array.from(document.querySelectorAll('#tbValidationStickyHead th'));
         return cells.map((cell,i)=>{
             const range=document.createRange();range.selectNodeContents(cell);
@@ -353,6 +360,14 @@ def test_control_totals_fit_and_scrolling_keeps_headers_aligned(browser,width):
     }""")
     assert all(cell['aligned'] for cell in measurements)
     assert all(cell['fits'] and cell['right'] for cell in measurements if cell['amount'])
+    amount_widths=page.locator('#tbValidationBody tr[data-excel-row="2"] .tb-validation-amount').evaluate_all(
+        'cells=>cells.map(cell=>cell.getBoundingClientRect().width)')
+    assert len(amount_widths)==6 and max(amount_widths)-min(amount_widths)<1
+    if total.startswith('1526'):
+        assert max(amount_widths)<130  # Real client footings no longer reserve 160px per amount.
+    assert page.locator('#tbValidationBody tr[data-excel-row="2"] .tb-validation-amount').all_text_contents()[:3]==['2,345,650','0','-1,001']
+    assert page.locator('#tbValidationBody tr[data-excel-row="2"] .tb-validation-amount').first.get_attribute('title')=='Unrounded amount: 2345650.49'
+    assert page.evaluate('window.sourceUnchanged')
     page.close()
 
 
@@ -385,19 +400,24 @@ def test_draft_footer_preserves_erp_values_and_shows_balanced_totals_in_both_vie
             warning:document.querySelector('#tbValidationBody .tb-control-difference').nextElementSibling.textContent};
         renderAvailableAccountsTable([],[],validationResult);
         const saved=Array.from(document.querySelectorAll('#availableAccountsTableBody .tb-draft-adjusted_totals td')).slice(2,8).map(c=>c.textContent);
+        validationResult.draft_reconciliation.pair_differences.opening={difference:'-0.02',within_tolerance:false};
+        renderTrialBalanceValidationGrid();
+        const smallPair={text:values('#tbValidationBody .tb-draft-pairs')[0],
+            red:document.querySelector('#tbValidationBody .tb-draft-pairs .tb-footing-nonzero')?.title};
         validationResult.draft_reconciliation=null;
         renderTrialBalanceValidationGrid();
         const pending=values('#tbValidationBody .tb-draft-pairs');
         validationResult.erp_unbalanced=false;
         renderTrialBalanceValidationGrid();
-        return {original,saved,pending,warnings:document.querySelectorAll('#tbValidationBody .tb-erp-warning').length};
+        return {original,saved,smallPair,pending,warnings:document.querySelectorAll('#tbValidationBody .tb-erp-warning').length};
     }""")
-    assert result['original']['erp']==['0.00','0.00','100.00','120.00','90.00','120.00']
-    assert result['original']['adjustments']==['0.00','0.00','20.00','0.00','30.00','0.00']
-    assert result['original']['adjusted']==['0.00','0.00','120.00','120.00','120.00','120.00']
-    assert result['original']['pairs']==['0.00','','0.00','','0.00','']
+    assert result['original']['erp']==['0','0','100','120','90','120']
+    assert result['original']['adjustments']==['0','0','20','0','30','0']
+    assert result['original']['adjusted']==['0','0','120','120','120','120']
+    assert result['original']['pairs']==['0','','0','','0','']
     assert result['original']['warning']=='ERP imbalance: query pending.'
-    assert result['saved']==result['original']['adjusted']
+    assert result['saved']==['0.00','0.00','120.00','120.00','120.00','120.00']
+    assert result['smallPair']=={'text':'<1','red':'Unrounded debit minus credit: -0.02'}
     assert result['pending']==['Pending','','Pending','','Pending','']
     assert result['warnings']==0
     page.close()

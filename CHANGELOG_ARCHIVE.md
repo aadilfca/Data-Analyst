@@ -8967,3 +8967,12 @@ Opening/period counter-entries carry their effects into closing; accumulated tol
 **Verification:** 102 focused backend/browser tests and nine subtests pass, covering both adjustment layers, source checks, metadata persistence, legacy reads, stale/Pending states, reordered columns and synchronized layout. Balanced ACME and both supplied unbalanced ACME/BFW workbooks show zero adjusted pair differences in validation/saved displays at 1920/1280/900px; only the unbalanced ACME ERP footer shows the source warning. File hashes are unchanged. Python compilation/whitespace checks pass; the existing TestClient warning remains. No live upload/database writes.
 
 **Acceptance/Git:** Aadil confirmed positive local testing and authorized commit/push on 2026-10-30.
+
+
+### Trial Balance validation amount formatting - 2026-10-30
+
+**Implementation:** Validation source rows, separate differences and footings use comma grouping, right alignment and nearest-whole rounding (half away from zero). Exact source values remain on hover and in calculations/storage. Sub-unit failures show red `<1` rather than a misleading zero. Six equal amount columns fit the widest displayed amount, including bold totals; matching colgroups preserve sticky-heading alignment and horizontal scrolling. Saved-view formatting and source preview remain unchanged. Script version: 32; no backend/schema change.
+
+**Verification:** All 14 focused browser checks pass. Coverage includes source/adjustment/footer formatting, exact large values, rounding boundaries, server tolerance colours, sub-unit failures, original data preservation and equal-width/no-overlap layout at 1920/1280/900px. Realistic client footings fit 104px amount columns; unusually large totals expand all six equally. Browser screenshot visually reviewed; whitespace checks pass. No database/workbook writes or package installation.
+
+**Acceptance/Git:** Aadil accepted the phase and authorized commit/push on 2026-10-30.
