@@ -156,9 +156,106 @@ function syncTrialBalanceStickyHeader() {
     if (!tbValidationTableWrap || !tbValidationStickyHead) return;
     const stickyTable = tbValidationStickyHead.querySelector('.tb-validation-table');
     if (stickyTable) stickyTable.style.transform = `translateX(-${tbValidationTableWrap.scrollLeft}px)`;
+    updateTrialBalanceUniversalScrollbar();
+}
+
+function syncTrialBalanceUniversalScrollbar() {
+    if (!tbValidationTableWrap || tbValidationTableWrap.dataset.floatingScrollBound === 'true') return;
+    const scrollbar = document.createElement('div');
+    scrollbar.className = 'tb-validation-universal-scrollbar';
+    scrollbar.setAttribute('role', 'scrollbar');
+    scrollbar.setAttribute('tabindex', '0');
+    scrollbar.setAttribute('aria-orientation', 'horizontal');
+    scrollbar.setAttribute('aria-label', 'Trial Balance validation horizontal scroll');
+    scrollbar.setAttribute('aria-hidden', 'true');
+    const track = document.createElement('div');
+    track.className = 'tb-validation-universal-scrollbar-track';
+    const thumb = document.createElement('div');
+    thumb.className = 'tb-validation-universal-scrollbar-thumb';
+    track.appendChild(thumb);
+    scrollbar.appendChild(track);
+    document.body.appendChild(scrollbar);
+
+    const update = function () {
+        const table = tbValidationTableWrap.querySelector('.tb-validation-table');
+        const wrapperRect = tbValidationTableWrap.getBoundingClientRect();
+        const activeView = tbValidationSheet && !tbValidationSheet.hidden && tbValidationSheet.classList.contains('active');
+        const visible = activeView && wrapperRect.bottom > 72.5 && wrapperRect.top < window.innerHeight;
+        const overflowing = table && tbValidationTableWrap.scrollWidth > tbValidationTableWrap.clientWidth + 1;
+        const active = Boolean(visible && overflowing);
+        scrollbar.hidden = !active;
+        scrollbar.setAttribute('aria-hidden', active ? 'false' : 'true');
+        if (!active) return;
+        const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+        scrollbar.style.left = Math.max(12, Math.round(wrapperRect.left)) + 'px';
+        scrollbar.style.right = Math.max(12, Math.round(viewportWidth - wrapperRect.right)) + 'px';
+        const trackWidth = track.clientWidth;
+        const maxScroll = Math.max(0, tbValidationTableWrap.scrollWidth - tbValidationTableWrap.clientWidth);
+        const thumbWidth = Math.min(trackWidth, Math.max(48, Math.round(trackWidth * tbValidationTableWrap.clientWidth / tbValidationTableWrap.scrollWidth)));
+        const travel = Math.max(0, trackWidth - thumbWidth);
+        thumb.style.width = thumbWidth + 'px';
+        thumb.style.transform = 'translateX(' + Math.round(travel * (maxScroll ? tbValidationTableWrap.scrollLeft / maxScroll : 0)) + 'px)';
+        scrollbar.setAttribute('aria-valuemin', '0');
+        scrollbar.setAttribute('aria-valuemax', String(maxScroll));
+        scrollbar.setAttribute('aria-valuenow', String(Math.round(tbValidationTableWrap.scrollLeft)));
+    };
+    const scrollToTrackPoint = function (clientX) {
+        const trackRect = track.getBoundingClientRect();
+        const travel = Math.max(0, track.clientWidth - thumb.getBoundingClientRect().width);
+        const maxScroll = Math.max(0, tbValidationTableWrap.scrollWidth - tbValidationTableWrap.clientWidth);
+        if (!travel || !maxScroll) return;
+        const offset = clientX - trackRect.left - thumb.getBoundingClientRect().width / 2;
+        tbValidationTableWrap.scrollLeft = Math.max(0, Math.min(maxScroll, offset / travel * maxScroll));
+    };
+    let dragState = null;
+    thumb.addEventListener('pointerdown', function (event) {
+        dragState = {pointerId:event.pointerId, startX:event.clientX, startScroll:tbValidationTableWrap.scrollLeft};
+        thumb.classList.add('is-dragging');
+        thumb.setPointerCapture(event.pointerId);
+        event.preventDefault();
+    });
+    thumb.addEventListener('pointermove', function (event) {
+        if (!dragState || dragState.pointerId !== event.pointerId) return;
+        const travel = Math.max(0, track.clientWidth - thumb.getBoundingClientRect().width);
+        const maxScroll = Math.max(0, tbValidationTableWrap.scrollWidth - tbValidationTableWrap.clientWidth);
+        if (travel && maxScroll) tbValidationTableWrap.scrollLeft = Math.max(0, Math.min(maxScroll,
+            dragState.startScroll + (event.clientX - dragState.startX) * maxScroll / travel));
+    });
+    const endDrag = function (event) {
+        if (!dragState || dragState.pointerId !== event.pointerId) return;
+        dragState = null;
+        thumb.classList.remove('is-dragging');
+    };
+    thumb.addEventListener('pointerup', endDrag);
+    thumb.addEventListener('pointercancel', endDrag);
+    track.addEventListener('pointerdown', function (event) { if (event.target !== thumb) scrollToTrackPoint(event.clientX); });
+    scrollbar.addEventListener('keydown', function (event) {
+        const step = Math.max(48, Math.round(tbValidationTableWrap.clientWidth * .15));
+        let next = null;
+        if (event.key === 'Home') next = 0;
+        else if (event.key === 'End') next = tbValidationTableWrap.scrollWidth - tbValidationTableWrap.clientWidth;
+        else if (event.key === 'ArrowLeft' || event.key === 'PageUp') next = tbValidationTableWrap.scrollLeft - (event.key === 'PageUp' ? tbValidationTableWrap.clientWidth : step);
+        else if (event.key === 'ArrowRight' || event.key === 'PageDown') next = tbValidationTableWrap.scrollLeft + (event.key === 'PageDown' ? tbValidationTableWrap.clientWidth : step);
+        if (next === null) return;
+        event.preventDefault();
+        tbValidationTableWrap.scrollLeft = Math.max(0, Math.min(tbValidationTableWrap.scrollWidth - tbValidationTableWrap.clientWidth, next));
+    });
+    tbValidationTableWrap.addEventListener('scroll', update, {passive:true});
+    window.addEventListener('resize', update, {passive:true});
+    window.addEventListener('scroll', update, {passive:true});
+    tbValidationTableWrap.dataset.floatingScrollBound = 'true';
+    tbValidationTableWrap._updateFloatingScrollbar = update;
+    update();
+}
+
+function updateTrialBalanceUniversalScrollbar() {
+    if (tbValidationTableWrap && typeof tbValidationTableWrap._updateFloatingScrollbar === 'function') {
+        tbValidationTableWrap._updateFloatingScrollbar();
+    }
 }
 
 if (tbValidationTableWrap) {
+    syncTrialBalanceUniversalScrollbar();
     tbValidationTableWrap.addEventListener('scroll', syncTrialBalanceStickyHeader, { passive: true });
 }
 const deleteUploadBtn = getElement('deleteUploadBtn');
@@ -661,6 +758,7 @@ function renderTrialBalanceValidationGrid() {
     }
     renderTrialBalanceControlFooter(columns, mappingRoleByIndex);
     fitTrialBalanceValidationAmountColumns(columns);
+    updateTrialBalanceUniversalScrollbar();
     updateCriticalIssueNavigator();
 }
 

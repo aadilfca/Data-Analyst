@@ -8976,3 +8976,12 @@ Opening/period counter-entries carry their effects into closing; accumulated tol
 **Verification:** All 14 focused browser checks pass. Coverage includes source/adjustment/footer formatting, exact large values, rounding boundaries, server tolerance colours, sub-unit failures, original data preservation and equal-width/no-overlap layout at 1920/1280/900px. Realistic client footings fit 104px amount columns; unusually large totals expand all six equally. Browser screenshot visually reviewed; whitespace checks pass. No database/workbook writes or package installation.
 
 **Acceptance/Git:** Aadil accepted the phase and authorized commit/push on 2026-10-30.
+
+
+### Trial Balance floating validation scrollbar - 2026-10-30
+
+**Implementation:** Replaced the bottom-of-table native horizontal bar with a slim viewport-fixed scrollbar shown only when the active validation table is visible and overflows. Drag, track-click, Home/End, arrow/Page keys and existing trackpad scrolling update the table, sticky heading and accessible position values together. The native bar is visually hidden only on this table. Script version: 33; Cashflow files and data remain unchanged.
+
+**Verification:** All 15 Trial Balance browser tests pass. The new regression covers overflow visibility, hidden native bar, Home/End keys, track-click, thumb drag, aria position, sticky-heading sync and hiding/reappearing while scrolling vertically. No backend/schema change; Cashflow reference files were unchanged.
+
+**Acceptance/Git:** Aadil authorized commit/push on 2026-10-30.

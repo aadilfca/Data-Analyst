@@ -624,7 +624,15 @@
             flex: 1 1 100%;
         }
 
-        .tb-validation-table-wrap { width: 100%; min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; }
+        .tb-validation-table-wrap { width: 100%; min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+        .tb-validation-table-wrap::-webkit-scrollbar { display: none; }
+        .tb-validation-universal-scrollbar { position: fixed; bottom: 10px; z-index: 90; display: flex; align-items: center; height: 18px; padding: 4px 9px; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 9px; background: rgba(248, 251, 253, .96); box-shadow: 0 4px 14px rgba(15, 23, 42, .16); }
+        .tb-validation-universal-scrollbar[hidden] { display: none; }
+        .tb-validation-universal-scrollbar:focus-visible { outline: 2px solid #1769aa; outline-offset: 2px; }
+        .tb-validation-universal-scrollbar-track { position: relative; width: 100%; height: 6px; border-radius: 999px; background: #dbe4ea; cursor: pointer; }
+        .tb-validation-universal-scrollbar-thumb { position: absolute; top: 0; left: 0; width: 48px; height: 6px; min-width: 48px; border-radius: 999px; background: #64748b; cursor: grab; touch-action: none; }
+        .tb-validation-universal-scrollbar-thumb:hover, .tb-validation-universal-scrollbar-thumb.is-dragging { background: #334e60; }
+        .tb-validation-universal-scrollbar-thumb.is-dragging { cursor: grabbing; }
         .tb-validation-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 11px; }
         .tb-validation-table th, .tb-validation-table td { box-sizing: border-box; }
         .tb-validation-table th {
@@ -1077,7 +1085,7 @@
     <script src="/static/loading_ui.js?v=2"></script>
     <script src="/static/client_context.js?v=21"></script>
     <script src="/static/utils.js"></script>
-    <script src="/static/trial_balance.js?v=32"></script>
+    <script src="/static/trial_balance.js?v=33"></script>
 
 </body>
 

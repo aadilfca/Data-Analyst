@@ -421,3 +421,54 @@ def test_draft_footer_preserves_erp_values_and_shows_balanced_totals_in_both_vie
     assert result['pending']==['Pending','','Pending','','Pending','']
     assert result['warnings']==0
     page.close()
+
+
+def test_validation_floating_scrollbar_tracks_table_and_supports_pointer_keyboard(browser):
+    import re
+    html=(PROJECT_ROOT/'static'/'trial_balance.html').read_text(encoding='utf-8')
+    page=browser.new_page(viewport={'width':1000,'height':900})
+    page.set_content(re.sub(r'<script[\s\S]*?</script>','',html))
+    page.add_style_tag(path=str(PROJECT_ROOT/'static'/'style.css'))
+    page.add_script_tag(path=str(PROJECT_ROOT/'static'/'trial_balance.js'))
+    page.evaluate("""() => {
+        fileHeaders=['Code','Name','OD','OC','PD','PC','CD','CC'];
+        tbColumnMapping=Object.fromEntries(TB_MAPPING_FIELDS.map((field,index)=>[field.role,fileHeaders[index]]));
+        fileAllRows=[['A','Debit','123456789012345','0','0','0','123456789012345','0'],
+                     ['B','Credit','0','123456789012345','0','0','0','123456789012345']];
+        autoClassificationByRow={'2':'leaf','3':'leaf'};
+        validationResult={no_total_row:true,source_total_rows:[],checks:[{key:'account_codes',status:'pass'}],
+            draft_reconciliation:{adjustment_totals:{},adjusted_totals:{},pair_differences:{}}};
+        tbValidationSheet.hidden=false;tbValidationSheet.classList.add('active');
+        renderTrialBalanceValidationGrid();
+    }""")
+    bar=page.locator('.tb-validation-universal-scrollbar')
+    assert bar.is_visible()
+    assert page.locator('#tbValidationTableWrap').evaluate("el=>getComputedStyle(el).scrollbarWidth")=='none'
+
+    bar.focus()
+    bar.press('End')
+    page.wait_for_function("tbValidationTableWrap.scrollLeft > 0 && document.querySelector('.tb-validation-universal-scrollbar').getAttribute('aria-valuenow') === String(Math.round(tbValidationTableWrap.scrollLeft))")
+    assert page.locator('.tb-validation-universal-scrollbar').get_attribute('aria-valuenow')==page.locator('#tbValidationTableWrap').evaluate('el=>String(Math.round(el.scrollLeft))')
+    assert page.locator('#tbValidationStickyHead table').evaluate("el=>el.style.transform")==page.locator('#tbValidationTableWrap').evaluate("el=>`translateX(-${el.scrollLeft}px)`")
+
+    bar.press('Home')
+    page.wait_for_function("tbValidationTableWrap.scrollLeft === 0")
+    track=page.locator('.tb-validation-universal-scrollbar-track')
+    box=track.bounding_box()
+    page.mouse.click(box['x']+box['width']*.8,box['y']+box['height']/2)
+    page.wait_for_function("tbValidationTableWrap.scrollLeft > 0")
+    assert float(bar.get_attribute('aria-valuenow'))>0
+
+    thumb=page.locator('.tb-validation-universal-scrollbar-thumb')
+    thumb_box=thumb.bounding_box()
+    page.mouse.move(thumb_box['x']+thumb_box['width']/2,thumb_box['y']+3)
+    page.mouse.down()
+    page.mouse.move(box['x']+box['width']-8,thumb_box['y']+3,steps=4)
+    page.mouse.up()
+    page.wait_for_function("tbValidationTableWrap.scrollLeft >= tbValidationTableWrap.scrollWidth - tbValidationTableWrap.clientWidth - 2")
+
+    page.evaluate("() => { const spacer=document.createElement('div'); spacer.style.height='1400px'; document.body.appendChild(spacer); window.scrollTo(0,document.body.scrollHeight); }")
+    page.wait_for_function("document.querySelector('.tb-validation-universal-scrollbar').hidden")
+    page.evaluate('window.scrollTo(0,0)')
+    page.wait_for_function("!document.querySelector('.tb-validation-universal-scrollbar').hidden")
+    page.close()
