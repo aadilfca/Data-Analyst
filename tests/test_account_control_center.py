@@ -1439,6 +1439,9 @@ class TrialBalanceOrderedControlTests(unittest.TestCase):
             metadata_call = next(c for c in write.call_args_list if 'validation_controls = ' in c.args[0])
             controls = json.loads(metadata_call.args[1][2])
             self.assertTrue(controls['global_adjustments_automatic'])
+            self.assertTrue(controls['erp_unbalanced'])
+            self.assertEqual(controls['draft_reconciliation']['original_totals']['closing_cr_column'], '0')
+            self.assertEqual(controls['draft_reconciliation']['adjusted_totals']['closing_cr_column'], '100')
             self.assertEqual(controls['source_total_rows'], [3])
             self.assertEqual(controls['global_adjustments'][0]['closing_cr_adjustment'], '100')
 
@@ -1513,3 +1516,57 @@ class TrialBalanceOrderedControlTests(unittest.TestCase):
                 self.assertEqual(response.status_code,400,response.text)
                 self.assertFalse(response.json()['detail']['validation']['valid'])
                 write.assert_not_called()
+
+
+    def test_draft_reconciliation_counts_horizontal_and_vertical_entries_once(self):
+        rows=[['A','Debit',0,0,100,0,90,0],['B','Credit',0,0,0,120,0,120],
+              ['', 'Total',0,0,100,120,90,120]]
+        result=self.validate(rows,total_excel_row='4')
+        self.assertTrue(result['valid'])
+        self.assertTrue(result['erp_unbalanced'])
+        self.assertEqual(result['checks'][1]['status'],'pass')
+        self.assertTrue(all(Decimal(c['difference'])==0 for c in result['source_total_comparison']))
+        summary=result['draft_reconciliation']
+        self.assertEqual(summary['original_totals']['period_dr_column'],'100')
+        self.assertEqual(summary['adjustment_totals']['period_dr_column'],'20')
+        self.assertEqual(summary['adjustment_totals']['closing_dr_column'],'30')
+        self.assertEqual(summary['adjusted_totals']['period_dr_column'],'120')
+        self.assertEqual(summary['adjusted_totals']['closing_dr_column'],'120')
+        self.assertTrue(all(pair['within_tolerance'] for pair in summary['pair_differences'].values()))
+        rows[-1][4]=99
+        blocked=self.validate(rows,total_excel_row='4')
+        self.assertFalse(blocked['valid'])
+        self.assertIsNone(blocked['draft_reconciliation'])
+        no_erp=self.validate(rows[:2],no_total_row=True)
+        self.assertIsNone(no_erp['erp_unbalanced'])
+        self.assertTrue(no_erp['draft_reconciliation']['pair_differences']['closing']['within_tolerance'])
+
+    def test_legacy_saved_reconciliation_is_read_only_and_excludes_parent_totals(self):
+        leaf={'id':2,'account_code':'A-1','source_account_code':'A-1','account_name':'Leaf','level':2,
+              'classification':'leaf','manually_overridden':False,
+              'opening_dr':100,'opening_cr':0,'period_dr':20,'period_cr':0,'closing_dr':110,'closing_cr':0}
+        parent={**leaf,'id':1,'account_code':'A','source_account_code':'A','classification':'parent','opening_dr':999}
+        adjustments=[{'account_id':2,'account_code':'A-1','account_name':'Leaf','source_excel_row':3,
+                      'expected_closing_net':120,'original_closing_net':110,'difference_net':10,
+                      'closing_dr_adjustment':10,'closing_cr_adjustment':0}]
+        controls={'global_adjustments':[{'opening_cr_adjustment':'100','period_cr_adjustment':'20','closing_cr_adjustment':'120'}]}
+        with patch.object(trial_balance,'_require_upload',return_value=controls), \
+             patch.object(trial_balance,'execute_query_pg',side_effect=[[parent,leaf],adjustments]), \
+             patch.object(trial_balance,'execute_write_pg') as write:
+            result=trial_balance.list_trial_balance_accounts(1)
+        summary=result['validation_controls']['draft_reconciliation']
+        self.assertEqual(summary['original_totals']['opening_dr_column'],'100')
+        self.assertEqual(summary['adjusted_totals']['closing_dr_column'],'120')
+        self.assertEqual(summary['adjusted_totals']['closing_cr_column'],'120')
+        self.assertTrue(all(pair['within_tolerance'] for pair in summary['pair_differences'].values()))
+        write.assert_not_called()
+        with patch.object(trial_balance,'_require_upload',return_value={}), \
+             patch.object(trial_balance,'execute_query_pg',side_effect=[[],[]]):
+            empty=trial_balance.list_trial_balance_accounts(1)
+        self.assertIsNone(empty['validation_controls']['draft_reconciliation'])
+        controls['account_classifications']=[['Other','leaf']]
+        with patch.object(trial_balance,'_require_upload',return_value=controls), \
+             patch.object(trial_balance,'execute_query_pg',side_effect=[[parent,leaf],adjustments]):
+            stale=trial_balance.list_trial_balance_accounts(1)
+        self.assertTrue(stale['validation_controls']['stale'])
+        self.assertIsNone(stale['validation_controls']['draft_reconciliation'])

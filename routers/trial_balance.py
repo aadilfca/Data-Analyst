@@ -349,6 +349,30 @@ def _load_excluded_excel_rows(raw_value, row_count):
     return excluded
 
 
+def _build_draft_reconciliation(original, adjusted, tolerance=Decimal('0.01')):
+    """Summarize existing entries only; this never creates balancing adjustments."""
+    roles = [period + '_' + side + '_column'
+             for period in ('opening', 'period', 'closing') for side in ('dr', 'cr')]
+    return {
+        'original_totals': {role: str(original[role]) for role in roles},
+        'adjustment_totals': {role: str(adjusted[role] - original[role]) for role in roles},
+        'adjusted_totals': {role: str(adjusted[role]) for role in roles},
+        'pair_differences': {
+            period: {'difference': str(adjusted[period + '_dr_column'] - adjusted[period + '_cr_column']),
+                     'within_tolerance': abs(adjusted[period + '_dr_column'] - adjusted[period + '_cr_column']) <= tolerance}
+            for period in ('opening', 'period', 'closing')
+        },
+    }
+
+
+def _erp_totals_unbalanced(totals, tolerance=Decimal('0.01')):
+    """ERP pair balance is distinct from matching original import footings."""
+    if not totals:
+        return None
+    return any(abs(totals[period + '_dr_column'] - totals[period + '_cr_column']) > tolerance
+               for period in ('opening', 'period', 'closing'))
+
+
 def validate_trial_balance_contents(
     contents, filename, mapping, code_overrides=None, classification_overrides=None, excluded_excel_rows=None,
     total_excel_row=None, no_total_row=False
@@ -577,6 +601,8 @@ def validate_trial_balance_contents(
         'source_total_rows': sorted(control_row_numbers),
         'source_total_comparison': source_comparison,
         'source_leaf_totals': {key: str(value) for key, value in source_totals.items()},
+        'erp_unbalanced': _erp_totals_unbalanced(control_rows[0]['amounts'] if control_rows else None, tolerance),
+        'draft_reconciliation': _build_draft_reconciliation(source_totals, adjusted_totals, tolerance) if not errors else None,
         'global_adjustments': global_adjustments,
         'global_adjustments_automatic': bool(global_adjustments),
         'rollforward_differences': rollforward_differences,
@@ -1238,6 +1264,8 @@ def upload_trial_balance(
                     'checks': validation['checks'], 'global_adjustments': validation['global_adjustments'],
                     'account_classifications': validation['account_classifications'],
                     'global_adjustments_automatic': validation['global_adjustments_automatic'],
+                    'erp_unbalanced': validation['erp_unbalanced'],
+                    'draft_reconciliation': validation['draft_reconciliation'],
                 }), upload_id)
             )
         if conflicts:
@@ -1499,6 +1527,37 @@ def list_trial_balance_accounts(upload_id: int, is_leaf: Optional[bool] = None):
     current_classifications = sorted([r['account_code'], r['classification'] if r['manually_overridden'] else auto_classification[r['account_code']]] for r in rows)
     if controls.get('account_classifications') and current_classifications != controls['account_classifications']:
         controls['stale'] = True
+
+    if controls.get('stale'):
+        controls['draft_reconciliation'] = None
+    elif not controls.get('draft_reconciliation'):
+        # Older uploads have the original accounts and adjustment entries but no
+        # summary metadata. Reconstruct it read-only, including actual Leaves only.
+        roles = [period + '_' + side + '_column'
+                 for period in ('opening', 'period', 'closing') for side in ('dr', 'cr')]
+        leaf_rows = [row for row in rows if (
+            row['classification'] if row['manually_overridden'] else auto_classification[row['account_code']]) == 'leaf']
+        leaf_ids = {row['id'] for row in leaf_rows}
+        original = {role: sum((_parse_validation_amount(row[role.replace('_column', '')])
+                               for row in leaf_rows), Decimal('0')) for role in roles}
+        adjusted = dict(original)
+        for entry in adjustment_rows:
+            if entry['account_id'] in leaf_ids:
+                for side in ('dr', 'cr'):
+                    adjusted['closing_' + side + '_column'] += Decimal(str(entry['closing_' + side + '_adjustment']))
+        for entry in controls.get('global_adjustments', []):
+            for role in roles:
+                adjusted[role] += Decimal(str(entry.get(role.replace('_column', '_adjustment'), 0)))
+        controls['draft_reconciliation'] = _build_draft_reconciliation(original, adjusted) if leaf_rows else None
+    if 'erp_unbalanced' not in controls:
+        comparisons = controls.get('source_total_comparison', [])
+        labels = {period + '_' + side + '_column': label + ' ' + side.title()
+                  for period, label in (('opening', 'Opening'), ('period', 'Period'), ('closing', 'Closing'))
+                  for side in ('dr', 'cr')}
+        by_label = {entry['field']: Decimal(entry['source_total']) for entry in comparisons}
+        controls['erp_unbalanced'] = _erp_totals_unbalanced(
+            {role: by_label[label] for role, label in labels.items()}
+            if all(label in by_label for label in labels.values()) else None)
 
     adjustments = [
         {

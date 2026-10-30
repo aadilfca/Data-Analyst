@@ -388,7 +388,9 @@ async function runTrialBalanceValidation(options) {
             if (parentWarningCount) notes.push(`${parentWarningCount} non-blocking Parent account-code warning(s) are also shown.`);
             if (globalDifferenceCount) notes.push(`${globalDifferenceCount} global footing difference line(s) will be saved separately.`);
             const note = notes.length ? ` ⚠️ ${notes.join(' ')}` : '';
-            setValidationStatus(`✅ Trial Balance is ready to save. ${result.account_count} accounts checked; source amounts remain unchanged and row-level differences use leaf accounts with a 0.01 tolerance.${note}`, warningCount ? 'info' : 'success');
+            const readyText = rollforwardCount || globalDifferenceCount
+                ? 'Trial Balance is ready to save for draft accounts with unresolved differences.' : 'Trial Balance is ready to save.';
+            setValidationStatus(`✅ ${readyText} ${result.account_count} accounts checked; source amounts remain unchanged and row-level differences use leaf accounts with a 0.01 tolerance.${note}`, warningCount ? 'info' : 'success');
         } else {
             const globalIssues = (result.errors || []).filter(function (issue) { return issue.excel_row == null; })
                 .map(function (issue) { return issue.message; }).join(' ');
@@ -1697,7 +1699,7 @@ async function loadAvailableUploadAccounts(uploadId, target = availableUploadsDr
         }
 
         renderTrialBalanceControls(result.validation_controls || {}, 'tbSavedValidationControls');
-        renderAvailableAccountsTable(result.accounts, (result.adjustments || []).concat(result.global_adjustments || []));
+        renderAvailableAccountsTable(result.accounts, (result.adjustments || []).concat(result.global_adjustments || []), result.validation_controls || {});
         availableAccountsTableWrapper.style.display = 'block';
     } catch (error) {
         showStatus('❌ ' + error.message, 'error');
@@ -1708,7 +1710,7 @@ async function loadAvailableUploadAccounts(uploadId, target = availableUploadsDr
 
 // Account and amount rows -- codes remain editable in the selected upload; classification
 // still reuses the same Leaf/Parent badge as the Review Classifications screen.
-function renderAvailableAccountsTable(accounts, adjustments) {
+function renderAvailableAccountsTable(accounts, adjustments, controls = {}) {
     availableAccountsTableBody.innerHTML = '';
 
     const amountFields = ['opening_dr', 'opening_cr', 'period_dr', 'period_cr', 'closing_dr', 'closing_cr'];
@@ -1764,7 +1766,10 @@ function renderAvailableAccountsTable(accounts, adjustments) {
     });
 
     const savedAdjustments = Array.isArray(adjustments) ? adjustments : [];
-    if (!savedAdjustments.length) return;
+    if (!savedAdjustments.length) {
+        renderSavedDraftReconciliation(controls);
+        return;
+    }
     const sectionRow = document.createElement('tr');
     sectionRow.className = 'tb-difference-section';
     const sectionCell = document.createElement('td');
@@ -1795,6 +1800,7 @@ function renderAvailableAccountsTable(accounts, adjustments) {
         });
         availableAccountsTableBody.appendChild(tr);
     });
+    renderSavedDraftReconciliation(controls);
 }
 
 async function saveAvailableAccountCode(account, accountCode, triggerBtn) {
@@ -2056,7 +2062,7 @@ function renderTrialBalanceControlFooter(columns, mappingRoleByIndex) {
     section.appendChild(heading);
     tbValidationBody.appendChild(section);
     [
-        {label: 'App leaf total', kind: 'leaf'},
+        {label: 'Original leaf totals', kind: 'leaf'},
         {label: 'Client ERP total', kind: 'erp'},
         {label: 'Footing difference', kind: 'difference'}
     ].forEach(function (definition) {
@@ -2097,10 +2103,80 @@ function renderTrialBalanceControlFooter(columns, mappingRoleByIndex) {
                 if (definition.kind === 'leaf') cell.textContent = 'Original amounts before adjustments';
                 else if (result.no_total_row) cell.textContent = 'No ERP total row selected';
                 else if (definition.kind === 'difference') cell.textContent = comparison.length === 6
-                    ? 'App leaf total minus Client ERP total' : 'Complete account checks to compare totals';
+                    ? 'Original leaf totals minus Client ERP total' : 'Complete account checks to compare totals';
             }
             tr.appendChild(cell);
         });
         tbValidationBody.appendChild(tr);
     });
+    renderDraftReconciliation(tbValidationBody, columns, mappingRoleByIndex, result);
+
+}
+
+// Reuse one footer for validation and saved uploads. Its values are exact server
+// summaries of the retained source accounts and existing adjustment entries.
+function renderDraftReconciliation(body, columns, mappingRoleByIndex, controls, includeOriginal = false) {
+    if (!Object.prototype.hasOwnProperty.call(controls, 'draft_reconciliation')) return;
+    const summary = controls.stale ? null : controls.draft_reconciliation;
+    function section(label, className) {
+        const row = document.createElement('tr');
+        row.className = className;
+        const cell = document.createElement('td');
+        cell.colSpan = columns.length; cell.textContent = label;
+        row.appendChild(cell); body.appendChild(row);
+    }
+    if (controls.erp_unbalanced && !controls.stale) section('ERP imbalance: query pending.', 'tb-erp-warning');
+    section('Draft Trial Balance reconciliation', 'tb-draft-heading');
+    const definitions = includeOriginal ? [{label:'Original leaf totals', key:'original_totals'}] : [];
+    definitions.push({label:'Difference adjustments', key:'adjustment_totals'},
+                     {label:'Adjusted App totals', key:'adjusted_totals'},
+                     {label:'Debit-credit difference', key:'pairs'});
+    definitions.forEach(function (definition) {
+        const row = document.createElement('tr');
+        row.className = 'tb-draft-total tb-draft-' + definition.key;
+        columns.forEach(function (column) {
+            const cell = document.createElement('td');
+            cell.className = column.className || '';
+            const role = column.role || mappingRoleByIndex.get(column.index);
+            if (column.kind === 'source' && role === 'account_name_column') {
+                cell.textContent = definition.label;
+            } else if (column.kind === 'source' && /_(dr|cr)_column$/.test(role || '')) {
+                cell.classList.add(body === tbValidationBody ? 'tb-validation-amount' : 'tb-amount-cell');
+                if (definition.key === 'pairs') {
+                    // Show one result per pair in its debit column, even when the
+                    // user's mapped source columns are arranged in a different order.
+                    if (role.endsWith('_dr_column')) {
+                        const pair = summary && summary.pair_differences[role.split('_')[0]];
+                        cell.textContent = !pair ? 'Pending' : pair.within_tolerance ? '0.00' : formatTrialBalanceControlAmount(pair.difference);
+                        if (pair) {
+                            cell.classList.add(pair.within_tolerance ? 'tb-footing-zero' : 'tb-footing-nonzero');
+                            cell.title = 'Unrounded debit minus credit: ' + pair.difference;
+                        }
+                    }
+                } else {
+                    const value = summary && summary[definition.key][role];
+                    cell.textContent = summary ? formatTrialBalanceControlAmount(value) : 'Pending';
+                    if (summary) cell.title = 'Unrounded amount: ' + value;
+                }
+            } else if (column.kind === 'classification') {
+                cell.textContent = 'Control';
+            } else if (column.kind === 'issues') {
+                cell.textContent = !summary ? 'Revalidate the source data' : definition.key === 'pairs'
+                    ? 'Opening / Period / Closing: debit minus credit'
+                    : definition.key === 'adjusted_totals' ? 'Draft totals including separate differences' : 'Source figures retained';
+            }
+            row.appendChild(cell);
+        });
+        body.appendChild(row);
+    });
+}
+function renderSavedDraftReconciliation(controls) {
+    const columns = [
+        {kind:'source',role:'account_code_column'}, {kind:'source',role:'account_name_column'},
+        ...['opening','period','closing'].flatMap(function (period) {
+            return ['dr','cr'].map(function (side) { return {kind:'source',role:period+'_'+side+'_column',className:'tb-amount-cell'}; });
+        }),
+        {kind:'classification'}, {kind:'issues'}
+    ];
+    renderDraftReconciliation(availableAccountsTableBody, columns, new Map(), controls, true);
 }

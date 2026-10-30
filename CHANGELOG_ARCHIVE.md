@@ -8767,7 +8767,7 @@ Record phase decisions, implementation, verification, and acceptance here as the
 - Match Trial Balance hierarchy by dash-delimited segments; ignore leading zeros in numeric segments for matching only. Parent rows have recognized descendants; rows without descendants default to Leaf. Preserve the account code and editable Parent/Leaf correction. Skip ambiguous normalized matches.
 - Financial assignments and Trial Balance footing/roll-forward checks use Leaf rows only. Parent assignments cascade to descendant Leaves without counting Parent amounts.
 - Selected ERP totals compare original Leaf sums before adjustments; ERP mismatches and required Leaf code corrections block saving.
-- Horizontal/vertical differences are advisory and save as separate automatic entries. Global differences remain unassigned until traced.
+- Horizontal/vertical differences are advisory and save separately. Draft totals include these entries without altering ERP totals; global differences remain unassigned until traced.
 - Assign each account to a client-scoped Balance Sheet or Income Statement category. Headings organize categories. Subtotals combine direct categories under a heading with signed treatment; totals combine categories, subtotals, or earlier totals, with overlapping sources blocked.
 - The current Financial Statement preview aggregates ledger movements by category and month. Full statement production and closing logic are not implemented.
 
@@ -8958,3 +8958,12 @@ Opening/period counter-entries carry their effects into closing; accumulated tol
 **Verification:** All 99 focused backend/browser tests and nine subtests pass. Coverage includes automatic difference persistence, enabled saving, removed controls, recalculation, and retained ERP/code rejection before writes. BFW produces four horizontal and one vertical difference lines with zero blocking errors and an enabled Save button. Workbook hash is unchanged; no live upload/database writes. Python compilation and whitespace checks pass; the existing TestClient dependency warning remains.
 
 **Acceptance/Git:** Aadil accepted local testing and authorized combined commit/push with the precision/layout fix on 2026-10-29.
+
+
+### Trial Balance draft reconciliation footer - 2026-10-29
+
+**Implementation:** Validation and saved-upload tables show difference adjustment totals, adjusted App totals and three final debit-credit differences. Exact Decimal summaries persist in existing upload metadata; older uploads reconstruct them read-only from stored Leaves and actual adjustment entries. Stale or unavailable snapshots show Pending. The original ERP-to-Leaf comparison remains independent and blocking. An independently unbalanced ERP footer shows "ERP imbalance: query pending." after Footing difference. Original accounts, ERP figures, categories and separate difference entries remain intact. Readiness explicitly identifies draft accounts with unresolved differences. Script version: 31; no schema change.
+
+**Verification:** 102 focused backend/browser tests and nine subtests pass, covering both adjustment layers, source checks, metadata persistence, legacy reads, stale/Pending states, reordered columns and synchronized layout. Balanced ACME and both supplied unbalanced ACME/BFW workbooks show zero adjusted pair differences in validation/saved displays at 1920/1280/900px; only the unbalanced ACME ERP footer shows the source warning. File hashes are unchanged. Python compilation/whitespace checks pass; the existing TestClient warning remains. No live upload/database writes.
+
+**Acceptance/Git:** Aadil confirmed positive local testing and authorized commit/push on 2026-10-30.

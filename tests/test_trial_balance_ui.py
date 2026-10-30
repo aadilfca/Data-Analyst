@@ -331,23 +331,73 @@ def test_control_totals_fit_and_scrolling_keeps_headers_aligned(browser,width):
         validationResult={source_total_rows:[4],source_leaf_totals:Object.fromEntries(roles.map(role=>[role,'9007199254740993.015'])),
             checks:[{key:'account_codes',status:'pass'}],source_total_comparison:
             ['Opening Dr','Opening Cr','Period Dr','Period Cr','Closing Dr','Closing Cr']
-            .map(field=>({field,source_total:'9007199254740993.015',difference:'-2.97E-7',within_tolerance:true}))};
+            .map(field=>({field,source_total:'9007199254740993.015',difference:'-2.97E-7',within_tolerance:true})),
+            draft_reconciliation:{adjustment_totals:Object.fromEntries(roles.map(role=>[role,'0'])),
+                adjusted_totals:Object.fromEntries(roles.map(role=>[role,'9007199254740993.015'])),
+                pair_differences:Object.fromEntries(['opening','period','closing'].map(period=>[period,{difference:'0',within_tolerance:true}]))}};
         tbValidationSheet.hidden=false;tbValidationSheet.classList.add('active');renderTrialBalanceValidationGrid();
         tbValidationTableWrap.scrollLeft=250;
     }""")
     page.wait_for_function("document.querySelector('#tbValidationStickyHead table').style.transform.includes('-250px')")
     measurements=page.evaluate("""() => {
-        const cells=Array.from(document.querySelectorAll('.tb-control-leaf td'));
+        const cells=Array.from(document.querySelectorAll('.tb-control-leaf td, .tb-draft-total td'));
         const headers=Array.from(document.querySelectorAll('#tbValidationStickyHead th'));
         return cells.map((cell,i)=>{
             const range=document.createRange();range.selectNodeContents(cell);
             const style=getComputedStyle(cell);
             return {amount:cell.classList.contains('tb-validation-amount'),
                 fits:range.getBoundingClientRect().width<=cell.clientWidth-parseFloat(style.paddingLeft)-parseFloat(style.paddingRight)+1,
-                aligned:Math.abs(cell.getBoundingClientRect().left-headers[i].getBoundingClientRect().left)<1,
+                aligned:Math.abs(cell.getBoundingClientRect().left-headers[cell.cellIndex].getBoundingClientRect().left)<1,
                 right:style.textAlign==='right'};
         });
     }""")
     assert all(cell['aligned'] for cell in measurements)
     assert all(cell['fits'] and cell['right'] for cell in measurements if cell['amount'])
+    page.close()
+
+
+def test_draft_footer_preserves_erp_values_and_shows_balanced_totals_in_both_views(browser):
+    page=browser.new_page()
+    page.set_content('<table><thead id="tbValidationHead"></thead><tbody id="tbValidationBody"></tbody></table>'
+                     '<table><tbody id="availableAccountsTableBody"></tbody></table>')
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
+    result=page.evaluate("""() => {
+        fileHeaders=['Name','CC','Code','PD','OD','CD','OC','PC'];
+        tbColumnMapping={account_code_column:'Code',account_name_column:'Name',opening_dr_column:'OD',opening_cr_column:'OC',
+            period_dr_column:'PD',period_cr_column:'PC',closing_dr_column:'CD',closing_cr_column:'CC'};
+        fileAllRows=[['Debit',0,'A',100,0,90,0,0],['Credit',120,'B',0,0,0,0,120],['Total',120,'',100,0,90,0,120]];
+        const roles=['opening_dr_column','opening_cr_column','period_dr_column','period_cr_column','closing_dr_column','closing_cr_column'];
+        const totals=values=>Object.fromEntries(roles.map((role,i)=>[role,String(values[i])]));
+        validationResult={source_total_rows:[4],no_total_row:false,erp_unbalanced:true,checks:[{key:'account_codes',status:'pass'}],
+            source_leaf_totals:totals([0,0,100,120,90,120]),source_total_comparison:
+            ['Opening Dr','Opening Cr','Period Dr','Period Cr','Closing Dr','Closing Cr']
+                .map((field,i)=>({field,source_total:String([0,0,100,120,90,120][i]),difference:'0',within_tolerance:true})),
+            draft_reconciliation:{original_totals:totals([0,0,100,120,90,120]),adjustment_totals:totals([0,0,20,0,30,0]),
+                adjusted_totals:totals([0,0,120,120,120,120]),pair_differences:
+                Object.fromEntries(['opening','period','closing'].map(p=>[p,{difference:'0',within_tolerance:true}]))}};
+        renderTrialBalanceValidationGrid();
+        const headers=Array.from(document.querySelectorAll('#tbValidationHead th')).map(c=>c.textContent);
+        const values=selector=>['OD','OC','PD','PC','CD','CC'].map(h=>document.querySelector(selector).children[headers.indexOf(h)].textContent);
+        const original={erp:values('#tbValidationBody .tb-control-erp'),
+            adjustments:values('#tbValidationBody .tb-draft-adjustment_totals'),
+            adjusted:values('#tbValidationBody .tb-draft-adjusted_totals'),
+            pairs:values('#tbValidationBody .tb-draft-pairs'),
+            warning:document.querySelector('#tbValidationBody .tb-control-difference').nextElementSibling.textContent};
+        renderAvailableAccountsTable([],[],validationResult);
+        const saved=Array.from(document.querySelectorAll('#availableAccountsTableBody .tb-draft-adjusted_totals td')).slice(2,8).map(c=>c.textContent);
+        validationResult.draft_reconciliation=null;
+        renderTrialBalanceValidationGrid();
+        const pending=values('#tbValidationBody .tb-draft-pairs');
+        validationResult.erp_unbalanced=false;
+        renderTrialBalanceValidationGrid();
+        return {original,saved,pending,warnings:document.querySelectorAll('#tbValidationBody .tb-erp-warning').length};
+    }""")
+    assert result['original']['erp']==['0.00','0.00','100.00','120.00','90.00','120.00']
+    assert result['original']['adjustments']==['0.00','0.00','20.00','0.00','30.00','0.00']
+    assert result['original']['adjusted']==['0.00','0.00','120.00','120.00','120.00','120.00']
+    assert result['original']['pairs']==['0.00','','0.00','','0.00','']
+    assert result['original']['warning']=='ERP imbalance: query pending.'
+    assert result['saved']==result['original']['adjusted']
+    assert result['pending']==['Pending','','Pending','','Pending','']
+    assert result['warnings']==0
     page.close()
