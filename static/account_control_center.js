@@ -1,6 +1,7 @@
 // Simplified Account Control Centre: Verification and Financial Statement mappings.
 let accClientId = null;
 let accAccounts = [];
+let accHierarchyIndex = { accountByCode: new Map(), ancestorsByAccount: new WeakMap(), descendantsByCode: new Map(), leafDescendantsByCode: new Map() };
 let accLatestUpload = null;
 let accSelectedUploadId = null;
 let accAvailableUploads = [];
@@ -27,7 +28,8 @@ let accCashflowLoaded = false;
 let accIsAdmin = false;
 let accBusyOperations = new Map();
 let accBusySequence = 0;
-let accTabLoading = { cashflow: false, financial: false, notes: false };
+let accDetailLoaded = { verification: false, cashflow: false, financial: false, notes: false };
+let accUploadLocks = 0;
 const accStatusTimers = new WeakMap();
 const ACC_STATUS_DURATION_MS = 4200;
 
@@ -180,26 +182,57 @@ async function accApi(url, options) {
     return payload;
 }
 function accAssignment(account) { return account.assignment || {}; }
+// Build code and descendant indexes once per Trial Balance refresh. Assignment
+// values stay on the account objects so edits are reflected without rebuilding.
+function accRebuildHierarchyIndex() {
+    const accountByCode = new Map();
+    accAccounts.forEach(function (account) {
+        const code = accNormaliseCode(account.account_code);
+        if (code && !accountByCode.has(code)) accountByCode.set(code, account);
+    });
+    const ancestorsByAccount = new WeakMap();
+    const descendantsByCode = new Map();
+    const leafDescendantsByCode = new Map();
+    accAccounts.forEach(function (account) {
+        const accountCode = accNormaliseCode(account.account_code);
+        const codes = new Set();
+        if (accountCode) codes.add(accountCode);
+        let ancestor = accNormaliseCode(account.parent_account_code);
+        const visited = new Set();
+        while (ancestor && !visited.has(ancestor)) {
+            codes.add(ancestor);
+            visited.add(ancestor);
+            const parent = accountByCode.get(ancestor);
+            ancestor = parent ? accNormaliseCode(parent.parent_account_code) : '';
+        }
+        ancestorsByAccount.set(account, codes);
+        codes.forEach(function (code) {
+            const descendants = descendantsByCode.get(code) || [];
+            descendants.push(account);
+            descendantsByCode.set(code, descendants);
+            if (account.is_leaf) {
+                const leaves = leafDescendantsByCode.get(code) || [];
+                leaves.push(account);
+                leafDescendantsByCode.set(code, leaves);
+            }
+        });
+    });
+    accHierarchyIndex = { accountByCode: accountByCode, ancestorsByAccount: ancestorsByAccount, descendantsByCode: descendantsByCode, leafDescendantsByCode: leafDescendantsByCode };
+}
+function accSetAccounts(accounts) {
+    const nextAccounts = Array.isArray(accounts) ? accounts : [];
+    if (accAccounts === nextAccounts) return;
+    accAccounts = nextAccounts;
+    accRebuildHierarchyIndex();
+}
 function accAccountIsWithin(account, parentCode) {
     const selectedCode = accNormaliseCode(parentCode);
-    let ancestor = accNormaliseCode(account.account_code) === selectedCode
-        ? selectedCode
-        : accNormaliseCode(account.parent_account_code);
-    const visited = new Set();
-    while (ancestor && !visited.has(ancestor)) {
-        if (ancestor === selectedCode) return true;
-        visited.add(ancestor);
-        const parent = accAccounts.find(function (candidate) {
-            return accNormaliseCode(candidate.account_code) === ancestor;
-        });
-        ancestor = parent ? accNormaliseCode(parent.parent_account_code) : '';
-    }
-    return false;
+    if (!selectedCode) return false;
+    const ancestors = accHierarchyIndex.ancestorsByAccount.get(account);
+    return !!ancestors && ancestors.has(selectedCode);
 }
 function accLeavesBelow(parentCode) {
-    return accAccounts.filter(function (account) {
-        return account.is_leaf && accAccountIsWithin(account, parentCode);
-    });
+    return accHierarchyIndex.leafDescendantsByCode.get(accNormaliseCode(parentCode)) || [];
 }
 function accEffectiveWorkstream(account) {
     const direct = accAssignment(account).verification_workstream || '';
@@ -238,8 +271,10 @@ function accFilterAccountRows(accountQuery, assignmentQuery, getAssignmentText) 
     const visible = new Set(matched);
     if (accountTerm || assignmentTerm) {
         matched.forEach(function (match) {
+            const ancestors = accHierarchyIndex.ancestorsByAccount.get(match);
+            if (!ancestors) return;
             accAccounts.forEach(function (candidate) {
-                if (!candidate.is_leaf && accAccountIsWithin(match, candidate.account_code)) visible.add(candidate);
+                if (!candidate.is_leaf && ancestors.has(accNormaliseCode(candidate.account_code))) visible.add(candidate);
             });
         });
     }
@@ -495,6 +530,7 @@ function accSetGridState(message, isError, isLoading) { accSetState('accGridStat
 function accSetFinancialGridState(message, isError, isLoading) { accSetState('accFinancialGridState', 'accFinancialGridWrap', message, isError, isLoading); }
 function accSetNotesGridState(message, isError, isLoading) { accSetState('accNotesGridState', 'accNotesGridWrap', message, isError, isLoading); }
 function accRenderRows() {
+    if (!accDetailLoaded.verification) return;
     const filter = String(accElement('accAccountFilter').value || '').trim().toLowerCase();
     const visible = accAccounts.filter(function (account) {
         return !filter || (String(account.account_code || '') + ' ' + String(account.account_name || '')).toLowerCase().indexOf(filter) !== -1;
@@ -542,9 +578,7 @@ function accCashflowLeavesBelow(parentCode) {
 }
 function accCashflowRowIndent(account, isHistorical) {
     if (!isHistorical) return Math.max(0, Number(account.level || 1) - 1) * 16;
-    const parent = accAccounts.find(function (candidate) {
-        return accNormaliseCode(candidate.account_code) === accNormaliseCode(account.parent_account_code);
-    });
+    const parent = accHierarchyIndex.accountByCode.get(accNormaliseCode(account.parent_account_code));
     const level = parent ? Number(parent.level || 1) + 1 : Number(account.level || 1);
     return Math.max(0, level - 1) * 16;
 }
@@ -584,6 +618,7 @@ function accCashflowSearchMatches(account, search, isHistorical) {
     return values.join(' ').toLowerCase().indexOf(search) !== -1;
 }
 function accRenderCashflowRows() {
+    if (!accDetailLoaded.cashflow) return;
     const filter = String(accElement('accCashflowFilter').value || '').trim().toLowerCase();
     const visible = accAccounts.filter(function (account) {
         return !filter || accCashflowSearchMatches(account, filter, false);
@@ -626,6 +661,7 @@ function accRenderCashflowRows() {
     accElement('accCashflowGridWrap').hidden = false;
 }
 function accRenderFinancialRows() {
+    if (!accDetailLoaded.financial) return;
     const visible = accFilterAccountRows(accAppliedFinancialAccountFilter, accAppliedFinancialCategoryFilter, function (account) {
         return accFinancialPickerLabel(accEffectiveFinancialCategory(account));
     });
@@ -721,6 +757,7 @@ function accNotePickerMarkup(account, selectedId, statementCategoryId, options) 
         '<select class="acc2-note-category" data-acc-code="' + accEscape(account.account_code) + '" data-acc-parent="' + (!account.is_leaf ? 'true' : 'false') + '" aria-hidden="true" tabindex="-1" hidden' + (disabled ? ' disabled' : '') + '>' + selectMarkup + '</select></div>';
 }
 function accRenderNotesRows() {
+    if (!accDetailLoaded.notes) return;
     const visible = accFilterAccountRows(accAppliedNotesAccountFilter, accAppliedNotesCategoryFilter, accNoteAssignmentSearchText);
     accElement('accNotesCount').textContent = visible.length + ' of ' + accAccounts.length + ' accounts';
     const rows = accElement('accNotesRows');
@@ -760,7 +797,7 @@ function accRenderSource() {
     select.innerHTML = accAvailableUploads.length ? (!upload ? '<option value="" selected>— Select a Trial Balance —</option>' : '') + accAvailableUploads.map(function (item) {
         return '<option value="' + item.id + '"' + (upload && String(item.id) === String(upload.id) ? ' selected' : '') + '>' + accEscape(label(item)) + '</option>';
     }).join('') : '<option value="">No parsed Trial Balances</option>';
-    select.disabled = !accAvailableUploads.length;
+    select.disabled = !accAvailableUploads.length || accUploadLocks > 0;
 }
 function accRenderCashflowCategoryList() {
     const list = accElement('accCashflowCategoryList');
@@ -825,17 +862,12 @@ function accCashflowVisibleAccounts(search) {
         if (!accCashflowAccountMatches(account, search)) return;
         const accountCode = accNormaliseCode(account.account_code);
         if (!account.is_leaf) {
-            accAccounts.forEach(function (child) {
-                const childCode = accNormaliseCode(child.account_code);
-                if (accAccountIsWithin(child, accountCode)) visibleCodes.add(childCode);
+            (accHierarchyIndex.descendantsByCode.get(accountCode) || []).forEach(function (child) {
+                visibleCodes.add(accNormaliseCode(child.account_code));
             });
         }
-        let current = account;
-        while (current) {
-            const code = accNormaliseCode(current.account_code);
-            visibleCodes.add(code);
-            current = accAccounts.find(function (candidate) { return accNormaliseCode(candidate.account_code) === accNormaliseCode(current.parent_account_code); });
-        }
+        const ancestors = accHierarchyIndex.ancestorsByAccount.get(account);
+        if (ancestors) ancestors.forEach(function (code) { visibleCodes.add(code); });
     });
     return accAccounts.filter(function (account) { return visibleCodes.has(accNormaliseCode(account.account_code)); });
 }
@@ -912,7 +944,7 @@ async function accLoadTrialBalance(forceRefresh) {
     const clientId = String(accClientId || '');
     const uploadId = String(accSelectedUploadId || '');
     if (!forceRefresh && accTrialBalanceCache.clientId === clientId && accTrialBalanceCache.uploadId === uploadId && accTrialBalanceCache.accounts) {
-        accAccounts = accTrialBalanceCache.accounts;
+        accSetAccounts(accTrialBalanceCache.accounts);
         accLatestUpload = accTrialBalanceCache.upload;
         return;
     }
@@ -922,11 +954,11 @@ async function accLoadTrialBalance(forceRefresh) {
     const request = accApi('/api/account-control-center/mapping?client_id=' + encodeURIComponent(accClientId) + (uploadId ? '&trial_balance_upload_id=' + encodeURIComponent(uploadId) : '')).then(function (result) {
         accTrialBalanceCache.accounts = result.accounts || [];
         accTrialBalanceCache.upload = result.upload || null;
-        accTrialBalanceCache.uploads = result.uploads || [];
+        accTrialBalanceCache.uploads = result.uploads || accAvailableUploads;
         accAvailableUploads = accTrialBalanceCache.uploads;
         accSelectedUploadId = result.upload ? String(result.upload.id) : null;
         accTrialBalanceCache.uploadId = String(accSelectedUploadId || '');
-        accAccounts = accTrialBalanceCache.accounts;
+        accSetAccounts(accTrialBalanceCache.accounts);
         accLatestUpload = accTrialBalanceCache.upload;
         return result;
     }).finally(function () {
@@ -2043,23 +2075,6 @@ function accSetFinancialSetupTab(tabName) {
         panel.hidden = panel.getAttribute('aria-labelledby') !== document.querySelector('[data-acc-financial-setup-tab="' + CSS.escape(tabName) + '"]').id;
     });
 }
-function accSetTabLoading(tabName, isLoading) {
-    const tab = document.querySelector('[data-acc-tab="' + CSS.escape(tabName) + '"]');
-    if (!tab) return;
-    tab.disabled = isLoading;
-    tab.setAttribute('aria-busy', isLoading ? 'true' : 'false');
-}
-function accLoadLazyTab(tabName, message, loader, setError) {
-    if (accTabLoading[tabName]) return;
-    accTabLoading[tabName] = true;
-    accSetTabLoading(tabName, true);
-    accWithBusy(message, loader).catch(function (error) {
-        setError(error.message, true);
-    }).finally(function () {
-        accTabLoading[tabName] = false;
-        accSetTabLoading(tabName, false);
-    });
-}
 function accSetTab(tabName) {
     document.querySelectorAll('[data-acc-tab]').forEach(function (tab) {
         const active = tab.dataset.accTab === tabName;
@@ -2079,21 +2094,58 @@ function accSetTab(tabName) {
     accElement('accCashflowCategoryFab').hidden = tabName !== 'cashflow';
     accElement('accFinancialSetupFab').hidden = tabName !== 'financial';
     accElement('accNotesSetupFab').hidden = tabName !== 'notes';
-    if (tabName === 'cashflow' && !accCashflowLoaded) {
-        accSetCashflowGridState('Loading Cash Flow Setup...', false, true);
-        accLoadLazyTab('cashflow', 'Loading Cash Flow Setup...', accLoadCashflow, accSetCashflowGridState);
+}
+
+// The selected upload cannot change while a detail request or setup load is in flight.
+async function accWithUploadLock(operation) {
+    accUploadLocks++;
+    accElement('accTrialBalanceSelect').disabled = true;
+    try { return await operation(); }
+    finally {
+        accUploadLocks--;
+        accElement('accTrialBalanceSelect').disabled = accUploadLocks > 0 || !accAvailableUploads.length;
     }
-    if (tabName === 'financial' && !accFinancialLoaded) {
-        accSetFinancialGridState('Loading Financial Statement categories...', false, true);
-        accLoadLazyTab('financial', 'Loading Financial Statement categories...', accLoadFinancialCategories, accSetFinancialGridState);
+}
+
+function accResetDetailViews() {
+    accDetailLoaded = {verification: false, cashflow: false, financial: false, notes: false};
+    accSetAccounts([]);
+    accCashflowLoaded = false;
+    accCashflowHistoricalOrphans = [];
+    accElement('accCashflowOrphanNotice').hidden = true;
+    [accSetGridState, accSetCashflowGridState, accSetFinancialGridState, accSetNotesGridState].forEach(function (setState) {
+        setState('Select a Trial Balance and click Load to view accounts.', false, false);
+    });
+}
+
+async function accLoadDetail(tabName, button) {
+    const states = {verification: accSetGridState, cashflow: accSetCashflowGridState, financial: accSetFinancialGridState, notes: accSetNotesGridState};
+    const renders = {verification: accRenderRows, cashflow: accRenderCashflowRows, financial: accRenderFinancialRows, notes: accRenderNotesRows};
+    if (!accSelectedUploadId) { states[tabName]('Select a Trial Balance before loading accounts.', true); return; }
+    if (button.disabled) return;
+    states[tabName]('Loading accounts...', false, true);
+    try {
+        await accWithUploadLock(function () { return accWithButtonBusy(button, 'Loading...', async function () {
+            await accLoadTrialBalance(false);
+            if (tabName === 'cashflow' && !accCashflowLoaded) await accLoadCashflow();
+            if (tabName === 'financial' && !accFinancialLoaded) await accLoadFinancialCategories();
+            if (tabName === 'notes') await accLoadNotesSetupData();
+            accDetailLoaded[tabName] = true;
+            renders[tabName]();
+        }); });
+    } catch (error) {
+        accDetailLoaded[tabName] = false;
+        states[tabName](error.message + ' Click Load to retry.', true);
     }
-    if (tabName === 'notes') {
-        if (accNotesLoaded) accRenderNotesRows();
-        else {
-            accSetNotesGridState('Loading Financial Statement categories and note choices...', false, true);
-            accLoadLazyTab('notes', 'Loading Financial Statement categories and note choices...', accLoadNotesSetupData, accSetNotesGridState);
-        }
-    }
+}
+
+async function accOpenLoadedSetup(button, loader, open) {
+    if (!accSelectedUploadId) { accShowStatus('Select a Trial Balance first.', 'error'); return; }
+    if (button.disabled) return;
+    try {
+        await accWithUploadLock(function () { return accWithButtonBusy(button, 'Loading...', loader); });
+        open();
+    } catch (error) { accShowStatus(error.message + ' Try again.', 'error'); }
 }
 function accSetTreasuryGuidance(isOpen) {
     const toggle = accElement('accTreasuryGuidanceToggle');
@@ -2120,29 +2172,27 @@ function accBindEvents() {
             window.location.href = '/static/trial_balance.html?' + params.toString();
         });
     });
-    accElement('accTrialBalanceSelect').addEventListener('change', async function (event) {
+    accElement('accTrialBalanceSelect').addEventListener('change', function (event) {
         accSelectedUploadId = event.target.value || null;
+        accLatestUpload = accAvailableUploads.find(function (upload) { return String(upload.id) === accSelectedUploadId; }) || null;
         accInvalidateTrialBalanceCache();
-        try {
-            await accWithBusy('Loading selected Trial Balance...', async function () {
-                await accLoadMapping(true);
-                if (accCashflowLoaded) await accLoadCashflow();
-            });
-        } catch (error) { accShowStatus(error.message, 'error'); }
+        accResetDetailViews();
     });
     accEnsureCashflowComboboxControls();
     document.addEventListener('input', accHandleCashflowComboboxInput);
     document.querySelectorAll('[data-acc-tab]').forEach(function (tab) { tab.addEventListener('click', function () { accSetTab(tab.dataset.accTab); }); });
-    accElement('accCashflowCategoryFab').addEventListener('click', function () { accSetCashflowModal('accCashflowCategoryModal', true); accElement('accCashflowCategoryLabel').focus(); });
+    accElement('accVerificationLoad').addEventListener('click', function () { accLoadDetail('verification', this); });
+    accElement('accCashflowLoad').addEventListener('click', function () { accLoadDetail('cashflow', this); });
+    accElement('accCashflowCategoryFab').addEventListener('click', function () { accOpenLoadedSetup(this, function () { return accCashflowLoaded ? Promise.resolve() : accLoadCashflow(); }, function () { accSetCashflowModal('accCashflowCategoryModal', true); accElement('accCashflowCategoryLabel').focus(); }); });
     accElement('accAccountFilter').addEventListener('input', accRenderRows);
     accElement('accAccountRows').addEventListener('change', function (event) { accHandleWorkstreamChange(event); });
     accElement('accCashflowFilter').addEventListener('input', accRenderCashflowRows);
     accElement('accCashflowRows').addEventListener('change', function (event) { accHandleCashflowChange(event); });
-    accElement('accCashflowCategoryButton').addEventListener('click', function () { accSetCashflowModal('accCashflowCategoryModal', true); });
+    accElement('accCashflowCategoryButton').addEventListener('click', function () { accOpenLoadedSetup(this, function () { return accCashflowLoaded ? Promise.resolve() : accLoadCashflow(); }, function () { accSetCashflowModal('accCashflowCategoryModal', true); }); });
     accElement('accCashflowCategoryClose').addEventListener('click', function () { accSetCashflowModal('accCashflowCategoryModal', false); });
     accElement('accCashflowCategoryForm').addEventListener('submit', accCreateCashflowCategory);
     accElement('accCashflowCategoryList').addEventListener('click', accHandleCashflowCategoryAction);
-    accElement('accCashflowAccountsButton').addEventListener('click', function () { accSetCashflowModal('accCashflowAccountsModal', true); accSetCashflowConfigTab('cash'); accRenderCashflowAccountOptions(); });
+    accElement('accCashflowAccountsButton').addEventListener('click', function () { accOpenLoadedSetup(this, function () { return accCashflowLoaded ? Promise.resolve() : accLoadCashflow(); }, function () { accSetCashflowModal('accCashflowAccountsModal', true); accSetCashflowConfigTab('cash'); accRenderCashflowAccountOptions(); }); });
     accElement('accCashflowAccountsClose').addEventListener('click', function () { accSetCashflowModal('accCashflowAccountsModal', false); });
     document.querySelectorAll('[data-acc-cashflow-config-tab]').forEach(function (tab) { tab.addEventListener('click', function () { accSetCashflowConfigTab(tab.dataset.accCashflowConfigTab); }); });
     accElement('accCashflowCashSearch').addEventListener('input', accRenderCashflowAccountOptions);
@@ -2154,7 +2204,7 @@ function accBindEvents() {
     accElement('accCashflowAccountsSave').addEventListener('click', function (event) { accSaveCashflowTreasury(event.currentTarget).catch(function (error) { accShowStatus(error.message, 'error'); }); });
     accElement('accCashflowSettingsSave').addEventListener('click', function (event) { accSaveCashflowSettings(event.currentTarget).catch(function (error) { accShowStatus(error.message, 'error'); }); });
     accElement('accCashflowCustomerSettingsSave').addEventListener('click', function (event) { accSaveCashflowSettings(event.currentTarget).catch(function (error) { accShowStatus(error.message, 'error'); }); });
-    accElement('accCashflowTemplateButton').addEventListener('click', function () { accOpenCashflowTemplateModal(); });
+    accElement('accCashflowTemplateButton').addEventListener('click', function () { accOpenLoadedSetup(this, function () { return accCashflowLoaded ? Promise.resolve() : accLoadCashflow(); }, accOpenCashflowTemplateModal); });
     accElement('accCashflowTemplateClose').addEventListener('click', function () { accSetCashflowModal('accCashflowTemplateModal', false); });
     accElement('accCashflowTemplateSelect').addEventListener('change', function (event) { accLoadCashflowTemplateMapping(event.target.value).catch(function (error) { accSetCashflowTemplateState(error.message, true); }); });
     accElement('accCashflowTemplateMapping').addEventListener('change', accHandleCashflowTemplateMappingChange);
@@ -2163,7 +2213,7 @@ function accBindEvents() {
     accElement('accFinancialFilterLoad').addEventListener('click', function () {
         accAppliedFinancialAccountFilter = accElement('accFinancialFilter').value;
         accAppliedFinancialCategoryFilter = accElement('accFinancialCategoryFilter').value;
-        accRenderFinancialRows();
+        accLoadDetail('financial', this);
     });
     const financialRows = accElement('accFinancialRows');
     financialRows.addEventListener('change', function (event) { accHandleFinancialChange(event); });
@@ -2178,8 +2228,8 @@ function accBindEvents() {
     document.addEventListener('click', function (event) { if (!event.target.closest('[data-fs-picker]')) accCloseFinancialPickers(); });
     document.addEventListener('scroll', function (event) { if (!event.target.closest || !event.target.closest('[data-fs-picker-menu]')) accCloseFinancialPickers(); }, true);
     window.addEventListener('resize', function () { accCloseFinancialPickers(); });
-    accElement('accFinancialSetupFab').addEventListener('click', function () { accSetFinancialSetupModal(true, 'financial'); });
-    accElement('accNotesSetupFab').addEventListener('click', function () { accSetFinancialSetupModal(true, 'notes'); });
+    accElement('accFinancialSetupFab').addEventListener('click', function () { accOpenLoadedSetup(this, accLoadNotesSetupData, function () { accSetFinancialSetupModal(true, 'financial'); }); });
+    accElement('accNotesSetupFab').addEventListener('click', function () { accOpenLoadedSetup(this, accLoadNotesSetupData, function () { accSetFinancialSetupModal(true, 'notes'); }); });
     accElement('accFinancialSetupClose').addEventListener('click', function () { accSetFinancialSetupModal(false); });
     document.querySelectorAll('[data-acc-financial-setup-tab]').forEach(function (tab) { tab.addEventListener('click', function () { accSetFinancialSetupTab(tab.dataset.accFinancialSetupTab); }); });
     document.querySelectorAll('[data-fs-section]').forEach(function (panel) {
@@ -2196,7 +2246,7 @@ function accBindEvents() {
     accElement('accNotesFilterLoad').addEventListener('click', function () {
         accAppliedNotesAccountFilter = accElement('accNotesFilter').value;
         accAppliedNotesCategoryFilter = accElement('accNotesCategoryFilter').value;
-        accRenderNotesRows();
+        accLoadDetail('notes', this);
     });
     document.querySelectorAll('[data-notes-section]').forEach(function (panel) {
         panel.addEventListener('click', function (event) { accHandleNotesOutlineAction(event).catch(function (error) { accShowStatus(error.message, 'error'); }); });
@@ -2206,33 +2256,42 @@ function accBindEvents() {
         panel.addEventListener('dragend', function () { panel.querySelectorAll('.acc2-note-dragging').forEach(function (row) { row.classList.remove('acc2-note-dragging'); }); accNoteDraggingId = null; accNoteDraggingAnchorId = null; });
     });
 }
+async function accBootstrapUploads() {
+    const overlay = accElement('accBootstrapOverlay');
+    overlay.hidden = false;
+    accElement('accRetryBootstrap').hidden = true;
+    try {
+        const result = await accApi('/api/account-control-center/uploads?client_id=' + encodeURIComponent(accClientId));
+        accAvailableUploads = result.uploads || [];
+        const requested = new URLSearchParams(window.location.search).get('upload_id');
+        const defaultId = result.default_upload_id == null ? null : String(result.default_upload_id);
+        const chosen = requested ? accAvailableUploads.find(function (upload) { return String(upload.id) === requested; })
+            : accAvailableUploads.find(function (upload) { return String(upload.id) === defaultId; }) || accAvailableUploads[0];
+        accLatestUpload = chosen || null;
+        accSelectedUploadId = chosen ? String(chosen.id) : null;
+        accInvalidateTrialBalanceCache();
+        accResetDetailViews();
+        accRenderSource();
+        if (requested && !chosen) accShowStatus('The requested Trial Balance is not available for this client. Select another upload.', 'error');
+    } catch (error) {
+        accAvailableUploads = []; accSelectedUploadId = null; accLatestUpload = null;
+        accResetDetailViews(); accRenderSource();
+        accElement('accRetryBootstrap').hidden = false;
+        accShowStatus('Could not load Trial Balances: ' + error.message, 'error');
+    } finally { overlay.hidden = true; }
+}
 async function initAccountControlCentre() {
-    await accWithBusy('Loading Account Control Centre...', async function () {
+    try {
         if (window.clientContextReady) await window.clientContextReady;
         accBindEvents();
+        accElement('accRetryBootstrap').addEventListener('click', accBootstrapUploads);
+        const tab = new URLSearchParams(window.location.search).get('tab');
+        if (tab === 'financial' || tab === 'notes') accSetTab(tab);
         accClientId = window.getSelectedClientId ? window.getSelectedClientId() : null;
-        if (!accClientId) { accSetGridState('Select a client before opening Account Control Centre.', true); return; }
+        if (!accClientId) { accElement('accTrialBalanceSelect').disabled = true; accSetGridState('Select a client before opening Account Control Centre.', true); return; }
         accIsAdmin = await window.isAdminUser();
-        if (!accIsAdmin) accElement('accAdminWarning').hidden = false;
-        accSetGridState('Loading Trial Balance...', false, true);
-        try {
-            await accLoadMapping();
-            const params = new URLSearchParams(window.location.search);
-            const requestedUpload = params.get('upload_id');
-            if (requestedUpload) {
-                const found = accAvailableUploads.some(function (upload) { return String(upload.id) === requestedUpload; });
-                if (found && requestedUpload !== String(accSelectedUploadId || '')) {
-                    accSelectedUploadId = requestedUpload;
-                    await accLoadMapping(true);
-                } else if (!found) {
-                    accSelectedUploadId = null; accLatestUpload = null; accAccounts = [];
-                    accInvalidateTrialBalanceCache(); accRenderSource(); accRenderRows();
-                    accShowStatus('The requested Trial Balance is not available for this client. Select another upload.', 'error');
-                }
-            }
-            const tab = params.get('tab');
-            if (tab === 'financial' || tab === 'notes') accSetTab(tab);
-        } catch (error) { accSetGridState(error.message, true); }
-    });
+        if (!accIsAdmin) { accElement('accAdminWarning').hidden = false; accElement('accTrialBalanceSelect').disabled = true; return; }
+        await accBootstrapUploads();
+    } finally { accElement('accBootstrapOverlay').hidden = true; }
 }
 document.addEventListener('DOMContentLoaded', initAccountControlCentre);

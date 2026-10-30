@@ -4,12 +4,23 @@ from __future__ import annotations
 
 import logging
 import re
+from functools import wraps
+from time import perf_counter
 from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from database import execute_query_pg, execute_write_pg, log_audit, pg_transaction
+from database import (
+    execute_query_pg,
+    execute_write_pg,
+    get_db_metrics,
+    get_db_query_details,
+    log_audit,
+    pg_transaction,
+    start_db_metrics,
+    stop_db_metrics,
+)
 from routers.auth import require_admin
 from routers.trial_balance import build_account_code_hierarchy, find_latest_parsed_upload
 from services.cash_bank_classification import (
@@ -28,6 +39,35 @@ from services.ledger_report_source import invalidate_cashflow_summary_read_model
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _with_optional_account_control_performance(handler):
+    """Expose safe, request-local SQL timings only for explicit admin diagnostics."""
+    @wraps(handler)
+    def wrapped(*args, **kwargs):
+        if not kwargs.get("perf", False):
+            return handler(*args, **kwargs)
+        started = perf_counter()
+        token = start_db_metrics()
+        try:
+            payload = handler(*args, **kwargs)
+            if not isinstance(payload, dict):
+                return payload
+            metrics = get_db_metrics()
+            return {
+                **payload,
+                "performance": {
+                    "handler_ms": round((perf_counter() - started) * 1000, 1),
+                    "db_calls": metrics["calls"],
+                    "db_reads": metrics["reads"],
+                    "db_writes": metrics["writes"],
+                    "db_ms": round(metrics["db_time"] * 1000, 1),
+                    "queries": get_db_query_details(),
+                },
+            }
+        finally:
+            stop_db_metrics(token)
+    return wrapped
 
 def _refresh_cashflow_snapshot(
     client_id: int,
@@ -1079,11 +1119,13 @@ def _note_statement_section(category_id: int, client_id: int) -> Optional[str]:
 
 
 @router.get("/api/account-control-center/categories")
+@_with_optional_account_control_performance
 def list_account_control_categories(
     client_id: int = Query(..., ge=1),
     category_type: str = Query("financial_statement"),
     include_inactive: bool = Query(False),
     session=Depends(require_admin),
+    perf: bool = False,
 ):
     _require_active_client(client_id)
     cleaned_type = _clean_category_type(category_type)
@@ -1324,10 +1366,12 @@ def _validate_statement_calculation_components(
 
 
 @router.get("/api/account-control-center/statement-calculations")
+@_with_optional_account_control_performance
 def list_statement_calculations(
     client_id: int = Query(..., ge=1),
     statement_section: str = Query("balance_sheet"),
     session=Depends(require_admin),
+    perf: bool = False,
 ):
     _require_active_client(client_id)
     section = _normalise_text(statement_section).casefold()
@@ -1337,41 +1381,51 @@ def list_statement_calculations(
         "SELECT id, client_id, statement_section, calculation_type, label, parent_heading_id, sort_order FROM account_control_statement_calculations WHERE client_id = %s AND statement_section = %s ORDER BY calculation_type, sort_order, id",
         (client_id, section),
     )
+    if not calculations:
+        return {"client_id": client_id, "statement_section": section, "calculations": []}
+
+    calculation_ids = [int(row["id"]) for row in calculations]
+    saved_component_rows = execute_query_pg(
+        "SELECT calculation_id, source_category_id, source_calculation_id, operator, sort_order FROM account_control_statement_calculation_components WHERE calculation_id = ANY(%s) ORDER BY calculation_id, sort_order, id",
+        (calculation_ids,),
+    )
+    components_by_calculation: dict[int, list[dict[str, Any]]] = {}
+    for row in saved_component_rows:
+        components_by_calculation.setdefault(int(row["calculation_id"]), []).append(row)
+
+    category_rows = execute_query_pg(
+        """SELECT id, label, parent_category_id
+           FROM account_control_categories
+           WHERE client_id = %s AND category_type = 'financial_statement'
+             AND statement_section = %s AND row_type = 'category'
+           ORDER BY parent_category_id, sort_order, LOWER(label), category_key""",
+        (client_id, section),
+    )
+    category_by_id = {int(row["id"]): row for row in category_rows}
+    categories_by_heading: dict[int, list[dict[str, Any]]] = {}
+    for row in category_rows:
+        if row.get("parent_category_id") is not None:
+            categories_by_heading.setdefault(int(row["parent_category_id"]), []).append(row)
+    calculation_by_id = {int(row["id"]): row for row in calculations}
     result: list[dict[str, Any]] = []
     for calculation in calculations:
-        saved_components = execute_query_pg(
-            "SELECT source_category_id, source_calculation_id, operator, sort_order FROM account_control_statement_calculation_components WHERE calculation_id = %s",
-            (calculation["id"],),
-        )
+        saved_components = components_by_calculation.get(int(calculation["id"]), [])
         if calculation["calculation_type"] == "subtotal":
-            categories = execute_query_pg(
-                "SELECT id, label FROM account_control_categories WHERE client_id = %s AND category_type = 'financial_statement' AND statement_section = %s AND row_type = 'category' AND parent_category_id = %s ORDER BY sort_order, LOWER(label), category_key",
-                (client_id, section, calculation["parent_heading_id"]),
-            )
             operators = {int(row["source_category_id"]): row["operator"] for row in saved_components if row["source_category_id"] is not None}
+            heading_id = calculation.get("parent_heading_id")
             components = [
                 {"source_category_id": int(category["id"]), "source_calculation_id": None,
                  "label": category["label"], "operator": operators.get(int(category["id"]), "add")}
-                for category in categories
+                for category in categories_by_heading.get(int(heading_id) if heading_id is not None else -1, [])
             ]
         else:
-            source_ids = [int(row["source_calculation_id"]) for row in saved_components if row["source_calculation_id"] is not None]
-            category_ids = [int(row["source_category_id"]) for row in saved_components if row["source_category_id"] is not None]
-            sources = execute_query_pg(
-                "SELECT id, label, calculation_type FROM account_control_statement_calculations WHERE client_id = %s AND statement_section = %s AND id = ANY(%s)",
-                (client_id, section, source_ids or [0]),
-            ) if source_ids else []
-            categories = execute_query_pg(
-                "SELECT id, label FROM account_control_categories WHERE client_id = %s AND category_type = 'financial_statement' AND statement_section = %s AND row_type = 'category' AND id = ANY(%s)",
-                (client_id, section, category_ids),
-            ) if category_ids else []
-            calculation_labels = {int(row["id"]): row["label"] for row in sources}
-            category_labels = {int(row["id"]): row["label"] for row in categories}
             components = []
             for row in sorted(saved_components, key=lambda item: int(item.get("sort_order") or 0)):
                 category_id = row["source_category_id"]
                 calculation_id = row["source_calculation_id"]
-                label = category_labels.get(int(category_id)) if category_id is not None else calculation_labels.get(int(calculation_id))
+                category = category_by_id.get(int(category_id)) if category_id is not None else None
+                source_calculation = calculation_by_id.get(int(calculation_id)) if calculation_id is not None else None
+                label = category.get("label") if category is not None else (source_calculation.get("label") if source_calculation is not None else None)
                 if label is None:
                     continue
                 components.append({
@@ -1788,8 +1842,19 @@ def delete_account_control_category(
         "orphan_assignments_cleared": len(orphan_assignments),
     }
 
+@router.get("/api/account-control-center/uploads")
+@_with_optional_account_control_performance
+def get_account_control_uploads(client_id: int = Query(..., ge=1), session=Depends(require_admin), perf: bool = False):
+    """List available Trial Balances without loading their account trees."""
+    _require_active_client(client_id)
+    uploads = _control_upload_options(client_id)
+    latest = find_latest_parsed_upload(client_id) if uploads else None
+    return {"uploads": uploads, "default_upload_id": latest["id"] if latest else None}
+
+
 @router.get("/api/account-control-center/mapping")
-def get_account_control_mapping(client_id: int = Query(..., ge=1), trial_balance_upload_id: Optional[int] = Query(default=None, ge=1), session=Depends(require_admin)):
+@_with_optional_account_control_performance
+def get_account_control_mapping(client_id: int = Query(..., ge=1), trial_balance_upload_id: Optional[int] = Query(default=None, ge=1), session=Depends(require_admin), perf: bool = False):
     """Return the selected Trial Balance tree with one shared assignment per account."""
     upload, accounts = _selected_control_accounts(client_id, trial_balance_upload_id)
     rows = execute_query_pg(
@@ -1958,7 +2023,8 @@ def apply_account_control_cashflow_to_children(payload: CashFlowBulkAssignmentPa
     return {"saved": True, "parent_account_code": parent_code, "leaf_count": len(leaves)}
 
 @router.get("/api/account-control-center/cashflow/setup")
-def get_cashflow_setup(client_id: int = Query(..., ge=1), trial_balance_upload_id: Optional[int] = Query(default=None, ge=1), session=Depends(require_admin)):
+@_with_optional_account_control_performance
+def get_cashflow_setup(client_id: int = Query(..., ge=1), trial_balance_upload_id: Optional[int] = Query(default=None, ge=1), session=Depends(require_admin), perf: bool = False):
     upload, accounts = _selected_control_accounts(client_id, trial_balance_upload_id)
     historical_orphans = discover_historical_orphan_accounts_postgres(client_id, accounts)
     categories = execute_query_pg(

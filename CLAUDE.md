@@ -34,9 +34,9 @@ One line per file group: what it is now. Full build history for every entry live
 - static/procedure_modal.js → shared Verification/Audit Workbook Procedure modal for grouped Data Table search, evidence/Forms, procedures, and observations. See CHANGELOG_ARCHIVE.md.
 - static/audit_workbook.js, static/audit_workbook.html → Audit Workbook: session rows, filtering, totals, shared Procedure Modal, and cached evidence/Form completion badges. See CHANGELOG_ARCHIVE.md.
 - routers/trial_balance.py → Trial Balance import, hierarchy, source controls, automatic adjustments, draft totals, categories and saved-upload reads. See CHANGELOG_ARCHIVE.md.
-- routers/account_control_center.py → account mappings, Financial Statement outlines and Balance Sheet/Income Statement totals and subtotals, Cash Flow configuration, and treasury setup. See CHANGELOG_ARCHIVE.md.
+- routers/account_control_center.py → upload options, account mappings, Financial Statement outlines, totals, Cash Flow configuration and treasury setup. See CHANGELOG_ARCHIVE.md.
 - static/trial_balance.html, static/trial_balance.js → Trial Balance mapping, validation, reconciliation and saved-upload review with inline account correction. See CHANGELOG_ARCHIVE.md.
-- static/account_control_center.html, static/account_control_center.js → central mapping, statement outlines, Notes assignments, Cash Flow setup and Trial Balance navigation. See CHANGELOG_ARCHIVE.md.
+- static/account_control_center.html, static/account_control_center.js → on-demand account mapping, statement outlines, Notes assignments, Cash Flow setup and Trial Balance navigation. See CHANGELOG_ARCHIVE.md.
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Two-pane Audit Rules editor for Documents, Cross-checks, Categories, Voucher Checks and Assertions, plus Assign Categories. See CHANGELOG_ARCHIVE.md.
 - category_control_center_prototype.html → standalone review-only prototype for the Category Control Center redesign; sample data only, no backend connection.
@@ -257,6 +257,9 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-10-30: ACC loads upload options first and opens account details on each tab's Load action. See CHANGELOG_ARCHIVE.md.
+- 2026-10-30: ACC indexes Trial Balance hierarchy once per load, reducing repeated assignment scans while preserving account and filter results. See CHANGELOG_ARCHIVE.md.
+- 2026-10-30: ACC adds opt-in database timings and batches statement-calculation reads to remove per-calculation SQL queries. See CHANGELOG_ARCHIVE.md.
 - 2026-10-30: Trial Balance and ACC Financial Statement/Notes views now link directly while preserving the selected upload. See CHANGELOG_ARCHIVE.md.
 - 2026-10-30: Saved Trial Balance review aligns with validation, including inline corrections and a floating scrollbar. See CHANGELOG_ARCHIVE.md.
 - 2026-10-30: Trial Balance validation adds a floating horizontal scrollbar synchronized with table and sticky headings. See CHANGELOG_ARCHIVE.md.

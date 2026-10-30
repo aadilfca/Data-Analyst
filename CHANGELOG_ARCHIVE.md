@@ -8994,3 +8994,23 @@ Follow-up: Classification also opens on double-click and saves through the exist
 ## Trial Balance and ACC navigation — 2026-10-30
 
 Available Trial Balances links to Financial Statement assignments; Financial Statement and Notes toolbars link back, preserving the selected upload and originating ACC tab. Missing uploads require an explicit new selection. Script versions: Trial Balance 36, ACC 33. Twenty focused UI tests pass; local-server acceptance remains pending.
+
+## ACC on-demand account loading — 2026-10-30
+
+An admin-only upload-options endpoint supports lightweight startup with a blurred loading overlay. Each ACC tab loads account details on its toolbar's Load action; setup controls fetch their own data on demand. Upload changes clear old views, active loads lock the upload selector, and errors allow retry. Script version 34. ACC and Trial Balance regression suites passed; local-server acceptance remains pending.
+
+## ACC browser hierarchy index — 2026-10-30
+
+**Implementation:** Replaced repeated full-account scans for hierarchy membership and descendant leaves with a per-upload index. Assignment values remain live on account records; Cashflow historical/orphan handling and source ordering are preserved. Financial/Notes parent context and Cashflow account filtering use indexed ancestry and descendants. ACC script version 35; no API, backend, or database changes.
+
+**Verification:** A parity regression compares all four effective assignments, hierarchy membership, leaf sets, filtered rows and Cashflow visibility, including mixed/unassigned values, historical orphans, whitespace-normalized parent codes, cycles and assignment edits. All 116 focused Account Control Centre/Trial Balance tests and 9 subtests pass. On 1,001 synthetic accounts, legacy rollups took 1,965.5 ms; index construction plus indexed rollups took 7.2 ms with identical results. Each tab rendered in 42–118 ms. Pytest reported two environment warnings, including blocked outbound Supabase access; no test depended on live data.
+
+**Acceptance:** Local-server acceptance remains pending. No staging, commit, or push.
+
+## ACC API fetch timing and calculation batching — 2026-10-30
+
+**Implementation:** ACC upload, mapping, category, statement-calculation, and Cashflow setup reads accept admin-only `perf=1` diagnostics with handler time, DB call totals, and per-query timings; normal responses remain unchanged. Statement calculations now batch saved components and financial category labels, using three data reads for a populated section instead of per-calculation reads. No schema or assignment behavior changed.
+
+**Verification:** Calculation output tests cover subtotal defaults/operators, total category and chained-total labels, and fixed query count at 1 and 12 calculations. ACC backend tests pass (94 plus 9 subtests); ACC browser and app smoke tests pass (18 plus 8 subtests). OpenAPI confirms `perf` is registered on all five diagnostic GET routes. Python compilation and `git diff --check` pass. Pytest reported environment warnings, including blocked outbound Supabase access; live database timing was not available.
+
+**Acceptance:** Local-server acceptance remains pending. No staging, commit, or push.

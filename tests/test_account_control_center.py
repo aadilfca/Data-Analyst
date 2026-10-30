@@ -19,6 +19,24 @@ from routers import account_control_center as control_center
 from routers import trial_balance
 
 
+class AccountControlUploadOptionsTests(unittest.TestCase):
+    def test_upload_options_validate_client_without_loading_accounts(self):
+        options = [{'id': 77, 'file_name': 'Trial Balance.xlsx'}]
+        with patch.object(control_center, '_require_active_client') as require_client, patch.object(
+            control_center, '_control_upload_options', return_value=options
+        ) as list_uploads, patch.object(control_center, 'find_latest_parsed_upload', return_value={'id': 77}) as latest, patch.object(control_center, '_accounts_for_upload') as accounts:
+            result = control_center.get_account_control_uploads(client_id=1, session={'username': 'Admin'})
+        self.assertEqual(result, {'uploads': options, 'default_upload_id': 77})
+        require_client.assert_called_once_with(1)
+        list_uploads.assert_called_once_with(1)
+        latest.assert_called_once_with(1)
+        accounts.assert_not_called()
+
+    def test_upload_options_require_admin(self):
+        route = next(route for route in control_center.router.routes if route.path == '/api/account-control-center/uploads')
+        self.assertIn(control_center.require_admin, [dependency.call for dependency in route.dependant.dependencies])
+
+
 class TrialBalanceHierarchyTests(unittest.TestCase):
     def test_numeric_zero_padding_does_not_hide_a_parent(self):
         codes = {"1", "01-0001", "01-0001-0002", "01-0001-0002-0006"}
@@ -1141,13 +1159,16 @@ class FinancialStatementCalculationTests(unittest.TestCase):
     def test_total_list_returns_earlier_total_label(self):
         with patch.object(control_center, "_require_active_client"), patch.object(
             control_center, "execute_query_pg", side_effect=[
-                [{"id": 88, "client_id": 1, "statement_section": "income_statement", "calculation_type": "total", "label": "Operating Profit", "parent_heading_id": None, "sort_order": 1}],
-                [{"source_category_id": None, "source_calculation_id": 77, "operator": "add", "sort_order": 0}],
-                [{"id": 77, "label": "Gross Profit", "calculation_type": "total"}],
+                [
+                    {"id": 77, "client_id": 1, "statement_section": "income_statement", "calculation_type": "total", "label": "Gross Profit", "parent_heading_id": None, "sort_order": 0},
+                    {"id": 88, "client_id": 1, "statement_section": "income_statement", "calculation_type": "total", "label": "Operating Profit", "parent_heading_id": None, "sort_order": 1},
+                ],
+                [{"calculation_id": 88, "source_category_id": None, "source_calculation_id": 77, "operator": "add", "sort_order": 0}],
+                [],
             ]
         ):
             result = control_center.list_statement_calculations(client_id=1, statement_section="income_statement", session={"username": "Admin"})
-        component = result["calculations"][0]["components"][0]
+        component = next(row for row in result["calculations"] if row["id"] == 88)["components"][0]
         self.assertEqual((component["label"], component["source_calculation_id"]), ("Gross Profit", 77))
 
     def test_total_rejects_category_already_included_via_earlier_total(self):
@@ -1210,8 +1231,11 @@ class FinancialStatementCalculationTests(unittest.TestCase):
         with patch.object(control_center, "_require_active_client"), patch.object(
             control_center, "execute_query_pg", side_effect=[
                 [{"id": 77, "client_id": 1, "statement_section": "balance_sheet", "calculation_type": "subtotal", "label": "Total Assets", "parent_heading_id": 30, "sort_order": 0}],
-                [{"source_category_id": 31, "source_calculation_id": None, "operator": "subtract"}],
-                [{"id": 31, "label": "Land"}, {"id": 32, "label": "New equipment"}],
+                [{"calculation_id": 77, "source_category_id": 31, "source_calculation_id": None, "operator": "subtract", "sort_order": 0}],
+                [
+                    {"id": 31, "label": "Land", "parent_category_id": 30},
+                    {"id": 32, "label": "New equipment", "parent_category_id": 30},
+                ],
             ]
         ):
             result = control_center.list_statement_calculations(client_id=1, statement_section="balance_sheet", session={"username": "Admin"})
@@ -1221,20 +1245,56 @@ class FinancialStatementCalculationTests(unittest.TestCase):
     def test_total_list_returns_subtotal_and_category_components(self):
         with patch.object(control_center, "_require_active_client"), patch.object(
             control_center, "execute_query_pg", side_effect=[
-                [{"id": 88, "client_id": 1, "statement_section": "balance_sheet", "calculation_type": "total", "label": "Total Assets", "parent_heading_id": None, "sort_order": 0}],
                 [
-                    {"source_category_id": None, "source_calculation_id": 77, "operator": "add", "sort_order": 0},
-                    {"source_category_id": 31, "source_calculation_id": None, "operator": "subtract", "sort_order": 1},
+                    {"id": 77, "client_id": 1, "statement_section": "balance_sheet", "calculation_type": "subtotal", "label": "Total Current Assets", "parent_heading_id": 30, "sort_order": 0},
+                    {"id": 88, "client_id": 1, "statement_section": "balance_sheet", "calculation_type": "total", "label": "Total Assets", "parent_heading_id": None, "sort_order": 1},
                 ],
-                [{"id": 77, "label": "Total Current Assets"}],
-                [{"id": 31, "label": "Cash and Bank"}],
+                [
+                    {"calculation_id": 88, "source_category_id": None, "source_calculation_id": 77, "operator": "add", "sort_order": 0},
+                    {"calculation_id": 88, "source_category_id": 31, "source_calculation_id": None, "operator": "subtract", "sort_order": 1},
+                ],
+                [{"id": 31, "label": "Cash and Bank", "parent_category_id": 30}],
             ]
         ):
             result = control_center.list_statement_calculations(client_id=1, statement_section="balance_sheet", session={"username": "Admin"})
-        components = result["calculations"][0]["components"]
+        components = next(row for row in result["calculations"] if row["id"] == 88)["components"]
         self.assertEqual([(row["label"], row["source_category_id"], row["source_calculation_id"], row["operator"]) for row in components], [
             ("Total Current Assets", None, 77, "add"), ("Cash and Bank", 31, None, "subtract"),
         ])
+
+    def test_statement_calculation_list_uses_fixed_queries_and_opt_in_metrics(self):
+        for count in (1, 12):
+            calculations = [
+                {"id": index, "client_id": 1, "statement_section": "income_statement", "calculation_type": "total",
+                 "label": "Total {}".format(index), "parent_heading_id": None, "sort_order": index}
+                for index in range(1, count + 1)
+            ]
+            with patch.object(control_center, "_require_active_client"), patch.object(
+                control_center, "execute_query_pg", side_effect=[calculations, [], []]
+            ) as query, patch.object(control_center, "start_db_metrics", return_value="metrics-token") as start, patch.object(
+                control_center, "get_db_metrics", return_value={"calls": 7, "reads": 7, "writes": 0, "db_time": 0.125}
+            ), patch.object(
+                control_center, "get_db_query_details", return_value=[{"kind": "reads", "ms": 20.0, "query": "SELECT ..."}]
+            ), patch.object(control_center, "stop_db_metrics") as stop:
+                response = control_center.list_statement_calculations(
+                    client_id=1, statement_section="income_statement", session={"username": "Admin"}, perf=True
+                )
+            self.assertEqual(len(response["calculations"]), count)
+            self.assertEqual(query.call_count, 3)
+            self.assertEqual(response["performance"]["db_calls"], 7)
+            self.assertEqual(response["performance"]["db_ms"], 125.0)
+            self.assertEqual(response["performance"]["queries"][0]["ms"], 20.0)
+            start.assert_called_once_with()
+            stop.assert_called_once_with("metrics-token")
+
+        with patch.object(control_center, "_require_active_client"), patch.object(
+            control_center, "execute_query_pg", side_effect=[[calculations[0]], [], []]
+        ), patch.object(control_center, "start_db_metrics") as start:
+            response = control_center.list_statement_calculations(
+                client_id=1, statement_section="income_statement", session={"username": "Admin"}
+            )
+        self.assertNotIn("performance", response)
+        start.assert_not_called()
 
     def test_income_statement_calculation_payload_is_accepted(self):
         payload = control_center.StatementCalculationPayload(
