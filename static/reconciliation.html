@@ -50,6 +50,20 @@
 
         #balanceSheetView .balance-sheet-amount { font-variant-numeric: tabular-nums; white-space: nowrap; }
         #balanceSheetTable .balance-sheet-amount { text-align: right; }
+        #balanceSheetReconciliation[hidden] { display: none; }
+        #balanceSheetReconciliation { margin-top: 16px; border-top: 1px solid #dbe4ea; padding-top: 12px; }
+        #balanceSheetReconciliation > summary { cursor: pointer; font-size: 13px; font-weight: 700; line-height: 1.6; overflow-wrap: anywhere; }
+        #balanceSheetReconciliation[data-state="not_reconciled"] > summary { color: #b91c1c; }
+        #balanceSheetReconciliation[data-state="reconciled"] > summary, #balanceSheetReconciliation[data-state="reconciled_to_tb"] > summary { color: #166534; }
+        #balanceSheetReconciliation > summary:focus-visible { outline: 2px solid #1769aa; outline-offset: 3px; }
+        #balanceSheetReconciliation .statement-reconciliation-body { margin-top: 12px; }
+        #balanceSheetReconciliation p, #statementReconciliationIssues { color: #64748b; font-size: 12px; line-height: 1.6; }
+        #statementReconciliationTable { width: 100%; border-collapse: collapse; font-size: 13px; }
+        #statementReconciliationTable th, #statementReconciliationTable td { padding: 10px 12px; border-bottom: 1px solid #e2e8f0; text-align: left; }
+        #statementReconciliationTable thead th { background: #f3f7fa; color: #536577; }
+        #statementReconciliationTable .reconciliation-number { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+        #statementReconciliationTable tr.reconciliation-total > * { border-top: 2px solid #9fb5c5; background: #f4f8fb; font-weight: 700; }
+        #statementReconciliationIssues { padding-left: 20px; color: #b91c1c; }
         /* Scope this compact toolbar/picker to Cashflows, without changing shared pages. */
         #cashflowsSummaryControlsPanel .cashflows-filter-bar { display: flex; flex-wrap: wrap; gap: 8px; }
         #cashflowsSummaryControlsPanel .cashflows-report-scope { flex: 1 1 auto; min-width: 0; gap: 9px; }
@@ -273,6 +287,15 @@
                 <ul id='balanceSheetDiagnostics' aria-label='Balance Sheet review items' hidden></ul>
                 <p id='balanceSheetStatus' role='status' aria-live='polite'></p>
                 <div class='balance-sheet-table-wrap'><table id='balanceSheetTable' aria-label='Draft Balance Sheet before audit adjustments' hidden><thead><tr><th scope='col'>Particulars</th><th scope='col' class='balance-sheet-amount'>Current period</th></tr></thead><tbody id='balanceSheetRows'></tbody></table></div>
+                <details id='balanceSheetReconciliation' data-state='not_reconciled' hidden>
+                    <summary id='statementReconciliationSummary'>Not reconciled</summary>
+                    <div class='statement-reconciliation-body'>
+                        <p id='statementReconciliationContext'></p>
+                        <div class='balance-sheet-table-wrap'><table id='statementReconciliationTable' aria-label='Trial Balance to Balance Sheet comparison'><thead><tr><th scope='col'>Particulars</th><th scope='col' class='reconciliation-number'>As per TB</th><th scope='col' class='reconciliation-number'>As per BS</th></tr></thead><tbody id='statementReconciliationRows'></tbody></table></div>
+                        <ul id='statementReconciliationIssues'></ul>
+                        <p>Debit balances are positive; credit balances are in parentheses. Comparison only: no balancing entry is posted. Exact amounts are used, with a tolerance of 0.01.</p>
+                    </div>
+                </details>
             </article>
         </section>
         <section id='cashflowsView' class='cashflows-report' aria-label='Cashflows report' hidden>
@@ -531,8 +554,8 @@
             </dialog>
         </div>
     </section>
-    <script src='/static/client_context.js?v=23'></script>
+    <script src='/static/client_context.js?v=24'></script>
     <script src='/static/loading_ui.js?v=ce6d21ca20c8'></script>
-    <script src='/static/reconciliation.js?v=61'></script>
+    <script src='/static/reconciliation.js?v=62'></script>
 </body>
 </html>

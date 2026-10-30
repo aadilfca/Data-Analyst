@@ -9054,3 +9054,18 @@ SQLite/PostgreSQL add compact client configuration and per-upload closing-status
 **Verification:** Calculation/API checks cover signs, formulas, profit/loss, closing states, stale confirmations, omitted categories, source/client scope, deletion protection and unchanged ERP amounts. Browser checks cover both statements, parentheses, setup, explicit closing confirmation, capital disclosure, already-posted exclusion, source switching and mobile containment. Desktop/mobile screenshots reviewed. Schema bootstrap/upgrade/idempotence checks passed; the final suite passed 294 tests and 17 subtests, with 1 skip and existing Starlette/httpx/FastAPI deprecation warnings. Syntax and whitespace checks passed. A 10,000-Leaf synthetic fingerprint plus both-statement/profit-link calculation took 1,223.4 ms, excluding database/network time. No new packages or live data writes; live PostgreSQL performance is unverified. Existing Status/map entries were rewritten without adding rows; File_Map remains 158 lines.
 
 **Acceptance:** Aadil confirmed consistent local Income Statement/Balance Sheet results and authorized commit/push on 2026-10-30. Profit reconciles and links once; source accounting warnings remain for review.
+
+
+## TB-to-Balance Sheet transfer reconciliation — 2026-10-30
+
+**Implementation:** An expandable green/red status below the statement compares signed Assets, Liabilities, Capital, Profit and unmapped balances. Capital excludes separately shown profit. Exact decimal checks use a 0.01 tolerance and distinguish original TB imbalance from unexplained transfer differences; no balancing entry or statement amount is changed.
+
+Final totals are identified by complete category coverage and formula coefficients, independent of labels. Missing/ambiguous totals, reversed contributions, offsetting omissions, unmapped accounts and unconfirmed profit prevent green status. A fully transferred unbalanced source is labelled “Reconciled to TB — source imbalance remains.” Existing nine-read snapshot/API plumbing is reused without schema changes or extra queries.
+
+The proof clears on source changes, errors and view transitions; Income Statement remains separate. Navigation/search includes the reconciliation deep link. Reports/shared navigation versions are 62/24 across all 19 navigation consumers.
+
+**Verification:** Combined statement, Reports, ACC, account-flow, browser and smoke regressions: 309 passed, 17 subtests passed, 1 skipped; existing deprecation warnings remain. Focused accounting checks cover exact amounts, source imbalance, offsetting omissions, zero-net categories, formula signs, profit once and unchanged source values. Desktop/mobile expanded-proof screenshots reviewed. Python/JavaScript syntax and whitespace checks pass. No packages installed or live data written; live PostgreSQL timing remains unverified.
+
+**Documentation:** Existing architecture/status lines rewritten in place; no files added or repurposed, so File_Map.md remains unchanged.
+
+**Acceptance:** Aadil confirmed this phase and authorized commit/push on 2026-10-30.

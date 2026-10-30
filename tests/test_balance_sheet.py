@@ -208,3 +208,163 @@ def test_report_endpoint_requires_authentication(report_api):
 def test_changed_hierarchy_marks_saved_validation_controls_stale():
     result = build_balance_sheet([account('A', '1')], [mapping('A', 1)], [category(1, 'asset')], [], [], {'account_classifications': [['A', 'parent']]})
     assert 'stale_controls' in {row['code'] for row in result['diagnostics']}
+
+
+@pytest.fixture
+def transfer_case():
+    return [
+        [account('A','100'),account('L',credit='30'),account('C',credit='70')],
+        [mapping('A',1),mapping('L',2),mapping('C',3)],
+        [category(1,'asset'),category(2,'liability'),category(3,'equity')],
+        [calc(10),calc(11)],
+        [part(10,1),part(11,2),part(11,3)],
+    ]
+
+
+def transfer(result):
+    return result['transfer_reconciliation']
+
+
+def test_transfer_balanced_source_and_statement_are_green_without_changing_amounts(transfer_case):
+    original=deepcopy(transfer_case)
+    result=build_balance_sheet(*transfer_case)
+    proof=transfer(result)
+    assert proof['status']=='reconciled'
+    assert proof['equation_balanced']
+    assert proof['unexplained_difference']=='0'
+    rows={row['key']:row for row in proof['rows']}
+    assert rows['asset']['tb']==rows['asset']['bs']=='100'
+    assert rows['liability']['tb']==rows['liability']['bs']=='-30'
+    assert rows['equity']['tb']==rows['equity']['bs']=='-70'
+    assert transfer_case==original
+    assert {row['id']:row['amount'] for row in result['calculations']}=={10:'100',11:'100'}
+
+
+@pytest.mark.parametrize('difference',['-1634.57','0.02','-0.011'])
+def test_transfer_unbalanced_erp_can_be_complete_but_does_not_claim_balanced_equation(transfer_case,difference):
+    from decimal import Decimal
+    transfer_case[0][0]['closing_dr']=str(Decimal('100')+Decimal(difference))
+    result=build_balance_sheet(*transfer_case)
+    proof=transfer(result)
+    assert proof['status']=='reconciled_to_tb'
+    assert not proof['equation_balanced']
+    assert proof['source_imbalance']==proof['statement_difference']==difference
+    assert Decimal(proof['unexplained_difference'])==0
+    rows={row['key']:row for row in proof['rows']}
+    assert Decimal(rows['source']['tb'])==-Decimal(difference)
+    assert rows['unexplained']['tb']=='0'
+    assert Decimal(rows['unexplained']['bs'])==0
+
+
+def test_transfer_uses_unrounded_values_and_existing_tolerance(transfer_case):
+    transfer_case[0][0]['closing_dr']='100.004'
+    result=build_balance_sheet(*transfer_case)
+    assert transfer(result)['status']=='reconciled'
+    assert transfer(result)['source_imbalance']=='0.004'
+    assert transfer(result)['rows'][0]['tb']=='100.004'
+    assert result['calculations'][0]['amount']=='100.004'
+
+
+def test_transfer_offsetting_unmapped_accounts_never_turn_green(transfer_case):
+    transfer_case[0].extend([account('UNMAPPED-DR','25'),account('UNMAPPED-CR',credit='25')])
+    proof=transfer(build_balance_sheet(*transfer_case))
+    assert proof['source_imbalance']=='0'
+    assert proof['statement_difference']=='0'
+    assert proof['unexplained_difference']=='0'
+    assert proof['status']=='not_reconciled'
+    assert any('leaf accounts' in reason for reason in proof['issues'])
+
+
+def test_transfer_omitted_offsetting_categories_fail_membership_even_when_nets_match(transfer_case):
+    transfer_case[0].extend([account('EXTRA-DR','25'),account('EXTRA-CR',credit='25')])
+    transfer_case[1].extend([mapping('EXTRA-DR',4),mapping('EXTRA-CR',5)])
+    transfer_case[2].extend([category(4,'asset'),category(5,'asset')])
+    proof=transfer(build_balance_sheet(*transfer_case))
+    assert proof['status']=='not_reconciled'
+    assert proof['unexplained_difference'] is None
+    assert any('No complete final Assets total' in reason for reason in proof['issues'])
+
+
+def test_transfer_zero_net_category_with_accounts_cannot_be_omitted(transfer_case):
+    transfer_case[0].extend([account('EXTRA-DR','25'),account('EXTRA-CR',credit='25')])
+    transfer_case[1].extend([mapping('EXTRA-DR',4),mapping('EXTRA-CR',4)])
+    transfer_case[2].append(category(4,'asset'))
+    assert transfer(build_balance_sheet(*transfer_case))['status']=='not_reconciled'
+    transfer_case[4].append(part(10,4))
+    assert transfer(build_balance_sheet(*transfer_case))['status']=='reconciled'
+
+
+def test_transfer_reversed_zero_net_category_is_not_certified_by_a_zero_difference(transfer_case):
+    transfer_case[0].extend([account('EXTRA-DR','25'),account('EXTRA-CR',credit='25')])
+    transfer_case[1].extend([mapping('EXTRA-DR',4),mapping('EXTRA-CR',4)])
+    transfer_case[2].append(category(4,'asset'))
+    transfer_case[4].append(part(10,4,operator='subtract'))
+    proof=transfer(build_balance_sheet(*transfer_case))
+    assert proof['unexplained_difference']=='0'
+    assert proof['status']=='not_reconciled'
+    assert any('reverses' in reason for reason in proof['issues'])
+
+
+def test_transfer_tracks_signs_through_chained_totals(transfer_case):
+    transfer_case[3].append(calc(12))
+    transfer_case[4].append(part(12,source=10,operator='subtract'))
+    proof=transfer(build_balance_sheet(*transfer_case))
+    assert proof['status']=='not_reconciled'
+    assert any('ambiguous' in reason for reason in proof['issues'])
+
+
+def test_transfer_never_guesses_totals_from_labels_and_accepts_equivalent_aliases(transfer_case):
+    transfer_case[3][0]['label']='An arbitrary label'
+    transfer_case[3][1]['label']='Another arbitrary label'
+    transfer_case[3].append(calc(12))
+    transfer_case[4].append(part(12,source=10))
+    proof=transfer(build_balance_sheet(*transfer_case))
+    assert proof['status']=='reconciled'
+    assert proof['totals']['equity_liabilities']['label']=='Another arbitrary label'
+
+
+def test_transfer_missing_roles_stale_controls_and_no_leaf_source_stay_red(transfer_case):
+    changed=deepcopy(transfer_case);changed[2][0]['presentation_role']=None
+    assert transfer(build_balance_sheet(*changed))['status']=='not_reconciled'
+    assert transfer(build_balance_sheet(*transfer_case,controls={'stale':True}))['status']=='not_reconciled'
+    changed=deepcopy(transfer_case);changed[0]=[];changed[1]=[]
+    assert transfer(build_balance_sheet(*changed))['status']=='not_reconciled'
+
+
+def test_transfer_profit_is_separate_from_capital_and_only_included_once():
+    from test_income_statement import statement_case,link_options
+    data=statement_case.__wrapped__()
+    data[3].extend([calc(13),calc(14)])
+    data[4].extend([part(13,102),part(14,source=12)])
+    result=build_balance_sheet(*data,**link_options())
+    proof=transfer(result)
+    assert proof['status']=='reconciled'
+    rows={row['key']:row for row in proof['rows']}
+    assert rows['equity']['tb']==rows['equity']['bs']=='-1000'
+    assert rows['profit']['tb']==rows['profit']['bs']=='-300'
+    assert next(row for row in result['categories'] if row['id']==101)['amount']=='1300'
+    options=link_options();options['closing_status']='not_confirmed'
+    assert transfer(build_balance_sheet(*data,**options))['status']=='not_reconciled'
+    options['closing_status']='already_in_capital'
+    assert transfer(build_balance_sheet(*data,**options))['status']=='not_reconciled'
+
+
+def test_transfer_closed_income_accounts_do_not_add_profit_again():
+    from test_income_statement import statement_case,link_options
+    data=statement_case.__wrapped__()
+    data[0][0]['closing_cr']='1300'
+    for row in data[0][2:]:row.update(closing_dr='0',closing_cr='0')
+    data[3].extend([calc(13),calc(14)]);data[4].extend([part(13,102),part(14,source=12)])
+    options=link_options();options['closing_status']='already_in_capital'
+    result=build_balance_sheet(*data,**options)
+    assert transfer(result)['status']=='reconciled'
+    assert next(row for row in result['categories'] if row['id']==101)['amount']=='1300'
+    assert next(row for row in transfer(result)['rows'] if row['key']=='profit')['bs']=='0'
+
+
+def test_transfer_metadata_is_returned_in_existing_snapshot_without_extra_reads(report_api):
+    client,_,calls,snapshots,_=report_api
+    result=client.get('/api/reconciliation/financial-statements/balance-sheet',params={'client_id':7,'trial_balance_upload_id':55})
+    assert result.status_code==200,result.text
+    assert result.json()['transfer_reconciliation']['status']=='not_reconciled'
+    assert len(calls)==9 and len(snapshots)==1

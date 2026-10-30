@@ -5075,7 +5075,45 @@
         const sign = /^0+$/.test(match[2]) && !fraction ? '' : match[1];
         return sign + whole + (fraction ? '.' + fraction : '');
     }
+    function clearStatementReconciliation() {
+        const details = element('balanceSheetReconciliation');
+        details.hidden = true;
+        details.open = false;
+        details.dataset.state = 'not_reconciled';
+        element('statementReconciliationSummary').textContent = 'Not reconciled';
+        element('statementReconciliationRows').replaceChildren();
+        element('statementReconciliationIssues').replaceChildren();
+        element('statementReconciliationContext').textContent = '';
+    }
+    function renderStatementReconciliation(result) {
+        const details = element('balanceSheetReconciliation');
+        const valid = result && Array.isArray(result.rows) && Array.isArray(result.issues);
+        const green = valid && result.reconciled === true && ['reconciled', 'reconciled_to_tb'].includes(result.status);
+        details.dataset.state = green ? result.status : 'not_reconciled';
+        element('statementReconciliationSummary').textContent = green
+            ? (result.status === 'reconciled_to_tb' ? 'Reconciled to TB — source imbalance remains' : 'Reconciled') : 'Not reconciled';
+        if (valid) {
+            const amount = function (value) {
+                const shown = balanceSheetAmount(value, true);
+                return shown.startsWith('-') ? '(' + shown.slice(1) + ')' : shown;
+            };
+            element('statementReconciliationRows').innerHTML = result.rows.map(function (row) {
+                const total = ['net', 'unexplained'].includes(row.key);
+                return '<tr' + (total ? ' class="reconciliation-total"' : '') + '><th scope="row">' + escapeHtml(row.label) + '</th><td class="reconciliation-number">' + escapeHtml(amount(row.tb)) + '</td><td class="reconciliation-number">' + escapeHtml(amount(row.bs)) + '</td></tr>';
+            }).join('');
+            element('statementReconciliationIssues').innerHTML = result.issues.map(function (issue) { return '<li>' + escapeHtml(issue) + '</li>'; }).join('');
+            const totals = result.totals || {};
+            element('statementReconciliationContext').textContent = 'TB column: original leaf closing balances, classified using ACC. BS column: contributions to the final statement totals. '
+                + (totals.assets && totals.equity_liabilities ? 'Totals checked: ' + totals.assets.label + ' / ' + totals.equity_liabilities.label + '. ' : '')
+                + (result.equation_balanced ? 'The accounting equation is balanced within tolerance.' : 'The accounting equation is not yet balanced or cannot be verified.');
+        } else {
+            element('statementReconciliationIssues').innerHTML = '<li>Reconciliation evidence is unavailable. Reload the statement after the server is updated.</li>';
+        }
+        details.hidden = false;
+        if (new URLSearchParams(window.location.search).get('feature') === 'tb-reconciliation') details.open = true;
+    }
     async function loadBalanceSheetOutline() {
+        clearStatementReconciliation();
         cancelBalanceSheetLoad();
         const generation = balanceSheetGeneration, requestedClient = clientId, requestedSection = activeStatement;
         const statementName = requestedSection === 'income_statement' ? 'Income Statement' : 'Balance Sheet';
@@ -5158,6 +5196,7 @@
             currentStatementContext = { clientId: requestedClient, uploadId: requested, key: result.context_key };
             element('statementClosingStatus').value = result.profit_link ? result.profit_link.closing_status : result.closing_status || 'not_confirmed';
             element('statementClosingControls').hidden = false;
+            if (requestedSection === 'balance_sheet' && rows.length) renderStatementReconciliation(result.transfer_reconciliation);
             table.hidden = !rows.length;
             status.hidden = !!rows.length;
             status.textContent = rows.length ? '' : 'No ' + statementName + ' outline is configured yet. Set up headings and categories in Account Control Centre.';
@@ -5194,6 +5233,7 @@
                 element('balanceSheetStatus').classList.add('is-error');
                 element('balanceSheetStatus').hidden = false;
                 element('balanceSheetTable').hidden = true;
+                clearStatementReconciliation();
             }
         } finally { window.clearTimeout(timer); button.disabled = false; }
     }
@@ -5211,7 +5251,7 @@
         const params = new URLSearchParams(window.location.search);
         params.set('view', 'reports');
         params.set('report', isStatement ? (activeStatement === 'income_statement' ? 'income-statement' : 'balance-sheet') : 'financial-statements');
-        params.delete('feature');
+        if (activeStatement !== 'balance_sheet' || !isStatement || params.get('feature') !== 'tb-reconciliation') params.delete('feature');
         window.history.replaceState({}, '', window.location.pathname + '?' + params.toString());
         if (typeof window.setNavModule === 'function') window.setNavModule(isStatement ? title : 'Financial Statements');
         if (typeof window.setUpOverride === 'function') window.setUpOverride(isStatement ? function () { showFinancialStatements(false); } : showReportsHub);
@@ -5220,6 +5260,7 @@
         if (isStatement) loadBalanceSheetOutline();
     }
     function setReportView(isReport) {
+        clearStatementReconciliation();
         currentStatementContext = null;
         cancelBalanceSheetLoad();
         element('financialStatementsView').hidden = true;
