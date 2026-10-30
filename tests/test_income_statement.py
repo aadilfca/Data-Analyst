@@ -108,6 +108,22 @@ def test_opening_income_balances_are_flagged_without_changing_closing_basis(stat
     assert any(row['code']=='opening_profit_balances' for row in result['diagnostics'])
 
 
+def test_comparative_build_preserves_current_income_and_confirmation(statement_case):
+    statement_case[0][3]['opening_dr'] = '20'
+    original = deepcopy(statement_case)
+    options = link_options()
+    before = build_income_statement(*statement_case, **options)
+    fingerprint = financial_statement_context_key(*statement_case, options['profit_link'])
+    balance = build_balance_sheet(*statement_case, **options)
+    assert balance['profit_link']['final_profit'] == '300'
+    assert balance['profit_link']['applied']
+    assert balance['comparative']['opening_review']['amount'] == '-20'
+    assert next(row for row in balance['categories'] if row['id'] == 101)['amount'] == '1300'
+    assert build_income_statement(*statement_case, **options) == before
+    assert financial_statement_context_key(*statement_case, options['profit_link']) == fingerprint
+    assert statement_case == original
+
+
 def test_context_key_is_order_independent_but_changes_for_source_mapping_and_formula(statement_case):
     key=financial_statement_context_key(*statement_case,link_options()['profit_link'])
     assert key==financial_statement_context_key(*(list(reversed(group)) for group in statement_case),link_options()['profit_link'])

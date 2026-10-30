@@ -1,4 +1,4 @@
-"""Shared ERP-closing financial statements; no writes or persisted report copy."""
+"""Shared ERP financial statements; no writes or persisted report copy."""
 
 import hashlib
 import json
@@ -118,10 +118,48 @@ def build_balance_sheet(accounts, assignments, categories, calculations, compone
             message = ('Current-period profit/loss linked once to capital: ' + reconciliation['final_profit']) if reconciliation['applied'] else ' '.join(reconciliation['reasons'])
             result['diagnostics'].append(dict(code='profit_link', message=message))
         result['transfer_reconciliation'] = _build_transfer_reconciliation(result, income)
+        opening_items = result['opening_income_items']
+        if opening_items:
+            for row in result['transfer_reconciliation']['rows']:
+                if row['key'] == 'profit':
+                    row['label'] = 'Closing-balance profit/(loss), includes opening I/S'
+            if reconciliation and reconciliation['applied']:
+                for diagnostic in result['diagnostics']:
+                    if diagnostic['code'] == 'profit_link':
+                        diagnostic['message'] = 'Closing-balance profit/loss (including opening I/S) linked once to capital: ' + reconciliation['final_profit']
+        opening_net = _amount(result['controls']['opening_income_statement_net'])
+        destination = (profit_link or {}).get('target_category_id')
+        valid_destination = _equity_destination(categories, destination)
+        # Opening I/S is a separate draft equity line, carried through the existing
+        # destination's formula lineage. It never changes the current profit link.
+        opening = _build(accounts, assignments, categories, calculations, components,
+                         controls or {}, automatic_adjustment_count, basis='opening',
+                         linked_profit=(destination, opening_net) if opening_items and valid_destination else None)
+        opening['opening_review'] = dict(amount=_text(opening_net), account_count=len(opening_items),
+                                        target_category_id=destination if valid_destination else None,
+                                        included=bool(opening_items) and valid_destination, accounts=opening_items)
+        opening['diagnostics'] = [item for item in opening['diagnostics'] if item['code'] != 'unclosed_profit_loss']
+        if opening_items:
+            opening['diagnostics'].append(dict(code='opening_income_review',
+                message='Opening I/S items need review; the separate draft equity line is included once.' if valid_destination
+                        else 'Opening I/S items are not included in totals: select an active equity destination in ACC.'))
+        opening['transfer_reconciliation'] = _build_transfer_reconciliation(opening, None, opening=True)
+        bridge = dict(opening=_text(opening_net),
+                      movement=_text(_amount(result['controls']['income_statement_net']) - opening_net),
+                      erp_period=_text(_amount(result['controls']['period_income_statement_net'])),
+                      closing=result['controls']['income_statement_net'])
+        bridge['difference'] = _text(_amount(bridge['movement']) - _amount(bridge['erp_period']))
+        bridge['reconciled'] = abs(_amount(bridge['difference'])) <= Decimal('0.01')
+        result['transfer_reconciliation']['profit_bridge'] = bridge
+        for proof in (result['transfer_reconciliation'], opening['transfer_reconciliation']):
+            proof['opening_review_required'] = bool(opening_items)
+            if opening_items and proof['reconciled']:
+                proof['label'] += ' — opening I/S items need review'
+        result['comparative'] = opening
         return result
 
 
-def _build_transfer_reconciliation(balance, income):
+def _build_transfer_reconciliation(balance, income, *, opening=False):
     """Compare source Leaves with actual final formula contributions, never a plug.
 
     Both columns use debit-positive accounting signs. Capital excludes the
@@ -138,8 +176,9 @@ def _build_transfer_reconciliation(balance, income):
     tb['unmapped'] = _amount(balance['controls']['unmapped_net']) + sum((_amount(categories[key]['raw_net']) for key in unknown_ids), Decimal(0))
     tb['profit'] = -_amount(balance['controls']['income_statement_net'])
     source_net = sum(tb.values(), Decimal(0))
-    if source_net != _amount(balance['controls']['closing_difference']):
-        issues.append('The source account breakdown does not match the selected TB closing control.')
+    source_field = 'opening_difference' if opening else 'closing_difference'
+    if source_net != _amount(balance['controls'][source_field]):
+        issues.append('The source account breakdown does not match the selected TB balance control.')
     if balance['controls']['unmapped_count'] or unknown_count:
         issues.append('Some leaf accounts are unmapped, unclassified or missing a presentation role, even if their net amount is zero.')
     if not balance['controls']['leaf_count']:
@@ -184,7 +223,11 @@ def _build_transfer_reconciliation(balance, income):
         bs['profit'] = -sum((_amount(categories[key].get('linked_profit')) * weight for key, weight in weights.items() if key in role_ids['equity']), Decimal(0))
 
     link = balance.get('profit_link')
-    if balance['controls']['income_statement_account_count']:
+    if opening:
+        review = balance['opening_review']
+        if review['account_count'] and not review['included']:
+            issues.append('Select an active Balance Sheet equity destination in ACC for the opening I/S review line.')
+    elif balance['controls']['income_statement_account_count']:
         if income is not None and link and link.get('reconciled'):
             final = next((row for row in income['calculations'] if row['id'] == link['source_calculation_id']), None)
             required = {int(row['id']) for row in income['categories'] if row.get('row_type') == 'category' and row.get('account_count')}
@@ -212,7 +255,7 @@ def _build_transfer_reconciliation(balance, income):
     source_imbalance = abs(source_net) > tolerance
     status = 'reconciled_to_tb' if reconciled and source_imbalance else 'reconciled' if reconciled else 'not_reconciled'
     labels = {'reconciled_to_tb': 'Reconciled to TB — source imbalance remains', 'reconciled': 'Reconciled', 'not_reconciled': 'Not reconciled'}
-    rows = [{'key': key, 'label': label, 'tb': _text(tb[key]), 'bs': _text(bs[key])}
+    rows = [{'key': key, 'label': ('Opening I/S items — need review' if opening and key == 'profit' else label), 'tb': _text(tb[key]), 'bs': _text(bs[key])}
             for key, label in [('asset', 'Assets'), ('liability', 'Liabilities'), ('equity', 'Capital, excluding separately shown profit'), ('profit', 'Current-period profit/(loss)'), ('unmapped', 'Unmapped/unclassified balances')]]
     rows.extend([
         {'key': 'net', 'label': 'Net difference', 'tb': _text(source_net), 'bs': _text(statement_net)},
@@ -229,7 +272,7 @@ def _build_transfer_reconciliation(balance, income):
 
 
 def _build(accounts, assignments, categories, calculations, components, controls, adjustment_count,
-           section='balance_sheet', linked_profit=None):
+           section='balance_sheet', linked_profit=None, basis='closing'):
     statement_name = "Income Statement" if section == "income_statement" else "Balance Sheet"
     hierarchy = build_account_code_hierarchy(row["account_code"] for row in accounts)
     by_category = {int(row["id"]): dict(row) for row in categories}
@@ -247,6 +290,9 @@ def _build(accounts, assignments, categories, calculations, components, controls
     unmapped_net = Decimal(0)
     income_account_count = 0
     opening_profit_count = 0
+    opening_income_items = []
+    opening_profit = Decimal(0)
+    period_profit = Decimal(0)
     inactive = []
     rollforward_count = 0
     leaf_count = 0
@@ -261,12 +307,12 @@ def _build(accounts, assignments, categories, calculations, components, controls
         if classification != "leaf":
             continue
         leaf_count += 1
-        debit, credit = _amount(account.get("closing_dr")), _amount(account.get("closing_cr"))
+        debit, credit = _amount(account.get(basis + "_dr")), _amount(account.get(basis + "_cr"))
         net = debit - credit
         total_dr += debit
         total_cr += credit
         expected = _amount(account.get("opening_dr")) - _amount(account.get("opening_cr")) + _amount(account.get("period_dr")) - _amount(account.get("period_cr"))
-        if abs(expected - net) > Decimal("0.01"):
+        if basis == 'closing' and abs(expected - net) > Decimal("0.01"):
             rollforward_count += 1
         category_id = mapping.get(code)
         category = by_category.get(int(category_id)) if category_id is not None else None
@@ -281,8 +327,14 @@ def _build(accounts, assignments, categories, calculations, components, controls
         if category["statement_section"] == "income_statement":
             income_account_count += 1
             profit -= net
-            if _amount(account.get("opening_dr")) - _amount(account.get("opening_cr")):
+            opening_dr, opening_cr = _amount(account.get('opening_dr')), _amount(account.get('opening_cr'))
+            opening_profit += opening_cr - opening_dr
+            period_profit += _amount(account.get('period_cr')) - _amount(account.get('period_dr'))
+            if opening_dr - opening_cr:
                 opening_profit_count += 1
+                opening_income_items.append(dict(account_code=code, category=category['label'],
+                                                 opening_dr=_text(opening_dr), opening_cr=_text(opening_cr),
+                                                 equity_effect=_text(opening_cr - opening_dr)))
         raw[int(category["id"])] += net
         counts[int(category["id"])] += 1
 
@@ -396,9 +448,9 @@ def _build(accounts, assignments, categories, calculations, components, controls
         notice("missing_presentation", "Set Asset, Liability or Equity in ACC for: " + "; ".join(missing_roles[:20]), len(missing_roles))
     difference = total_dr - total_cr
     if abs(difference) > Decimal("0.01"):
-        notice("source_imbalance", "ERP closing debits and credits do not balance. Difference: " + _text(difference))
+        notice("source_imbalance", "ERP " + basis + " debits and credits do not balance. Difference: " + _text(difference))
     global_count = len(controls.get("global_adjustments") or [])
-    if adjustment_count or global_count or rollforward_count:
+    if basis == 'closing' and (adjustment_count or global_count or rollforward_count):
         notice("excluded_differences", f"Automatic TB differences are excluded: {adjustment_count} saved leaf entries, {global_count} global entries; {rollforward_count} current leaf roll-forward differences require review.")
     saved_classifications = controls.get("account_classifications")
     if controls.get("stale") or (saved_classifications and sorted(current_classifications) != sorted(saved_classifications)):
@@ -413,10 +465,12 @@ def _build(accounts, assignments, categories, calculations, components, controls
         notice("opening_profit_balances", f"{opening_profit_count} P&L accounts have nonzero opening balances. Closing-balance profit may include earlier periods; review the reporting period.", opening_profit_count)
     if problems:
         notice("incomplete_totals", "Some totals are unavailable because their sources are incomplete or unconfigured.", len(problems))
-    return {"basis": "erp_closing_before_audit_adjustments", "statement_section": section, "categories": statement,
+    return {"basis": "erp_" + basis + "_before_audit_adjustments", "statement_section": section, "categories": statement,
             "calculations": list(calc_by_id.values()), "diagnostics": diagnostics,
-            "controls": {"closing_dr": _text(total_dr), "closing_cr": _text(total_cr),
-                         "closing_difference": _text(difference), "leaf_count": leaf_count,
+            "opening_income_items": opening_income_items,
+            "controls": {basis + "_dr": _text(total_dr), basis + "_cr": _text(total_cr),
+                         basis + "_difference": _text(difference), "leaf_count": leaf_count,
+                         "opening_income_statement_net": _text(opening_profit), "period_income_statement_net": _text(period_profit),
                          "unmapped_net": _text(unmapped_net), "income_statement_account_count": income_account_count,
                          "unmapped_count": len(unmapped), "unmapped_nonzero_count": unmapped_nonzero_count, "unmapped_account_codes": unmapped[:50],
                          "income_statement_net": _text(profit), "audit_adjustment_net": "0"}}

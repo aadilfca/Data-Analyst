@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, selected-TB statements, profit linking, transfer reconciliation, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
+- routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, current/opening statements, profit linking, transfer reconciliation, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
 
 - routers/clients.py + static/clients.* → firm-level client management; admin-only except the paginated `GET /api/clients`. See CHANGELOG_ARCHIVE.md.
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, and database size with PostgreSQL table/index breakdown. See CHANGELOG_ARCHIVE.md.
@@ -58,7 +58,7 @@ One line per file group: what it is now. Full build history for every entry live
 - experiments/cashflow_fetch/*.py + tests/test_cashflow_fetch_benchmark.py → Standalone read-only transport benchmarks with exact source/report/export comparisons; never loaded by the app. See CHANGELOG_ARCHIVE.md.
 
 
-- static/reconciliation.html, static/reconciliation.js → Reports, Cashflows, selected-TB statements, closing confirmation and expandable Balance Sheet reconciliation. See CHANGELOG_ARCHIVE.md.
+- static/reconciliation.html, static/reconciliation.js → Reports, Cashflows, comparative Balance Sheets, opening I/S review, closing confirmation and separate reconciliations. See CHANGELOG_ARCHIVE.md.
 
 ## Commands
 - Run app: [your actual run command]
@@ -122,7 +122,8 @@ One line per file group: what it is now. Full build history for every entry live
  - **Prepare once, report fast, verify always:** interns/processors classify categories, Cash/Bank, and derived periods during controlled upload preparation—the practical “desi” preparation layer—while executives receive fast reports from validated read models.
  - Keep raw source rows unchanged; prepared results and browser caches are never the accounting source. Scope read models by client, uploads, configuration, and revision, with canonical SQL fallback when preparation is missing or stale.
 - Financial reports preserve uploaded amounts and round presentation; use validated source/canonical debit-credit fields, not the approximate search helper.
-- Statements use selected ERP closing Leaves; Income Statement reverses Dr−Cr. Profit linking requires reconciliation and source-bound closing confirmation; transfer checks never plug ERP imbalances.
+- Statements use selected ERP Leaves: closing Dr−Cr for current, opening Dr−Cr for comparative; Income Statement reverses signs.
+- Profit linking requires reconciliation and source-bound confirmation. Opening I/S enters comparative equity once; current profit retains closing basis. Transfer checks never plug imbalances.
 - Build voucher flags once from loaded records; avoid repeated DataFrame slicing and verify exact evidence equivalence.
 - Database coverage counts active source lines and distinct vouchers before cashflow filtering; bind totals to client/template/dates and reject broader-period cache totals.
 - Performance experiments require explicit standalone opt-in, PostgreSQL READ ONLY and exact source/report/export comparisons; production integration needs separate approval.
@@ -258,7 +259,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
-- 2026-10-30: Balance Sheet adds expandable TB transfer reconciliation, separating source imbalance and profit, with formula coverage safeguards. See CHANGELOG_ARCHIVE.md.
+- 2026-10-30: Balance Sheet adds opening comparatives, separate reconciliations and opening I/S review without duplicating current profit. See CHANGELOG_ARCHIVE.md.
 - 2026-10-30: Added isolated Trial Balance-to-ACC, Verification, and Financial Statement data-flow safety tests; application source remains unchanged. See CHANGELOG_ARCHIVE.md.
 - 2026-10-30: ACC loads upload options first and opens account details on each tab's Load action. See CHANGELOG_ARCHIVE.md.
 - 2026-10-30: ACC indexes Trial Balance hierarchy, batches statement-calculation reads, and adds opt-in timings while preserving assignment results. See CHANGELOG_ARCHIVE.md.

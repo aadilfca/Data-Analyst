@@ -1,6 +1,7 @@
 """ERP-only Balance Sheet contracts; all data is synthetic and reads are mocked."""
 
 from copy import deepcopy
+from decimal import Decimal
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -368,3 +369,148 @@ def test_transfer_metadata_is_returned_in_existing_snapshot_without_extra_reads(
     assert result.status_code==200,result.text
     assert result.json()['transfer_reconciliation']['status']=='not_reconciled'
     assert len(calls)==9 and len(snapshots)==1
+
+
+@pytest.fixture
+def comparative_case(transfer_case):
+    data = deepcopy(transfer_case)
+    # Opening: 980 assets = 100 liabilities + 900 capital - 20 unclosed expense.
+    data[0] = [account('A', '1300'), account('L', credit='100'), account('C', credit='900'),
+               account('REV', credit='500'), account('COST', '120'), account('TAX', '80')]
+    openings = [('980', '0'), ('0', '100'), ('0', '900'), ('0', '0'), ('20', '0'), ('0', '0')]
+    for row, (dr, cr) in zip(data[0], openings):
+        row.update(opening_dr=dr, opening_cr=cr,
+                   period_dr=str(Decimal(row['closing_dr']) - Decimal(dr)),
+                   period_cr=str(Decimal(row['closing_cr']) - Decimal(cr)))
+    data[1].extend([mapping('REV', 4), mapping('COST', 5), mapping('TAX', 6)])
+    data[2].extend([category(key, section='income_statement') for key in (4, 5, 6)])
+    data[3].append(dict(calc(12), statement_section='income_statement'))
+    data[4].extend([part(12, key) for key in (4, 5, 6)])
+    options = dict(profit_link={'source_calculation_id': 12, 'target_category_id': 3},
+                   closing_status='not_in_capital', context_key='same', confirmed_context_key='same')
+    return data, options
+
+
+def test_comparative_opening_loss_is_separate_and_included_once(comparative_case):
+    data, options = comparative_case
+    original = deepcopy(data)
+    result = build_balance_sheet(*data, **options)
+    opening = result['comparative']
+    assert result['profit_link']['final_profit'] == '300'
+    assert amounts(result)[3] == '1200'
+    assert amounts(opening)[3] == '880'
+    capital = next(row for row in opening['categories'] if row['id'] == 3)
+    assert (capital['erp_amount'], capital['linked_profit']) == ('900', '-20')
+    assert {row['id']: row['amount'] for row in opening['calculations']} == {10: '980', 11: '980'}
+    assert opening['opening_review']['amount'] == '-20'
+    assert opening['opening_review']['accounts'][0]['account_code'] == 'COST'
+    assert opening['transfer_reconciliation']['reconciled']
+    assert opening['transfer_reconciliation']['unexplained_difference'] == '0'
+    assert 'need review' in opening['transfer_reconciliation']['label']
+    assert result['transfer_reconciliation']['reconciled']
+    assert result['transfer_reconciliation']['profit_bridge'] == dict(opening='-20', movement='320', erp_period='320', closing='300', difference='0', reconciled=True)
+    assert data == original
+
+
+def test_comparative_opening_income_increases_equity(comparative_case):
+    data, options = comparative_case
+    data[0][0]['opening_dr'] = '1020'
+    data[0][4].update(opening_dr='0', opening_cr='20')
+    opening = build_balance_sheet(*data, **options)['comparative']
+    assert amounts(opening)[3] == '920'
+    assert opening['opening_review']['amount'] == '20'
+    assert opening['transfer_reconciliation']['reconciled']
+
+
+def test_comparative_offsetting_opening_items_remain_reviewable(comparative_case):
+    data, options = comparative_case
+    data[0][0]['opening_dr'] = '1000'
+    data[0][3]['opening_cr'] = '20'
+    opening = build_balance_sheet(*data, **options)['comparative']
+    assert opening['opening_review']['amount'] == '0'
+    assert opening['opening_review']['account_count'] == 2
+    assert opening['transfer_reconciliation']['opening_review_required']
+    assert 'need review' in opening['transfer_reconciliation']['label']
+    assert opening['transfer_reconciliation']['reconciled']
+
+
+@pytest.mark.parametrize('failure', ['missing', 'inactive', 'liability'])
+def test_comparative_requires_valid_equity_destination(comparative_case, failure):
+    data, options = comparative_case
+    if failure == 'missing': options['profit_link'] = None
+    elif failure == 'inactive': data[2][2]['is_active'] = False
+    else: data[2][2]['presentation_role'] = 'liability'
+    opening = build_balance_sheet(*data, **options)['comparative']
+    assert not opening['opening_review']['included']
+    assert not opening['transfer_reconciliation']['reconciled']
+    assert any('equity destination' in reason for reason in opening['transfer_reconciliation']['issues'])
+    assert opening['opening_review']['amount'] == '-20'
+
+
+def test_comparative_zero_opening_income_needs_no_extra_capital_setup(transfer_case):
+    opening = build_balance_sheet(*transfer_case)['comparative']
+    assert opening['opening_review']['account_count'] == 0
+    assert opening['transfer_reconciliation']['status'] == 'reconciled'
+
+
+def test_comparative_opening_review_does_not_reopen_already_closed_current_profit(comparative_case):
+    data, options = comparative_case
+    options['closing_status'] = 'already_in_capital'
+    data[0][2]['closing_cr'] = '1200'
+    for row in data[0][3:]: row.update(closing_dr='0', closing_cr='0')
+    result = build_balance_sheet(*data, **options)
+    assert not result['profit_link']['applied']
+    assert amounts(result)[3] == '1200'
+    assert result['transfer_reconciliation']['reconciled']
+    assert amounts(result['comparative'])[3] == '880'
+    assert result['comparative']['opening_review']['amount'] == '-20'
+    assert result['comparative']['transfer_reconciliation']['reconciled']
+
+
+def test_comparative_review_destination_must_contribute_to_final_totals(comparative_case):
+    data, options = comparative_case
+    data[2].append(category(7, 'equity'))
+    options['profit_link']['target_category_id'] = 7
+    result = build_balance_sheet(*data, **options)
+    assert result['comparative']['opening_review']['included']
+    assert not result['comparative']['transfer_reconciliation']['reconciled']
+    assert any('No complete final Equity' in item for item in result['comparative']['transfer_reconciliation']['issues'])
+
+
+def test_comparative_and_current_source_imbalances_are_independent(comparative_case):
+    data, options = comparative_case
+    data[0][0]['opening_dr'] = '978.765'
+    result = build_balance_sheet(*data, **options)
+    assert result['controls']['closing_difference'] == '0'
+    assert result['comparative']['controls']['opening_difference'] == '-1.235'
+    assert result['comparative']['transfer_reconciliation']['status'] == 'reconciled_to_tb'
+    assert result['comparative']['transfer_reconciliation']['unexplained_difference'] == '0.000'
+    assert result['transfer_reconciliation']['profit_bridge']['difference'] == '0'
+    data[0][4]['period_dr'] = '90'
+    assert build_balance_sheet(*data, **options)['transfer_reconciliation']['profit_bridge']['difference'] == '-10'
+
+
+def test_comparative_omitted_and_unmapped_opening_accounts_stay_red(comparative_case):
+    data, options = comparative_case
+    data[0].extend([account('EXTRA1', '0'), account('EXTRA2', '0')])
+    data[0][-2]['opening_dr'] = '50'
+    data[0][-1]['opening_cr'] = '50'
+    assert not build_balance_sheet(*data, **options)['comparative']['transfer_reconciliation']['reconciled']
+    data[1].extend([mapping('EXTRA1', 7), mapping('EXTRA2', 7)])
+    data[2].append(category(7, 'asset'))
+    assert not build_balance_sheet(*data, **options)['comparative']['transfer_reconciliation']['reconciled']
+
+
+def test_comparative_api_source_metadata_does_not_add_reads(report_api, monkeypatch):
+    client, state, calls, snapshots, _ = report_api
+    query = reconciliation.execute_query_pg
+    def dated(sql, params):
+        rows = query(sql, params)
+        if 'FROM trial_balance_uploads' in sql:
+            rows[0]['period_start'] = '2026-01-01'
+        return rows
+    monkeypatch.setattr(reconciliation, 'execute_query_pg', dated)
+    result = client.get('/api/reconciliation/financial-statements/balance-sheet', params={'client_id': 7, 'trial_balance_upload_id': 55}).json()
+    assert result['comparative']['opening_at'] == '2026-01-01'
+    assert result['comparative']['source_label'] == 'TB opening balances'
+    assert len(calls) == 9 and len(snapshots) == 1

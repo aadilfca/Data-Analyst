@@ -191,6 +191,8 @@ const NAV_MANIFEST = [
                         keywords: ['financial accounts', 'statement outline'] },
                     { label: 'Balance Sheet', url: '/static/reconciliation.html?report=balance-sheet', state: 'ready',
                         keywords: ['financial position', 'assets', 'liabilities', 'equity', 'financial statements'] },
+                    { label: 'Balance Sheet comparative', url: '/static/reconciliation.html?report=balance-sheet', state: 'ready',
+                        keywords: ['opening balances', 'comparative column', 'opening income statement items', 'opening reconciliation'] },
                     { label: 'Income Statement', url: '/static/reconciliation.html?report=income-statement', state: 'ready',
                         keywords: ['profit and loss', 'sales', 'expenses', 'profit after taxation', 'financial statements'] },
                     { label: 'Balance Sheet reconciliation', url: '/static/reconciliation.html?report=balance-sheet&feature=tb-reconciliation', state: 'ready',

@@ -10,6 +10,146 @@ import pandas as pd
 from openpyxl import load_workbook
 import pytest
 
+
+def test_comparative_statement_browser_isolated_sources_and_review(tmp_path):
+    """Actual report DOM with synthetic accounting/API data; no live server/DB."""
+    import functools
+    import os
+    import threading
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import urlparse, parse_qs
+    from playwright.sync_api import sync_playwright, expect
+    from test_balance_sheet import comparative_case, transfer_case
+    from services.financial_statement_balances import build_balance_sheet, build_income_statement
+
+    data, options = comparative_case.__wrapped__(transfer_case.__wrapped__())
+    upload = dict(id=55, file_name='Synthetic.xlsx', period_start='2026-01-01', period_end='2026-06-30')
+
+    def payload(changed=None, chosen=55, income=False):
+        builder = build_income_statement if income else build_balance_sheet
+        result = builder(*(changed or data), **options)
+        if not income:
+            result['comparative'].update(opening_at='2026-01-01', source_label='TB opening balances')
+        return dict(client_id=7, upload=upload | {'id': chosen}, context_key='same', **result)
+
+    state = dict(value=payload(), error=False)
+    calls, errors = [], []
+
+    class QuietHandler(SimpleHTTPRequestHandler):
+        def log_message(self, *args): pass
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), functools.partial(QuietHandler, directory=str(Path(__file__).resolve().parents[1])))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page(viewport={'width': 1440, 'height': 1000})
+            page.on('pageerror', lambda error: errors.append(str(error)))
+
+            def api(route):
+                parsed = urlparse(route.request.url)
+                calls.append((parsed.path, route.request.method))
+                if parsed.path.endswith('/auth/current-client'):
+                    value = dict(client_id=7, client_name='Example Manufacturing', username='Analyst')
+                elif parsed.path.endswith('/users'):
+                    value = []
+                elif parsed.path.endswith('/account-control-center/uploads'):
+                    value = {'uploads': [upload, upload | {'id': 56, 'file_name': 'Second.xlsx'}]}
+                elif parsed.path.endswith('/financial-statements/income-statement'):
+                    value = payload(income=True)
+                elif parsed.path.endswith('/financial-statements/balance-sheet'):
+                    if state['error']:
+                        route.fulfill(status=409, json={'detail': 'Synthetic source unavailable'})
+                        return
+                    chosen = int(parse_qs(parsed.query)['trial_balance_upload_id'][0])
+                    value = copy.deepcopy(state['value'])
+                    value['upload']['id'] = chosen
+                else:
+                    value = {'settings': {}, 'categories': [], 'calculations': []}
+                route.fulfill(status=200, json=value)
+
+            page.route('**/api/**', api)
+            base = 'http://127.0.0.1:' + str(server.server_port)
+            page.goto(base + '/static/reconciliation.html?report=balance-sheet&trial_balance_upload_id=55')
+            current = page.locator('#balanceSheetReconciliation')
+            opening = page.locator('#openingBalanceSheetReconciliation')
+            expect(opening).to_be_visible()
+            expect(page.locator('#statementComparativeHeader')).to_contain_text('2026-01-01')
+            expect(page.locator('#statementComparativeSource')).to_contain_text('TB opening balances')
+            assert not opening.evaluate('el => el.open')
+            expect(current.locator('summary')).to_contain_text('opening I/S items need review')
+            expect(opening.locator('summary')).to_contain_text('opening I/S items need review')
+            review = page.locator('#balanceSheetRows .opening-income-review')
+            expect(review).to_have_count(1)
+            assert review.locator('td').all_text_contents() == ['', '-20']
+            capital = page.locator('#balanceSheetRows tr.bs-category').filter(has=page.locator('th', has_text='Category 3'))
+            assert capital.locator('td').all_text_contents() == ['1,200', '900']
+            review.locator('summary').click()
+            expect(review.locator('li')).to_contain_text('COST')
+            expect(review.locator('li')).to_contain_text('Opening Dr 20')
+            current.locator('summary').click()
+            opening.locator('summary').focus()
+            page.keyboard.press('Enter')
+            assert opening.evaluate('el => el.open')
+            expect(page.locator('#statementReconciliationIssues')).to_contain_text('opening (20) + movement 320 = closing 300')
+            opening_profit = page.locator('#openingStatementReconciliationRows tr').filter(has_text='Opening I/S items')
+            assert opening_profit.locator('td').all_text_contents() == ['20', '20']
+            for width in (1440, 390):
+                page.set_viewport_size({'width': width, 'height': 1000})
+                assert page.locator('#balanceSheetView').evaluate('el => el.getBoundingClientRect().right <= innerWidth + 1')
+                assert capital.locator('th').bounding_box()['width'] >= 200
+                page.evaluate('window.scrollTo(0, 0)')
+                page.screenshot(path=str(tmp_path / ('comparative-' + str(width) + '.png')), full_page=True)
+
+            # Source changes clear expanded evidence, and both columns reload together.
+            page.locator('#balanceSheetUpload').select_option('56')
+            expect(page.locator('#balanceSheetUpload')).to_be_enabled()
+            expect(opening).to_be_visible()
+            assert not opening.evaluate('el => el.open')
+            changed = copy.deepcopy(data)
+            changed[0][0]['opening_dr'] = '1000'
+            changed[0][3]['opening_cr'] = '20'
+            state['value'] = payload(changed)
+            page.locator('#balanceSheetReload').click()
+            expect(page.locator('#balanceSheetReload')).to_be_enabled()
+            expect(page.locator('.opening-income-review td').last).to_have_text('0')
+            page.locator('.opening-income-review summary').click()
+            expect(page.locator('.opening-income-review li')).to_have_count(2)
+            changed = copy.deepcopy(data)
+            changed[0][0]['opening_dr'] = '979'
+            state['value'] = payload(changed)
+            page.locator('#balanceSheetReload').click()
+            expect(opening.locator('summary')).to_contain_text('source imbalance remains')
+            expect(current.locator('summary')).not_to_contain_text('source imbalance remains')
+            broken = copy.deepcopy(data)
+            broken[1] = [row for row in broken[1] if row['account_code'] != 'COST']
+            state['value'] = payload(broken)
+            page.locator('#balanceSheetReload').click()
+            expect(opening.locator('summary')).to_contain_text('Not reconciled')
+            state['error'] = True
+            page.locator('#balanceSheetReload').click()
+            expect(page.locator('#balanceSheetStatus')).to_contain_text('Synthetic source unavailable')
+            expect(current).to_be_hidden()
+            expect(opening).to_be_hidden()
+            page.goto(base + '/static/reconciliation.html?report=income-statement&trial_balance_upload_id=55')
+            expect(page.locator('#balanceSheetTable')).to_be_visible()
+            expect(page.locator('#statementComparativeHeader')).to_be_hidden()
+            expect(current).to_be_hidden()
+            expect(opening).to_be_hidden()
+            expect(page.locator('.opening-income-review')).to_have_count(0)
+            assert not errors, errors
+            assert all(method == 'GET' for _, method in calls)
+            destination = os.environ.get('CODEX_COMPARATIVE_SCREENSHOT_DIR')
+            if destination:
+                import shutil
+                for picture in tmp_path.glob('comparative-*.png'):
+                    shutil.copyfile(picture, Path(destination) / picture.name)
+            browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+
 from routers import reconciliation
 from services.ledger_group_summary import build_cashflow_summary, build_financial_statement_summary
 from services.ledger_report_source import CASHFLOW_CHILD_DETAILS_VERSION, CASHFLOW_DRILLDOWN_DETAILS_VERSION, CASHFLOW_SUMMARY_PAYLOAD_VERSION, load_cashflow_prepared_drilldown, load_cashflow_prepared_rollup_summary
@@ -2587,7 +2727,7 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "setActiveCashflowWindow" in javascript
     assert "const CASHFLOW_DEFAULT_START = '2026-01-01';" in javascript
     assert "const CASHFLOW_DEFAULT_END = '2026-06-30';" in javascript
-    assert "<script src='/static/reconciliation.js?v=62'></script>" in html
+    assert "<script src='/static/reconciliation.js?v=63'></script>" in html
     assert "id='reconReportPeriod'" in html
     assert "Linked to the loaded Cashflows Report" in html
     assert "id='reconPeriod'" not in html

@@ -5076,6 +5076,14 @@
         return sign + whole + (fraction ? '.' + fraction : '');
     }
     function clearStatementReconciliation() {
+        ['balanceSheetReconciliation', 'openingBalanceSheetReconciliation'].forEach(function (id) {
+            const panel = element(id);
+            panel.hidden = true;
+            panel.open = false;
+        });
+        element('statementComparativeHeader').hidden = true;
+        element('statementComparativeSource').hidden = true;
+        element('balanceSheetTable').classList.remove('has-comparative');
         const details = element('balanceSheetReconciliation');
         details.hidden = true;
         details.open = false;
@@ -5085,29 +5093,41 @@
         element('statementReconciliationIssues').replaceChildren();
         element('statementReconciliationContext').textContent = '';
     }
-    function renderStatementReconciliation(result) {
-        const details = element('balanceSheetReconciliation');
+    function renderStatementReconciliation(result, opening) {
+        const details = element(opening ? 'openingBalanceSheetReconciliation' : 'balanceSheetReconciliation');
+        const target = function (suffix) { return element((opening ? 'openingStatementReconciliation' : 'statementReconciliation') + suffix); };
         const valid = result && Array.isArray(result.rows) && Array.isArray(result.issues);
         const green = valid && result.reconciled === true && ['reconciled', 'reconciled_to_tb'].includes(result.status);
         details.dataset.state = green ? result.status : 'not_reconciled';
-        element('statementReconciliationSummary').textContent = green
-            ? (result.status === 'reconciled_to_tb' ? 'Reconciled to TB — source imbalance remains' : 'Reconciled') : 'Not reconciled';
+        target('Summary').textContent = (opening ? 'Comparative/opening reconciliation: ' : 'Current reconciliation: ')
+            + (green ? result.label : 'Not reconciled');
         if (valid) {
             const amount = function (value) {
                 const shown = balanceSheetAmount(value, true);
                 return shown.startsWith('-') ? '(' + shown.slice(1) + ')' : shown;
             };
-            element('statementReconciliationRows').innerHTML = result.rows.map(function (row) {
+            target('Rows').innerHTML = result.rows.map(function (row) {
                 const total = ['net', 'unexplained'].includes(row.key);
                 return '<tr' + (total ? ' class="reconciliation-total"' : '') + '><th scope="row">' + escapeHtml(row.label) + '</th><td class="reconciliation-number">' + escapeHtml(amount(row.tb)) + '</td><td class="reconciliation-number">' + escapeHtml(amount(row.bs)) + '</td></tr>';
             }).join('');
-            element('statementReconciliationIssues').innerHTML = result.issues.map(function (issue) { return '<li>' + escapeHtml(issue) + '</li>'; }).join('');
+            const issues = result.issues.slice();
+            if (result.opening_review_required) issues.push('Opening I/S items need review. Transfer agreement does not resolve their accounting treatment.');
+            if (result.profit_bridge) {
+                const bridge = result.profit_bridge;
+                issues.push('Closing I/S net available to the current profit link: opening ' + amount(bridge.opening)
+                    + ' + movement ' + amount(bridge.movement) + ' = closing ' + amount(bridge.closing) + '. No extra opening amount is added to current capital.');
+                if (bridge.reconciled === false) issues.push('ERP period I/S movement ' + amount(bridge.erp_period)
+                    + ' differs from closing less opening by ' + amount(bridge.difference) + '; review source roll-forward.');
+            }
+            target('Issues').innerHTML = issues.map(function (issue) { return '<li>' + escapeHtml(issue) + '</li>'; }).join('');
             const totals = result.totals || {};
-            element('statementReconciliationContext').textContent = 'TB column: original leaf closing balances, classified using ACC. BS column: contributions to the final statement totals. '
+            target('Context').textContent = 'TB column: original leaf ' + (opening ? 'opening' : 'closing') + ' balances, classified using ACC. BS column: contributions to the final statement totals. '
                 + (totals.assets && totals.equity_liabilities ? 'Totals checked: ' + totals.assets.label + ' / ' + totals.equity_liabilities.label + '. ' : '')
                 + (result.equation_balanced ? 'The accounting equation is balanced within tolerance.' : 'The accounting equation is not yet balanced or cannot be verified.');
         } else {
-            element('statementReconciliationIssues').innerHTML = '<li>Reconciliation evidence is unavailable. Reload the statement after the server is updated.</li>';
+            target('Rows').replaceChildren();
+            target('Context').textContent = '';
+            target('Issues').innerHTML = '<li>Reconciliation evidence is unavailable. Reload the statement after the server is updated.</li>';
         }
         details.hidden = false;
         if (new URLSearchParams(window.location.search).get('feature') === 'tb-reconciliation') details.open = true;
@@ -5171,14 +5191,53 @@
                 throw new Error('The Balance Sheet source could not be verified. Please reload.');
             }
             const rows = balanceSheetOutline(result.categories, result.calculations, requestedSection);
+            const comparative = requestedSection === 'balance_sheet' ? result.comparative : null;
+            if (requestedSection === 'balance_sheet' && (!comparative || comparative.basis !== 'erp_opening_before_audit_adjustments'
+                || !Array.isArray(comparative.categories) || !Array.isArray(comparative.calculations) || !comparative.opening_review)) {
+                throw new Error('Comparative source could not be verified. Reload after the server is updated.');
+            }
+            const openingRows = comparative ? new Map(balanceSheetOutline(comparative.categories, comparative.calculations).map(function (row) { return [row.key, row.item]; })) : null;
+            table.classList.toggle('has-comparative', !!comparative);
+            const review = comparative && comparative.opening_review;
+            const cell = function (value) {
+                return '<td class="balance-sheet-amount" title="' + escapeHtml(value == null ? 'Amount unavailable; review ACC configuration' : value) + '">' + escapeHtml(balanceSheetAmount(value)) + '</td>';
+            };
+            const reviewRow = function () {
+                if (!review || !review.account_count) return '';
+                const accounts = review.accounts.map(function (item) {
+                    return '<li>' + escapeHtml(item.account_code) + ' · ' + escapeHtml(item.category)
+                        + ' · Opening Dr ' + escapeHtml(balanceSheetAmount(item.opening_dr, true))
+                        + ' · Cr ' + escapeHtml(balanceSheetAmount(item.opening_cr, true))
+                        + ' · Equity effect ' + escapeHtml(balanceSheetAmount(item.equity_effect, true)) + '</li>';
+                }).join('');
+                return '<tr class="opening-income-review"><th scope="row"><details><summary>Opening I/S items — need review</summary><ul>' + accounts
+                    + '</ul><small>' + (review.included ? 'Included once in comparative equity; current capital receives no extra amount.' : 'Not included in comparative totals: configure an active equity destination in ACC.')
+                    + '</small></details></th><td class="balance-sheet-amount"></td>' + cell(review.amount) + '</tr>';
+            };
+            let reviewPlaced = false;
             element('balanceSheetRows').innerHTML = rows.map(function (row) {
                 const inactive = row.item.is_active === false || row.item.is_active === 0;
                 let label = escapeHtml(row.item.label) + (inactive ? '<span class="bs-inactive-label">Inactive</span>' : '');
-                if (row.item.linked_profit != null) label += '<small class="statement-capital-breakdown">ERP capital: ' + escapeHtml(balanceSheetAmount(row.item.erp_amount, true)) + ' · Linked current-period result: ' + escapeHtml(balanceSheetAmount(row.item.linked_profit, true)) + '</small>';
+                if (row.item.linked_profit != null) label += '<small class="statement-capital-breakdown">ERP capital: ' + escapeHtml(balanceSheetAmount(row.item.erp_amount, true)) + ' · Linked closing-balance result: ' + escapeHtml(balanceSheetAmount(row.item.linked_profit, true)) + (review && review.account_count ? ' (includes opening I/S items)' : '') + '</small>';
                 let shownAmount = balanceSheetAmount(row.item.amount);
                 if (requestedSection === 'income_statement' && shownAmount.startsWith('-')) shownAmount = '(' + shownAmount.slice(1) + ')';
-                return '<tr class="bs-' + row.kind + (inactive ? ' bs-inactive' : '') + '"><th scope="row"' + (row.kind === 'heading' ? ' colspan="2"' : '') + '>' + label + '</th>' + (row.kind === 'heading' ? '' : '<td class="balance-sheet-amount" title="' + escapeHtml(row.item.amount == null ? 'Amount unavailable; review ACC configuration' : row.item.amount) + '">' + escapeHtml(shownAmount) + '</td>') + '</tr>';
-            }).join('');
+                const openingItem = openingRows && openingRows.get(row.key);
+                // The comparative capital cell shows ERP capital only; its review
+                // amount is displayed separately while totals include both once.
+                const openingAmount = openingItem && (row.kind === 'category' && openingItem.linked_profit != null ? openingItem.erp_amount : openingItem.amount);
+                let html = '<tr class="bs-' + row.kind + (inactive ? ' bs-inactive' : '') + '"><th scope="row"' + (row.kind === 'heading' ? ' colspan="' + (comparative ? 3 : 2) + '"' : '') + '>' + label + '</th>' + (row.kind === 'heading' ? '' : '<td class="balance-sheet-amount" title="' + escapeHtml(row.item.amount == null ? 'Amount unavailable; review ACC configuration' : row.item.amount) + '">' + escapeHtml(shownAmount) + '</td>' + (comparative ? cell(openingAmount) : '')) + '</tr>';
+                if (review && review.account_count && row.kind === 'category' && Number(row.item.id) === Number(review.target_category_id)) {
+                    html += reviewRow(); reviewPlaced = true;
+                }
+                return html;
+            }).join('') + (!reviewPlaced ? reviewRow() : '');
+            element('statementCurrentHeader').textContent = comparative ? 'Current · ' + (result.upload.period_end || result.upload.as_of_date || 'date unavailable') : 'Current period';
+            element('statementComparativeHeader').hidden = !comparative;
+            if (comparative) {
+                element('statementComparativeHeader').textContent = 'Comparative · opening at ' + (comparative.opening_at || 'date unavailable');
+                element('statementComparativeSource').textContent = 'Comparative source: TB opening balances; prior-year audit adjustments and financial year-end require verification.';
+                element('statementComparativeSource').hidden = false;
+            }
             const controls = result.controls || {};
             const diagnostics = (result.diagnostics || []).map(function (item) { return item.message; });
             if (result.profit_link) {
@@ -5188,6 +5247,12 @@
             }
             diagnostics.unshift('ERP closing Dr: ' + balanceSheetAmount(controls.closing_dr, true) + ' · Cr: ' + balanceSheetAmount(controls.closing_cr, true) + ' · Difference: ' + balanceSheetAmount(controls.closing_difference, true));
             if (controls.unmapped_count) diagnostics.push('Unmapped account codes: ' + (controls.unmapped_account_codes || []).join(', ') + (controls.unmapped_count > 50 ? ' (first 50)' : ''));
+            if (comparative) {
+                const openingControls = comparative.controls;
+                diagnostics.push('ERP opening Dr: ' + balanceSheetAmount(openingControls.opening_dr, true) + ' · Cr: ' + balanceSheetAmount(openingControls.opening_cr, true) + ' · Difference: ' + balanceSheetAmount(openingControls.opening_difference, true));
+                (comparative.diagnostics || []).filter(function (item) { return item.code !== 'unclosed_profit_loss'; }).forEach(function (item) { diagnostics.push('Comparative: ' + item.message); });
+                if (review.account_count) diagnostics.push(review.account_count + ' opening I/S accounts need review. Current closing-balance profit includes their opening balances.');
+            }
             element('balanceSheetDiagnostics').innerHTML = diagnostics.map(function (message) { return '<li>' + escapeHtml(message) + '</li>'; }).join('');
             element('balanceSheetDiagnostics').hidden = false;
             element('balanceSheetDate').textContent = requestedSection === 'income_statement'
@@ -5197,6 +5262,7 @@
             element('statementClosingStatus').value = result.profit_link ? result.profit_link.closing_status : result.closing_status || 'not_confirmed';
             element('statementClosingControls').hidden = false;
             if (requestedSection === 'balance_sheet' && rows.length) renderStatementReconciliation(result.transfer_reconciliation);
+            if (comparative && rows.length) renderStatementReconciliation(comparative.transfer_reconciliation, true);
             table.hidden = !rows.length;
             status.hidden = !!rows.length;
             status.textContent = rows.length ? '' : 'No ' + statementName + ' outline is configured yet. Set up headings and categories in Account Control Centre.';

@@ -9069,3 +9069,20 @@ The proof clears on source changes, errors and view transitions; Income Statemen
 **Documentation:** Existing architecture/status lines rewritten in place; no files added or repurposed, so File_Map.md remains unchanged.
 
 **Acceptance:** Aadil confirmed this phase and authorized commit/push on 2026-10-30.
+
+
+## Balance Sheet opening comparatives and I/S review - 2026-10-30
+
+**Implementation:** The selected TB supplies current closing and comparative opening Dr-Cr through shared ACC categories, signs and formulas. Comparative headers identify the actual opening boundary from period_start, not an assumed financial year-end; missing dates remain unavailable. Source is labelled TB opening balances, pending prior-year final-account/adjustment verification.
+
+Nonzero opening I/S accounts appear in a red expandable row below the configured capital destination. It displays opening credits minus debits separately from ERP capital, while comparative subtotals/totals include it once through the same equity lineage. Offsetting items remain reviewable at net zero. Missing/inactive/non-equity destinations or omitted formula contributions prevent reconciliation. Current closing-balance profit and existing confirmation fingerprints remain unchanged; no extra opening amount enters current capital.
+
+Separate current/opening reconciliation panels preserve source imbalances and completeness checks. The current panel explains opening plus movement equals closing I/S net and flags disagreement with ERP period movements at the existing 0.01 tolerance. Review-qualified transfer statuses do not certify accounting correction. Details include account codes, ACC categories and exact opening debit/credit amounts.
+
+Reports/nav versions are 63/25 across all 19 shared navigation consumers; other HTML changes are version-only. The statement scrolls locally on mobile. Existing nine-read snapshot and source-selection guards are preserved; no schema changes, source writes, workbook edits or packages.
+
+**Verification:** Final statement, Reports, ACC, account-flow, browser and app-smoke regressions: 323 passed, 17 subtests passed, 1 skipped; existing deprecation warnings remain. Synthetic tests cover profit/loss, zero-net review, already-closed current profit, missing destinations, omitted/unmapped accounts, exact independent source differences, stable fingerprints and unchanged Income Statement figures. Browser checks cover both panels, keyboard expansion, account details, source switching, error clearing and Income Statement isolation; desktop/mobile screenshots reviewed. Final mobile-layout browser rerun, Python/JavaScript syntax and whitespace checks pass. Live PostgreSQL performance remains unverified.
+
+**Documentation:** Existing architecture/status entries rewritten; no files added or repurposed. File_Map.md remains at its existing 158 lines, with no new rows.
+
+**Acceptance:** Aadil confirmed this phase and authorized commit/push on 2026-10-30.

@@ -50,20 +50,32 @@
 
         #balanceSheetView .balance-sheet-amount { font-variant-numeric: tabular-nums; white-space: nowrap; }
         #balanceSheetTable .balance-sheet-amount { text-align: right; }
-        #balanceSheetReconciliation[hidden] { display: none; }
-        #balanceSheetReconciliation { margin-top: 16px; border-top: 1px solid #dbe4ea; padding-top: 12px; }
-        #balanceSheetReconciliation > summary { cursor: pointer; font-size: 13px; font-weight: 700; line-height: 1.6; overflow-wrap: anywhere; }
-        #balanceSheetReconciliation[data-state="not_reconciled"] > summary { color: #b91c1c; }
-        #balanceSheetReconciliation[data-state="reconciled"] > summary, #balanceSheetReconciliation[data-state="reconciled_to_tb"] > summary { color: #166534; }
-        #balanceSheetReconciliation > summary:focus-visible { outline: 2px solid #1769aa; outline-offset: 3px; }
-        #balanceSheetReconciliation .statement-reconciliation-body { margin-top: 12px; }
-        #balanceSheetReconciliation p, #statementReconciliationIssues { color: #64748b; font-size: 12px; line-height: 1.6; }
-        #statementReconciliationTable { width: 100%; border-collapse: collapse; font-size: 13px; }
-        #statementReconciliationTable th, #statementReconciliationTable td { padding: 10px 12px; border-bottom: 1px solid #e2e8f0; text-align: left; }
-        #statementReconciliationTable thead th { background: #f3f7fa; color: #536577; }
-        #statementReconciliationTable .reconciliation-number { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-        #statementReconciliationTable tr.reconciliation-total > * { border-top: 2px solid #9fb5c5; background: #f4f8fb; font-weight: 700; }
-        #statementReconciliationIssues { padding-left: 20px; color: #b91c1c; }
+        /* Preserve readable labels on phones; only the statement scrolls sideways. */
+        #balanceSheetTable.has-comparative { min-width: 680px; table-layout: fixed; }
+        #balanceSheetTable.has-comparative thead .balance-sheet-amount { white-space: normal; }
+        @media (max-width: 600px) {
+            #balanceSheetTable.has-comparative { min-width: 460px; }
+        }
+        #balanceSheetView .statement-reconciliation[hidden] { display: none; }
+        #balanceSheetView .statement-reconciliation { margin-top: 16px; border-top: 1px solid #dbe4ea; padding-top: 12px; }
+        #balanceSheetView .statement-reconciliation > summary { cursor: pointer; font-size: 13px; font-weight: 700; line-height: 1.6; overflow-wrap: anywhere; }
+        #balanceSheetView .statement-reconciliation[data-state="not_reconciled"] > summary { color: #b91c1c; }
+        #balanceSheetView .statement-reconciliation[data-state="reconciled"] > summary, #balanceSheetView .statement-reconciliation[data-state="reconciled_to_tb"] > summary { color: #166534; }
+        #balanceSheetView .statement-reconciliation > summary:focus-visible { outline: 2px solid #1769aa; outline-offset: 3px; }
+        #balanceSheetView .statement-reconciliation .statement-reconciliation-body { margin-top: 12px; }
+        #balanceSheetView .statement-reconciliation p, #balanceSheetView .statement-reconciliation-issues { color: #64748b; font-size: 12px; line-height: 1.6; }
+        #balanceSheetView .statement-reconciliation-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        #balanceSheetView .statement-reconciliation-table th, #balanceSheetView .statement-reconciliation-table td { padding: 10px 12px; border-bottom: 1px solid #e2e8f0; text-align: left; }
+        #balanceSheetView .statement-reconciliation-table thead th { background: #f3f7fa; color: #536577; }
+        #balanceSheetView .statement-reconciliation-table .reconciliation-number { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+        #balanceSheetView .statement-reconciliation-table tr.reconciliation-total > * { border-top: 2px solid #9fb5c5; background: #f4f8fb; font-weight: 700; }
+        #balanceSheetView .statement-reconciliation-issues { padding-left: 20px; color: #b91c1c; }
+        #balanceSheetTable .opening-income-review > * { color: #b91c1c; border-bottom: 1px solid #fecaca; }
+        #balanceSheetTable .opening-income-review th { text-align: left; font-weight: 500; }
+        #balanceSheetTable .opening-income-review summary { cursor: pointer; }
+        #balanceSheetTable .opening-income-review ul { padding-left: 18px; font-size: 12px; font-weight: 400; line-height: 1.6; }
+        #balanceSheetTable .opening-income-review li { overflow-wrap: anywhere; }
+        #balanceSheetTable [hidden] { display: none; }
         /* Scope this compact toolbar/picker to Cashflows, without changing shared pages. */
         #cashflowsSummaryControlsPanel .cashflows-filter-bar { display: flex; flex-wrap: wrap; gap: 8px; }
         #cashflowsSummaryControlsPanel .cashflows-report-scope { flex: 1 1 auto; min-width: 0; gap: 9px; }
@@ -283,16 +295,25 @@
             <div class='balance-sheet-source'><label for='balanceSheetUpload'>Trial Balance</label><select id='balanceSheetUpload'><option value=''>Select a Trial Balance</option></select></div>
             <div id='statementClosingControls' class='balance-sheet-source' hidden><label for='statementClosingStatus'>Profit closing status for this TB</label><select id='statementClosingStatus'><option value='not_confirmed'>Not confirmed</option><option value='not_in_capital'>Profit is not yet included in ERP capital</option><option value='already_in_capital'>Profit is already included in ERP capital</option></select><button type='button' id='statementClosingSave' class='cashflows-secondary'>Save closing status</button></div>
             <article class='balance-sheet-paper'>
-                <header class='balance-sheet-caption'><h3 id='balanceSheetClient'></h3><p>Draft — before audit adjustments</p><p id='balanceSheetDate'></p><p>Amounts rounded to whole units; hover to see exact values.</p></header>
+                <header class='balance-sheet-caption'><h3 id='balanceSheetClient'></h3><p>Draft — before audit adjustments</p><p id='balanceSheetDate'></p><p id='statementComparativeSource' hidden></p><p>Amounts rounded to whole units; hover to see exact values.</p></header>
                 <ul id='balanceSheetDiagnostics' aria-label='Balance Sheet review items' hidden></ul>
                 <p id='balanceSheetStatus' role='status' aria-live='polite'></p>
-                <div class='balance-sheet-table-wrap'><table id='balanceSheetTable' aria-label='Draft Balance Sheet before audit adjustments' hidden><thead><tr><th scope='col'>Particulars</th><th scope='col' class='balance-sheet-amount'>Current period</th></tr></thead><tbody id='balanceSheetRows'></tbody></table></div>
-                <details id='balanceSheetReconciliation' data-state='not_reconciled' hidden>
+                <div class='balance-sheet-table-wrap'><table id='balanceSheetTable' aria-label='Draft Balance Sheet before audit adjustments' hidden><thead><tr><th scope='col'>Particulars</th><th scope='col' id='statementCurrentHeader' class='balance-sheet-amount'>Current period</th><th scope='col' id='statementComparativeHeader' class='balance-sheet-amount' hidden>Comparative</th></tr></thead><tbody id='balanceSheetRows'></tbody></table></div>
+                <details id='balanceSheetReconciliation' class='statement-reconciliation' data-state='not_reconciled' hidden>
                     <summary id='statementReconciliationSummary'>Not reconciled</summary>
                     <div class='statement-reconciliation-body'>
                         <p id='statementReconciliationContext'></p>
-                        <div class='balance-sheet-table-wrap'><table id='statementReconciliationTable' aria-label='Trial Balance to Balance Sheet comparison'><thead><tr><th scope='col'>Particulars</th><th scope='col' class='reconciliation-number'>As per TB</th><th scope='col' class='reconciliation-number'>As per BS</th></tr></thead><tbody id='statementReconciliationRows'></tbody></table></div>
-                        <ul id='statementReconciliationIssues'></ul>
+                        <div class='balance-sheet-table-wrap'><table id='statementReconciliationTable' class='statement-reconciliation-table' aria-label='Trial Balance to Balance Sheet comparison'><thead><tr><th scope='col'>Particulars</th><th scope='col' class='reconciliation-number'>As per TB</th><th scope='col' class='reconciliation-number'>As per BS</th></tr></thead><tbody id='statementReconciliationRows'></tbody></table></div>
+                        <ul id='statementReconciliationIssues' class='statement-reconciliation-issues'></ul>
+                        <p>Debit balances are positive; credit balances are in parentheses. Comparison only: no balancing entry is posted. Exact amounts are used, with a tolerance of 0.01.</p>
+                    </div>
+                </details>
+                <details id='openingBalanceSheetReconciliation' class='statement-reconciliation' data-state='not_reconciled' hidden>
+                    <summary id='openingStatementReconciliationSummary'>Not reconciled</summary>
+                    <div class='statement-reconciliation-body'>
+                        <p id='openingStatementReconciliationContext'></p>
+                        <div class='balance-sheet-table-wrap'><table id='openingStatementReconciliationTable' class='statement-reconciliation-table' aria-label='Opening Trial Balance to comparative Balance Sheet comparison'><thead><tr><th scope='col'>Particulars</th><th scope='col' class='reconciliation-number'>As per TB</th><th scope='col' class='reconciliation-number'>As per BS</th></tr></thead><tbody id='openingStatementReconciliationRows'></tbody></table></div>
+                        <ul id='openingStatementReconciliationIssues' class='statement-reconciliation-issues'></ul>
                         <p>Debit balances are positive; credit balances are in parentheses. Comparison only: no balancing entry is posted. Exact amounts are used, with a tolerance of 0.01.</p>
                     </div>
                 </details>
@@ -554,8 +575,8 @@
             </dialog>
         </div>
     </section>
-    <script src='/static/client_context.js?v=24'></script>
+    <script src='/static/client_context.js?v=25'></script>
     <script src='/static/loading_ui.js?v=ce6d21ca20c8'></script>
-    <script src='/static/reconciliation.js?v=62'></script>
+    <script src='/static/reconciliation.js?v=63'></script>
 </body>
 </html>

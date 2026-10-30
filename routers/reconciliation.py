@@ -3000,6 +3000,13 @@ def balance_sheet_report(
                              controls, int(adjustment_counts[0]["count"]) if adjustment_counts else 0,
                              profit_link=profit_link, closing_status=closing_status,
                              context_key=context_key, confirmed_context_key=confirmed_context_key)
+            if statement_section == 'balance_sheet':
+                # Opening is a source boundary, not proof of the client's year-end.
+                try:
+                    opening_at = date.fromisoformat(str(upload.get('period_start'))[:10]).isoformat()
+                except (TypeError, ValueError):
+                    opening_at = None
+                result['comparative'].update(opening_at=opening_at, source_label='TB opening balances')
         except BalanceSheetInputError as error:
             raise HTTPException(409, str(error)) from error
         return {"client_id": client_id, "upload": upload, "context_key": context_key, "closing_status": closing_status if context_key == confirmed_context_key else "not_confirmed", **result}
