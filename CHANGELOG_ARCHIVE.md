@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Phased Financial Statement Notes loading — 2026-10-31
+
+Main statements now load with lightweight note references; full note details load after the statement or on first Notes click. Concurrent requests are reused, and client/upload/context changes discard stale results. Existing API callers retain full notes by default. This adds read-only calculation work in a second request and no schema changes.
+
+**Verification:** Combined Balance Sheet, Income Statement and reconciliation suites passed (200 passed, 1 skipped); two stale UI assertions were corrected and rerun successfully. Playwright verified background timing, click-before-main reuse, direct Notes links, error recovery and retry. JavaScript/Python syntax and diff checks passed.
+
 ## Balance Sheet report header and review popups — 2026-10-31
 
 Moved the client/statement title into a compact two-row header. The Period dropdown displays the selected date range; alternate choices retain their workbook names. Removed the repeated caption and moved profit-closing controls and source diagnostics into accessible, keyboard-operable dialogs with compact SVG icon buttons. Comparative-source guidance remains in review items. Set statement top padding to 88.5px: 72.5px for the global header plus a 16px gap. No API or schema changes; custom editable Trial Balance names remain a separate follow-up.

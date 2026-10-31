@@ -2926,6 +2926,7 @@ def balance_sheet_report(
     trial_balance_upload_id: int = Query(..., ge=1),
     session=Depends(require_admin),
     statement_section: str = "balance_sheet",
+    include_notes: bool = True,
 ):
     """Compute one selected ERP TB and current statement configuration in one snapshot."""
     def read(_connection):
@@ -3005,6 +3006,16 @@ def balance_sheet_report(
         links = execute_query_pg("SELECT source_calculation_id, target_category_id FROM account_control_profit_links WHERE client_id = %s", (client_id,))
         profit_link = dict(links[0]) if links else None
         context_key = financial_statement_context_key(accounts, statement_assignments, categories, calculations, components, profit_link)
+        notes_context_key = financial_statement_context_key(
+            accounts, assignments, categories, calculations, components,
+            {
+                "client_id": client_id,
+                "trial_balance_upload_id": trial_balance_upload_id,
+                "statement_section": statement_section,
+                "profit_link": profit_link or {},
+                "note_categories": note_categories,
+            },
+        )
         if statement_section not in {"balance_sheet", "income_statement"}:
             raise HTTPException(400, "Choose Balance Sheet or Income Statement")
         try:
@@ -3020,10 +3031,32 @@ def balance_sheet_report(
                 except (TypeError, ValueError):
                     opening_at = None
                 result['comparative'].update(opening_at=opening_at, source_label='TB opening balances')
-            result['notes'] = build_statement_notes(accounts, assignments, note_categories, result, statement_section)
+            if include_notes:
+                result['notes'] = build_statement_notes(accounts, assignments, note_categories, result, statement_section)
+            else:
+                statement_category_ids = {
+                    int(row['id']) for row in result.get('categories', [])
+                    if row.get('row_type') == 'category' and row.get('statement_section') == statement_section
+                }
+                result['note_references'] = {
+                    'statement_section': statement_section,
+                    'roots': [
+                        {
+                            'id': int(row['id']),
+                            'source_statement_category_id': int(row['source_statement_category_id']),
+                            'sort_order': int(row.get('sort_order') or 0),
+                        }
+                        for row in note_categories
+                        if row.get('parent_category_id') is None
+                        and row.get('source_statement_category_id') is not None
+                        and int(row['source_statement_category_id']) in statement_category_ids
+                    ],
+                }
         except BalanceSheetInputError as error:
             raise HTTPException(409, str(error)) from error
-        return {"client_id": client_id, "upload": upload, "context_key": context_key, "closing_status": closing_status if context_key == confirmed_context_key else "not_confirmed", **result}
+        return {"client_id": client_id, "upload": upload, "context_key": context_key,
+                "notes_context_key": notes_context_key,
+                "closing_status": closing_status if context_key == confirmed_context_key else "not_confirmed", **result}
     return run_read_snapshot_pg(read)
 
 
@@ -3031,8 +3064,36 @@ def balance_sheet_report(
 def income_statement_report(
     client_id: int = Query(..., ge=1), trial_balance_upload_id: int = Query(..., ge=1),
     session=Depends(require_admin),
+    include_notes: bool = True,
 ):
-    return balance_sheet_report(client_id, trial_balance_upload_id, session, statement_section="income_statement")
+    return balance_sheet_report(client_id, trial_balance_upload_id, session,
+                                statement_section="income_statement", include_notes=include_notes)
+
+
+@router.get("/api/reconciliation/financial-statements/notes")
+def financial_statement_notes_report(
+    client_id: int = Query(..., ge=1),
+    trial_balance_upload_id: int = Query(..., ge=1),
+    statement_section: str = Query(...),
+    session=Depends(require_admin),
+):
+    if statement_section not in {"balance_sheet", "income_statement"}:
+        raise HTTPException(400, "Choose Balance Sheet or Income Statement")
+    result = balance_sheet_report(
+        client_id, trial_balance_upload_id, session,
+        statement_section=statement_section, include_notes=True,
+    )
+    return {
+        "client_id": result["client_id"],
+        "upload": result["upload"],
+        "context_key": result["context_key"],
+        "notes_context_key": result["notes_context_key"],
+        "statement_section": result["statement_section"],
+        "categories": result["categories"],
+        "calculations": result["calculations"],
+        "comparative": result.get("comparative"),
+        "notes": result["notes"],
+    }
 
 
 @router.get("/api/reconciliation/financial-statements/preview")

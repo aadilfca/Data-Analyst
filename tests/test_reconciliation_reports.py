@@ -30,9 +30,38 @@ def test_comparative_statement_browser_isolated_sources_and_review(tmp_path):
         result = builder(*(changed or data), **options)
         if not income:
             result['comparative'].update(opening_at='2026-01-01', source_label='TB opening balances')
+        section = result['statement_section']
+        source = next(row for row in result['categories'] if row.get('row_type') == 'category' and row.get('statement_section') == section)
+        note_id = 702 if income else 701
+        result['note_references'] = {'statement_section': section, 'roots': [
+            {'id': note_id, 'source_statement_category_id': source['id'], 'sort_order': 0}
+        ]}
+        result['notes_context_key'] = section + '-notes-context'
         return dict(client_id=7, upload=upload | {'id': chosen}, context_key='same', **result)
 
-    state = dict(value=payload(), error=False)
+    def notes_payload(chosen=55, income=False):
+        core = payload(chosen=chosen, income=income)
+        section = core['statement_section']
+        reference = core['note_references']['roots'][0]
+        note = {
+            **reference, 'label': 'Synthetic note', 'parent_category_id': None, 'is_active': True,
+            'current_amount': '300', 'comparative_amount': '250' if not income else None,
+            'account_count': 1, 'children': [],
+        }
+        return {
+            'client_id': core['client_id'], 'upload': core['upload'], 'context_key': core['context_key'],
+            'notes_context_key': core['notes_context_key'], 'statement_section': section,
+            'categories': core['categories'], 'calculations': core['calculations'],
+            'comparative': core.get('comparative'),
+            'notes': {'statement_section': section, 'roots': [note], 'coverage': [{
+                'statement_category_id': reference['source_statement_category_id'], 'label': 'Synthetic category',
+                'note_root_id': reference['id'], 'account_count': 1, 'assigned_account_count': 1,
+                'unassigned_account_count': 0, 'current_difference': '0',
+                'comparative_difference': '0' if not income else None,
+            }]},
+        }
+
+    state = dict(value=payload(), error=False, notes_error=False)
     calls, errors = [], []
 
     class QuietHandler(SimpleHTTPRequestHandler):
@@ -46,6 +75,7 @@ def test_comparative_statement_browser_isolated_sources_and_review(tmp_path):
             browser = pw.chromium.launch(headless=True)
             page = browser.new_page(viewport={'width': 1440, 'height': 1000})
             page.on('pageerror', lambda error: errors.append(str(error)))
+            page.add_init_script("""(() => { const original = window.fetch.bind(window); window.__notesStartedAfterMain = false; window.fetch = function (input, init) { const url = typeof input === 'string' ? input : input.url; if (url.includes('/financial-statements/notes')) { const table = document.querySelector('#balanceSheetTable'); const view = document.querySelector('#balanceSheetView'); window.__notesStartedAfterMain = !!table && !table.hidden && view.getAttribute('aria-busy') === 'false'; } return original(input, init); }; })();""")
 
             def api(route):
                 parsed = urlparse(route.request.url)
@@ -56,6 +86,14 @@ def test_comparative_statement_browser_isolated_sources_and_review(tmp_path):
                     value = []
                 elif parsed.path.endswith('/account-control-center/uploads'):
                     value = {'uploads': [upload, upload | {'id': 56, 'file_name': 'Second.xlsx'}]}
+                elif parsed.path.endswith('/financial-statements/notes'):
+                    if state['notes_error']:
+                        route.fulfill(status=503, json={'detail': 'Synthetic notes unavailable'})
+                        return
+                    query = parse_qs(parsed.query)
+                    section = query.get('statement_section', ['balance_sheet'])[0]
+                    chosen = int(query.get('trial_balance_upload_id', ['55'])[0])
+                    value = notes_payload(chosen=chosen, income=section == 'income_statement')
                 elif parsed.path.endswith('/financial-statements/income-statement'):
                     value = payload(income=True)
                 elif parsed.path.endswith('/financial-statements/balance-sheet'):
@@ -72,19 +110,48 @@ def test_comparative_statement_browser_isolated_sources_and_review(tmp_path):
             page.route('**/api/**', api)
             base = 'http://127.0.0.1:' + str(server.server_port)
             page.goto(base + '/static/reconciliation.html?report=balance-sheet&trial_balance_upload_id=55')
+            expect(page.locator('#balanceSheetTable')).to_be_visible()
+            page.wait_for_function('window.__notesStartedAfterMain === true')
+            notes_path = '/api/reconciliation/financial-statements/notes'
+            assert sum(path == notes_path for path, _ in calls) == 1
+            page.locator('#balanceSheetNotesOpen').click()
+            expect(page.locator('#balanceSheetNotesTable')).to_be_visible()
+            expect(page.locator('#balanceSheetNotesRows')).to_contain_text('Synthetic note')
+            assert sum(path == notes_path for path, _ in calls) == 1
+            page.locator('#balanceSheetNotesBack').click()
+
+            early = browser.new_page(viewport={'width': 1440, 'height': 1000})
+            early.on('pageerror', lambda error: errors.append(str(error)))
+            early.add_init_script("""(() => { const original = window.fetch.bind(window); window.__releaseMainStatementFetch = null; window.fetch = function (input, init) { const url = typeof input === 'string' ? input : input.url; if (url.includes('/financial-statements/balance-sheet') && url.includes('include_notes=false')) { return new Promise((resolve, reject) => { window.__releaseMainStatementFetch = () => original(input, init).then(resolve, reject); }); } return original(input, init); }; })();""")
+            early.route('**/api/**', api)
+            early.goto(base + '/static/reconciliation.html?report=balance-sheet&trial_balance_upload_id=55')
+            early.wait_for_function('window.__releaseMainStatementFetch !== null')
+            assert early.locator('#balanceSheetTable').is_hidden()
+            early.locator('#balanceSheetNotesOpen').click()
+            expect(early.locator('#balanceSheetNotesTable')).to_be_visible()
+            expect(early.locator('#balanceSheetNotesRows')).to_contain_text('Synthetic note')
+            assert sum(path == notes_path for path, _ in calls) == 2
+            early.evaluate('window.__releaseMainStatementFetch()')
+            early.wait_for_function("document.querySelector('#balanceSheetView').getAttribute('aria-busy') === 'false'")
+            assert sum(path == notes_path for path, _ in calls) == 2
+            assert early.locator('#balanceSheetNotesView').is_visible()
+            early.close()
+
             current = page.locator('#balanceSheetReconciliation')
             opening = page.locator('#openingBalanceSheetReconciliation')
             expect(opening).to_be_visible()
             expect(page.locator('#statementComparativeHeader')).to_contain_text('2026-01-01')
-            expect(page.locator('#statementComparativeSource')).to_contain_text('TB opening balances')
+            page.locator('#balanceSheetDiagnosticsOpen').click()
+            expect(page.locator('#balanceSheetDiagnostics')).to_contain_text('Comparative basis: TB opening balances')
+            page.locator('#balanceSheetDiagnosticsDialog [data-statement-dialog-close]').click()
             assert not opening.evaluate('el => el.open')
             expect(current.locator('summary')).to_contain_text('opening I/S items need review')
             expect(opening.locator('summary')).to_contain_text('opening I/S items need review')
             review = page.locator('#balanceSheetRows .opening-income-review')
             expect(review).to_have_count(1)
-            assert review.locator('td').all_text_contents() == ['', '-20']
+            assert review.locator('td').all_text_contents() == ['', '', '-20']
             capital = page.locator('#balanceSheetRows tr.bs-category').filter(has=page.locator('th', has_text='Category 3'))
-            assert capital.locator('td').all_text_contents() == ['1,200', '900']
+            assert capital.locator('td').all_text_contents() == ['', '1,200', '900']
             review.locator('summary').click()
             expect(review.locator('li')).to_contain_text('COST')
             expect(review.locator('li')).to_contain_text('Opening Dr 20')
@@ -98,7 +165,7 @@ def test_comparative_statement_browser_isolated_sources_and_review(tmp_path):
             for width in (1440, 390):
                 page.set_viewport_size({'width': width, 'height': 1000})
                 assert page.locator('#balanceSheetView').evaluate('el => el.getBoundingClientRect().right <= innerWidth + 1')
-                assert capital.locator('th').bounding_box()['width'] >= 200
+                assert capital.locator('th').bounding_box()['width'] >= (120 if width <= 600 else 200)
                 page.evaluate('window.scrollTo(0, 0)')
                 page.screenshot(path=str(tmp_path / ('comparative-' + str(width) + '.png')), full_page=True)
 
@@ -138,6 +205,26 @@ def test_comparative_statement_browser_isolated_sources_and_review(tmp_path):
             expect(current).to_be_hidden()
             expect(opening).to_be_hidden()
             expect(page.locator('.opening-income-review')).to_have_count(0)
+
+            # A direct Notes URL should load the requested Income Statement note.
+            page.goto(base + '/static/reconciliation.html?report=income-statement-notes&trial_balance_upload_id=55&note_id=702')
+            expect(page.locator('#incomeStatementNotesTable')).to_be_visible()
+            expect(page.locator('#incomeStatementNotesRows')).to_contain_text('Synthetic note')
+            assert page.locator('#incomeStatementNotesNote-702').evaluate("el => el.classList.contains('bs-note-selected')")
+
+            # A failed background load must leave the statement usable, and reopening Notes retries.
+            state['error'] = False
+            state['notes_error'] = True
+            page.goto(base + '/static/reconciliation.html?report=balance-sheet&trial_balance_upload_id=55')
+            expect(page.locator('#balanceSheetTable')).to_be_visible()
+            page.locator('#balanceSheetNotesOpen').click()
+            expect(page.locator('#balanceSheetNotesStatus')).to_contain_text('Synthetic notes unavailable')
+            state['notes_error'] = False
+            page.locator('#balanceSheetNotesBack').click()
+            page.locator('#balanceSheetNotesOpen').click()
+            expect(page.locator('#balanceSheetNotesTable')).to_be_visible()
+            expect(page.locator('#balanceSheetNotesRows')).to_contain_text('Synthetic note')
+
             assert not errors, errors
             assert all(method == 'GET' for _, method in calls)
             destination = os.environ.get('CODEX_COMPARATIVE_SCREENSHOT_DIR')
@@ -2727,7 +2814,7 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "setActiveCashflowWindow" in javascript
     assert "const CASHFLOW_DEFAULT_START = '2026-01-01';" in javascript
     assert "const CASHFLOW_DEFAULT_END = '2026-06-30';" in javascript
-    assert "<script src='/static/reconciliation.js?v=63'></script>" in html
+    assert "<script src='/static/reconciliation.js?v=68'></script>" in html
     assert "id='reconReportPeriod'" in html
     assert "Linked to the loaded Cashflows Report" in html
     assert "id='reconPeriod'" not in html
@@ -2875,7 +2962,7 @@ def test_reports_hub_exposes_requested_report_cards():
     assert "Vendor Reports" in html
     assert "Customer Reports" in html
     assert "Financial Statements" in html
-    assert "Draft — before audit adjustments" in html
+    assert "Draft disclosures — before audit adjustments" in html
     assert "balanceSheetUpload" in html
     assert "/api/reconciliation/financial-statements/balance-sheet" in javascript
     assert "/api/reconciliation/financial-statements/income-statement" in javascript

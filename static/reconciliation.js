@@ -5007,13 +5007,25 @@
     let activeStatement = 'balance_sheet';
     let currentStatementContext = null;
     let currentStatementResult = null;
+    let currentStatementNotes = null;
+    let statementNotesRequest = null;
+    let statementNotesGeneration = 0;
+    let activeStatementNotesView = null;
     let pendingStatementNote = null;
     let balanceSheetRequest = null;
     let balanceSheetGeneration = 0;
+    function cancelStatementNotesLoad(clearCache) {
+        statementNotesGeneration += 1;
+        if (statementNotesRequest) statementNotesRequest.controller.abort();
+        statementNotesRequest = null;
+        if (clearCache !== false) currentStatementNotes = null;
+    }
     function cancelBalanceSheetLoad() {
         balanceSheetGeneration += 1;
         if (balanceSheetRequest) balanceSheetRequest.abort();
         balanceSheetRequest = null;
+        cancelStatementNotesLoad(true);
+        activeStatementNotesView = null;
     }
     // Reproduce ACC's source-based placement without evaluating any financial amounts.
     function balanceSheetOutline(categories, calculations, section) {
@@ -5101,10 +5113,10 @@
         });
         return {roots: roots, byStatementCategory: byStatementCategory, byNoteId: byNoteId};
     }
-    function renderStatementNotes(section, selectedNoteId) {
+    function renderStatementNotes(section, selectedNoteId, statementNotesPayload) {
         const isBalanceSheet = section === 'balance_sheet';
         const prefix = isBalanceSheet ? 'balanceSheetNotes' : 'incomeStatementNotes';
-        const result = currentStatementResult;
+        const result = statementNotesPayload || currentStatementResult;
         const notes = result && result.notes;
         const table = element(prefix + 'Table');
         const status = element(prefix + 'Status');
@@ -5112,6 +5124,7 @@
             status.classList.add('is-error');
             status.textContent = 'Statement notes could not be loaded. Reload the statement and try again.';
             table.hidden = true;
+            element(prefix + 'View').setAttribute('aria-busy', 'false');
             return;
         }
         const numbering = statementNoteNumbers(notes, result.categories, result.calculations, section);
@@ -5158,10 +5171,91 @@
         });
         element(prefix + 'CoverageRows').innerHTML = coverageRows.join('');
         element(prefix + 'Coverage').hidden = !coverageRows.length;
+        element(prefix + 'View').setAttribute('aria-busy', 'false');
         if (selectedNoteId != null) {
             const target = element(prefix + 'Note-' + Number(selectedNoteId));
             if (target) target.scrollIntoView({block: 'center'});
         }
+    }
+    function statementNotesKey(section, requestedClient, uploadId) {
+        return [section, Number(requestedClient), String(uploadId)].join(':');
+    }
+    function statementNotesViewMatches(key) {
+        return !!activeStatementNotesView && activeStatementNotesView.key === key;
+    }
+    function showStatementNotesLoading(section, key) {
+        if (!statementNotesViewMatches(key)) return;
+        const prefix = section === 'balance_sheet' ? 'balanceSheetNotes' : 'incomeStatementNotes';
+        const status = element(prefix + 'Status');
+        const table = element(prefix + 'Table');
+        status.classList.remove('is-error');
+        status.textContent = 'Loading ' + (section === 'balance_sheet' ? 'Balance Sheet' : 'Income Statement') + ' notes…';
+        table.hidden = true;
+        element(prefix + 'Coverage').hidden = true;
+        element(prefix + 'View').setAttribute('aria-busy', 'true');
+    }
+    function loadStatementNotes(section, uploadId) {
+        const requestedClient = Number(clientId);
+        const requestedUpload = String(uploadId || '');
+        const key = statementNotesKey(section, requestedClient, requestedUpload);
+        if (!requestedClient || !requestedUpload) return Promise.resolve(null);
+        if (statementNotesViewMatches(key)) showStatementNotesLoading(section, key);
+        if (currentStatementNotes && currentStatementNotes.key === key) {
+            const mainMatches = currentStatementResult && currentStatementContext
+                && currentStatementContext.notesKey === key
+                && currentStatementNotes.result.notes_context_key === currentStatementResult.notes_context_key;
+            if (!currentStatementResult || !currentStatementContext || mainMatches) {
+                if (statementNotesViewMatches(key)) renderStatementNotes(section, activeStatementNotesView.noteId, currentStatementNotes.result);
+                return Promise.resolve(currentStatementNotes.result);
+            }
+            currentStatementNotes = null;
+        }
+        if (statementNotesRequest && statementNotesRequest.key === key) return statementNotesRequest.promise;
+        if (statementNotesRequest) cancelStatementNotesLoad(false);
+        const generation = ++statementNotesGeneration;
+        const controller = new AbortController();
+        let timedOut = false;
+        const timeout = window.setTimeout(function () { timedOut = true; controller.abort(); }, 30000);
+        const query = new URLSearchParams({client_id: String(requestedClient), trial_balance_upload_id: requestedUpload, statement_section: section});
+        const task = {key: key, controller: controller, generation: generation, promise: null};
+        statementNotesRequest = task;
+        task.promise = api('/api/reconciliation/financial-statements/notes?' + query.toString(), {signal: controller.signal})
+            .then(function (result) {
+                if (generation !== statementNotesGeneration) return null;
+                if (Number(result.client_id) !== requestedClient || !result.upload || String(result.upload.id) !== requestedUpload
+                    || result.statement_section !== section || !result.notes || result.notes.statement_section !== section
+                    || !Array.isArray(result.notes.roots) || !Array.isArray(result.notes.coverage)
+                    || !Array.isArray(result.categories) || !Array.isArray(result.calculations)
+                    || !result.notes_context_key) {
+                    throw new Error('The selected Trial Balance notes could not be verified. Reload the statement and try again.');
+                }
+                const mainMatches = currentStatementResult && currentStatementContext
+                    && currentStatementContext.notesKey === key;
+                if (mainMatches && (result.context_key !== currentStatementResult.context_key
+                    || result.notes_context_key !== currentStatementResult.notes_context_key)) {
+                    throw new Error('Notes or statement setup changed while loading. Reload the statement and try again.');
+                }
+                currentStatementNotes = {key: key, result: result};
+                if (statementNotesViewMatches(key)) renderStatementNotes(section, activeStatementNotesView.noteId, result);
+                return result;
+            })
+            .catch(function (error) {
+                if (generation === statementNotesGeneration && statementNotesViewMatches(key) && (!controller.signal.aborted || timedOut)) {
+                    const prefix = section === 'balance_sheet' ? 'balanceSheetNotes' : 'incomeStatementNotes';
+                    const status = element(prefix + 'Status');
+                    status.classList.add('is-error');
+                    status.textContent = (timedOut ? 'Loading took too long.' : error.message) + ' Return to the statement and reopen Notes to retry.';
+                    element(prefix + 'Table').hidden = true;
+                    element(prefix + 'Coverage').hidden = true;
+                    element(prefix + 'View').setAttribute('aria-busy', 'false');
+                }
+                return null;
+            })
+            .finally(function () {
+                window.clearTimeout(timeout);
+                if (statementNotesRequest === task) statementNotesRequest = null;
+            });
+        return task.promise;
     }
     function clearStatementReconciliation() {
         ['balanceSheetReconciliation', 'openingBalanceSheetReconciliation'].forEach(function (id) {
@@ -5312,19 +5406,25 @@
             const endpoint = requestedSection === 'income_statement'
                 ? '/api/reconciliation/financial-statements/income-statement'
                 : '/api/reconciliation/financial-statements/balance-sheet';
-        const result = await api(endpoint + suffix + '&trial_balance_upload_id=' + encodeURIComponent(requested), { signal: controller.signal });
+        const result = await api(endpoint + suffix + '&trial_balance_upload_id=' + encodeURIComponent(requested) + '&include_notes=false', { signal: controller.signal });
             if (generation !== balanceSheetGeneration || requestedClient !== clientId) return;
-            if (Number(result.client_id) !== Number(requestedClient) || !result.upload || String(result.upload.id) !== requested || !Array.isArray(result.categories) || !Array.isArray(result.calculations) || result.basis !== 'erp_closing_before_audit_adjustments' || result.statement_section !== requestedSection || !result.notes || result.notes.statement_section !== requestedSection || !Array.isArray(result.notes.roots) || !Array.isArray(result.notes.coverage)) {
+            if (Number(result.client_id) !== Number(requestedClient) || !result.upload || String(result.upload.id) !== requested || !Array.isArray(result.categories) || !Array.isArray(result.calculations) || result.basis !== 'erp_closing_before_audit_adjustments' || result.statement_section !== requestedSection || !result.note_references || result.note_references.statement_section !== requestedSection || !Array.isArray(result.note_references.roots) || !result.notes_context_key) {
                 throw new Error('The ' + statementName + ' source could not be verified. Please reload.');
             }
             const rows = balanceSheetOutline(result.categories, result.calculations, requestedSection);
-            const noteNumbers = statementNoteNumbers(result.notes, result.categories, result.calculations, requestedSection).byStatementCategory;
+            const noteNumbers = statementNoteNumbers(result.note_references, result.categories, result.calculations, requestedSection).byStatementCategory;
             const comparative = requestedSection === 'balance_sheet' ? result.comparative : null;
             if (requestedSection === 'balance_sheet' && (!comparative || comparative.basis !== 'erp_opening_before_audit_adjustments'
                 || !Array.isArray(comparative.categories) || !Array.isArray(comparative.calculations) || !comparative.opening_review)) {
                 throw new Error('Comparative source could not be verified. Reload after the server is updated.');
             }
             currentStatementResult = result;
+            const notesKey = statementNotesKey(requestedSection, requestedClient, requested);
+            if (currentStatementNotes && currentStatementNotes.key === notesKey
+                && currentStatementNotes.result.notes_context_key !== result.notes_context_key) {
+                currentStatementNotes = null;
+                if (statementNotesViewMatches(notesKey)) showStatementNotesLoading(requestedSection, notesKey);
+            }
             const openingRows = comparative ? new Map(balanceSheetOutline(comparative.categories, comparative.calculations).map(function (row) { return [row.key, row.item]; })) : null;
             table.classList.toggle('has-comparative', !!comparative);
             const review = comparative && comparative.opening_review;
@@ -5388,7 +5488,7 @@
             element('balanceSheetDiagnostics').hidden = false;
             element('balanceSheetDiagnosticsOpen').hidden = false;
             element('balanceSheetDiagnosticsOpen').setAttribute('aria-label', 'Open ' + statementName + ' review items');
-            currentStatementContext = { clientId: requestedClient, uploadId: requested, key: result.context_key };
+            currentStatementContext = { clientId: requestedClient, uploadId: requested, key: result.context_key, notesKey: notesKey, statementSection: requestedSection };
             element('statementClosingStatus').value = result.profit_link ? result.profit_link.closing_status : result.closing_status || 'not_confirmed';
             element('statementClosingControls').hidden = false;
             element('statementClosingOpen').hidden = false;
@@ -5418,6 +5518,9 @@
                     const pending = pendingStatementNote;
                     pendingStatementNote = null;
                     showStatementNotes(requestedSection, pending.noteId);
+                }
+                if (currentStatementResult && currentStatementContext && currentStatementContext.statementSection === requestedSection) {
+                    loadStatementNotes(requestedSection, currentStatementContext.uploadId);
                 }
             }
         }
@@ -5453,38 +5556,42 @@
         const statementReport = isBalanceSheet ? 'balance-sheet' : 'income-statement';
         const statementName = isBalanceSheet ? 'Balance Sheet' : 'Income Statement';
         const selectedNoteId = noteId != null && /^\d+$/.test(String(noteId)) ? Number(noteId) : null;
-        if (!currentStatementResult || currentStatementResult.statement_section !== section || !currentStatementContext || Number(currentStatementContext.clientId) !== Number(clientId)
-            || String(currentStatementContext.uploadId) !== String(element('balanceSheetUpload').value)) {
+        const params = new URLSearchParams(window.location.search);
+        const selectedUpload = String(element('balanceSheetUpload').value || params.get('trial_balance_upload_id') || '');
+        if (!clientId || !selectedUpload) {
             pendingStatementNote = {section: section, noteId: selectedNoteId == null ? '' : String(selectedNoteId)};
-            showFinancialStatements(statementReport);
+            if (activeStatement !== section || element('balanceSheetView').hidden) showFinancialStatements(statementReport);
             return;
         }
         pendingStatementNote = null;
+        activeStatement = section;
         element('reportsView').hidden = true;
         element('financialStatementsView').hidden = true;
         element('balanceSheetView').hidden = true;
         element('balanceSheetNotesView').hidden = true;
         element('incomeStatementNotesView').hidden = true;
         element(prefix + 'View').hidden = false;
+        const key = statementNotesKey(section, clientId, selectedUpload);
+        activeStatementNotesView = {key: key, section: section, clientId: Number(clientId), uploadId: selectedUpload, noteId: selectedNoteId};
         const notesShell = document.querySelector('.reconciliation-shell');
         if (notesShell) notesShell.classList.remove('statement-view-active');
-        const params = new URLSearchParams(window.location.search);
         params.set('view', 'reports');
         params.set('report', report);
-        params.set('trial_balance_upload_id', currentStatementContext.uploadId);
+        params.set('trial_balance_upload_id', selectedUpload);
         if (selectedNoteId != null) params.set('note_id', String(selectedNoteId));
         else params.delete('note_id');
         window.history.replaceState({}, '', window.location.pathname + '?' + params.toString());
         if (typeof window.pushInPageNavEntry === 'function') window.pushInPageNavEntry(null, 'Notes to ' + statementName);
         if (typeof window.setNavModule === 'function') window.setNavModule('Notes to ' + statementName);
         if (typeof window.setUpOverride === 'function') window.setUpOverride(function () { showStatementFromNotes(section); });
-        renderStatementNotes(section, selectedNoteId);
+        loadStatementNotes(section, selectedUpload);
         element(prefix + 'Heading').focus({preventScroll: true});
         if (selectedNoteId == null) window.scrollTo(0, 0);
     }
     function showStatementFromNotes(section) {
         const isBalanceSheet = section === 'balance_sheet';
         const statementName = isBalanceSheet ? 'Balance Sheet' : 'Income Statement';
+        activeStatementNotesView = null;
         element('balanceSheetNotesView').hidden = true;
         element('incomeStatementNotesView').hidden = true;
         element('reportsView').hidden = true;
@@ -5530,7 +5637,14 @@
         if (typeof window.setUpOverride === 'function') window.setUpOverride(isStatement ? function () { showFinancialStatements(false); } : showReportsHub);
         element(isStatement ? 'balanceSheetHeading' : 'financialStatementsHeading').focus({ preventScroll: true });
         window.scrollTo(0, 0);
-        if (isStatement) loadBalanceSheetOutline();
+        if (isStatement) {
+            loadBalanceSheetOutline();
+            if (pendingStatementNote) {
+                const pending = pendingStatementNote;
+                const requestedUpload = new URLSearchParams(window.location.search).get('trial_balance_upload_id');
+                if (requestedUpload) showStatementNotes(pending.section, pending.noteId);
+            }
+        }
     }
     function setReportView(isReport) {
         ['balanceSheetDiagnosticsDialog', 'statementClosingDialog'].forEach(function (id) {

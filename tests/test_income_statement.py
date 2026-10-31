@@ -173,7 +173,7 @@ def test_link_sources_are_protected_from_deletion():
 
 
 def test_new_endpoints_require_admin():
-    for router,path in [(acc.router,'/api/account-control-center/profit-link'),(acc.router,'/api/account-control-center/profit-status'),(reconciliation.router,'/api/reconciliation/financial-statements/income-statement')]:
+    for router,path in [(acc.router,'/api/account-control-center/profit-link'),(acc.router,'/api/account-control-center/profit-status'),(reconciliation.router,'/api/reconciliation/financial-statements/income-statement'),(reconciliation.router,'/api/reconciliation/financial-statements/notes')]:
         route=next(route for route in router.routes if route.path==path)
         assert acc.require_admin in [dependency.call for dependency in route.dependant.dependencies]
 
@@ -213,7 +213,7 @@ def test_http_statement_confirmation_linking_and_source_change_refusal(statement
         result=income.json();assert result['statement_section']=='income_statement'
         assert result['profit_link']['final_profit']=='300'
         assert not result['profit_link']['applied']
-        assert len(calls)==9
+        assert len(calls)==10
         body={**params,'closing_status':'not_in_capital','context_key':result['context_key']}
         assert client.put('/api/account-control-center/profit-status',json=body).status_code==200
         balance=client.get(prefix+'balance-sheet',params=params).json()

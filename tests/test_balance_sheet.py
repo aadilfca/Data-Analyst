@@ -180,14 +180,48 @@ def test_report_api_requires_explicit_upload_and_reads_one_snapshot_without_n_pl
     result = client.get(url, params={"client_id": 7, "trial_balance_upload_id": 55})
     assert result.status_code == 200, result.text
     assert result.json()["categories"][0]["amount"] == "25"
-    assert len(calls) == 9 and len(snapshots) == 1
+    assert len(calls) == 10 and len(snapshots) == 1
     assert all(sql.lstrip().startswith("SELECT") for sql, _ in calls)
     calls.clear()
     state.update(debit="40", mapping=2, size=50)
     refreshed = client.get(url, params={"client_id": 7, "trial_balance_upload_id": 55}).json()
     assert refreshed["categories"][1]["amount"] == "-2000"
     assert refreshed["controls"]["leaf_count"] == 50
-    assert len(calls) == 9
+    assert len(calls) == 10
+
+
+def test_statement_only_response_keeps_lightweight_note_references(report_api):
+    client, _, calls, snapshots, _ = report_api
+    response = client.get(
+        "/api/reconciliation/financial-statements/balance-sheet",
+        params={"client_id": 7, "trial_balance_upload_id": 55, "include_notes": "false"},
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert "notes" not in result
+    assert result["note_references"] == {"statement_section": "balance_sheet", "roots": []}
+    assert len(result["notes_context_key"]) == 64
+    assert len(calls) == 10 and len(snapshots) == 1
+
+
+def test_notes_endpoint_returns_full_notes_separately_for_both_statements(report_api):
+    client, _, calls, snapshots, _ = report_api
+    for section in ("balance_sheet", "income_statement"):
+        calls.clear()
+        snapshots.clear()
+        response = client.get(
+            "/api/reconciliation/financial-statements/notes",
+            params={"client_id": 7, "trial_balance_upload_id": 55, "statement_section": section},
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["statement_section"] == section
+        assert result["notes"]["statement_section"] == section
+        assert isinstance(result["notes"]["roots"], list)
+        assert isinstance(result["notes"]["coverage"], list)
+        assert result["upload"]["id"] == 55
+        assert len(result["notes_context_key"]) == 64
+        assert len(calls) == 10 and len(snapshots) == 1
 
 
 def test_missing_or_foreign_upload_is_refused_without_fallback(report_api):
@@ -368,7 +402,7 @@ def test_transfer_metadata_is_returned_in_existing_snapshot_without_extra_reads(
     result=client.get('/api/reconciliation/financial-statements/balance-sheet',params={'client_id':7,'trial_balance_upload_id':55})
     assert result.status_code==200,result.text
     assert result.json()['transfer_reconciliation']['status']=='not_reconciled'
-    assert len(calls)==9 and len(snapshots)==1
+    assert len(calls)==10 and len(snapshots)==1
 
 
 @pytest.fixture
@@ -513,4 +547,4 @@ def test_comparative_api_source_metadata_does_not_add_reads(report_api, monkeypa
     result = client.get('/api/reconciliation/financial-statements/balance-sheet', params={'client_id': 7, 'trial_balance_upload_id': 55}).json()
     assert result['comparative']['opening_at'] == '2026-01-01'
     assert result['comparative']['source_label'] == 'TB opening balances'
-    assert len(calls) == 9 and len(snapshots) == 1
+    assert len(calls) == 10 and len(snapshots) == 1
