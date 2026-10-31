@@ -507,7 +507,7 @@
         }
 
         #availableAccountsTableWrapper .tb-review-table {
-            min-width: 1420px;
+            min-width: 1500px;
         }
 
         #availableAccountsTableWrapper .tb-amount-cell {
@@ -515,29 +515,34 @@
             white-space: nowrap;
             font-variant-numeric: tabular-nums;
         }
-        #availableTrialBalancesSection { padding: 0; background: transparent; box-shadow: none; }
-        .tb-saved-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
-        .tb-saved-toolbar h3 { margin: 0; }
+        #availableTrialBalancesSection { padding: 0; margin-top: -4px; background: transparent; box-shadow: none; }
+        .tb-saved-toolbar { display: grid; grid-template-rows: auto auto; gap: 6px; margin: 0 0 9px; }
+        .tb-saved-toolbar-row { display: flex; align-items: center; flex-wrap: nowrap; gap: 9px; min-height: 32px; }
+        .tb-saved-toolbar-row h3 { flex: 0 0 auto; margin: 0; }
+        .tb-saved-toolbar-row--filters { gap: 8px; }
+        .tb-saved-toolbar-row--filters #tbAssignCategoriesBtn { margin-left: 4px; }
+        .tb-saved-toolbar-row--filters #deleteUploadBtn { margin-left: auto; }
         #availableAccountsTableWrapper { max-height: none; overflow-y: visible; border: 0; border-radius: 0; }
         #availableAccountsTableWrapper { scrollbar-width: none; }
         #availableAccountsTableWrapper::-webkit-scrollbar { display: none; }
         .tb-saved-sticky { position: sticky; top: 70px; z-index: 3; overflow: hidden; background: #f1f5f9; }
         .tb-saved-sticky[hidden] { display: none; }
-        .tb-saved-table { width: 100%; min-width: 1420px; table-layout: fixed; border-collapse: collapse; font-size: 11px; }
+        .tb-saved-table { width: 100%; min-width: 1500px; table-layout: fixed; border-collapse: collapse; font-size: 11px; }
         .tb-saved-table th, .tb-saved-table td { box-sizing: border-box; padding: 6px 8px; border: 1px solid #e2e8f0; overflow-wrap: anywhere; }
         .tb-saved-table th { background: #f1f5f9; text-align: left; padding: 8px 10px; }
         .tb-saved-table td { background: #fff; }
         .tb-saved-table tbody tr:nth-child(even) td { background: #fafcff; }
         .tb-saved-table .tb-amount-cell { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
         .tb-saved-table input { box-sizing: border-box; width: 100%; }
-        .tb-saved-category-filter { display: flex; align-items: center; gap: 7px; }
-        .tb-saved-category-filter label { font-size: 13px; font-weight: 600; color: #34495e; white-space: nowrap; }
-        #tbSavedCategorySearch { box-sizing: border-box; width: 205px; max-width: 28vw; padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 6px; color: #1a1a2e; font: inherit; }
-        #tbSavedCategorySearch:focus-visible { outline: 2px solid #1769aa; outline-offset: 2px; }
-        #tbSavedCategorySearch:disabled { background: #f1f5f9; color: #64748b; cursor: not-allowed; }
+        .tb-saved-category-filter, .tb-saved-note-filter { display: flex; align-items: center; gap: 7px; }
+        .tb-saved-toolbar-row label { font-size: 13px; font-weight: 600; color: #34495e; white-space: nowrap; }
+        #tbSavedCategorySearch, #tbSavedNoteSearch { box-sizing: border-box; width: 190px; max-width: 22vw; padding: 6px 9px; border: 1px solid #cbd5e1; border-radius: 6px; color: #1a1a2e; font: inherit; }
+        #tbSavedCategorySearch:focus-visible, #tbSavedNoteSearch:focus-visible { outline: 2px solid #1769aa; outline-offset: 2px; }
+        #tbSavedCategorySearch:disabled, #tbSavedNoteSearch:disabled { background: #f1f5f9; color: #64748b; cursor: not-allowed; }
         #tbSavedCategoryNoMatches { margin: 0 0 10px; color: #64748b; font-size: 13px; }
         #tbSavedCategoryNoMatches[hidden] { display: none; }
-        @media (max-width: 600px) { #tbSavedCategorySearch { width: min(205px, 48vw); max-width: none; } }
+        @media (max-width: 900px) { .tb-saved-toolbar-row { flex-wrap: wrap; } .tb-saved-toolbar-row--filters #deleteUploadBtn { margin-left: 0; } }
+        @media (max-width: 600px) { #tbSavedCategorySearch, #tbSavedNoteSearch { width: min(190px, 48vw); max-width: none; } }
         #availableAccountsTableWrapper thead { display: none; }
 
         /* ---------- COLUMN MAPPING (Section 1, Phase 2) ---------- */
@@ -1064,26 +1069,33 @@
     <!-- Available Trial Balances supports account-code corrections within one selected upload. -->
     <div class="tb-form-group" id="availableTrialBalancesSection" style="display:none;">
         <div class="tb-saved-toolbar">
-            <button class="btn-secondary-action" id="closeAvailableTrialBalancesBtn" type="button">← Back</button>
-            <h3 style="margin-bottom:0;">📊 Available Trial Balances</h3>
-            <label for="availableUploadsDropdown">Upload</label>
-            <select id="availableUploadsDropdown">
-                <option value="">— Select an upload —</option>
-            </select>
-            <div class="tb-saved-category-filter">
-                <label for="tbSavedCategorySearch">Category</label>
-                <input id="tbSavedCategorySearch" type="search" list="tbSavedCategoryOptions" placeholder="Search or choose category" aria-label="Filter Trial Balance accounts by Account Control Centre category" autocomplete="off" disabled>
-                <datalist id="tbSavedCategoryOptions"></datalist>
+            <div class="tb-saved-toolbar-row tb-saved-toolbar-row--source">
+                <button class="btn-secondary-action" id="closeAvailableTrialBalancesBtn" type="button">← Back</button>
+                <h3>📊 Available Trial Balances</h3>
+                <label for="availableUploadsDropdown">Upload</label>
+                <select id="availableUploadsDropdown">
+                    <option value="">— Select an upload —</option>
+                </select>
             </div>
-            <button class="btn-secondary-action" id="tbAssignCategoriesBtn" type="button">Assign categories →</button>
-            <!-- Confirmed fix: deletes the selected upload + all its accounts. Hidden
-                 until an upload is actually selected (same visibility pattern as
-                 availableAccountsTableWrapper below). -->
-            <button class="btn-danger-action" id="deleteUploadBtn" type="button" style="display:none;">🗑️ Delete</button>
+            <div class="tb-saved-toolbar-row tb-saved-toolbar-row--filters">
+                <div class="tb-saved-category-filter">
+                    <label for="tbSavedCategorySearch">Category</label>
+                    <input id="tbSavedCategorySearch" type="search" list="tbSavedCategoryOptions" placeholder="Search or choose" aria-label="Filter Trial Balance accounts by Account Control Centre category" autocomplete="off" disabled>
+                    <datalist id="tbSavedCategoryOptions"></datalist>
+                </div>
+                <div class="tb-saved-note-filter">
+                    <label for="tbSavedNoteSearch">Note</label>
+                    <input id="tbSavedNoteSearch" type="search" list="tbSavedNoteOptions" placeholder="Search or choose" aria-label="Filter Trial Balance accounts by Notes to Financial Statements assignment" autocomplete="off" disabled>
+                    <datalist id="tbSavedNoteOptions"></datalist>
+                </div>
+                <button class="btn-secondary-action" id="tbAssignCategoriesBtn" type="button">Assign categories →</button>
+                <!-- Hidden until an upload is selected; removes the selected upload and its accounts. -->
+                <button class="btn-danger-action" id="deleteUploadBtn" type="button" style="display:none;">🗑️ Delete</button>
+            </div>
         </div>
 
         <p class="group-hint" id="availableUploadsEmptyHint" style="display:none;">No classified Trial Balance uploads found for this client yet.</p>
-        <p id="tbSavedCategoryNoMatches" role="status" aria-live="polite" hidden>No Trial Balance accounts match this category.</p>
+        <p id="tbSavedCategoryNoMatches" role="status" aria-live="polite" hidden>No Trial Balance accounts match these filters.</p>
 
         <div id="tbSavedStatus" class="status-bar" role="status" style="display:none;"></div>
         <div id="tbSavedValidationControls" class="tb-validation-controls" aria-live="polite"></div>
@@ -1096,6 +1108,7 @@
                         <th>Name</th>
                         <th>Classification</th>
                         <th>Category</th>
+                        <th>Note</th>
                         <th class="tb-amount-cell">Opening Dr</th>
                         <th class="tb-amount-cell">Opening Cr</th>
                         <th class="tb-amount-cell">Period Dr</th>
@@ -1114,7 +1127,7 @@
     <script src="/static/loading_ui.js?v=2"></script>
     <script src="/static/client_context.js?v=25"></script>
     <script src="/static/utils.js"></script>
-    <script src="/static/trial_balance.js?v=37"></script>
+    <script src="/static/trial_balance.js?v=38"></script>
 
 </body>
 

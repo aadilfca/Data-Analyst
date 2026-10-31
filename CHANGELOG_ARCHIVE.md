@@ -1,5 +1,17 @@
 # Changelog Archive
 
+## Filtered Trial Balance reconciliation totals — 2026-10-31
+
+When a Category or Note filter is active, the Draft Trial Balance reconciliation heading shows six exact, cents-formatted totals from matching original account rows; both filters intersect. Separate adjustment rows are excluded. Full-upload reconciliation detail remains unchanged, and clearing filters restores the heading. No backend or schema changes.
+
+**Verification:** `tests/test_trial_balance_ui.py` passed (20 passed). Playwright covers Category, Note and combined totals, zero matches, clearing filters and amount retention. JavaScript syntax and diff checks passed; pytest emitted a cache-directory warning.
+
+## Trial Balance Notes column and dual filters — 2026-10-31
+
+Added a read-only Note column after Category using ACC note assignments and labels. The toolbar now uses compact source and filter/action rows with a Note typeahead. Category and Note searches combine for account rows only. Their lookups fail independently, preserving Trial Balance figures and whichever field remains available. Reused ACC read endpoints; no backend or schema changes. Script cache version is 38.
+
+**Verification:** `tests/test_trial_balance_ui.py` passed (20 passed). Playwright covers assigned/unassigned values, combined filters, two-row fit, amount retention and independent lookup fallback. JavaScript syntax and diff checks passed; pytest emitted a cache-directory warning.
+
 ## Trial Balance category display and filter — 2026-10-31
 
 Added read-only ACC Financial Statements categories after Classification in saved Trial Balance review. A category typeahead lists active categories and Unassigned and filters displayed account rows only. Trial Balance figures load first; ACC categories fill in afterward. Lookup failures leave figures visible and mark categories unavailable. Reused existing read endpoints; no backend or schema changes. Trial Balance script cache version is 37.

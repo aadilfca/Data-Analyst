@@ -118,7 +118,7 @@ def test_rollforward_differences_render_as_red_section_without_changing_source_r
             validationSection: document.querySelector('#tbValidationBody tr.tb-difference-section')?.textContent,
             savedSection: document.querySelector('#availableAccountsTableBody tr.tb-difference-section')?.textContent,
             savedLabel: document.querySelector('#availableAccountsTableBody tr.tb-generated-difference td:nth-child(2)')?.textContent,
-            savedDebit: document.querySelector('#availableAccountsTableBody tr.tb-generated-difference td:nth-child(9)')?.textContent
+            savedDebit: document.querySelector('#availableAccountsTableBody tr.tb-generated-difference td:nth-child(10)')?.textContent
         };
     }""")
 
@@ -176,9 +176,10 @@ def test_global_difference_preserves_all_six_saved_columns(browser):
     page.evaluate("""() => renderAvailableAccountsTable([], [{account_name: 'Opening footing',
         global_adjustment: true, opening_cr_adjustment: '100', closing_cr_adjustment: '100'}])""")
     cells = page.locator('.tb-generated-difference td').all_text_contents()
-    assert cells[4:10] == ['', '100', '', '', '', '100']
+    assert cells[5:11] == ['', '100', '', '', '', '100']
     assert cells[2] == 'Unassigned global difference'
     assert cells[3] == ''
+    assert cells[4] == ''
     page.close()
 
 
@@ -230,7 +231,8 @@ def test_saved_classification_and_amount_widths_and_floating_scroll(browser):
                 controls.stale=true;
                 return {ok:true,json:async()=>account};
             }
-            if (url.includes('/api/account-control-center/mapping')) return {ok:true,json:async()=>({client_id:42,upload:{id:1},accounts:[{account_code:'A',assignment:{financial_statement_category_id:7}}]})};
+            if (url.includes('/api/account-control-center/mapping')) return {ok:true,json:async()=>({client_id:42,upload:{id:1},accounts:[{account_code:'A',assignment:{financial_statement_category_id:7,note_category_id:11}}]})};
+            if (url.includes('category_type=note')) return {ok:true,json:async()=>({categories:[{id:11,label:'Cash note',is_active:true}]})};
             if (url.includes('/api/account-control-center/categories')) return {ok:true,json:async()=>({categories:[{id:7,label:'Cash and cash equivalents',is_active:true}]})};
             return {ok:true,json:async()=>({accounts:[account],adjustments:[],validation_controls:controls})};
         };
@@ -239,10 +241,12 @@ def test_saved_classification_and_amount_widths_and_floating_scroll(browser):
         return loadAvailableUploadAccounts('1');
     }""")
     page.wait_for_function("document.querySelector('#availableAccountsTableBody tr:first-child td:nth-child(4)')?.textContent === 'Cash and cash equivalents'")
+    page.wait_for_function("document.querySelector('#availableAccountsTableBody tr:first-child td:nth-child(5)')?.textContent === 'Cash note'")
     classification = page.locator('#availableAccountsTableBody tr:first-child td').nth(2)
     widths = page.locator('#availableAccountsTableBody tr:first-child td.tb-amount-cell').evaluate_all('cells => cells.map(c => c.getBoundingClientRect().width)')
     assert len(widths) == 6 and max(widths) - min(widths) < 1
     assert page.locator('#availableAccountsTableBody tr:first-child td').nth(3).inner_text() == 'Cash and cash equivalents'
+    assert page.locator('#availableAccountsTableBody tr:first-child td').nth(4).inner_text() == 'Cash note'
     assert page.locator('#availableAccountsTableBody .tb-draft-adjusted_totals td.tb-amount-cell').first.evaluate('el => el.scrollWidth <= el.clientWidth')
     bar = page.locator('.tb-saved-floating-scroll')
     assert bar.is_visible()
@@ -278,16 +282,25 @@ def test_saved_trial_balance_category_lookup_and_search_filter(browser):
     page.evaluate("""() => {
         window.API_BASE=''; window.getSelectedClientId=()=>42;
         const accounts=[
-            {id:1,account_code:'100',account_name:'Cash',is_leaf:true,opening_dr:'10',closing_dr:'12'},
-            {id:2,account_code:'200',account_name:'Unassigned account',is_leaf:true,opening_dr:'20',closing_dr:'22'},
-            {id:3,account_code:'300',account_name:'Trade receivables',is_leaf:true,opening_dr:'30',closing_dr:'32'}
+            {id:1,account_code:'100',account_name:'Cash',is_leaf:true,opening_dr:'10',opening_cr:'0',period_dr:'5',period_cr:'1',closing_dr:'12',closing_cr:'0'},
+            {id:2,account_code:'200',account_name:'Unassigned account',is_leaf:true,opening_dr:'20',opening_cr:'2',period_dr:'4',period_cr:'1',closing_dr:'23',closing_cr:'3'},
+            {id:3,account_code:'300',account_name:'Trade receivables',is_leaf:true,opening_dr:'30',opening_cr:'2',period_dr:'3',period_cr:'1',closing_dr:'32',closing_cr:'4'}
         ];
+        const totalRoles=['opening','period','closing'].flatMap(period=>['dr','cr'].map(side=>[period+'_'+side+'_column','0']));
+        const zeroTotals=Object.fromEntries(totalRoles);
+        const controls={draft_reconciliation:{original_totals:zeroTotals,adjustment_totals:zeroTotals,adjusted_totals:zeroTotals,
+            pair_differences:Object.fromEntries(['opening','period','closing'].map(period=>[period,{difference:'0',within_tolerance:true}]))}};
         window.fetch=async url => {
-            if (url.includes('/api/trial-balance/accounts')) return {ok:true,json:async()=>({accounts,adjustments:[],validation_controls:{}})};
+            if (url.includes('/api/trial-balance/accounts')) return {ok:true,json:async()=>({accounts,adjustments:[],validation_controls:controls})};
             if (url.includes('/api/account-control-center/mapping')) return {ok:true,json:async()=>({client_id:42,upload:{id:59},accounts:[
-                {account_code:'100',assignment:{financial_statement_category_id:7}},
-                {account_code:'200',assignment:{financial_statement_category_id:null}},
-                {account_code:'300',assignment:{financial_statement_category_id:8}}
+                {account_code:'100',assignment:{financial_statement_category_id:7,note_category_id:21}},
+                {account_code:'200',assignment:{financial_statement_category_id:null,note_category_id:null}},
+                {account_code:'300',assignment:{financial_statement_category_id:8,note_category_id:23}}
+            ]})};
+            if (url.includes('category_type=note')) return {ok:true,json:async()=>({categories:[
+                {id:21,label:'Cash note',is_active:true},
+                {id:23,label:'Receivables note',is_active:true},
+                {id:24,label:'Inactive note',is_active:false}
             ]})};
             return {ok:true,json:async()=>({categories:[
                 {id:7,label:'Cash and cash equivalents',is_active:true},
@@ -298,29 +311,55 @@ def test_saved_trial_balance_category_lookup_and_search_filter(browser):
         availableTrialBalancesSection.style.display='block';
         availableUploadsDropdown.innerHTML='<option value="59">TB</option>';
         availableUploadsDropdown.value='59';
+        deleteUploadBtn.style.display='inline-block';
         return loadAvailableUploadAccounts('59');
     }""")
-    page.wait_for_function("document.querySelector('#availableAccountsTableBody tr:first-child td:nth-child(4)')?.textContent === 'Cash and cash equivalents'")
+    page.wait_for_function("document.querySelector('#availableAccountsTableBody tr:first-child td:nth-child(4)')?.textContent === 'Cash and cash equivalents' && document.querySelector('#availableAccountsTableBody tr:first-child td:nth-child(5)')?.textContent === 'Cash note'")
     headers = page.locator('#availableAccountsTableWrapper thead th').all_text_contents()
-    assert headers[:4] == ['Code', 'Name', 'Classification', 'Category']
+    assert headers[:5] == ['Code', 'Name', 'Classification', 'Category', 'Note']
     assert page.locator('#availableAccountsTableBody tr:first-child td').nth(2).inner_text() == 'Leaf'
     assert page.locator('#availableAccountsTableBody tr:first-child td').nth(3).inner_text() == 'Cash and cash equivalents'
+    assert page.locator('#availableAccountsTableBody tr:first-child td').nth(4).inner_text() == 'Cash note'
     assert page.locator('#availableAccountsTableBody tr:nth-child(2) td').nth(3).inner_text() == 'Unassigned'
+    assert page.locator('#availableAccountsTableBody tr:nth-child(2) td').nth(4).inner_text() == 'Unassigned'
     assert page.locator('#availableAccountsTableBody tr:first-child td:nth-child(4) input, #availableAccountsTableBody tr:first-child td:nth-child(4) select').count() == 0
     assert page.locator('#tbSavedCategorySearch').is_enabled()
     options = page.locator('#tbSavedCategoryOptions option').evaluate_all('items => items.map(item => item.value)')
     assert options == ['Cash and cash equivalents', 'Trade receivables', 'Unassigned']
+    assert page.locator('#tbSavedNoteSearch').is_enabled()
+    note_options = page.locator('#tbSavedNoteOptions option').evaluate_all('items => items.map(item => item.value)')
+    assert note_options == ['Cash note', 'Receivables note', 'Unassigned']
     category_filter = page.locator('#tbSavedCategorySearch')
     category_filter.fill('receiv')
     assert page.locator('#availableAccountsTableBody tr[data-category-filter]:visible').count() == 1
     assert page.locator('#availableAccountsTableBody tr[data-category-filter]:visible td').nth(1).inner_text() == 'Trade receivables'
+    assert page.locator('#availableAccountsTableBody tr.tb-draft-heading td.tb-amount-cell').all_text_contents() == ['30.00', '2.00', '3.00', '1.00', '32.00', '4.00']
+    page.locator('#tbSavedNoteSearch').fill('cash')
+    assert page.locator('#availableAccountsTableBody tr[data-category-filter]:visible').count() == 0
+    assert page.locator('#tbSavedCategoryNoMatches').is_visible()
+    assert page.locator('#availableAccountsTableBody tr.tb-draft-heading td.tb-amount-cell').all_text_contents() == ['0.00'] * 6
+    category_filter.fill('')
+    assert page.locator('#availableAccountsTableBody tr[data-category-filter]:visible td').nth(1).inner_text() == 'Cash'
+    assert page.locator('#availableAccountsTableBody tr.tb-draft-heading td.tb-amount-cell').all_text_contents() == ['10.00', '0.00', '5.00', '1.00', '12.00', '0.00']
+    page.locator('#tbSavedNoteSearch').fill('unassigned')
+    assert page.locator('#availableAccountsTableBody tr[data-category-filter]:visible td').nth(1).inner_text() == 'Unassigned account'
+    assert page.locator('#availableAccountsTableBody tr.tb-draft-heading td.tb-amount-cell').all_text_contents() == ['20.00', '2.00', '4.00', '1.00', '23.00', '3.00']
+    page.locator('#tbSavedNoteSearch').fill('')
     category_filter.fill('Unassigned')
     assert page.locator('#availableAccountsTableBody tr[data-category-filter]:visible').count() == 1
     category_filter.fill('not a category')
     assert page.locator('#tbSavedCategoryNoMatches').is_visible()
     category_filter.fill('')
     assert page.locator('#availableAccountsTableBody tr[data-category-filter]:visible').count() == 3
+    assert page.locator('#availableAccountsTableBody tr.tb-draft-heading td').count() == 1
+    assert page.locator('#availableAccountsTableBody tr.tb-draft-heading td').first.inner_text() == 'Draft Trial Balance reconciliation'
     assert page.locator('#availableAccountsTableBody tr:first-child td.tb-amount-cell').first.inner_text() == '10'
+    toolbar_rows = page.locator('.tb-saved-toolbar-row')
+    assert toolbar_rows.count() == 2
+    row_positions = toolbar_rows.evaluate_all('rows => rows.map(row => Math.round(row.getBoundingClientRect().top))')
+    assert row_positions[1] > row_positions[0]
+    filter_item_tops = toolbar_rows.nth(1).evaluate("row => Array.from(row.children).filter(item => item.getClientRects().length).map(item => Math.round(item.getBoundingClientRect().top))")
+    assert max(filter_item_tops) - min(filter_item_tops) <= 2
     page.close()
 
 
@@ -336,12 +375,43 @@ def test_saved_trial_balance_remains_available_when_category_lookup_fails(browse
         availableUploadsDropdown.value='59';
         return loadAvailableUploadAccounts('59');
     }""")
-    page.wait_for_function("document.querySelector('#tbSavedCategoryNoMatches')?.textContent.includes('categories are unavailable')")
+    page.wait_for_function("document.querySelector('#tbSavedCategoryNoMatches')?.textContent.includes('categories and notes are unavailable')")
     assert page.locator('#availableAccountsTableWrapper tbody tr').count() == 1
     assert page.locator('#availableAccountsTableWrapper tbody tr:first-child td').nth(3).inner_text() == 'Unavailable'
     assert page.locator('#availableAccountsTableWrapper tbody tr:first-child td.tb-amount-cell').nth(4).inner_text() == '50'
     assert page.locator('#tbSavedCategorySearch').is_disabled()
-    assert 'categories are unavailable' in page.locator('#tbSavedCategoryNoMatches').inner_text()
+    assert 'categories and notes are unavailable' in page.locator('#tbSavedCategoryNoMatches').inner_text()
+    page.close()
+
+
+def test_saved_trial_balance_keeps_category_filter_when_note_lookup_fails(browser):
+    import re
+    html = (PROJECT_ROOT / 'static' / 'trial_balance.html').read_text(encoding='utf-8')
+    page = browser.new_page()
+    page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
+    page.evaluate("""() => {
+        window.API_BASE=''; window.getSelectedClientId=()=>42;
+        window.fetch=async url => {
+            if (url.includes('/api/trial-balance/accounts')) return {ok:true,json:async()=>({accounts:[
+                {id:1,account_code:'A',account_name:'Cash',is_leaf:true,closing_dr:'50'}],adjustments:[],validation_controls:{}})};
+            if (url.includes('/api/account-control-center/mapping')) return {ok:true,json:async()=>({client_id:42,upload:{id:59},accounts:[
+                {account_code:'A',assignment:{financial_statement_category_id:7,note_category_id:11}}]})};
+            if (url.includes('category_type=note')) return {ok:false,json:async()=>({detail:'Notes temporarily unavailable'})};
+            return {ok:true,json:async()=>({categories:[{id:7,label:'Cash and cash equivalents',is_active:true}]})};
+        };
+        availableTrialBalancesSection.style.display='block';
+        availableUploadsDropdown.innerHTML='<option value="59">TB</option>';
+        availableUploadsDropdown.value='59';
+        return loadAvailableUploadAccounts('59');
+    }""")
+    page.wait_for_function("document.querySelector('#availableAccountsTableBody tr:first-child td:nth-child(4)')?.textContent === 'Cash and cash equivalents' && document.querySelector('#availableAccountsTableBody tr:first-child td:nth-child(5)')?.textContent === 'Unavailable'")
+    assert page.locator('#tbSavedCategorySearch').is_enabled()
+    assert page.locator('#tbSavedNoteSearch').is_disabled()
+    assert page.locator('#availableAccountsTableBody tr:first-child td.tb-amount-cell').nth(4).inner_text() == '50'
+    page.locator('#tbSavedCategorySearch').fill('cash and cash')
+    assert page.locator('#availableAccountsTableBody tr[data-category-filter]:visible').count() == 1
+    assert 'notes are unavailable' in page.locator('#tbSavedCategoryNoMatches').inner_text()
     page.close()
 
 
@@ -563,7 +633,7 @@ def test_draft_footer_preserves_erp_values_and_shows_balanced_totals_in_both_vie
             pairs:values('#tbValidationBody .tb-draft-pairs'),
             warning:document.querySelector('#tbValidationBody .tb-control-difference').nextElementSibling.textContent};
         renderAvailableAccountsTable([],[],validationResult);
-        const saved=Array.from(document.querySelectorAll('#availableAccountsTableBody .tb-draft-adjusted_totals td')).slice(4,10).map(c=>c.textContent);
+        const saved=Array.from(document.querySelectorAll('#availableAccountsTableBody .tb-draft-adjusted_totals td')).slice(5,11).map(c=>c.textContent);
         validationResult.draft_reconciliation.pair_differences.opening={difference:'-0.02',within_tolerance:false};
         renderTrialBalanceValidationGrid();
         const smallPair={text:values('#tbValidationBody .tb-draft-pairs')[0],
