@@ -101,14 +101,23 @@
         #balanceSheetTable .opening-income-review ul { padding-left: 18px; font-size: 12px; font-weight: 400; line-height: 1.6; }
         .balance-sheet-note-reference { min-width: 34px; padding: 4px 8px; border: 1px solid #cbd5e1; border-radius: 5px; background: #f8fafc; color: #1769aa; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
         .balance-sheet-note-reference:hover { border-color: #1769aa; background: #eff6ff; }
-        .balance-sheet-note-reference:focus-visible, #balanceSheetNotesView button:focus-visible { outline: 2px solid #1769aa; outline-offset: 2px; }
-        #balanceSheetNotesView { max-width: 1080px; margin: 0 auto; color: #1a1a2e; }
+        .balance-sheet-note-reference:focus-visible, #balanceSheetNotesView button:focus-visible, #incomeStatementNotesView button:focus-visible { outline: 2px solid #1769aa; outline-offset: 2px; }
+        #balanceSheetNotesView, #incomeStatementNotesView { width: 100%; max-width: none; margin: 0; color: #1a1a2e; }
+        .statement-notes-toolbar { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin-bottom: 12px; }
+        .statement-notes-title-row { display: flex; align-items: center; min-width: 0; }
+        .statement-notes-title-row h2 { margin: 0; color: #18344b; font-size: 22px; line-height: 1.3; overflow-wrap: anywhere; }
+        .statement-notes-title-row h2:focus { outline: none; }
+        .statement-notes-meta-row, .statement-notes-meta-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+        .statement-notes-meta-row { width: 100%; box-sizing: border-box; justify-content: space-between; }
+        .statement-notes-meta-left { flex: 1 1 auto; flex-wrap: nowrap; }
+        .statement-notes-period-label { color: #536577; font-size: 13px; font-weight: 700; white-space: nowrap; }
+        .statement-notes-period-value { color: #18344b; font-size: 14px; white-space: nowrap; }
+        .statement-notes-actions { align-items: center; justify-content: flex-end; flex: 0 0 auto; flex-wrap: nowrap; margin-left: auto; }
         #balanceSheetNotesView .balance-sheet-paper { padding: 24px; border: 1px solid #dbe4ea; border-radius: 12px; background: #fff; }
-        #balanceSheetNotesView .balance-sheet-caption { margin: 0 0 20px; }
-        #balanceSheetNotesView .balance-sheet-caption h3 { margin: 0 0 5px; color: #18344b; font-size: 18px; overflow-wrap: anywhere; }
-        #balanceSheetNotesView .balance-sheet-caption p { margin: 0; color: #64748b; font-size: 13px; }
-        #balanceSheetNotesStatus { padding: 18px 0; color: #64748b; font-size: 13px; }
-        #balanceSheetNotesStatus.is-error { color: #b91c1c; }
+        #incomeStatementNotesView .balance-sheet-paper { padding: 24px; border: 1px solid #dbe4ea; border-radius: 12px; background: #fff; }
+        #balanceSheetNotesStatus, #incomeStatementNotesStatus { padding: 18px 0; color: #64748b; font-size: 13px; }
+        #balanceSheetNotesStatus:empty, #incomeStatementNotesStatus:empty { display: none; }
+        #balanceSheetNotesStatus.is-error, #incomeStatementNotesStatus.is-error { color: #b91c1c; }
         .balance-sheet-notes-table-wrap { max-width: 100%; overflow-x: auto; }
         #balanceSheetNotesTable, #balanceSheetNotesCoverageTable { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 14px; }
         #balanceSheetNotesTable { min-width: 650px; }
@@ -116,6 +125,8 @@
         #balanceSheetNotesTable thead th, #balanceSheetNotesCoverageTable thead th { color: #64748b; font-weight: 500; text-align: left; }
         #balanceSheetNotesTable .balance-sheet-amount, #balanceSheetNotesCoverageTable .balance-sheet-amount { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
         #balanceSheetNotesTable .bs-note-root > * { border-top: 2px solid #9fb5c5; background: #f3f7fa; color: #18344b; font-weight: 700; }
+        #balanceSheetNotesTable .bs-note-subtotal > * { border-top: 1px solid #9fb5c5; background: #f3f7fa; color: #18344b; font-weight: 700; }
+        #balanceSheetNotesTable .bs-note-group-gap > td { height: 18px; padding: 0; border: 0; background: transparent; }
         #balanceSheetNotesTable .bs-note-child > th { font-weight: 500; color: #34495e; }
         #balanceSheetNotesTable .bs-note-inactive { opacity: .58; }
         #balanceSheetNotesTable .bs-note-number { width: 90px; color: #64748b; font-size: 12px; white-space: nowrap; }
@@ -128,12 +139,8 @@
         #balanceSheetNotesCoverageTable .notes-coverage-gap > * { color: #8a5b08; background: #fff8e7; }
         #balanceSheetNotesCoverage[hidden], #balanceSheetNotesTable[hidden] { display: none; }
         #balanceSheetNotesTable .bs-note-selected > * { box-shadow: inset 0 0 0 2px #1769aa; }
-        @media (max-width: 600px) { #balanceSheetNotesView .balance-sheet-paper { padding: 14px; } }
-        #incomeStatementNotesView { max-width: 1080px; margin: 0 auto; color: #1a1a2e; }
-        #incomeStatementNotesView .balance-sheet-paper { padding: 24px; border: 1px solid #dbe4ea; border-radius: 12px; background: #fff; }
-        #incomeStatementNotesView .balance-sheet-caption { margin: 0 0 20px; }
-        #incomeStatementNotesView .balance-sheet-caption h3 { margin: 0 0 5px; color: #18344b; font-size: 18px; overflow-wrap: anywhere; }
-        #incomeStatementNotesView .balance-sheet-caption p { margin: 0; color: #64748b; font-size: 13px; }
+        #incomeStatementNotesTable .bs-note-subtotal > * { border-top: 1px solid #9fb5c5; background: #f3f7fa; color: #18344b; font-weight: 700; }
+        #incomeStatementNotesTable .bs-note-group-gap > td { height: 18px; padding: 0; border: 0; background: transparent; }
         #incomeStatementNotesStatus { padding: 18px 0; color: #64748b; font-size: 13px; }
         #incomeStatementNotesStatus.is-error { color: #b91c1c; }
         #incomeStatementNotesTable, #incomeStatementNotesCoverageTable { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 14px; }
@@ -153,7 +160,13 @@
         #incomeStatementNotesCoverageTable .notes-coverage-gap > * { color: #8a5b08; background: #fff8e7; }
         #incomeStatementNotesCoverage[hidden], #incomeStatementNotesTable[hidden] { display: none; }
         #incomeStatementNotesTable .bs-note-selected > * { box-shadow: inset 0 0 0 2px #1769aa; }
-        @media (max-width: 600px) { #incomeStatementNotesView .balance-sheet-paper { padding: 14px; } }
+        @media (max-width: 600px) {
+            #balanceSheetNotesView .balance-sheet-paper, #incomeStatementNotesView .balance-sheet-paper { padding: 14px; }
+            .statement-notes-meta-row { align-items: stretch; flex-direction: column; }
+            .statement-notes-meta-left { flex-wrap: wrap; }
+            .statement-notes-period-value { white-space: normal; }
+            .statement-notes-actions { justify-content: flex-start; flex-wrap: wrap; }
+        }
         #balanceSheetTable .opening-income-review li { overflow-wrap: anywhere; }
         #balanceSheetTable [hidden] { display: none; }
         /* Scope this compact toolbar/picker to Cashflows, without changing shared pages. */
@@ -425,18 +438,22 @@
             </article>
         </section>
         <section id='balanceSheetNotesView' aria-labelledby='balanceSheetNotesHeading' hidden>
-            <header class='balance-sheet-toolbar'><h2 id='balanceSheetNotesHeading' tabindex='-1'>Notes to Balance Sheet</h2><div class='balance-sheet-actions'><button type='button' id='balanceSheetNotesBack' class='cashflows-secondary'>Balance Sheet</button></div></header>
+            <header id='balanceSheetNotesToolbar' class='statement-notes-toolbar'>
+                <div class='statement-notes-title-row'><h2 id='balanceSheetNotesHeading' tabindex='-1'>Notes to Balance Sheet</h2></div>
+                <div class='statement-notes-meta-row'><div class='statement-notes-meta-left'><span class='statement-notes-period-label'>Period:</span><span id='balanceSheetNotesPeriod' class='statement-notes-period-value'>Loading…</span></div><div class='balance-sheet-actions statement-notes-actions'><button type='button' id='balanceSheetNotesBack' class='cashflows-secondary'>Balance Sheet</button><button type='button' id='balanceSheetNotesFinancialStatements' class='cashflows-secondary'>Financial Statements</button></div></div>
+            </header>
             <article class='balance-sheet-paper'>
-                <header class='balance-sheet-caption'><h3 id='balanceSheetNotesClient'></h3><p>Draft disclosures — before audit adjustments</p><p id='balanceSheetNotesDate'></p><p>Amounts follow the selected Trial Balance and the Balance Sheet presentation signs.</p></header>
                 <p id='balanceSheetNotesStatus' role='status' aria-live='polite'></p>
                 <div class='balance-sheet-notes-table-wrap'><table id='balanceSheetNotesTable' aria-label='Balance Sheet notes' hidden><thead><tr><th scope='col'>Note</th><th scope='col'>Particulars</th><th scope='col' class='balance-sheet-amount' id='balanceSheetNotesCurrentHeader'>Current</th><th scope='col' class='balance-sheet-amount' id='balanceSheetNotesComparativeHeader'>Comparative</th></tr></thead><tbody id='balanceSheetNotesRows'></tbody></table></div>
                 <section id='balanceSheetNotesCoverage' aria-labelledby='balanceSheetNotesCoverageHeading' hidden><h3 id='balanceSheetNotesCoverageHeading'>Note coverage review</h3><p>Differences compare each Balance Sheet category with the balances assigned to its linked note. They are review items and are not adjusted.</p><div class='balance-sheet-notes-table-wrap'><table id='balanceSheetNotesCoverageTable' aria-label='Note coverage against Balance Sheet categories'><thead><tr><th scope='col'>Balance Sheet category</th><th scope='col' class='balance-sheet-amount'>Accounts without a note</th><th scope='col' class='balance-sheet-amount'>Current difference</th><th scope='col' class='balance-sheet-amount'>Comparative difference</th></tr></thead><tbody id='balanceSheetNotesCoverageRows'></tbody></table></div></section>
             </article>
         </section>
         <section id='incomeStatementNotesView' aria-labelledby='incomeStatementNotesHeading' hidden>
-            <header class='balance-sheet-toolbar'><h2 id='incomeStatementNotesHeading' tabindex='-1'>Notes to Income Statement</h2><div class='balance-sheet-actions'><button type='button' id='incomeStatementNotesBack' class='cashflows-secondary'>Income Statement</button></div></header>
+            <header id='incomeStatementNotesToolbar' class='statement-notes-toolbar'>
+                <div class='statement-notes-title-row'><h2 id='incomeStatementNotesHeading' tabindex='-1'>Notes to Income Statement</h2></div>
+                <div class='statement-notes-meta-row'><div class='statement-notes-meta-left'><span class='statement-notes-period-label'>Period:</span><span id='incomeStatementNotesPeriod' class='statement-notes-period-value'>Loading…</span></div><div class='balance-sheet-actions statement-notes-actions'><button type='button' id='incomeStatementNotesBack' class='cashflows-secondary'>Income Statement</button><button type='button' id='incomeStatementNotesFinancialStatements' class='cashflows-secondary'>Financial Statements</button></div></div>
+            </header>
             <article class='balance-sheet-paper'>
-                <header class='balance-sheet-caption'><h3 id='incomeStatementNotesClient'></h3><p>Draft disclosures — before audit adjustments</p><p id='incomeStatementNotesDate'></p><p>Amounts follow the selected Trial Balance and Income Statement presentation signs.</p></header>
                 <p id='incomeStatementNotesStatus' role='status' aria-live='polite'></p>
                 <div class='balance-sheet-notes-table-wrap'><table id='incomeStatementNotesTable' aria-label='Income Statement notes' hidden><thead><tr><th scope='col'>Note</th><th scope='col'>Particulars</th><th scope='col' class='balance-sheet-amount' id='incomeStatementNotesCurrentHeader'>Statement amount</th></tr></thead><tbody id='incomeStatementNotesRows'></tbody></table></div>
                 <section id='incomeStatementNotesCoverage' aria-labelledby='incomeStatementNotesCoverageHeading' hidden><h3 id='incomeStatementNotesCoverageHeading'>Note coverage review</h3><p>Differences compare each Income Statement category with the balances assigned to its linked note. They are review items and are not adjusted.</p><div class='balance-sheet-notes-table-wrap'><table id='incomeStatementNotesCoverageTable' aria-label='Note coverage against Income Statement categories'><thead><tr><th scope='col'>Income Statement category</th><th scope='col' class='balance-sheet-amount'>Accounts without a note</th><th scope='col' class='balance-sheet-amount'>Statement difference</th></tr></thead><tbody id='incomeStatementNotesCoverageRows'></tbody></table></div></section>
@@ -700,6 +717,6 @@
     </section>
     <script src='/static/client_context.js?v=25'></script>
     <script src='/static/loading_ui.js?v=ce6d21ca20c8'></script>
-    <script src='/static/reconciliation.js?v=68'></script>
+    <script src='/static/reconciliation.js?v=69'></script>
 </body>
 </html>

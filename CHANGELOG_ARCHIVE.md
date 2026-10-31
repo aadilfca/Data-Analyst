@@ -6,6 +6,12 @@ Main statements now load with lightweight note references; full note details loa
 
 **Verification:** Combined Balance Sheet, Income Statement and reconciliation suites passed (200 passed, 1 skipped); two stale UI assertions were corrected and rerun successfully. Playwright verified background timing, click-before-main reuse, direct Notes links, error recovery and retry. JavaScript/Python syntax and diff checks passed.
 
+## Financial Statement Notes layout — 2026-10-31
+
+Aligned both Notes views with the main statement header, showing the client/Notes title and selected period as read-only text. Removed repeated disclosure captions, moved root totals to subtotal rows after note details, and added spacing between note groups. No accounting or backend changes.
+
+**Verification:** Three Playwright cases pass, covering both statements, period/header text, title-row amounts, footing totals, note spacing, responsive header width and Financial Statements navigation. JavaScript syntax and diff checks pass.
+
 ## Balance Sheet report header and review popups — 2026-10-31
 
 Moved the client/statement title into a compact two-row header. The Period dropdown displays the selected date range; alternate choices retain their workbook names. Removed the repeated caption and moved profit-closing controls and source diagnostics into accessible, keyboard-operable dialogs with compact SVG icon buttons. Comparative-source guidance remains in review items. Set statement top padding to 88.5px: 72.5px for the global header plus a 16px gap. No API or schema changes; custom editable Trial Balance names remain a separate follow-up.

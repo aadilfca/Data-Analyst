@@ -5131,12 +5131,11 @@
         const comparative = result.comparative || {};
         const currentDate = result.upload.period_end || result.upload.as_of_date || 'date unavailable';
         const openingDate = comparative.opening_at || 'date unavailable';
-        const periodStart = result.upload.period_start || 'start date unavailable';
-        const periodEnd = result.upload.period_end || result.upload.as_of_date || 'end date unavailable';
-        element(prefix + 'Client').textContent = window.getSelectedClientName ? window.getSelectedClientName() : '';
-        element(prefix + 'Date').textContent = isBalanceSheet
-            ? 'Current · ' + currentDate + ' | Comparative opening · ' + openingDate
-            : 'For the period ' + periodStart + ' to ' + periodEnd;
+        const clientName = window.getSelectedClientName ? window.getSelectedClientName() : '';
+        element(prefix + 'Heading').textContent = (clientName ? clientName + ' : ' : '') + 'Notes to ' + (isBalanceSheet ? 'Balance Sheet' : 'Income Statement');
+        element(prefix + 'Period').textContent = result.upload.period_start && (result.upload.period_end || result.upload.as_of_date)
+            ? statementDateLabel(result.upload.period_start) + ' to ' + statementDateLabel(result.upload.period_end || result.upload.as_of_date)
+            : statementDateLabel(result.upload.period_end || result.upload.as_of_date || result.upload.period_start);
         element(prefix + 'CurrentHeader').textContent = isBalanceSheet ? 'Current · ' + currentDate : 'Statement amount';
         if (isBalanceSheet) element(prefix + 'ComparativeHeader').textContent = 'Opening · ' + openingDate;
         status.classList.remove('is-error');
@@ -5150,15 +5149,23 @@
         function renderNode(note, number, depth, isRoot) {
             const inactive = note.is_active === false || note.is_active === 0;
             const label = escapeHtml(note.label) + (inactive ? '<span class="bs-inactive-label">Inactive</span>' : '');
-            const amounts = amountCell(note.current_amount) + (isBalanceSheet ? amountCell(note.comparative_amount) : '');
+            const amounts = isRoot
+                ? '<td class="balance-sheet-amount"></td>' + (isBalanceSheet ? '<td class="balance-sheet-amount"></td>' : '')
+                : amountCell(note.current_amount) + (isBalanceSheet ? amountCell(note.comparative_amount) : '');
             rendered.push('<tr id="' + prefix + 'Note-' + Number(note.id) + '" class="' + (isRoot ? 'bs-note-root' : 'bs-note-child') + (inactive ? ' bs-note-inactive' : '') + (Number(note.id) === Number(selectedNoteId) ? ' bs-note-selected' : '') + '"><td class="bs-note-number">' + escapeHtml(number) + '</td><th scope="row" class="bs-note-label" style="padding-left:' + (13 + depth * 22) + 'px">' + label + '</th>' + amounts + '</tr>');
             if (isBalanceSheet && note.current_system_amount != null) rendered.push('<tr class="bs-note-system"><td></td><th scope="row" style="padding-left:' + (35 + depth * 22) + 'px">Current-period profit/(loss) linked to this category</th>' + amountCell(note.current_system_amount) + amountCell(null) + '</tr>');
             if (isBalanceSheet && note.comparative_system_amount != null) rendered.push('<tr class="bs-note-system"><td></td><th scope="row" style="padding-left:' + (35 + depth * 22) + 'px">Opening I/S items included in comparative balance</th>' + amountCell(null) + amountCell(note.comparative_system_amount) + '</tr>');
             (note.children || []).forEach(function (child, index) {
                 renderNode(child, number + '.' + String(index + 1), depth + 1, false);
             });
+            if (isRoot) {
+                rendered.push('<tr class="bs-note-subtotal"><td></td><th scope="row">Subtotal</th>' + amountCell(note.current_amount) + (isBalanceSheet ? amountCell(note.comparative_amount) : '') + '</tr>');
+            }
         }
-        numbering.roots.forEach(function (root, index) { renderNode(root, String(index + 1), 0, true); });
+        numbering.roots.forEach(function (root, index) {
+            if (index > 0) rendered.push('<tr class="bs-note-group-gap" aria-hidden="true"><td colspan="' + (isBalanceSheet ? '4' : '3') + '"></td></tr>');
+            renderNode(root, String(index + 1), 0, true);
+        });
         element(prefix + 'Rows').innerHTML = rendered.join('');
         table.hidden = !notes.roots.length;
 
@@ -5571,6 +5578,10 @@
         element('balanceSheetNotesView').hidden = true;
         element('incomeStatementNotesView').hidden = true;
         element(prefix + 'View').hidden = false;
+        const selectedClientName = window.getSelectedClientName ? window.getSelectedClientName() : '';
+        element(prefix + 'Heading').textContent = (selectedClientName ? selectedClientName + ' : ' : '') + 'Notes to ' + statementName;
+        const selectedPeriod = element('balanceSheetUpload').selectedOptions[0];
+        element(prefix + 'Period').textContent = selectedPeriod && selectedPeriod.value === selectedUpload ? selectedPeriod.textContent : 'Loading…';
         const key = statementNotesKey(section, clientId, selectedUpload);
         activeStatementNotesView = {key: key, section: section, clientId: Number(clientId), uploadId: selectedUpload, noteId: selectedNoteId};
         const notesShell = document.querySelector('.reconciliation-shell');
@@ -5710,6 +5721,14 @@
         element('incomeStatementNotesOpen').addEventListener('click', function () { showStatementNotes('income_statement'); });
         element('balanceSheetNotesBack').addEventListener('click', function () { showStatementFromNotes('balance_sheet'); });
         element('incomeStatementNotesBack').addEventListener('click', function () { showStatementFromNotes('income_statement'); });
+        element('balanceSheetNotesFinancialStatements').addEventListener('click', function () {
+            activeStatementNotesView = null;
+            showFinancialStatements(false);
+        });
+        element('incomeStatementNotesFinancialStatements').addEventListener('click', function () {
+            activeStatementNotesView = null;
+            showFinancialStatements(false);
+        });
         element('balanceSheetRows').addEventListener('click', function (event) {
             const reference = event.target.closest('[data-note-id]');
             if (reference) showStatementNotes(activeStatement, reference.dataset.noteId);

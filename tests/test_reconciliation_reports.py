@@ -46,14 +46,32 @@ def test_comparative_statement_browser_isolated_sources_and_review(tmp_path):
         note = {
             **reference, 'label': 'Synthetic note', 'parent_category_id': None, 'is_active': True,
             'current_amount': '300', 'comparative_amount': '250' if not income else None,
-            'account_count': 1, 'children': [],
+            'account_count': 1, 'children': [{
+                'id': int(reference['id']) + 1000, 'parent_category_id': reference['id'],
+                'source_statement_category_id': reference['source_statement_category_id'],
+                'sort_order': 0, 'label': 'Synthetic detail', 'is_active': True,
+                'current_amount': '300', 'comparative_amount': '250' if not income else None,
+                'account_count': 1, 'children': [],
+            }],
+        }
+        second_note_id = int(reference['id']) + 1
+        second_note = {
+            **reference, 'id': second_note_id, 'sort_order': 1, 'label': 'Second synthetic note',
+            'current_amount': '75', 'comparative_amount': '50' if not income else None,
+            'account_count': 1, 'children': [{
+                'id': second_note_id + 1000, 'parent_category_id': second_note_id,
+                'source_statement_category_id': reference['source_statement_category_id'],
+                'sort_order': 0, 'label': 'Second synthetic detail', 'is_active': True,
+                'current_amount': '75', 'comparative_amount': '50' if not income else None,
+                'account_count': 1, 'children': [],
+            }],
         }
         return {
             'client_id': core['client_id'], 'upload': core['upload'], 'context_key': core['context_key'],
             'notes_context_key': core['notes_context_key'], 'statement_section': section,
             'categories': core['categories'], 'calculations': core['calculations'],
             'comparative': core.get('comparative'),
-            'notes': {'statement_section': section, 'roots': [note], 'coverage': [{
+            'notes': {'statement_section': section, 'roots': [note, second_note], 'coverage': [{
                 'statement_category_id': reference['source_statement_category_id'], 'label': 'Synthetic category',
                 'note_root_id': reference['id'], 'account_count': 1, 'assigned_account_count': 1,
                 'unassigned_account_count': 0, 'current_difference': '0',
@@ -117,6 +135,25 @@ def test_comparative_statement_browser_isolated_sources_and_review(tmp_path):
             page.locator('#balanceSheetNotesOpen').click()
             expect(page.locator('#balanceSheetNotesTable')).to_be_visible()
             expect(page.locator('#balanceSheetNotesRows')).to_contain_text('Synthetic note')
+            expect(page.locator('#balanceSheetNotesHeading')).to_have_text('Example Manufacturing : Notes to Balance Sheet')
+            expect(page.locator('#balanceSheetNotesPeriod')).to_have_text('Jan 01, 2026 to Jun 30, 2026')
+            expect(page.locator('#balanceSheetNotesFinancialStatements')).to_be_visible()
+            assert page.locator('#balanceSheetNotesView .balance-sheet-caption').count() == 0
+            roots = page.locator('#balanceSheetNotesTable tr.bs-note-root')
+            expect(roots).to_have_count(2)
+            assert roots.nth(0).locator('td.balance-sheet-amount').all_text_contents() == ['', '']
+            assert page.locator('#balanceSheetNotesNote-1701 td.balance-sheet-amount').all_text_contents() == ['300', '250']
+            assert page.locator('#balanceSheetNotesTable tr.bs-note-subtotal').nth(0).locator('td.balance-sheet-amount').all_text_contents() == ['300', '250']
+            assert page.locator('#balanceSheetNotesTable tr.bs-note-subtotal').nth(1).locator('td.balance-sheet-amount').all_text_contents() == ['75', '50']
+            group_gap = page.locator('#balanceSheetNotesTable tr.bs-note-group-gap')
+            expect(group_gap).to_have_count(1)
+            assert group_gap.bounding_box()['height'] >= 18
+            row_order = page.locator('#balanceSheetNotesRows').evaluate("el => Array.from(el.children).map(row => row.id || row.className)")
+            assert row_order.index('bs-note-subtotal') < row_order.index('bs-note-group-gap') < row_order.index('balanceSheetNotesNote-702')
+            for width in (1440, 390):
+                page.set_viewport_size({'width': width, 'height': 1000})
+                assert page.locator('#balanceSheetNotesToolbar').evaluate('el => el.getBoundingClientRect().right <= innerWidth + 1')
+            page.set_viewport_size({'width': 1440, 'height': 1000})
             assert sum(path == notes_path for path, _ in calls) == 1
             page.locator('#balanceSheetNotesBack').click()
 
@@ -210,6 +247,21 @@ def test_comparative_statement_browser_isolated_sources_and_review(tmp_path):
             page.goto(base + '/static/reconciliation.html?report=income-statement-notes&trial_balance_upload_id=55&note_id=702')
             expect(page.locator('#incomeStatementNotesTable')).to_be_visible()
             expect(page.locator('#incomeStatementNotesRows')).to_contain_text('Synthetic note')
+            expect(page.locator('#incomeStatementNotesHeading')).to_have_text('Example Manufacturing : Notes to Income Statement')
+            expect(page.locator('#incomeStatementNotesPeriod')).to_have_text('Jan 01, 2026 to Jun 30, 2026')
+            assert page.locator('#incomeStatementNotesView .balance-sheet-caption').count() == 0
+            income_roots = page.locator('#incomeStatementNotesTable tr.bs-note-root')
+            expect(income_roots).to_have_count(2)
+            assert income_roots.nth(0).locator('td.balance-sheet-amount').all_text_contents() == ['']
+            assert page.locator('#incomeStatementNotesNote-1702 td.balance-sheet-amount').all_text_contents() == ['300']
+            assert page.locator('#incomeStatementNotesNote-1703 td.balance-sheet-amount').all_text_contents() == ['75']
+            assert page.locator('#incomeStatementNotesTable tr.bs-note-subtotal').nth(0).locator('td.balance-sheet-amount').all_text_contents() == ['300']
+            assert page.locator('#incomeStatementNotesTable tr.bs-note-subtotal').nth(1).locator('td.balance-sheet-amount').all_text_contents() == ['75']
+            expect(page.locator('#incomeStatementNotesTable tr.bs-note-group-gap')).to_have_count(1)
+            for width in (1440, 390):
+                page.set_viewport_size({'width': width, 'height': 1000})
+                assert page.locator('#incomeStatementNotesToolbar').evaluate('el => el.getBoundingClientRect().right <= innerWidth + 1')
+            page.set_viewport_size({'width': 1440, 'height': 1000})
             assert page.locator('#incomeStatementNotesNote-702').evaluate("el => el.classList.contains('bs-note-selected')")
 
             # A failed background load must leave the statement usable, and reopening Notes retries.
@@ -224,6 +276,8 @@ def test_comparative_statement_browser_isolated_sources_and_review(tmp_path):
             page.locator('#balanceSheetNotesOpen').click()
             expect(page.locator('#balanceSheetNotesTable')).to_be_visible()
             expect(page.locator('#balanceSheetNotesRows')).to_contain_text('Synthetic note')
+            page.locator('#balanceSheetNotesFinancialStatements').click()
+            expect(page.locator('#financialStatementsView')).to_be_visible()
 
             assert not errors, errors
             assert all(method == 'GET' for _, method in calls)
@@ -2814,7 +2868,7 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert "setActiveCashflowWindow" in javascript
     assert "const CASHFLOW_DEFAULT_START = '2026-01-01';" in javascript
     assert "const CASHFLOW_DEFAULT_END = '2026-06-30';" in javascript
-    assert "<script src='/static/reconciliation.js?v=68'></script>" in html
+    assert "<script src='/static/reconciliation.js?v=69'></script>" in html
     assert "id='reconReportPeriod'" in html
     assert "Linked to the loaded Cashflows Report" in html
     assert "id='reconPeriod'" not in html
@@ -2962,7 +3016,11 @@ def test_reports_hub_exposes_requested_report_cards():
     assert "Vendor Reports" in html
     assert "Customer Reports" in html
     assert "Financial Statements" in html
-    assert "Draft disclosures — before audit adjustments" in html
+    assert "Draft disclosures — before audit adjustments" not in html
+    assert "balanceSheetNotesPeriod" in html
+    assert "incomeStatementNotesPeriod" in html
+    assert "bs-note-subtotal" in javascript
+    assert "bs-note-group-gap" in javascript
     assert "balanceSheetUpload" in html
     assert "/api/reconciliation/financial-statements/balance-sheet" in javascript
     assert "/api/reconciliation/financial-statements/income-statement" in javascript
