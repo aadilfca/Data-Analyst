@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Balance Sheet report header and review popups — 2026-10-31
+
+Moved the client/statement title into a compact two-row header. The Period dropdown displays the selected date range; alternate choices retain their workbook names. Removed the repeated caption and moved profit-closing controls and source diagnostics into accessible, keyboard-operable dialogs with compact SVG icon buttons. Comparative-source guidance remains in review items. Set statement top padding to 88.5px: 72.5px for the global header plus a 16px gap. No API or schema changes; custom editable Trial Balance names remain a separate follow-up.
+
+**Verification:** JavaScript syntax and `git diff --check` pass. Automated tests and live visual acceptance were not run.
+
 ## Income Statement Notes — 2026-10-31
 
 Added ACC-linked nested Income Statement notes with note references in statement categories, period amounts using Income Statement presentation signs, and an unassigned-account/difference coverage review. Notes are current-period only and do not adjust statement balances. The Balance Sheet Notes view remains separate with its comparative opening column and existing profit-link disclosures. No schema change.

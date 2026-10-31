@@ -12,13 +12,22 @@
         .balance-sheet-toolbar h2 { margin: 0; font-size: 21px; color: #18344b; }
         .balance-sheet-toolbar h2:focus { outline: none; }
         .balance-sheet-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-        #balanceSheetView { max-width: 1080px; margin: 0 auto; color: #1a1a2e; }
+        #balanceSheetView { width: 100%; max-width: none; margin: 0; color: #1a1a2e; }
         #balanceSheetView .balance-sheet-paper { padding: 24px; border: 1px solid #dbe4ea; border-radius: 12px; background: #fff; }
-        #balanceSheetView .balance-sheet-caption { margin: 0 0 20px; }
-        #balanceSheetClient { margin: 0 0 5px; color: #18344b; font-size: 18px; overflow-wrap: anywhere; }
-        #balanceSheetView .balance-sheet-caption p { margin: 0; color: #64748b; font-size: 13px; }
+        #balanceSheetView #balanceSheetToolbar { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin-bottom: 12px; }
+        #balanceSheetView .balance-sheet-title-row { display: flex; align-items: center; min-width: 0; }
+        #balanceSheetView #balanceSheetHeading { margin: 0; color: #18344b; font-size: 22px; line-height: 1.3; overflow-wrap: anywhere; }
+        #balanceSheetView .balance-sheet-meta-row, #balanceSheetView .balance-sheet-meta-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+        #balanceSheetView .balance-sheet-meta-row { width: 100%; box-sizing: border-box; justify-content: space-between; }
+        #balanceSheetView .balance-sheet-meta-left { flex: 1 1 auto; flex-wrap: nowrap; }
+        #balanceSheetView #balanceSheetDate { margin: 0; color: #536577; font-size: 13px; font-weight: 700; white-space: nowrap; }
+        #balanceSheetView .balance-sheet-actions { align-items: center; justify-content: flex-end; flex: 0 0 auto; flex-wrap: nowrap; margin-left: auto; }
+        #balanceSheetView .balance-sheet-icon-button { display: inline-grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #38536b; cursor: pointer; }
+        #balanceSheetView .balance-sheet-icon-button:hover { border-color: #7d9bb3; background: #f3f7fa; color: #18344b; }
+        #balanceSheetView .balance-sheet-icon-button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
         #balanceSheetStatus { margin: 0; padding: 20px 0; color: #64748b; font-size: 13px; }
         #balanceSheetStatus[hidden], #balanceSheetTable[hidden], #balanceSheetReload[hidden] { display: none; }
+        #balanceSheetView #balanceSheetDiagnosticsOpen[hidden], #balanceSheetView #statementClosingOpen[hidden], #balanceSheetView .balance-sheet-actions button[hidden] { display: none; }
         #balanceSheetStatus.is-error { color: #b91c1c; }
         #balanceSheetView .balance-sheet-table-wrap { max-width: 100%; overflow-x: auto; }
         #balanceSheetTable { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: auto; font-size: 14px; }
@@ -35,17 +44,33 @@
         #balanceSheetView button:focus-visible, #financialStatementsView [role=button]:focus-visible { outline: 2px solid #1769aa; outline-offset: 3px; }
         @media (max-width: 600px) {
             #balanceSheetView .balance-sheet-paper { padding: 14px; }
+            #balanceSheetView .balance-sheet-meta-row { align-items: stretch; flex-direction: column; }
+            #balanceSheetView .balance-sheet-actions { justify-content: flex-start; flex-wrap: wrap; }
+            #balanceSheetView #balanceSheetUpload { width: min(260px, calc(100vw - 32px)); }
+            #balanceSheetDiagnosticsDialog .statement-dialog-header, #statementClosingDialog .statement-dialog-header { padding: 17px 17px 12px; }
+            #balanceSheetDiagnosticsDialog .statement-dialog-body, #statementClosingDialog .statement-dialog-body { padding: 16px 17px 18px; }
             #balanceSheetTable th, #balanceSheetTable td { padding: 10px; }
             #balanceSheetTable .bs-category th { padding-left: 20px; }
             #balanceSheetTable .balance-sheet-amount { width: 25%; }
         }
-        #balanceSheetView .balance-sheet-source { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 16px; color: #536577; font-size: 13px; }
-        #balanceSheetUpload { flex: 1; min-width: 180px; max-width: 650px; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; font: inherit; }
-        #balanceSheetDiagnostics { margin: 12px 0; padding: 12px 12px 12px 30px; border: 1px solid #e8c878; border-radius: 7px; background: #fff8e7; color: #5f4a18; font-size: 12px; line-height: 1.6; }
-        #balanceSheetDiagnostics[hidden] { display: none; }
-        #balanceSheetDate { margin-top: 5px; }
-        #statementClosingControls[hidden] { display: none; }
-        #statementClosingStatus { max-width: 100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; }
+        #balanceSheetUpload { width: min(250px, 40vw); min-width: 170px; padding: 7px 28px 7px 10px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #34495e; font: inherit; font-size: 12px; }
+        #balanceSheetDiagnostics[hidden], #statementClosingControls[hidden] { display: none; }
+        #balanceSheetDiagnostics { margin: 0; padding: 0 0 0 20px; color: #40566a; font-size: 13px; line-height: 1.55; }
+        #balanceSheetDiagnostics li + li { margin-top: 7px; }
+        #statementClosingControls { display: grid; gap: 12px; color: #40566a; font-size: 13px; }
+        #statementClosingControls label { font-weight: 600; color: #243b53; }
+        #statementClosingStatus { width: 100%; padding: 9px 10px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #243b53; font: inherit; }
+        #statementClosingSave { justify-self: end; }
+        #balanceSheetDiagnosticsDialog, #statementClosingDialog { width: min(560px, calc(100vw - 32px)); max-width: none; max-height: min(78vh, 680px); padding: 0; border: 1px solid #d4dee6; border-radius: 14px; background: #fff; color: #243b53; box-shadow: 0 24px 70px rgb(15 35 55 / 24%); }
+        #balanceSheetDiagnosticsDialog::backdrop, #statementClosingDialog::backdrop { background: rgb(15 35 55 / 42%); backdrop-filter: blur(2px); }
+        #balanceSheetDiagnosticsDialog .statement-dialog-header, #statementClosingDialog .statement-dialog-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 20px 22px 14px; border-bottom: 1px solid #e5ebf0; }
+        #balanceSheetDiagnosticsDialog .statement-dialog-header h3, #statementClosingDialog .statement-dialog-header h3 { margin: 0; color: #18344b; font-size: 17px; line-height: 1.35; }
+        #balanceSheetDiagnosticsDialog .statement-dialog-header p, #statementClosingDialog .statement-dialog-header p { margin: 4px 0 0; color: #64748b; font-size: 12px; line-height: 1.5; }
+        #balanceSheetDiagnosticsDialog .statement-dialog-close, #statementClosingDialog .statement-dialog-close { display: grid; place-items: center; flex: 0 0 32px; width: 32px; height: 32px; padding: 0; border: 1px solid #dbe4ea; border-radius: 8px; background: #fff; color: #536577; font-size: 19px; cursor: pointer; }
+        #balanceSheetDiagnosticsDialog .statement-dialog-body, #statementClosingDialog .statement-dialog-body { padding: 18px 22px 22px; }
+        #balanceSheetDiagnosticsDialog .statement-dialog-body { max-height: calc(78vh - 84px); overflow: auto; }
+        #balanceSheetDiagnosticsDialog[hidden], #statementClosingDialog[hidden] { display: none; }
+        #balanceSheetView .balance-sheet-icon-button:focus-visible, #balanceSheetDiagnosticsDialog button:focus-visible, #statementClosingDialog button:focus-visible, #statementClosingDialog select:focus-visible { outline: 2px solid #1769aa; outline-offset: 2px; }
         #balanceSheetRows .statement-capital-breakdown { display: block; margin-top: 5px; color: #64748b; font-size: 11px; font-weight: 400; }
 
         #balanceSheetView .balance-sheet-amount { font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -187,6 +212,7 @@
         }
         /* Full-page report view; the original Cashflows DOM is retained for returning. */
         .reconciliation-page > .reconciliation-shell[hidden], #cashflowReconciliation[hidden] { display: none !important; }
+        .reconciliation-page > .reconciliation-shell.statement-view-active { padding-top: 88.5px; }
         #cashflowReconciliation { box-sizing: border-box; width: 100%; min-width: 0; min-height: calc(100dvh - 72.5px); margin: 72.5px 0 0; color: #1a1a2e; background: #fff; }
         #cashflowReconciliation [hidden] { display: none !important; }
         #cashflowReconciliation .recon-accessible-context { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -346,12 +372,36 @@
             </div>
         </section>
         <section id='balanceSheetView' aria-labelledby='balanceSheetHeading' hidden>
-            <header class='balance-sheet-toolbar'><h2 id='balanceSheetHeading' tabindex='-1'>Balance Sheet</h2><div class='balance-sheet-actions'><button type='button' id='balanceSheetNotesOpen' class='cashflows-secondary' hidden>Notes to Balance Sheet</button><button type='button' id='incomeStatementNotesOpen' class='cashflows-secondary' hidden>Notes to Income Statement</button><button type='button' id='balanceSheetReload' class='cashflows-secondary'>Reload Balance Sheet</button><button type='button' id='balanceSheetBack' class='cashflows-secondary'>Financial Statements</button></div></header>
-            <div class='balance-sheet-source'><label for='balanceSheetUpload'>Trial Balance</label><select id='balanceSheetUpload'><option value=''>Select a Trial Balance</option></select></div>
-            <div id='statementClosingControls' class='balance-sheet-source' hidden><label for='statementClosingStatus'>Profit closing status for this TB</label><select id='statementClosingStatus'><option value='not_confirmed'>Not confirmed</option><option value='not_in_capital'>Profit is not yet included in ERP capital</option><option value='already_in_capital'>Profit is already included in ERP capital</option></select><button type='button' id='statementClosingSave' class='cashflows-secondary'>Save closing status</button></div>
+            <header id='balanceSheetToolbar' class='balance-sheet-toolbar'>
+                <div class='balance-sheet-title-row'><h2 id='balanceSheetHeading' tabindex='-1'></h2></div>
+                <div class='balance-sheet-meta-row'>
+                    <div class='balance-sheet-meta-left'>
+                        <span id='balanceSheetDate'>Period:</span>
+                        <select id='balanceSheetUpload' aria-label='Select Trial Balance period'><option value=''>Select period</option></select>
+                        <button type='button' id='balanceSheetDiagnosticsOpen' class='balance-sheet-icon-button' aria-label='Open Balance Sheet review items' title='Review items' aria-haspopup='dialog' aria-expanded='false' aria-controls='balanceSheetDiagnosticsDialog' hidden>
+                            <svg viewBox='0 0 24 24' aria-hidden='true'><path d='M8 4.5h8a2 2 0 0 1 2 2v13H6v-13a2 2 0 0 1 2-2Z'/><path d='M9 3.5h6v3H9zM9 11h6M9 15h6'/><path d='m8 11 .7.7L10 10.5M8 15l.7.7L10 14.5'/></svg>
+                        </button>
+                    </div>
+                    <div class='balance-sheet-actions'>
+                        <button type='button' id='statementClosingOpen' class='balance-sheet-icon-button' aria-label='Edit profit closing status' title='Profit closing status' aria-haspopup='dialog' aria-expanded='false' aria-controls='statementClosingDialog' hidden>
+                            <svg viewBox='0 0 24 24' aria-hidden='true'><path d='M7 5.5h10a2 2 0 0 1 2 2v12H5v-12a2 2 0 0 1 2-2Z'/><path d='M9 3.5h6v4H9zM8.5 12h7M8.5 16h4'/><path d='m15.5 16 1.2 1.2 2.3-2.5'/></svg>
+                        </button>
+                        <button type='button' id='balanceSheetNotesOpen' class='cashflows-secondary' hidden>Notes to Balance Sheet</button>
+                        <button type='button' id='incomeStatementNotesOpen' class='cashflows-secondary' hidden>Notes to Income Statement</button>
+                        <button type='button' id='balanceSheetReload' class='cashflows-secondary'>Reload Balance Sheet</button>
+                        <button type='button' id='balanceSheetBack' class='cashflows-secondary'>Financial Statements</button>
+                    </div>
+                </div>
+            </header>
+            <dialog id='balanceSheetDiagnosticsDialog' aria-labelledby='balanceSheetDiagnosticsHeading' hidden>
+                <div class='statement-dialog-header'><div><h3 id='balanceSheetDiagnosticsHeading'>Balance Sheet review items</h3><p>Source checks and items that need review.</p></div><button type='button' class='statement-dialog-close' data-statement-dialog-close aria-label='Close review items'>×</button></div>
+                <div class='statement-dialog-body'><ul id='balanceSheetDiagnostics' aria-label='Balance Sheet review items' hidden></ul></div>
+            </dialog>
+            <dialog id='statementClosingDialog' aria-labelledby='statementClosingHeading' hidden>
+                <div class='statement-dialog-header'><div><h3 id='statementClosingHeading'>Profit closing status</h3><p>Confirm whether this Trial Balance’s profit is already included in ERP capital.</p></div><button type='button' class='statement-dialog-close' data-statement-dialog-close aria-label='Close profit closing status'>×</button></div>
+                <div class='statement-dialog-body'><div id='statementClosingControls' hidden><label for='statementClosingStatus'>Profit closing status for this Trial Balance</label><select id='statementClosingStatus'><option value='not_confirmed'>Not confirmed</option><option value='not_in_capital'>Profit is not yet included in ERP capital</option><option value='already_in_capital'>Profit is already included in ERP capital</option></select><button type='button' id='statementClosingSave' class='cashflows-secondary'>Save closing status</button></div></div>
+            </dialog>
             <article class='balance-sheet-paper'>
-                <header class='balance-sheet-caption'><h3 id='balanceSheetClient'></h3><p>Draft — before audit adjustments</p><p id='balanceSheetDate'></p><p id='statementComparativeSource' hidden></p><p>Amounts rounded to whole units; hover to see exact values.</p></header>
-                <ul id='balanceSheetDiagnostics' aria-label='Balance Sheet review items' hidden></ul>
                 <p id='balanceSheetStatus' role='status' aria-live='polite'></p>
                 <div class='balance-sheet-table-wrap'><table id='balanceSheetTable' aria-label='Draft Balance Sheet before audit adjustments' hidden><thead><tr><th scope='col'>Particulars</th><th scope='col' id='statementNoteHeader'>Note</th><th scope='col' id='statementCurrentHeader' class='balance-sheet-amount'>Current period</th><th scope='col' id='statementComparativeHeader' class='balance-sheet-amount' hidden>Comparative</th></tr></thead><tbody id='balanceSheetRows'></tbody></table></div>
                 <details id='balanceSheetReconciliation' class='statement-reconciliation' data-state='not_reconciled' hidden>
@@ -650,6 +700,6 @@
     </section>
     <script src='/static/client_context.js?v=25'></script>
     <script src='/static/loading_ui.js?v=ce6d21ca20c8'></script>
-    <script src='/static/reconciliation.js?v=65'></script>
+    <script src='/static/reconciliation.js?v=67'></script>
 </body>
 </html>

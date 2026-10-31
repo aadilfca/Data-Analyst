@@ -5170,7 +5170,6 @@
             panel.open = false;
         });
         element('statementComparativeHeader').hidden = true;
-        element('statementComparativeSource').hidden = true;
         element('balanceSheetTable').classList.remove('has-comparative');
         const details = element('balanceSheetReconciliation');
         details.hidden = true;
@@ -5220,6 +5219,38 @@
         details.hidden = false;
         if (new URLSearchParams(window.location.search).get('feature') === 'tb-reconciliation') details.open = true;
     }
+    function statementDateLabel(value) {
+        const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ''));
+        if (!match) return value || 'date unavailable';
+        const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+        return new Intl.DateTimeFormat('en-US', {month: 'short', day: '2-digit', year: 'numeric'}).format(date);
+    }
+    function statementUploadOptionLabel(upload, isSelected) {
+        const end = upload.period_end || upload.as_of_date;
+        const start = upload.period_start;
+        const range = start && end
+            ? statementDateLabel(start) + ' to ' + statementDateLabel(end)
+            : statementDateLabel(end || start);
+        return isSelected ? range : (upload.file_name || 'Trial Balance') + ' · ' + range;
+    }
+    function setStatementHeaderTitle(statementName) {
+        const clientName = window.getSelectedClientName ? window.getSelectedClientName() : '';
+        element('balanceSheetHeading').textContent = clientName ? clientName + ' : ' + statementName : statementName;
+    }
+    function bindStatementDialog(buttonId, dialogId) {
+        const button = element(buttonId), dialog = element(dialogId);
+        button.addEventListener('click', function () {
+            if (dialog.open) return;
+            dialog.hidden = false;
+            dialog.showModal();
+            button.setAttribute('aria-expanded', 'true');
+        });
+        dialog.querySelector('[data-statement-dialog-close]').addEventListener('click', function () { dialog.close(); });
+        dialog.addEventListener('close', function () {
+            dialog.hidden = true;
+            button.setAttribute('aria-expanded', 'false');
+        });
+    }
     async function loadBalanceSheetOutline() {
         clearStatementReconciliation();
         cancelBalanceSheetLoad();
@@ -5231,6 +5262,8 @@
         element('incomeStatementNotesOpen').hidden = requestedSection !== 'income_statement';
         element('statementNoteHeader').hidden = false;
         element('statementClosingControls').hidden = true;
+        element('statementClosingOpen').hidden = true;
+        element('balanceSheetDiagnosticsOpen').hidden = true;
         const controller = new AbortController();
         balanceSheetRequest = controller;
         const status = element('balanceSheetStatus'), table = element('balanceSheetTable'), reload = element('balanceSheetReload');
@@ -5240,11 +5273,10 @@
         element('balanceSheetRows').replaceChildren();
         element('balanceSheetDiagnostics').replaceChildren();
         element('balanceSheetDiagnostics').hidden = true;
-        element('balanceSheetDate').textContent = '';
+        setStatementHeaderTitle(statementName);
         status.hidden = false;
         status.classList.remove('is-error');
         status.textContent = 'Loading ' + statementName + '…';
-        element('balanceSheetClient').textContent = window.getSelectedClientName ? window.getSelectedClientName() : '';
         reload.disabled = true;
         selector.disabled = true;
         element('balanceSheetView').setAttribute('aria-busy', 'true');
@@ -5257,8 +5289,8 @@
             const options = await api('/api/account-control-center/uploads' + suffix, { signal: controller.signal });
             if (generation !== balanceSheetGeneration) return;
             if (!Array.isArray(options.uploads)) throw new Error('Trial Balance choices could not be loaded. Please retry.');
-            selector.innerHTML = '<option value="">Select a Trial Balance</option>' + options.uploads.map(function (upload) {
-                const label = (upload.file_name || 'Trial Balance') + ' · ' + (upload.period_start || '') + ' to ' + (upload.period_end || upload.as_of_date || '');
+            selector.innerHTML = '<option value="">Select period</option>' + options.uploads.map(function (upload) {
+                const label = statementUploadOptionLabel(upload, String(upload.id) === selectedUpload);
                 return '<option value="' + Number(upload.id) + '">' + escapeHtml(label) + '</option>';
             }).join('');
             const requested = selectedUpload || (!balanceSheetUploadsLoaded ? new URLSearchParams(window.location.search).get('trial_balance_upload_id') : '');
@@ -5274,6 +5306,9 @@
                 throw new Error('The selected Trial Balance is no longer available. Select an available upload.');
             }
             selector.value = requested;
+            const selectedOption = selector.selectedOptions[0];
+            const selectedUploadInfo = options.uploads.find(function (upload) { return String(upload.id) === requested; });
+            if (selectedOption && selectedUploadInfo) selectedOption.textContent = statementUploadOptionLabel(selectedUploadInfo, true);
             const endpoint = requestedSection === 'income_statement'
                 ? '/api/reconciliation/financial-statements/income-statement'
                 : '/api/reconciliation/financial-statements/balance-sheet';
@@ -5328,12 +5363,10 @@
                 }
                 return html;
             }).join('') + (!reviewPlaced ? reviewRow() : '');
-            element('statementCurrentHeader').textContent = comparative ? 'Current · ' + (result.upload.period_end || result.upload.as_of_date || 'date unavailable') : 'Current period';
+            element('statementCurrentHeader').textContent = requestedSection === 'balance_sheet' ? 'Closing balance' : 'Current period';
             element('statementComparativeHeader').hidden = !comparative;
             if (comparative) {
                 element('statementComparativeHeader').textContent = 'Comparative · opening at ' + (comparative.opening_at || 'date unavailable');
-                element('statementComparativeSource').textContent = 'Comparative source: TB opening balances; prior-year audit adjustments and financial year-end require verification.';
-                element('statementComparativeSource').hidden = false;
             }
             const controls = result.controls || {};
             const diagnostics = (result.diagnostics || []).map(function (item) { return item.message; });
@@ -5346,18 +5379,20 @@
             if (controls.unmapped_count) diagnostics.push('Unmapped account codes: ' + (controls.unmapped_account_codes || []).join(', ') + (controls.unmapped_count > 50 ? ' (first 50)' : ''));
             if (comparative) {
                 const openingControls = comparative.controls;
+                diagnostics.push('Comparative basis: TB opening balances; prior-year audit adjustments and financial year-end require verification.');
                 diagnostics.push('ERP opening Dr: ' + balanceSheetAmount(openingControls.opening_dr, true) + ' · Cr: ' + balanceSheetAmount(openingControls.opening_cr, true) + ' · Difference: ' + balanceSheetAmount(openingControls.opening_difference, true));
                 (comparative.diagnostics || []).filter(function (item) { return item.code !== 'unclosed_profit_loss'; }).forEach(function (item) { diagnostics.push('Comparative: ' + item.message); });
                 if (review.account_count) diagnostics.push(review.account_count + ' opening I/S accounts need review. Current closing-balance profit includes their opening balances.');
             }
             element('balanceSheetDiagnostics').innerHTML = diagnostics.map(function (message) { return '<li>' + escapeHtml(message) + '</li>'; }).join('');
             element('balanceSheetDiagnostics').hidden = false;
-            element('balanceSheetDate').textContent = requestedSection === 'income_statement'
-                ? 'For the period ' + (result.upload.period_start || 'start date unavailable') + ' to ' + (result.upload.period_end || result.upload.as_of_date || 'date unavailable')
-                : 'As at ' + (result.upload.period_end || result.upload.as_of_date || 'date unavailable');
+            element('balanceSheetDiagnosticsOpen').hidden = false;
+            element('balanceSheetDiagnosticsOpen').setAttribute('aria-label', 'Open ' + statementName + ' review items');
             currentStatementContext = { clientId: requestedClient, uploadId: requested, key: result.context_key };
             element('statementClosingStatus').value = result.profit_link ? result.profit_link.closing_status : result.closing_status || 'not_confirmed';
             element('statementClosingControls').hidden = false;
+            element('statementClosingOpen').hidden = false;
+            element('statementClosingOpen').setAttribute('aria-label', 'Profit closing status: ' + element('statementClosingStatus').selectedOptions[0].textContent);
             if (requestedSection === 'balance_sheet' && rows.length) renderStatementReconciliation(result.transfer_reconciliation);
             if (comparative && rows.length) renderStatementReconciliation(comparative.transfer_reconciliation, true);
             table.hidden = !rows.length;
@@ -5396,7 +5431,11 @@
         const timer = window.setTimeout(function () { controller.abort(); }, 30000);
         try {
             await api('/api/account-control-center/profit-status', {signal: controller.signal, method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({client_id: context.clientId, trial_balance_upload_id: Number(context.uploadId), context_key: context.key, closing_status: element('statementClosingStatus').value})});
-            if (currentStatementContext === context && !element('balanceSheetView').hidden) await loadBalanceSheetOutline();
+            if (currentStatementContext === context && !element('balanceSheetView').hidden) {
+                const dialog = element('statementClosingDialog');
+                if (dialog.open) dialog.close();
+                await loadBalanceSheetOutline();
+            }
         } catch (error) {
             if (currentStatementContext === context) {
                 element('balanceSheetStatus').textContent = (controller.signal.aborted ? 'Closing status could not be verified.' : error.message) + ' Reload the statement before retrying.';
@@ -5427,6 +5466,8 @@
         element('balanceSheetNotesView').hidden = true;
         element('incomeStatementNotesView').hidden = true;
         element(prefix + 'View').hidden = false;
+        const notesShell = document.querySelector('.reconciliation-shell');
+        if (notesShell) notesShell.classList.remove('statement-view-active');
         const params = new URLSearchParams(window.location.search);
         params.set('view', 'reports');
         params.set('report', report);
@@ -5449,6 +5490,8 @@
         element('reportsView').hidden = true;
         element('financialStatementsView').hidden = true;
         element('balanceSheetView').hidden = false;
+        const notesShell = document.querySelector('.reconciliation-shell');
+        if (notesShell) notesShell.classList.add('statement-view-active');
         const params = new URLSearchParams(window.location.search);
         params.set('view', 'reports');
         params.set('report', isBalanceSheet ? 'balance-sheet' : 'income-statement');
@@ -5471,9 +5514,11 @@
         element('balanceSheetView').hidden = !isStatement;
         element('balanceSheetNotesView').hidden = true;
         element('incomeStatementNotesView').hidden = true;
-        element('balanceSheetHeading').textContent = title;
+        const statementShell = document.querySelector('.reconciliation-shell');
+        if (statementShell) statementShell.classList.toggle('statement-view-active', isStatement);
         element('balanceSheetReload').textContent = 'Reload ' + title;
         element('balanceSheetTable').setAttribute('aria-label', 'Draft ' + title + ' before audit adjustments');
+        setStatementHeaderTitle(title);
         element('balanceSheetNotesOpen').hidden = activeStatement !== 'balance_sheet';
         element('incomeStatementNotesOpen').hidden = activeStatement !== 'income_statement';
         const params = new URLSearchParams(window.location.search);
@@ -5488,6 +5533,10 @@
         if (isStatement) loadBalanceSheetOutline();
     }
     function setReportView(isReport) {
+        ['balanceSheetDiagnosticsDialog', 'statementClosingDialog'].forEach(function (id) {
+            const dialog = element(id);
+            if (dialog.open) dialog.close();
+        });
         clearStatementReconciliation();
         currentStatementContext = null;
         cancelBalanceSheetLoad();
@@ -5498,7 +5547,10 @@
         element('reportsView').hidden = isReport;
         element('cashflowsView').hidden = !isReport;
         const shell = document.querySelector('.reconciliation-shell');
-        if (shell) shell.classList.toggle('cashflows-view-active', isReport);
+        if (shell) {
+            shell.classList.toggle('cashflows-view-active', isReport);
+            shell.classList.remove('statement-view-active');
+        }
         if (typeof window.setNavModule === 'function') window.setNavModule(isReport ? 'Cashflows summary' : 'Reports');
         if (typeof window.setUpOverride === 'function') window.setUpOverride(isReport ? showReportsHub : null);
     }
@@ -5536,6 +5588,8 @@
         defaultPeriods();
     }
     async function initialise() {
+        bindStatementDialog('balanceSheetDiagnosticsOpen', 'balanceSheetDiagnosticsDialog');
+        bindStatementDialog('statementClosingOpen', 'statementClosingDialog');
         element('financialStatementsBack').addEventListener('click', showReportsHub);
         element('balanceSheetBack').addEventListener('click', function () { showFinancialStatements(false); });
         element('balanceSheetNotesOpen').addEventListener('click', function () { showStatementNotes('balance_sheet'); });
