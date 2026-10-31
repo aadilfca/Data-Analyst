@@ -118,7 +118,7 @@ def test_rollforward_differences_render_as_red_section_without_changing_source_r
             validationSection: document.querySelector('#tbValidationBody tr.tb-difference-section')?.textContent,
             savedSection: document.querySelector('#availableAccountsTableBody tr.tb-difference-section')?.textContent,
             savedLabel: document.querySelector('#availableAccountsTableBody tr.tb-generated-difference td:nth-child(2)')?.textContent,
-            savedDebit: document.querySelector('#availableAccountsTableBody tr.tb-generated-difference td:nth-child(8)')?.textContent
+            savedDebit: document.querySelector('#availableAccountsTableBody tr.tb-generated-difference td:nth-child(9)')?.textContent
         };
     }""")
 
@@ -176,8 +176,9 @@ def test_global_difference_preserves_all_six_saved_columns(browser):
     page.evaluate("""() => renderAvailableAccountsTable([], [{account_name: 'Opening footing',
         global_adjustment: true, opening_cr_adjustment: '100', closing_cr_adjustment: '100'}])""")
     cells = page.locator('.tb-generated-difference td').all_text_contents()
-    assert cells[3:9] == ['', '100', '', '', '', '100']
+    assert cells[4:10] == ['', '100', '', '', '', '100']
     assert cells[2] == 'Unassigned global difference'
+    assert cells[3] == ''
     page.close()
 
 
@@ -216,7 +217,7 @@ def test_saved_classification_and_amount_widths_and_floating_scroll(browser):
     page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""() => {
-        window.API_BASE=''; window.requests=[]; window.failOverride=false;
+        window.API_BASE=''; window.requests=[]; window.failOverride=false; window.getSelectedClientId=()=>42;
         const large='123456789012345678901234567890.00';
         const account={id:1,account_code:'A',account_name:'Cash',is_leaf:true,opening_dr:'1'};
         const totals=Object.fromEntries(['opening','period','closing'].flatMap(p=>['dr','cr'].map(s=>[p+'_'+s+'_column',large])));
@@ -229,15 +230,19 @@ def test_saved_classification_and_amount_widths_and_floating_scroll(browser):
                 controls.stale=true;
                 return {ok:true,json:async()=>account};
             }
+            if (url.includes('/api/account-control-center/mapping')) return {ok:true,json:async()=>({client_id:42,upload:{id:1},accounts:[{account_code:'A',assignment:{financial_statement_category_id:7}}]})};
+            if (url.includes('/api/account-control-center/categories')) return {ok:true,json:async()=>({categories:[{id:7,label:'Cash and cash equivalents',is_active:true}]})};
             return {ok:true,json:async()=>({accounts:[account],adjustments:[],validation_controls:controls})};
         };
         availableTrialBalancesSection.style.display='block';
         availableUploadsDropdown.innerHTML='<option value="1">One</option>';
         return loadAvailableUploadAccounts('1');
     }""")
+    page.wait_for_function("document.querySelector('#availableAccountsTableBody tr:first-child td:nth-child(4)')?.textContent === 'Cash and cash equivalents'")
     classification = page.locator('#availableAccountsTableBody tr:first-child td').nth(2)
     widths = page.locator('#availableAccountsTableBody tr:first-child td.tb-amount-cell').evaluate_all('cells => cells.map(c => c.getBoundingClientRect().width)')
     assert len(widths) == 6 and max(widths) - min(widths) < 1
+    assert page.locator('#availableAccountsTableBody tr:first-child td').nth(3).inner_text() == 'Cash and cash equivalents'
     assert page.locator('#availableAccountsTableBody .tb-draft-adjusted_totals td.tb-amount-cell').first.evaluate('el => el.scrollWidth <= el.clientWidth')
     bar = page.locator('.tb-saved-floating-scroll')
     assert bar.is_visible()
@@ -261,6 +266,82 @@ def test_saved_classification_and_amount_widths_and_floating_scroll(browser):
     assert 'Parent' in classification.inner_text()
     page.locator('#closeAvailableTrialBalancesBtn').click()
     assert bar.is_hidden()
+    page.close()
+
+
+def test_saved_trial_balance_category_lookup_and_search_filter(browser):
+    import re
+    html = (PROJECT_ROOT / 'static' / 'trial_balance.html').read_text(encoding='utf-8')
+    page = browser.new_page()
+    page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
+    page.evaluate("""() => {
+        window.API_BASE=''; window.getSelectedClientId=()=>42;
+        const accounts=[
+            {id:1,account_code:'100',account_name:'Cash',is_leaf:true,opening_dr:'10',closing_dr:'12'},
+            {id:2,account_code:'200',account_name:'Unassigned account',is_leaf:true,opening_dr:'20',closing_dr:'22'},
+            {id:3,account_code:'300',account_name:'Trade receivables',is_leaf:true,opening_dr:'30',closing_dr:'32'}
+        ];
+        window.fetch=async url => {
+            if (url.includes('/api/trial-balance/accounts')) return {ok:true,json:async()=>({accounts,adjustments:[],validation_controls:{}})};
+            if (url.includes('/api/account-control-center/mapping')) return {ok:true,json:async()=>({client_id:42,upload:{id:59},accounts:[
+                {account_code:'100',assignment:{financial_statement_category_id:7}},
+                {account_code:'200',assignment:{financial_statement_category_id:null}},
+                {account_code:'300',assignment:{financial_statement_category_id:8}}
+            ]})};
+            return {ok:true,json:async()=>({categories:[
+                {id:7,label:'Cash and cash equivalents',is_active:true},
+                {id:8,label:'Trade receivables',is_active:true},
+                {id:9,label:'Retired category',is_active:false}
+            ]})};
+        };
+        availableTrialBalancesSection.style.display='block';
+        availableUploadsDropdown.innerHTML='<option value="59">TB</option>';
+        availableUploadsDropdown.value='59';
+        return loadAvailableUploadAccounts('59');
+    }""")
+    page.wait_for_function("document.querySelector('#availableAccountsTableBody tr:first-child td:nth-child(4)')?.textContent === 'Cash and cash equivalents'")
+    headers = page.locator('#availableAccountsTableWrapper thead th').all_text_contents()
+    assert headers[:4] == ['Code', 'Name', 'Classification', 'Category']
+    assert page.locator('#availableAccountsTableBody tr:first-child td').nth(2).inner_text() == 'Leaf'
+    assert page.locator('#availableAccountsTableBody tr:first-child td').nth(3).inner_text() == 'Cash and cash equivalents'
+    assert page.locator('#availableAccountsTableBody tr:nth-child(2) td').nth(3).inner_text() == 'Unassigned'
+    assert page.locator('#availableAccountsTableBody tr:first-child td:nth-child(4) input, #availableAccountsTableBody tr:first-child td:nth-child(4) select').count() == 0
+    assert page.locator('#tbSavedCategorySearch').is_enabled()
+    options = page.locator('#tbSavedCategoryOptions option').evaluate_all('items => items.map(item => item.value)')
+    assert options == ['Cash and cash equivalents', 'Trade receivables', 'Unassigned']
+    category_filter = page.locator('#tbSavedCategorySearch')
+    category_filter.fill('receiv')
+    assert page.locator('#availableAccountsTableBody tr[data-category-filter]:visible').count() == 1
+    assert page.locator('#availableAccountsTableBody tr[data-category-filter]:visible td').nth(1).inner_text() == 'Trade receivables'
+    category_filter.fill('Unassigned')
+    assert page.locator('#availableAccountsTableBody tr[data-category-filter]:visible').count() == 1
+    category_filter.fill('not a category')
+    assert page.locator('#tbSavedCategoryNoMatches').is_visible()
+    category_filter.fill('')
+    assert page.locator('#availableAccountsTableBody tr[data-category-filter]:visible').count() == 3
+    assert page.locator('#availableAccountsTableBody tr:first-child td.tb-amount-cell').first.inner_text() == '10'
+    page.close()
+
+
+def test_saved_trial_balance_remains_available_when_category_lookup_fails(browser):
+    page = browser.new_page()
+    page.set_content('<div id="availableAccountsTableWrapper"><table><thead><tr><th>Code</th></tr></thead><tbody id="availableAccountsTableBody"></tbody></table></div><div id="tbSavedStickyHead"></div><select id="availableUploadsDropdown"><option value="59">TB</option></select><input id="tbSavedCategorySearch"><datalist id="tbSavedCategoryOptions"></datalist><p id="tbSavedCategoryNoMatches" hidden></p>')
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
+    page.evaluate("""() => {
+        window.API_BASE=''; window.getSelectedClientId=()=>42;
+        window.fetch=async url => url.includes('/api/trial-balance/accounts')
+            ? {ok:true,json:async()=>({accounts:[{id:1,account_code:'A',account_name:'Cash',is_leaf:true,closing_dr:'50'}],adjustments:[],validation_controls:{}})}
+            : {ok:false,json:async()=>({detail:'ACC unavailable'})};
+        availableUploadsDropdown.value='59';
+        return loadAvailableUploadAccounts('59');
+    }""")
+    page.wait_for_function("document.querySelector('#tbSavedCategoryNoMatches')?.textContent.includes('categories are unavailable')")
+    assert page.locator('#availableAccountsTableWrapper tbody tr').count() == 1
+    assert page.locator('#availableAccountsTableWrapper tbody tr:first-child td').nth(3).inner_text() == 'Unavailable'
+    assert page.locator('#availableAccountsTableWrapper tbody tr:first-child td.tb-amount-cell').nth(4).inner_text() == '50'
+    assert page.locator('#tbSavedCategorySearch').is_disabled()
+    assert 'categories are unavailable' in page.locator('#tbSavedCategoryNoMatches').inner_text()
     page.close()
 
 
@@ -482,7 +563,7 @@ def test_draft_footer_preserves_erp_values_and_shows_balanced_totals_in_both_vie
             pairs:values('#tbValidationBody .tb-draft-pairs'),
             warning:document.querySelector('#tbValidationBody .tb-control-difference').nextElementSibling.textContent};
         renderAvailableAccountsTable([],[],validationResult);
-        const saved=Array.from(document.querySelectorAll('#availableAccountsTableBody .tb-draft-adjusted_totals td')).slice(3,9).map(c=>c.textContent);
+        const saved=Array.from(document.querySelectorAll('#availableAccountsTableBody .tb-draft-adjusted_totals td')).slice(4,10).map(c=>c.textContent);
         validationResult.draft_reconciliation.pair_differences.opening={difference:'-0.02',within_tolerance:false};
         renderTrialBalanceValidationGrid();
         const smallPair={text:values('#tbValidationBody .tb-draft-pairs')[0],

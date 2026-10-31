@@ -507,7 +507,7 @@
         }
 
         #availableAccountsTableWrapper .tb-review-table {
-            min-width: 1240px;
+            min-width: 1420px;
         }
 
         #availableAccountsTableWrapper .tb-amount-cell {
@@ -523,13 +523,21 @@
         #availableAccountsTableWrapper::-webkit-scrollbar { display: none; }
         .tb-saved-sticky { position: sticky; top: 70px; z-index: 3; overflow: hidden; background: #f1f5f9; }
         .tb-saved-sticky[hidden] { display: none; }
-        .tb-saved-table { width: 100%; min-width: 1240px; table-layout: fixed; border-collapse: collapse; font-size: 11px; }
+        .tb-saved-table { width: 100%; min-width: 1420px; table-layout: fixed; border-collapse: collapse; font-size: 11px; }
         .tb-saved-table th, .tb-saved-table td { box-sizing: border-box; padding: 6px 8px; border: 1px solid #e2e8f0; overflow-wrap: anywhere; }
         .tb-saved-table th { background: #f1f5f9; text-align: left; padding: 8px 10px; }
         .tb-saved-table td { background: #fff; }
         .tb-saved-table tbody tr:nth-child(even) td { background: #fafcff; }
         .tb-saved-table .tb-amount-cell { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
         .tb-saved-table input { box-sizing: border-box; width: 100%; }
+        .tb-saved-category-filter { display: flex; align-items: center; gap: 7px; }
+        .tb-saved-category-filter label { font-size: 13px; font-weight: 600; color: #34495e; white-space: nowrap; }
+        #tbSavedCategorySearch { box-sizing: border-box; width: 205px; max-width: 28vw; padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 6px; color: #1a1a2e; font: inherit; }
+        #tbSavedCategorySearch:focus-visible { outline: 2px solid #1769aa; outline-offset: 2px; }
+        #tbSavedCategorySearch:disabled { background: #f1f5f9; color: #64748b; cursor: not-allowed; }
+        #tbSavedCategoryNoMatches { margin: 0 0 10px; color: #64748b; font-size: 13px; }
+        #tbSavedCategoryNoMatches[hidden] { display: none; }
+        @media (max-width: 600px) { #tbSavedCategorySearch { width: min(205px, 48vw); max-width: none; } }
         #availableAccountsTableWrapper thead { display: none; }
 
         /* ---------- COLUMN MAPPING (Section 1, Phase 2) ---------- */
@@ -1062,6 +1070,11 @@
             <select id="availableUploadsDropdown">
                 <option value="">— Select an upload —</option>
             </select>
+            <div class="tb-saved-category-filter">
+                <label for="tbSavedCategorySearch">Category</label>
+                <input id="tbSavedCategorySearch" type="search" list="tbSavedCategoryOptions" placeholder="Search or choose category" aria-label="Filter Trial Balance accounts by Account Control Centre category" autocomplete="off" disabled>
+                <datalist id="tbSavedCategoryOptions"></datalist>
+            </div>
             <button class="btn-secondary-action" id="tbAssignCategoriesBtn" type="button">Assign categories →</button>
             <!-- Confirmed fix: deletes the selected upload + all its accounts. Hidden
                  until an upload is actually selected (same visibility pattern as
@@ -1070,6 +1083,7 @@
         </div>
 
         <p class="group-hint" id="availableUploadsEmptyHint" style="display:none;">No classified Trial Balance uploads found for this client yet.</p>
+        <p id="tbSavedCategoryNoMatches" role="status" aria-live="polite" hidden>No Trial Balance accounts match this category.</p>
 
         <div id="tbSavedStatus" class="status-bar" role="status" style="display:none;"></div>
         <div id="tbSavedValidationControls" class="tb-validation-controls" aria-live="polite"></div>
@@ -1081,6 +1095,7 @@
                         <th>Code</th>
                         <th>Name</th>
                         <th>Classification</th>
+                        <th>Category</th>
                         <th class="tb-amount-cell">Opening Dr</th>
                         <th class="tb-amount-cell">Opening Cr</th>
                         <th class="tb-amount-cell">Period Dr</th>
@@ -1099,7 +1114,7 @@
     <script src="/static/loading_ui.js?v=2"></script>
     <script src="/static/client_context.js?v=25"></script>
     <script src="/static/utils.js"></script>
-    <script src="/static/trial_balance.js?v=36"></script>
+    <script src="/static/trial_balance.js?v=37"></script>
 
 </body>
 

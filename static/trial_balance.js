@@ -151,6 +151,13 @@ const availableUploadsEmptyHint = getElement('availableUploadsEmptyHint');
 const availableAccountsTableWrapper = getElement('availableAccountsTableWrapper');
 const availableAccountsTableBody = getElement('availableAccountsTableBody');
 const tbSavedStickyHead = getElement('tbSavedStickyHead');
+const tbSavedCategorySearch = getElement('tbSavedCategorySearch');
+const tbSavedCategoryOptions = getElement('tbSavedCategoryOptions');
+const tbSavedCategoryNoMatches = getElement('tbSavedCategoryNoMatches');
+let availableAccountCategoryByCode = new Map();
+let availableAccountCategoryLookupReady = false;
+let availableAccountsLoadToken = 0;
+let availableCategoryUploadId = null;
 if (availableAccountsTableWrapper && tbSavedStickyHead) {
     const savedTable = availableAccountsTableWrapper.querySelector('table');
     const heading = savedTable.cloneNode(false);
@@ -1770,6 +1777,93 @@ function buildUploadLabel(upload) {
     return typeLabel + ' (' + startMonth + ' ' + startYear + ' - ' + endMonth + ' ' + endYear + ')';
 }
 
+function populateSavedCategoryOptions(categories) {
+    if (!tbSavedCategoryOptions) return;
+    tbSavedCategoryOptions.replaceChildren();
+    const labels = new Set((Array.isArray(categories) ? categories : [])
+        .filter(category => category.is_active !== false)
+        .map(category => String(category.label || '').trim())
+        .filter(Boolean));
+    labels.add('Unassigned');
+    Array.from(labels).sort((left, right) => left.localeCompare(right)).forEach(function (label) {
+        const option = document.createElement('option');
+        option.value = label;
+        tbSavedCategoryOptions.appendChild(option);
+    });
+}
+
+function applySavedCategoryFilter() {
+    if (!availableAccountsTableBody) return;
+    const query = String(tbSavedCategorySearch ? tbSavedCategorySearch.value : '').trim().toLocaleLowerCase();
+    const rows = availableAccountsTableBody.querySelectorAll('tr[data-category-filter]');
+    if (!availableAccountCategoryLookupReady) {
+        rows.forEach(row => { row.hidden = false; });
+        return;
+    }
+    let visibleCount = 0;
+    rows.forEach(function (row) {
+        const matches = !query || String(row.dataset.categoryFilter || '').toLocaleLowerCase().includes(query);
+        row.hidden = !matches;
+        if (matches) visibleCount += 1;
+    });
+    if (tbSavedCategoryNoMatches && availableAccountCategoryLookupReady) {
+        tbSavedCategoryNoMatches.textContent = 'No Trial Balance accounts match this category.';
+        tbSavedCategoryNoMatches.hidden = !query || visibleCount > 0;
+    }
+}
+
+async function loadAvailableUploadCategories(uploadId, clientId, loadToken) {
+    if (!clientId) return;
+    const requests = [
+        fetch(API_BASE + '/api/account-control-center/mapping?client_id=' + encodeURIComponent(clientId) + '&trial_balance_upload_id=' + encodeURIComponent(uploadId)),
+        fetch(API_BASE + '/api/account-control-center/categories?client_id=' + encodeURIComponent(clientId) + '&category_type=financial_statement&include_inactive=true'),
+    ];
+    const responses = await Promise.allSettled(requests);
+    if (loadToken !== availableAccountsLoadToken || (availableUploadsDropdown && String(availableUploadsDropdown.value) !== String(uploadId))) return;
+
+    try {
+        if (responses.some(response => response.status !== 'fulfilled')) throw new Error('Category lookup failed');
+        const [mappingResponse, categoriesResponse] = responses.map(response => response.value);
+        const [mapping, categoryResult] = await Promise.all([mappingResponse.json(), categoriesResponse.json()]);
+        const mappingMatches = mappingResponse.ok && categoriesResponse.ok
+            && String(mapping.client_id) === String(clientId)
+            && mapping.upload && String(mapping.upload.id) === String(uploadId)
+            && Array.isArray(mapping.accounts) && Array.isArray(categoryResult.categories);
+        if (!mappingMatches) throw new Error('Category lookup returned an unexpected client or upload');
+
+        const labelsById = new Map(categoryResult.categories.map(category => [String(category.id), category.label]));
+        availableAccountCategoryByCode = new Map(mapping.accounts.map(account => {
+            const categoryId = account.assignment && account.assignment.financial_statement_category_id;
+            return [String(account.account_code || '').trim(), categoryId == null ? 'Unassigned' : (labelsById.get(String(categoryId)) || 'Category unavailable')];
+        }));
+        availableAccountCategoryLookupReady = true;
+        populateSavedCategoryOptions(categoryResult.categories);
+        if (tbSavedCategorySearch) tbSavedCategorySearch.disabled = false;
+        if (tbSavedCategoryNoMatches) {
+            tbSavedCategoryNoMatches.textContent = 'No Trial Balance accounts match this category.';
+            tbSavedCategoryNoMatches.hidden = true;
+        }
+        availableAccountsTableBody.querySelectorAll('tr[data-category-filter]').forEach(function (row) {
+            const label = availableAccountCategoryByCode.get(String(row.dataset.accountCode || '').trim()) || 'Category unavailable';
+            row.dataset.categoryFilter = label;
+            const cell = row.querySelector('.tb-saved-category-cell');
+            if (cell) {
+                cell.textContent = label === 'Category unavailable' ? 'Unavailable' : label;
+                cell.title = label === 'Category unavailable' ? 'Account Control Centre category lookup could not be verified.' : '';
+            }
+        });
+        applySavedCategoryFilter();
+    } catch (_error) {
+        if (loadToken !== availableAccountsLoadToken) return;
+        availableAccountCategoryLookupReady = false;
+        if (tbSavedCategorySearch) tbSavedCategorySearch.disabled = true;
+        if (tbSavedCategoryNoMatches) {
+            tbSavedCategoryNoMatches.textContent = 'Account categories are unavailable. Trial Balance figures remain available.';
+            tbSavedCategoryNoMatches.hidden = false;
+        }
+    }
+}
+
 // Fetches Phase 1's list-uploads endpoint and populates the dropdown. Only 'parsed'
 // uploads are listed -- an 'error'/'pending' upload has no accounts to browse, so
 // including it would just be a dead entry that returns an empty table on selection.
@@ -1784,6 +1878,13 @@ async function loadAvailableUploads(target = availableTrialBalancesBtn, requeste
     if (tbSavedStickyHead) tbSavedStickyHead.hidden = true;
     if (availableAccountsTableWrapper && availableAccountsTableWrapper._updateFloatingScrollbar) availableAccountsTableWrapper._updateFloatingScrollbar();
     if (availableAccountsTableBody) availableAccountsTableBody.innerHTML = '';
+    availableAccountsLoadToken += 1;
+    availableCategoryUploadId = null;
+    availableAccountCategoryByCode = new Map();
+    availableAccountCategoryLookupReady = false;
+    if (tbSavedCategorySearch) { tbSavedCategorySearch.value = ''; tbSavedCategorySearch.disabled = true; }
+    if (tbSavedCategoryOptions) tbSavedCategoryOptions.replaceChildren();
+    if (tbSavedCategoryNoMatches) { tbSavedCategoryNoMatches.hidden = true; tbSavedCategoryNoMatches.textContent = 'No Trial Balance accounts match this category.'; }
     if (deleteUploadBtn) deleteUploadBtn.style.display = 'none';
 
     try {
@@ -1829,11 +1930,25 @@ async function loadAvailableUploads(target = availableTrialBalancesBtn, requeste
 // this view's own table.
 async function loadAvailableUploadAccounts(uploadId, target = availableUploadsDropdown) {
     if (!availableAccountsTableWrapper || !availableAccountsTableBody) return;
+    const loadToken = ++availableAccountsLoadToken;
+    const clientId = window.getSelectedClientId ? window.getSelectedClientId() : null;
+    const previousUploadId = availableCategoryUploadId;
+    if (previousUploadId !== String(uploadId)) {
+        if (tbSavedCategorySearch) tbSavedCategorySearch.value = '';
+        if (tbSavedCategoryNoMatches) tbSavedCategoryNoMatches.hidden = true;
+    }
+    availableCategoryUploadId = String(uploadId);
+    availableAccountCategoryByCode = new Map();
+    availableAccountCategoryLookupReady = false;
+    if (tbSavedCategorySearch) tbSavedCategorySearch.disabled = true;
+    if (tbSavedCategoryOptions) tbSavedCategoryOptions.replaceChildren();
     const loadingToken = startTrialBalanceLoading(target);
 
     try {
-        const res = await fetch(API_BASE + '/api/trial-balance/accounts?upload_id=' + uploadId);
+        const res = await fetch(API_BASE + '/api/trial-balance/accounts?upload_id=' + encodeURIComponent(uploadId));
+        if (loadToken !== availableAccountsLoadToken || (availableUploadsDropdown && String(availableUploadsDropdown.value) !== String(uploadId))) return;
         const result = await res.json();
+        if (loadToken !== availableAccountsLoadToken || (availableUploadsDropdown && String(availableUploadsDropdown.value) !== String(uploadId))) return;
 
         if (!res.ok) {
             throw new Error(result.detail || 'Failed to load accounts');
@@ -1844,6 +1959,8 @@ async function loadAvailableUploadAccounts(uploadId, target = availableUploadsDr
         availableAccountsTableWrapper.style.display = 'block';
         if (tbSavedStickyHead) tbSavedStickyHead.hidden = false;
         fitSavedTrialBalanceAmountColumns();
+        applySavedCategoryFilter();
+        loadAvailableUploadCategories(uploadId, clientId, loadToken);
     } catch (error) {
         showStatus('❌ ' + error.message, 'error');
     } finally {
@@ -1859,6 +1976,11 @@ function renderAvailableAccountsTable(accounts, adjustments, controls = {}) {
 
     accounts.forEach(function (account) {
         const tr = document.createElement('tr');
+        const categoryLabel = availableAccountCategoryLookupReady
+            ? (availableAccountCategoryByCode.get(String(account.account_code || '').trim()) || 'Category unavailable')
+            : 'Category unavailable';
+        tr.dataset.accountCode = String(account.account_code || '').trim();
+        tr.dataset.categoryFilter = categoryLabel;
 
         const tdCode = document.createElement('td');
         const display = document.createElement('span');
@@ -1917,6 +2039,12 @@ function renderAvailableAccountsTable(accounts, adjustments, controls = {}) {
         });
         tr.appendChild(tdClassification);
 
+        const tdCategory = document.createElement('td');
+        tdCategory.className = 'tb-saved-category-cell';
+        tdCategory.textContent = categoryLabel === 'Category unavailable' ? 'Unavailable' : categoryLabel;
+        if (categoryLabel === 'Category unavailable') tdCategory.title = 'Account Control Centre category lookup could not be verified.';
+        tr.appendChild(tdCategory);
+
         amountFields.forEach(function (field) {
             const tdAmount = document.createElement('td');
             tdAmount.className = 'tb-amount-cell';
@@ -1937,7 +2065,7 @@ function renderAvailableAccountsTable(accounts, adjustments, controls = {}) {
     const sectionRow = document.createElement('tr');
     sectionRow.className = 'tb-difference-section';
     const sectionCell = document.createElement('td');
-    sectionCell.colSpan = 9;
+    sectionCell.colSpan = 10;
     sectionCell.textContent = `System-generated differences (${savedAdjustments.length}) — separate from original Trial Balance amounts.`;
     sectionRow.appendChild(sectionCell);
     availableAccountsTableBody.appendChild(sectionRow);
@@ -1949,14 +2077,15 @@ function renderAvailableAccountsTable(accounts, adjustments, controls = {}) {
             adjustment.account_code || '—',
             'Difference — ' + (adjustment.account_name || adjustment.account_code || 'Leaf account'),
             adjustment.global_adjustment ? 'Unassigned global difference' : 'Leaf adjustment',
+            '',
             Number(adjustment.opening_dr_adjustment || 0) || '', Number(adjustment.opening_cr_adjustment || 0) || '',
             Number(adjustment.period_dr_adjustment || 0) || '', Number(adjustment.period_cr_adjustment || 0) || '',
             Number(adjustment.closing_dr_adjustment || 0) || '', Number(adjustment.closing_cr_adjustment || 0) || '',
         ];
         values.forEach(function (value, index) {
             const td = document.createElement('td');
-            if (index >= 3 && index <= 8) td.className = 'tb-amount-cell';
-            td.textContent = value === '' ? '' : (index >= 3 && index <= 8
+            if (index >= 4 && index <= 9) td.className = 'tb-amount-cell';
+            td.textContent = value === '' ? '' : (index >= 4 && index <= 9
                 ? (typeof window.formatAmount === 'function' ? window.formatAmount(value) : String(value))
                 : String(value));
             tr.appendChild(td);
@@ -2046,7 +2175,7 @@ function fitSavedTrialBalanceAmountColumns() {
             amountWidth = Math.max(amountWidth, Math.ceil(context.measureText(value).width) + 24);
         });
     }
-    const widths = [145, 220, 110, ...Array(6).fill(amountWidth)];
+    const widths = [145, 220, 110, 190, ...Array(6).fill(amountWidth)];
     [table, heading].forEach(function (target) {
         const group = document.createElement('colgroup');
         widths.forEach(function (width) { const col = document.createElement('col'); col.style.width = width + 'px'; group.appendChild(col); });
@@ -2062,6 +2191,13 @@ if (availableUploadsDropdown) {
     availableUploadsDropdown.addEventListener('change', function () {
         const uploadId = this.value;
         if (!uploadId) {
+            availableAccountsLoadToken += 1;
+            availableCategoryUploadId = null;
+            availableAccountCategoryByCode = new Map();
+            availableAccountCategoryLookupReady = false;
+            if (tbSavedCategorySearch) { tbSavedCategorySearch.value = ''; tbSavedCategorySearch.disabled = true; }
+            if (tbSavedCategoryOptions) tbSavedCategoryOptions.replaceChildren();
+            if (tbSavedCategoryNoMatches) { tbSavedCategoryNoMatches.hidden = true; tbSavedCategoryNoMatches.textContent = 'No Trial Balance accounts match this category.'; }
             if (availableAccountsTableWrapper) availableAccountsTableWrapper.style.display = 'none';
             if (tbSavedStickyHead) tbSavedStickyHead.hidden = true;
             if (availableAccountsTableWrapper && availableAccountsTableWrapper._updateFloatingScrollbar) availableAccountsTableWrapper._updateFloatingScrollbar();
@@ -2073,6 +2209,10 @@ if (availableUploadsDropdown) {
         // Confirmed fix: Delete only appears once a real upload is selected.
         if (deleteUploadBtn) deleteUploadBtn.style.display = 'inline-block';
     });
+}
+
+if (tbSavedCategorySearch) {
+    tbSavedCategorySearch.addEventListener('input', applySavedCategoryFilter);
 }
 
 // Confirmed fix: deletes the currently selected upload (and all its accounts) after
@@ -2161,6 +2301,13 @@ if (closeAvailableTrialBalancesBtn) {
         if (tbSavedStickyHead) tbSavedStickyHead.hidden = true;
         if (availableAccountsTableWrapper && availableAccountsTableWrapper._updateFloatingScrollbar) availableAccountsTableWrapper._updateFloatingScrollbar();
         if (availableAccountsTableBody) availableAccountsTableBody.innerHTML = '';
+        availableAccountsLoadToken += 1;
+        availableCategoryUploadId = null;
+        availableAccountCategoryByCode = new Map();
+        availableAccountCategoryLookupReady = false;
+        if (tbSavedCategorySearch) { tbSavedCategorySearch.value = ''; tbSavedCategorySearch.disabled = true; }
+        if (tbSavedCategoryOptions) tbSavedCategoryOptions.replaceChildren();
+        if (tbSavedCategoryNoMatches) { tbSavedCategoryNoMatches.hidden = true; tbSavedCategoryNoMatches.textContent = 'No Trial Balance accounts match this category.'; }
         if (availableUploadsEmptyHint) availableUploadsEmptyHint.style.display = 'none';
         if (deleteUploadBtn) deleteUploadBtn.style.display = 'none';
     });
@@ -2465,7 +2612,7 @@ function renderDraftReconciliation(body, columns, mappingRoleByIndex, controls, 
 function renderSavedDraftReconciliation(controls) {
     const columns = [
         {kind:'source',role:'account_code_column'}, {kind:'source',role:'account_name_column'},
-        {kind:'classification'},
+        {kind:'classification'}, {kind:'category'},
         ...['opening','period','closing'].flatMap(function (period) {
             return ['dr','cr'].map(function (side) { return {kind:'source',role:period+'_'+side+'_column',className:'tb-amount-cell'}; });
         }),

@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Trial Balance category display and filter — 2026-10-31
+
+Added read-only ACC Financial Statements categories after Classification in saved Trial Balance review. A category typeahead lists active categories and Unassigned and filters displayed account rows only. Trial Balance figures load first; ACC categories fill in afterward. Lookup failures leave figures visible and mark categories unavailable. Reused existing read endpoints; no backend or schema changes. Trial Balance script cache version is 37.
+
+**Verification:** `tests/test_trial_balance_ui.py` passed (19 passed). Playwright covers assigned/unassigned labels, filtering, totals and ACC failure fallback. JavaScript syntax and diff checks passed; pytest emitted a cache-directory warning.
+
 ## Phased Financial Statement Notes loading — 2026-10-31
 
 Main statements now load with lightweight note references; full note details load after the statement or on first Notes click. Concurrent requests are reused, and client/upload/context changes discard stale results. Existing API callers retain full notes by default. This adds read-only calculation work in a second request and no schema changes.
