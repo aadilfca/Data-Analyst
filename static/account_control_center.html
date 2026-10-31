@@ -59,7 +59,7 @@
                 <label for="accNotesFilter">Search accounts</label><input id="accNotesFilter" type="search" placeholder="Search code or account name"><label for="accNotesCategoryFilter">Search note</label><input id="accNotesCategoryFilter" class="acc2-assignment-search" type="search" placeholder="Type a note"><button type="button" id="accNotesFilterLoad" class="acc2-action-btn">Load</button><span id="accNotesCount" class="acc2-count" hidden></span>
             </div>
             <div class="acc2-toolbar-period"><select id="accTrialBalanceSelect" aria-label="Select Trial Balance"><option value="">Loading Trial Balances...</option></select></div>
-            <div class="acc2-toolbar-actions" data-acc-toolbar-actions="verification">
+            <div class="acc2-toolbar-actions" data-acc-toolbar-actions="verification"><button type="button" class="acc2-action-btn secondary" data-acc-trial-balance-link>← View Trial Balance</button>
                 <div class="acc2-guidance">
                     <button type="button" id="accTreasuryGuidanceToggle" class="acc2-guidance-toggle" aria-expanded="false" aria-controls="accTreasuryGuidance">ⓘ Cash and Bank selection notes</button>
                     <section id="accTreasuryGuidance" class="acc2-guidance-popover" role="note" aria-label="Cash and Bank voucher selection notes" hidden>
@@ -70,7 +70,7 @@
                     </section>
                 </div>
             </div>
-            <div class="acc2-toolbar-actions" data-acc-toolbar-actions="cashflow" hidden>
+            <div class="acc2-toolbar-actions" data-acc-toolbar-actions="cashflow" hidden><button type="button" class="acc2-action-btn secondary" data-acc-trial-balance-link>← View Trial Balance</button>
                 <button type="button" id="accCashflowAccountsButton" class="acc2-action-btn">Cash &amp; Bank Accounts</button><button type="button" id="accCashflowTemplateButton" class="acc2-action-btn secondary">Transaction Template</button><button type="button" id="accCashflowCategoryButton" class="acc2-action-btn secondary">Manage Categories</button>
             </div>
             <div class="acc2-toolbar-actions" data-acc-toolbar-actions="financial" hidden><button type="button" class="acc2-action-btn secondary" data-acc-trial-balance-link>← View Trial Balance</button></div>
@@ -104,8 +104,9 @@
             <button type="button" id="accNotesSetupFab" class="acc2-cashflow-fab" aria-label="Open Notes to Financial Statements setup" title="Notes to Financial Statements setup" hidden>+</button>
         </section>
         <div id="accCashflowTemplateModal" class="acc2-modal-backdrop" hidden><section class="acc2-modal acc2-modal-wide" role="dialog" aria-modal="true" aria-labelledby="accCashflowTemplateModalTitle"><div class="acc2-modal-header"><div><h2 id="accCashflowTemplateModalTitle">Cashflows transaction template</h2><p>Select the Client Data Bank template and map its columns to the Cashflows report fields.</p></div><button type="button" id="accCashflowTemplateClose" class="acc2-modal-close" aria-label="Close transaction template setup">&times;</button></div><div class="acc2-template-source"><label for="accCashflowTemplateSelect">Client Data Bank template</label><select id="accCashflowTemplateSelect" class="acc2-select"><option value="">Loading templates...</option></select><p id="accCashflowTemplateHint" class="acc2-category-hint" role="status"></p></div><div id="accCashflowTemplateMappingState" class="acc2-grid-state">Select a template to view its columns.</div><div id="accCashflowTemplateMapping" class="acc2-template-mapping" hidden></div><div class="acc2-modal-footer"><button type="button" id="accCashflowTemplateSave" class="acc2-action-btn" disabled>Save template mapping</button></div></section></div>    </main>
-    <script src="/static/client_context.js?v=25"></script>
+    <script src="/static/client_context.js?v=26"></script>
     <script src="/static/loading_ui.js"></script>
-    <script src="/static/account_control_center.js?v=37"></script>
+    <script src="/static/account_assignment_shared.js?v=1"></script>
+    <script src="/static/account_control_center.js?v=38"></script>
 </body>
 </html>

@@ -35,7 +35,7 @@ One line per file group: what it is now. Full build history for every entry live
 - static/audit_workbook.js, static/audit_workbook.html → Audit Workbook: session rows, filtering, totals, shared Procedure Modal, and cached evidence/Form completion badges. See CHANGELOG_ARCHIVE.md.
 - routers/trial_balance.py → Trial Balance import, hierarchy, source controls, automatic adjustments, draft totals, categories and saved-upload reads. See CHANGELOG_ARCHIVE.md.
 - routers/account_control_center.py → account mappings, statement outlines, presentation, profit-link configuration, closing confirmation and Cash Flow setup. See CHANGELOG_ARCHIVE.md.
-- static/trial_balance.html, static/trial_balance.js → Trial Balance mapping, validation and saved-upload review with ACC categories, Notes, filters and selected totals. See CHANGELOG_ARCHIVE.md.
+- static/trial_balance.html, static/trial_balance.js, static/account_assignment_shared.js → TB import/review, workflow assignment views, scoped ACC reads and setup navigation. See CHANGELOG_ARCHIVE.md.
 - static/account_control_center.html, static/account_control_center.js → on-demand account mapping, statement outlines, Notes assignments, Cash Flow setup and Trial Balance navigation. See CHANGELOG_ARCHIVE.md.
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Two-pane Audit Rules editor for Documents, Cross-checks, Categories, Voucher Checks and Assertions, plus Assign Categories. See CHANGELOG_ARCHIVE.md.
@@ -266,7 +266,7 @@ One line per file group: what it is now. Full build history for every entry live
 - 2026-10-30: ACC loads upload options first and opens account details on each tab's Load action. See CHANGELOG_ARCHIVE.md.
 - 2026-10-30: ACC indexes Trial Balance hierarchy, batches statement-calculation reads, and adds opt-in timings while preserving assignment results. See CHANGELOG_ARCHIVE.md.
 - 2026-10-30: Trial Balance and ACC Financial Statement/Notes views now link directly while preserving the selected upload. See CHANGELOG_ARCHIVE.md.
-- 2026-10-31: Saved Trial Balance filters now total matching account balances across six amount columns. See CHANGELOG_ARCHIVE.md.
+- 2026-10-31: TB assignment workspace adds three read-only workflows, shared ACC reads and context-preserving setup navigation. See CHANGELOG_ARCHIVE.md.
 - 2026-10-30: Trial Balance validation adds a floating horizontal scrollbar synchronized with table and sticky headings. See CHANGELOG_ARCHIVE.md.
 - 2026-10-29: Trial Balance validation shows mapped columns only while preserving the complete source preview. See CHANGELOG_ARCHIVE.md.
 - 2026-10-29: Trial Balance import stores mapped columns only; unmapped workbook columns remain visible in the source preview. See CHANGELOG_ARCHIVE.md.

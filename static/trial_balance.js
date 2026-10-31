@@ -163,6 +163,22 @@ let availableAccountNoteLookupReady = false;
 let availableAccountLookupMessage = '';
 let availableAccountsLoadToken = 0;
 let availableCategoryUploadId = null;
+const tbAssignmentWorkflow = getElement('tbAssignmentWorkflow');
+const tbAssignmentSetup = getElement('tbAssignmentSetup');
+const tbAssignmentSetupMenu = getElement('tbAssignmentSetupMenu');
+let tbWorkflowMode = window.AccountAssignments ? AccountAssignments.mode(new URLSearchParams(location.search).get('workflow') || new URLSearchParams(location.search).get('acc_tab')) : 'financial';
+let tbWorkflowLoadToken = 0;
+let tbWorkflowContext = '';
+const tbWorkflowStates = new Map();
+const tbWorkflowCache = new Map();
+let tbWorkflowReturnRestored = false;
+function savedAssignmentColumnCount() { return tbWorkflowMode === 'financial' ? 2 : 1; }
+async function tbReadAssignmentJson(url) {
+    const response = await fetch(API_BASE + url);
+    const result = await response.json();
+    if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Could not load account assignments');
+    return result;
+}
 if (availableAccountsTableWrapper && tbSavedStickyHead) {
     const savedTable = availableAccountsTableWrapper.querySelector('table');
     const heading = savedTable.cloneNode(false);
@@ -1782,6 +1798,141 @@ function buildUploadLabel(upload) {
     return typeLabel + ' (' + startMonth + ' ' + startYear + ' - ' + endMonth + ' ' + endYear + ')';
 }
 
+function closeSavedSetupMenu() {
+    if (tbAssignmentSetupMenu) tbAssignmentSetupMenu.hidden = true;
+    if (tbAssignmentSetup) tbAssignmentSetup.setAttribute('aria-expanded', 'false');
+}
+function rememberSavedWorkflow() {
+    tbWorkflowStates.set(tbWorkflowMode, {category: tbSavedCategorySearch ? tbSavedCategorySearch.value : '',
+        note: tbSavedNoteSearch ? tbSavedNoteSearch.value : '', left: availableAccountsTableWrapper ? availableAccountsTableWrapper.scrollLeft : 0, top: window.scrollY});
+}
+function syncSavedWorkflowColumns() {
+    const financial = tbWorkflowMode === 'financial';
+    const definition = window.AccountAssignments && AccountAssignments.workflows[tbWorkflowMode];
+    if (tbAssignmentWorkflow) tbAssignmentWorkflow.value = tbWorkflowMode;
+    if (tbSavedNoteSearch) tbSavedNoteSearch.closest('.tb-saved-note-filter').hidden = !financial;
+    const label = getElement('tbSavedCategoryLabel');
+    if (label && definition) label.textContent = definition.column;
+    [availableAccountsTableWrapper, tbSavedStickyHead].filter(Boolean).forEach(function (container) {
+        container.querySelectorAll('thead tr').forEach(function (row) {
+            if (row.children[3] && definition) row.children[3].textContent = definition.column;
+            if (row.children[4]) row.children[4].hidden = !financial;
+        });
+    });
+    if (availableAccountsTableBody) {
+        availableAccountsTableBody.querySelectorAll('tr[data-category-filter], tr.tb-generated-difference, tr.tb-draft-total').forEach(function (row) {
+            if (row.children[4]) row.children[4].hidden = !financial;
+        });
+        availableAccountsTableBody.querySelectorAll('.tb-difference-section td, .tb-erp-warning td').forEach(cell => { cell.colSpan = 9 + savedAssignmentColumnCount(); });
+    }
+    if (tbAssignmentSetup) {
+        tbAssignmentSetup.disabled = !availableUploadsDropdown || !availableUploadsDropdown.value;
+        if (definition) { tbAssignmentSetup.title = definition.label + ' setup'; tbAssignmentSetup.setAttribute('aria-label', 'Open ' + definition.label + ' setup'); }
+    }
+    if (tbAssignmentSetupMenu && definition) {
+        tbAssignmentSetupMenu.replaceChildren();
+        definition.setups.forEach(function (action) {
+            const link = document.createElement('a'); link.textContent = action[1];
+            link.href = AccountAssignments.accUrl(tbWorkflowMode, availableUploadsDropdown && availableUploadsDropdown.value, action[0]);
+            link.addEventListener('click', saveSavedWorkflowReturnState);
+            tbAssignmentSetupMenu.appendChild(link);
+        });
+    }
+}
+function saveSavedWorkflowReturnState() {
+    rememberSavedWorkflow();
+    try {
+        const clientId = window.getSelectedClientId ? window.getSelectedClientId() : '';
+        sessionStorage.setItem('tb-assignment-return', JSON.stringify({clientId: String(clientId), uploadId: availableUploadsDropdown.value,
+            mode: tbWorkflowMode, states: Array.from(tbWorkflowStates)}));
+    } catch (_error) { /* Navigation remains usable if browser storage is unavailable. */ }
+}
+function restoreSavedWorkflowReturnState() {
+    if (tbWorkflowReturnRestored || new URLSearchParams(location.search).get('restore') !== '1') return;
+    tbWorkflowReturnRestored = true;
+    try {
+        const saved = JSON.parse(sessionStorage.getItem('tb-assignment-return') || 'null');
+        const clientId = window.getSelectedClientId ? window.getSelectedClientId() : '';
+        if (!saved || saved.clientId !== String(clientId) || saved.uploadId !== availableUploadsDropdown.value) return;
+        for (const [mode, state] of saved.states || []) if (Object.hasOwn(AccountAssignments.workflows, mode)) tbWorkflowStates.set(mode, state);
+        restoreSavedWorkflowFilters();
+    } catch (_error) { /* A missing/obsolete return state uses the normal view defaults. */ }
+}
+function restoreSavedWorkflowFilters() {
+    const state = tbWorkflowStates.get(tbWorkflowMode);
+    if (tbSavedCategorySearch) tbSavedCategorySearch.value = state ? state.category : '';
+    if (tbSavedNoteSearch) tbSavedNoteSearch.value = state ? state.note : '';
+    if (state) requestAnimationFrame(function () {
+        if (availableAccountsTableWrapper) availableAccountsTableWrapper.scrollLeft = state.left || 0;
+        window.scrollTo(0, state.top || 0);
+    });
+}
+function finishSavedWorkflowLookup() {
+    tbWorkflowCache.set(tbWorkflowMode, {category: availableAccountCategoryByCode, note: availableAccountNoteByCode,
+        categoryReady: availableAccountCategoryLookupReady, noteReady: availableAccountNoteLookupReady, message: availableAccountLookupMessage,
+        options: tbSavedCategoryOptions ? tbSavedCategoryOptions.innerHTML : '', noteOptions: tbSavedNoteOptions ? tbSavedNoteOptions.innerHTML : ''});
+    if (!availableAccountCategoryLookupReady || (tbWorkflowMode === 'financial' && !availableAccountNoteLookupReady)) tbWorkflowCache.delete(tbWorkflowMode);
+    if (tbSavedCategorySearch) tbSavedCategorySearch.disabled = !availableAccountCategoryLookupReady;
+    if (tbSavedNoteSearch) tbSavedNoteSearch.disabled = !availableAccountNoteLookupReady;
+    availableAccountsTableBody.querySelectorAll('tr[data-category-filter]').forEach(function (row) {
+        const code = row.dataset.accountCode;
+        const category = availableAccountCategoryByCode.get(code) || 'Category unavailable';
+        const note = availableAccountNoteByCode.get(code) || 'Note unavailable';
+        row.dataset.categoryFilter = category; row.dataset.noteFilter = note;
+        const categoryCell = row.querySelector('.tb-saved-category-cell');
+        const noteCell = row.querySelector('.tb-saved-note-cell');
+        if (categoryCell) categoryCell.textContent = category === 'Category unavailable' ? 'Unavailable' : category;
+        if (noteCell) noteCell.textContent = note === 'Note unavailable' ? 'Unavailable' : note;
+    });
+    syncSavedWorkflowColumns();
+    applySavedCategoryFilter();
+    fitSavedTrialBalanceAmountColumns();
+}
+async function switchSavedWorkflow(value) {
+    closeSavedSetupMenu();
+    rememberSavedWorkflow();
+    tbWorkflowMode = AccountAssignments.mode(value);
+    const params = new URLSearchParams(location.search); params.set('workflow', tbWorkflowMode);
+    if (location.protocol !== 'about:') history.replaceState(null, '', location.pathname + '?' + params);
+    tbWorkflowLoadToken++;
+    availableAccountCategoryByCode = new Map(); availableAccountNoteByCode = new Map();
+    availableAccountCategoryLookupReady = false; availableAccountNoteLookupReady = false; availableAccountLookupMessage = '';
+    if (tbSavedCategoryOptions) tbSavedCategoryOptions.replaceChildren();
+    if (tbSavedNoteOptions) tbSavedNoteOptions.replaceChildren();
+    restoreSavedWorkflowFilters(); syncSavedWorkflowColumns();
+    const cached = tbWorkflowCache.get(tbWorkflowMode);
+    if (cached) {
+        availableAccountCategoryByCode = cached.category; availableAccountNoteByCode = cached.note;
+        availableAccountCategoryLookupReady = cached.categoryReady; availableAccountNoteLookupReady = cached.noteReady;
+        availableAccountLookupMessage = cached.message;
+        if (tbSavedCategoryOptions) tbSavedCategoryOptions.innerHTML = cached.options;
+        if (tbSavedNoteOptions) tbSavedNoteOptions.innerHTML = cached.noteOptions;
+        finishSavedWorkflowLookup();
+    } else {
+        if (tbSavedCategorySearch) tbSavedCategorySearch.disabled = true;
+        if (tbSavedNoteSearch) tbSavedNoteSearch.disabled = true;
+        finishSavedWorkflowLookup(); tbWorkflowCache.delete(tbWorkflowMode);
+        if (availableCategoryUploadId) await loadAvailableUploadCategories(availableCategoryUploadId, window.getSelectedClientId(), availableAccountsLoadToken);
+    }
+    restoreSavedWorkflowFilters();
+}
+if (tbAssignmentWorkflow) tbAssignmentWorkflow.addEventListener('change', function () { switchSavedWorkflow(this.value); });
+if (tbAssignmentSetup) tbAssignmentSetup.addEventListener('click', function () {
+    const open = tbAssignmentSetupMenu.hidden;
+    tbAssignmentSetupMenu.hidden = !open; this.setAttribute('aria-expanded', String(open));
+    if (open && tbAssignmentSetupMenu.firstElementChild) tbAssignmentSetupMenu.firstElementChild.focus();
+});
+document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape' && tbAssignmentSetupMenu && !tbAssignmentSetupMenu.hidden) {
+        tbAssignmentSetupMenu.hidden = true; tbAssignmentSetup.setAttribute('aria-expanded', 'false'); tbAssignmentSetup.focus();
+    }
+});
+document.addEventListener('click', function (event) {
+    if (tbAssignmentSetupMenu && !tbAssignmentSetupMenu.hidden && !tbAssignmentSetupMenu.contains(event.target) && event.target !== tbAssignmentSetup && !tbAssignmentSetup.contains(event.target)) {
+        tbAssignmentSetupMenu.hidden = true; tbAssignmentSetup.setAttribute('aria-expanded', 'false');
+    }
+});
+
 function populateSavedCategoryOptions(categories) {
     if (!tbSavedCategoryOptions) return;
     tbSavedCategoryOptions.replaceChildren();
@@ -1816,7 +1967,7 @@ function applySavedCategoryFilter() {
     if (!availableAccountsTableBody) return;
     const categoryQuery = availableAccountCategoryLookupReady
         ? String(tbSavedCategorySearch ? tbSavedCategorySearch.value : '').trim().toLocaleLowerCase() : '';
-    const noteQuery = availableAccountNoteLookupReady
+    const noteQuery = tbWorkflowMode === 'financial' && availableAccountNoteLookupReady
         ? String(tbSavedNoteSearch ? tbSavedNoteSearch.value : '').trim().toLocaleLowerCase() : '';
     const rows = availableAccountsTableBody.querySelectorAll('tr[data-category-filter]');
     let visibleCount = 0;
@@ -1832,6 +1983,7 @@ function applySavedCategoryFilter() {
         tbSavedCategoryNoMatches.hidden = availableAccountLookupMessage ? false : ((!categoryQuery && !noteQuery) || visibleCount > 0);
     }
     updateSavedDraftFilteredTotal();
+    fitSavedTrialBalanceAmountColumns();
 }
 
 function sumSavedTrialBalanceValues(values) {
@@ -1863,14 +2015,14 @@ function updateSavedDraftFilteredTotal() {
     if (!heading) return;
     const categoryQuery = availableAccountCategoryLookupReady && tbSavedCategorySearch
         ? tbSavedCategorySearch.value.trim() : '';
-    const noteQuery = availableAccountNoteLookupReady && tbSavedNoteSearch
+    const noteQuery = tbWorkflowMode === 'financial' && availableAccountNoteLookupReady && tbSavedNoteSearch
         ? tbSavedNoteSearch.value.trim() : '';
     const hasActiveFilter = Boolean(categoryQuery || noteQuery);
     if (!hasActiveFilter) {
         heading.classList.remove('tb-draft-filtered-total');
         heading.replaceChildren();
         const cell = document.createElement('td');
-        cell.colSpan = 11;
+        cell.colSpan = 9 + savedAssignmentColumnCount();
         cell.textContent = 'Draft Trial Balance reconciliation';
         heading.appendChild(cell);
         return;
@@ -1881,7 +2033,7 @@ function updateSavedDraftFilteredTotal() {
     heading.classList.add('tb-draft-filtered-total');
     heading.replaceChildren();
     const label = document.createElement('td');
-    label.colSpan = 5;
+    label.colSpan = 3 + savedAssignmentColumnCount();
     label.textContent = 'Draft Trial Balance reconciliation · Filtered account totals';
     label.title = 'Totals include matching Trial Balance account rows only; separate adjustment rows are excluded.';
     heading.appendChild(label);
@@ -1901,20 +2053,43 @@ function updateSavedDraftFilteredTotal() {
 
 async function loadAvailableUploadCategories(uploadId, clientId, loadToken) {
     if (!clientId) return;
+    const mode = tbWorkflowMode;
+    const workflowToken = ++tbWorkflowLoadToken;
+    const isCurrent = () => workflowToken === tbWorkflowLoadToken && loadToken === availableAccountsLoadToken && mode === tbWorkflowMode && String(availableUploadsDropdown.value) === String(uploadId);
+    if (mode !== 'financial') {
+        try {
+            const result = await AccountAssignments.read(mode === 'cashflow' ? 'cashflow' : 'mapping', clientId, uploadId, tbReadAssignmentJson);
+            if (!isCurrent()) return;
+            const categories = mode === 'cashflow' ? result.categories || [] : AccountAssignments.workstreams.map(item => ({id: item.value, label: item.label, is_active: true}));
+            const labels = new Map(categories.map(item => [String(item.id), item.label]));
+            availableAccountCategoryByCode = new Map(result.accounts.map(account => {
+                const id = mode === 'cashflow' ? account.category_id : account.assignment && account.assignment.verification_workstream;
+                return [AccountAssignments.normaliseCode(account.account_code), id == null || id === '' ? 'Unassigned' : labels.get(String(id)) || 'Category unavailable'];
+            }));
+            availableAccountCategoryLookupReady = true; availableAccountNoteLookupReady = false;
+            availableAccountNoteByCode = new Map(); availableAccountLookupMessage = '';
+            populateSavedCategoryOptions(categories);
+        } catch (error) {
+            if (!isCurrent()) return;
+            availableAccountCategoryLookupReady = false;
+            availableAccountLookupMessage = AccountAssignments.workflows[mode].label + ' assignments are unavailable. Trial Balance figures remain available.';
+        }
+        if (isCurrent()) finishSavedWorkflowLookup();
+        return;
+    }
     const requests = [
-        fetch(API_BASE + '/api/account-control-center/mapping?client_id=' + encodeURIComponent(clientId) + '&trial_balance_upload_id=' + encodeURIComponent(uploadId)),
+        AccountAssignments.read('mapping', clientId, uploadId, tbReadAssignmentJson),
         fetch(API_BASE + '/api/account-control-center/categories?client_id=' + encodeURIComponent(clientId) + '&category_type=financial_statement&include_inactive=true'),
         fetch(API_BASE + '/api/account-control-center/categories?client_id=' + encodeURIComponent(clientId) + '&category_type=note&include_inactive=true'),
     ];
     const responses = await Promise.allSettled(requests);
-    if (loadToken !== availableAccountsLoadToken || (availableUploadsDropdown && String(availableUploadsDropdown.value) !== String(uploadId))) return;
+    if (!isCurrent()) return;
 
     let mapping = null;
     if (responses[0].status === 'fulfilled') {
         try {
-            const response = responses[0].value;
-            const result = await response.json();
-            if (response.ok && String(result.client_id) === String(clientId)
+            const result = responses[0].value;
+            if ( String(result.client_id) === String(clientId)
                 && result.upload && String(result.upload.id) === String(uploadId)
                 && Array.isArray(result.accounts)) mapping = result;
         } catch (_error) { /* Keep ACC fields unavailable without blocking the Trial Balance. */ }
@@ -1931,7 +2106,7 @@ async function loadAvailableUploadCategories(uploadId, clientId, loadToken) {
     const [financialCategories, noteCategories] = await Promise.all([
         readCategories(responses[1]), readCategories(responses[2]),
     ]);
-    if (loadToken !== availableAccountsLoadToken || (availableUploadsDropdown && String(availableUploadsDropdown.value) !== String(uploadId))) return;
+    if (!isCurrent()) return;
 
     availableAccountCategoryLookupReady = Boolean(mapping && financialCategories);
     availableAccountNoteLookupReady = Boolean(mapping && noteCategories);
@@ -1951,29 +2126,6 @@ async function loadAvailableUploadCategories(uploadId, clientId, loadToken) {
         }));
         populateSavedNoteOptions(noteCategories);
     }
-    if (tbSavedCategorySearch) tbSavedCategorySearch.disabled = !availableAccountCategoryLookupReady;
-    if (tbSavedNoteSearch) tbSavedNoteSearch.disabled = !availableAccountNoteLookupReady;
-
-    availableAccountsTableBody.querySelectorAll('tr[data-category-filter]').forEach(function (row) {
-        const code = String(row.dataset.accountCode || '').trim();
-        const categoryLabel = availableAccountCategoryLookupReady
-            ? (availableAccountCategoryByCode.get(code) || 'Category unavailable') : 'Category unavailable';
-        const noteLabel = availableAccountNoteLookupReady
-            ? (availableAccountNoteByCode.get(code) || 'Note unavailable') : 'Note unavailable';
-        row.dataset.categoryFilter = categoryLabel;
-        row.dataset.noteFilter = noteLabel;
-        const categoryCell = row.querySelector('.tb-saved-category-cell');
-        if (categoryCell) {
-            categoryCell.textContent = categoryLabel === 'Category unavailable' ? 'Unavailable' : categoryLabel;
-            categoryCell.title = categoryLabel === 'Category unavailable' ? 'Account Control Centre category lookup could not be verified.' : '';
-        }
-        const noteCell = row.querySelector('.tb-saved-note-cell');
-        if (noteCell) {
-            noteCell.textContent = noteLabel === 'Note unavailable' ? 'Unavailable' : noteLabel;
-            noteCell.title = noteLabel === 'Note unavailable' ? 'Account Control Centre note lookup could not be verified.' : '';
-        }
-    });
-
     if (tbSavedCategoryNoMatches) {
         const unavailable = [];
         if (!availableAccountCategoryLookupReady) unavailable.push('categories');
@@ -1983,7 +2135,7 @@ async function loadAvailableUploadCategories(uploadId, clientId, loadToken) {
             : '';
         tbSavedCategoryNoMatches.hidden = !availableAccountLookupMessage;
     }
-    applySavedCategoryFilter();
+    finishSavedWorkflowLookup();
 }
 
 // Fetches Phase 1's list-uploads endpoint and populates the dropdown. Only 'parsed'
@@ -2001,6 +2153,7 @@ async function loadAvailableUploads(target = availableTrialBalancesBtn, requeste
     if (availableAccountsTableWrapper && availableAccountsTableWrapper._updateFloatingScrollbar) availableAccountsTableWrapper._updateFloatingScrollbar();
     if (availableAccountsTableBody) availableAccountsTableBody.innerHTML = '';
     availableAccountsLoadToken += 1;
+    tbWorkflowLoadToken++; tbWorkflowCache.clear(); tbWorkflowStates.clear();
     availableCategoryUploadId = null;
     availableAccountCategoryByCode = new Map();
     availableAccountCategoryLookupReady = false;
@@ -2013,6 +2166,8 @@ async function loadAvailableUploads(target = availableTrialBalancesBtn, requeste
     if (tbSavedNoteOptions) tbSavedNoteOptions.replaceChildren();
     if (tbSavedCategoryNoMatches) { tbSavedCategoryNoMatches.hidden = true; tbSavedCategoryNoMatches.textContent = 'No Trial Balance accounts match these filters.'; }
     if (deleteUploadBtn) deleteUploadBtn.style.display = 'none';
+    syncSavedWorkflowColumns();
+    closeSavedSetupMenu();
 
     try {
         const res = await fetch(API_BASE + '/api/trial-balance/uploads?client_id=' + clientId);
@@ -2059,13 +2214,22 @@ async function loadAvailableUploadAccounts(uploadId, target = availableUploadsDr
     if (!availableAccountsTableWrapper || !availableAccountsTableBody) return;
     const loadToken = ++availableAccountsLoadToken;
     const clientId = window.getSelectedClientId ? window.getSelectedClientId() : null;
+    const context = String(clientId) + ':' + String(uploadId);
+    if (context !== tbWorkflowContext) { tbWorkflowStates.clear(); tbWorkflowContext = context; }
+    tbWorkflowCache.clear();
+    if (window.AccountAssignments) AccountAssignments.invalidate(tbReadAssignmentJson);
+    tbWorkflowLoadToken++;
     const previousUploadId = availableCategoryUploadId;
     if (previousUploadId !== String(uploadId)) {
         if (tbSavedCategorySearch) tbSavedCategorySearch.value = '';
         if (tbSavedNoteSearch) tbSavedNoteSearch.value = '';
         if (tbSavedCategoryNoMatches) tbSavedCategoryNoMatches.hidden = true;
+        availableAccountsTableWrapper.style.display = 'none';
+        if (tbSavedStickyHead) tbSavedStickyHead.hidden = true;
     }
     availableCategoryUploadId = String(uploadId);
+    syncSavedWorkflowColumns();
+    closeSavedSetupMenu();
     availableAccountCategoryByCode = new Map();
     availableAccountCategoryLookupReady = false;
     availableAccountNoteByCode = new Map();
@@ -2093,6 +2257,8 @@ async function loadAvailableUploadAccounts(uploadId, target = availableUploadsDr
         availableAccountsTableWrapper.style.display = 'block';
         if (tbSavedStickyHead) tbSavedStickyHead.hidden = false;
         fitSavedTrialBalanceAmountColumns();
+        restoreSavedWorkflowReturnState();
+        syncSavedWorkflowColumns();
         applySavedCategoryFilter();
         loadAvailableUploadCategories(uploadId, clientId, loadToken);
     } catch (error) {
@@ -2321,7 +2487,8 @@ function fitSavedTrialBalanceAmountColumns() {
             amountWidth = Math.max(amountWidth, Math.ceil(context.measureText(value).width) + 24);
         });
     }
-    const widths = [145, 220, 110, 180, 190, ...Array(6).fill(amountWidth)];
+    syncSavedWorkflowColumns();
+    const widths = [145, 220, 110, 180, ...(tbWorkflowMode === 'financial' ? [190] : []), ...Array(6).fill(amountWidth)];
     [table, heading].forEach(function (target) {
         const group = document.createElement('colgroup');
         widths.forEach(function (width) { const col = document.createElement('col'); col.style.width = width + 'px'; group.appendChild(col); });
@@ -2338,6 +2505,7 @@ if (availableUploadsDropdown) {
         const uploadId = this.value;
         if (!uploadId) {
             availableAccountsLoadToken += 1;
+            tbWorkflowLoadToken++; tbWorkflowCache.clear(); tbWorkflowStates.clear();
             availableCategoryUploadId = null;
             availableAccountCategoryByCode = new Map();
             availableAccountCategoryLookupReady = false;
@@ -2354,6 +2522,8 @@ if (availableUploadsDropdown) {
             if (availableAccountsTableWrapper && availableAccountsTableWrapper._updateFloatingScrollbar) availableAccountsTableWrapper._updateFloatingScrollbar();
             if (availableAccountsTableBody) availableAccountsTableBody.innerHTML = '';
             if (deleteUploadBtn) deleteUploadBtn.style.display = 'none';
+            syncSavedWorkflowColumns();
+            closeSavedSetupMenu();
             return;
         }
         loadAvailableUploadAccounts(uploadId, this);
@@ -2433,11 +2603,10 @@ if (availableTrialBalancesBtn) {
 const tbAssignCategoriesBtn = getElement('tbAssignCategoriesBtn');
 if (tbAssignCategoriesBtn) {
     tbAssignCategoriesBtn.addEventListener('click', function () {
-        const incoming = new URLSearchParams(window.location.search);
-        const tab = incoming.get('acc_tab') === 'notes' ? 'notes' : 'financial';
-        const params = new URLSearchParams({tab: tab});
-        if (availableUploadsDropdown && availableUploadsDropdown.value) params.set('upload_id', availableUploadsDropdown.value);
-        window.location.href = '/static/account_control_center.html?' + params.toString();
+        saveSavedWorkflowReturnState();
+        const target = new URL(AccountAssignments.accUrl(tbWorkflowMode, availableUploadsDropdown && availableUploadsDropdown.value), location.href);
+        if (tbWorkflowMode === 'financial' && new URLSearchParams(location.search).get('acc_tab') === 'notes') target.searchParams.set('tab', 'notes');
+        window.location.href = target.pathname + target.search;
     });
 }
 
@@ -2456,6 +2625,7 @@ if (closeAvailableTrialBalancesBtn) {
         if (availableAccountsTableWrapper && availableAccountsTableWrapper._updateFloatingScrollbar) availableAccountsTableWrapper._updateFloatingScrollbar();
         if (availableAccountsTableBody) availableAccountsTableBody.innerHTML = '';
         availableAccountsLoadToken += 1;
+        tbWorkflowLoadToken++; tbWorkflowCache.clear(); tbWorkflowStates.clear();
         availableCategoryUploadId = null;
         availableAccountCategoryByCode = new Map();
         availableAccountCategoryLookupReady = false;
@@ -2469,6 +2639,7 @@ if (closeAvailableTrialBalancesBtn) {
         if (tbSavedCategoryNoMatches) { tbSavedCategoryNoMatches.hidden = true; tbSavedCategoryNoMatches.textContent = 'No Trial Balance accounts match these filters.'; }
         if (availableUploadsEmptyHint) availableUploadsEmptyHint.style.display = 'none';
         if (deleteUploadBtn) deleteUploadBtn.style.display = 'none';
+        closeSavedSetupMenu();
     });
 }
 
@@ -2481,6 +2652,7 @@ window.onload = async function () {
     if (window.clientContextReady) await window.clientContextReady;
     if (typeof window.initUtils === 'function') await window.initUtils();
     updateClientDependentUI();
+    syncSavedWorkflowColumns();
     const params = new URLSearchParams(window.location.search);
     if (params.get('view') === 'available' && availableTrialBalancesSection) {
         if (uploadViewContainer) uploadViewContainer.style.display = 'none';

@@ -207,7 +207,11 @@ const NAV_MANIFEST = [
                 children: [{ label: 'Account Ledger upload', url: '/static/upload.html?feature=account-ledger', state: 'ready',
                     keywords: ['ledger', 'cash bank ledger', 'opening closing balances'] }] },
             { label: 'Client Data Bank', url: '/static/databank.html', state: 'ready', module: 'Data Bank' },
-            { label: 'Trial Balance', url: '/static/trial_balance.html', state: 'ready', module: 'Trial Balance' },
+            { label: 'Trial Balance', url: '/static/trial_balance.html', state: 'ready', module: 'Trial Balance',
+                children: ['financial', 'cashflow', 'verification'].map(function (mode) {
+                    const label = {financial: 'Financial Statement assignments', cashflow: 'Cashflow assignments', verification: 'Verification assignments'}[mode];
+                    return {label: label, url: '/static/trial_balance.html?view=available&workflow=' + mode, state: 'ready', keywords: ['trial balance', 'account assignment', mode, 'category', 'notes']};
+                }) },
         ],
     },
     {

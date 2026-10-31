@@ -1,4 +1,17 @@
-## Current work — Full database backups — 2026-10-25
+## Current work — Trial Balance assignment workspace — 2026-10-31
+
+| Phase | Status / objective |
+|---|---|
+| 1 — Foundation | Accepted by Aadil; release authorized: workflow selector, read-only columns, shared scoped reads, independent filters and existing ACC setup/return links. |
+| 2 — Financial Statements/Notes | Pending: in-workspace editors/setup and enforced category-to-note relationship. |
+| 3 — Cashflows | Pending: in-workspace category, Treasury and source setup; retain historical accounts and refresh behavior. |
+| 4 — Verification | Pending: in-workspace workstream assignment/setup, preserving routing and Audit Rules categories. |
+| 5 — Integrated review | Pending: prove assignment-to-report freshness, context retention and cross-module result parity. |
+| 6 — Cutover | Pending: remove standalone ACC screens, navigation and obsolete code after accepted TB feature parity. |
+
+Assignments retain client/account-code scope. Phase 1 uses existing ACC setup screens; later workflow phases move editors in place. Each phase requires local acceptance and separate Git authorization. Details: CHANGELOG_ARCHIVE.md, “Trial Balance assignment workspace foundation”.
+
+## Full database backups — completed — 2026-10-25
 
 | Phase | Status / objective |
 |---|---|

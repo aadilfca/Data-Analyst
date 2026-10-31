@@ -1257,3 +1257,59 @@ def test_hierarchy_index_preserves_account_and_assignment_results(browser, stati
     assert result["beforeMutation"] == "__mixed"
     assert result["afterMutation"] == "8"
     page.close()
+
+
+def test_tb_setup_launcher_opens_acc_and_restores_workflow_context(browser, static_server):
+    from urllib.parse import urlparse, parse_qs
+    page = browser.new_page(viewport={'width': 1280, 'height': 900})
+    calls = []
+    upload = {'id':77,'status':'parsed','file_name':'Selected TB.xlsx'}
+    account = {'id':1,'account_code':'A','account_name':'Cash','is_leaf':True,'opening_dr':'10','closing_dr':'20',
+               'assignment':{'verification_workstream':'cash'}}
+
+    def api(route, request):
+        path = urlparse(request.url).path
+        calls.append((path, request.method))
+        if path.endswith('/api/auth/current-client'):
+            result = {'client_id':1,'client_name':'Client','client_code':'C'}
+        elif path.endswith('/api/users'):
+            result = []
+        elif path.endswith('/uploads'):
+            result = {'uploads':[upload],'default_upload_id':77}
+        elif path.endswith('/api/trial-balance/accounts'):
+            result = {'accounts':[account],'adjustments':[],'validation_controls':{}}
+        elif path.endswith('/mapping'):
+            result = {'client_id':1,'upload':upload,'uploads':[upload],'accounts':[account]}
+        elif path.endswith('/cashflow/setup'):
+            result = {'client_id':1,'upload':upload,'accounts':[dict(account,category_id=1)],'categories':[{'id':1,'label':'Receipts','category_key':'receipts','is_active':True}],
+                      'historical_orphans':[],'treasury_accounts':{'cash':[],'bank':[]},'settings':{}}
+        else:
+            result = {'categories':[],'calculations':[],'settings':{}}
+        route.fulfill(status=200,content_type='application/json',body=json.dumps(result))
+
+    page.route('**/api/**',api)
+    page.goto(static_server+'/static/trial_balance.html?view=available&workflow=cashflow&upload_id=77',wait_until='load')
+    page.wait_for_function("document.querySelector('.tb-saved-category-cell')?.textContent === 'Receipts'")
+    page.locator('#tbSavedCategorySearch').fill('Receipts')
+    page.locator('#tbAssignmentSetup').click()
+    page.locator('#tbAssignmentSetupMenu a').filter(has_text='Cashflow categories').click()
+    page.wait_for_url('**/account_control_center.html?**')
+    page.wait_for_selector('#accCashflowCategoryModal',state='visible')
+    assert page.locator('#accTrialBalanceSelect').input_value() == '77'
+    assert page.locator('#accTabCashflow').get_attribute('aria-selected') == 'true'
+    page.locator('#accCashflowCategoryClose').click()
+    page.locator('[data-acc-toolbar-actions="cashflow"] [data-acc-trial-balance-link]').click()
+    page.wait_for_url('**/trial_balance.html?**')
+    page.wait_for_function("document.querySelector('.tb-saved-category-cell')?.textContent === 'Receipts'")
+    assert page.locator('#tbAssignmentWorkflow').input_value() == 'cashflow'
+    assert page.locator('#availableUploadsDropdown').input_value() == '77'
+    assert page.locator('#tbSavedCategorySearch').input_value() == 'Receipts'
+    page.locator('#tbAssignmentWorkflow').select_option('verification')
+    page.wait_for_function("document.querySelector('.tb-saved-category-cell').textContent === 'Cash vouchers'")
+    page.locator('#tbAssignmentSetup').click()
+    page.locator('#tbAssignmentSetupMenu a').click()
+    page.wait_for_url('**/account_control_center.html?**')
+    page.wait_for_function("document.querySelector('#accAccountRows')?.textContent.includes('Cash')")
+    assert page.locator('#accTabVerification').get_attribute('aria-selected') == 'true'
+    assert all(method == 'GET' for _, method in calls)
+    page.close()

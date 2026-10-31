@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Trial Balance assignment workspace foundation — 2026-10-31
+
+Phase 1 adds Financial Statements, Cashflows and Verification workflow views with read-only assignment columns, separate filters, dynamic headings/footings and a fixed setup launcher. Shared browser helpers serve TB and ACC, deduplicate scoped in-flight reads and reject mismatched responses. Source edits invalidate reads; late workflow responses are ignored. Existing ACC setup screens open with the selected upload and return TB workflow/filter/scroll state. Failed lookups remain retryable. Phase 2–4 bring editors in place; current assignment scope, report consumers and backend/schema are unchanged. Assets: TB 39, ACC 38, shared helper 1; NAV_MANIFEST registers all workflows.
+
+**Verification:** Trial Balance and ACC browser suites passed (28 tests), covering existing editing/setup, workflow isolation, preserved amounts/totals, late/wrong-scope responses, setup navigation and return state. A synthetic 1280px browser screenshot was visually reviewed. All changed JavaScript syntax and whitespace checks pass; pytest reports its existing cache-directory warning. No live database writes or package installation. Aadil confirmed the local verification points and authorized commit/push.
+
 ## Filtered Trial Balance reconciliation totals — 2026-10-31
 
 When a Category or Note filter is active, the Draft Trial Balance reconciliation heading shows six exact, cents-formatted totals from matching original account rows; both filters intersect. Separate adjustment rows are excluded. Full-upload reconciliation detail remains unchanged, and clearing filters restores the heading. No backend or schema changes.

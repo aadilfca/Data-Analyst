@@ -520,6 +520,15 @@
         .tb-saved-toolbar-row { display: flex; align-items: center; flex-wrap: nowrap; gap: 9px; min-height: 32px; }
         .tb-saved-toolbar-row h3 { flex: 0 0 auto; margin: 0; }
         .tb-saved-toolbar-row--filters { gap: 8px; }
+        #availableTrialBalancesSection [hidden] { display: none !important; }
+        #tbAssignmentWorkflow { max-width: 210px; padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; }
+        #tbAssignmentSetup { position: fixed; right: 24px; bottom: 48px; z-index: 100; display: grid; place-items: center; width: 46px; height: 46px; border: 0; border-radius: 50%; background: #234b67; color: #fff; box-shadow: 0 3px 12px #18364d35; cursor: pointer; }
+        #tbAssignmentSetup:disabled { opacity: .5; cursor: default; }
+        #tbAssignmentSetup svg { width: 23px; height: 23px; }
+        #tbAssignmentSetup:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }
+        #tbAssignmentSetupMenu { position: fixed; right: 24px; bottom: 104px; z-index: 101; display: grid; min-width: 220px; max-width: calc(100vw - 48px); padding: 6px; border: 1px solid #d6e0e8; border-radius: 9px; background: white; box-shadow: 0 6px 24px #18364d26; }
+        #tbAssignmentSetupMenu a { padding: 9px 11px; color: #234b67; text-decoration: none; border-radius: 5px; font-size: 13px; }
+        #tbAssignmentSetupMenu a:hover, #tbAssignmentSetupMenu a:focus-visible { background: #eef4f8; }
         .tb-saved-toolbar-row--filters #tbAssignCategoriesBtn { margin-left: 4px; }
         .tb-saved-toolbar-row--filters #deleteUploadBtn { margin-left: auto; }
         #availableAccountsTableWrapper { max-height: none; overflow-y: visible; border: 0; border-radius: 0; }
@@ -1072,6 +1081,8 @@
             <div class="tb-saved-toolbar-row tb-saved-toolbar-row--source">
                 <button class="btn-secondary-action" id="closeAvailableTrialBalancesBtn" type="button">← Back</button>
                 <h3>📊 Available Trial Balances</h3>
+                <label for="tbAssignmentWorkflow">Workflow</label>
+                <select id="tbAssignmentWorkflow" title="Assignments apply to matching account codes for this client across Trial Balance uploads."><option value="financial">Financial Statements</option><option value="cashflow">Cashflows</option><option value="verification">Verification</option></select>
                 <label for="availableUploadsDropdown">Upload</label>
                 <select id="availableUploadsDropdown">
                     <option value="">— Select an upload —</option>
@@ -1079,7 +1090,7 @@
             </div>
             <div class="tb-saved-toolbar-row tb-saved-toolbar-row--filters">
                 <div class="tb-saved-category-filter">
-                    <label for="tbSavedCategorySearch">Category</label>
+                    <label id="tbSavedCategoryLabel" for="tbSavedCategorySearch">FS Category</label>
                     <input id="tbSavedCategorySearch" type="search" list="tbSavedCategoryOptions" placeholder="Search or choose" aria-label="Filter Trial Balance accounts by Account Control Centre category" autocomplete="off" disabled>
                     <datalist id="tbSavedCategoryOptions"></datalist>
                 </div>
@@ -1088,12 +1099,16 @@
                     <input id="tbSavedNoteSearch" type="search" list="tbSavedNoteOptions" placeholder="Search or choose" aria-label="Filter Trial Balance accounts by Notes to Financial Statements assignment" autocomplete="off" disabled>
                     <datalist id="tbSavedNoteOptions"></datalist>
                 </div>
-                <button class="btn-secondary-action" id="tbAssignCategoriesBtn" type="button">Assign categories →</button>
+                <button class="btn-secondary-action" id="tbAssignCategoriesBtn" type="button">Assignments →</button>
                 <!-- Hidden until an upload is selected; removes the selected upload and its accounts. -->
                 <button class="btn-danger-action" id="deleteUploadBtn" type="button" style="display:none;">🗑️ Delete</button>
             </div>
         </div>
 
+        <button id="tbAssignmentSetup" type="button" aria-label="Open assignment setup" title="Assignment setup" aria-haspopup="true" aria-controls="tbAssignmentSetupMenu" aria-expanded="false" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m9 3-.7 2.4-2.2 1L3.8 6l-1.5 2.6L4 10.5v3l-1.7 1.9L3.8 18l2.3-.4 2.2 1L9 21h3l.7-2.4 2.2-1 2.3.4 1.5-2.6-1.7-1.9v-3l1.7-1.9L17.2 6l-2.3.4-2.2-1L12 3Z"/><circle cx="10.5" cy="12" r="3"/></svg>
+        </button>
+        <nav id="tbAssignmentSetupMenu" aria-label="Assignment setup" hidden></nav>
         <p class="group-hint" id="availableUploadsEmptyHint" style="display:none;">No classified Trial Balance uploads found for this client yet.</p>
         <p id="tbSavedCategoryNoMatches" role="status" aria-live="polite" hidden>No Trial Balance accounts match these filters.</p>
 
@@ -1107,7 +1122,7 @@
                         <th>Code</th>
                         <th>Name</th>
                         <th>Classification</th>
-                        <th>Category</th>
+                        <th>FS Category</th>
                         <th>Note</th>
                         <th class="tb-amount-cell">Opening Dr</th>
                         <th class="tb-amount-cell">Opening Cr</th>
@@ -1125,9 +1140,10 @@
     </div>
 
     <script src="/static/loading_ui.js?v=2"></script>
-    <script src="/static/client_context.js?v=25"></script>
+    <script src="/static/client_context.js?v=26"></script>
     <script src="/static/utils.js"></script>
-    <script src="/static/trial_balance.js?v=38"></script>
+    <script src="/static/account_assignment_shared.js?v=1"></script>
+    <script src="/static/trial_balance.js?v=39"></script>
 
 </body>
 

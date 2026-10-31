@@ -33,22 +33,14 @@ let accUploadLocks = 0;
 const accStatusTimers = new WeakMap();
 const ACC_STATUS_DURATION_MS = 4200;
 
-const ACC_WORKSTREAMS = [
-    { value: 'cash', label: 'Cash vouchers' },
-    { value: 'bank', label: 'Bank vouchers' },
-    { value: 'local_vendor', label: 'Local vendor' },
-    { value: 'import_vendor', label: 'Import vendor' },
-    { value: 'export_customer', label: 'Export customer' },
-    { value: 'payroll', label: 'Payroll' },
-    { value: 'contractor', label: 'Contractor' },
-];
+const ACC_WORKSTREAMS = AccountAssignments.workstreams;
 function accElement(id) { return document.getElementById(id); }
 function accEscape(value) {
     return String(value == null ? '' : value).replace(/[&<>'"]/g, function (character) {
         return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character];
     });
 }
-function accNormaliseCode(value) { return String(value == null ? '' : value).trim(); }
+function accNormaliseCode(value) { return AccountAssignments.normaliseCode(value); }
 function accSelectedUploadQuery() { return accSelectedUploadId ? '&trial_balance_upload_id=' + encodeURIComponent(accSelectedUploadId) : ''; }
 function accSelectedUploadPayload() { return { trial_balance_upload_id: accSelectedUploadId ? Number(accSelectedUploadId) : null }; }
 function accHideStatus(status) {
@@ -934,6 +926,7 @@ async function accSaveCashflowSettings(button) {
     });
 }
 function accInvalidateTrialBalanceCache() {
+    AccountAssignments.invalidate(accApi);
     if (accTrialBalanceCache.clientId === String(accClientId || '')) {
         accTrialBalanceCache.accounts = null;
         accTrialBalanceCache.upload = null;
@@ -951,7 +944,7 @@ async function accLoadTrialBalance(forceRefresh) {
     if (accTrialBalanceCache.request && accTrialBalanceCache.clientId === clientId && accTrialBalanceCache.uploadId === uploadId) return accTrialBalanceCache.request;
     accTrialBalanceCache.clientId = clientId;
     accTrialBalanceCache.uploadId = uploadId;
-    const request = accApi('/api/account-control-center/mapping?client_id=' + encodeURIComponent(accClientId) + (uploadId ? '&trial_balance_upload_id=' + encodeURIComponent(uploadId) : '')).then(function (result) {
+    const request = AccountAssignments.read('mapping', accClientId, uploadId, accApi).then(function (result) {
         accTrialBalanceCache.accounts = result.accounts || [];
         accTrialBalanceCache.upload = result.upload || null;
         accTrialBalanceCache.uploads = result.uploads || accAvailableUploads;
@@ -1096,7 +1089,7 @@ async function accSaveCashflowTemplate() {
 }
 async function accLoadCashflow() {
     await accLoadTrialBalance(false);
-    const result = await accApi('/api/account-control-center/cashflow/setup?client_id=' + encodeURIComponent(accClientId) + accSelectedUploadQuery());
+    const result = await AccountAssignments.read('cashflow', accClientId, accSelectedUploadId, accApi);
     const setupAccounts = new Map((result.accounts || []).map(function (account) {
         return [accNormaliseCode(account.account_code), account];
     }));
@@ -2215,9 +2208,8 @@ function accBindEvents() {
     accBindTreasuryGuidance();
     document.querySelectorAll('[data-acc-trial-balance-link]').forEach(function (button) {
         button.addEventListener('click', function () {
-            const params = new URLSearchParams({view: 'available', acc_tab: button.closest('[data-acc-toolbar-actions]').dataset.accToolbarActions});
-            if (accSelectedUploadId) params.set('upload_id', accSelectedUploadId);
-            window.location.href = '/static/trial_balance.html?' + params.toString();
+            const tab = button.closest('[data-acc-toolbar-actions]').dataset.accToolbarActions;
+            window.location.href = AccountAssignments.trialBalanceUrl(tab, accSelectedUploadId, new URLSearchParams(location.search).get('from') === 'trial-balance');
         });
     });
     accElement('accTrialBalanceSelect').addEventListener('change', function (event) {
@@ -2330,18 +2322,33 @@ async function accBootstrapUploads() {
         accShowStatus('Could not load Trial Balances: ' + error.message, 'error');
     } finally { overlay.hidden = true; }
 }
+// Setup links reuse the normal loaders, permission checks and modal handlers.
+async function accOpenRequestedSetup() {
+    if (!accIsAdmin || !accSelectedUploadId) return;
+    const params = new URLSearchParams(location.search);
+    const action = params.get('setup');
+    const mode = AccountAssignments.mode(params.get('tab') || 'verification');
+    if (!AccountAssignments.workflows[mode].setups.some(item => item[0] === action)) return;
+    const buttons = {financial: 'accFinancialSetupFab', notes: 'accNotesSetupFab', cashflow: 'accCashflowCategoryFab', treasury: 'accCashflowAccountsButton', template: 'accCashflowTemplateButton'};
+    if (action === 'verification') {
+        await accLoadDetail('verification', accElement('accVerificationLoad'));
+    } else if (Object.hasOwn(buttons, action)) {
+        accElement(buttons[action]).click();
+    }
+}
 async function initAccountControlCentre() {
     try {
         if (window.clientContextReady) await window.clientContextReady;
         accBindEvents();
         accElement('accRetryBootstrap').addEventListener('click', accBootstrapUploads);
         const tab = new URLSearchParams(window.location.search).get('tab');
-        if (tab === 'financial' || tab === 'notes') accSetTab(tab);
+        if (['financial', 'notes', 'cashflow', 'verification'].includes(tab)) accSetTab(tab);
         accClientId = window.getSelectedClientId ? window.getSelectedClientId() : null;
         if (!accClientId) { accElement('accTrialBalanceSelect').disabled = true; accSetGridState('Select a client before opening Account Control Centre.', true); return; }
         accIsAdmin = await window.isAdminUser();
         if (!accIsAdmin) { accElement('accAdminWarning').hidden = false; accElement('accTrialBalanceSelect').disabled = true; return; }
         await accBootstrapUploads();
+        await accOpenRequestedSetup();
     } finally { accElement('accBootstrapOverlay').hidden = true; }
 }
 document.addEventListener('DOMContentLoaded', initAccountControlCentre);

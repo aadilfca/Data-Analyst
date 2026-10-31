@@ -29,6 +29,7 @@ def test_validation_grid_shows_mapped_columns_only_and_preserves_source_preview(
         <table><thead id="mappingPreviewHead"></thead><tbody id="mappingPreviewBody"></tbody></table>
         <table><thead id="tbValidationHead"></thead><tbody id="tbValidationBody"></tbody></table>
     """)
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / "static" / "trial_balance.js"))
 
     result = page.evaluate("""() => {
@@ -83,6 +84,7 @@ def test_rollforward_differences_render_as_red_section_without_changing_source_r
         <table><thead id="tbValidationHead"></thead><tbody id="tbValidationBody"></tbody></table>
         <table><tbody id="availableAccountsTableBody"></tbody></table>
     """)
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / "static" / "trial_balance.js"))
 
     result = page.evaluate("""() => {
@@ -138,6 +140,7 @@ def test_global_differences_allow_save_without_review_controls(browser):
     html=(PROJECT_ROOT / 'static' / 'trial_balance.html').read_text(encoding='utf-8')
     page=browser.new_page()
     page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""async () => {
         window.API_BASE=''; window.isClientSelected=()=>true;
@@ -172,6 +175,7 @@ def test_global_differences_allow_save_without_review_controls(browser):
 def test_global_difference_preserves_all_six_saved_columns(browser):
     page = browser.new_page()
     page.set_content('<table><tbody id="availableAccountsTableBody"></tbody></table>')
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""() => renderAvailableAccountsTable([], [{account_name: 'Opening footing',
         global_adjustment: true, opening_cr_adjustment: '100', closing_cr_adjustment: '100'}])""")
@@ -188,6 +192,7 @@ def test_saved_view_inline_edit_and_sticky_heading(browser):
     html = (PROJECT_ROOT / 'static' / 'trial_balance.html').read_text(encoding='utf-8')
     page = browser.new_page(viewport={'width': 900, 'height': 600})
     page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""() => {
         availableTrialBalancesSection.style.display='block';
@@ -216,6 +221,7 @@ def test_saved_classification_and_amount_widths_and_floating_scroll(browser):
     html = (PROJECT_ROOT / 'static' / 'trial_balance.html').read_text(encoding='utf-8')
     page = browser.new_page(viewport={'width': 900, 'height': 700})
     page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""() => {
         window.API_BASE=''; window.requests=[]; window.failOverride=false; window.getSelectedClientId=()=>42;
@@ -278,6 +284,7 @@ def test_saved_trial_balance_category_lookup_and_search_filter(browser):
     html = (PROJECT_ROOT / 'static' / 'trial_balance.html').read_text(encoding='utf-8')
     page = browser.new_page()
     page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""() => {
         window.API_BASE=''; window.getSelectedClientId=()=>42;
@@ -316,7 +323,7 @@ def test_saved_trial_balance_category_lookup_and_search_filter(browser):
     }""")
     page.wait_for_function("document.querySelector('#availableAccountsTableBody tr:first-child td:nth-child(4)')?.textContent === 'Cash and cash equivalents' && document.querySelector('#availableAccountsTableBody tr:first-child td:nth-child(5)')?.textContent === 'Cash note'")
     headers = page.locator('#availableAccountsTableWrapper thead th').all_text_contents()
-    assert headers[:5] == ['Code', 'Name', 'Classification', 'Category', 'Note']
+    assert headers[:5] == ['Code', 'Name', 'Classification', 'FS Category', 'Note']
     assert page.locator('#availableAccountsTableBody tr:first-child td').nth(2).inner_text() == 'Leaf'
     assert page.locator('#availableAccountsTableBody tr:first-child td').nth(3).inner_text() == 'Cash and cash equivalents'
     assert page.locator('#availableAccountsTableBody tr:first-child td').nth(4).inner_text() == 'Cash note'
@@ -366,6 +373,7 @@ def test_saved_trial_balance_category_lookup_and_search_filter(browser):
 def test_saved_trial_balance_remains_available_when_category_lookup_fails(browser):
     page = browser.new_page()
     page.set_content('<div id="availableAccountsTableWrapper"><table><thead><tr><th>Code</th></tr></thead><tbody id="availableAccountsTableBody"></tbody></table></div><div id="tbSavedStickyHead"></div><select id="availableUploadsDropdown"><option value="59">TB</option></select><input id="tbSavedCategorySearch"><datalist id="tbSavedCategoryOptions"></datalist><p id="tbSavedCategoryNoMatches" hidden></p>')
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""() => {
         window.API_BASE=''; window.getSelectedClientId=()=>42;
@@ -389,6 +397,7 @@ def test_saved_trial_balance_keeps_category_filter_when_note_lookup_fails(browse
     html = (PROJECT_ROOT / 'static' / 'trial_balance.html').read_text(encoding='utf-8')
     page = browser.new_page()
     page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""() => {
         window.API_BASE=''; window.getSelectedClientId=()=>42;
@@ -420,6 +429,7 @@ def test_manual_total_row_mapping_preview_gating_and_file_reset(browser):
     html = (PROJECT_ROOT / 'static' / 'trial_balance.html').read_text(encoding='utf-8')
     page = browser.new_page(viewport={'width': 1280, 'height': 1000})
     page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""() => {
         window.isClientSelected = () => true;
@@ -463,6 +473,7 @@ def test_erp_control_footer_aligns_six_columns_and_keeps_original_leaf_totals(br
         <div id="tbValidationControls"></div>
         <table><thead id="tbValidationHead"></thead><tbody id="tbValidationBody"></tbody></table>
     """)
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     result = page.evaluate("""() => {
         fileHeaders = ['Name', 'CC', 'Code', 'PD', 'OD', 'CD', 'OC', 'PC', 'Unmapped'];
@@ -522,6 +533,7 @@ def test_erp_control_footer_aligns_six_columns_and_keeps_original_leaf_totals(br
 def test_control_rounding_and_difference_colours_follow_server_tolerance(browser):
     page=browser.new_page()
     page.set_content('<table><thead id="tbValidationHead"></thead><tbody id="tbValidationBody"></tbody></table>')
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     result=page.evaluate("""() => {
         fileHeaders=['Code','Name','OD','OC','PD','PC','CD','CC'];
@@ -559,6 +571,7 @@ def test_control_totals_fit_and_scrolling_keeps_headers_aligned(browser,width,to
     page=browser.new_page(viewport={'width':width,'height':1080})
     page.set_content(re.sub(r'<script[\s\S]*?</script>','',html))
     page.add_style_tag(path=str(PROJECT_ROOT / 'static' / 'style.css'))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""total => {
         fileHeaders=['Code','Name','OD','OC','PD','PC','CD','CC'];
@@ -609,6 +622,7 @@ def test_draft_footer_preserves_erp_values_and_shows_balanced_totals_in_both_vie
     page=browser.new_page()
     page.set_content('<table><thead id="tbValidationHead"></thead><tbody id="tbValidationBody"></tbody></table>'
                      '<table><tbody id="availableAccountsTableBody"></tbody></table>')
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     result=page.evaluate("""() => {
         fileHeaders=['Name','CC','Code','PD','OD','CD','OC','PC'];
@@ -705,4 +719,81 @@ def test_validation_floating_scrollbar_tracks_table_and_supports_pointer_keyboar
     page.wait_for_function("document.querySelector('.tb-validation-universal-scrollbar').hidden")
     page.evaluate('window.scrollTo(0,0)')
     page.wait_for_function("!document.querySelector('.tb-validation-universal-scrollbar').hidden")
+    page.close()
+
+
+def test_assignment_workflows_preserve_filters_amounts_and_reject_late_results(browser):
+    import re
+    html = (PROJECT_ROOT / 'static' / 'trial_balance.html').read_text(encoding='utf-8')
+    page = browser.new_page(viewport={'width': 1280, 'height': 800})
+    page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
+    page.evaluate("""async () => {
+        window.API_BASE=''; window.getSelectedClientId=()=>1; window.calls=[];
+        const accounts=[{id:1,account_code:'A',account_name:'Cash account',is_leaf:true,opening_dr:'10.25',closing_dr:'20.5'},
+                        {id:2,account_code:'B',account_name:'Bank account',is_leaf:true,opening_dr:'30',closing_dr:'40'}];
+        const mapping={client_id:1,upload:{id:77},accounts:[
+            {account_code:'A',assignment:{financial_statement_category_id:7,note_category_id:11,verification_workstream:'cash'}},
+            {account_code:'B',assignment:{financial_statement_category_id:8,note_category_id:null,verification_workstream:'bank'}}]};
+        window.fetch=async (url, options={})=>{
+            window.calls.push({url,method:options.method||'GET'});
+            if(url.includes('/trial-balance/accounts')) return {ok:true,json:async()=>({accounts,adjustments:[],validation_controls:{draft_reconciliation:null}})};
+            if(url.includes('/mapping?')) return {ok:true,json:async()=>mapping};
+            if(url.includes('/cashflow/setup')) return new Promise(resolve=>{window.releaseCashflow=()=>resolve({ok:true,json:async()=>({client_id:1,upload:{id:77},accounts:[{account_code:'A',category_id:1},{account_code:'B',category_id:2}],categories:[{id:1,label:'Receipts',is_active:true},{id:2,label:'Payments',is_active:true}]})});});
+            return {ok:true,json:async()=>({categories:url.includes('category_type=note')?[{id:11,label:'Cash note',is_active:true}]:[{id:7,label:'Cash',is_active:true},{id:8,label:'Bank',is_active:true}]})};
+        };
+        availableTrialBalancesSection.style.display='block';
+        availableUploadsDropdown.innerHTML='<option value="77">TB</option>';
+        await loadAvailableUploadAccounts('77');
+    }""")
+    page.wait_for_function("document.querySelector('.tb-saved-note-cell').textContent === 'Cash note'")
+    before = page.locator('tr[data-category-filter]').evaluate_all('rows=>rows.map(row=>row.dataset.tbAmounts)')
+    page.locator('#tbSavedCategorySearch').fill('Cash')
+    page.locator('#tbSavedNoteSearch').fill('Cash note')
+    assert page.locator('.tb-draft-heading .tb-amount-cell').all_text_contents() == ['10.25','0.00','0.00','0.00','20.50','0.00']
+    page.evaluate('availableAccountsTableWrapper.scrollLeft=130')
+    page.locator('#tbAssignmentWorkflow').select_option('cashflow')
+    page.wait_for_function('typeof window.releaseCashflow === "function"')
+    # A delayed Cashflow response must not paint over the later Verification selection.
+    page.locator('#tbAssignmentWorkflow').select_option('verification')
+    page.wait_for_function("document.querySelector('.tb-saved-category-cell').textContent === 'Cash vouchers'")
+    page.evaluate('window.releaseCashflow()')
+    page.wait_for_function("document.querySelector('#tbSavedCategoryLabel').textContent === 'Verification Workstream'")
+    assert page.locator('#tbSavedNoteSearch').is_hidden()
+    assert page.locator('#availableAccountsTableWrapper thead th:visible').count() == 0  # synchronized heading is the visible copy
+    assert page.locator('#tbSavedStickyHead th:not([hidden])').count() == 10
+    assert page.locator('#tbSavedStickyHead col').count() == 10
+    page.locator('#tbSavedCategorySearch').fill('bank')
+    assert page.locator('tr[data-category-filter]:visible').count() == 1
+    assert page.locator('tr[data-category-filter]:visible').get_attribute('data-account-code') == 'B'
+    page.locator('#tbAssignmentWorkflow').select_option('cashflow')
+    page.wait_for_function("tbWorkflowMode === 'cashflow' && typeof window.releaseCashflow === 'function'")
+    page.evaluate('window.releaseCashflow()')
+    page.wait_for_function("document.querySelector('.tb-saved-category-cell').textContent === 'Receipts'")
+    page.locator('#tbSavedCategorySearch').fill('Receipts')
+    assert page.locator('tr[data-category-filter]:visible').count() == 1
+    page.locator('#tbAssignmentWorkflow').select_option('financial')
+    assert page.locator('#tbSavedCategorySearch').input_value() == 'Cash'
+    assert page.locator('#tbSavedNoteSearch').input_value() == 'Cash note'
+    assert page.locator('#tbSavedStickyHead col').count() == 11
+    page.wait_for_function('availableAccountsTableWrapper.scrollLeft > 0')
+    assert page.locator('tr[data-category-filter]').evaluate_all('rows=>rows.map(row=>row.dataset.tbAmounts)') == before
+    assert page.evaluate('window.calls.every(call=>call.method === "GET")')
+    assert page.evaluate('window.calls.filter(call=>call.url.includes("/trial-balance/accounts")).length') == 1
+    page.locator('#tbAssignmentSetup').click()
+    assert page.locator('#tbAssignmentSetupMenu a').all_text_contents() == ['Financial Statements setup','Notes setup']
+    page.keyboard.press('Escape')
+    assert page.locator('#tbAssignmentSetupMenu').is_hidden()
+    page.evaluate("""() => {
+        tbWorkflowCache.delete('cashflow');
+        const original=window.fetch;
+        window.fetch=(url,options)=>url.includes('/cashflow/setup')
+            ? Promise.resolve({ok:true,json:async()=>({client_id:2,upload:{id:999},accounts:[],categories:[]})})
+            : original(url,options);
+    }""")
+    page.locator('#tbAssignmentWorkflow').select_option('cashflow')
+    page.wait_for_function("document.querySelector('#tbSavedCategoryNoMatches').textContent.includes('assignments are unavailable')")
+    assert page.locator('#tbSavedCategorySearch').is_disabled()
+    assert page.locator('tr[data-category-filter]').evaluate_all('rows=>rows.map(row=>row.dataset.tbAmounts)') == before
     page.close()
