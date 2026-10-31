@@ -25,7 +25,7 @@ from services.reconciliation_export_jobs import export_jobs, ExportJobError
 
 from database import execute_query_pg, execute_write_pg, log_audit, pg_transaction, run_read_snapshot_pg
 from routers.auth import require_admin
-from services.financial_statement_balances import (build_balance_sheet, build_balance_sheet_notes, build_income_statement, financial_statement_context_key, BalanceSheetInputError)
+from services.financial_statement_balances import (build_balance_sheet, build_income_statement, build_statement_notes, financial_statement_context_key, BalanceSheetInputError)
 from services.ledger_group_summary import LedgerBalanceError, build_cashflow_summary, build_cross_group_check, build_financial_statement_summary, build_group_summary, normalize_cashflow_grouping
 from services.ledger_report_source import (
     CASHFLOW_CHILD_DETAILS_VERSION,
@@ -2990,7 +2990,7 @@ def balance_sheet_report(
             (client_id,),
         )
         note_categories = []
-        if statement_section == "balance_sheet":
+        if statement_section in {"balance_sheet", "income_statement"}:
             note_categories = execute_query_pg(
                 """SELECT id, label, parent_category_id, source_statement_category_id, sort_order, is_active
                    FROM account_control_categories
@@ -3020,7 +3020,7 @@ def balance_sheet_report(
                 except (TypeError, ValueError):
                     opening_at = None
                 result['comparative'].update(opening_at=opening_at, source_label='TB opening balances')
-                result['notes'] = build_balance_sheet_notes(accounts, assignments, note_categories, result)
+            result['notes'] = build_statement_notes(accounts, assignments, note_categories, result, statement_section)
         except BalanceSheetInputError as error:
             raise HTTPException(409, str(error)) from error
         return {"client_id": client_id, "upload": upload, "context_key": context_key, "closing_status": closing_status if context_key == confirmed_context_key else "not_confirmed", **result}

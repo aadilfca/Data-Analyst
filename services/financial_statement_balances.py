@@ -159,13 +159,13 @@ def build_balance_sheet(accounts, assignments, categories, calculations, compone
         return result
 
 
-def build_balance_sheet_notes(accounts, assignments, note_categories, statement):
-    """Roll selected-TB balances into ACC's linked Balance Sheet note tree."""
+def build_statement_notes(accounts, assignments, note_categories, statement, statement_section):
+    """Roll selected-TB balances into ACC's linked note tree for one statement."""
     statement_categories = {
         int(row['id']): row for row in statement.get('categories', [])
-        if row.get('row_type') == 'category'
+        if row.get('row_type') == 'category' and row.get('statement_section') == statement_section
     }
-    comparative = statement.get('comparative') or {}
+    comparative = (statement.get('comparative') or {}) if statement_section == 'balance_sheet' else {}
     comparative_categories = {
         int(row['id']): row for row in comparative.get('categories', [])
         if row.get('row_type') == 'category'
@@ -216,26 +216,31 @@ def build_balance_sheet_notes(accounts, assignments, note_categories, statement)
         root = note_root(note_id)
         if not category or not note or not root or int(root.get('source_statement_category_id') or 0) != int(category_id):
             continue
-        role = category.get('effective_presentation_role')
-        if role not in {'asset', 'liability', 'equity'}:
-            continue
-        sign = Decimal(1) if role == 'asset' else Decimal(-1)
+        if statement_section == 'income_statement':
+            sign = Decimal(-1)
+        else:
+            role = category.get('effective_presentation_role')
+            if role not in {'asset', 'liability', 'equity'}:
+                continue
+            sign = Decimal(1) if role == 'asset' else Decimal(-1)
         direct[int(note_id)]['current'] += (_amount(account.get('closing_dr')) - _amount(account.get('closing_cr'))) * sign
-        direct[int(note_id)]['comparative'] += (_amount(account.get('opening_dr')) - _amount(account.get('opening_cr'))) * sign
+        if statement_section == 'balance_sheet':
+            direct[int(note_id)]['comparative'] += (_amount(account.get('opening_dr')) - _amount(account.get('opening_cr'))) * sign
         direct[int(note_id)]['account_count'] += 1
         assigned_by_category[int(category_id)] += 1
 
     # Report-only profit links must also appear in the linked capital note so its
     # disclosed amount follows the Balance Sheet line exactly.
-    for category_id, category in statement_categories.items():
-        root = next((row for row in roots if int(row.get('source_statement_category_id') or 0) == category_id), None)
-        if root and category.get('linked_profit') is not None:
-            direct[int(root['id'])]['current'] += _amount(category['linked_profit'])
-            direct[int(root['id'])]['current_system_amount'] = _amount(category['linked_profit'])
-        comparative_category = comparative_categories.get(category_id)
-        if root and comparative_category and comparative_category.get('linked_profit') is not None:
-            direct[int(root['id'])]['comparative'] += _amount(comparative_category['linked_profit'])
-            direct[int(root['id'])]['comparative_system_amount'] = _amount(comparative_category['linked_profit'])
+    if statement_section == 'balance_sheet':
+        for category_id, category in statement_categories.items():
+            root = next((row for row in roots if int(row.get('source_statement_category_id') or 0) == category_id), None)
+            if root and category.get('linked_profit') is not None:
+                direct[int(root['id'])]['current'] += _amount(category['linked_profit'])
+                direct[int(root['id'])]['current_system_amount'] = _amount(category['linked_profit'])
+            comparative_category = comparative_categories.get(category_id)
+            if root and comparative_category and comparative_category.get('linked_profit') is not None:
+                direct[int(root['id'])]['comparative'] += _amount(comparative_category['linked_profit'])
+                direct[int(root['id'])]['comparative_system_amount'] = _amount(comparative_category['linked_profit'])
 
     def build_node(note, inherited_source_id=None):
         note_id = int(note['id'])
@@ -254,7 +259,7 @@ def build_balance_sheet_notes(accounts, assignments, note_categories, statement)
             'sort_order': int(note.get('sort_order') or 0),
             'is_active': note.get('is_active', True),
             'current_amount': _text(current),
-            'comparative_amount': _text(opening),
+            'comparative_amount': _text(opening) if statement_section == 'balance_sheet' else None,
             'account_count': int(values['account_count']) + sum(int(child['account_count']) for child in child_nodes),
             'current_system_amount': _text(values.get('current_system_amount')) if values.get('current_system_amount') is not None else None,
             'comparative_system_amount': _text(values.get('comparative_system_amount')) if values.get('comparative_system_amount') is not None else None,
@@ -268,7 +273,7 @@ def build_balance_sheet_notes(accounts, assignments, note_categories, statement)
     for category_id, category in statement_categories.items():
         note_root_row = root_amounts.get(category_id)
         note_current = _amount(note_root_row['current_amount']) if note_root_row else Decimal(0)
-        note_opening = _amount(note_root_row['comparative_amount']) if note_root_row else Decimal(0)
+        note_opening = _amount(note_root_row['comparative_amount']) if statement_section == 'balance_sheet' and note_root_row else Decimal(0)
         current_statement = _amount(category['amount']) if category.get('amount') is not None else None
         opening_category = comparative_categories.get(category_id) or {}
         comparative_statement = _amount(opening_category['amount']) if opening_category.get('amount') is not None else None
@@ -280,9 +285,9 @@ def build_balance_sheet_notes(accounts, assignments, note_categories, statement)
             'assigned_account_count': int(assigned_by_category[category_id]),
             'unassigned_account_count': max(0, int(category.get('account_count') or 0) - int(assigned_by_category[category_id])),
             'current_difference': _text(current_statement - note_current) if current_statement is not None else None,
-            'comparative_difference': _text(comparative_statement - note_opening) if comparative_statement is not None else None,
+            'comparative_difference': _text(comparative_statement - note_opening) if statement_section == 'balance_sheet' and comparative_statement is not None else None,
         })
-    return {'roots': note_roots, 'coverage': coverage}
+    return {'statement_section': statement_section, 'roots': note_roots, 'coverage': coverage}
 
 
 def _build_transfer_reconciliation(balance, income, *, opening=False):

@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Income Statement Notes — 2026-10-31
+
+Added ACC-linked nested Income Statement notes with note references in statement categories, period amounts using Income Statement presentation signs, and an unassigned-account/difference coverage review. Notes are current-period only and do not adjust statement balances. The Balance Sheet Notes view remains separate with its comparative opening column and existing profit-link disclosures. No schema change.
+
+**Verification:** Python and JavaScript syntax checks and `git diff --check` pass. Aadil confirmed the local-server hierarchy, signs, amounts, and coverage display.
+
 ## Balance Sheet Notes and statement links — 2026-10-31
 
 Added a read-only Balance Sheet Notes view using ACC-linked note roots, ordered nested breakdowns, account assignments and the selected Trial Balance's closing/opening balances. Main statement rows link to their note references; the notes view preserves the selected upload, includes report-only profit/opening-I/S items where linked, and reports unassigned accounts or differences without adjusting them. No schema change.
