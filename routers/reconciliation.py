@@ -25,7 +25,7 @@ from services.reconciliation_export_jobs import export_jobs, ExportJobError
 
 from database import execute_query_pg, execute_write_pg, log_audit, pg_transaction, run_read_snapshot_pg
 from routers.auth import require_admin
-from services.financial_statement_balances import (build_balance_sheet, build_income_statement, financial_statement_context_key, BalanceSheetInputError)
+from services.financial_statement_balances import (build_balance_sheet, build_balance_sheet_notes, build_income_statement, financial_statement_context_key, BalanceSheetInputError)
 from services.ledger_group_summary import LedgerBalanceError, build_cashflow_summary, build_cross_group_check, build_financial_statement_summary, build_group_summary, normalize_cashflow_grouping
 from services.ledger_report_source import (
     CASHFLOW_CHILD_DETAILS_VERSION,
@@ -2958,9 +2958,13 @@ def balance_sheet_report(
             (trial_balance_upload_id,),
         )
         assignments = execute_query_pg(
-            "SELECT account_code, financial_statement_category_id FROM account_control_assignments WHERE client_id = %s",
+            "SELECT account_code, financial_statement_category_id, note_category_id FROM account_control_assignments WHERE client_id = %s",
             (client_id,),
         )
+        statement_assignments = [
+            {"account_code": row["account_code"], "financial_statement_category_id": row["financial_statement_category_id"]}
+            for row in assignments
+        ]
         categories = execute_query_pg(
             """SELECT id, label, statement_section, row_type, parent_category_id,
                       presentation_role, sort_order, is_active
@@ -2985,18 +2989,27 @@ def balance_sheet_report(
                ORDER BY component.calculation_id, component.sort_order, component.id""",
             (client_id,),
         )
+        note_categories = []
+        if statement_section == "balance_sheet":
+            note_categories = execute_query_pg(
+                """SELECT id, label, parent_category_id, source_statement_category_id, sort_order, is_active
+                   FROM account_control_categories
+                   WHERE client_id = %s AND category_type = 'note'
+                   ORDER BY sort_order, id""",
+                (client_id,),
+            )
         adjustment_counts = execute_query_pg(
             "SELECT COUNT(*) AS count FROM trial_balance_rollforward_adjustments WHERE upload_id = %s",
             (trial_balance_upload_id,),
         )
         links = execute_query_pg("SELECT source_calculation_id, target_category_id FROM account_control_profit_links WHERE client_id = %s", (client_id,))
         profit_link = dict(links[0]) if links else None
-        context_key = financial_statement_context_key(accounts, assignments, categories, calculations, components, profit_link)
+        context_key = financial_statement_context_key(accounts, statement_assignments, categories, calculations, components, profit_link)
         if statement_section not in {"balance_sheet", "income_statement"}:
             raise HTTPException(400, "Choose Balance Sheet or Income Statement")
         try:
             builder = build_income_statement if statement_section == "income_statement" else build_balance_sheet
-            result = builder(accounts, assignments, categories, calculations, components,
+            result = builder(accounts, statement_assignments, categories, calculations, components,
                              controls, int(adjustment_counts[0]["count"]) if adjustment_counts else 0,
                              profit_link=profit_link, closing_status=closing_status,
                              context_key=context_key, confirmed_context_key=confirmed_context_key)
@@ -3007,6 +3020,7 @@ def balance_sheet_report(
                 except (TypeError, ValueError):
                     opening_at = None
                 result['comparative'].update(opening_at=opening_at, source_label='TB opening balances')
+                result['notes'] = build_balance_sheet_notes(accounts, assignments, note_categories, result)
         except BalanceSheetInputError as error:
             raise HTTPException(409, str(error)) from error
         return {"client_id": client_id, "upload": upload, "context_key": context_key, "closing_status": closing_status if context_key == confirmed_context_key else "not_confirmed", **result}

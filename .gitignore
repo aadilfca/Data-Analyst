@@ -38,3 +38,6 @@ uvicorn_out.log
 # Holds the real Supabase DATABASE_URL (Phase 2 of the Supabase/Render migration)
 # - never committed. See .env.example for the documented, safe-to-share shape.
 .env
+
+# Protected local database backups and rehearsal artifacts; never commit.
+LeatherCrop-Database-Backups/

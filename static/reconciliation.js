@@ -5006,6 +5006,8 @@
     }
     let activeStatement = 'balance_sheet';
     let currentStatementContext = null;
+    let currentBalanceSheetResult = null;
+    let pendingBalanceSheetNoteId = null;
     let balanceSheetRequest = null;
     let balanceSheetGeneration = 0;
     function cancelBalanceSheetLoad() {
@@ -5075,6 +5077,83 @@
         const sign = /^0+$/.test(match[2]) && !fraction ? '' : match[1];
         return sign + whole + (fraction ? '.' + fraction : '');
     }
+    function balanceSheetNoteNumbers(notes, categories, calculations) {
+        const positions = new Map();
+        balanceSheetOutline(categories, calculations, 'balance_sheet').forEach(function (row, index) {
+            if (row.kind === 'category') positions.set(Number(row.item.id), index);
+        });
+        const roots = (notes && notes.roots || []).slice().sort(function (a, b) {
+            return (positions.get(Number(a.source_statement_category_id)) || 0) - (positions.get(Number(b.source_statement_category_id)) || 0)
+                || Number(a.sort_order || 0) - Number(b.sort_order || 0) || Number(a.id) - Number(b.id);
+        });
+        const byStatementCategory = new Map();
+        const byNoteId = new Map();
+        roots.forEach(function (root, index) {
+            const number = String(index + 1);
+            byStatementCategory.set(Number(root.source_statement_category_id), {id: Number(root.id), number: number});
+            function indexChildren(note, path) {
+                byNoteId.set(Number(note.id), path);
+                (note.children || []).forEach(function (child, childIndex) {
+                    indexChildren(child, path + '.' + String(childIndex + 1));
+                });
+            }
+            indexChildren(root, number);
+        });
+        return {roots: roots, byStatementCategory: byStatementCategory, byNoteId: byNoteId};
+    }
+    function renderBalanceSheetNotes(selectedNoteId) {
+        const result = currentBalanceSheetResult;
+        const notes = result && result.notes;
+        const table = element('balanceSheetNotesTable');
+        const status = element('balanceSheetNotesStatus');
+        if (!result || !notes || !Array.isArray(notes.roots)) {
+            status.classList.add('is-error');
+            status.textContent = 'Balance Sheet notes could not be loaded. Reload the Balance Sheet and try again.';
+            table.hidden = true;
+            return;
+        }
+        const numbering = balanceSheetNoteNumbers(notes, result.categories, result.calculations);
+        const comparative = result.comparative || {};
+        const currentDate = result.upload.period_end || result.upload.as_of_date || 'date unavailable';
+        const openingDate = comparative.opening_at || 'date unavailable';
+        element('balanceSheetNotesClient').textContent = window.getSelectedClientName ? window.getSelectedClientName() : '';
+        element('balanceSheetNotesDate').textContent = 'Current · ' + currentDate + ' | Comparative opening · ' + openingDate;
+        element('balanceSheetNotesCurrentHeader').textContent = 'Current · ' + currentDate;
+        element('balanceSheetNotesComparativeHeader').textContent = 'Opening · ' + openingDate;
+        status.classList.remove('is-error');
+        status.textContent = notes.roots.length ? '' : 'No Balance Sheet notes are linked in Account Control Centre.';
+        function amountCell(value) {
+            const shown = balanceSheetAmount(value);
+            return '<td class="balance-sheet-amount" title="' + escapeHtml(value == null ? 'Amount unavailable' : value) + '">' + escapeHtml(shown.startsWith('-') ? '(' + shown.slice(1) + ')' : shown) + '</td>';
+        }
+        const rendered = [];
+        function renderNode(note, number, depth, isRoot) {
+            const inactive = note.is_active === false || note.is_active === 0;
+            const label = escapeHtml(note.label) + (inactive ? '<span class="bs-inactive-label">Inactive</span>' : '');
+            rendered.push('<tr id="balanceSheetNote-' + Number(note.id) + '" class="' + (isRoot ? 'bs-note-root' : 'bs-note-child') + (inactive ? ' bs-note-inactive' : '') + (Number(note.id) === Number(selectedNoteId) ? ' bs-note-selected' : '') + '"><td class="bs-note-number">' + escapeHtml(number) + '</td><th scope="row" class="bs-note-label" style="padding-left:' + (13 + depth * 22) + 'px">' + label + '</th>' + amountCell(note.current_amount) + amountCell(note.comparative_amount) + '</tr>');
+            if (note.current_system_amount != null) rendered.push('<tr class="bs-note-system"><td></td><th scope="row" style="padding-left:' + (35 + depth * 22) + 'px">Current-period profit/(loss) linked to this category</th>' + amountCell(note.current_system_amount) + amountCell(null) + '</tr>');
+            if (note.comparative_system_amount != null) rendered.push('<tr class="bs-note-system"><td></td><th scope="row" style="padding-left:' + (35 + depth * 22) + 'px">Opening I/S items included in comparative balance</th>' + amountCell(null) + amountCell(note.comparative_system_amount) + '</tr>');
+            (note.children || []).forEach(function (child, index) {
+                renderNode(child, number + '.' + String(index + 1), depth + 1, false);
+            });
+        }
+        numbering.roots.forEach(function (root, index) { renderNode(root, String(index + 1), 0, true); });
+        element('balanceSheetNotesRows').innerHTML = rendered.join('');
+        table.hidden = !notes.roots.length;
+
+        const coverage = Array.isArray(notes.coverage) ? notes.coverage : [];
+        const coverageRows = coverage.filter(function (row) { return row.account_count || row.note_root_id; }).map(function (row) {
+            const gap = Number(row.unassigned_account_count || 0) > 0 || (row.current_difference != null && Number.isFinite(Number(row.current_difference)) && Math.abs(Number(row.current_difference)) > 0.01)
+                || (row.comparative_difference != null && Number.isFinite(Number(row.comparative_difference)) && Math.abs(Number(row.comparative_difference)) > 0.01);
+            return '<tr class="' + (gap ? 'notes-coverage-gap' : '') + '"><th scope="row">' + escapeHtml(row.label) + (row.note_root_id ? '' : ' · No note linked') + '</th><td class="balance-sheet-amount">' + escapeHtml(String(row.unassigned_account_count || 0)) + '</td>' + amountCell(row.current_difference) + amountCell(row.comparative_difference) + '</tr>';
+        });
+        element('balanceSheetNotesCoverageRows').innerHTML = coverageRows.join('');
+        element('balanceSheetNotesCoverage').hidden = !coverageRows.length;
+        if (selectedNoteId != null) {
+            const target = element('balanceSheetNote-' + Number(selectedNoteId));
+            if (target) target.scrollIntoView({block: 'center'});
+        }
+    }
     function clearStatementReconciliation() {
         ['balanceSheetReconciliation', 'openingBalanceSheetReconciliation'].forEach(function (id) {
             const panel = element(id);
@@ -5138,6 +5217,9 @@
         const generation = balanceSheetGeneration, requestedClient = clientId, requestedSection = activeStatement;
         const statementName = requestedSection === 'income_statement' ? 'Income Statement' : 'Balance Sheet';
         currentStatementContext = null;
+        currentBalanceSheetResult = null;
+        element('balanceSheetNotesOpen').hidden = requestedSection !== 'balance_sheet';
+        element('statementNoteHeader').hidden = requestedSection !== 'balance_sheet';
         element('statementClosingControls').hidden = true;
         const controller = new AbortController();
         balanceSheetRequest = controller;
@@ -5185,17 +5267,19 @@
             const endpoint = requestedSection === 'income_statement'
                 ? '/api/reconciliation/financial-statements/income-statement'
                 : '/api/reconciliation/financial-statements/balance-sheet';
-            const result = await api(endpoint + suffix + '&trial_balance_upload_id=' + encodeURIComponent(requested), { signal: controller.signal });
+        const result = await api(endpoint + suffix + '&trial_balance_upload_id=' + encodeURIComponent(requested), { signal: controller.signal });
             if (generation !== balanceSheetGeneration || requestedClient !== clientId) return;
-            if (Number(result.client_id) !== Number(requestedClient) || !result.upload || String(result.upload.id) !== requested || !Array.isArray(result.categories) || !Array.isArray(result.calculations) || result.basis !== 'erp_closing_before_audit_adjustments' || result.statement_section !== requestedSection) {
+            if (Number(result.client_id) !== Number(requestedClient) || !result.upload || String(result.upload.id) !== requested || !Array.isArray(result.categories) || !Array.isArray(result.calculations) || result.basis !== 'erp_closing_before_audit_adjustments' || result.statement_section !== requestedSection || (requestedSection === 'balance_sheet' && (!result.notes || !Array.isArray(result.notes.roots) || !Array.isArray(result.notes.coverage)))) {
                 throw new Error('The Balance Sheet source could not be verified. Please reload.');
             }
             const rows = balanceSheetOutline(result.categories, result.calculations, requestedSection);
+            const noteNumbers = requestedSection === 'balance_sheet' ? balanceSheetNoteNumbers(result.notes, result.categories, result.calculations).byStatementCategory : new Map();
             const comparative = requestedSection === 'balance_sheet' ? result.comparative : null;
             if (requestedSection === 'balance_sheet' && (!comparative || comparative.basis !== 'erp_opening_before_audit_adjustments'
                 || !Array.isArray(comparative.categories) || !Array.isArray(comparative.calculations) || !comparative.opening_review)) {
                 throw new Error('Comparative source could not be verified. Reload after the server is updated.');
             }
+            currentBalanceSheetResult = result;
             const openingRows = comparative ? new Map(balanceSheetOutline(comparative.categories, comparative.calculations).map(function (row) { return [row.key, row.item]; })) : null;
             table.classList.toggle('has-comparative', !!comparative);
             const review = comparative && comparative.opening_review;
@@ -5212,7 +5296,7 @@
                 }).join('');
                 return '<tr class="opening-income-review"><th scope="row"><details><summary>Opening I/S items — need review</summary><ul>' + accounts
                     + '</ul><small>' + (review.included ? 'Included once in comparative equity; current capital receives no extra amount.' : 'Not included in comparative totals: configure an active equity destination in ACC.')
-                    + '</small></details></th><td class="balance-sheet-amount"></td>' + cell(review.amount) + '</tr>';
+                    + '</small></details></th><td class="balance-sheet-note-cell"></td><td class="balance-sheet-amount"></td>' + cell(review.amount) + '</tr>';
             };
             let reviewPlaced = false;
             element('balanceSheetRows').innerHTML = rows.map(function (row) {
@@ -5225,7 +5309,10 @@
                 // The comparative capital cell shows ERP capital only; its review
                 // amount is displayed separately while totals include both once.
                 const openingAmount = openingItem && (row.kind === 'category' && openingItem.linked_profit != null ? openingItem.erp_amount : openingItem.amount);
-                let html = '<tr class="bs-' + row.kind + (inactive ? ' bs-inactive' : '') + '"><th scope="row"' + (row.kind === 'heading' ? ' colspan="' + (comparative ? 3 : 2) + '"' : '') + '>' + label + '</th>' + (row.kind === 'heading' ? '' : '<td class="balance-sheet-amount" title="' + escapeHtml(row.item.amount == null ? 'Amount unavailable; review ACC configuration' : row.item.amount) + '">' + escapeHtml(shownAmount) + '</td>' + (comparative ? cell(openingAmount) : '')) + '</tr>';
+                const note = row.kind === 'category' ? noteNumbers.get(Number(row.item.id)) : null;
+                const noteCell = requestedSection !== 'balance_sheet' ? '' : (note ? '<td class="balance-sheet-note-cell"><button type="button" class="balance-sheet-note-reference" data-note-id="' + note.id + '" aria-label="Open Balance Sheet note ' + escapeHtml(note.number) + '">' + escapeHtml(note.number) + '</button></td>' : '<td class="balance-sheet-note-cell"></td>');
+                const statementColumnCount = (comparative ? 3 : 2) + (requestedSection === 'balance_sheet' ? 1 : 0);
+                let html = '<tr class="bs-' + row.kind + (inactive ? ' bs-inactive' : '') + '"><th scope="row"' + (row.kind === 'heading' ? ' colspan="' + statementColumnCount + '"' : '') + '>' + label + '</th>' + (row.kind === 'heading' ? '' : noteCell + '<td class="balance-sheet-amount" title="' + escapeHtml(row.item.amount == null ? 'Amount unavailable; review ACC configuration' : row.item.amount) + '">' + escapeHtml(shownAmount) + '</td>' + (comparative ? cell(openingAmount) : '')) + '</tr>';
                 if (review && review.account_count && row.kind === 'category' && Number(row.item.id) === Number(review.target_category_id)) {
                     html += reviewRow(); reviewPlaced = true;
                 }
@@ -5266,6 +5353,7 @@
             table.hidden = !rows.length;
             status.hidden = !!rows.length;
             status.textContent = rows.length ? '' : 'No ' + statementName + ' outline is configured yet. Set up headings and categories in Account Control Centre.';
+            element('balanceSheetNotesOpen').hidden = requestedSection !== 'balance_sheet';
             const params = new URLSearchParams(window.location.search);
             params.set('trial_balance_upload_id', requested);
             window.history.replaceState({}, '', window.location.pathname + '?' + params.toString());
@@ -5280,6 +5368,11 @@
                 reload.disabled = false;
                 selector.disabled = false;
                 element('balanceSheetView').setAttribute('aria-busy', 'false');
+                if (requestedSection === 'balance_sheet' && pendingBalanceSheetNoteId !== null && currentBalanceSheetResult) {
+                    const pending = pendingBalanceSheetNoteId;
+                    pendingBalanceSheetNoteId = null;
+                    showBalanceSheetNotes(pending);
+                }
             }
         }
     }
@@ -5303,6 +5396,50 @@
             }
         } finally { window.clearTimeout(timer); button.disabled = false; }
     }
+    function showBalanceSheetNotes(noteId) {
+        const selectedNoteId = noteId != null && /^\d+$/.test(String(noteId)) ? Number(noteId) : null;
+        if (!currentBalanceSheetResult || !currentStatementContext || Number(currentStatementContext.clientId) !== Number(clientId)
+            || String(currentStatementContext.uploadId) !== String(element('balanceSheetUpload').value)) {
+            pendingBalanceSheetNoteId = selectedNoteId == null ? '' : String(selectedNoteId);
+            showFinancialStatements('balance-sheet');
+            return;
+        }
+        pendingBalanceSheetNoteId = null;
+        element('reportsView').hidden = true;
+        element('financialStatementsView').hidden = true;
+        element('balanceSheetView').hidden = true;
+        element('balanceSheetNotesView').hidden = false;
+        const params = new URLSearchParams(window.location.search);
+        params.set('view', 'reports');
+        params.set('report', 'balance-sheet-notes');
+        params.set('trial_balance_upload_id', currentStatementContext.uploadId);
+        if (selectedNoteId != null) params.set('note_id', String(selectedNoteId));
+        else params.delete('note_id');
+        window.history.replaceState({}, '', window.location.pathname + '?' + params.toString());
+        if (typeof window.pushInPageNavEntry === 'function') window.pushInPageNavEntry(null, 'Balance Sheet Notes');
+        if (typeof window.setNavModule === 'function') window.setNavModule('Balance Sheet Notes');
+        if (typeof window.setUpOverride === 'function') window.setUpOverride(showBalanceSheetStatement);
+        renderBalanceSheetNotes(selectedNoteId);
+        element('balanceSheetNotesHeading').focus({preventScroll: true});
+        if (selectedNoteId == null) window.scrollTo(0, 0);
+    }
+    function showBalanceSheetStatement() {
+        element('balanceSheetNotesView').hidden = true;
+        element('reportsView').hidden = true;
+        element('financialStatementsView').hidden = true;
+        element('balanceSheetView').hidden = false;
+        const params = new URLSearchParams(window.location.search);
+        params.set('view', 'reports');
+        params.set('report', 'balance-sheet');
+        params.delete('note_id');
+        if (currentStatementContext) params.set('trial_balance_upload_id', currentStatementContext.uploadId);
+        window.history.replaceState({}, '', window.location.pathname + '?' + params.toString());
+        if (typeof window.pushInPageNavEntry === 'function') window.pushInPageNavEntry(null, 'Balance Sheet');
+        if (typeof window.setNavModule === 'function') window.setNavModule('Balance Sheet');
+        if (typeof window.setUpOverride === 'function') window.setUpOverride(function () { showFinancialStatements(false); });
+        element('balanceSheetHeading').focus({preventScroll: true});
+        window.scrollTo(0, 0);
+    }
     function showFinancialStatements(statement) {
         setReportView(false);
         const isStatement = statement === true || statement === 'balance-sheet' || statement === 'income-statement';
@@ -5311,9 +5448,11 @@
         element('reportsView').hidden = true;
         element('financialStatementsView').hidden = isStatement;
         element('balanceSheetView').hidden = !isStatement;
+        element('balanceSheetNotesView').hidden = true;
         element('balanceSheetHeading').textContent = title;
         element('balanceSheetReload').textContent = 'Reload ' + title;
         element('balanceSheetTable').setAttribute('aria-label', 'Draft ' + title + ' before audit adjustments');
+        element('balanceSheetNotesOpen').hidden = activeStatement !== 'balance_sheet';
         const params = new URLSearchParams(window.location.search);
         params.set('view', 'reports');
         params.set('report', isStatement ? (activeStatement === 'income_statement' ? 'income-statement' : 'balance-sheet') : 'financial-statements');
@@ -5331,6 +5470,7 @@
         cancelBalanceSheetLoad();
         element('financialStatementsView').hidden = true;
         element('balanceSheetView').hidden = true;
+        element('balanceSheetNotesView').hidden = true;
         element('reportsView').hidden = isReport;
         element('cashflowsView').hidden = !isReport;
         const shell = document.querySelector('.reconciliation-shell');
@@ -5356,6 +5496,7 @@
         const params = new URLSearchParams(window.location.search);
         params.delete('report');
         params.delete('feature');
+        params.delete('note_id');
         params.set('view', 'reports');
         window.history.replaceState({}, '', window.location.pathname + '?' + params.toString());
         setReportView(false);
@@ -5373,6 +5514,12 @@
     async function initialise() {
         element('financialStatementsBack').addEventListener('click', showReportsHub);
         element('balanceSheetBack').addEventListener('click', function () { showFinancialStatements(false); });
+        element('balanceSheetNotesOpen').addEventListener('click', function () { showBalanceSheetNotes(); });
+        element('balanceSheetNotesBack').addEventListener('click', showBalanceSheetStatement);
+        element('balanceSheetRows').addEventListener('click', function (event) {
+            const reference = event.target.closest('[data-note-id]');
+            if (reference) showBalanceSheetNotes(reference.dataset.noteId);
+        });
         element('balanceSheetReload').addEventListener('click', loadBalanceSheetOutline);
         element('balanceSheetUpload').addEventListener('change', loadBalanceSheetOutline);
         element('statementClosingSave').addEventListener('click', saveStatementClosingStatus);
@@ -5641,7 +5788,10 @@
         });
         const requested = new URLSearchParams(window.location.search).get('report');
         const requestedCard = Array.from(document.querySelectorAll('[data-report-key]')).find(function (card) { return card.dataset.reportKey === requested; });
-        if (requestedCard && clientId) {
+        if (requested === 'balance-sheet-notes' && clientId) {
+            pendingBalanceSheetNoteId = new URLSearchParams(window.location.search).get('note_id') || '';
+            showFinancialStatements('balance-sheet');
+        } else if (requestedCard && clientId) {
             setSelection(requestedCard);
             if (requested === 'cashflows' && new URLSearchParams(window.location.search).get('feature') === 'reconciliation') {
                 await generateCashflows();

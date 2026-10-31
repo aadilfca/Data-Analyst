@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Balance Sheet Notes and statement links — 2026-10-31
+
+Added a read-only Balance Sheet Notes view using ACC-linked note roots, ordered nested breakdowns, account assignments and the selected Trial Balance's closing/opening balances. Main statement rows link to their note references; the notes view preserves the selected upload, includes report-only profit/opening-I/S items where linked, and reports unassigned accounts or differences without adjusting them. No schema change.
+
+**Verification:** Python and JavaScript syntax checks and `git diff --check` pass. Aadil's local-server test confirmed the linked hierarchy, current/opening amounts, capital adjustments and coverage display. Automated tests were not run.
+
 ## Trial Balance account-flow safety checks — 2026-10-30
 
 Added `tests/test_trial_balance_account_flow_safety.py` with synthetic records and mocked database reads. It verifies Trial Balance amount retention versus ACC's metadata-only response, ACC upload/client scope, Financial Statement category transfer and unmapped-review behavior, and Verification's latest-Trial-Balance-first category resolution. Follow-up checks confirm code corrections carry mappings forward but reject conflicting destination assignments (409). No application source or live data was changed. The initial focused Trial Balance, ACC, report, and hermetic Playwright suites passed: 252 passed, 1 skipped, and 9 subtests; the follow-up scope passed 105 tests and 9 subtests. Pytest emitted Starlette/httpx deprecation and cache-directory warnings. `File_map.md` is 158 lines (over its 150-line guard); its existing test row was updated without adding a row, and a later map compression review is advisable.

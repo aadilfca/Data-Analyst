@@ -159,6 +159,132 @@ def build_balance_sheet(accounts, assignments, categories, calculations, compone
         return result
 
 
+def build_balance_sheet_notes(accounts, assignments, note_categories, statement):
+    """Roll selected-TB balances into ACC's linked Balance Sheet note tree."""
+    statement_categories = {
+        int(row['id']): row for row in statement.get('categories', [])
+        if row.get('row_type') == 'category'
+    }
+    comparative = statement.get('comparative') or {}
+    comparative_categories = {
+        int(row['id']): row for row in comparative.get('categories', [])
+        if row.get('row_type') == 'category'
+    }
+    note_by_id = {int(row['id']): dict(row) for row in note_categories}
+    children = defaultdict(list)
+    roots = []
+    for note in note_by_id.values():
+        parent_id = note.get('parent_category_id')
+        if parent_id is None and note.get('source_statement_category_id') is not None:
+            roots.append(note)
+        elif parent_id is not None and int(parent_id) in note_by_id:
+            children[int(parent_id)].append(note)
+    for rows in children.values():
+        rows.sort(key=lambda row: (int(row.get('sort_order') or 0), int(row['id'])))
+    roots.sort(key=lambda row: (
+        int(statement_categories.get(int(row['source_statement_category_id']), {}).get('sort_order') or 0),
+        int(row.get('sort_order') or 0), int(row['id'])
+    ))
+
+    def note_root(note_id):
+        seen = set()
+        note = note_by_id.get(int(note_id)) if note_id is not None else None
+        while note and note.get('parent_category_id') is not None:
+            current_id = int(note['id'])
+            if current_id in seen:
+                return None
+            seen.add(current_id)
+            note = note_by_id.get(int(note['parent_category_id']))
+        return note
+
+    assignments_by_code = {str(row['account_code']).strip(): row for row in assignments}
+    if len(assignments_by_code) != len(assignments):
+        raise BalanceSheetInputError("Duplicate Trial Balance account assignments require review")
+    hierarchy = build_account_code_hierarchy(row['account_code'] for row in accounts)
+    direct = defaultdict(lambda: {'current': Decimal(0), 'comparative': Decimal(0), 'account_count': 0})
+    assigned_by_category = defaultdict(int)
+    for account in accounts:
+        code = str(account['account_code']).strip()
+        classification = account.get('classification') if account.get('manually_overridden') else hierarchy['classification'][code]
+        if classification != 'leaf':
+            continue
+        assignment = assignments_by_code.get(code) or {}
+        category_id = assignment.get('financial_statement_category_id')
+        note_id = assignment.get('note_category_id')
+        category = statement_categories.get(int(category_id)) if category_id is not None else None
+        note = note_by_id.get(int(note_id)) if note_id is not None else None
+        root = note_root(note_id)
+        if not category or not note or not root or int(root.get('source_statement_category_id') or 0) != int(category_id):
+            continue
+        role = category.get('effective_presentation_role')
+        if role not in {'asset', 'liability', 'equity'}:
+            continue
+        sign = Decimal(1) if role == 'asset' else Decimal(-1)
+        direct[int(note_id)]['current'] += (_amount(account.get('closing_dr')) - _amount(account.get('closing_cr'))) * sign
+        direct[int(note_id)]['comparative'] += (_amount(account.get('opening_dr')) - _amount(account.get('opening_cr'))) * sign
+        direct[int(note_id)]['account_count'] += 1
+        assigned_by_category[int(category_id)] += 1
+
+    # Report-only profit links must also appear in the linked capital note so its
+    # disclosed amount follows the Balance Sheet line exactly.
+    for category_id, category in statement_categories.items():
+        root = next((row for row in roots if int(row.get('source_statement_category_id') or 0) == category_id), None)
+        if root and category.get('linked_profit') is not None:
+            direct[int(root['id'])]['current'] += _amount(category['linked_profit'])
+            direct[int(root['id'])]['current_system_amount'] = _amount(category['linked_profit'])
+        comparative_category = comparative_categories.get(category_id)
+        if root and comparative_category and comparative_category.get('linked_profit') is not None:
+            direct[int(root['id'])]['comparative'] += _amount(comparative_category['linked_profit'])
+            direct[int(root['id'])]['comparative_system_amount'] = _amount(comparative_category['linked_profit'])
+
+    def build_node(note, inherited_source_id=None):
+        note_id = int(note['id'])
+        source_id = note.get('source_statement_category_id', inherited_source_id)
+        source_id = int(source_id) if source_id is not None else inherited_source_id
+        source = statement_categories.get(source_id) if source_id is not None else None
+        values = direct[note_id]
+        child_nodes = [build_node(child, source_id) for child in children.get(note_id, [])]
+        current = values['current'] + sum((_amount(child['current_amount']) for child in child_nodes), Decimal(0))
+        opening = values['comparative'] + sum((_amount(child['comparative_amount']) for child in child_nodes), Decimal(0))
+        return {
+            'id': note_id,
+            'label': source.get('label') if note.get('source_statement_category_id') is not None and source else note['label'],
+            'source_statement_category_id': source_id,
+            'parent_category_id': int(note['parent_category_id']) if note.get('parent_category_id') is not None else None,
+            'sort_order': int(note.get('sort_order') or 0),
+            'is_active': note.get('is_active', True),
+            'current_amount': _text(current),
+            'comparative_amount': _text(opening),
+            'account_count': int(values['account_count']) + sum(int(child['account_count']) for child in child_nodes),
+            'current_system_amount': _text(values.get('current_system_amount')) if values.get('current_system_amount') is not None else None,
+            'comparative_system_amount': _text(values.get('comparative_system_amount')) if values.get('comparative_system_amount') is not None else None,
+            'children': child_nodes,
+        }
+
+    note_roots = [build_node(root, int(root['source_statement_category_id'])) for root in roots
+                  if int(root['source_statement_category_id']) in statement_categories]
+    root_amounts = {int(root['source_statement_category_id']): root for root in note_roots}
+    coverage = []
+    for category_id, category in statement_categories.items():
+        note_root_row = root_amounts.get(category_id)
+        note_current = _amount(note_root_row['current_amount']) if note_root_row else Decimal(0)
+        note_opening = _amount(note_root_row['comparative_amount']) if note_root_row else Decimal(0)
+        current_statement = _amount(category['amount']) if category.get('amount') is not None else None
+        opening_category = comparative_categories.get(category_id) or {}
+        comparative_statement = _amount(opening_category['amount']) if opening_category.get('amount') is not None else None
+        coverage.append({
+            'statement_category_id': category_id,
+            'label': category['label'],
+            'note_root_id': note_root_row['id'] if note_root_row else None,
+            'account_count': int(category.get('account_count') or 0),
+            'assigned_account_count': int(assigned_by_category[category_id]),
+            'unassigned_account_count': max(0, int(category.get('account_count') or 0) - int(assigned_by_category[category_id])),
+            'current_difference': _text(current_statement - note_current) if current_statement is not None else None,
+            'comparative_difference': _text(comparative_statement - note_opening) if comparative_statement is not None else None,
+        })
+    return {'roots': note_roots, 'coverage': coverage}
+
+
 def _build_transfer_reconciliation(balance, income, *, opening=False):
     """Compare source Leaves with actual final formula contributions, never a plug.
 
