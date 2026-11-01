@@ -9203,6 +9203,40 @@ The proof clears on source changes, errors and view transitions; Income Statemen
 **Acceptance:** Aadil confirmed this phase and authorized commit/push on 2026-10-30.
 
 
+## Trial Balance explicit account loading — 2026-11-01
+
+**Implementation:** Available Trial Balances now separates upload selection from account loading. The Load Trial Balance button fetches the selected upload; changing sources clears old rows and cancels stale responses. Existing direct-link loading for assignment workflows is preserved. Loading feedback and retry after errors use the existing fetch flow. No backend or database changes; the Trial Balance script cache version is 49.
+
+**Verification:** JavaScript syntax and `git diff --check` pass. Automated and browser tests were not run; local-server acceptance remains pending.
+
+
+## Trial Balance account auto-load restored — 2026-11-01
+
+**Implementation:** Removed the extra Load button. Selecting an upload again loads its accounts automatically; changing sources still clears old rows and cancels stale responses. The dropdown readiness wait and retry behavior remain. No backend changes; Trial Balance script cache version stays at 50.
+
+**Verification:** JavaScript syntax and `git diff --check` pass. Local-server acceptance remains pending.
+
+
+## Rounded Trial Balance filter popups — 2026-11-01
+
+**Implementation:** Restyled FS Category and Note search controls as pill-shaped fields with a dropdown caret. Their existing search, exact multi-select and clear behavior remains; the popup panels, option rows and clear action now use rounded card/pill styling. No JavaScript, filtering or backend behavior changed. Columns page was read-only reference; its picker is a native select.
+
+**Verification:** Inline CSS reviewed for page scope; JavaScript and API behavior are unchanged. Local visual acceptance remains pending.
+
+## Trial Balance filters match grouped row pickers — 2026-11-01
+
+**Implementation:** Replaced the toolbar’s pill-only controls with the shared row-picker trigger and fixed popup style. FS categories group by statement and heading; notes group by source statement category and show full paths. Search, exact multi-select, clear, and live row filtering remain. Workspace picker files and shared CSS were read-only references; no backend changes.
+
+**Verification:** JavaScript syntax and `git diff --check` pass. Local visual acceptance remains pending.
+
+
+## Trial Balance upload choices retry and guard client readiness — 2026-11-01
+
+**Implementation:** The Available Trial Balances list waits for `clientContextReady` before reading the selected client and uses shared `ApiUtils.apiFetch()` for its one retry on network/5xx failures. A loading option, request token and selected-client check prevent stale responses from replacing current choices; final failures show visible status. All Trial Balance API calls use the shared wrapper so its bypass guard stays quiet; writes still do not retry. The page loads `api_utils.js`; script cache version is 50. No backend changes.
+
+**Verification:** JavaScript syntax and `git diff --check` pass. Automated and browser tests were not run; local-server acceptance remains pending.
+
+
 ## Tabular statement review dialog — 2026-11-01
 
 **Implementation:** The Balance Sheet review dialog separates numeric closing, profit and comparative opening checks from explanatory review items. Differences retain the existing 0.01 tolerance and normal-balance formatting; review content uses compact responsive tables. Income Statement diagnostics share the dialog structure. Accounting calculations and backend behavior are unchanged; reconciliation.js cache version is 70.

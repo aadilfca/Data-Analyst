@@ -16,6 +16,7 @@
 // ever reads the current client id via window.getSelectedClientId().
 
 let selectedFile = null;
+let availableUploadsRequestToken = 0;
 
 // Which saved upload is currently active for the Available Trial Balances view.
 let currentUploadId = null;
@@ -101,6 +102,16 @@ function getElement(id) {
     return el;
 }
 
+// Keep every Trial Balance API request on the shared GET-retry/mutation path.
+function tbApiRequest(url, options) {
+    const requestOptions = options || {};
+    const method = String(requestOptions.method || 'GET').toUpperCase();
+    if (!window.ApiUtils) throw new Error('The shared API request helper is unavailable.');
+    return method === 'GET'
+        ? window.ApiUtils.apiFetch(url, requestOptions)
+        : window.ApiUtils.apiFetchMutate(url, requestOptions);
+}
+
 const clientSelectionWarning = getElement('clientSelectionWarning');
 const uploadToolbar = getElement('uploadToolbar');
 const periodStartInput = getElement('periodStartInput');
@@ -159,8 +170,10 @@ const availableAccountsTableWrapper = getElement('availableAccountsTableWrapper'
 const availableAccountsTableBody = getElement('availableAccountsTableBody');
 const tbSavedStickyHead = getElement('tbSavedStickyHead');
 const tbSavedCategorySearch = getElement('tbSavedCategorySearch');
+const tbSavedCategoryTrigger = getElement('tbSavedCategoryTrigger');
 const tbSavedCategoryOptions = getElement('tbSavedCategoryOptions');
 const tbSavedNoteSearch = getElement('tbSavedNoteSearch');
+const tbSavedNoteTrigger = getElement('tbSavedNoteTrigger');
 const tbSavedNoteOptions = getElement('tbSavedNoteOptions');
 const tbSavedCategoryNoMatches = getElement('tbSavedCategoryNoMatches');
 let availableAccountCategoryByCode = new Map();
@@ -201,7 +214,7 @@ let tbVerificationAccounts = [];
 let tbVerificationLeaves = new Map();
 function savedAssignmentColumnCount() { return tbWorkflowMode === 'financial' ? 2 : 1; }
 async function tbReadAssignmentJson(url) {
-    const response = await fetch(API_BASE + url);
+    const response = await tbApiRequest(API_BASE + url);
     const result = await response.json();
     if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Could not load account assignments');
     return result;
@@ -525,7 +538,7 @@ async function runTrialBalanceValidation(options) {
     validationDirty = true;
     setValidationStatus('Validating mapped rows and Trial Balance controls…', 'loading');
     try {
-        const res = await fetch(API_BASE + '/api/trial-balance/validate', {
+        const res = await tbApiRequest(API_BASE + '/api/trial-balance/validate', {
             method: 'POST',
             body: buildTrialBalanceFormData()
         });
@@ -1227,7 +1240,7 @@ async function checkAndConfirmPeriodOverwrite(clientId, periodStart, periodEnd) 
             + '?client_id=' + encodeURIComponent(clientId)
             + '&period_start=' + encodeURIComponent(periodStart)
             + '&period_end=' + encodeURIComponent(periodEnd);
-        const res = await fetch(url);
+        const res = await tbApiRequest(url);
         const data = await res.json();
         if (!res.ok) {
             throw new Error(data.detail || 'Failed to check for a conflicting upload');
@@ -1278,7 +1291,7 @@ async function suggestColumnMapping(file) {
     const formData = new FormData();
     formData.append('file', file);
 
-    const res = await fetch(API_BASE + '/api/trial-balance/suggest-mapping', {
+    const res = await tbApiRequest(API_BASE + '/api/trial-balance/suggest-mapping', {
         method: 'POST',
         body: formData
     });
@@ -1292,7 +1305,7 @@ async function suggestColumnMapping(file) {
 
 async function fetchSavedTrialBalanceColumnMapping(clientId) {
     const url = API_BASE + '/api/trial-balance/saved-column-mapping?client_id=' + encodeURIComponent(clientId);
-    const res = await fetch(url);
+    const res = await tbApiRequest(url);
     const result = await res.json();
     if (!res.ok) throw new Error(result.detail || 'Could not load the saved client mapping.');
     return result.mapping;
@@ -1550,7 +1563,7 @@ async function saveTrialBalanceColumnMapping() {
     const loadingToken = startTrialBalanceLoading(saveTrialBalanceMappingBtn);
     updateClientDependentUI();
     try {
-        const res = await fetch(API_BASE + '/api/trial-balance/saved-column-mapping', {
+        const res = await tbApiRequest(API_BASE + '/api/trial-balance/saved-column-mapping', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ client_id: clientId, mapping: tbColumnMapping })
@@ -1605,7 +1618,7 @@ function updateTbUploadProgressBar(current, total) {
 function pollTbUploadProgress(progressKey) {
     tbUploadProgressPollInterval = setInterval(async () => {
         try {
-            const res = await fetch(API_BASE + '/api/trial-balance/upload-status/' + progressKey);
+            const res = await tbApiRequest(API_BASE + '/api/trial-balance/upload-status/' + progressKey);
             if (!res.ok) return;
             const status = await res.json();
             updateTbUploadProgressBar(status.current || 0, status.total || 0);
@@ -1705,7 +1718,7 @@ async function uploadTrialBalance() {
         formData.append('excluded_excel_rows', JSON.stringify(getExcludedSubtotalRowNumbers()));
         appendTotalRowChoice(formData);
 
-        const res = await fetch(API_BASE + '/api/trial-balance/upload', {
+        const res = await tbApiRequest(API_BASE + '/api/trial-balance/upload', {
             method: 'POST',
             body: formData
         });
@@ -1750,7 +1763,7 @@ async function uploadTrialBalance() {
 // ---------- SUMMARY DISPLAY (Phase 3's read-only summary endpoint) ----------
 async function loadSummary(uploadId) {
     try {
-        const res = await fetch(API_BASE + '/api/trial-balance/summary?upload_id=' + uploadId);
+        const res = await tbApiRequest(API_BASE + '/api/trial-balance/summary?upload_id=' + uploadId);
         const result = await res.json();
 
         if (!res.ok) {
@@ -1835,9 +1848,50 @@ function closeSavedSetupMenu() {
     if (tbAssignmentSetupMenu) tbAssignmentSetupMenu.hidden = true;
     if (tbAssignmentSetup) tbAssignmentSetup.setAttribute('aria-expanded', 'false');
 }
+function savedFilterInput(kind) {
+    return kind === 'note' ? tbSavedNoteSearch : tbSavedCategorySearch;
+}
+function savedFilterQuery(kind) {
+    const input = savedFilterInput(kind);
+    return input ? String(input.dataset.savedFilterQuery ?? input.value ?? '') : '';
+}
+function setSavedFilterQuery(kind, value) {
+    const input = savedFilterInput(kind);
+    if (!input) return;
+    input.dataset.savedFilterQuery = String(value ?? '');
+    input.value = input.dataset.savedFilterQuery;
+    syncSavedFilterDisplay(kind);
+}
+function syncSavedFilterDisplay(kind) {
+    const input = savedFilterInput(kind);
+    const trigger = kind === 'note' ? tbSavedNoteTrigger : tbSavedCategoryTrigger;
+    const selection = kind === 'note' ? tbSavedNoteSelections : tbSavedCategorySelections;
+    if (!input || !trigger) return;
+    const label = trigger.querySelector('[data-saved-filter-trigger-value]');
+    if (!label) return;
+    if (selection.size) {
+        const selected = Array.from(selection);
+        const chosen = selected.length === 1
+            ? (kind === 'note' ? tbSavedNoteOptions : tbSavedCategoryOptions)?.querySelector('[data-saved-filter-option][data-saved-filter-value="' + CSS.escape(selected[0]) + '"]')?.querySelector('span')?.textContent || selected[0]
+            : selected.length + ' selected';
+        const summary = chosen;
+        label.textContent = summary;
+        trigger.title = selected.join('; ');
+    } else {
+        const query = savedFilterQuery(kind).trim();
+        label.textContent = query || 'Search or choose';
+        if (query) trigger.title = query; else trigger.removeAttribute('title');
+    }
+}
+function setSavedFilterAvailability(kind, disabled) {
+    const input = savedFilterInput(kind);
+    const trigger = kind === 'note' ? tbSavedNoteTrigger : tbSavedCategoryTrigger;
+    if (input) input.disabled = disabled;
+    if (trigger) trigger.disabled = disabled;
+}
 function rememberSavedWorkflow() {
-    tbWorkflowStates.set(tbWorkflowMode, {category: tbSavedCategorySearch ? tbSavedCategorySearch.value : '',
-        note: tbSavedNoteSearch ? tbSavedNoteSearch.value : '', categorySelections: Array.from(tbSavedCategorySelections),
+    tbWorkflowStates.set(tbWorkflowMode, {category: savedFilterQuery('category'),
+        note: savedFilterQuery('note'), categorySelections: Array.from(tbSavedCategorySelections),
         noteSelections: Array.from(tbSavedNoteSelections), left: availableAccountsTableWrapper ? availableAccountsTableWrapper.scrollLeft : 0, top: window.scrollY});
 }
 function clearSavedWorkflowStates() {
@@ -1906,14 +1960,17 @@ function restoreSavedWorkflowReturnState() {
 }
 function restoreSavedWorkflowFilters() {
     const state = tbWorkflowStates.get(tbWorkflowMode);
-    if (tbSavedCategorySearch) tbSavedCategorySearch.value = state ? state.category : '';
-    if (tbSavedNoteSearch) tbSavedNoteSearch.value = state ? state.note : '';
+    setSavedFilterQuery('category', state ? state.category : '');
+    setSavedFilterQuery('note', state ? state.note : '');
     tbSavedCategorySelections.clear();
     tbSavedNoteSelections.clear();
     (state && state.categorySelections || []).forEach(value => tbSavedCategorySelections.add(String(value)));
     (state && state.noteSelections || []).forEach(value => tbSavedNoteSelections.add(String(value)));
     updateSavedFilterOptions('category');
+    syncSavedFilterOptionsFromRows('note');
     updateSavedFilterOptions('note');
+    syncSavedFilterDisplay('category');
+    syncSavedFilterDisplay('note');
     if (state) requestAnimationFrame(function () {
         if (availableAccountsTableWrapper) availableAccountsTableWrapper.scrollLeft = state.left || 0;
         window.scrollTo(0, state.top || 0);
@@ -1925,8 +1982,8 @@ function finishSavedWorkflowLookup() {
         options: tbSavedCategoryOptions ? tbSavedCategoryOptions.innerHTML : '', noteOptions: tbSavedNoteOptions ? tbSavedNoteOptions.innerHTML : '',
         accounts: tbWorkflowMode === 'verification' ? tbVerificationAccounts : null});
     if (!availableAccountCategoryLookupReady || (tbWorkflowMode === 'financial' && !availableAccountNoteLookupReady)) tbWorkflowCache.delete(tbWorkflowMode);
-    if (tbSavedCategorySearch) tbSavedCategorySearch.disabled = !availableAccountCategoryLookupReady;
-    if (tbSavedNoteSearch) tbSavedNoteSearch.disabled = !availableAccountNoteLookupReady;
+    setSavedFilterAvailability('category', !availableAccountCategoryLookupReady);
+    setSavedFilterAvailability('note', !availableAccountNoteLookupReady);
     availableAccountsTableBody.querySelectorAll('tr[data-category-filter]').forEach(function (row) {
         const code = row.dataset.accountCode;
         const category = availableAccountCategoryByCode.get(code) || 'Category unavailable';
@@ -2144,8 +2201,8 @@ async function switchSavedWorkflow(value) {
         if (tbSavedNoteOptions) tbSavedNoteOptions.innerHTML = cached.noteOptions;
         finishSavedWorkflowLookup();
     } else {
-        if (tbSavedCategorySearch) tbSavedCategorySearch.disabled = true;
-        if (tbSavedNoteSearch) tbSavedNoteSearch.disabled = true;
+        setSavedFilterAvailability('category', true);
+        setSavedFilterAvailability('note', true);
         finishSavedWorkflowLookup(); tbWorkflowCache.delete(tbWorkflowMode);
         if (availableCategoryUploadId) await loadAvailableUploadCategories(availableCategoryUploadId, window.getSelectedClientId(), availableAccountsLoadToken);
     }
@@ -2186,57 +2243,134 @@ function populateSavedNoteOptions(categories) {
 // Keep exact selections separate from the text query so users can add several exact values without losing contains-search.
 function populateSavedFilterOptions(container, categories, kind) {
     if (!container) return;
+    if (kind === 'note' && tbWorkflowMode === 'financial' && tbFsWorkspace) {
+        const values = new Set(['Unassigned']);
+        (tbFsWorkspace.STATE.categories || []).filter(category => category.is_active !== false && category.row_type !== 'heading')
+            .forEach(category => (tbFsWorkspace.accGetEffectiveNoteOptions(category.id) || []).forEach(item => values.add(item.path.join(' '))));
+        renderSavedFilterValues(container, values, kind);
+        return;
+    }
     const values = new Set((Array.isArray(categories) ? categories : [])
-        .filter(category => category.is_active !== false)
-        .map(category => String(category.label || '').trim())
-        .filter(Boolean));
+        .filter(category => category.is_active !== false && category.row_type !== 'heading')
+        .map(category => String(category.label || '').trim()).filter(Boolean));
     values.add('Unassigned');
-    renderSavedFilterValues(container, values, kind);
+    renderSavedFilterValues(container, values, kind, false, categories);
 }
 
-function renderSavedFilterValues(container, values, kind) {
+function makeSavedFilterOption(label, value, kind, searchText = label) {
+    const option = document.createElement('button');
+    option.type = 'button';
+    option.className = 'acc2-fs-picker-option';
+    option.setAttribute('role', 'option');
+    option.dataset.fsPickerOption = '';
+    option.dataset.fsPickerValue = value;
+    option.dataset.fsPickerSearch = String(searchText || label).toLocaleLowerCase();
+    option.dataset.savedFilterOption = '';
+    option.dataset.savedFilterValue = value;
+    option.dataset.savedFilterSearch = String(searchText || label);
+    option.dataset.savedFilterKind = kind;
+    option.setAttribute('aria-selected', 'false');
+    const text = document.createElement('span');
+    text.textContent = label;
+    const check = document.createElement('span');
+    check.className = 'acc2-fs-picker-check';
+    check.setAttribute('aria-hidden', 'true');
+    check.textContent = '✓';
+    option.append(text, check);
+    return option;
+}
+
+function appendSavedFilterSection(container, label, key) {
+    const section = document.createElement('div');
+    section.className = 'acc2-fs-picker-section';
+    section.dataset.fsPickerSection = '';
+    if (key) section.dataset.fsPickerSectionKey = key;
+    const heading = document.createElement('div');
+    heading.className = 'acc2-fs-picker-section-title';
+    heading.setAttribute('role', 'presentation');
+    heading.textContent = label;
+    section.appendChild(heading);
+    container.appendChild(section);
+    return section;
+}
+
+function appendSavedFilterHeading(section, label = '') {
+    const group = document.createElement('div');
+    group.className = 'acc2-fs-picker-heading-group';
+    group.dataset.fsPickerHeadingGroup = '';
+    if (label) {
+        const heading = document.createElement('div');
+        heading.className = 'acc2-fs-picker-heading';
+        heading.setAttribute('role', 'presentation');
+        heading.textContent = label;
+        group.appendChild(heading);
+    }
+    section.appendChild(group);
+    return group;
+}
+
+function renderSavedFilterValues(container, values, kind, preserveUnavailableSelections = false, categories = []) {
     container.replaceChildren();
     const selection = kind === 'note' ? tbSavedNoteSelections : tbSavedCategorySelections;
-    const header = document.createElement('div');
-    header.className = 'tb-saved-filter-options-header';
-    const summary = document.createElement('span');
-    summary.dataset.savedFilterSummary = '';
-    summary.setAttribute('aria-live', 'polite');
-    const clear = document.createElement('button');
-    clear.type = 'button';
-    clear.className = 'tb-saved-filter-clear';
-    clear.dataset.savedFilterClear = kind;
-    clear.textContent = 'Clear selection';
-    header.append(summary, clear);
-    container.appendChild(header);
-    Array.from(values).sort((left, right) => left.localeCompare(right)).forEach(function (label) {
-        const option = document.createElement('div');
-        option.className = 'tb-saved-filter-option';
-        option.dataset.savedFilterOption = '';
-        option.dataset.savedFilterValue = label;
-        option.hidden = true;
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.dataset.savedFilterCheckbox = kind;
-        checkbox.value = label;
-        checkbox.checked = selection.has(label);
-        checkbox.setAttribute('aria-label', 'Filter to exact ' + (kind === 'note' ? 'note' : 'category') + ': ' + label);
-        const textSearch = document.createElement('button');
-        textSearch.type = 'button';
-        textSearch.className = 'tb-saved-filter-text';
-        textSearch.dataset.savedFilterText = kind;
-        textSearch.textContent = label;
-        option.append(checkbox, textSearch);
-        container.appendChild(option);
-    });
+    if (kind === 'category' && tbWorkflowMode === 'financial' && tbFsWorkspace) {
+        const categoryOptions = categories.length ? categories : (tbFsWorkspace.STATE.categories || []);
+        const template = document.createElement('template');
+        template.innerHTML = tbFsWorkspace.accFinancialPickerMenuMarkup(null);
+        const source = template.content.querySelector('[data-fs-picker-option-wrap]');
+        if (source) {
+            Array.from(source.querySelectorAll('[data-fs-picker-option]')).forEach(function (option) {
+                const id = option.dataset.fsPickerValue || '';
+                const category = categoryOptions.find(item => String(item.id) === String(id));
+                const value = id ? String(category && category.label || '') : 'Unassigned';
+                if (id && (!category || category.is_active === false || !values.has(value))) { option.remove(); return; }
+                option.dataset.savedFilterOption = '';
+                option.dataset.savedFilterValue = value;
+                option.dataset.savedFilterSearch = [option.dataset.fsPickerSearch, option.closest('[data-fs-picker-heading-group]')?.innerText,
+                    option.closest('[data-fs-picker-section]')?.querySelector('.acc2-fs-picker-section-title')?.innerText].filter(Boolean).join(' ');
+                option.dataset.savedFilterKind = kind;
+            });
+            Array.from(source.querySelectorAll('[data-fs-picker-section], [data-fs-picker-heading-group]')).forEach(group => {
+                if (!group.querySelector('[data-fs-picker-option]')) group.remove();
+            });
+            source.querySelector('[data-fs-picker-no-results]')?.remove();
+            container.append(...Array.from(source.children));
+        }
+    } else if (kind === 'note' && tbWorkflowMode === 'financial' && tbFsWorkspace) {
+        const sourceCategories = tbFsWorkspace.STATE.categories || [];
+        const noteValues = new Set(values);
+        if (noteValues.has('Unassigned')) {
+            const unassigned = appendSavedFilterHeading(appendSavedFilterSection(container, 'Notes', 'notes'));
+            unassigned.appendChild(makeSavedFilterOption('Unassigned', 'Unassigned', kind));
+        }
+        sourceCategories.filter(category => category.is_active !== false && category.row_type !== 'heading').forEach(function (category) {
+            const options = tbFsWorkspace.accGetEffectiveNoteOptions(category.id) || [];
+            const matching = options.filter(item => noteValues.has(item.path.join(' ')));
+            if (!matching.length) return;
+            const section = appendSavedFilterSection(container, String(category.label || 'Financial Statement') + ' notes', 'note-' + category.id);
+            const group = appendSavedFilterHeading(section);
+            matching.forEach(item => group.appendChild(makeSavedFilterOption(item.path.join(' › '), item.path.join(' '), kind, item.path.join(' '))));
+        });
+        const special = Array.from(noteValues).filter(value => value !== 'Unassigned'
+            && !sourceCategories.some(category => (tbFsWorkspace.accGetEffectiveNoteOptions(category.id) || []).some(item => item.path.join(' ') === value)));
+        if (special.length) {
+            const section = appendSavedFilterSection(container, 'Other notes', 'note-other');
+            const group = appendSavedFilterHeading(section);
+            special.sort((a, b) => a.localeCompare(b)).forEach(value => group.appendChild(makeSavedFilterOption(value, value, kind)));
+        }
+    } else {
+        const section = appendSavedFilterSection(container, kind === 'note' ? 'Notes' : 'Categories', kind);
+        const group = appendSavedFilterHeading(section);
+        Array.from(values).sort((left, right) => left.localeCompare(right))
+            .forEach(value => group.appendChild(makeSavedFilterOption(value, value, kind)));
+    }
     const noMatches = document.createElement('div');
-    noMatches.className = 'tb-saved-filter-no-matches';
+    noMatches.className = 'acc2-fs-picker-no-results';
     noMatches.dataset.savedFilterNoMatches = '';
     noMatches.textContent = 'No matching ' + (kind === 'note' ? 'notes.' : 'categories.');
     noMatches.hidden = true;
     container.appendChild(noMatches);
     const validLabels = new Set(Array.from(container.querySelectorAll('[data-saved-filter-option]'), option => option.dataset.savedFilterValue));
-    selection.forEach(value => { if (!validLabels.has(value)) selection.delete(value); });
+    if (!preserveUnavailableSelections) selection.forEach(value => { if (!validLabels.has(value)) selection.delete(value); });
     updateSavedFilterOptions(kind);
 }
 
@@ -2244,11 +2378,14 @@ function syncSavedFilterOptionsFromRows(kind) {
     const container = kind === 'note' ? tbSavedNoteOptions : tbSavedCategoryOptions;
     if (!container || !availableAccountsTableBody) return;
     const field = kind === 'note' ? 'noteFilter' : 'categoryFilter';
-    const values = new Set(Array.from(availableAccountsTableBody.querySelectorAll('tr[data-category-filter]'))
+    const rows = Array.from(availableAccountsTableBody.querySelectorAll('tr[data-category-filter]'));
+    const categoryFilterActive = kind === 'note' && hasSavedCategoryFilter();
+    const values = new Set(rows
+        .filter(row => !categoryFilterActive || savedCategoryFilterMatchesRow(row))
         .map(row => row.dataset[field] || '')
         .filter(Boolean));
-    values.add('Unassigned');
-    renderSavedFilterValues(container, values, kind);
+    if (!categoryFilterActive) values.add('Unassigned');
+    renderSavedFilterValues(container, values, kind, categoryFilterActive);
 }
 
 function updateSavedFilterOptions(kind) {
@@ -2256,37 +2393,56 @@ function updateSavedFilterOptions(kind) {
     const container = kind === 'note' ? tbSavedNoteOptions : tbSavedCategoryOptions;
     if (!input || !container) return;
     const selection = kind === 'note' ? tbSavedNoteSelections : tbSavedCategorySelections;
-    const query = input.value.trim().toLocaleLowerCase();
+    const query = savedFilterQuery(kind).trim().toLocaleLowerCase();
     container.querySelectorAll('[data-saved-filter-option]').forEach(option => {
         const value = option.dataset.savedFilterValue || '';
-        option.hidden = !!query && !value.toLocaleLowerCase().includes(query) && !selection.has(value);
-        const checkbox = option.querySelector('[data-saved-filter-checkbox]');
-        if (checkbox) checkbox.checked = selection.has(value);
+        const search = [value, option.dataset.savedFilterSearch, option.dataset.fsPickerSearch,
+            option.closest('[data-fs-picker-heading-group]')?.innerText,
+            option.closest('[data-fs-picker-section]')?.querySelector('.acc2-fs-picker-section-title')?.innerText]
+            .filter(Boolean).join(' ').toLocaleLowerCase();
+        option.hidden = !!query && !search.includes(query) && !selection.has(value);
+        option.setAttribute('aria-selected', String(selection.has(value)));
     });
-    const summary = container.querySelector('[data-saved-filter-summary]');
+    container.querySelectorAll('[data-fs-picker-heading-group]').forEach(group => {
+        group.hidden = !group.querySelector('[data-saved-filter-option]:not([hidden])');
+    });
+    container.querySelectorAll('[data-fs-picker-section]').forEach(section => {
+        section.hidden = !section.querySelector('[data-saved-filter-option]:not([hidden])');
+    });
+    const menu = container.closest('[data-saved-filter-menu]');
+    const summary = menu && menu.querySelector('[data-saved-filter-summary]');
     if (summary) summary.textContent = selection.size ? selection.size + ' exact selected' : 'Check exact matches';
-    const clear = container.querySelector('[data-saved-filter-clear]');
+    const clear = menu && menu.querySelector('[data-saved-filter-clear]');
     if (clear) clear.hidden = !selection.size;
     const noMatches = container.querySelector('[data-saved-filter-no-matches]');
     if (noMatches) noMatches.hidden = Array.from(container.querySelectorAll('[data-saved-filter-option]')).some(option => !option.hidden);
 }
 
+function hasSavedCategoryFilter() {
+    return availableAccountCategoryLookupReady
+        && (tbSavedCategorySelections.size > 0 || !!savedFilterQuery('category').trim());
+}
+
+function savedCategoryFilterMatchesRow(row) {
+    if (!availableAccountCategoryLookupReady) return true;
+    const categoryValue = row.dataset.categoryFilter || '';
+    if (tbSavedCategorySelections.size) return tbSavedCategorySelections.has(categoryValue);
+    const query = savedFilterQuery('category').trim().toLocaleLowerCase();
+    return !query || categoryValue.toLocaleLowerCase().includes(query);
+}
+
 function applySavedCategoryFilter() {
     if (!availableAccountsTableBody) return;
-    const categoryQuery = availableAccountCategoryLookupReady
-        ? String(tbSavedCategorySearch ? tbSavedCategorySearch.value : '').trim().toLocaleLowerCase() : '';
     const noteQuery = tbWorkflowMode === 'financial' && availableAccountNoteLookupReady
-        ? String(tbSavedNoteSearch ? tbSavedNoteSearch.value : '').trim().toLocaleLowerCase() : '';
-    const categorySelections = availableAccountCategoryLookupReady ? tbSavedCategorySelections : new Set();
+        ? savedFilterQuery('note').trim().toLocaleLowerCase() : '';
     const noteSelections = tbWorkflowMode === 'financial' && availableAccountNoteLookupReady ? tbSavedNoteSelections : new Set();
+    const categoryFilterActive = hasSavedCategoryFilter();
+    const noteFilterActive = noteSelections.size > 0 || !!noteQuery;
     const rows = availableAccountsTableBody.querySelectorAll('tr[data-category-filter]');
     let visibleCount = 0;
     rows.forEach(function (row) {
-        const categoryValue = String(row.dataset.categoryFilter || '').toLocaleLowerCase();
         const noteValue = String(row.dataset.noteFilter || '').toLocaleLowerCase();
-        const categoryMatches = categorySelections.size
-            ? categorySelections.has(row.dataset.categoryFilter || '')
-            : (!categoryQuery || categoryValue.includes(categoryQuery));
+        const categoryMatches = savedCategoryFilterMatchesRow(row);
         const noteMatches = noteSelections.size
             ? noteSelections.has(row.dataset.noteFilter || '')
             : (!noteQuery || noteValue.includes(noteQuery));
@@ -2296,7 +2452,7 @@ function applySavedCategoryFilter() {
     });
     if (tbSavedCategoryNoMatches) {
         tbSavedCategoryNoMatches.textContent = availableAccountLookupMessage || 'No Trial Balance accounts match these filters.';
-        tbSavedCategoryNoMatches.hidden = availableAccountLookupMessage ? false : ((!categoryQuery && !noteQuery) || visibleCount > 0);
+        tbSavedCategoryNoMatches.hidden = availableAccountLookupMessage ? false : ((!categoryFilterActive && !noteFilterActive) || visibleCount > 0);
     }
     updateSavedDraftFilteredTotal();
     fitSavedTrialBalanceAmountColumns();
@@ -2329,10 +2485,8 @@ function updateSavedDraftFilteredTotal() {
     if (!availableAccountsTableBody) return;
     const heading = availableAccountsTableBody.querySelector('tr.tb-draft-heading');
     if (!heading) return;
-    const categoryQuery = availableAccountCategoryLookupReady && tbSavedCategorySearch
-        ? tbSavedCategorySearch.value.trim() : '';
-    const noteQuery = tbWorkflowMode === 'financial' && availableAccountNoteLookupReady && tbSavedNoteSearch
-        ? tbSavedNoteSearch.value.trim() : '';
+    const categoryQuery = availableAccountCategoryLookupReady ? savedFilterQuery('category').trim() : '';
+    const noteQuery = tbWorkflowMode === 'financial' && availableAccountNoteLookupReady ? savedFilterQuery('note').trim() : '';
     const hasActiveFilter = Boolean(categoryQuery || noteQuery || tbSavedCategorySelections.size
         || (tbWorkflowMode === 'financial' && tbSavedNoteSelections.size));
     if (!hasActiveFilter) {
@@ -2404,8 +2558,8 @@ async function loadAvailableUploadCategories(uploadId, clientId, loadToken) {
     }
     const requests = [
         AccountAssignments.read('mapping', clientId, uploadId, tbReadAssignmentJson),
-        fetch(API_BASE + '/api/account-control-center/categories?client_id=' + encodeURIComponent(clientId) + '&category_type=financial_statement&include_inactive=true'),
-        fetch(API_BASE + '/api/account-control-center/categories?client_id=' + encodeURIComponent(clientId) + '&category_type=note&include_inactive=true'),
+        tbApiRequest(API_BASE + '/api/account-control-center/categories?client_id=' + encodeURIComponent(clientId) + '&category_type=financial_statement&include_inactive=true'),
+        tbApiRequest(API_BASE + '/api/account-control-center/categories?client_id=' + encodeURIComponent(clientId) + '&category_type=note&include_inactive=true'),
     ];
     const responses = await Promise.allSettled(requests);
     if (!isCurrent()) return;
@@ -2470,11 +2624,12 @@ async function loadAvailableUploadCategories(uploadId, clientId, loadToken) {
 // uploads are listed -- an 'error'/'pending' upload has no accounts to browse, so
 // including it would just be a dead entry that returns an empty table on selection.
 async function loadAvailableUploads(target = availableTrialBalancesBtn, requestedUploadId = null) {
-    const clientId = window.getSelectedClientId ? window.getSelectedClientId() : null;
-    if (!availableUploadsDropdown || !clientId) return;
+    if (!availableUploadsDropdown) return;
+    const requestToken = ++availableUploadsRequestToken;
     const loadingToken = startTrialBalanceLoading(target);
 
-    availableUploadsDropdown.innerHTML = '<option value="">— Select an upload —</option>';
+    availableUploadsDropdown.disabled = true;
+    availableUploadsDropdown.innerHTML = '<option value="">Loading Trial Balances…</option>';
     if (availableUploadsEmptyHint) availableUploadsEmptyHint.style.display = 'none';
     if (availableAccountsTableWrapper) availableAccountsTableWrapper.style.display = 'none';
     if (tbSavedStickyHead) tbSavedStickyHead.hidden = true;
@@ -2488,8 +2643,10 @@ async function loadAvailableUploads(target = availableTrialBalancesBtn, requeste
     availableAccountNoteByCode = new Map();
     availableAccountNoteLookupReady = false;
     availableAccountLookupMessage = '';
-    if (tbSavedCategorySearch) { tbSavedCategorySearch.value = ''; tbSavedCategorySearch.disabled = true; }
-    if (tbSavedNoteSearch) { tbSavedNoteSearch.value = ''; tbSavedNoteSearch.disabled = true; }
+    setSavedFilterQuery('category', '');
+    setSavedFilterQuery('note', '');
+    setSavedFilterAvailability('category', true);
+    setSavedFilterAvailability('note', true);
     if (tbSavedCategoryOptions) tbSavedCategoryOptions.replaceChildren();
     if (tbSavedNoteOptions) tbSavedNoteOptions.replaceChildren();
     if (tbSavedCategoryNoMatches) { tbSavedCategoryNoMatches.hidden = true; tbSavedCategoryNoMatches.textContent = 'No Trial Balance accounts match these filters.'; }
@@ -2497,15 +2654,36 @@ async function loadAvailableUploads(target = availableTrialBalancesBtn, requeste
     syncSavedWorkflowColumns();
     closeSavedSetupMenu();
 
+    let clientId = null;
     try {
-        const res = await fetch(API_BASE + '/api/trial-balance/uploads?client_id=' + clientId);
+        // The page can be used before the window load handler finishes waiting for the
+        // session client; wait here too so an early click never silently skips the list.
+        if (window.clientContextReady) await window.clientContextReady;
+        if (requestToken !== availableUploadsRequestToken) return;
+
+        clientId = window.getSelectedClientId ? window.getSelectedClientId() : null;
+        if (!clientId) throw new Error('No client is selected. Return to the dashboard and select a client first.');
+
+        const url = API_BASE + '/api/trial-balance/uploads?client_id=' + encodeURIComponent(clientId);
+        const res = await window.ApiUtils.apiFetch(url);
         const result = await res.json();
+
+        // Repeated opens or a client switch can leave an older request in flight. Only
+        // the newest request for the still-selected client may populate this dropdown.
+        if (requestToken !== availableUploadsRequestToken
+            || String(window.getSelectedClientId()) !== String(clientId)) return;
 
         if (!res.ok) {
             throw new Error(result.detail || 'Failed to load available trial balances');
         }
+        if (!result || !Array.isArray(result.uploads)) {
+            throw new Error('The server returned an invalid Trial Balance upload list.');
+        }
 
-        const parsedUploads = result.uploads.filter(function (u) { return u.status === 'parsed'; });
+        availableUploadsDropdown.innerHTML = '<option value="">— Select an upload —</option>';
+        const parsedUploads = result.uploads.filter(function (u) {
+            return String(u.status || '').trim().toLowerCase() === 'parsed';
+        });
 
         if (parsedUploads.length === 0) {
             if (availableUploadsEmptyHint) availableUploadsEmptyHint.style.display = 'block';
@@ -2529,8 +2707,13 @@ async function loadAvailableUploads(target = availableTrialBalancesBtn, requeste
             }
         }
     } catch (error) {
-        showStatus('❌ Could not load available trial balances: ' + error.message, 'error');
+        if (requestToken === availableUploadsRequestToken
+            && (!clientId || String(window.getSelectedClientId()) === String(clientId))) {
+            availableUploadsDropdown.innerHTML = '<option value="">— Select an upload —</option>';
+            showStatus('❌ Could not load available trial balances: ' + error.message, 'error');
+        }
     } finally {
+        if (requestToken === availableUploadsRequestToken) availableUploadsDropdown.disabled = false;
         stopTrialBalanceLoading(loadingToken);
     }
 }
@@ -2552,8 +2735,8 @@ async function loadAvailableUploadAccounts(uploadId, target = availableUploadsDr
     tbWorkflowLoadToken++;
     const previousUploadId = availableCategoryUploadId;
     if (previousUploadId !== String(uploadId)) {
-        if (tbSavedCategorySearch) tbSavedCategorySearch.value = '';
-        if (tbSavedNoteSearch) tbSavedNoteSearch.value = '';
+        setSavedFilterQuery('category', '');
+        setSavedFilterQuery('note', '');
         if (tbSavedCategoryNoMatches) tbSavedCategoryNoMatches.hidden = true;
         availableAccountsTableWrapper.style.display = 'none';
         if (tbSavedStickyHead) tbSavedStickyHead.hidden = true;
@@ -2566,15 +2749,15 @@ async function loadAvailableUploadAccounts(uploadId, target = availableUploadsDr
     availableAccountNoteByCode = new Map();
     availableAccountNoteLookupReady = false;
     availableAccountLookupMessage = '';
-    if (tbSavedCategorySearch) tbSavedCategorySearch.disabled = true;
-    if (tbSavedNoteSearch) tbSavedNoteSearch.disabled = true;
+    setSavedFilterAvailability('category', true);
+    setSavedFilterAvailability('note', true);
     if (tbSavedCategoryOptions) tbSavedCategoryOptions.replaceChildren();
     if (tbSavedNoteOptions) tbSavedNoteOptions.replaceChildren();
     if (tbSavedCategoryNoMatches) { tbSavedCategoryNoMatches.hidden = true; tbSavedCategoryNoMatches.textContent = 'No Trial Balance accounts match these filters.'; }
     const loadingToken = startTrialBalanceLoading(target);
 
     try {
-        const res = await fetch(API_BASE + '/api/trial-balance/accounts?upload_id=' + encodeURIComponent(uploadId));
+        const res = await tbApiRequest(API_BASE + '/api/trial-balance/accounts?upload_id=' + encodeURIComponent(uploadId));
         if (loadToken !== availableAccountsLoadToken || (availableUploadsDropdown && String(availableUploadsDropdown.value) !== String(uploadId))) return;
         const result = await res.json();
         if (loadToken !== availableAccountsLoadToken || (availableUploadsDropdown && String(availableUploadsDropdown.value) !== String(uploadId))) return;
@@ -2785,7 +2968,7 @@ async function tbSaveAccountCodes() {
     const token = startTrialBalanceLoading(document.getElementById('tbSaveCodeCorrections'));
     let saved = false;
     try {
-        const response = await fetch(API_BASE + '/api/trial-balance/uploads/' + encodeURIComponent(uploadId) + '/account-codes', {
+        const response = await tbApiRequest(API_BASE + '/api/trial-balance/uploads/' + encodeURIComponent(uploadId) + '/account-codes', {
             method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({corrections})
         });
         const result = await response.json();
@@ -2891,7 +3074,7 @@ async function saveAvailableClassification(account, isLeaf, trigger) {
     const loadingToken = startTrialBalanceLoading(trigger);
     trigger.disabled = true;
     try {
-        const response = await fetch(API_BASE + '/api/trial-balance/accounts/' + account.id + '/override', {
+        const response = await tbApiRequest(API_BASE + '/api/trial-balance/accounts/' + account.id + '/override', {
             method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({is_leaf: isLeaf})
         });
         const result = await response.json();
@@ -2939,89 +3122,124 @@ function fitSavedTrialBalanceAmountColumns() {
     if (availableAccountsTableWrapper._updateFloatingScrollbar) availableAccountsTableWrapper._updateFloatingScrollbar();
 }
 
+function clearSelectedAvailableUploadView() {
+    availableAccountsLoadToken += 1;
+    tbWorkflowLoadToken++; tbWorkflowCache.clear(); clearSavedWorkflowStates();
+    availableCategoryUploadId = null;
+    availableAccountCategoryByCode = new Map();
+    availableAccountCategoryLookupReady = false;
+    availableAccountNoteByCode = new Map();
+    availableAccountNoteLookupReady = false;
+    availableAccountLookupMessage = '';
+    setSavedFilterQuery('category', '');
+    setSavedFilterQuery('note', '');
+    setSavedFilterAvailability('category', true);
+    setSavedFilterAvailability('note', true);
+    if (tbSavedCategoryOptions) tbSavedCategoryOptions.replaceChildren();
+    if (tbSavedNoteOptions) tbSavedNoteOptions.replaceChildren();
+    if (tbSavedCategoryNoMatches) { tbSavedCategoryNoMatches.hidden = true; tbSavedCategoryNoMatches.textContent = 'No Trial Balance accounts match these filters.'; }
+    if (availableAccountsTableWrapper) availableAccountsTableWrapper.style.display = 'none';
+    if (tbSavedStickyHead) tbSavedStickyHead.hidden = true;
+    if (availableAccountsTableWrapper && availableAccountsTableWrapper._updateFloatingScrollbar) availableAccountsTableWrapper._updateFloatingScrollbar();
+    if (availableAccountsTableBody) availableAccountsTableBody.innerHTML = '';
+    if (deleteUploadBtn) deleteUploadBtn.style.display = 'none';
+    syncSavedWorkflowColumns();
+    closeSavedSetupMenu();
+}
+
 if (availableUploadsDropdown) {
     availableUploadsDropdown.addEventListener('change', function () {
-        const uploadId = this.value;
-        if (!uploadId) {
-            availableAccountsLoadToken += 1;
-            tbWorkflowLoadToken++; tbWorkflowCache.clear(); clearSavedWorkflowStates();
-            availableCategoryUploadId = null;
-            availableAccountCategoryByCode = new Map();
-            availableAccountCategoryLookupReady = false;
-            availableAccountNoteByCode = new Map();
-            availableAccountNoteLookupReady = false;
-            availableAccountLookupMessage = '';
-            if (tbSavedCategorySearch) { tbSavedCategorySearch.value = ''; tbSavedCategorySearch.disabled = true; }
-            if (tbSavedNoteSearch) { tbSavedNoteSearch.value = ''; tbSavedNoteSearch.disabled = true; }
-            if (tbSavedCategoryOptions) tbSavedCategoryOptions.replaceChildren();
-            if (tbSavedNoteOptions) tbSavedNoteOptions.replaceChildren();
-            if (tbSavedCategoryNoMatches) { tbSavedCategoryNoMatches.hidden = true; tbSavedCategoryNoMatches.textContent = 'No Trial Balance accounts match these filters.'; }
-            if (availableAccountsTableWrapper) availableAccountsTableWrapper.style.display = 'none';
-            if (tbSavedStickyHead) tbSavedStickyHead.hidden = true;
-            if (availableAccountsTableWrapper && availableAccountsTableWrapper._updateFloatingScrollbar) availableAccountsTableWrapper._updateFloatingScrollbar();
-            if (availableAccountsTableBody) availableAccountsTableBody.innerHTML = '';
-            if (deleteUploadBtn) deleteUploadBtn.style.display = 'none';
-            syncSavedWorkflowColumns();
-            closeSavedSetupMenu();
-            return;
+        clearSelectedAvailableUploadView();
+        if (this.value) {
+            if (deleteUploadBtn) deleteUploadBtn.style.display = 'inline-block';
+            loadAvailableUploadAccounts(this.value, this);
         }
-        loadAvailableUploadAccounts(uploadId, this);
-        // Confirmed fix: Delete only appears once a real upload is selected.
-        if (deleteUploadBtn) deleteUploadBtn.style.display = 'inline-block';
     });
 }
 
-if (tbSavedCategorySearch) {
-    tbSavedCategorySearch.addEventListener('focus', function () { tbSavedNoteOptions.hidden = true; tbSavedNoteSearch.setAttribute('aria-expanded', 'false'); tbSavedCategoryOptions.hidden = false; tbSavedCategorySearch.setAttribute('aria-expanded', 'true'); updateSavedFilterOptions('category'); });
-    tbSavedCategorySearch.addEventListener('input', function () { updateSavedFilterOptions('category'); applySavedCategoryFilter(); rememberSavedWorkflow(); });
-}
-if (tbSavedNoteSearch) {
-    tbSavedNoteSearch.addEventListener('focus', function () { tbSavedCategoryOptions.hidden = true; tbSavedCategorySearch.setAttribute('aria-expanded', 'false'); tbSavedNoteOptions.hidden = false; tbSavedNoteSearch.setAttribute('aria-expanded', 'true'); updateSavedFilterOptions('note'); });
-    tbSavedNoteSearch.addEventListener('input', function () { updateSavedFilterOptions('note'); applySavedCategoryFilter(); rememberSavedWorkflow(); });
+function openSavedFilterOptions(kind) {
+    const picker = (kind === 'note' ? tbSavedNoteTrigger : tbSavedCategoryTrigger)?.closest('[data-fs-picker]');
+    if (!picker || !tbFsWorkspace) return;
+    tbFsWorkspace.accOpenFinancialPicker(picker);
+    const input = savedFilterInput(kind);
+    if (input) {
+        input.value = savedFilterQuery(kind);
+        updateSavedFilterOptions(kind);
+        tbFsWorkspace.accPositionFinancialPicker(picker);
+    }
 }
 function closeSavedFilterOptions() {
-    [[tbSavedCategoryOptions, tbSavedCategorySearch], [tbSavedNoteOptions, tbSavedNoteSearch]].forEach(function ([container, input]) {
-        if (!container || !input) return;
-        container.hidden = true;
-        input.setAttribute('aria-expanded', 'false');
-    });
+    if (tbFsWorkspace) {
+        [tbSavedCategoryTrigger, tbSavedNoteTrigger].forEach(trigger => {
+            const picker = trigger && trigger.closest('[data-fs-picker]');
+            if (picker) tbFsWorkspace.accCloseFinancialPicker(picker, false);
+        });
+    } else {
+        [tbSavedCategoryTrigger, tbSavedNoteTrigger].forEach(trigger => {
+            const picker = trigger && trigger.closest('[data-fs-picker]');
+            if (!picker) return;
+            picker.classList.remove('is-open');
+            const menu = picker.querySelector('[data-fs-picker-menu]');
+            if (menu) menu.hidden = true;
+            trigger.setAttribute('aria-expanded', 'false');
+        });
+    }
 }
-document.addEventListener('change', function (event) {
-    const checkbox = event.target.closest('[data-saved-filter-checkbox]');
-    if (!checkbox) return;
-    const selection = checkbox.dataset.savedFilterCheckbox === 'note' ? tbSavedNoteSelections : tbSavedCategorySelections;
-    if (checkbox.checked) selection.add(checkbox.value); else selection.delete(checkbox.value);
-    updateSavedFilterOptions(checkbox.dataset.savedFilterCheckbox);
-    applySavedCategoryFilter();
-    rememberSavedWorkflow();
+[[tbSavedCategoryTrigger, 'category'], [tbSavedNoteTrigger, 'note']].forEach(function ([trigger, kind]) {
+    if (!trigger) return;
+    trigger.addEventListener('click', function () {
+        if (trigger.getAttribute('aria-expanded') === 'true') closeSavedFilterOptions();
+        else openSavedFilterOptions(kind);
+    });
+});
+[[tbSavedCategorySearch, 'category'], [tbSavedNoteSearch, 'note']].forEach(function ([input, kind]) {
+    if (!input) return;
+    input.addEventListener('input', function () {
+        input.dataset.savedFilterQuery = input.value;
+        updateSavedFilterOptions(kind);
+        syncSavedFilterDisplay(kind);
+        if (kind === 'category') syncSavedFilterOptionsFromRows('note');
+        applySavedCategoryFilter();
+        rememberSavedWorkflow();
+    });
 });
 document.addEventListener('click', function (event) {
     const clear = event.target.closest('[data-saved-filter-clear]');
     if (clear) {
         const kind = clear.dataset.savedFilterClear;
         (kind === 'note' ? tbSavedNoteSelections : tbSavedCategorySelections).clear();
+        if (kind === 'category') syncSavedFilterOptionsFromRows('note');
         updateSavedFilterOptions(kind);
+        syncSavedFilterDisplay(kind);
         applySavedCategoryFilter();
         rememberSavedWorkflow();
         return;
     }
-    const textOption = event.target.closest('[data-saved-filter-text]');
-    if (textOption) {
-        const kind = textOption.dataset.savedFilterText;
-        const input = kind === 'note' ? tbSavedNoteSearch : tbSavedCategorySearch;
-        (kind === 'note' ? tbSavedNoteSelections : tbSavedCategorySelections).clear();
-        if (input) input.value = textOption.textContent;
+    const option = event.target.closest('[data-saved-filter-option]');
+    if (option) {
+        const kind = option.dataset.savedFilterKind;
+        const selection = kind === 'note' ? tbSavedNoteSelections : tbSavedCategorySelections;
+        const value = option.dataset.savedFilterValue || '';
+        if (selection.has(value)) selection.delete(value); else selection.add(value);
+        if (kind === 'category') syncSavedFilterOptionsFromRows('note');
         updateSavedFilterOptions(kind);
+        syncSavedFilterDisplay(kind);
         applySavedCategoryFilter();
         rememberSavedWorkflow();
-        input && input.focus();
-        closeSavedFilterOptions();
+        savedFilterInput(kind)?.focus();
         return;
     }
-    if (!event.target.closest('.tb-saved-category-filter, .tb-saved-note-filter')) closeSavedFilterOptions();
+    if (!event.target.closest('[data-fs-picker]')) closeSavedFilterOptions();
 });
 document.addEventListener('keydown', function (event) {
-    if (event.key === 'Escape') closeSavedFilterOptions();
+    if (event.key === 'Escape') {
+        const open = document.querySelector('.tb-saved-filter-picker.is-open');
+        if (open) {
+            const trigger = open.querySelector('[data-fs-picker-trigger]');
+            closeSavedFilterOptions();
+            trigger?.focus();
+        }
+    }
 });
 
 // Confirmed fix: deletes the currently selected upload (and all its accounts) after
@@ -3045,7 +3263,7 @@ if (deleteUploadBtn) {
         if (availableUploadsDropdown) availableUploadsDropdown.disabled = true;
 
         try {
-            const res = await fetch(API_BASE + '/api/trial-balance/uploads/' + uploadId, {
+            const res = await tbApiRequest(API_BASE + '/api/trial-balance/uploads/' + uploadId, {
                 method: 'DELETE'
             });
             const result = await res.json();
@@ -3116,8 +3334,10 @@ if (closeAvailableTrialBalancesBtn) {
         availableAccountNoteByCode = new Map();
         availableAccountNoteLookupReady = false;
         availableAccountLookupMessage = '';
-        if (tbSavedCategorySearch) { tbSavedCategorySearch.value = ''; tbSavedCategorySearch.disabled = true; }
-        if (tbSavedNoteSearch) { tbSavedNoteSearch.value = ''; tbSavedNoteSearch.disabled = true; }
+        setSavedFilterQuery('category', '');
+        setSavedFilterQuery('note', '');
+        setSavedFilterAvailability('category', true);
+        setSavedFilterAvailability('note', true);
         if (tbSavedCategoryOptions) tbSavedCategoryOptions.replaceChildren();
         if (tbSavedNoteOptions) tbSavedNoteOptions.replaceChildren();
         if (tbSavedCategoryNoMatches) { tbSavedCategoryNoMatches.hidden = true; tbSavedCategoryNoMatches.textContent = 'No Trial Balance accounts match these filters.'; }
@@ -3455,7 +3675,7 @@ function tbSetFinancialAccounts(accounts,ready=true) {
     }
 }
 async function tbFsApi(url,options) {
-    const response=await fetch(API_BASE+url,options||{});
+    const response=await tbApiRequest(API_BASE+url,options);
     const result=await response.json().catch(()=>({}));
     if(!response.ok)throw new Error(typeof result.detail==='string'?result.detail:'The Financial Statement request failed.');
     return result;
@@ -3476,8 +3696,8 @@ function tbRenderFinancialAssignments() {
     const state=tbFsWorkspace.STATE;
     if(!tbFsMappingReady || !(state.financialLoaded || state.pickerCategoriesReady))return;
     availableAccountCategoryLookupReady=true;availableAccountNoteLookupReady=!!state.notesLoaded;
-    if(tbSavedCategorySearch)tbSavedCategorySearch.disabled=false;
-    if(tbSavedNoteSearch)tbSavedNoteSearch.disabled=!state.notesLoaded;
+    setSavedFilterAvailability('category', false);
+    setSavedFilterAvailability('note', !state.notesLoaded);
     if(state.notesLoaded)availableAccountLookupMessage='';
     if(tbFsRenderedCategories!==state.categories || tbFsRenderedNotes!==state.notes){
         tbFsMetadataRevision++;tbFsRenderedCategories=state.categories;tbFsRenderedNotes=state.notes;
@@ -3519,6 +3739,7 @@ function tbRenderFinancialAssignments() {
     }
     const cache=tbWorkflowCache.get('financial');
     if(cache)Object.assign(cache,{category:availableAccountCategoryByCode,note:availableAccountNoteByCode,options:tbSavedCategoryOptions.innerHTML,noteOptions:tbSavedNoteOptions.innerHTML});
+    syncSavedFilterOptionsFromRows('note');
     applySavedCategoryFilter();
 }
 function tbApplyConfirmedFinancialChanges(result,context,targets) {
@@ -3559,7 +3780,7 @@ tbCashflowWorkspace = CashflowWorkspace.create({
     get clientId(){return window.getSelectedClientId?window.getSelectedClientId():null;},
     get uploadId(){return availableUploadsDropdown && availableUploadsDropdown.value ? Number(availableUploadsDropdown.value) : null;},
     get isAdmin(){return tbFsIsAdmin;},
-    request:(url,options)=>fetch(API_BASE+url,options||{}),
+    request:(url,options)=>tbApiRequest(API_BASE+url,options),
     onSaved:tbRefreshCashflowAssignments,
     onModalChanged:open=>{tbFsModalOpen=open;tbFsUpdateLock();},
 });

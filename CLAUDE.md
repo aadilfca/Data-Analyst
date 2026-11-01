@@ -35,7 +35,7 @@ One line per file group: what it is now. Full build history for every entry live
 - static/audit_workbook.js, static/audit_workbook.html → Audit Workbook: session rows, filtering, totals, shared Procedure Modal, and cached evidence/Form completion badges. See CHANGELOG_ARCHIVE.md.
 - routers/trial_balance.py → Trial Balance import, validation, batched code corrections, hierarchy, adjustments, draft totals, categories and saved uploads. See CHANGELOG_ARCHIVE.md.
 - routers/account_control_center.py → account mappings with validated FS/Note pairs, batched writes, statement outlines, presentation, profit linking, closing confirmation and Cashflow setup. See CHANGELOG_ARCHIVE.md.
-- static/trial_balance.*, static/account_assignment_shared.js, static/financial_statement_workspace.*, static/cashflow_workspace.* → Trial Balance review and scoped assignment workflows, with exact multi-select filters and shared in-place FS/Notes/Cashflow setup. See CHANGELOG_ARCHIVE.md.
+- static/trial_balance.*, static/account_assignment_shared.js, static/financial_statement_workspace.*, static/cashflow_workspace.* → Trial Balance review auto-loads uploads, retries choices and uses grouped row-style FS/Note filter popups; scoped assignments and shared setup. See CHANGELOG_ARCHIVE.md.
 - static/account_control_center.* → retired screens; legacy page bookmarks redirect to the Trial Balance assignment workspace. APIs remain in the router. See CHANGELOG_ARCHIVE.md.
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Two-pane Audit Rules editor for Documents, Cross-checks, Categories, Voucher Checks and Assertions, plus Assign Categories. See CHANGELOG_ARCHIVE.md.
@@ -259,6 +259,9 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-01: Trial Balance FS Category and Note filters use grouped row-style popups with search and multi-select. See CHANGELOG_ARCHIVE.md.
+- 2026-11-01: Trial Balance upload choices wait for client context, retry transient failures and ignore stale requests. See CHANGELOG_ARCHIVE.md.
+- 2026-11-01: Trial Balance selections load account rows automatically; source changes clear stale rows and cancel older requests. See CHANGELOG_ARCHIVE.md.
 - 2026-11-01: Notes keep numbered headings uniform and show direct assignments on separate numbered rows. See CHANGELOG_ARCHIVE.md.
 - 2026-11-01: Financial Statement notes show Unassigned balances and direct note assignments on the note row. See CHANGELOG_ARCHIVE.md.
 - 2026-11-01: Profit closing status defaults to “not yet included” without saving until confirmed. See CHANGELOG_ARCHIVE.md.

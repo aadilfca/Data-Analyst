@@ -545,25 +545,23 @@
         .tb-saved-table input { box-sizing: border-box; width: 100%; }
         .tb-saved-category-filter, .tb-saved-note-filter { display: flex; align-items: center; gap: 7px; position: relative; }
         .tb-saved-toolbar-row label { font-size: 13px; font-weight: 600; color: #34495e; white-space: nowrap; }
-        #tbSavedCategorySearch, #tbSavedNoteSearch { box-sizing: border-box; width: 190px; max-width: 22vw; padding: 6px 9px; border: 1px solid #cbd5e1; border-radius: 6px; color: #1a1a2e; font: inherit; }
-        #tbSavedCategorySearch:focus-visible, #tbSavedNoteSearch:focus-visible { outline: 2px solid #1769aa; outline-offset: 2px; }
-        #tbSavedCategorySearch:disabled, #tbSavedNoteSearch:disabled { background: #f1f5f9; color: #64748b; cursor: not-allowed; }
-        .tb-saved-filter-options { position: absolute; z-index: 30; top: calc(100% + 4px); right: 0; box-sizing: border-box; width: max(240px, 100%); max-width: min(360px, 80vw); max-height: 280px; overflow: auto; padding: 5px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; box-shadow: 0 8px 22px rgba(15, 23, 42, .16); }
-        .tb-saved-filter-options[hidden] { display: none; }
-        .tb-saved-filter-options-header { position: sticky; top: -5px; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 8px; border-bottom: 1px solid #e2e8f0; background: #f8fafc; color: #64748b; font-size: 12px; }
-        .tb-saved-filter-clear { border: 0; padding: 2px 4px; background: transparent; color: #1769aa; font: inherit; cursor: pointer; }
+        .tb-saved-filter-picker { flex: 0 0 210px; width: 210px; min-width: 0; }
+        .tb-saved-filter-picker .acc2-fs-picker-trigger { min-height: 38px; border-radius: 999px; padding-right: 14px; padding-left: 14px; font-size: 13px; }
+        .tb-saved-filter-picker .acc2-fs-picker-menu { max-width: calc(100vw - 24px); max-height: min(380px, calc(100vh - 24px)); }
+        .tb-saved-filter-picker .acc2-fs-picker-search { box-sizing: border-box; width: calc(100% - 20px); }
+        .tb-saved-filter-actions { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 10px; padding: 0 10px 7px; color: #748391; font-size: 11px; }
         .tb-saved-filter-clear[hidden] { display: none; }
-        .tb-saved-filter-option { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 2px 7px; border-radius: 5px; }
-        .tb-saved-filter-option:hover, .tb-saved-filter-option:focus-within { background: #eff6ff; }
-        .tb-saved-filter-option[hidden] { display: none; }
-        .tb-saved-filter-option input[type="checkbox"] { flex: 0 0 auto; width: auto; margin: 0; accent-color: #1769aa; }
-        .tb-saved-filter-text { flex: 1 1 auto; min-width: 0; border: 0; padding: 6px 2px; background: transparent; color: #1e293b; font: inherit; text-align: left; cursor: pointer; }
-        .tb-saved-filter-text:focus-visible, .tb-saved-filter-clear:focus-visible { outline: 2px solid #1769aa; outline-offset: 1px; }
-        .tb-saved-filter-no-matches { padding: 8px; color: #64748b; font-size: 13px; }
+        .tb-saved-filter-clear { border: 0; padding: 3px 0; background: transparent; color: #1769aa; font: inherit; font-weight: 600; cursor: pointer; }
+        .tb-saved-filter-clear:hover { color: #0d4f81; text-decoration: underline; }
+        .tb-saved-filter-clear:focus-visible { outline: 2px solid #93c5fd; outline-offset: 1px; }
+        .tb-saved-filter-options { flex: 1 1 auto; }
+        .tb-saved-filter-options [data-saved-filter-option][hidden] { display: none; }
+        .tb-saved-filter-options [data-fs-picker-section][hidden], .tb-saved-filter-options [data-fs-picker-heading-group][hidden] { display: none; }
+        .tb-saved-filter-no-matches { padding: 8px 12px; color: #748391; font-size: 11px; }
         #tbSavedCategoryNoMatches { margin: 0 0 10px; color: #64748b; font-size: 13px; }
         #tbSavedCategoryNoMatches[hidden] { display: none; }
         @media (max-width: 900px) { .tb-saved-toolbar-row { flex-wrap: wrap; } .tb-saved-toolbar-row--filters #deleteUploadBtn { margin-left: 0; } }
-        @media (max-width: 600px) { #tbSavedCategorySearch, #tbSavedNoteSearch { width: min(190px, 48vw); max-width: none; } }
+        @media (max-width: 600px) { .tb-saved-filter-picker { flex-basis: min(210px, 55vw); width: min(210px, 55vw); } }
         #availableAccountsTableWrapper thead { display: none; }
 
         /* ---------- COLUMN MAPPING (Section 1, Phase 2) ---------- */
@@ -1115,14 +1113,28 @@
             </div>
             <div class="tb-saved-toolbar-row tb-saved-toolbar-row--filters">
                 <div class="tb-saved-category-filter">
-                    <label id="tbSavedCategoryLabel" for="tbSavedCategorySearch">FS Category</label>
-                    <input id="tbSavedCategorySearch" type="search" placeholder="Search or choose" aria-label="Filter Trial Balance accounts by Account Control Centre category" aria-controls="tbSavedCategoryOptions" aria-expanded="false" autocomplete="off" disabled>
-                    <div id="tbSavedCategoryOptions" class="tb-saved-filter-options" role="group" aria-label="Category matches" hidden></div>
+                    <label id="tbSavedCategoryLabel" for="tbSavedCategoryTrigger">FS Category</label>
+                    <div class="tb-saved-filter-picker acc2-fs-picker" data-fs-picker data-saved-filter-picker="category">
+                        <button id="tbSavedCategoryTrigger" class="acc2-fs-picker-trigger" data-fs-picker-trigger type="button" role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-controls="tbSavedCategoryMenu" aria-label="Filter Trial Balance accounts by Financial Statement category" disabled><span id="tbSavedCategoryTriggerValue" data-saved-filter-trigger-value>Search or choose</span><span class="acc2-fs-picker-chevron" aria-hidden="true">▾</span></button>
+                        <div id="tbSavedCategoryMenu" class="acc2-fs-picker-menu" data-fs-picker-menu data-saved-filter-menu="category" hidden>
+                            <label class="acc2-fs-picker-search-label" for="tbSavedCategorySearch">Find a category</label>
+                            <input id="tbSavedCategorySearch" class="acc2-fs-picker-search" data-fs-picker-search-input data-saved-filter-search="category" type="search" placeholder="Search categories or headings" aria-label="Search categories or headings" autocomplete="off" disabled>
+                            <div class="tb-saved-filter-actions"><span data-saved-filter-summary aria-live="polite">Check exact matches</span><button class="tb-saved-filter-clear" data-saved-filter-clear="category" type="button" hidden>Clear selection</button></div>
+                            <div id="tbSavedCategoryOptions" class="acc2-fs-picker-option-wrap tb-saved-filter-options" role="listbox" aria-label="Financial Statement categories" aria-multiselectable="true"></div>
+                        </div>
+                    </div>
                 </div>
                 <div class="tb-saved-note-filter">
-                    <label for="tbSavedNoteSearch">Note</label>
-                    <input id="tbSavedNoteSearch" type="search" placeholder="Search or choose" aria-label="Filter Trial Balance accounts by Notes to Financial Statements assignment" aria-controls="tbSavedNoteOptions" aria-expanded="false" autocomplete="off" disabled>
-                    <div id="tbSavedNoteOptions" class="tb-saved-filter-options" role="group" aria-label="Note matches" hidden></div>
+                    <label for="tbSavedNoteTrigger">Note</label>
+                    <div class="tb-saved-filter-picker acc2-fs-picker" data-fs-picker data-saved-filter-picker="note">
+                        <button id="tbSavedNoteTrigger" class="acc2-fs-picker-trigger" data-fs-picker-trigger type="button" role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-controls="tbSavedNoteMenu" aria-label="Filter Trial Balance accounts by Note" disabled><span id="tbSavedNoteTriggerValue" data-saved-filter-trigger-value>Search or choose</span><span class="acc2-fs-picker-chevron" aria-hidden="true">▾</span></button>
+                        <div id="tbSavedNoteMenu" class="acc2-fs-picker-menu" data-fs-picker-menu data-saved-filter-menu="note" hidden>
+                            <label class="acc2-fs-picker-search-label" for="tbSavedNoteSearch">Find a note</label>
+                            <input id="tbSavedNoteSearch" class="acc2-fs-picker-search" data-fs-picker-search-input data-saved-filter-search="note" type="search" placeholder="Search notes" aria-label="Search notes" autocomplete="off" disabled>
+                            <div class="tb-saved-filter-actions"><span data-saved-filter-summary aria-live="polite">Check exact matches</span><button class="tb-saved-filter-clear" data-saved-filter-clear="note" type="button" hidden>Clear selection</button></div>
+                            <div id="tbSavedNoteOptions" class="acc2-fs-picker-option-wrap tb-saved-filter-options" role="listbox" aria-label="Financial Statement notes" aria-multiselectable="true"></div>
+                        </div>
+                    </div>
                 </div>
                 <button class="btn-secondary-action" id="tbAssignCategoriesBtn" type="button">Assignments →</button>
                 <!-- Hidden until an upload is selected; removes the selected upload and its accounts. -->
@@ -1185,7 +1197,8 @@
     </dialog>
     <script src="/static/cashflow_workspace.js?v=1"></script>
     <script src="/static/verification_workspace.js?v=1"></script>
-    <script src="/static/trial_balance.js?v=46"></script>
+    <script src="/static/api_utils.js?v=1"></script>
+    <script src="/static/trial_balance.js?v=50"></script>
 
 </body>
 
