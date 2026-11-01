@@ -1317,12 +1317,12 @@ def test_tb_cashflow_workspace_edits_assignments_and_opens_setup_in_place(browse
     assert page.locator('#availableUploadsDropdown').input_value() == '77'
     assert page.locator('#tbSavedCategorySearch').input_value() == 'Receipts'
     page.locator('#tbAssignmentWorkflow').select_option('verification')
-    page.wait_for_function("document.querySelector('.tb-saved-category-cell').textContent === 'Cash vouchers'")
+    page.wait_for_function("document.querySelector('.tb-saved-category-cell select option:checked')?.textContent === 'Cash vouchers'")
     page.locator('#tbAssignmentSetup').click()
-    page.locator('#tbAssignmentSetupMenu a').click()
-    page.wait_for_url('**/account_control_center.html?**')
-    page.wait_for_function("document.querySelector('#accAccountRows')?.textContent.includes('Cash')")
-    assert page.locator('#accTabVerification').get_attribute('aria-selected') == 'true'
+    page.wait_for_selector('#vwBackdrop:not([hidden])')
+    assert page.locator('#vwRows select[data-verification-code="A"]').input_value() == 'cash'
+    assert 'account_control_center.html' not in page.url
+    assert ('/api/account-control-center/mapping', 'PUT') not in calls
     assert all(method == 'GET' or (method == 'PUT' and path.endswith(('/cashflow/category-assignment','/cashflow/treasury-accounts','/cashflow/settings'))) for path, method in calls)
     page.close()
 

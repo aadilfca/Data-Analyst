@@ -1,12 +1,20 @@
 # Changelog Archive
 
+## Trial Balance Verification workspace — Phase 4 — 2026-11-01
+
+Verification workstreams can now be edited in the TB assignment column; leaf updates use the existing mapping API and parent assignments use its confirmed bulk-child operation. The floating setup button and Assignments action open a searchable in-place account/workstream editor. Unlinked parents are disabled and marked “Check code.” ACC remains available as fallback. Verification routing and Audit Rules categories are unchanged; no backend, schema or dependency changes.
+
+Added `static/verification_workspace.js`/`.css`; Trial Balance cache version is 44. The popup and main table refresh from the selected client/upload after saves, and assignment-only updates retain source amounts and unrelated mappings.
+
+**Verification:** Five approved suites pass: 213 tests and 12 subtests, covering TB/ACC browser behavior, direct leaf saves, parent bulk assignment, unlinked-parent guard, amount retention, mapping safeguards and Verification routing. JavaScript syntax and `git diff --check` pass. Existing pytest cache-directory and Starlette/httpx warnings remain. No live assignment writes or package installation. Local acceptance and Git authorization remain pending.
+
 ## Trial Balance Cashflows workspace — Phase 3 — 2026-11-01
 
 Cashflow is now an editable Trial Balance workflow. Leaf categories save through the existing scoped endpoint; parent selections confirm and use the existing bulk-child route. The category column, category filter and filtered account totals refresh from the saved setup response. The fixed setup button opens an in-place modal with category management, Cash/Bank account selection, transfer/customer-receipt settings and Client Data Bank template mapping. The selected client and upload scope are retained while the modal is open. ACC remains available and consumes the shared category option builder; historical/orphan assignment handling and the existing ACC setup screens remain unchanged. No backend, schema, report-engine or dependency changes.
 
 **Assets:** Added `static/cashflow_workspace.js` and `.css`; TB/ACC cache versions are 43/40 and shared module version 1. Updated TB setup tests and script fixtures.
 
-**Verification:** Four approved regression files passed: 190 tests and 12 subtests. Playwright covers TB leaf save, in-place setup, Cash/Bank and settings saves, while ACC Cashflow assignment/setup coverage remains green. JavaScript syntax and `git diff --check` pass. Existing pytest cache-directory and Starlette/httpx deprecation warnings remain. Tests use mocked browser APIs or isolated backend fixtures; no live Cashflow records were changed. Aadil then confirmed locally that TB category changes appear in ACC and the Cashflow report. Phase accepted; Aadil explicitly directed that this work remain uncommitted and unpushed.
+**Verification:** Four approved regression files passed: 190 tests and 12 subtests. Playwright covers TB leaf save, in-place setup, Cash/Bank and settings saves, while ACC Cashflow assignment/setup coverage remains green. JavaScript syntax and `git diff --check` pass. Existing pytest cache-directory and Starlette/httpx deprecation warnings remain. Tests use mocked browser APIs or isolated backend fixtures; no live Cashflow records were changed. Aadil then confirmed locally that TB category changes appear in ACC and the Cashflow report. Phase was later committed and pushed as `8883074` before Phase 4.
 
 ## Trial Balance batch code corrections — 2026-11-01
 

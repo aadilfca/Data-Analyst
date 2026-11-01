@@ -832,6 +832,80 @@ def test_assignment_workflows_preserve_filters_amounts_and_reject_late_results(b
     page.close()
 
 
+def test_verification_workspace_edits_accounts_and_opens_direct_assignment_popup(browser):
+    import re
+
+    html = (PROJECT_ROOT / 'static' / 'trial_balance.html').read_text(encoding='utf-8')
+    page = browser.new_page(viewport={'width': 1440, 'height': 900})
+    page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
+    for script in ('loading_ui.js', 'account_assignment_shared.js', 'financial_statement_workspace.js', 'cashflow_workspace.js', 'verification_workspace.js', 'trial_balance.js'):
+        page.add_script_tag(path=str(PROJECT_ROOT / 'static' / script))
+    page.evaluate("""async () => {
+        window.API_BASE=''; window.getSelectedClientId=()=>1; tbFsIsAdmin=true;
+        window.calls=[]; window.confirm=()=>true;
+        const rows=[
+            {id:1,account_code:'10',account_name:'Receivables',is_leaf:false,opening_dr:'100',closing_dr:'125'},
+            {id:2,account_code:'10-1',parent_account_code:'10',account_name:'Customer A',is_leaf:true,opening_dr:'60',closing_dr:'70'},
+            {id:3,account_code:'10-2',parent_account_code:'10',account_name:'Customer B',is_leaf:true,opening_dr:'40',closing_dr:'55'},
+            {id:4,account_code:'99',account_name:'Unlinked parent',is_leaf:false,opening_dr:'0',closing_dr:'0'}
+        ];
+        window.mapping={client_id:1,upload:{id:77},accounts:rows.map(row=>({account_code:row.account_code,account_name:row.account_name,parent_account_code:row.parent_account_code||null,is_leaf:row.is_leaf,level:row.is_leaf?2:1,assignment:{financial_statement_category_id:7,note_category_id:11,verification_workstream:row.account_code==='10-2'?'bank':null}}))};
+        window.fetch=async (url,options={})=>{
+            const method=options.method||'GET'; window.calls.push({url,method,body:options.body||null});
+            if(url.includes('/trial-balance/accounts')) return {ok:true,json:async()=>({accounts:rows,adjustments:[],validation_controls:{draft_reconciliation:null}})};
+            if(url.includes('/mapping/apply-to-children')) {
+                const body=JSON.parse(options.body); window.mapping.accounts.filter(item=>item.account_code.startsWith(body.parent_account_code+'-')&&item.is_leaf).forEach(item=>item.assignment.verification_workstream=body.verification_workstream);
+                return {ok:true,json:async()=>({saved:true,leaf_count:2})};
+            }
+            if(url.includes('/mapping') && method==='PUT') {
+                const body=JSON.parse(options.body); const target=window.mapping.accounts.find(item=>item.account_code===body.account_code); target.assignment.verification_workstream=body.verification_workstream;
+                return {ok:true,json:async()=>({saved:true})};
+            }
+            if(url.includes('/mapping?')) return {ok:true,json:async()=>window.mapping};
+            return {ok:true,json:async()=>({})};
+        };
+        availableTrialBalancesSection.style.display='block';
+        availableUploadsDropdown.innerHTML='<option value="77">Test upload</option>';
+        tbWorkflowMode='verification'; tbAssignmentWorkflow.value='verification';
+        await loadAvailableUploadAccounts('77');
+    }""")
+
+    page.wait_for_function("document.querySelector('.tb-verification-workstream-picker')")
+    assert page.locator('#tbSavedCategoryLabel').text_content() == 'Verification Workstream'
+    assert page.locator('tr[data-account-code="10-1"] .tb-saved-category-cell select').input_value() == ''
+    assert page.locator('tr[data-account-code="10-2"] .tb-saved-category-cell select').input_value() == 'bank'
+    assert page.locator('tr[data-account-code="99"] .tb-verification-workstream-picker').is_disabled()
+    before = page.locator('tr[data-category-filter]').evaluate_all('rows=>rows.map(row=>row.dataset.tbAmounts)')
+    mapping_reads = page.evaluate("calls.filter(call=>call.url.includes('/mapping?')).length")
+    page.locator('tr[data-account-code="10-1"] .tb-verification-workstream-picker').select_option('payroll')
+    page.wait_for_function("mapping.accounts.find(item=>item.account_code==='10-1').assignment.verification_workstream==='payroll'")
+    page.wait_for_function("document.querySelector('tr[data-account-code=\\\"10-1\\\"] .tb-verification-workstream-picker').value==='payroll'")
+    assert page.evaluate("calls.filter(call=>call.url.includes('/mapping?')).length") == mapping_reads
+
+    page.locator('#tbAssignmentSetup').click()
+    assert page.locator('#vwBackdrop').is_visible()
+    assert page.locator('#vwRows tr').count() == 4
+    page.locator('#vwSearch').fill('Customer A')
+    assert page.locator('#vwRows tr').count() == 1
+    page.locator('#vwSearch').fill('')
+    page.locator('#vwRows tr.vw-unlinked').get_by_text('Check code').wait_for()
+    page.locator('#vwRows select[data-verification-code="10"]').select_option('cash')
+    page.wait_for_function("calls.some(call=>call.url.includes('/mapping/apply-to-children')) && mapping.accounts.find(item=>item.account_code==='10-1').assignment.verification_workstream==='cash'")
+    assert page.locator('tr[data-account-code="10-1"] .tb-verification-workstream-picker').input_value() == 'cash'
+    assert page.locator('tr[data-account-code="10-2"] .tb-verification-workstream-picker').input_value() == 'cash'
+    assert page.locator('tr[data-account-code="10-1"]').get_attribute('data-tb-amounts') is not None
+    assert page.locator('tr[data-category-filter]').evaluate_all('rows=>rows.map(row=>row.dataset.tbAmounts)') == before
+    writes = page.evaluate("calls.filter(call=>call.method==='PUT'||call.method==='POST')")
+    assert [write['method'] for write in writes] == ['PUT', 'POST']
+    assert writes[0]['url'].endswith('/mapping')
+    assert writes[1]['url'].endswith('/mapping/apply-to-children')
+    assert page.evaluate("JSON.parse(calls.find(call=>call.method==='PUT').body).verification_workstream") == 'payroll'
+    assert page.evaluate("JSON.parse(calls.find(call=>call.method==='POST').body).verification_workstream") == 'cash'
+    page.locator('#vwBackdrop [data-vw-close]').click()
+    assert page.locator('#vwBackdrop').is_hidden()
+    page.close()
+
+
 def _batch_code_page(browser):
     import re
     page = browser.new_page()

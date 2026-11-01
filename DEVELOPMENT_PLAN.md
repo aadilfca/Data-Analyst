@@ -4,12 +4,12 @@
 |---|---|
 | 1 — Foundation | Accepted and pushed (`91486fe`): workflow selector, scoped reads, independent filters and ACC setup/return links. |
 | 2 — Financial Statements/Notes | Implemented; local acceptance pending: shared in-place editors/setup, compatible Notes, transactional saves and recovery. |
-| 3 — Cashflows | Accepted locally: editable TB categories and in-place category, Treasury, transfer/receipt and source-template setup. Aadil verified report updates; explicitly left uncommitted/unpushed. |
-| 4 — Verification | Pending: in-workspace workstream assignment/setup, preserving routing and Audit Rules categories. |
+| 3 — Cashflows | Accepted and pushed (`8883074`): editable TB categories and in-place category, Treasury, transfer/receipt and source-template setup. Aadil verified report updates. |
+| 4 — Verification | Implemented; local acceptance pending: editable workstream assignments and direct searchable TB popup, using existing APIs and preserving Verification routing/Audit Rules categories. |
 | 5 — Integrated review | Pending: prove assignment-to-report freshness, context retention and cross-module result parity. |
 | 6 — Cutover | Pending: remove standalone ACC screens, navigation and obsolete code after accepted TB feature parity. |
 
-Assignments retain client/account-code scope. Financial Statements and Cashflow setup open inside TB; Verification remains linked to ACC until Phase 4. Each phase requires local acceptance and separate Git authorization. Details: CHANGELOG_ARCHIVE.md, “Trial Balance Cashflows workspace — Phase 3”.
+Assignments retain client/account-code scope. Financial Statements, Cashflow and Verification assignment setup open inside TB; ACC remains available during rollout. Each phase requires local acceptance and separate Git authorization. Details: CHANGELOG_ARCHIVE.md, “Trial Balance Verification workspace — Phase 4”.
 
 ## Full database backups — completed — 2026-10-25
 
