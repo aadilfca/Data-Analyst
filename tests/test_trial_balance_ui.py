@@ -30,6 +30,7 @@ def test_validation_grid_shows_mapped_columns_only_and_preserves_source_preview(
         <table><thead id="tbValidationHead"></thead><tbody id="tbValidationBody"></tbody></table>
     """)
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / "static" / "trial_balance.js"))
 
     result = page.evaluate("""() => {
@@ -85,6 +86,7 @@ def test_rollforward_differences_render_as_red_section_without_changing_source_r
         <table><tbody id="availableAccountsTableBody"></tbody></table>
     """)
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / "static" / "trial_balance.js"))
 
     result = page.evaluate("""() => {
@@ -141,6 +143,7 @@ def test_global_differences_allow_save_without_review_controls(browser):
     page=browser.new_page()
     page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""async () => {
         window.API_BASE=''; window.isClientSelected=()=>true;
@@ -176,6 +179,7 @@ def test_global_difference_preserves_all_six_saved_columns(browser):
     page = browser.new_page()
     page.set_content('<table><tbody id="availableAccountsTableBody"></tbody></table>')
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""() => renderAvailableAccountsTable([], [{account_name: 'Opening footing',
         global_adjustment: true, opening_cr_adjustment: '100', closing_cr_adjustment: '100'}])""")
@@ -193,12 +197,13 @@ def test_saved_view_inline_edit_and_sticky_heading(browser):
     page = browser.new_page(viewport={'width': 900, 'height': 600})
     page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""() => {
         availableTrialBalancesSection.style.display='block';
         availableAccountsTableWrapper.style.display='block'; tbSavedStickyHead.hidden=false;
         window.savedCode=null;
-        saveAvailableAccountCode=async (account, value) => { window.savedCode=value; return true; };
+        window.getSelectedClientId=()=>1;
         renderAvailableAccountsTable(Array.from({length: 40}, (_, i) => ({id:i, account_code:'A'+i,
             account_name:'Cash', is_leaf:true})), []);
     }""")
@@ -208,7 +213,8 @@ def test_saved_view_inline_edit_and_sticky_heading(browser):
     editor = page.locator('#availableAccountsTableBody tr:first-child input')
     editor.fill('B0')
     editor.press('Enter')
-    assert page.evaluate('window.savedCode') == 'B0'
+    assert page.evaluate('tbPendingCodeCorrections.get(0).account_code') == 'B0'
+    assert page.evaluate('window.savedCode') is None
     page.evaluate('availableAccountsTableWrapper.scrollLeft=200; window.scrollTo(0, 500)')
     page.wait_for_function("tbSavedStickyHead.querySelector('table').style.transform === `translateX(-${availableAccountsTableWrapper.scrollLeft}px)`")
     assert page.locator('#tbSavedStickyHead').evaluate('el => getComputedStyle(el).position') == 'sticky'
@@ -222,6 +228,7 @@ def test_saved_classification_and_amount_widths_and_floating_scroll(browser):
     page = browser.new_page(viewport={'width': 900, 'height': 700})
     page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""() => {
         window.API_BASE=''; window.requests=[]; window.failOverride=false; window.getSelectedClientId=()=>42;
@@ -285,6 +292,7 @@ def test_saved_trial_balance_category_lookup_and_search_filter(browser):
     page = browser.new_page()
     page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""() => {
         window.API_BASE=''; window.getSelectedClientId=()=>42;
@@ -374,6 +382,7 @@ def test_saved_trial_balance_remains_available_when_category_lookup_fails(browse
     page = browser.new_page()
     page.set_content('<div id="availableAccountsTableWrapper"><table><thead><tr><th>Code</th></tr></thead><tbody id="availableAccountsTableBody"></tbody></table></div><div id="tbSavedStickyHead"></div><select id="availableUploadsDropdown"><option value="59">TB</option></select><input id="tbSavedCategorySearch"><datalist id="tbSavedCategoryOptions"></datalist><p id="tbSavedCategoryNoMatches" hidden></p>')
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""() => {
         window.API_BASE=''; window.getSelectedClientId=()=>42;
@@ -398,6 +407,7 @@ def test_saved_trial_balance_keeps_category_filter_when_note_lookup_fails(browse
     page = browser.new_page()
     page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""() => {
         window.API_BASE=''; window.getSelectedClientId=()=>42;
@@ -430,6 +440,7 @@ def test_manual_total_row_mapping_preview_gating_and_file_reset(browser):
     page = browser.new_page(viewport={'width': 1280, 'height': 1000})
     page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""() => {
         window.isClientSelected = () => true;
@@ -474,6 +485,7 @@ def test_erp_control_footer_aligns_six_columns_and_keeps_original_leaf_totals(br
         <table><thead id="tbValidationHead"></thead><tbody id="tbValidationBody"></tbody></table>
     """)
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     result = page.evaluate("""() => {
         fileHeaders = ['Name', 'CC', 'Code', 'PD', 'OD', 'CD', 'OC', 'PC', 'Unmapped'];
@@ -534,6 +546,7 @@ def test_control_rounding_and_difference_colours_follow_server_tolerance(browser
     page=browser.new_page()
     page.set_content('<table><thead id="tbValidationHead"></thead><tbody id="tbValidationBody"></tbody></table>')
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     result=page.evaluate("""() => {
         fileHeaders=['Code','Name','OD','OC','PD','PC','CD','CC'];
@@ -572,6 +585,7 @@ def test_control_totals_fit_and_scrolling_keeps_headers_aligned(browser,width,to
     page.set_content(re.sub(r'<script[\s\S]*?</script>','',html))
     page.add_style_tag(path=str(PROJECT_ROOT / 'static' / 'style.css'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""total => {
         fileHeaders=['Code','Name','OD','OC','PD','PC','CD','CC'];
@@ -623,6 +637,7 @@ def test_draft_footer_preserves_erp_values_and_shows_balanced_totals_in_both_vie
     page.set_content('<table><thead id="tbValidationHead"></thead><tbody id="tbValidationBody"></tbody></table>'
                      '<table><tbody id="availableAccountsTableBody"></tbody></table>')
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     result=page.evaluate("""() => {
         fileHeaders=['Name','CC','Code','PD','OD','CD','OC','PC'];
@@ -728,6 +743,7 @@ def test_assignment_workflows_preserve_filters_amounts_and_reject_late_results(b
     page = browser.new_page(viewport={'width': 1280, 'height': 800})
     page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""async () => {
         window.API_BASE=''; window.getSelectedClientId=()=>1; window.calls=[];
@@ -782,7 +798,8 @@ def test_assignment_workflows_preserve_filters_amounts_and_reject_late_results(b
     assert page.evaluate('window.calls.every(call=>call.method === "GET")')
     assert page.evaluate('window.calls.filter(call=>call.url.includes("/trial-balance/accounts")).length') == 1
     page.locator('#tbAssignmentSetup').click()
-    assert page.locator('#tbAssignmentSetupMenu a').all_text_contents() == ['Financial Statements setup','Notes setup']
+    assert page.locator('#tbAssignmentSetupMenu').is_hidden()
+    assert page.locator('#tbAssignmentSetupMenu a').count() == 0
     page.keyboard.press('Escape')
     assert page.locator('#tbAssignmentSetupMenu').is_hidden()
     page.evaluate("""() => {
@@ -796,4 +813,131 @@ def test_assignment_workflows_preserve_filters_amounts_and_reject_late_results(b
     page.wait_for_function("document.querySelector('#tbSavedCategoryNoMatches').textContent.includes('assignments are unavailable')")
     assert page.locator('#tbSavedCategorySearch').is_disabled()
     assert page.locator('tr[data-category-filter]').evaluate_all('rows=>rows.map(row=>row.dataset.tbAmounts)') == before
+    page.close()
+
+
+def _batch_code_page(browser):
+    import re
+    page = browser.new_page()
+    html = (PROJECT_ROOT / 'static/trial_balance.html').read_text(encoding='utf-8')
+    page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
+    for script in ('account_assignment_shared.js', 'financial_statement_workspace.js', 'trial_balance.js'):
+        page.add_script_tag(path=str(PROJECT_ROOT / 'static' / script))
+    page.evaluate("""() => {
+        window.API_BASE=''; window.getSelectedClientId=()=>5;
+        availableTrialBalancesSection.style.display='block'; availableAccountsTableWrapper.style.display='block';
+        availableUploadsDropdown.innerHTML='<option value="59">Half-year</option><option value="60">Other</option>';
+        availableCategoryUploadId='59'; tbWorkflowMode='financial';
+        window.rows=[{id:1,account_code:'BAD1',account_name:'Parent 1',is_leaf:false,closing_dr:'42'},
+            {id:2,account_code:'BAD2',account_name:'Parent 2',is_leaf:false,closing_dr:'17'}];
+        renderAvailableAccountsTable(window.rows, []);
+        window.calls=[];window.reloads=0;window.failSave=false;
+        window.fetch=async(url,options)=>{
+            const body=JSON.parse(options.body);window.calls.push({url,body});
+            if(window.failSave)return {ok:false,json:async()=>({detail:'Conflicting mapping'})};
+            body.corrections.forEach(c=>window.rows.find(row=>row.id===c.account_id).account_code=c.account_code);
+            return {ok:true,json:async()=>({updated:true,upload_id:59,corrected_count:body.corrections.length})};
+        };
+        loadAvailableUploadAccounts=async()=>{window.reloads++;renderAvailableAccountsTable(window.rows,[]);return true;};
+    }""")
+    return page
+
+
+def _edit_saved_code(page, row, value):
+    cell=page.locator('#availableAccountsTableBody tr').nth(row).locator('td').first
+    cell.locator('.tb-account-code-display').dblclick()
+    cell.locator('input').fill(value)
+    cell.locator('input').press('Enter')
+
+
+def test_saved_code_batch_waits_for_save_and_refreshes_once(browser):
+    page=_batch_code_page(browser)
+    _edit_saved_code(page,0,'10')
+    _edit_saved_code(page,1,'20')
+    assert page.evaluate('calls.length') == 0
+    assert page.locator('#tbCodeCorrectionsCount').inner_text() == '2 unsaved code correction(s)'
+    assert page.locator('#availableAccountsTableBody tr').first.get_attribute('data-account-code') == 'BAD1'
+    page.locator('#tbSaveCodeCorrections').click()
+    page.wait_for_function('reloads===1 && !tbCodeSaveRunning')
+    assert page.evaluate('calls.length') == 1
+    assert page.evaluate('calls[0].body.corrections') == [
+        {'account_id':1,'account_code':'10','expected_account_code':'BAD1'},
+        {'account_id':2,'account_code':'20','expected_account_code':'BAD2'}]
+    assert page.locator('#tbCodeCorrectionsBar').is_hidden()
+    assert page.evaluate('rows.map(row=>row.closing_dr)') == ['42','17']
+    page.close()
+
+
+def test_saved_code_draft_guard_cancel_discard_and_failed_save(browser):
+    page=_batch_code_page(browser)
+    _edit_saved_code(page,0,'10')
+    # Stay preserves the draft and prevents the requested workflow action.
+    page.locator('#tbAssignmentSetup').evaluate('el=>el.disabled=false')
+    page.locator('#tbAssignmentSetup').click()
+    assert page.locator('#tbCodeCorrectionsDialog').is_visible()
+    page.locator('#tbCodeStay').click()
+    assert page.evaluate('tbPendingCodeCorrections.size') == 1
+    page.evaluate('failSave=true')
+    page.locator('#tbSaveCodeCorrections').click()
+    page.wait_for_function('!tbCodeSaveRunning && calls.length===1')
+    assert page.evaluate('tbPendingCodeCorrections.size') == 1
+    assert 'Conflicting mapping' in page.locator('#tbSavedStatus').inner_text()
+    assert page.evaluate('reloads') == 0
+    page.locator('#tbDiscardCodeCorrections').click()
+    assert page.locator('.tb-account-code-display').first.inner_text() == 'BAD1'
+    assert page.evaluate('tbPendingCodeCorrections.size') == 0
+    page.close()
+
+
+def test_saved_code_guard_saves_before_toolbar_action_and_keyboard_upload_change(browser):
+    page=_batch_code_page(browser)
+    _edit_saved_code(page,0,'10')
+    page.locator('#closeAvailableTrialBalancesBtn').click()
+    page.locator('#tbCodeSave').click()
+    page.wait_for_function('calls.length===1 && !tbCodeSaveRunning')
+    assert page.locator('#availableTrialBalancesSection').is_hidden()
+    page.close()
+    page=_batch_code_page(browser)
+    _edit_saved_code(page,1,'20')
+    page.evaluate("availableUploadsDropdown.value='60';availableUploadsDropdown.dispatchEvent(new Event('change',{bubbles:true}))")
+    assert page.locator('#tbCodeCorrectionsDialog').is_visible()
+    assert page.locator('#availableUploadsDropdown').input_value() == '59'
+    page.locator('#tbCodeStay').click()
+    assert page.evaluate('tbPendingCodeCorrections.size') == 1
+    page.close()
+
+
+def test_import_code_edits_stage_without_requests_and_require_one_revalidation(browser):
+    page=_batch_code_page(browser)
+    page.evaluate("""() => {
+        tbDiscardAccountCodes();availableTrialBalancesSection.style.display='none';tbValidationSheet.hidden=false;
+        tbValidationSheet.classList.add('active');fileHeaders=['Code','Name'];
+        tbColumnMapping={account_code_column:'Code',account_name_column:'Name'};
+        fileAllRows=[['BAD1','Parent 1'],['BAD2','Parent 2']];
+        renderTrialBalanceValidationGrid();validationDirty=false;
+    }""")
+    for row,code in [(0,'10'),(1,'20')]:
+        cell=page.locator('#tbValidationBody tr').nth(row).locator('.tb-account-code-display')
+        cell.dblclick()
+        editor=page.locator('#tbValidationBody input')
+        editor.fill(code);editor.press('Enter')
+    assert page.evaluate('accountCodeCorrections') == {'2':'10','3':'20'}
+    assert page.evaluate('validationDirty') is True
+    assert page.evaluate('calls.length') == 0
+    assert page.locator('#uploadTrialBalanceBtn').is_disabled()
+    page.close()
+
+
+def test_import_unlinked_parent_confirmation_can_cancel_before_upload(browser):
+    page=_batch_code_page(browser)
+    page.evaluate("""() => {
+        selectedFile=new File(['data'],'tb.xlsx');window.getSelectedClientId=()=>5;
+        periodStartInput.value='2026-01-01';periodEndInput.value='2026-06-30';
+        validationResult={valid:true,warnings:[{message:'Parent has no linked child accounts.'}]};validationDirty=false;
+        checkMappingComplete=()=>true;checkTotalRowChoice=()=>true;
+        window.confirmations=[];window.confirm=message=>{confirmations.push(message);return false;};
+    }""")
+    page.evaluate('uploadTrialBalance()')
+    assert page.evaluate('confirmations.length') == 1
+    assert page.evaluate('calls.length') == 0
     page.close()

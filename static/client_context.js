@@ -210,7 +210,7 @@ const NAV_MANIFEST = [
             { label: 'Trial Balance', url: '/static/trial_balance.html', state: 'ready', module: 'Trial Balance',
                 children: ['financial', 'cashflow', 'verification'].map(function (mode) {
                     const label = {financial: 'Financial Statement assignments', cashflow: 'Cashflow assignments', verification: 'Verification assignments'}[mode];
-                    return {label: label, url: '/static/trial_balance.html?view=available&workflow=' + mode, state: 'ready', keywords: ['trial balance', 'account assignment', mode, 'category', 'notes']};
+                    return {label: label, url: '/static/trial_balance.html?view=available&workflow=' + mode, state: 'ready', keywords: ['trial balance', 'account assignment', mode, 'category', 'notes', 'correct account codes', 'batch corrections']};
                 }) },
         ],
     },

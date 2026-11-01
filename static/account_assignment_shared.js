@@ -48,5 +48,17 @@
         return '/static/trial_balance.html?' + params;
     }
     function invalidate(request) { requests.delete(request); }
-    window.AccountAssignments = Object.freeze({workstreams, workflows, mode, normaliseCode, read, invalidate, accUrl, trialBalanceUrl});
+    // Explicit assignment writes are sent once; callers own confirmation and UI recovery.
+    function saveMapping(context, fields, request, parent, clearNotes) {
+        const payload = {client_id: context.clientId, trial_balance_upload_id: context.uploadId};
+        payload[parent ? 'parent_account_code' : 'account_code'] = context.accountCode;
+        for (const key of ['financial_statement_category_id', 'note_category_id', 'verification_workstream']) {
+            if (Object.hasOwn(fields, key)) payload[key] = fields[key];
+        }
+        if (parent && clearNotes) payload.clear_incompatible_notes = true;
+        return request('/api/account-control-center/mapping' + (parent ? '/apply-to-children' : ''), {
+            method: parent ? 'POST' : 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload),
+        });
+    }
+    window.AccountAssignments = Object.freeze({workstreams, workflows, mode, normaliseCode, read, invalidate, saveMapping, accUrl, trialBalanceUrl});
 })();

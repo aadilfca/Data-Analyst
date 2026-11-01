@@ -862,7 +862,18 @@
         .tb-validation-table tr.tb-draft-pairs td, .tb-review-table tr.tb-draft-pairs td { border-top: 2px solid #cbd5e1; font-weight: 700; }
         .tb-draft-total td.tb-footing-zero { color: #166534; }
         .tb-draft-total td.tb-footing-nonzero, .tb-validation-table tr.tb-erp-warning td, .tb-review-table tr.tb-erp-warning td { color: #b91c1c; font-weight: 700; }
+        .tb-code-corrections { display:flex; align-items:center; gap:8px; padding:6px 10px; margin:6px 0; background:#fff8e8; border:1px solid #ead7a7; border-radius:6px; font-size:12px; }
+        .tb-code-corrections[hidden] { display:none; }
+        .tb-code-corrections button { padding:5px 9px; }
+        .tb-validation-table tbody tr td.tb-account-code-review { background:#fff3f2; color:#974844; }
+        .tb-code-pending { color:#895c1a; text-decoration:underline dotted; text-underline-offset:3px; }
+        #tbCodeCorrectionsDialog { border:1px solid #cbd5e1; border-radius:12px; padding:22px; max-width:420px; color:#1e293b; box-shadow:0 15px 50px #0f172a33; }
+        #tbCodeCorrectionsDialog::backdrop { background:#0f172a66; }
+        #tbCodeCorrectionsDialog h3 { margin:0 0 8px; }
+        #tbCodeCorrectionsDialog p { margin:0 0 16px; }
+        #tbCodeCorrectionsDialog .tb-code-dialog-actions { display:flex; justify-content:flex-end; gap:8px; }
     </style>
+    <link rel="stylesheet" href="/static/financial_statement_workspace.css?v=2">
 </head>
 
 <body data-nav-module="Trial Balance" data-nav-parent="index.html">
@@ -1035,7 +1046,7 @@
             <div class="tb-validation-top-row">
                 <div class="tb-validation-title">
                     <h2>Trial Balance Validation</h2>
-                    <p id="tbValidationFileInfo"></p>
+                    <p id="tbValidationFileInfo"></p><p>Double-click codes to correct several rows, then Revalidate once before saving.</p>
                 </div>
                 <div class="tb-validation-header-actions">
                     <div class="tb-validation-actions">
@@ -1112,6 +1123,11 @@
         <p class="group-hint" id="availableUploadsEmptyHint" style="display:none;">No classified Trial Balance uploads found for this client yet.</p>
         <p id="tbSavedCategoryNoMatches" role="status" aria-live="polite" hidden>No Trial Balance accounts match these filters.</p>
 
+        <div id="tbCodeCorrectionsBar" class="tb-code-corrections" role="status" hidden>
+            <span id="tbCodeCorrectionsCount"></span>
+            <button id="tbSaveCodeCorrections" class="btn-primary-action" type="button">Save corrections</button>
+            <button id="tbDiscardCodeCorrections" class="btn-secondary-action" type="button">Discard</button>
+        </div>
         <div id="tbSavedStatus" class="status-bar" role="status" style="display:none;"></div>
         <div id="tbSavedValidationControls" class="tb-validation-controls" aria-live="polite"></div>
         <div id="tbSavedStickyHead" class="tb-saved-sticky" hidden aria-hidden="true"></div>
@@ -1140,10 +1156,20 @@
     </div>
 
     <script src="/static/loading_ui.js?v=2"></script>
-    <script src="/static/client_context.js?v=26"></script>
+    <script src="/static/client_context.js?v=27"></script>
     <script src="/static/utils.js"></script>
-    <script src="/static/account_assignment_shared.js?v=1"></script>
-    <script src="/static/trial_balance.js?v=39"></script>
+    <script src="/static/account_assignment_shared.js?v=2"></script>
+    <script src="/static/financial_statement_workspace.js?v=2"></script>
+    <dialog id="tbCodeCorrectionsDialog" aria-labelledby="tbCodeCorrectionsTitle">
+        <h3 id="tbCodeCorrectionsTitle">Unsaved account codes</h3>
+        <p>Save your corrections before continuing?</p>
+        <div class="tb-code-dialog-actions">
+            <button id="tbCodeStay" class="btn-secondary-action" type="button">Stay</button>
+            <button id="tbCodeDiscard" class="btn-secondary-action" type="button">Discard</button>
+            <button id="tbCodeSave" class="btn-primary-action" type="button">Save corrections</button>
+        </div>
+    </dialog>
+    <script src="/static/trial_balance.js?v=42"></script>
 
 </body>
 

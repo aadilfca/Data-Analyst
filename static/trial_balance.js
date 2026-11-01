@@ -19,6 +19,13 @@ let selectedFile = null;
 
 // Which saved upload is currently active for the Available Trial Balances view.
 let currentUploadId = null;
+// Draft account codes never alter the saved hierarchy or assignments until one save succeeds.
+const tbPendingCodeCorrections = new Map();
+let tbCodeSaveRunning = false;
+let tbImportCodeChangesPending = false;
+let tbCodeDecisionPending = null;
+let tbCodeGuardResuming = false;
+
 
 // ---------- PERIOD TRACKING + OVERWRITE CONFLICT STATE (Section 2, Phase 6) ----------
 // Caches the outcome of the last check-period-conflict call so the exact same period
@@ -172,6 +179,17 @@ let tbWorkflowContext = '';
 const tbWorkflowStates = new Map();
 const tbWorkflowCache = new Map();
 let tbWorkflowReturnRestored = false;
+let tbFsWorkspace = null;
+let tbFsAccounts = [];
+let tbFsMappingReady = false;
+let tbFsLeaves = new Map();
+let tbFsIsAdmin = false;
+let tbFsBusyCount = 0;
+let tbFsModalOpen = false;
+let tbFsLockState = null;
+let tbFsRenderedCategories = null;
+let tbFsRenderedNotes = null;
+let tbFsMetadataRevision = 0;
 function savedAssignmentColumnCount() { return tbWorkflowMode === 'financial' ? 2 : 1; }
 async function tbReadAssignmentJson(url) {
     const response = await fetch(API_BASE + url);
@@ -671,7 +689,7 @@ function renderTrialBalanceValidationGrid() {
             if (issue.excel_row == null) return;
             const key = String(issue.excel_row);
             if (!issuesByRow.has(key)) issuesByRow.set(key, []);
-            issuesByRow.get(key).push({ message: issue.message, severity: severity });
+            issuesByRow.get(key).push({ message: issue.message, severity: severity, field:issue.field });
         });
     }
     collectRowIssues(validationIssueSnapshot.errors, 'error');
@@ -730,6 +748,7 @@ function renderTrialBalanceValidationGrid() {
                     display.title = 'Double-click to edit';
                     display.dataset.excelRow = String(excelRow);
                     display.dataset.sourceCode = sourceValue;
+                    if ((issuesByRow.get(String(excelRow)) || []).some(issue => issue.field === 'Account Code')) cell.classList.add('tb-account-code-review');
                     cell.appendChild(display);
                 } else {
                     if (column.className.includes('tb-validation-amount')) {
@@ -927,6 +946,7 @@ if (tbValidationBody) {
         const corrected = input.value.trim();
         if (corrected === input.dataset.sourceCode) delete accountCodeCorrections[rowNumber];
         else accountCodeCorrections[rowNumber] = corrected;
+        tbImportCodeChangesPending = Object.keys(accountCodeCorrections).length > 0;
         invalidateTrialBalanceValidation('Account code changed. Revalidate before saving.', true);
     });
     tbValidationBody.addEventListener('change', function (event) {
@@ -1596,6 +1616,7 @@ function stopTbUploadProgressPoll() {
 
 // ---------- UPLOAD & CLASSIFY ----------
 async function uploadTrialBalance() {
+
     // Defensive guard -- the button is disabled unless all of these are present,
     // but re-check directly in case of a race (e.g. a stale click event). Period
     // Start/End are now required (not optional) since the old standalone As of Date
@@ -1617,6 +1638,8 @@ async function uploadTrialBalance() {
         return;
     }
 
+    const unlinkedParents = (validationResult?.warnings || []).filter(issue => issue.message.includes('Parent has no linked child accounts'));
+    if (unlinkedParents.length && !window.confirm(unlinkedParents.length + ' parent account(s) have no linked children. Correct their codes before import where possible. Import with these parents intentionally unlinked?')) return;
     if (trialBalanceActionsInFlight.has('upload')) return;
     trialBalanceActionsInFlight.add('upload');
     const loadingToken = startTrialBalanceLoading(uploadTrialBalanceBtn);
@@ -1690,6 +1713,7 @@ async function uploadTrialBalance() {
             throw new Error(typeof detail === 'string' ? detail : (detail && detail.message) || 'Upload failed');
         }
 
+        tbImportCodeChangesPending = false;
         currentUploadId = result.upload_id;
         closeTrialBalanceValidation();
         const adjustmentCount = Number(result.rollforward_adjustment_count || 0) + Number(result.global_adjustment_count || 0);
@@ -1810,6 +1834,8 @@ function syncSavedWorkflowColumns() {
     const financial = tbWorkflowMode === 'financial';
     const definition = window.AccountAssignments && AccountAssignments.workflows[tbWorkflowMode];
     if (tbAssignmentWorkflow) tbAssignmentWorkflow.value = tbWorkflowMode;
+    const legacyAssignments = getElement('tbAssignCategoriesBtn');
+    if (legacyAssignments) legacyAssignments.hidden = financial;
     if (tbSavedNoteSearch) tbSavedNoteSearch.closest('.tb-saved-note-filter').hidden = !financial;
     const label = getElement('tbSavedCategoryLabel');
     if (label && definition) label.textContent = definition.column;
@@ -1828,13 +1854,18 @@ function syncSavedWorkflowColumns() {
     if (tbAssignmentSetup) {
         tbAssignmentSetup.disabled = !availableUploadsDropdown || !availableUploadsDropdown.value;
         if (definition) { tbAssignmentSetup.title = definition.label + ' setup'; tbAssignmentSetup.setAttribute('aria-label', 'Open ' + definition.label + ' setup'); }
+        if(financial){tbAssignmentSetup.removeAttribute('aria-haspopup');tbAssignmentSetup.removeAttribute('aria-expanded');}
+        else {tbAssignmentSetup.setAttribute('aria-haspopup','menu');if(!tbAssignmentSetup.hasAttribute('aria-expanded'))tbAssignmentSetup.setAttribute('aria-expanded','false');}
     }
     if (tbAssignmentSetupMenu && definition) {
         tbAssignmentSetupMenu.replaceChildren();
-        definition.setups.forEach(function (action) {
+        (financial?[]:definition.setups).forEach(function (action) {
             const link = document.createElement('a'); link.textContent = action[1];
             link.href = AccountAssignments.accUrl(tbWorkflowMode, availableUploadsDropdown && availableUploadsDropdown.value, action[0]);
-            link.addEventListener('click', saveSavedWorkflowReturnState);
+            if(tbWorkflowMode==='financial') {
+                link.href='#';
+                link.addEventListener('click',function(event){event.preventDefault();closeSavedSetupMenu();tbOpenFinancialSetup(action[0]);});
+            } else link.addEventListener('click', saveSavedWorkflowReturnState);
             tbAssignmentSetupMenu.appendChild(link);
         });
     }
@@ -1885,6 +1916,7 @@ function finishSavedWorkflowLookup() {
         if (noteCell) noteCell.textContent = note === 'Note unavailable' ? 'Unavailable' : note;
     });
     syncSavedWorkflowColumns();
+    if(tbWorkflowMode==='financial' && tbFsIsAdmin)tbRenderFinancialAssignments();
     applySavedCategoryFilter();
     fitSavedTrialBalanceAmountColumns();
 }
@@ -1918,6 +1950,7 @@ async function switchSavedWorkflow(value) {
 }
 if (tbAssignmentWorkflow) tbAssignmentWorkflow.addEventListener('change', function () { switchSavedWorkflow(this.value); });
 if (tbAssignmentSetup) tbAssignmentSetup.addEventListener('click', function () {
+    if(tbWorkflowMode==='financial'){closeSavedSetupMenu();tbOpenFinancialSetup('financial');return;}
     const open = tbAssignmentSetupMenu.hidden;
     tbAssignmentSetupMenu.hidden = !open; this.setAttribute('aria-expanded', String(open));
     if (open && tbAssignmentSetupMenu.firstElementChild) tbAssignmentSetupMenu.firstElementChild.focus();
@@ -2108,6 +2141,9 @@ async function loadAvailableUploadCategories(uploadId, clientId, loadToken) {
     ]);
     if (!isCurrent()) return;
 
+    if(mapping)tbSetFinancialAccounts(mapping.accounts);
+    tbFsWorkspace.STATE.categories=financialCategories||[];tbFsWorkspace.STATE.notes=noteCategories||[];
+    tbFsWorkspace.STATE.pickerCategoriesReady=Boolean(financialCategories);tbFsWorkspace.STATE.notesLoaded=Boolean(noteCategories);
     availableAccountCategoryLookupReady = Boolean(mapping && financialCategories);
     availableAccountNoteLookupReady = Boolean(mapping && noteCategories);
     if (availableAccountCategoryLookupReady) {
@@ -2217,6 +2253,8 @@ async function loadAvailableUploadAccounts(uploadId, target = availableUploadsDr
     const context = String(clientId) + ':' + String(uploadId);
     if (context !== tbWorkflowContext) { tbWorkflowStates.clear(); tbWorkflowContext = context; }
     tbWorkflowCache.clear();
+    tbSetFinancialAccounts([],false);
+    tbFsWorkspace.STATE.financialLoaded=false;tbFsWorkspace.STATE.pickerCategoriesReady=false;tbFsWorkspace.STATE.notesLoaded=false;
     if (window.AccountAssignments) AccountAssignments.invalidate(tbReadAssignmentJson);
     tbWorkflowLoadToken++;
     const previousUploadId = availableCategoryUploadId;
@@ -2261,8 +2299,10 @@ async function loadAvailableUploadAccounts(uploadId, target = availableUploadsDr
         syncSavedWorkflowColumns();
         applySavedCategoryFilter();
         loadAvailableUploadCategories(uploadId, clientId, loadToken);
+        return true;
     } catch (error) {
         showStatus('❌ ' + error.message, 'error');
+        return false;
     } finally {
         stopTrialBalanceLoading(loadingToken);
     }
@@ -2295,20 +2335,18 @@ function renderAvailableAccountsTable(accounts, adjustments, controls = {}) {
         tdCode.appendChild(display);
         display.addEventListener('dblclick', function () {
             const input = document.createElement('input');
+            if (tbCodeSaveRunning || tbFsBusyCount > 0 || tbFsModalOpen || trialBalanceActionsInFlight.has('account-code-upload:' + availableUploadsDropdown.value)) return;
             input.type = 'text'; input.className = 'tb-code-review-input'; input.maxLength = 120;
-            input.value = account.account_code || '';
+            input.value = display.textContent || '';
             input.setAttribute('aria-label', 'Account code for ' + (account.account_name || account.account_code));
             tdCode.replaceChildren(input); input.focus(); input.select();
             input.addEventListener('keydown', function (event) {
-                if (event.key === 'Escape') input.value = account.account_code || '';
+                if (event.key === 'Escape') input.value = display.textContent || '';
                 if (event.key === 'Enter' || event.key === 'Escape') input.blur();
             });
             input.addEventListener('blur', function () {
-                const value = input.value.trim();
-                if (value === (account.account_code || '')) { tdCode.replaceChildren(display); return; }
-                saveAvailableAccountCode(account, value, input).then(function (saved) {
-                    if (!saved && tdCode.contains(input)) tdCode.replaceChildren(display);
-                });
+                tbStageAccountCode(account, input.value, display);
+                tdCode.replaceChildren(display);
             }, { once: true });
         });
         tr.appendChild(tdCode);
@@ -2407,41 +2445,149 @@ function renderAvailableAccountsTable(accounts, adjustments, controls = {}) {
     renderSavedDraftReconciliation(controls);
 }
 
-async function saveAvailableAccountCode(account, accountCode, triggerBtn) {
-    const uploadId = availableUploadsDropdown ? availableUploadsDropdown.value : null;
-    if (!uploadId) return;
-    const actionKey = 'account-code-upload:' + uploadId;
-    if (trialBalanceActionsInFlight.has(actionKey)) return;
-    trialBalanceActionsInFlight.add(actionKey);
-    const loadingToken = startTrialBalanceLoading(triggerBtn);
-    const previousDisabled = triggerBtn.disabled;
-    triggerBtn.disabled = true;
+function tbUpdateCodeCorrectionsBar() {
+    const bar = document.getElementById('tbCodeCorrectionsBar');
+    if (bar) bar.hidden = !tbPendingCodeCorrections.size;
+    const label = document.getElementById('tbCodeCorrectionsCount');
+    if (label) label.textContent = tbPendingCodeCorrections.size + ' unsaved code correction(s)';
+    ['tbSaveCodeCorrections', 'tbDiscardCodeCorrections'].forEach(id => {
+        const button = document.getElementById(id); if (button) button.disabled = tbCodeSaveRunning;
+    });
+}
+
+function tbStageAccountCode(account, code, display) {
+    if (tbCodeSaveRunning) return;
+    const value = code.trim();
+    if (value === account.account_code) tbPendingCodeCorrections.delete(account.id);
+    else tbPendingCodeCorrections.set(account.id, {account, account_code:value, display});
+    display.textContent = value;
+    display.classList.toggle('tb-code-pending', value !== account.account_code);
+    tbUpdateCodeCorrectionsBar();
+}
+
+function tbDiscardAccountCodes() {
+    tbPendingCodeCorrections.forEach(item => {
+        item.display.textContent = item.account.account_code;
+        item.display.classList.remove('tb-code-pending');
+    });
+    tbPendingCodeCorrections.clear();
+    tbUpdateCodeCorrectionsBar();
+}
+
+async function tbSaveAccountCodes() {
+    if (tbCodeSaveRunning || tbFsBusyCount > 0 || tbFsModalOpen || trialBalanceActionsInFlight.has('account-code-upload:' + availableUploadsDropdown.value)) return false;
+    if (!tbPendingCodeCorrections.size) return true;
+    const uploadId = String(availableUploadsDropdown.value);
+    const clientId = window.getSelectedClientId();
+    const corrections = [...tbPendingCodeCorrections.values()].map(item => ({
+        account_id:item.account.id, account_code:item.account_code, expected_account_code:item.account.account_code
+    }));
+    if (corrections.some(item => !item.account_code || item.account_code.length > 120)
+        || new Set(corrections.map(item => item.account_code)).size !== corrections.length) {
+        showStatus('Enter distinct, nonblank account codes of up to 120 characters.', 'error'); return false;
+    }
+    const sourceControls = [availableUploadsDropdown, tbAssignmentWorkflow].filter(Boolean).map(control => [control, control.disabled]);
+    sourceControls.forEach(([control]) => { control.disabled = true; });
+    tbCodeSaveRunning = true; tbUpdateCodeCorrectionsBar();
+    const token = startTrialBalanceLoading(document.getElementById('tbSaveCodeCorrections'));
+    let saved = false;
     try {
-        const res = await fetch(API_BASE + '/api/trial-balance/accounts/' + account.id + '/code', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ account_code: accountCode })
+        const response = await fetch(API_BASE + '/api/trial-balance/uploads/' + encodeURIComponent(uploadId) + '/account-codes', {
+            method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({corrections})
         });
-        const result = await res.json();
-        if (!res.ok) {
-            const detail = typeof result.detail === 'string' ? result.detail : 'Could not save account code';
-            throw new Error(detail);
-        }
-        showStatus('✅ Account code saved for this upload.', 'success');
-        await loadAvailableUploadAccounts(uploadId, triggerBtn);
-        if (String(currentUploadId) === String(uploadId)) {
-            await loadSummary(currentUploadId);
-        }
+        const result = await response.json();
+        if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Could not save account codes.');
+        if (String(result.upload_id) !== uploadId) throw new Error('Save acknowledgement could not be verified. Reload before retrying.');
+        saved = true;
+        tbPendingCodeCorrections.clear(); tbUpdateCodeCorrectionsBar();
+        if (String(window.getSelectedClientId()) !== String(clientId) || String(availableUploadsDropdown.value) !== uploadId) return true;
+        const refreshed = await loadAvailableUploadAccounts(uploadId);
+        showStatus(refreshed ? 'Account code corrections saved. Hierarchy refreshed.' : 'Corrections saved, but refresh failed. Reload this Trial Balance.', refreshed ? 'success' : 'error');
+        if (String(currentUploadId) === uploadId) await loadSummary(currentUploadId);
         return true;
     } catch (error) {
-        showStatus('❌ ' + error.message, 'error');
-        return false;
+        showStatus((saved ? 'Corrections saved; refresh failed. ' : '') + error.message, 'error');
+        return saved;
     } finally {
-        triggerBtn.disabled = previousDisabled;
-        stopTrialBalanceLoading(loadingToken);
-        trialBalanceActionsInFlight.delete(actionKey);
+        sourceControls.forEach(([control, disabled]) => { control.disabled = disabled; });
+        tbCodeSaveRunning = false; tbUpdateCodeCorrectionsBar(); stopTrialBalanceLoading(token);
     }
 }
+
+function tbAskAboutAccountCodes() {
+    if (tbCodeDecisionPending) return tbCodeDecisionPending;
+    const dialog = document.getElementById('tbCodeCorrectionsDialog');
+    if (!dialog) return Promise.resolve('stay');
+    tbCodeDecisionPending = new Promise(resolve => {
+        const finish = value => {
+            dialog.close(); dialog.removeEventListener('cancel', cancel);
+            listeners.forEach(([button, listener]) => button.removeEventListener('click', listener));
+            tbCodeDecisionPending = null; resolve(value);
+        };
+        const cancel = event => { event.preventDefault(); finish('stay'); };
+        dialog.addEventListener('cancel', cancel);
+        const listeners = [['tbCodeStay','stay'],['tbCodeDiscard','discard'],['tbCodeSave','save']].map(([id, value]) => {
+            const button = document.getElementById(id), listener = () => finish(value);
+            button.addEventListener('click', listener); return [button, listener];
+        });
+        dialog.showModal();
+    });
+    return tbCodeDecisionPending;
+}
+
+// Gate page actions, while moving between Code cells remains immediate. Browser
+// Back/refresh/close uses its native unsaved-change warning (cannot await a save).
+async function tbGuardAccountCodeAction(event) {
+    if (tbCodeGuardResuming || (!tbPendingCodeCorrections.size && !tbCodeSaveRunning)) return;
+    const target = event.target.closest('a,button,input,select,td');
+    if (!target || target.closest('#tbCodeCorrectionsBar,#tbCodeCorrectionsDialog')) return;
+    if (target.closest('#availableAccountsTableBody td:first-child')) return;
+    event.preventDefault(); event.stopImmediatePropagation();
+    if (tbCodeSaveRunning || tbCodeDecisionPending) return;
+    const decision = await tbAskAboutAccountCodes();
+    if (decision === 'stay') return;
+    if (decision === 'save' && !await tbSaveAccountCodes()) return;
+    if (decision === 'discard') tbDiscardAccountCodes();
+    tbCodeGuardResuming = true;
+    try {
+        if (target.matches('a,button')) target.click();
+        else target.focus();
+    } finally { tbCodeGuardResuming = false; }
+}
+document.addEventListener('click', event => {
+    if (!tbImportCodeChangesPending || !selectedFile || !Object.keys(accountCodeCorrections).length) return;
+    const target = event.target.closest('a,button');
+    if (!target || target.closest('#uploadViewContainer,#tbValidationSheet,#availableTrialBalancesSection')) return;
+    if (!window.confirm('Leave this Trial Balance review? Your code corrections have not been imported.')) {
+        event.preventDefault(); event.stopImmediatePropagation();
+    }
+}, true);
+document.addEventListener('click', tbGuardAccountCodeAction, true);
+document.addEventListener('dblclick', tbGuardAccountCodeAction, true);
+document.addEventListener('focusin', event => {
+    if (event.target.matches('input,select')) tbGuardAccountCodeAction(event);
+}, true);
+// Keyboard/native select changes need the same gate as pointer actions.
+document.addEventListener('change', async event => {
+    if (tbCodeGuardResuming || !tbPendingCodeCorrections.size) return;
+    const select = event.target;
+    if (select !== availableUploadsDropdown && select !== tbAssignmentWorkflow) return;
+    const wanted = select.value;
+    select.value = select === availableUploadsDropdown ? availableCategoryUploadId : tbWorkflowMode;
+    event.stopImmediatePropagation();
+    if (tbCodeDecisionPending || tbCodeSaveRunning) return;
+    const decision = await tbAskAboutAccountCodes();
+    if (decision === 'stay' || (decision === 'save' && !await tbSaveAccountCodes())) return;
+    if (decision === 'discard') tbDiscardAccountCodes();
+    tbCodeGuardResuming = true;
+    try { select.value = wanted; select.dispatchEvent(new Event('change', {bubbles:true})); }
+    finally { tbCodeGuardResuming = false; }
+}, true);
+window.addEventListener('beforeunload', event => {
+    if (tbPendingCodeCorrections.size || tbCodeSaveRunning || (selectedFile && tbImportCodeChangesPending && Object.keys(accountCodeCorrections).length)) { event.preventDefault(); event.returnValue = ''; }
+});
+document.getElementById('tbSaveCodeCorrections')?.addEventListener('click', tbSaveAccountCodes);
+document.getElementById('tbDiscardCodeCorrections')?.addEventListener('click', tbDiscardAccountCodes);
 
 // Reload saved controls after a classification change so stale reconciliation is visible.
 async function saveAvailableClassification(account, isLeaf, trigger) {
@@ -2603,6 +2749,7 @@ if (availableTrialBalancesBtn) {
 const tbAssignCategoriesBtn = getElement('tbAssignCategoriesBtn');
 if (tbAssignCategoriesBtn) {
     tbAssignCategoriesBtn.addEventListener('click', function () {
+        if (tbWorkflowMode === 'financial') { tbOpenFinancialSetup('financial'); return; }
         saveSavedWorkflowReturnState();
         const target = new URL(AccountAssignments.accUrl(tbWorkflowMode, availableUploadsDropdown && availableUploadsDropdown.value), location.href);
         if (tbWorkflowMode === 'financial' && new URLSearchParams(location.search).get('acc_tab') === 'notes') target.searchParams.set('tab', 'notes');
@@ -2652,6 +2799,7 @@ window.onload = async function () {
     if (window.clientContextReady) await window.clientContextReady;
     if (typeof window.initUtils === 'function') await window.initUtils();
     updateClientDependentUI();
+    tbFsIsAdmin=typeof window.isAdminUser==='function'?await window.isAdminUser():false;
     syncSavedWorkflowColumns();
     const params = new URLSearchParams(window.location.search);
     if (params.get('view') === 'available' && availableTrialBalancesSection) {
@@ -2950,3 +3098,130 @@ function renderSavedDraftReconciliation(controls) {
     ];
     renderDraftReconciliation(availableAccountsTableBody, columns, new Map(), controls, true);
 }
+
+
+// The financial workspace owns assignment metadata; the TB rows retain their source amounts.
+function tbSetFinancialAccounts(accounts,ready=true) {
+    tbFsMappingReady=ready;
+    tbFsAccounts=Array.isArray(accounts)?accounts:[];
+    tbFsLeaves=new Map();
+    const byCode=new Map(tbFsAccounts.map(account=>[AccountAssignments.normaliseCode(account.account_code),account]));
+    for(const account of tbFsAccounts.filter(account=>account.is_leaf)) {
+        let code=AccountAssignments.normaliseCode(account.account_code),seen=new Set();
+        while(code && !seen.has(code)) {
+            seen.add(code);const rows=tbFsLeaves.get(code)||[];rows.push(account);tbFsLeaves.set(code,rows);
+            const parent=byCode.get(code);code=parent?AccountAssignments.normaliseCode(parent.parent_account_code):'';
+        }
+    }
+}
+async function tbFsApi(url,options) {
+    const response=await fetch(API_BASE+url,options||{});
+    const result=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error(typeof result.detail==='string'?result.detail:'The Financial Statement request failed.');
+    return result;
+}
+function tbFsUpdateLock() {
+    const locked=tbFsBusyCount>0||tbFsModalOpen;
+    if(locked && !tbFsLockState)tbFsLockState={upload:availableUploadsDropdown?.disabled,workflow:tbAssignmentWorkflow?.disabled};
+    if(locked){if(availableUploadsDropdown)availableUploadsDropdown.disabled=true;if(tbAssignmentWorkflow)tbAssignmentWorkflow.disabled=true;}
+    else if(tbFsLockState){if(availableUploadsDropdown)availableUploadsDropdown.disabled=!!tbFsLockState.upload;if(tbAssignmentWorkflow)tbAssignmentWorkflow.disabled=!!tbFsLockState.workflow;tbFsLockState=null;}
+    if(availableAccountsTableBody){availableAccountsTableBody.inert=tbFsBusyCount>0;availableAccountsTableBody.setAttribute('aria-busy',String(tbFsBusyCount>0));}
+}
+async function tbFsWithBusy(message,operation) {
+    tbFsBusyCount++;tbFsUpdateLock();const token=startTrialBalanceLoading(tbAssignmentSetup);
+    try{return await operation();}finally{stopTrialBalanceLoading(token);tbFsBusyCount--;tbFsUpdateLock();}
+}
+function tbRenderFinancialAssignments() {
+    if(!tbFsWorkspace || tbWorkflowMode!=='financial' || !tbFsIsAdmin || !availableAccountsTableBody)return;
+    const state=tbFsWorkspace.STATE;
+    if(!tbFsMappingReady || !(state.financialLoaded || state.pickerCategoriesReady))return;
+    availableAccountCategoryLookupReady=true;availableAccountNoteLookupReady=!!state.notesLoaded;
+    if(tbSavedCategorySearch)tbSavedCategorySearch.disabled=false;
+    if(tbSavedNoteSearch)tbSavedNoteSearch.disabled=!state.notesLoaded;
+    if(state.notesLoaded)availableAccountLookupMessage='';
+    if(tbFsRenderedCategories!==state.categories || tbFsRenderedNotes!==state.notes){
+        tbFsMetadataRevision++;tbFsRenderedCategories=state.categories;tbFsRenderedNotes=state.notes;
+    }
+    // Filter options can be cleared by a workflow switch even when metadata is unchanged.
+    if(tbSavedCategoryOptions.dataset.fsRevision!==String(tbFsMetadataRevision) || !tbSavedCategoryOptions.children.length){
+        populateSavedCategoryOptions(state.categories);tbSavedCategoryOptions.dataset.fsRevision=String(tbFsMetadataRevision);
+    }
+    if(state.notesLoaded && (tbSavedNoteOptions.dataset.fsRevision!==String(tbFsMetadataRevision) || !tbSavedNoteOptions.children.length)){
+        populateSavedNoteOptions(state.notes);tbSavedNoteOptions.dataset.fsRevision=String(tbFsMetadataRevision);
+    }
+    const byCode=new Map(tbFsAccounts.map(account=>[AccountAssignments.normaliseCode(account.account_code),account]));
+    for(const row of availableAccountsTableBody.querySelectorAll('tr[data-category-filter]')) {
+        const account=byCode.get(row.dataset.accountCode);if(!account)continue;
+        const categoryId=tbFsWorkspace.accEffectiveFinancialCategory(account);
+        const noteId=tbFsWorkspace.accEffectiveNoteCategory(account);
+        const category=state.categories.find(item=>String(item.id)===String(categoryId));
+        const categoryText=categoryId==='__mixed'?'Mixed assignments':category?category.label:categoryId?'Unavailable':'Unassigned';
+        const noteText=tbFsWorkspace.accNoteAssignmentSearchText(account);
+        row.dataset.categoryFilter=categoryText;row.dataset.noteFilter=noteText;
+        availableAccountCategoryByCode.set(row.dataset.accountCode,categoryText);
+        availableAccountNoteByCode.set(row.dataset.accountCode,noteText);
+        const categoryCell=row.querySelector('.tb-saved-category-cell');const noteCell=row.querySelector('.tb-saved-note-cell');
+        const unlinkedParent=!account.is_leaf && !(tbFsLeaves.get(row.dataset.accountCode)||[]).length;
+        const codeCell=row.cells[0];
+        codeCell.classList.toggle('tb-account-code-review',unlinkedParent);
+        if(unlinkedParent){
+            codeCell.title='No linked child accounts. Double-click to correct this account code.';
+            if(!codeCell.querySelector('.tb-code-review-hint')){const hint=document.createElement('small');hint.className='tb-code-review-hint';hint.textContent='Check code';codeCell.appendChild(hint);}
+        }else{codeCell.querySelector('.tb-code-review-hint')?.remove();}
+        const signature=JSON.stringify([tbFsMetadataRevision,categoryId,noteId,!!state.notesLoaded]);
+        if(row.dataset.fsSignature===signature && categoryCell.querySelector('select')?.value===String(categoryId||'')
+            && (!state.notesLoaded || noteCell.querySelector('select')?.value===String(noteId||'')))continue;
+        row.dataset.fsSignature=signature;
+        categoryCell.innerHTML=tbFsWorkspace.accFinancialPickerMarkup(account,categoryId);categoryCell.title='';
+        if(!state.notesLoaded)categoryCell.querySelector('[data-fs-picker-trigger]').disabled=true;
+        if(state.notesLoaded){const options=categoryId && categoryId!=='__mixed'?tbFsWorkspace.accGetEffectiveNoteOptions(categoryId):[];
+            noteCell.innerHTML=tbFsWorkspace.accNotePickerMarkup(account,noteId,categoryId,options);noteCell.title='';}
+    }
+    const cache=tbWorkflowCache.get('financial');
+    if(cache)Object.assign(cache,{category:availableAccountCategoryByCode,note:availableAccountNoteByCode,options:tbSavedCategoryOptions.innerHTML,noteOptions:tbSavedNoteOptions.innerHTML});
+    applySavedCategoryFilter();
+}
+function tbApplyConfirmedFinancialChanges(result,context,targets) {
+    if(!result?.saved || String(result.client_id)!==String(context.clientId)
+        || String(result.trial_balance_upload_id)!==String(context.uploadId)
+        || String(window.getSelectedClientId())!==String(context.clientId)
+        || String(availableUploadsDropdown.value)!==String(context.uploadId)
+        || !Array.isArray(result.assignment_changes))return false;
+    const expected=new Set(targets.map(item=>AccountAssignments.normaliseCode(item.account_code)));
+    const byCode=new Map(tbFsAccounts.map(item=>[AccountAssignments.normaliseCode(item.account_code),item]));
+    const changes=result.assignment_changes;
+    const received=new Set(changes.map(item=>AccountAssignments.normaliseCode(item.account_code)));
+    if(changes.length!==expected.size || received.size!==expected.size || [...received].some(code=>!expected.has(code) || !byCode.has(code))
+        || changes.some(item=>!Object.hasOwn(item,'financial_statement_category_id') || !Object.hasOwn(item,'note_category_id')))return false;
+    // Apply only server-confirmed metadata. Source amounts and unrelated workstreams stay intact.
+    for(const change of changes){
+        const account=byCode.get(AccountAssignments.normaliseCode(change.account_code));
+        account.assignment=Object.assign({},account.assignment);
+        for(const field of ['financial_statement_category_id','note_category_id','verification_workstream']){
+            if(Object.hasOwn(change,field))account.assignment[field]=change[field];
+        }
+    }
+    return true;
+}
+async function tbRefreshFinancialMapping() {
+    const clientId=window.getSelectedClientId(),uploadId=availableUploadsDropdown.value;
+    AccountAssignments.invalidate(tbReadAssignmentJson);
+    const result=await AccountAssignments.read('mapping',clientId,uploadId,tbReadAssignmentJson);
+    if(String(clientId)!==String(window.getSelectedClientId())||uploadId!==availableUploadsDropdown.value)return;
+    tbSetFinancialAccounts(result.accounts);tbRenderFinancialAssignments();
+}
+async function tbOpenFinancialSetup(mode) {
+    if(!availableUploadsDropdown?.value)return;
+    if(!tbFsIsAdmin){showStatus('Only administrators can manage account assignments.','error');return;}
+    try{await tbFsWorkspace.open(mode);}catch(error){showStatus(error.message,'error');}
+}
+tbFsWorkspace=FinancialStatementWorkspace.create({
+    lazyPickers:true,applyConfirmedChanges:tbApplyConfirmedFinancialChanges,
+    get accounts(){return tbFsAccounts;},get clientId(){return window.getSelectedClientId?window.getSelectedClientId():null;},get isAdmin(){return tbFsIsAdmin;},
+    leavesBelow:code=>tbFsLeaves.get(AccountAssignments.normaliseCode(code))||[],
+    uploadPayload:()=>({trial_balance_upload_id:Number(availableUploadsDropdown?.value)||null}),api:tbFsApi,
+    refreshMapping:tbRefreshFinancialMapping,renderFinancialRows:tbRenderFinancialAssignments,renderNotesRows:tbRenderFinancialAssignments,
+    showStatus:(message,type)=>showStatus(message,type),clearStatus:()=>{const status=getElement('tbSavedStatus');if(status)status.style.display='none';},
+    focusTarget:()=>tbAssignmentSetup,withBusy:tbFsWithBusy,modalChanged:open=>{tbFsModalOpen=open;tbFsUpdateLock();},
+});
+if(availableAccountsTableBody)tbFsWorkspace.bindPickers(availableAccountsTableBody);

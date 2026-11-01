@@ -590,6 +590,7 @@ class AccountControlBulkAssignmentPayload(BaseModel):
     verification_workstream: Optional[str] = None
     financial_statement_category_id: Optional[int] = Field(default=None, ge=1)
     note_category_id: Optional[int] = Field(default=None, ge=1)
+    clear_incompatible_notes: bool = False
 
 
 class AccountControlCategoryPayload(BaseModel):
@@ -953,6 +954,64 @@ def _validate_control_categories(client_id: int, assignment: dict[str, Any]) -> 
             raise HTTPException(400, "Headings cannot be assigned to accounts")
 
 
+def _prepare_control_assignment_pairs(assignment: dict[str, Any], codes: list[str], clear_incompatible_notes: bool = False) -> list[dict[str, Any]]:
+    """Validate merged FS/Note pairs before any writes; preserve unrelated assignments."""
+    fields = assignment.get('_provided_fields', set())
+    if not fields.intersection({'financial_statement_category_id', 'note_category_id'}):
+        return [{**assignment, 'account_code': code} for code in codes]
+    # Serialize creation as well as updates: FOR UPDATE alone cannot lock a missing row.
+    lock_names = sorted(f"account-control:{assignment['client_id']}:{code}" for code in codes)
+    execute_query_pg(
+        """SELECT pg_advisory_xact_lock(hashtextextended(lock_name, 0))
+           FROM (SELECT unnest(%s::text[]) AS lock_name ORDER BY lock_name) scoped_locks""",
+        (lock_names,),
+    )
+    current = execute_query_pg(
+        """SELECT account_code, financial_statement_category_id, note_category_id
+           FROM account_control_assignments WHERE client_id = %s AND account_code = ANY(%s)
+           ORDER BY account_code FOR UPDATE""", (assignment['client_id'], codes),
+    )
+    by_code = {_normalise_account_code(row['account_code']): row for row in current}
+    categories = execute_query_pg(
+        """SELECT id, category_type, row_type, parent_category_id, source_statement_category_id, is_active
+           FROM account_control_categories WHERE client_id = %s
+             AND category_type IN ('financial_statement', 'note')""", (assignment['client_id'],),
+    )
+    by_id = {int(row['id']): row for row in categories}
+
+    def valid_note(note_id, fs_id):
+        seen = set()
+        while note_id is not None and note_id not in seen:
+            seen.add(note_id)
+            note = by_id.get(int(note_id))
+            if not note or note['category_type'] != 'note' or not note['is_active']:
+                return False
+            if note.get('parent_category_id') is None:
+                category = by_id.get(int(fs_id)) if fs_id is not None else None
+                return bool(category and category['category_type'] == 'financial_statement'
+                            and category['row_type'] == 'category' and category['is_active']
+                            and note.get('source_statement_category_id') == fs_id)
+            note_id = note['parent_category_id']
+        return False
+
+    prepared = []
+    for code in codes:
+        existing = by_code.get(code, {})
+        item = {**assignment, 'account_code': code, '_provided_fields': set(fields)}
+        for field in ('financial_statement_category_id', 'note_category_id'):
+            if field not in fields:
+                item[field] = existing.get(field)
+        note_id, fs_id = item['note_category_id'], item['financial_statement_category_id']
+        if note_id is not None and not valid_note(note_id, fs_id):
+            if clear_incompatible_notes and 'financial_statement_category_id' in fields and 'note_category_id' not in fields:
+                item['note_category_id'] = None
+                item['_provided_fields'].add('note_category_id')
+            else:
+                raise HTTPException(409, 'The Note must belong to the account\'s Financial Statement category. Refresh assignments and clear or choose a compatible Note.')
+        prepared.append(item)
+    return prepared
+
+
 def _upsert_control_assignment(assignment: dict[str, Any], updated_by: str) -> None:
     """Upsert only fields supplied by the active tab; other tab assignments remain intact."""
     provided = [field for field in _ACCOUNT_CONTROL_ASSIGNMENT_FIELDS if field in assignment.get("_provided_fields", set())]
@@ -969,6 +1028,36 @@ def _upsert_control_assignment(assignment: dict[str, Any], updated_by: str) -> N
         f"INSERT INTO account_control_assignments ({', '.join(columns)}) VALUES ({', '.join(placeholders)}) ON CONFLICT (client_id, account_code) {conflict}",
         tuple(values),
     )
+
+
+def _upsert_control_assignment_batch(assignments: list[dict[str, Any]], updated_by: str) -> None:
+    """Bound bulk writes while retaining each leaf's exact supplied-field scope."""
+    groups = {}
+    for item in assignments:
+        fields = tuple(field for field in _ACCOUNT_CONTROL_ASSIGNMENT_FIELDS if field in item['_provided_fields'])
+        groups.setdefault(fields, []).append(item)
+    for fields, items in groups.items():
+        columns = ['client_id', 'account_code', *fields, 'updated_by', 'updated_at']
+        row_sql = '(' + ', '.join(['%s'] * (len(columns) - 1) + ['CURRENT_TIMESTAMP']) + ')'
+        updates = ', '.join(f'{field} = EXCLUDED.{field}' for field in (*fields, 'updated_by', 'updated_at'))
+        for offset in range(0, len(items), 250):
+            batch = items[offset:offset + 250]
+            values = [value for item in batch for value in (item['client_id'], item['account_code'],
+                      *(item[field] for field in fields), updated_by)]
+            execute_write_pg(
+                f"INSERT INTO account_control_assignments ({', '.join(columns)}) VALUES "
+                + ', '.join([row_sql] * len(batch))
+                + f" ON CONFLICT (client_id, account_code) DO UPDATE SET {updates}", tuple(values),
+            )
+
+
+def _confirmed_assignment_changes(assignments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return the validated pair, plus other explicitly changed metadata only."""
+    return [{
+        'account_code': item['account_code'],
+        **{field: item[field] for field in _ACCOUNT_CONTROL_ASSIGNMENT_FIELDS
+           if field in item['_provided_fields'] or field in ('financial_statement_category_id', 'note_category_id')},
+    } for item in assignments]
 
 
 def _clean_category_type(value: str) -> str:
@@ -1992,8 +2081,17 @@ def save_account_control_mapping(payload: AccountControlAssignmentPayload, sessi
     if account["classification"] != "leaf":
         raise HTTPException(400, "Assign the parent through the bulk child operation; direct assignments require a leaf account")
     _validate_control_categories(assignment["client_id"], assignment)
-    _upsert_control_assignment(assignment, _actor_name(session))
-    return {"saved": True, "account_code": assignment["account_code"], "assignment": _public_control_assignment(assignment)}
+    if assignment['_provided_fields'].intersection({'financial_statement_category_id', 'note_category_id'}):
+        with pg_transaction():
+            assignment = _prepare_control_assignment_pairs(assignment, [assignment['account_code']])[0]
+            _upsert_control_assignment(assignment, _actor_name(session))
+    else:
+        _upsert_control_assignment(assignment, _actor_name(session))
+    result = {"saved": True, "account_code": assignment["account_code"], "assignment": _public_control_assignment(assignment)}
+    if assignment['_provided_fields'].intersection({'financial_statement_category_id', 'note_category_id'}):
+        result.update(client_id=assignment['client_id'], trial_balance_upload_id=_upload['id'],
+                      assignment_changes=_confirmed_assignment_changes([assignment]))
+    return result
 
 
 @router.post("/api/account-control-center/mapping/apply-to-children")
@@ -2020,10 +2118,17 @@ def apply_account_control_mapping_to_children(payload: AccountControlBulkAssignm
     _validate_control_categories(assignment["client_id"], assignment)
     actor = _actor_name(session)
     with pg_transaction():
-        for row in leaves:
-            child_assignment = {**assignment, "account_code": row["account_code"]}
-            _upsert_control_assignment(child_assignment, actor)
-    return {"saved": True, "parent_account_code": parent_code, "leaf_count": len(leaves)}
+        prepared = _prepare_control_assignment_pairs(assignment, [row['account_code'] for row in leaves], payload.clear_incompatible_notes)
+        if assignment['_provided_fields'].intersection({'financial_statement_category_id', 'note_category_id'}):
+            _upsert_control_assignment_batch(prepared, actor)
+        else:
+            for child_assignment in prepared:
+                _upsert_control_assignment(child_assignment, actor)
+    result = {"saved": True, "parent_account_code": parent_code, "leaf_count": len(leaves)}
+    if assignment['_provided_fields'].intersection({'financial_statement_category_id', 'note_category_id'}):
+        result.update(client_id=assignment['client_id'], trial_balance_upload_id=_upload['id'],
+                      assignment_changes=_confirmed_assignment_changes(prepared))
+    return result
 
 @router.get("/api/account-control-center/cashflow")
 def get_account_control_cashflow(client_id: int = Query(..., ge=1), trial_balance_upload_id: Optional[int] = Query(default=None, ge=1), session=Depends(require_admin)):

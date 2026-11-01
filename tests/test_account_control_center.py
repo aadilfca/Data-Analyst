@@ -11,12 +11,22 @@ from unittest.mock import patch
 from io import BytesIO
 
 import pandas as pd
+import pytest
 
 from fastapi import HTTPException
 
 import database
 from routers import account_control_center as control_center
 from routers import trial_balance
+
+
+@pytest.fixture(autouse=True)
+def isolate_account_control_database_calls():
+    # New database paths must be mocked deliberately, never reach the working store.
+    with patch.object(control_center, 'execute_query_pg', side_effect=AssertionError('Unmocked PostgreSQL read')), patch.object(
+        control_center, 'execute_write_pg', side_effect=AssertionError('Unmocked PostgreSQL write')
+    ):
+        yield
 
 
 class AccountControlUploadOptionsTests(unittest.TestCase):
@@ -88,14 +98,15 @@ class TrialBalanceHierarchyTests(unittest.TestCase):
         ]
         with patch.object(control_center, "_selected_control_accounts", return_value=({"id": 77}, accounts)), patch.object(
             control_center, "_validate_control_categories"
-        ), patch.object(control_center, "_upsert_control_assignment") as upsert, patch.object(
+        ), patch.object(control_center, "_upsert_control_assignment_batch") as upsert, patch.object(
             control_center, "pg_transaction", return_value=nullcontext()
+        ), patch.object(control_center, 'execute_query_pg', return_value=[]
         ):
             result = control_center.apply_account_control_mapping_to_children(payload, session={"username": "Admin"})
 
         self.assertEqual(result["leaf_count"], 2)
         self.assertEqual(
-            {call.args[0]["account_code"] for call in upsert.call_args_list},
+            {item["account_code"] for item in upsert.call_args.args[0]},
             {"01-0001-0002", "01-0001-0002-0006"},
         )
 
@@ -1679,3 +1690,115 @@ class BalanceSheetExistingSchemaTests(unittest.TestCase):
                 self.assertEqual(connection.execute("SELECT label, presentation_role FROM account_control_categories WHERE category_key = 'existing'").fetchone(), ('Existing category', None))
                 with self.assertRaises(sqlite3.IntegrityError):
                     connection.execute("UPDATE account_control_categories SET presentation_role = 'guessed'")
+
+
+class FinancialNoteAssignmentPairTests(unittest.TestCase):
+    def setUp(self):
+        self.categories=[
+            {'id':7,'category_type':'financial_statement','row_type':'category','is_active':True},
+            {'id':8,'category_type':'financial_statement','row_type':'category','is_active':True},
+            {'id':11,'category_type':'note','row_type':'category','parent_category_id':None,'source_statement_category_id':7,'is_active':True},
+            {'id':12,'category_type':'note','row_type':'category','parent_category_id':11,'source_statement_category_id':None,'is_active':True},
+            {'id':13,'category_type':'note','row_type':'category','parent_category_id':None,'source_statement_category_id':8,'is_active':True},
+            {'id':14,'category_type':'note','row_type':'category','parent_category_id':13,'source_statement_category_id':None,'is_active':True},
+        ]
+        self.current=[{'account_code':'P-1','financial_statement_category_id':7,'note_category_id':12},
+                      {'account_code':'P-2','financial_statement_category_id':8,'note_category_id':14}]
+        self.accounts=[{'account_code':'P','classification':'parent'},
+                       {'account_code':'P-1','classification':'leaf'},{'account_code':'P-2','classification':'leaf'}]
+
+    def query(self,sql,params):
+        if 'pg_advisory_xact_lock' in sql:
+            self.assertEqual(params[0], sorted(params[0]))
+            return []
+        if 'FOR UPDATE' in sql:
+            return [dict(item) for item in self.current if item['account_code'] in params[1]]
+        if "category_type IN ('financial_statement', 'note')" in sql:
+            return self.categories
+        if 'SELECT id, row_type' in sql:
+            return [item for item in self.categories if item['id']==params[0] and item['category_type']==params[2] and item['is_active']]
+        raise AssertionError('Unexpected query in isolated assignment test')
+
+    def save(self,**fields):
+        payload=control_center.AccountControlAssignmentPayload(client_id=1,trial_balance_upload_id=77,account_code='P-1',**fields)
+        return control_center.save_account_control_mapping(payload,session={'username':'Admin'})
+
+    def test_mismatched_category_change_rejects_before_write_then_explicit_clear_saves_pair(self):
+        with patch.object(control_center,'_selected_control_accounts',return_value=({'id':77},self.accounts)) as selected, patch.object(
+            control_center,'execute_query_pg',side_effect=self.query), patch.object(control_center,'pg_transaction',return_value=nullcontext()), patch.object(
+            control_center,'_upsert_control_assignment') as write:
+            with self.assertRaises(HTTPException) as raised:self.save(financial_statement_category_id=8)
+            self.assertEqual(raised.exception.status_code,409);write.assert_not_called()
+            result=self.save(financial_statement_category_id=8,note_category_id=None)
+        self.assertTrue(result['saved']);self.assertEqual(result['assignment']['note_category_id'],None)
+        self.assertEqual(write.call_args.args[0]['_provided_fields'],{'financial_statement_category_id','note_category_id'})
+        self.assertEqual((result['client_id'],result['trial_balance_upload_id']),(1,77))
+        self.assertEqual(result['assignment_changes'],[{'account_code':'P-1','financial_statement_category_id':8,'note_category_id':None}])
+        selected.assert_called_with(1,77)
+
+    def test_note_only_save_uses_persisted_fs_category_and_rejects_wrong_branch(self):
+        with patch.object(control_center,'_selected_control_accounts',return_value=({'id':77},self.accounts)), patch.object(
+            control_center,'execute_query_pg',side_effect=self.query), patch.object(control_center,'pg_transaction',return_value=nullcontext()), patch.object(
+            control_center,'_upsert_control_assignment') as write:
+            with self.assertRaises(HTTPException):self.save(note_category_id=14)
+            write.assert_not_called()
+            result=self.save(note_category_id=12)
+        self.assertEqual(result['assignment']['financial_statement_category_id'],7)
+        self.assertEqual(write.call_args.args[0]['_provided_fields'],{'note_category_id'})
+
+    def test_parent_change_validates_all_children_and_clears_only_confirmed_incompatible_notes(self):
+        base={'client_id':1,'trial_balance_upload_id':77,'parent_account_code':'P','financial_statement_category_id':7}
+        with patch.object(control_center,'_selected_control_accounts',return_value=({'id':77},self.accounts)), patch.object(
+            control_center,'execute_query_pg',side_effect=self.query), patch.object(control_center,'pg_transaction',return_value=nullcontext()), patch.object(
+            control_center,'_upsert_control_assignment_batch') as write:
+            with self.assertRaises(HTTPException):control_center.apply_account_control_mapping_to_children(control_center.AccountControlBulkAssignmentPayload(**base),session={})
+            write.assert_not_called()
+            result=control_center.apply_account_control_mapping_to_children(control_center.AccountControlBulkAssignmentPayload(**base,clear_incompatible_notes=True),session={})
+        saved={item['account_code']:item for item in write.call_args.args[0]}
+        self.assertEqual(result['leaf_count'],2);self.assertEqual(saved['P-1']['note_category_id'],12)
+        self.assertEqual(saved['P-1']['_provided_fields'],{'financial_statement_category_id'})
+        self.assertIsNone(saved['P-2']['note_category_id']);self.assertIn('note_category_id',saved['P-2']['_provided_fields'])
+        self.assertEqual(result['assignment_changes'],[
+            {'account_code':'P-1','financial_statement_category_id':7,'note_category_id':12},
+            {'account_code':'P-2','financial_statement_category_id':7,'note_category_id':None}])
+
+    def test_inactive_or_cyclic_note_ancestry_and_missing_fs_are_rejected(self):
+        with patch.object(control_center,'execute_query_pg',side_effect=self.query):
+            for change in ('inactive','cycle','missing_fs'):
+                with self.subTest(change=change):
+                    self.categories[2]['is_active']=change!='inactive'
+                    self.categories[2]['parent_category_id']=12 if change=='cycle' else None
+                    self.current[0]['financial_statement_category_id']=None if change=='missing_fs' else 7
+                    assignment=control_center._clean_control_assignment(control_center.AccountControlAssignmentPayload(client_id=1,account_code='P-1',note_category_id=12))
+                    with self.assertRaises(HTTPException):control_center._prepare_control_assignment_pairs(assignment,['P-1'])
+
+    def test_verification_only_change_preserves_existing_financial_fields_without_pair_reads(self):
+        with patch.object(control_center,'_selected_control_accounts',return_value=({'id':77},self.accounts)), patch.object(
+            control_center,'execute_query_pg') as query, patch.object(control_center,'_upsert_control_assignment') as write:
+            self.save(verification_workstream='bank')
+        query.assert_not_called();self.assertEqual(write.call_args.args[0]['_provided_fields'],{'verification_workstream'})
+
+    def test_large_parent_batches_preserve_note_and_workstream_write_scope(self):
+        assignments=[dict(client_id=1,account_code='P-'+str(index),financial_statement_category_id=7,
+                          note_category_id=12,_provided_fields={'financial_statement_category_id'}) for index in range(501)]
+        assignments.append(dict(client_id=1,account_code='P-clear',financial_statement_category_id=7,
+                                note_category_id=None,_provided_fields={'financial_statement_category_id','note_category_id'}))
+        with patch.object(control_center,'execute_write_pg') as write:
+            control_center._upsert_control_assignment_batch(assignments,'Admin')
+        self.assertEqual(write.call_count,4)
+        for call,count in zip(write.call_args_list,[250,250,1,1]):
+            sql,values=call.args
+            self.assertNotIn('verification_workstream',sql)
+            self.assertEqual(sql.count('CURRENT_TIMESTAMP'),count)
+            self.assertEqual(sql.count('%s'),len(values))
+            self.assertLessEqual(count,250)
+        self.assertNotIn('note_category_id',write.call_args_list[0].args[0])
+        self.assertIn('note_category_id',write.call_args_list[-1].args[0])
+        self.assertEqual(write.call_args_list[-1].args[1],(1,'P-clear',7,None,'Admin'))
+
+    def test_unlinked_overridden_parent_does_not_guess_children_from_row_order(self):
+        accounts=[{'account_code':'2025-10-10 00:00:00','classification':'parent','manually_overridden':True},
+                  {'account_code':'10-10-25-10','classification':'parent'},
+                  {'account_code':'10-10-25-10-0001','classification':'leaf'}]
+        self.assertEqual(control_center._leaf_accounts_below(accounts,accounts[0]['account_code']),[])
+        self.assertEqual(control_center._leaf_accounts_below(accounts,'10-10-25-10'),[accounts[2]])

@@ -97,22 +97,20 @@ def test_trial_balance_navigation_preserves_upload_and_reports_missing(browser, 
     page.wait_for_url('**/trial_balance.html?**')
     page.wait_for_function("availableUploadsDropdown.value === '77'")
     assert page.locator('#availableTrialBalancesSection').is_visible()
-    page.locator('#tbAssignCategoriesBtn').click()
-    page.wait_for_url('**/account_control_center.html?**')
-    page.wait_for_function("document.querySelector('#accTabFinancial').getAttribute('aria-selected') === 'true'")
+    assert page.locator('#tbAssignCategoriesBtn').is_hidden()
+    page.locator('#tbAssignmentSetup').click()
+    page.wait_for_selector('#accFinancialSetupModal',state='visible')
+    assert '/trial_balance.html' in page.url
+    page.locator('#accFinancialSetupClose').click()
+    page.goto(static_server+'/static/account_control_center.html?tab=notes&upload_id=77',wait_until='load')
     page.wait_for_function("document.querySelector('#accTrialBalanceSelect').value === '77'")
-    assert page.locator('#accTrialBalanceSelect').input_value() == '77'
-    page.locator('#accTabNotes').click()
-    notes_button = page.locator('[data-acc-toolbar-actions="notes"] [data-acc-trial-balance-link]')
-    assert notes_button.is_visible()
-    notes_button.click()
+    page.locator('[data-acc-toolbar-actions="notes"] [data-acc-trial-balance-link]').click()
     page.wait_for_url('**/trial_balance.html?**')
     page.wait_for_function("availableUploadsDropdown.value === '77'")
-    page.locator('#tbAssignCategoriesBtn').click()
-    page.wait_for_url('**/account_control_center.html?**')
-    page.wait_for_function("document.querySelector('#accTabNotes').getAttribute('aria-selected') === 'true'")
-    page.wait_for_function("document.querySelector('#accTrialBalanceSelect').value === '77'")
-    assert page.locator('#accTrialBalanceSelect').input_value() == '77'
+    page.locator('#tbAssignmentSetup').click()
+    page.wait_for_selector('#accFinancialSetupModal',state='visible')
+    assert page.locator('#accFinancialSetupModalTitle').inner_text()=='Financial Statements'
+    page.locator('#accFinancialSetupClose').click()
     page.goto(static_server + '/static/account_control_center.html?tab=financial&upload_id=999', wait_until='load')
     page.wait_for_function("document.querySelector('#accStatus').textContent.includes('not available')")
     assert page.locator('#accTrialBalanceSelect').input_value() == ''
@@ -1312,4 +1310,174 @@ def test_tb_setup_launcher_opens_acc_and_restores_workflow_context(browser, stat
     page.wait_for_function("document.querySelector('#accAccountRows')?.textContent.includes('Cash')")
     assert page.locator('#accTabVerification').get_attribute('aria-selected') == 'true'
     assert all(method == 'GET' for _, method in calls)
+    page.close()
+
+
+@pytest.mark.parametrize('extra_accounts',[0,1000])
+def test_tb_financial_editors_atomic_note_clear_failure_parent_and_local_setup(browser, static_server, extra_accounts):
+    from urllib.parse import urlparse, parse_qs
+    page=browser.new_page(viewport={'width':1280,'height':900})
+    upload={'id':77,'status':'parsed','file_name':'TB.xlsx','period_start':'2026-01-01','period_end':'2026-06-30','period_type':'half_yearly','row_count':3}
+    accounts=[{'id':1,'account_code':'100','account_name':'Assets','is_leaf':False,'classification':'parent','level':1,'parent_account_code':None,'opening_dr':'40','closing_dr':'60','assignment':{}},
+              {'id':2,'account_code':'100-1','account_name':'Till','is_leaf':True,'classification':'leaf','level':2,'parent_account_code':'100','opening_dr':'10','closing_dr':'20','assignment':{'financial_statement_category_id':7,'note_category_id':12,'verification_workstream':'cash'}},
+              {'id':3,'account_code':'100-2','account_name':'Stock','is_leaf':True,'classification':'leaf','level':2,'parent_account_code':'100','opening_dr':'30','closing_dr':'40','assignment':{'financial_statement_category_id':8,'note_category_id':14,'verification_workstream':'bank'}}]
+    accounts.append({'id':4,'account_code':'2025-10-10 00:00:00','account_name':'Unlinked heading','is_leaf':False,'manually_overridden':True,'classification':'parent','level':1,'parent_account_code':None,'assignment':{}})
+    accounts.extend(dict(accounts[2],id=index+5,account_code='100-extra-'+str(index),assignment=dict(accounts[2]['assignment'])) for index in range(extra_accounts))
+    categories=[{'id':1,'label':'Assets','row_type':'heading','statement_section':'balance_sheet','parent_category_id':None,'is_active':True,'presentation_role':'asset','sort_order':0},
+                {'id':7,'label':'Cash','row_type':'category','statement_section':'balance_sheet','parent_category_id':1,'is_active':True,'sort_order':1},
+                {'id':8,'label':'Inventory','row_type':'category','statement_section':'balance_sheet','parent_category_id':1,'is_active':True,'sort_order':2}]
+    notes=[{'id':11,'label':'Cash','parent_category_id':None,'source_statement_category_id':7,'is_active':True,'assigned_account_count':0},
+           {'id':12,'label':'Till detail','parent_category_id':11,'source_statement_category_id':None,'is_active':True,'assigned_account_count':1},
+           {'id':13,'label':'Inventory','parent_category_id':None,'source_statement_category_id':8,'is_active':True,'assigned_account_count':0},
+           {'id':14,'label':'Stock detail','parent_category_id':13,'source_statement_category_id':None,'is_active':True,'assigned_account_count':1}]
+    calculations=[{'id':20,'label':'Total Assets','statement_section':'balance_sheet','calculation_type':'subtotal','parent_heading_id':1,'sort_order':0,
+                   'components':[{'source_category_id':7,'operator':'add','label':'Cash'},{'source_category_id':8,'operator':'add','label':'Inventory'}]}]
+    writes=[];source_reads=[];mapping_reads=[];setup_reads=[];fail=[False];fail_refresh=[False];omit_ack=[False];wrong_ack=[False]
+    totals={period+'_'+side+'_column':'0' for period in ('opening','period','closing') for side in ('dr','cr')}
+    controls={'draft_reconciliation':{'original_totals':totals,'adjustment_totals':totals,'adjusted_totals':totals,'pair_differences':{}}}
+
+    def api(route,request):
+        parsed=urlparse(request.url);path=parsed.path;query=parse_qs(parsed.query)
+        if path.endswith('/api/auth/current-client'):result={'client_id':1,'client_name':'Test Client','client_code':'C'}
+        elif path.endswith('/api/users'):result=[]
+        elif path.endswith('/uploads'):result={'uploads':[upload],'default_upload_id':77}
+        elif path.endswith('/api/trial-balance/accounts'):
+            source_reads.append(request.url);result={'accounts':accounts,'adjustments':[],'validation_controls':controls}
+        elif path.endswith('/mapping') and request.method=='GET':
+            mapping_reads.append(request.url)
+            if fail_refresh[0]:
+                fail_refresh[0]=False;route.fulfill(status=503,content_type='application/json',body=json.dumps({'detail':'Refresh unavailable'}));return
+            result={'client_id':1,'upload':upload,'uploads':[upload],'accounts':accounts}
+        elif '/mapping' in path and request.method in ('PUT','POST'):
+            body=json.loads(request.post_data);writes.append(body)
+            if fail[0]:
+                fail[0]=False;route.fulfill(status=503,content_type='application/json',body=json.dumps({'detail':'Save rejected for regression'}));return
+            assert body['client_id']==1 and body['trial_balance_upload_id']==77
+            targets=[item for item in accounts if item['is_leaf']] if 'parent_account_code' in body else [item for item in accounts if item['account_code']==body['account_code']]
+            for item in targets:
+                for field in ('financial_statement_category_id','note_category_id'):
+                    if field in body:item['assignment'][field]=body[field]
+                if body.get('clear_incompatible_notes'):item['assignment']['note_category_id']=None
+            result={'saved':True}
+            if not omit_ack[0]:result.update(client_id=1,trial_balance_upload_id=77,assignment_changes=[dict(account_code=item['account_code'],financial_statement_category_id=item['assignment'].get('financial_statement_category_id'),note_category_id=item['assignment'].get('note_category_id')) for item in targets])
+            if wrong_ack[0]:result['client_id']=999
+        elif path.endswith('/categories') and request.method=='GET':result={'categories':notes if query.get('category_type')==['note'] else categories}
+        elif path.endswith('/categories') and request.method=='POST':
+            body=json.loads(request.post_data);body['id']=32 if body['category_type']=='note' else 31;body['is_active']=True;body['assigned_account_count']=0
+            if body['category_type']=='note':notes.append(body)
+            else:categories.append(body)
+            result={'saved':True,'category':body}
+        elif path.endswith('/statement-calculations'):
+            setup_reads.append(request.url)
+            result={'calculations':calculations if query.get('statement_section')==['balance_sheet'] else [],'profit_link':None}
+        else:result={}
+        route.fulfill(status=200,content_type='application/json',body=json.dumps(result))
+
+    def picker(code,kind):
+        return page.locator('tr[data-account-code="'+code+'"] .tb-saved-'+kind+'-cell [data-fs-picker]')
+
+    def choose(code,kind,value):
+        control=picker(code,kind);control.locator('[data-fs-picker-trigger]').click()
+        control.locator('[data-fs-picker-option][data-fs-picker-value="'+str(value)+'"]').click()
+
+    page.route('**/api/**',api)
+    page.goto(static_server+'/static/trial_balance.html?view=available&workflow=financial&upload_id=77',wait_until='load')
+    page.wait_for_selector('tr[data-account-code="100-1"] .acc2-note-category',state='attached')
+    original=page.locator('tr[data-account-code]').evaluate_all('rows=>rows.map(row=>row.dataset.tbAmounts)')
+    assert page.locator('#availableAccountsTableBody [data-fs-picker-option]').count()==0
+    assert page.locator('*').count()<60000
+    assert page.locator('#availableAccountsTableBody .tb-saved-category-cell,#availableAccountsTableBody .tb-saved-note-cell').evaluate_all("cells=>cells.every(cell=>{const p=cell.querySelector('[data-fs-picker-trigger]');return !p || p.getBoundingClientRect().right<=cell.getBoundingClientRect().right+1})")
+    bad=page.locator('tr[data-account-code="2025-10-10 00:00:00"] td').first
+    assert bad.get_attribute('class')=='tb-account-code-review'
+    assert bad.evaluate("el=>getComputedStyle(el).backgroundColor")=='rgb(255, 243, 242)'
+    assert bad.get_by_text('Check code',exact=True).is_visible()
+    assert 'Double-click to correct' in bad.get_attribute('title')
+    choose('2025-10-10 00:00:00','category',7)
+    assert 'Double-click' in page.locator('#tbSavedStatus').inner_text()
+    assert not writes
+    bad.dblclick();bad.locator('input').press('Escape')
+    page.evaluate("window.unchangedPicker=document.querySelector('tr[data-account-code=\"100-2\"] .acc2-financial-category')")
+    assert picker('100','category').locator('select').input_value()=='__mixed'
+    assert picker('100','note').locator('[data-fs-picker-trigger]').is_disabled()
+    page.once('dialog',lambda dialog:dialog.dismiss())
+    choose('100-1','category',8)
+    assert not writes
+    assert picker('100-1','category').locator('select').input_value()=='7'
+    page.once('dialog',lambda dialog:dialog.accept())
+    choose('100-1','category',8)
+    page.wait_for_function("document.querySelector('tr[data-account-code=\"100-1\"] .acc2-financial-category')?.value==='8' && !document.querySelector('#availableAccountsTableBody').inert")
+    assert writes[-1]['financial_statement_category_id']==8 and writes[-1]['note_category_id'] is None
+    assert len(mapping_reads)==1
+    assert picker('100-1','category').locator('select option').count()==1
+    assert page.evaluate("window.unchangedPicker===document.querySelector('tr[data-account-code=\"100-2\"] .acc2-financial-category')")
+    note_control=picker('100-1','note');note_control.locator('[data-fs-picker-trigger]').click()
+    assert note_control.locator('[data-fs-picker-option][data-fs-picker-value="14"]').is_visible()
+    assert note_control.locator('[data-fs-picker-option][data-fs-picker-value="12"]').count()==0
+    page.keyboard.press('Escape')
+    choose('100-1','note',14)
+    page.wait_for_function("!document.querySelector('#availableAccountsTableBody').inert")
+    assert writes[-1]['note_category_id']==14 and 'financial_statement_category_id' not in writes[-1]
+    fail[0]=True;page.once('dialog',lambda dialog:dialog.accept())
+    choose('100-1','category',7)
+    page.wait_for_function("document.querySelector('#tbSavedStatus').textContent.includes('Save rejected')")
+    assert picker('100-1','category').locator('select').input_value()=='8'
+    assert picker('100-1','note').locator('select').input_value()=='14'
+    page.locator('#tbSavedCategorySearch').fill('Inventory')
+    page.once('dialog',lambda dialog:dialog.accept())
+    choose('100','category',7)
+    page.wait_for_function("!document.querySelector('#availableAccountsTableBody').inert")
+    assert writes[-1]['parent_account_code']=='100' and writes[-1]['clear_incompatible_notes'] is True
+    assert page.locator('tr[data-account-code]:visible').count()==0
+    assert page.locator('.tb-draft-filtered-total .tb-amount-cell').all_text_contents()==['0.00']*6
+    page.locator('#tbSavedCategorySearch').fill('')
+    assert picker('100','category').locator('select').input_value()=='7'
+    assert picker('100-1','note').locator('select').input_value()==''
+    assert accounts[1]['assignment']['verification_workstream']=='cash'
+    assert accounts[2]['assignment']['verification_workstream']=='bank'
+    assert page.locator('tr[data-account-code]').evaluate_all('rows=>rows.map(row=>row.dataset.tbAmounts)')==original
+    assert len(source_reads)==1
+    page.locator('#tbAssignmentSetup').click()
+    page.wait_for_selector('#accFinancialSetupModal',state='visible')
+    assert '/trial_balance.html' in page.url
+    assert page.locator('#tbAssignmentWorkflow').is_disabled()
+    assert page.locator('#accFinancialSetupModal [role=tab]').count()==4
+    assert page.locator('#accFinancialSetupPanelBalanceSheet').get_by_text('Total Assets',exact=True).is_visible()
+    assert page.locator('#tbAssignmentSetupMenu').is_hidden()
+    assert len(setup_reads)==2
+    page.locator('#accFinancialSetupClose').click()
+    page.locator('#tbAssignmentSetup').click()
+    page.wait_for_selector('#accFinancialSetupModal',state='visible')
+    assert len(setup_reads)==2
+    page.locator('#accFinancialSetupPanelBalanceSheet [data-fs-calc-action="edit"]').click()
+    assert page.locator('[data-fs-calc-label]').input_value()=='Total Assets'
+    page.locator('[data-fs-calc-action="cancel"]').click()
+    page.once('dialog',lambda dialog:dialog.accept('Equipment'))
+    page.locator('#accFinancialSetupPanelBalanceSheet .acc2-fs-toolbar [data-fs-action="add-category"]').click()
+    page.wait_for_selector('#accFinancialSetupPanelBalanceSheet [data-fs-id="31"]')
+    page.locator('#accFinancialSetupTabNotesBalanceSheet').click()
+    page.once('dialog',lambda dialog:dialog.accept('Safe detail'))
+    page.locator('[data-note-source-drop][data-source-id="7"] [data-note-action="add-child"]').click()
+    page.wait_for_selector('[data-note-row][data-note-id="32"]')
+    page.keyboard.press('Escape')
+    assert page.locator('#accFinancialSetupModal').is_hidden()
+    assert page.evaluate('document.activeElement.id')=='tbAssignmentSetup'
+    assert page.locator('#tbAssignmentWorkflow').is_enabled()
+    choose('100-1','note',32)
+    page.wait_for_function("!document.querySelector('#availableAccountsTableBody').inert")
+    assert writes[-1]['note_category_id']==32
+    assert '/trial_balance.html' in page.url
+    fail_refresh[0]=True;omit_ack[0]=True
+    choose('100-1','note',12)
+    page.wait_for_function("document.querySelector('#tbSavedStatus').textContent.includes('Assignment saved. Refresh could not complete')")
+    assert picker('100-1','note').locator('select').input_value()=='12'
+    assert accounts[1]['assignment']['note_category_id']==12
+    omit_ack[0]=False;wrong_ack[0]=True;fail_refresh[0]=True
+    choose('100-1','note',32)
+    page.wait_for_function("!document.querySelector('#availableAccountsTableBody').inert")
+    assert picker('100-1','note').locator('select').input_value()=='12'
+    assert 'Assignment saved. Refresh could not complete' in page.locator('#tbSavedStatus').inner_text()
+    page.evaluate('tbRefreshFinancialMapping()')
+    assert picker('100-1','note').locator('select').input_value()=='32'
+    assert page.locator('tr[data-account-code]').evaluate_all('rows=>rows.map(row=>row.dataset.tbAmounts)')==original
+    assert len(source_reads)==1
     page.close()

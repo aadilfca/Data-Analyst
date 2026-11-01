@@ -60,6 +60,16 @@ class AccountCodeEditRequest(BaseModel):
     account_code: str
 
 
+class AccountCodeCorrection(BaseModel):
+    account_id: int
+    account_code: str
+    expected_account_code: str
+
+
+class AccountCodeBatchRequest(BaseModel):
+    corrections: list[AccountCodeCorrection]
+
+
 class TrialBalanceColumnMappingPayload(BaseModel):
     """One explicitly saved Trial Balance column mapping for a client."""
     client_id: int
@@ -514,6 +524,11 @@ def validate_trial_balance_contents(
             blocking_errors.append(issue)
     errors = blocking_errors
 
+    for account in candidates:
+        if account['classification'] == 'parent' and account['auto_classification'] != 'parent':
+            warnings.append({'excel_row': account['excel_row'], 'field': 'Account Code', 'severity': 'warning',
+                             'message': 'Parent has no linked child accounts. Correct the code or confirm it is intentional before import.'})
+
     valid_amount_rows = [row for row in candidates if row['classification'] == 'leaf']
     if not valid_amount_rows:
         add_error(None, 'Rows', 'At least one Leaf account is required for validation.')
@@ -776,25 +791,43 @@ def _copy_shared_code_assignments(client_id: int, source_code: str, target_code:
         )
         if not source_rows:
             continue
+        def has_assignment(row):
+            if table == "account_control_cashflow_assignments":
+                return bool(
+                    row.get("section") not in (None, "unassigned")
+                    or row.get("category_label")
+                    or row.get("cash_bank_role") not in (None, "none")
+                    or row.get("treatment_type") not in (None, "standard")
+                )
+            return any(row.get(column) is not None for column in value_columns)
+
         source_values = tuple(source_rows[0].get(c) for c in value_columns)
-        has_assignment = any(value is not None for value in source_values)
-        if table == "account_control_cashflow_assignments":
-            source = source_rows[0]
-            has_assignment = bool(
-                source.get("section") not in (None, "unassigned")
-                or source.get("category_label")
-                or source.get("cash_bank_role") not in (None, "none")
-                or source.get("treatment_type") not in (None, "standard")
-            )
-        if not has_assignment:
+        if not has_assignment(source_rows[0]):
             continue
         if target_rows:
-            if source_values != tuple(target_rows[0].get(c) for c in value_columns):
+            target_values = tuple(target_rows[0].get(c) for c in value_columns)
+            if source_values == target_values:
+                continue
+            if has_assignment(target_rows[0]):
                 raise HTTPException(
                     409,
                     f"Account code {target_code} already has a different {table.replace('_', ' ')} assignment. "
                     "Resolve that assignment before correcting this code.",
                 )
+            # A saved Unassigned row is equivalent to no mapping. Copy the whole
+            # assignment, preserving the FS/Note pair, only if it is still empty.
+            updates = ', '.join(f'{column} = %s' for column in value_columns)
+            updates += ", updated_at = CURRENT_TIMESTAMP"
+            if table != "account_category_assignments":
+                updates += ", updated_by = 'Analyst'"
+            unchanged = ' AND '.join(f'{column} IS NOT DISTINCT FROM %s' for column in value_columns)
+            copied = execute_write_pg(
+                f"UPDATE {table} SET {updates} WHERE client_id = %s AND account_code = %s "
+                f"AND {unchanged} RETURNING account_code",
+                (*source_values, client_id, target_code, *target_values),
+            )
+            if copied is None:
+                raise HTTPException(409, f"Assignments for {target_code} changed while correcting the code. Reload and retry.")
             continue
         insert_columns = ["client_id", "account_code", *value_columns]
         if table != "account_category_assignments":
@@ -1708,82 +1741,85 @@ def get_trial_balance_summary(upload_id: int):
 # Code corrections are scoped to one selected upload. Classification overrides remain
 # row-level and preserve their explicit manual status across later code corrections.
 
+def _save_account_code_corrections(upload_id: int, corrections: list[AccountCodeCorrection]):
+    """Validate the whole draft, carry mappings and rebuild one upload atomically."""
+    if not corrections or len({item.account_id for item in corrections}) != len(corrections):
+        raise HTTPException(400, "Provide distinct accounts to correct.")
+    with pg_transaction():
+        uploads = execute_query_pg(
+            "SELECT id, client_id, status FROM trial_balance_uploads WHERE id = %s FOR UPDATE", (upload_id,))
+        if not uploads:
+            raise HTTPException(404, "Trial Balance not found.")
+        upload = uploads[0]
+        if upload["status"] != "parsed":
+            raise HTTPException(409, "Only a successfully parsed Trial Balance can be corrected.")
+        rows = execute_query_pg(
+            "SELECT id, account_code, classification, manually_overridden FROM trial_balance_accounts "
+            "WHERE upload_id = %s ORDER BY id FOR UPDATE", (upload_id,))
+        by_id = {row["id"]: row for row in rows}
+        occupied = {row["account_code"]: row["id"] for row in rows}
+        changes = {}
+        for item in corrections:
+            row = by_id.get(item.account_id)
+            if not row:
+                raise HTTPException(404, "A corrected account is not in this Trial Balance.")
+            if row["account_code"] != item.expected_account_code:
+                raise HTTPException(409, "Account codes changed elsewhere. Reload before correcting them.")
+            code = item.account_code.strip()
+            if not code or len(code) > 120:
+                raise HTTPException(400, "Account codes must contain 1 to 120 characters.")
+            if code in occupied and occupied[code] != item.account_id:
+                raise HTTPException(409, f"Account code {code} already belongs to another account. Choose an unused code.")
+            if code != row["account_code"]:
+                changes[item.account_id] = code
+        final_codes = [changes.get(row["id"], row["account_code"]) for row in rows]
+        if len(set(final_codes)) != len(final_codes):
+            raise HTTPException(409, "Corrections would create duplicate account codes.")
+        if not changes:
+            return {"updated": False, "upload_id": upload_id, "corrected_count": 0}
+        hierarchy = build_account_code_hierarchy(final_codes)
+        for account_id, code in changes.items():
+            _copy_shared_code_assignments(upload["client_id"], by_id[account_id]["account_code"], code, upload_id)
+        values = []
+        for row, code in zip(rows, final_codes):
+            values.append((row["id"], code, hierarchy["parent_account_code"].get(code), len(code.split('-')),
+                           row["classification"] if row["manually_overridden"] else hierarchy["classification"][code]))
+        # Bounded set updates avoid one network round trip per account. Keep all
+        # chunks in the same transaction and skip hierarchy rows that did not change.
+        for offset in range(0, len(values), 1000):
+            chunk = values[offset:offset + 1000]
+            placeholders = ','.join(['(%s::integer,%s::text,%s::text,%s::integer,%s::text)'] * len(chunk))
+            execute_write_pg(
+                "UPDATE trial_balance_accounts AS a SET source_account_code = COALESCE(a.source_account_code, a.account_code), "
+                "account_code = v.code, parent_account_code = v.parent, level = v.level, classification = v.classification "
+                f"FROM (VALUES {placeholders}) AS v(id, code, parent, level, classification) "
+                "WHERE a.id = v.id AND a.upload_id = %s AND "
+                "(a.account_code, a.parent_account_code, a.level, a.classification) IS DISTINCT FROM "
+                "(v.code, v.parent, v.level, v.classification)",
+                tuple(value for entry in chunk for value in entry) + (upload_id,))
+    invalidate_category_for_account_cache(upload["client_id"])
+    log_audit("Analyst", "Update", "TrialBalance", f"Corrected {len(changes)} account code(s) in upload {upload_id}: " +
+              '; '.join(f'{by_id[account_id]["account_code"]} -> {code}' for account_id, code in changes.items()))
+    return {"updated": True, "upload_id": upload_id, "corrected_count": len(changes)}
+
+
+@router.put("/api/trial-balance/uploads/{upload_id}/account-codes")
+def update_trial_balance_account_codes(upload_id: int, payload: AccountCodeBatchRequest):
+    return _save_account_code_corrections(upload_id, payload.corrections)
+
+
 @router.put("/api/trial-balance/accounts/{account_id}/code")
 def update_trial_balance_account_code(account_id: int, payload: AccountCodeEditRequest):
-    """Correct one account code in its upload, retaining the imported source code."""
-    corrected_code = str(payload.account_code or "").strip()
-    if not corrected_code:
-        raise HTTPException(400, "Account code cannot be blank.")
-    if len(corrected_code) > 120:
-        raise HTTPException(400, "Account code cannot exceed 120 characters.")
-
-    rows = execute_query_pg(
-        """SELECT a.id, a.upload_id, a.account_code, a.source_account_code, a.category_id, u.client_id, u.status
-           FROM trial_balance_accounts a
-           JOIN trial_balance_uploads u ON u.id = a.upload_id
-           WHERE a.id = %s""",
-        (account_id,),
-    )
+    """Retain the existing single-account API with the same batched hierarchy save."""
+    rows = execute_query_pg("SELECT upload_id, account_code, source_account_code FROM trial_balance_accounts WHERE id = %s", (account_id,))
     if not rows:
         raise HTTPException(404, "Trial balance account not found")
     account = rows[0]
-    if account["status"] != "parsed":
-        raise HTTPException(409, "Only a successfully parsed Trial Balance can be corrected.")
-    old_code = account["account_code"]
-    if corrected_code == old_code:
-        return {"updated": False, "account_id": account_id, "account_code": old_code}
+    result = _save_account_code_corrections(account["upload_id"], [AccountCodeCorrection(
+        account_id=account_id, account_code=payload.account_code, expected_account_code=account["account_code"])])
+    return {**result, "account_id": account_id, "account_code": payload.account_code.strip(),
+            "source_account_code": account.get("source_account_code") or account["account_code"]}
 
-    sibling = execute_query_pg(
-        "SELECT id FROM trial_balance_accounts WHERE upload_id = %s AND account_code = %s AND id <> %s",
-        (account["upload_id"], corrected_code, account_id),
-    )
-    if sibling:
-        raise HTTPException(409, f"Account code {corrected_code} already exists in this Trial Balance.")
-
-    upload_accounts = execute_query_pg(
-        "SELECT id, account_code, classification, manually_overridden FROM trial_balance_accounts WHERE upload_id = %s ORDER BY sort_order",
-        (account["upload_id"],),
-    )
-    all_codes = {corrected_code if row["id"] == account_id else row["account_code"] for row in upload_accounts}
-    hierarchy = build_account_code_hierarchy(all_codes)
-    classification = hierarchy['classification']
-    parent_account_codes = hierarchy['parent_account_code']
-    client_id = account["client_id"]
-
-    with pg_transaction():
-        _copy_shared_code_assignments(client_id, old_code, corrected_code, account["upload_id"])
-        execute_write_pg(
-            "UPDATE trial_balance_accounts SET account_code = %s WHERE id = %s",
-            (corrected_code, account_id),
-        )
-        for row in upload_accounts:
-            code = corrected_code if row["id"] == account_id else row["account_code"]
-            parts = code.split('-')
-            parent_code = parent_account_codes.get(code)
-            execute_write_pg(
-                """UPDATE trial_balance_accounts
-                   SET parent_account_code = %s, level = %s, classification = %s
-                   WHERE id = %s""",
-                (
-                    parent_code,
-                    len(parts),
-                    row["classification"] if row["manually_overridden"] else classification[code],
-                    row["id"],
-                ),
-            )
-
-    invalidate_category_for_account_cache(client_id)
-    log_audit(
-        "Analyst", "Update", "TrialBalance",
-        f"Corrected account code in upload {account['upload_id']}: {old_code} -> {corrected_code}",
-    )
-    return {
-        "updated": True,
-        "account_id": account_id,
-        "upload_id": account["upload_id"],
-        "source_account_code": account.get("source_account_code") or old_code,
-        "account_code": corrected_code,
-    }
 
 @router.put("/api/trial-balance/accounts/{account_id}/override")
 def override_account_classification(account_id: int, payload: AccountOverrideRequest):

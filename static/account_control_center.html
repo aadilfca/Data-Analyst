@@ -6,30 +6,13 @@
     <title>Account Control Centre</title>
     <link rel="stylesheet" href="/static/style.css?v=79">
     <style>
-        #accFinancialSetupModal .acc2-profit-link { margin-bottom: 18px; padding: 14px; border: 1px solid #dbe4ea; border-radius: 8px; background: #f8fafc; }
-        #accFinancialSetupModal .acc2-profit-link h3 { margin: 0 0 6px; font-size: 15px; }
-        #accFinancialSetupModal .acc2-profit-link p { color: #617589; font-size: 12px; line-height: 1.5; }
-        #accFinancialSetupModal .acc2-profit-link > div { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; }
-        #accFinancialSetupModal .acc2-profit-link label { flex: 1; min-width: 0; font-size: 12px; }
-        #accFinancialSetupModal .acc2-profit-link select { width: 100%; min-width: 0; max-width: 100%; }
-
         .acc-bootstrap-overlay { position: fixed; inset: 0; z-index: 1200; display: grid; place-items: center; background: rgba(15, 23, 42, .25); backdrop-filter: blur(3px); }
         .acc-bootstrap-overlay[hidden] { display: none; }
         .acc-bootstrap-message { display: flex; align-items: center; gap: 12px; padding: 18px 24px; border-radius: 10px; background: white; color: #1e293b; box-shadow: 0 8px 30px rgba(15,23,42,.2); }
+
     </style>
-    <style>
-        /* Keep presentation controls within the existing Balance Sheet setup rows. */
-        #accFinancialSetupModal .acc2-presentation-control { display: inline-flex; align-items: center; gap: 5px; margin: 0; padding: 0; color: #536577; font-size: 12px; }
-        #accFinancialSetupModal .acc2-presentation-control select { box-sizing: border-box; width: 110px; min-width: 0; max-width: 110px; height: 27px; min-height: 27px; margin: 0; padding: 2px 6px; }
-        @media (max-width: 700px) {
-            #accFinancialSetupModal .acc2-fs-heading-title, #accFinancialSetupModal .acc2-fs-category { flex-wrap: wrap; }
-            #accFinancialSetupModal .acc2-fs-heading-title > div, #accFinancialSetupModal .acc2-fs-category > span:last-child { flex-wrap: wrap; }
-            #accFinancialSetupModal .acc2-fs-toolbar { flex-wrap: wrap; gap: 8px; }
-            #accFinancialSetupModal .acc2-fs-toolbar > span:first-child { flex: 1 0 100%; }
-            #accFinancialSetupModal .acc2-fs-toolbar > div { flex-wrap: wrap; }
-            #accFinancialSetupModal .acc2-fs-order-status:empty { display: none; }
-        }
-    </style>
+
+    <link rel="stylesheet" href="/static/financial_statement_workspace.css?v=2">
 </head>
 <body data-nav-module="Account Control Centre" data-nav-parent="setup.html">
     <nav class="navbar"><div class="nav-container"><div id="navLeft"></div><div class="nav-client" id="clientControl"></div><div class="nav-user"></div></div></nav>
@@ -97,7 +80,6 @@
             <div class="acc2-grid-wrap" id="accFinancialGridWrap" hidden><table class="acc2-table"><thead><tr><th scope="col">Account code</th><th scope="col">Account name</th><th scope="col">Type</th><th scope="col">Financial Statement category</th><th scope="col">Result</th></tr></thead><tbody id="accFinancialRows"></tbody></table></div>
             <button type="button" id="accFinancialSetupFab" class="acc2-cashflow-fab" aria-label="Open Financial Statements setup" title="Financial Statements setup" hidden>+</button>
         </section>
-        <div id="accFinancialSetupModal" class="acc2-modal-backdrop" hidden><section class="acc2-modal acc2-modal-wide" role="dialog" aria-modal="true" aria-labelledby="accFinancialSetupModalTitle"><div class="acc2-modal-header"><div><h2 id="accFinancialSetupModalTitle">Financial Statements</h2><p>Organise statement headings and account categories.</p></div><button type="button" id="accFinancialSetupClose" class="acc2-modal-close" aria-label="Close Financial Statements setup">&times;</button></div><nav class="acc2-modal-tabs" role="tablist" aria-label="Financial Statements sections"><button type="button" class="acc2-modal-tab active" id="accFinancialSetupTabBalanceSheet" data-acc-financial-setup-tab="balance-sheet" role="tab" aria-selected="true" aria-controls="accFinancialSetupPanelBalanceSheet">Balance Sheet</button><button type="button" class="acc2-modal-tab" id="accFinancialSetupTabNotesBalanceSheet" data-acc-financial-setup-tab="notes-balance-sheet" role="tab" aria-selected="false" aria-controls="accFinancialSetupPanelNotesBalanceSheet">Notes to Balance Sheet</button><button type="button" class="acc2-modal-tab" id="accFinancialSetupTabIncomeStatement" data-acc-financial-setup-tab="income-statement" role="tab" aria-selected="false" aria-controls="accFinancialSetupPanelIncomeStatement">Income Statement</button><button type="button" class="acc2-modal-tab" id="accFinancialSetupTabNotesIncomeStatement" data-acc-financial-setup-tab="notes-income-statement" role="tab" aria-selected="false" aria-controls="accFinancialSetupPanelNotesIncomeStatement">Notes to Income Statement</button></nav><section id="accFinancialSetupPanelBalanceSheet" class="acc2-fs-outline" data-fs-section="balance_sheet" role="tabpanel" aria-labelledby="accFinancialSetupTabBalanceSheet"></section><section id="accFinancialSetupPanelNotesBalanceSheet" class="acc2-notes-outline" data-notes-section="balance_sheet" role="tabpanel" aria-labelledby="accFinancialSetupTabNotesBalanceSheet" hidden></section><section id="accFinancialSetupPanelIncomeStatement" class="acc2-fs-outline" data-fs-section="income_statement" role="tabpanel" aria-labelledby="accFinancialSetupTabIncomeStatement" hidden></section><section id="accFinancialSetupPanelNotesIncomeStatement" class="acc2-notes-outline" data-notes-section="income_statement" role="tabpanel" aria-labelledby="accFinancialSetupTabNotesIncomeStatement" hidden></section></section></div>
         <section id="accNotesPanel" class="acc2-panel" role="tabpanel" aria-labelledby="accTabNotes" hidden>
             <div id="accNotesGridState" class="acc2-grid-state">Select a Trial Balance and click Load to view accounts.</div>
             <div class="acc2-grid-wrap" id="accNotesGridWrap" hidden><table class="acc2-table"><thead><tr><th scope="col">Account code</th><th scope="col">Account name</th><th scope="col">Type</th><th scope="col">Financial Statement category</th><th scope="col">Note</th><th scope="col">Result</th></tr></thead><tbody id="accNotesRows"></tbody></table></div>
@@ -106,7 +88,8 @@
         <div id="accCashflowTemplateModal" class="acc2-modal-backdrop" hidden><section class="acc2-modal acc2-modal-wide" role="dialog" aria-modal="true" aria-labelledby="accCashflowTemplateModalTitle"><div class="acc2-modal-header"><div><h2 id="accCashflowTemplateModalTitle">Cashflows transaction template</h2><p>Select the Client Data Bank template and map its columns to the Cashflows report fields.</p></div><button type="button" id="accCashflowTemplateClose" class="acc2-modal-close" aria-label="Close transaction template setup">&times;</button></div><div class="acc2-template-source"><label for="accCashflowTemplateSelect">Client Data Bank template</label><select id="accCashflowTemplateSelect" class="acc2-select"><option value="">Loading templates...</option></select><p id="accCashflowTemplateHint" class="acc2-category-hint" role="status"></p></div><div id="accCashflowTemplateMappingState" class="acc2-grid-state">Select a template to view its columns.</div><div id="accCashflowTemplateMapping" class="acc2-template-mapping" hidden></div><div class="acc2-modal-footer"><button type="button" id="accCashflowTemplateSave" class="acc2-action-btn" disabled>Save template mapping</button></div></section></div>    </main>
     <script src="/static/client_context.js?v=26"></script>
     <script src="/static/loading_ui.js"></script>
-    <script src="/static/account_assignment_shared.js?v=1"></script>
-    <script src="/static/account_control_center.js?v=38"></script>
+    <script src="/static/account_assignment_shared.js?v=2"></script>
+    <script src="/static/financial_statement_workspace.js?v=2"></script>
+    <script src="/static/account_control_center.js?v=39"></script>
 </body>
 </html>

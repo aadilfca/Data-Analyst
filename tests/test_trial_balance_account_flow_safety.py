@@ -232,3 +232,218 @@ def test_balance_sheet_uses_leaf_closing_fields_without_changing_acc_metadata_co
     assert result['categories'][0]['amount'] == '120.50'
     assert result['controls']['audit_adjustment_net'] == '0'
     assert account['closing_dr'] == '120.50'
+
+
+@pytest.mark.parametrize('section',['balance_sheet','income_statement'])
+def test_paired_assignment_save_reaches_statement_and_notes_without_source_writes(section):
+    from contextlib import nullcontext
+    from copy import deepcopy
+    from decimal import Decimal
+    from services.financial_statement_balances import build_balance_sheet,build_income_statement,build_statement_notes
+    source=[dict(account_code='A',classification='leaf',manually_overridden=False,opening_dr='100',opening_cr='0',
+                 period_dr='0.50',period_cr='0',closing_dr='100.50',closing_cr='0')]
+    original=deepcopy(source)
+    persisted={'account_code':'A','financial_statement_category_id':7,'note_category_id':11,'verification_workstream':'cash'}
+    categories=[dict(id=key,label=label,row_type='category',parent_category_id=None,statement_section=section,
+                     presentation_role='asset' if section=='balance_sheet' else None,is_active=True,sort_order=key,category_type='financial_statement')
+                for key,label in [(7,'Original category'),(8,'New category')]]
+    notes=[dict(id=key,label=label,parent_category_id=None,source_statement_category_id=fs,is_active=True,category_type='note',row_type='category')
+           for key,label,fs in [(11,'Original Note',7),(12,'New Note',8)]]
+    builder=build_balance_sheet if section=='balance_sheet' else build_income_statement
+    before=builder(source,[persisted],categories,[],[])
+    before_notes=build_statement_notes(source,[persisted],notes,before,section)
+
+    def query(sql,params):
+        if 'pg_advisory_xact_lock' in sql:return []
+        if 'FOR UPDATE' in sql:return [dict(persisted)]
+        if "category_type IN ('financial_statement', 'note')" in sql:return categories+notes
+        if 'SELECT id, row_type' in sql:return [row for row in categories+notes if row['id']==params[0] and row['category_type']==params[2]]
+        raise AssertionError('Unexpected query in hermetic account/report flow')
+
+    def save(assignment,actor):
+        for field in assignment['_provided_fields']:persisted[field]=assignment[field]
+
+    with patch.object(account_control_center,'_selected_control_accounts',return_value=({'id':77},source)), patch.object(
+        account_control_center,'execute_query_pg',side_effect=query), patch.object(account_control_center,'pg_transaction',return_value=nullcontext()), patch.object(
+        account_control_center,'_upsert_control_assignment',side_effect=save) as write:
+        account_control_center.save_account_control_mapping(account_control_center.AccountControlAssignmentPayload(
+            client_id=1,trial_balance_upload_id=77,account_code='A',financial_statement_category_id=8,note_category_id=12),session={'username':'Admin'})
+    after=builder(source,[persisted],categories,[],[])
+    after_notes=build_statement_notes(source,[persisted],notes,after,section)
+    old_amount=next(row['amount'] for row in before['categories'] if row['id']==7)
+    assert Decimal(next(row['amount'] for row in after['categories'] if row['id']==8))==Decimal(old_amount)
+    assert Decimal(next(row['amount'] for row in after['categories'] if row['id']==7))==0
+    assert Decimal(next(row['current_amount'] for row in before_notes['roots'] if row['id']==11))==Decimal(old_amount)
+    assert Decimal(next(row['current_amount'] for row in after_notes['roots'] if row['id']==12))==Decimal(old_amount)
+    assert source==original and persisted['verification_workstream']=='cash'
+    assert write.call_args.args[0]['_provided_fields']=={'financial_statement_category_id','note_category_id'}
+
+
+@pytest.fixture
+def correction_store(monkeypatch):
+    from contextlib import contextmanager
+    rows=[dict(id=1,account_code='BAD',classification='parent',manually_overridden=True),
+          dict(id=2,account_code='10-01',classification='leaf',manually_overridden=False),
+          dict(id=3,account_code='BAD2',classification='leaf',manually_overridden=False)]
+    state={'rows':rows,'writes':[],'copies':[],'rolled_back':False}
+    @contextmanager
+    def transaction():
+        before=len(state['writes'])
+        try: yield
+        except Exception:
+            state['writes'][before:]=[];state['rolled_back']=True;raise
+    def query(sql,params):
+        if 'FROM trial_balance_uploads' in sql: return [dict(id=59,client_id=5,status='parsed')]
+        if 'FROM trial_balance_accounts' in sql: return state['rows']
+        raise AssertionError('Unmocked database query')
+    monkeypatch.setattr(trial_balance,'pg_transaction',transaction)
+    monkeypatch.setattr(trial_balance,'execute_query_pg',query)
+    monkeypatch.setattr(trial_balance,'execute_write_pg',lambda sql,params:state['writes'].append((sql,params)))
+    monkeypatch.setattr(trial_balance,'_copy_shared_code_assignments',lambda *args:state['copies'].append(args))
+    monkeypatch.setattr(trial_balance,'invalidate_category_for_account_cache',lambda *args:None)
+    monkeypatch.setattr(trial_balance,'log_audit',lambda *args:None)
+    return state
+
+
+def test_code_batch_rebuilds_hierarchy_once_and_preserves_overrides(correction_store):
+    corrections=[trial_balance.AccountCodeCorrection(account_id=1,account_code='10',expected_account_code='BAD'),
+                 trial_balance.AccountCodeCorrection(account_id=3,account_code='20',expected_account_code='BAD2')]
+    result=trial_balance.update_trial_balance_account_codes(59,trial_balance.AccountCodeBatchRequest(corrections=corrections))
+    assert result['corrected_count']==2
+    assert correction_store['copies']==[(5,'BAD','10',59),(5,'BAD2','20',59)]
+    sql,params=correction_store['writes'][0]
+    assert params==(1,'10',None,1,'parent',2,'10-01','10',2,'leaf',3,'20',None,1,'leaf',59)
+    assert 'IS DISTINCT FROM' in sql
+    assert all(field not in sql for field in AMOUNT_FIELDS)
+    assert 'category_id' not in sql
+    assert len(correction_store['writes'])==1
+
+
+@pytest.mark.parametrize('corrections',[
+    [(1,'10','BAD'),(3,'10','BAD2')], # duplicate final codes
+    [(1,'10-01','BAD')], # existing account
+    [(1,'10','STALE')], # concurrent correction
+    [(999,'10','BAD')], # wrong upload/account
+    [(1,'','BAD')],
+])
+def test_code_batch_rejects_whole_draft_before_copy_or_update(correction_store,corrections):
+    items=[trial_balance.AccountCodeCorrection(account_id=i,account_code=c,expected_account_code=o) for i,c,o in corrections]
+    with pytest.raises(HTTPException): trial_balance._save_account_code_corrections(59,items)
+    assert correction_store['copies']==[]
+    assert correction_store['writes']==[]
+    assert correction_store['rolled_back']
+
+
+def test_code_batch_large_upload_has_bounded_updates(correction_store):
+    correction_store['rows'].extend(dict(id=i,account_code=f'10-{i}',classification='leaf',manually_overridden=False)
+                                   for i in range(4,1007))
+    trial_balance._save_account_code_corrections(59,[trial_balance.AccountCodeCorrection(
+        account_id=1,account_code='10',expected_account_code='BAD')])
+    assert len(correction_store['writes'])==2
+    assert sum((len(params)-1)//5 for _,params in correction_store['writes'])==1006
+
+
+def test_code_batch_mapping_conflict_rolls_back_all_changes(correction_store,monkeypatch):
+    def copy(client,old,new,upload):
+        trial_balance.execute_write_pg('simulated mapping copy',(old,new))
+        if old=='BAD2': raise HTTPException(409,'Mapping conflict')
+    monkeypatch.setattr(trial_balance,'_copy_shared_code_assignments',copy)
+    with pytest.raises(HTTPException):
+        trial_balance._save_account_code_corrections(59,[
+            trial_balance.AccountCodeCorrection(account_id=1,account_code='10',expected_account_code='BAD'),
+            trial_balance.AccountCodeCorrection(account_id=3,account_code='20',expected_account_code='BAD2')])
+    assert correction_store['writes']==[]
+    assert correction_store['rolled_back']
+
+
+def test_import_unlinked_parent_warning_and_batch_corrections():
+    from io import BytesIO
+    frame=pd.DataFrame([dict(Code='BAD',Name='Parent',OD=0,OC=0,PD=0,PC=0,CD=0,CC=0),
+                        dict(Code='10-01',Name='Leaf',OD=10,OC=0,PD=0,PC=0,CD=10,CC=0)])
+    out=BytesIO();frame.to_excel(out,index=False)
+    mapping=dict(account_code_column='Code',account_name_column='Name',opening_dr_column='OD',opening_cr_column='OC',
+                 period_dr_column='PD',period_cr_column='PC',closing_dr_column='CD',closing_cr_column='CC')
+    result=trial_balance.validate_trial_balance_contents(out.getvalue(),'tb.xlsx',mapping,
+        classification_overrides={'2':'parent'},no_total_row=True)
+    assert any('Parent has no linked child' in issue['message'] for issue in result['warnings'])
+    result=trial_balance.validate_trial_balance_contents(out.getvalue(),'tb.xlsx',mapping,
+        code_overrides={'2':'10'},classification_overrides={'2':'parent'},no_total_row=True)
+    assert not any('Parent has no linked child' in issue['message'] for issue in result['warnings'])
+    assert result['valid']
+
+
+@pytest.mark.parametrize('table,source,empty', [
+    ('account_control_assignments',
+     dict(verification_workstream=None,financial_statement_category_id=4,note_category_id=None),
+     dict(verification_workstream=None,financial_statement_category_id=None,note_category_id=None)),
+    ('account_control_assignments',
+     dict(verification_workstream='cash',financial_statement_category_id=4,note_category_id=7),
+     dict(verification_workstream=None,financial_statement_category_id=None,note_category_id=None)),
+    ('account_category_assignments',dict(category_id=5),dict(category_id=None)),
+    ('account_control_cashflow_category_assignments',dict(category_id=6),dict(category_id=None)),
+    ('account_control_cashflow_assignments',
+     dict(section='investing',category_label='Investments',cash_bank_role='none',treatment_type='standard'),
+     dict(section='unassigned',category_label=None,cash_bank_role='none',treatment_type='standard')),
+])
+def test_code_correction_fills_saved_unassigned_row(table,source,empty):
+    def query(sql,params):
+        if f'FROM {table} WHERE' in sql:
+            return [source if params[1]=='1940-10-10' else empty]
+        return []
+    with patch.object(trial_balance,'execute_query_pg',side_effect=query), patch.object(
+        trial_balance,'execute_write_pg',return_value='10-10-40') as write:
+        trial_balance._copy_shared_code_assignments(5,'1940-10-10','10-10-40')
+    assert write.call_count==1
+    sql,params=write.call_args.args
+    assert sql.startswith(f'UPDATE {table} SET')
+    assert 'IS NOT DISTINCT FROM' in sql and 'RETURNING account_code' in sql
+    assert params==(*source.values(),5,'10-10-40',*empty.values())
+    # The source mapping is retained for other uploads, and no source figures are written.
+    assert all(field not in sql for field in AMOUNT_FIELDS)
+
+
+@pytest.mark.parametrize('target',[
+    dict(verification_workstream='bank',financial_statement_category_id=None,note_category_id=None),
+    dict(verification_workstream=None,financial_statement_category_id=8,note_category_id=None),
+    dict(verification_workstream=None,financial_statement_category_id=None,note_category_id=7),
+])
+def test_code_correction_nonempty_target_still_blocks(target):
+    source=dict(verification_workstream=None,financial_statement_category_id=4,note_category_id=7)
+    def query(sql,params):
+        if 'FROM account_control_assignments WHERE' in sql:
+            return [source if params[1]=='OLD' else target]
+        return []
+    with patch.object(trial_balance,'execute_query_pg',side_effect=query), patch.object(trial_balance,'execute_write_pg') as write:
+        with pytest.raises(HTTPException) as raised:
+            trial_balance._copy_shared_code_assignments(5,'OLD','10-10-40')
+        assert raised.value.status_code==409
+        write.assert_not_called()
+
+
+def test_code_correction_does_not_overwrite_target_changed_after_read():
+    source=dict(verification_workstream=None,financial_statement_category_id=4,note_category_id=None)
+    empty={key:None for key in source}
+    def query(sql,params):
+        if 'FROM account_control_assignments WHERE' in sql:
+            return [source if params[1]=='OLD' else empty]
+        return []
+    with patch.object(trial_balance,'execute_query_pg',side_effect=query), patch.object(
+        trial_balance,'execute_write_pg',return_value=None) as write:
+        with pytest.raises(HTTPException) as raised:
+            trial_balance._copy_shared_code_assignments(5,'OLD','10-10-40')
+        assert raised.value.status_code==409
+        assert 'changed while correcting' in raised.value.detail
+        assert write.call_count==1
+
+
+@pytest.mark.parametrize('same',[False,True])
+def test_code_correction_empty_source_and_identical_mapping_are_noops(same):
+    real=dict(verification_workstream=None,financial_statement_category_id=4,note_category_id=7)
+    empty={key:None for key in real}
+    def query(sql,params):
+        if 'FROM account_control_assignments WHERE' in sql:
+            return [real if same or params[1]=='NEW' else empty]
+        return []
+    with patch.object(trial_balance,'execute_query_pg',side_effect=query), patch.object(trial_balance,'execute_write_pg') as write:
+        trial_balance._copy_shared_code_assignments(5,'OLD','NEW')
+        write.assert_not_called()

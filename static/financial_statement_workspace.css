@@ -1,0 +1,27 @@
+#accFinancialSetupModal .acc2-profit-link { margin-bottom: 18px; padding: 14px; border: 1px solid #dbe4ea; border-radius: 8px; background: #f8fafc; }
+#accFinancialSetupModal .acc2-profit-link h3 { margin: 0 0 6px; font-size: 15px; }
+#accFinancialSetupModal .acc2-profit-link p { color: #617589; font-size: 12px; line-height: 1.5; }
+#accFinancialSetupModal .acc2-profit-link > div { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; }
+#accFinancialSetupModal .acc2-profit-link label { flex: 1; min-width: 0; font-size: 12px; }
+#accFinancialSetupModal .acc2-profit-link select { width: 100%; min-width: 0; max-width: 100%; }
+
+/* Keep presentation controls within the existing Balance Sheet setup rows. */
+#accFinancialSetupModal .acc2-presentation-control { display: inline-flex; align-items: center; gap: 5px; margin: 0; padding: 0; color: #536577; font-size: 12px; }
+#accFinancialSetupModal .acc2-presentation-control select { box-sizing: border-box; width: 110px; min-width: 0; max-width: 110px; height: 27px; min-height: 27px; margin: 0; padding: 2px 6px; }
+@media (max-width: 700px) {
+    #accFinancialSetupModal .acc2-fs-heading-title, #accFinancialSetupModal .acc2-fs-category { flex-wrap: wrap; }
+    #accFinancialSetupModal .acc2-fs-heading-title > div, #accFinancialSetupModal .acc2-fs-category > span:last-child { flex-wrap: wrap; }
+    #accFinancialSetupModal .acc2-fs-toolbar { flex-wrap: wrap; gap: 8px; }
+    #accFinancialSetupModal .acc2-fs-toolbar > span:first-child { flex: 1 0 100%; }
+    #accFinancialSetupModal .acc2-fs-toolbar > div { flex-wrap: wrap; }
+    #accFinancialSetupModal .acc2-fs-order-status:empty { display: none; }
+}
+
+.tb-saved-table .acc2-fs-picker { width: 100%; min-width: 0; max-width: 100%; }
+.tb-saved-table .acc2-fs-picker-trigger { box-sizing: border-box; min-width: 0; max-width: 100%; font: inherit; padding: 3px 5px; min-height: 25px; border-color: transparent; background: transparent; }
+.tb-saved-table .acc2-fs-picker-trigger > span:first-child { min-width: 0; }
+.tb-saved-table .acc2-fs-picker-trigger:hover { border-color: #bfd0df; background: #f7fafc; }
+.tb-saved-table tbody tr td.tb-account-code-review { background: #fff3f2; color: #974844; }
+.tb-code-review-hint { display: block; margin-top: 2px; color: #974844; font-size: 9px; font-weight: 600; }
+#accFinancialSetupModal .acc2-modal { max-width: calc(100vw - 32px); }
+#accFinancialSetupModal [hidden] { display: none !important; }
