@@ -39,6 +39,7 @@ function create(host) {
     function lazyPickerMarkup(account,selectedId,kind,statementCategoryId,options) {
         const note=kind==='note', key=String(account.account_code||'').replace(/[^a-zA-Z0-9_-]/g,'_');
         const id=(note?'accNotePicker_':'accFsPicker_')+key;
+        if(note)selectedId=accEffectiveNoteSelection(selectedId,options);
         const label=note?accNotePickerLabel(statementCategoryId,selectedId,options):accFinancialPickerLabel(selectedId);
         const disabled=!host.isAdmin || (note && (!statementCategoryId || statementCategoryId==='__mixed' || !options.length));
         return '<div class="acc2-fs-picker'+(note?' acc2-note-picker':'')+'" data-fs-picker data-fs-picker-lazy="'+kind+'">'
@@ -171,29 +172,37 @@ function create(host) {
     }
 
     function accNotePickerLabel(statementCategoryId, selectedId, options) {
+        selectedId = accEffectiveNoteSelection(selectedId, options);
         if (statementCategoryId === '__mixed') return 'Accounts span multiple statement categories';
         if (!statementCategoryId) return 'Assign a Financial Statement category first';
         if (!options.length) return 'No notes defined under this category';
         if (selectedId === '__mixed') return 'Mixed assignments — choose one';
-        if (!selectedId) return 'Select a note';
+        if (!selectedId) return 'Unassigned';
         const selected = options.find(function (item) { return String(item.category.id) === String(selectedId); });
-        return selected ? selected.path.join(' › ') : 'Existing note assignment';
+        return selected ? selected.path.join(' › ') : 'Unassigned';
+    }
+
+    // Notes outside the selected statement category are not effective assignments.
+    function accEffectiveNoteSelection(selectedId, options) {
+        if (selectedId === '__mixed') return '__mixed';
+        if (selectedId == null || selectedId === '') return '';
+        return options.some(function (item) { return String(item.category.id) === String(selectedId); }) ? String(selectedId) : '';
     }
 
     function accNoteAssignmentSearchText(account) {
         const statementCategoryId = accEffectiveFinancialCategory(account);
-        const noteCategoryId = accEffectiveNoteCategory(account);
+        let noteCategoryId = accEffectiveNoteCategory(account);
         if (noteCategoryId === '__mixed') return 'Mixed assignments';
-        if (!noteCategoryId) return 'Unassigned';
         const options = statementCategoryId && statementCategoryId !== '__mixed' ? accGetEffectiveNoteOptions(statementCategoryId) : [];
+        noteCategoryId = accEffectiveNoteSelection(noteCategoryId, options);
+        if (!noteCategoryId) return 'Unassigned';
         const selected = options.find(function (item) { return String(item.category.id) === String(noteCategoryId); });
-        if (selected) return selected.path.join(' ');
-        const existing = host.state.notes.find(function (item) { return Number(item.id) === Number(noteCategoryId); });
-        return existing ? existing.label : 'Existing note assignment';
+        return selected ? selected.path.join(' ') : 'Unassigned';
     }
 
     function accNotePickerMarkup(account, selectedId, statementCategoryId, options, eager=false) {
         if(host.lazyPickers && !eager)return lazyPickerMarkup(account,selectedId,'note',statementCategoryId,options);
+        selectedId = accEffectiveNoteSelection(selectedId, options);
         const codeKey = String(account.account_code || '').replace(/[^a-zA-Z0-9_-]/g, '_');
         const pickerId = 'accNotePicker_' + codeKey;
         const source = statementCategoryId && statementCategoryId !== '__mixed'

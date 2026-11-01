@@ -279,6 +279,9 @@ def build_statement_notes(accounts, assignments, note_categories, statement, sta
             'is_active': note.get('is_active', True),
             'current_amount': _text(current),
             'comparative_amount': _text(opening) if statement_section == 'balance_sheet' else None,
+            'direct_current_amount': _text(values['current']),
+            'direct_comparative_amount': _text(values['comparative']) if statement_section == 'balance_sheet' else None,
+            'direct_account_count': int(values['account_count']),
             'account_count': int(values['account_count']) + sum(int(child['account_count']) for child in child_nodes),
             'current_system_amount': _text(values.get('current_system_amount')) if values.get('current_system_amount') is not None else None,
             'comparative_system_amount': _text(values.get('comparative_system_amount')) if values.get('comparative_system_amount') is not None else None,
@@ -331,7 +334,7 @@ def build_statement_notes(accounts, assignments, note_categories, statement, sta
         pending_id = -(2 * category_id + 1)
         pending = {
             'id': pending_id,
-            'label': 'Unallocated / awaiting note detail',
+            'label': 'Unassigned' if row['unassigned_account_count'] else 'Unallocated / awaiting note detail',
             'source_statement_category_id': category_id,
             'parent_category_id': int(root['id']) if root else -(2 * category_id),
             'sort_order': 2147483647,

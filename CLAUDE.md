@@ -58,7 +58,7 @@ One line per file group: what it is now. Full build history for every entry live
 - experiments/cashflow_fetch/*.py + tests/test_cashflow_fetch_benchmark.py → Standalone read-only transport benchmarks with exact source/report/export comparisons; never loaded by the app. See CHANGELOG_ARCHIVE.md.
 
 
-- static/reconciliation.html, static/reconciliation.js → Reports, Cashflows and Financial Statements: period labels, normal-balance signs, note coverage, statement shortcuts, profit status and review dialogs. See CHANGELOG_ARCHIVE.md.
+- static/reconciliation.html, static/reconciliation.js → Reports, Cashflows and Financial Statements: period labels, signs, note coverage, shortcuts, profit status and direct note details. See CHANGELOG_ARCHIVE.md.
 
 ## Commands
 - Run app: [your actual run command]
@@ -259,6 +259,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-01: Financial Statement notes show Unassigned balances and direct note assignments on the note row. See CHANGELOG_ARCHIVE.md.
 - 2026-11-01: Profit closing status defaults to “not yet included” without saving until confirmed. See CHANGELOG_ARCHIVE.md.
 - 2026-11-01: Balance Sheet and Income Statement pages offer direct shortcuts while retaining the selected Trial Balance. See CHANGELOG_ARCHIVE.md.
 - 2026-11-01: Balance Sheet review dialog presents source checks and review messages in separate tables. See CHANGELOG_ARCHIVE.md.

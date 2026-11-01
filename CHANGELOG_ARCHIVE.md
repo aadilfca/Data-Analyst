@@ -9224,6 +9224,13 @@ The proof clears on source changes, errors and view transitions; Income Statemen
 **Verification:** JavaScript syntax and whitespace checks pass. Aadil authorized commit/push.
 
 
+## Direct note balances in Financial Statement Notes — 2026-11-01
+
+**Implementation:** TB Note pickers show Unassigned when no valid note is selected for the account's statement category. Notes reports label uncovered-account residuals Unassigned. The Notes builder also exposes direct-to-root account balances separately from rolled-up totals; the report shows direct balances on the root note row, and labels that row “Direct assignment to [note]” when child notes also exist. Child, unassigned, and system-linked rows remain separately visible; subtotals retain their existing calculation. Trial Balance/Reconciliation script versions are 3/73. No assignment is automatically cleared.
+
+**Verification:** JavaScript syntax, Python compilation and whitespace checks pass. Aadil accepted the result and authorized commit/push.
+
+
 ## Balance Sheet opening comparatives and I/S review - 2026-10-30
 
 **Implementation:** The selected TB supplies current closing and comparative opening Dr-Cr through shared ACC categories, signs and formulas. Comparative headers identify the actual opening boundary from period_start, not an assumed financial year-end; missing dates remain unavailable. Source is labelled TB opening balances, pending prior-year final-account/adjustment verification.
