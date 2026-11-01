@@ -1,15 +1,15 @@
-## Current work — Trial Balance assignment workspace — 2026-10-31
+## Trial Balance assignment workspace — completed — 2026-11-01
 
 | Phase | Status / objective |
 |---|---|
 | 1 — Foundation | Accepted and pushed (`91486fe`): workflow selector, scoped reads, independent filters and ACC setup/return links. |
-| 2 — Financial Statements/Notes | Implemented; local acceptance pending: shared in-place editors/setup, compatible Notes, transactional saves and recovery. |
+| 2 — Financial Statements/Notes | Accepted and pushed (`d0fea81`): shared in-place editors/setup, compatible Notes, transactional saves and recovery. |
 | 3 — Cashflows | Accepted and pushed (`8883074`): editable TB categories and in-place category, Treasury, transfer/receipt and source-template setup. Aadil verified report updates. |
 | 4 — Verification | Accepted and pushed (`019da3d`): editable workstream assignments and direct searchable TB popup; existing Verification routing and Audit Rules categories preserved. |
-| 5 — Integrated review | Implemented; local acceptance pending: approved regressions confirm selected-upload retention through statement/Notes navigation and existing assignment-to-report freshness paths. |
-| 6 — Cutover | Pending: remove standalone ACC screens, navigation and obsolete code after accepted TB feature parity. |
+| 5 — Integrated review | Accepted and pushed (`dc68815`): selected-upload retention through statement/Notes navigation and existing assignment-to-report freshness paths verified. |
+| 6 — Cutover | Accepted and closed: ACC screens retired, bookmarks redirect, APIs retained. Observed Cashflow latency is an accepted limitation; Commit/push authorised. |
 
-Assignments retain client/account-code scope. Financial Statements, Cashflow and Verification assignment setup open inside TB; ACC remains available during rollout. Each phase requires local acceptance and separate Git authorization. Details: CHANGELOG_ARCHIVE.md, “Trial Balance Verification workspace — Phase 4”.
+Assignments retain client/account-code scope. Financial Statements, Cashflow and Verification assignment setup open inside TB; assignment APIs remain available. All six phases are accepted; Phase 6 commit/push is authorised. Details: CHANGELOG_ARCHIVE.md, “Trial Balance assignment workspace cutover — Phase 6”.
 
 ## Full database backups — completed — 2026-10-25
 

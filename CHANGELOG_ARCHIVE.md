@@ -1,12 +1,22 @@
 # Changelog Archive
 
+## Trial Balance assignment workspace cutover — Phase 6 — 2026-11-01
+
+Retired the standalone Account Control Centre page and navigation. Legacy page bookmarks redirect to the matching Trial Balance workflow while preserving valid upload/setup context; existing assignment APIs remain mounted. Trial Balance Cashflow Assignments opens local setup. Updated shared-navigation cache versions in all consuming pages. No schema or API changes.
+
+**Verification:** Four approved test files passed: 202 passed, 1 skipped. Coverage includes legacy redirects and upload/setup context, retained APIs, in-place Cashflow setup, Trial Balance workflows and report/data-flow safety. JavaScript syntax and `git diff --check` passed. Existing framework deprecation, duplicate-operation-ID and pytest-cache warnings remain. Aadil accepted local functionality and authorised commit/push.
+
+**Live closeout review:** Authenticated Playwright checked Leather Crop/upload 60 (59 is unavailable). A leaf's 1,000,000 FS reassignment moved exactly between Inventory/Fixed Assets. A Cashflow reassignment changed the configuration fingerprint and voucher attribution without changing source totals/net movement. All FS/Note/Verification/Cashflow mappings and full statement/Cashflow results matched baseline after restoration; explicit source refresh matched too. Both Notes pages and legacy redirects worked. Baseline report requests returned HTTP 200. Existing API names remain shared backend services, independent of the retired screen.
+
+**Observed timing:** Balance Sheet 4.49s including source lookup (report API 3.04s); Income Statement 2.91/2.97s. Half-year Cashflow first-context 20.02s, repeats 14.07/28.03s to completed balances, forced source 20.14s; cached movements appeared in 1.11s while balances displayed Checking. These localhost observations do not establish a true cold server, production latency, or global optimality. Cashflow exceeds the historical 2s cold/500ms warm goals. Server wait includes database/upstream network work; browser timings cannot isolate Supabase execution from home connectivity. No renewed optimisation was attempted. Evidence: external `phase6-live-review/evidence.json` and screenshots in this chat's visualization directory. Aadil accepted closure of the six-phase workspace migration with this speed limitation documented; further performance work requires separate scope. Aadil authorised commit/push on 1 November 2026.
+
 ## Trial Balance integrated review and freshness — Phase 5 — 2026-11-01
 
 Extended the isolated statement browser regression to trace the selected upload through Balance Sheet → Notes → Financial Statements → Income Statement → Notes → back, asserting URL scope and Notes API scope at each step. Existing assignment, report refresh, TB totals and Verification routing contracts were reviewed; no reproducible stale-data defect required application changes.
 
 **Verification:** The six approved TB, ACC, statement, Cashflow and Verification suites passed before the test extension: 383 passed, 1 skipped. The extended Playwright browser regression passed separately. Existing Starlette/httpx and pytest-cache warnings remain. No live data writes, backend changes or package installation. `File_map.md` remains unchanged because no file was added, removed or repurposed.
 
-**Acceptance:** Awaiting Aadil's local-server review and explicit Git authorization.
+**Acceptance:** Aadil accepted and pushed as `dc68815` before Phase 6.
 
 ## Trial Balance Verification workspace — Phase 4 — 2026-11-01
 

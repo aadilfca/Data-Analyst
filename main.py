@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, RedirectResponse
+from urllib.parse import urlencode
 from database import init_db, log_error, get_error_code_for_exception, execute_query
 from fastapi.concurrency import run_in_threadpool
 import os
@@ -27,6 +28,32 @@ app.add_middleware(
 )
 # Fast-data-handling Phase 1 of 13: compress responses over slow connections (Sialkot)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+
+@app.get("/static/account_control_center.html", include_in_schema=False)
+async def redirect_legacy_account_control_centre(request: Request):
+    """Keep old ACC bookmarks useful while moving setup into Trial Balance."""
+    tab = (request.query_params.get("tab") or "verification").strip().casefold()
+    setup = (request.query_params.get("setup") or "").strip().casefold()
+    setup_workflows = {
+        "financial": "financial", "notes": "financial", "cashflow": "cashflow",
+        "treasury": "cashflow", "template": "cashflow", "verification": "verification",
+    }
+    tab_workflows = {
+        "financial": "financial", "notes": "financial", "cashflow": "cashflow",
+        "verification": "verification",
+    }
+    workflow = setup_workflows.get(setup) or tab_workflows.get(tab) or "verification"
+    destination = {"view": "available", "workflow": workflow}
+    upload_id = (request.query_params.get("upload_id") or "").strip()
+    if upload_id.isdigit() and int(upload_id) > 0:
+        destination["upload_id"] = upload_id
+    if setup in setup_workflows:
+        destination["setup"] = setup
+    return RedirectResponse(
+        url="/static/trial_balance.html?" + urlencode(destination),
+        status_code=302,
+    )
 
 
 @app.middleware("http")

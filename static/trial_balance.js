@@ -2953,10 +2953,7 @@ if (tbAssignCategoriesBtn) {
     tbAssignCategoriesBtn.addEventListener('click', function () {
         if (tbWorkflowMode === 'financial') { tbOpenFinancialSetup('financial'); return; }
         if (tbWorkflowMode === 'verification') { tbOpenVerificationSetup(); return; }
-        saveSavedWorkflowReturnState();
-        const target = new URL(AccountAssignments.accUrl(tbWorkflowMode, availableUploadsDropdown && availableUploadsDropdown.value), location.href);
-        if (tbWorkflowMode === 'financial' && new URLSearchParams(location.search).get('acc_tab') === 'notes') target.searchParams.set('tab', 'notes');
-        window.location.href = target.pathname + target.search;
+        tbOpenCashflowSetup();
     });
 }
 
@@ -3009,6 +3006,9 @@ window.onload = async function () {
         if (uploadViewContainer) uploadViewContainer.style.display = 'none';
         availableTrialBalancesSection.style.display = 'block';
         await loadAvailableUploads(availableTrialBalancesBtn, params.get('upload_id'));
+        if (availableUploadsDropdown && availableUploadsDropdown.value && params.get('setup')) {
+            await tbOpenLegacySetup(params.get('setup'));
+        }
     }
 };
 
@@ -3430,6 +3430,15 @@ async function tbOpenCashflowSetup() {
     if(!availableUploadsDropdown?.value)return;
     if(!tbFsIsAdmin){showStatus('Only administrators can manage Cashflow setup.','error');return;}
     try{await tbCashflowWorkspace.open('categories');}catch(error){showStatus(error.message,'error');}
+}
+async function tbOpenLegacySetup(setup) {
+    if (setup === 'financial' || setup === 'notes') return tbOpenFinancialSetup(setup);
+    if (setup === 'verification') return tbOpenVerificationSetup();
+    if (!['cashflow', 'treasury', 'template'].includes(setup)) return;
+    await tbOpenCashflowSetup();
+    const tab = {cashflow: 'categories', treasury: 'accounts', template: 'template'}[setup];
+    const control = document.querySelector('#cfwBackdrop [data-cfw-tab="' + tab + '"]');
+    if (control) control.click();
 }
 tbVerificationWorkspace = window.VerificationWorkspace ? VerificationWorkspace.create({
     clientId:()=>window.getSelectedClientId?window.getSelectedClientId():null,

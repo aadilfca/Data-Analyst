@@ -762,7 +762,7 @@ def test_assignment_workflows_preserve_filters_amounts_and_reject_late_results(b
     page.add_script_tag(path=str(PROJECT_ROOT / "static" / "cashflow_workspace.js"))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""async () => {
-        window.API_BASE=''; window.getSelectedClientId=()=>1; window.calls=[];
+        window.API_BASE=''; window.getSelectedClientId=()=>1; window.calls=[]; window.cashflowSetupReads=0;
         const accounts=[{id:1,account_code:'A',account_name:'Cash account',is_leaf:true,opening_dr:'10.25',closing_dr:'20.5'},
                         {id:2,account_code:'B',account_name:'Bank account',is_leaf:true,opening_dr:'30',closing_dr:'40'}];
         const mapping={client_id:1,upload:{id:77},accounts:[
@@ -772,7 +772,11 @@ def test_assignment_workflows_preserve_filters_amounts_and_reject_late_results(b
             window.calls.push({url,method:options.method||'GET'});
             if(url.includes('/trial-balance/accounts')) return {ok:true,json:async()=>({accounts,adjustments:[],validation_controls:{draft_reconciliation:null}})};
             if(url.includes('/mapping?')) return {ok:true,json:async()=>mapping};
-            if(url.includes('/cashflow/setup')) return new Promise(resolve=>{window.releaseCashflow=()=>resolve({ok:true,json:async()=>({client_id:1,upload:{id:77},accounts:[{account_code:'A',category_id:1},{account_code:'B',category_id:2}],categories:[{id:1,label:'Receipts',is_active:true},{id:2,label:'Payments',is_active:true}]})});});
+            if(url.includes('/cashflow/setup')) {
+                const response={ok:true,json:async()=>({client_id:1,upload:{id:77},accounts:[{account_code:'A',category_id:1},{account_code:'B',category_id:2}],categories:[{id:1,label:'Receipts',is_active:true},{id:2,label:'Payments',is_active:true}],historical_orphans:[],treasury_accounts:{cash:[],bank:[]},settings:{},role_categories:{}})};
+                if(++window.cashflowSetupReads <= 2) return new Promise(resolve=>{window.releaseCashflow=()=>resolve(response);});
+                return response;
+            }
             return {ok:true,json:async()=>({categories:url.includes('category_type=note')?[{id:11,label:'Cash note',is_active:true}]:[{id:7,label:'Cash',is_active:true},{id:8,label:'Bank',is_active:true}]})};
         };
         availableTrialBalancesSection.style.display='block';
@@ -805,6 +809,12 @@ def test_assignment_workflows_preserve_filters_amounts_and_reject_late_results(b
     page.wait_for_function("document.querySelector('.tb-saved-category-cell').textContent === 'Receipts'")
     page.locator('#tbSavedCategorySearch').fill('Receipts')
     assert page.locator('tr[data-category-filter]:visible').count() == 1
+    page.evaluate('tbFsIsAdmin = true')
+    page.locator('#tbAssignCategoriesBtn').click()
+    page.wait_for_selector('#cfwBackdrop:not([hidden])')
+    assert page.locator('#cfwBackdrop').get_by_role('tab', name='Categories').count() == 1
+    assert page.url == 'about:blank'
+    page.locator('#cfwBackdrop [data-cfw-close]').click()
     page.locator('#tbAssignmentWorkflow').select_option('financial')
     assert page.locator('#tbSavedCategorySearch').input_value() == 'Cash'
     assert page.locator('#tbSavedNoteSearch').input_value() == 'Cash note'
@@ -829,6 +839,27 @@ def test_assignment_workflows_preserve_filters_amounts_and_reject_late_results(b
     page.wait_for_function("document.querySelector('#tbSavedCategoryNoMatches').textContent.includes('assignments are unavailable')")
     assert page.locator('#tbSavedCategorySearch').is_disabled()
     assert page.locator('tr[data-category-filter]').evaluate_all('rows=>rows.map(row=>row.dataset.tbAmounts)') == before
+    page.close()
+
+
+def test_legacy_cashflow_setup_bookmark_opens_the_matching_trial_balance_panel(browser):
+    import re
+    html = (PROJECT_ROOT / 'static' / 'trial_balance.html').read_text(encoding='utf-8')
+    page = browser.new_page()
+    page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
+    for script in ('account_assignment_shared.js', 'financial_statement_workspace.js', 'cashflow_workspace.js', 'trial_balance.js'):
+        page.add_script_tag(path=str(PROJECT_ROOT / 'static' / script))
+    page.evaluate("""async () => {
+        window.API_BASE=''; window.getSelectedClientId=()=>1; tbFsIsAdmin=true;
+        availableUploadsDropdown.innerHTML='<option value="77">TB</option>';
+        window.setupCalls=[];
+        window.fetch=async url=>{setupCalls.push(url);return {ok:true,json:async()=>({client_id:1,upload:{id:77},accounts:[],categories:[],historical_orphans:[],treasury_accounts:{cash:[],bank:[]},settings:{},role_categories:{}})}};
+        await tbOpenLegacySetup('template');
+    }""")
+    assert page.locator('#cfwBackdrop').is_visible()
+    assert page.locator('#cfwBackdrop [data-cfw-panel="template"]').is_visible()
+    setup_calls = page.evaluate('setupCalls')
+    assert setup_calls and 'trial_balance_upload_id=77' in setup_calls[0], setup_calls
     page.close()
 
 
