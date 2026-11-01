@@ -19,9 +19,10 @@
         #balanceSheetView #balanceSheetHeading { margin: 0; color: #18344b; font-size: 22px; line-height: 1.3; overflow-wrap: anywhere; }
         #balanceSheetView .balance-sheet-meta-row, #balanceSheetView .balance-sheet-meta-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
         #balanceSheetView .balance-sheet-meta-row { width: 100%; box-sizing: border-box; justify-content: space-between; }
-        #balanceSheetView .balance-sheet-meta-left { flex: 1 1 auto; flex-wrap: nowrap; }
+        #balanceSheetView .balance-sheet-meta-left { flex: 0 1 auto; flex-wrap: nowrap; }
         #balanceSheetView #balanceSheetDate { margin: 0; color: #536577; font-size: 13px; font-weight: 700; white-space: nowrap; }
         #balanceSheetView .balance-sheet-actions { align-items: center; justify-content: flex-end; flex: 0 0 auto; flex-wrap: nowrap; margin-left: auto; }
+        #balanceSheetView .balance-sheet-actions .cashflows-secondary { padding: 7px 9px; font-size: 13px; white-space: nowrap; }
         #balanceSheetView .balance-sheet-icon-button { display: inline-grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #38536b; cursor: pointer; }
         #balanceSheetView .balance-sheet-icon-button:hover { border-color: #7d9bb3; background: #f3f7fa; color: #18344b; }
         #balanceSheetView .balance-sheet-icon-button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
@@ -53,7 +54,7 @@
             #balanceSheetTable .bs-category th { padding-left: 20px; }
             #balanceSheetTable .balance-sheet-amount { width: 25%; }
         }
-        #balanceSheetUpload { width: min(250px, 40vw); min-width: 170px; padding: 7px 28px 7px 10px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #34495e; font: inherit; font-size: 12px; }
+        #balanceSheetUpload { width: min(180px, 30vw); min-width: 150px; flex: 0 1 180px; padding: 7px 28px 7px 10px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #34495e; font: inherit; font-size: 12px; }
         #statementClosingControls[hidden] { display: none; }
         #statementClosingControls { display: grid; gap: 12px; color: #40566a; font-size: 13px; }
         #statementClosingControls label { font-weight: 600; color: #243b53; }
@@ -412,6 +413,8 @@
                         </button>
                         <button type='button' id='balanceSheetNotesOpen' class='cashflows-secondary' hidden>Notes to Balance Sheet</button>
                         <button type='button' id='incomeStatementNotesOpen' class='cashflows-secondary' hidden>Notes to Income Statement</button>
+                        <button type='button' id='balanceSheetIncomeStatementShortcut' class='cashflows-secondary' aria-label='Open Income Statement' title='Open Income Statement' hidden>Income Statement</button>
+                        <button type='button' id='incomeStatementBalanceSheetShortcut' class='cashflows-secondary' aria-label='Open Balance Sheet' title='Open Balance Sheet' hidden>Balance Sheet</button>
                         <button type='button' id='balanceSheetReload' class='cashflows-secondary'>Reload Balance Sheet</button>
                         <button type='button' id='balanceSheetBack' class='cashflows-secondary'>Financial Statements</button>
                     </div>
@@ -737,6 +740,6 @@
     </section>
     <script src='/static/client_context.js?v=28'></script>
     <script src='/static/loading_ui.js?v=ce6d21ca20c8'></script>
-    <script src='/static/reconciliation.js?v=70'></script>
+    <script src='/static/reconciliation.js?v=71'></script>
 </body>
 </html>

@@ -5685,6 +5685,8 @@
         setStatementHeaderTitle(title);
         element('balanceSheetNotesOpen').hidden = activeStatement !== 'balance_sheet';
         element('incomeStatementNotesOpen').hidden = activeStatement !== 'income_statement';
+        element('balanceSheetIncomeStatementShortcut').hidden = activeStatement !== 'balance_sheet';
+        element('incomeStatementBalanceSheetShortcut').hidden = activeStatement !== 'income_statement';
         const params = new URLSearchParams(window.location.search);
         params.set('view', 'reports');
         params.set('report', isStatement ? (activeStatement === 'income_statement' ? 'income-statement' : 'balance-sheet') : 'financial-statements');
@@ -5763,6 +5765,8 @@
         bindStatementDialog('statementClosingOpen', 'statementClosingDialog');
         element('financialStatementsBack').addEventListener('click', showReportsHub);
         element('balanceSheetBack').addEventListener('click', function () { showFinancialStatements(false); });
+        element('balanceSheetIncomeStatementShortcut').addEventListener('click', function () { showFinancialStatements('income-statement'); });
+        element('incomeStatementBalanceSheetShortcut').addEventListener('click', function () { showFinancialStatements('balance-sheet'); });
         element('balanceSheetNotesOpen').addEventListener('click', function () { showStatementNotes('balance_sheet'); });
         element('incomeStatementNotesOpen').addEventListener('click', function () { showStatementNotes('income_statement'); });
         element('balanceSheetNotesBack').addEventListener('click', function () { showStatementFromNotes('balance_sheet'); });

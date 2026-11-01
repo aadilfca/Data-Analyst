@@ -9210,6 +9210,13 @@ The proof clears on source changes, errors and view transitions; Income Statemen
 **Verification:** JavaScript syntax and `git diff --check` pass. Aadil confirmed positive local testing. No automated suite or backend changes were needed.
 
 
+## Income Statement and Balance Sheet shortcuts — 2026-11-01
+
+**Implementation:** Each statement page now links directly to the other in its existing action row. Switching retains the selected Trial Balance; desktop controls remain in one row with a narrower period selector, while the existing mobile layout stacks them. Reconciliation script cache version is 71; no accounting or backend behavior changed.
+
+**Verification:** JavaScript syntax and whitespace checks pass. Aadil accepted the local result and authorized commit/push.
+
+
 ## Balance Sheet opening comparatives and I/S review - 2026-10-30
 
 **Implementation:** The selected TB supplies current closing and comparative opening Dr-Cr through shared ACC categories, signs and formulas. Comparative headers identify the actual opening boundary from period_start, not an assumed financial year-end; missing dates remain unavailable. Source is labelled TB opening balances, pending prior-year final-account/adjustment verification.
