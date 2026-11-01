@@ -273,6 +273,14 @@ function create(host) {
             ['', 'asset', 'liability', 'equity'].map(function (role) { return '<option value="' + role + '"' + ((item.presentation_role || '') === role ? ' selected' : '') + '>' + (labels[role] || 'Not set') + '</option>'; }).join('') + '</select></label>';
     }
 
+    function accIncomeStatementRoleMarkup(item, readOnly) {
+        if (item.statement_section !== 'income_statement' || (item.row_type === 'category' && item.parent_category_id != null)) return '';
+        const labels = { income: 'Income (credit-normal)', expense: 'Expense (debit-normal)' };
+        if (readOnly) return '<span class="acc2-presentation-reference">' + (labels[item.income_statement_role] || 'Income/Expense not set') + '</span>';
+        return '<label class="acc2-presentation-control">Income/Expense <select class="acc2-select" data-fs-income-role="' + item.id + '" aria-label="Income/Expense role for ' + accEscape(item.label) + '">' +
+            ['', 'income', 'expense'].map(function (role) { return '<option value="' + role + '"' + ((item.income_statement_role || '') === role ? ' selected' : '') + '>' + (labels[role] || 'Not set') + '</option>'; }).join('') + '</select></label>';
+    }
+
     async function accHandlePresentationChange(event) {
         const select = event.target.closest('[data-fs-presentation]');
         if (!select) return;
@@ -289,6 +297,22 @@ function create(host) {
         } finally { select.disabled = false; }
     }
 
+    async function accHandleIncomeStatementRoleChange(event) {
+        const select = event.target.closest('[data-fs-income-role]');
+        if (!select) return;
+        const item = host.state.categories.find(function (row) { return Number(row.id) === Number(select.dataset.fsIncomeRole); });
+        if (!item) return;
+        select.disabled = true;
+        try {
+            await accApi('/api/account-control-center/categories/' + item.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: host.clientId, category_type: 'financial_statement', label: item.label, statement_section: item.statement_section, row_type: item.row_type, parent_category_id: item.parent_category_id, sort_order: item.sort_order, is_active: item.is_active, income_statement_role: select.value || null }) });
+            item.income_statement_role = select.value || null;
+            accShowStatus('Income/Expense role saved. Reload Income Statement Notes to apply.', 'success');
+        } catch (error) {
+            select.value = item.income_statement_role || '';
+            accShowStatus(error.message, 'error');
+        } finally { select.disabled = false; }
+    }
+
     function accRenderFinancialOutlines() {
         document.querySelectorAll('[data-fs-section]').forEach(function (panel) {
             const section = panel.dataset.fsSection;
@@ -300,7 +324,7 @@ function create(host) {
             const totals = calculations.filter(function (item) { return item.calculation_type === 'total'; }).sort(function (a, b) { return Number(a.sort_order) - Number(b.sort_order) || Number(a.id) - Number(b.id); });
             const totalsAfterSourceRow = new Map();
             const unplacedTotals = [];
-            function actions(item) { return accPresentationMarkup(item, readOnly) + (readOnly ? '' : '<button type="button" class="acc2-fs-small" data-fs-action="delete" data-fs-id="' + item.id + '">Delete</button><button type="button" class="acc2-fs-small" data-fs-action="rename" data-fs-id="' + item.id + '">Rename</button><button type="button" class="acc2-fs-small" data-fs-action="toggle" data-fs-id="' + item.id + '" data-fs-active="' + item.is_active + '">' + (item.is_active ? 'Deactivate' : 'Restore') + '</button>'); }
+            function actions(item) { return accPresentationMarkup(item, readOnly) + accIncomeStatementRoleMarkup(item, readOnly) + (readOnly ? '' : '<button type="button" class="acc2-fs-small" data-fs-action="delete" data-fs-id="' + item.id + '">Delete</button><button type="button" class="acc2-fs-small" data-fs-action="rename" data-fs-id="' + item.id + '">Rename</button><button type="button" class="acc2-fs-small" data-fs-action="toggle" data-fs-id="' + item.id + '" data-fs-active="' + item.is_active + '">' + (item.is_active ? 'Deactivate' : 'Restore') + '</button>'); }
             function dragHandle(item, kind) { return readOnly ? '' : '<button type="button" class="acc2-fs-drag-handle" draggable="true" data-fs-drag-handle data-fs-id="' + item.id + '" aria-label="Drag to reorder ' + kind + ' ' + accEscape(item.label) + '" title="Drag to reorder">☰</button>'; }
             function calculationMarkup(calculation, kind) {
                 const summary = (calculation.components || []).map(function (component, index) {
@@ -1220,6 +1244,7 @@ function create(host) {
             panel.addEventListener('click', function (event) { accHandleFinancialCalculationAction(event).catch(function (error) { accShowStatus(error.message, 'error'); }); });
             panel.addEventListener('change', accHandleCalculationIncludeChange);
             panel.addEventListener('change', accHandlePresentationChange);
+            panel.addEventListener('change', accHandleIncomeStatementRoleChange);
             panel.addEventListener('click', accHandleProfitLinkAction);
             panel.addEventListener('click', function (event) { accHandleFinancialOutlineAction(event).catch(function (error) { accShowStatus(error.message, 'error'); }); });
             panel.addEventListener('dragstart', accHandleFinancialDragStart);
@@ -1263,7 +1288,7 @@ function create(host) {
             await setupLoading;
         }
         accSetFinancialSetupModal(true,mode);
-    }, accEffectiveFinancialCategory, accEffectiveNoteCategory, accCategoryOptionMarkupFor, accCategoryOptionMarkup, accFinancialPickerLabel, accFinancialPickerOptionMarkup, accFinancialPickerSectionMarkup, accFinancialPickerMenuMarkup, accFinancialPickerMarkup, accGetEffectiveNoteOptions, accNotePickerLabel, accNoteAssignmentSearchText, accNotePickerMarkup, accLoadFinancialCategories, accProfitLinkMarkup, accHandleProfitLinkAction, accPresentationMarkup, accHandlePresentationChange, accRenderFinancialOutlines, accFinancialTotalAnchorRow, accFinancialCalculationEditorMarkup, accUpdateFinancialCalculationPlacementPreview, accUpdateFinancialTotalChoiceAvailability, accFinancialSortRows, accClearFinancialDropState, accHandleFinancialDragStart, accHandleFinancialDragOver, accHandleFinancialDrop, accFinancialKey, accOpenFinancialCalculationEditor, accHandleFinancialCalculationAction, accHandleCalculationIncludeChange, accHandleFinancialOutlineAction, accRenderNotesOutlines, accLoadNoteCategories, accLoadNotesSetupData, accSaveFinancialLeaf, accSaveNoteLeaf, accApplyNoteParent, accApplyFinancialParent, accFilterFinancialPicker, accPositionFinancialPicker, accCloseFinancialPicker, accCloseFinancialPickers, accOpenFinancialPicker, accUpdateFinancialPickerSelection, accHandleFinancialPickerClick, accHandleFinancialPickerInput, accHandleFinancialPickerKeydown, accHandleFinancialChange, accHandleNoteChange, accUpdateNoteCategory, accHandleNotesOutlineAction, accNoteSubtreeAssignedCount, accHandleNotesDragStart, accHandleNotesDrop, accSetFinancialSetupModal, accSetFinancialSetupTab});
+    }, accEffectiveFinancialCategory, accEffectiveNoteCategory, accCategoryOptionMarkupFor, accCategoryOptionMarkup, accFinancialPickerLabel, accFinancialPickerOptionMarkup, accFinancialPickerSectionMarkup, accFinancialPickerMenuMarkup, accFinancialPickerMarkup, accGetEffectiveNoteOptions, accNotePickerLabel, accNoteAssignmentSearchText, accNotePickerMarkup, accLoadFinancialCategories, accProfitLinkMarkup, accHandleProfitLinkAction, accPresentationMarkup, accIncomeStatementRoleMarkup, accHandlePresentationChange, accHandleIncomeStatementRoleChange, accRenderFinancialOutlines, accFinancialTotalAnchorRow, accFinancialCalculationEditorMarkup, accUpdateFinancialCalculationPlacementPreview, accUpdateFinancialTotalChoiceAvailability, accFinancialSortRows, accClearFinancialDropState, accHandleFinancialDragStart, accHandleFinancialDragOver, accHandleFinancialDrop, accFinancialKey, accOpenFinancialCalculationEditor, accHandleFinancialCalculationAction, accHandleCalculationIncludeChange, accHandleFinancialOutlineAction, accRenderNotesOutlines, accLoadNoteCategories, accLoadNotesSetupData, accSaveFinancialLeaf, accSaveNoteLeaf, accApplyNoteParent, accApplyFinancialParent, accFilterFinancialPicker, accPositionFinancialPicker, accCloseFinancialPicker, accCloseFinancialPickers, accOpenFinancialPicker, accUpdateFinancialPickerSelection, accHandleFinancialPickerClick, accHandleFinancialPickerInput, accHandleFinancialPickerKeydown, accHandleFinancialChange, accHandleNoteChange, accUpdateNoteCategory, accHandleNotesOutlineAction, accNoteSubtreeAssignedCount, accHandleNotesDragStart, accHandleNotesDrop, accSetFinancialSetupModal, accSetFinancialSetupTab});
 }
 const MODAL = "<div id=\"accFinancialSetupModal\" class=\"acc2-modal-backdrop\" hidden><section class=\"acc2-modal acc2-modal-wide\" role=\"dialog\" aria-modal=\"true\" aria-labelledby=\"accFinancialSetupModalTitle\"><div class=\"acc2-modal-header\"><div><h2 id=\"accFinancialSetupModalTitle\">Financial Statements</h2><p>Organise statement headings and account categories.</p></div><button type=\"button\" id=\"accFinancialSetupClose\" class=\"acc2-modal-close\" aria-label=\"Close Financial Statements setup\">&times;</button></div><nav class=\"acc2-modal-tabs\" role=\"tablist\" aria-label=\"Financial Statements sections\"><button type=\"button\" class=\"acc2-modal-tab active\" id=\"accFinancialSetupTabBalanceSheet\" data-acc-financial-setup-tab=\"balance-sheet\" role=\"tab\" aria-selected=\"true\" aria-controls=\"accFinancialSetupPanelBalanceSheet\">Balance Sheet</button><button type=\"button\" class=\"acc2-modal-tab\" id=\"accFinancialSetupTabNotesBalanceSheet\" data-acc-financial-setup-tab=\"notes-balance-sheet\" role=\"tab\" aria-selected=\"false\" aria-controls=\"accFinancialSetupPanelNotesBalanceSheet\">Notes to Balance Sheet</button><button type=\"button\" class=\"acc2-modal-tab\" id=\"accFinancialSetupTabIncomeStatement\" data-acc-financial-setup-tab=\"income-statement\" role=\"tab\" aria-selected=\"false\" aria-controls=\"accFinancialSetupPanelIncomeStatement\">Income Statement</button><button type=\"button\" class=\"acc2-modal-tab\" id=\"accFinancialSetupTabNotesIncomeStatement\" data-acc-financial-setup-tab=\"notes-income-statement\" role=\"tab\" aria-selected=\"false\" aria-controls=\"accFinancialSetupPanelNotesIncomeStatement\">Notes to Income Statement</button></nav><section id=\"accFinancialSetupPanelBalanceSheet\" class=\"acc2-fs-outline\" data-fs-section=\"balance_sheet\" role=\"tabpanel\" aria-labelledby=\"accFinancialSetupTabBalanceSheet\"></section><section id=\"accFinancialSetupPanelNotesBalanceSheet\" class=\"acc2-notes-outline\" data-notes-section=\"balance_sheet\" role=\"tabpanel\" aria-labelledby=\"accFinancialSetupTabNotesBalanceSheet\" hidden></section><section id=\"accFinancialSetupPanelIncomeStatement\" class=\"acc2-fs-outline\" data-fs-section=\"income_statement\" role=\"tabpanel\" aria-labelledby=\"accFinancialSetupTabIncomeStatement\" hidden></section><section id=\"accFinancialSetupPanelNotesIncomeStatement\" class=\"acc2-notes-outline\" data-notes-section=\"income_statement\" role=\"tabpanel\" aria-labelledby=\"accFinancialSetupTabNotesIncomeStatement\" hidden></section></section></div>";
 window.FinancialStatementWorkspace=Object.freeze({create});

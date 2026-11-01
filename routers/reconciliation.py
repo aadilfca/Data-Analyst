@@ -2968,7 +2968,7 @@ def balance_sheet_report(
         ]
         categories = execute_query_pg(
             """SELECT id, label, statement_section, row_type, parent_category_id,
-                      presentation_role, sort_order, is_active
+                      presentation_role, income_statement_role, sort_order, is_active
                FROM account_control_categories
                WHERE client_id = %s AND category_type = 'financial_statement'
                ORDER BY sort_order, LOWER(label), category_key""",
@@ -3005,7 +3005,11 @@ def balance_sheet_report(
         )
         links = execute_query_pg("SELECT source_calculation_id, target_category_id FROM account_control_profit_links WHERE client_id = %s", (client_id,))
         profit_link = dict(links[0]) if links else None
-        context_key = financial_statement_context_key(accounts, statement_assignments, categories, calculations, components, profit_link)
+        statement_context_categories = [
+            {key: value for key, value in row.items() if key != "income_statement_role"}
+            for row in categories
+        ]
+        context_key = financial_statement_context_key(accounts, statement_assignments, statement_context_categories, calculations, components, profit_link)
         notes_context_key = financial_statement_context_key(
             accounts, assignments, categories, calculations, components,
             {

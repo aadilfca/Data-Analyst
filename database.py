@@ -3092,6 +3092,7 @@ def init_db():
                 label TEXT NOT NULL,
                 statement_section TEXT CHECK (statement_section IN ('balance_sheet', 'income_statement')),
                 presentation_role TEXT CHECK (presentation_role IN ('asset', 'liability', 'equity')),
+                income_statement_role TEXT CHECK (income_statement_role IN ('income', 'expense')),
                 row_type TEXT NOT NULL DEFAULT 'category' CHECK (row_type IN ('heading', 'category')),
                 parent_category_id INTEGER REFERENCES account_control_categories(id) ON DELETE RESTRICT,
                 source_statement_category_id INTEGER REFERENCES account_control_categories(id) ON DELETE RESTRICT,
@@ -3155,6 +3156,8 @@ def init_db():
         category_columns = {row[1] for row in conn.execute("PRAGMA table_info(account_control_categories)").fetchall()}
         if "presentation_role" not in category_columns:
             conn.execute("ALTER TABLE account_control_categories ADD COLUMN presentation_role TEXT CHECK (presentation_role IN ('asset', 'liability', 'equity'))")
+        if "income_statement_role" not in category_columns:
+            conn.execute("ALTER TABLE account_control_categories ADD COLUMN income_statement_role TEXT CHECK (income_statement_role IN ('income', 'expense'))")
         if "statement_section" not in category_columns:
             conn.execute("ALTER TABLE account_control_categories ADD COLUMN statement_section TEXT")
         if "row_type" not in category_columns:
@@ -4386,6 +4389,7 @@ def _ensure_postgres_account_set_tables(conn):
         ''')
         cur.execute("ALTER TABLE account_control_categories ADD COLUMN IF NOT EXISTS statement_section TEXT")
         cur.execute("ALTER TABLE account_control_categories ADD COLUMN IF NOT EXISTS presentation_role TEXT CHECK (presentation_role IN ('asset', 'liability', 'equity'))")
+        cur.execute("ALTER TABLE account_control_categories ADD COLUMN IF NOT EXISTS income_statement_role TEXT CHECK (income_statement_role IN ('income', 'expense'))")
         cur.execute("ALTER TABLE account_control_categories ADD COLUMN IF NOT EXISTS row_type TEXT NOT NULL DEFAULT 'category'")
         cur.execute("ALTER TABLE account_control_categories ADD COLUMN IF NOT EXISTS parent_category_id INTEGER REFERENCES account_control_categories(id) ON DELETE RESTRICT")
         cur.execute("ALTER TABLE account_control_categories ADD COLUMN IF NOT EXISTS source_statement_category_id INTEGER REFERENCES account_control_categories(id) ON DELETE RESTRICT")

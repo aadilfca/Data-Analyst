@@ -185,6 +185,24 @@ def build_statement_notes(accounts, assignments, note_categories, statement, sta
         int(statement_categories.get(int(row['source_statement_category_id']), {}).get('sort_order') or 0),
         int(row.get('sort_order') or 0), int(row['id'])
     ))
+    if statement_section == 'income_statement':
+        linked_category_ids = {
+            int(row['source_statement_category_id']) for row in roots
+            if row.get('source_statement_category_id') is not None
+        }
+        missing_roles = [
+            row['label'] for category_id, row in statement_categories.items()
+            if (int(row.get('account_count') or 0) > 0 or category_id in linked_category_ids)
+            and row.get('effective_income_statement_role') not in {'income', 'expense'}
+        ]
+        if missing_roles:
+            labels = ', '.join(missing_roles[:10])
+            remaining = len(missing_roles) - 10
+            if remaining > 0:
+                labels += f' and {remaining} more'
+            raise BalanceSheetInputError(
+                'Set an Income/Expense role in Financial Statements for: ' + labels
+            )
 
     def note_root(note_id):
         seen = set()
@@ -217,7 +235,8 @@ def build_statement_notes(accounts, assignments, note_categories, statement, sta
         if not category or not note or not root or int(root.get('source_statement_category_id') or 0) != int(category_id):
             continue
         if statement_section == 'income_statement':
-            sign = Decimal(-1)
+            # Show the category's normal balance as positive in its note.
+            sign = Decimal(-1) if category.get('effective_income_statement_role') == 'income' else Decimal(1)
         else:
             role = category.get('effective_presentation_role')
             if role not in {'asset', 'liability', 'equity'}:
@@ -274,7 +293,15 @@ def build_statement_notes(accounts, assignments, note_categories, statement, sta
         note_root_row = root_amounts.get(category_id)
         note_current = _amount(note_root_row['current_amount']) if note_root_row else Decimal(0)
         note_opening = _amount(note_root_row['comparative_amount']) if statement_section == 'balance_sheet' and note_root_row else Decimal(0)
-        current_statement = _amount(category['amount']) if category.get('amount') is not None else None
+        if category.get('amount') is None:
+            current_statement = None
+        elif statement_section == 'income_statement':
+            role = category.get('effective_income_statement_role')
+            # Main I/S is credit-positive; normalize its expense categories to
+            # debit-positive before comparing with their note balances.
+            current_statement = _amount(category['amount']) if role == 'income' else -_amount(category['amount'])
+        else:
+            current_statement = _amount(category['amount'])
         opening_category = comparative_categories.get(category_id) or {}
         comparative_statement = _amount(opening_category['amount']) if opening_category.get('amount') is not None else None
         coverage.append({
@@ -543,6 +570,11 @@ def _build(accounts, assignments, categories, calculations, components, controls
         parent_id = row.get("parent_category_id")
         parent = by_category.get(int(parent_id)) if parent_id is not None else None
         role = parent.get("presentation_role") if parent and parent.get("row_type") == "heading" and parent.get("statement_section") == "balance_sheet" else row.get("presentation_role") if parent_id is None else None
+        income_role = None
+        if section == "income_statement":
+            income_role = row.get("income_statement_role")
+            if income_role is None and parent and parent.get("row_type") == "heading" and parent.get("statement_section") == "income_statement":
+                income_role = parent.get("income_statement_role")
         value = raw[key] * (1 if role == "asset" else -1) if role in {"asset", "liability", "equity"} else None
         if section == "income_statement":
             value = -raw[key]
@@ -554,7 +586,8 @@ def _build(accounts, assignments, categories, calculations, components, controls
         elif value < 0:
             abnormal.append(row["label"])
         values[key] = value
-        row.update(raw_net=_text(raw[key]), amount=_text(value), account_count=counts[key], effective_presentation_role=role, erp_amount=_text(erp_amount),
+        row.update(raw_net=_text(raw[key]), amount=_text(value), account_count=counts[key], effective_presentation_role=role,
+                   effective_income_statement_role=income_role, erp_amount=_text(erp_amount),
                    linked_profit=_text(linked_profit[1]) if linked_profit and key == linked_profit[0] else None)
 
     calc_by_id = {int(row["id"]): dict(row) for row in calculations if row.get("statement_section") == section}

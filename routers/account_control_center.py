@@ -600,6 +600,7 @@ class AccountControlCategoryPayload(BaseModel):
     label: str
     statement_section: Optional[str] = None
     presentation_role: Optional[str] = None
+    income_statement_role: Optional[str] = None
     row_type: str = "category"
     parent_category_id: Optional[int] = Field(default=None, ge=1)
     source_statement_category_id: Optional[int] = Field(default=None, ge=1)
@@ -613,6 +614,7 @@ class AccountControlCategoryUpdatePayload(BaseModel):
     label: str
     statement_section: Optional[str] = None
     presentation_role: Optional[str] = None
+    income_statement_role: Optional[str] = None
     row_type: str = "category"
     parent_category_id: Optional[int] = Field(default=None, ge=1)
     source_statement_category_id: Optional[int] = Field(default=None, ge=1)
@@ -1080,6 +1082,7 @@ def _clean_category_payload(payload: AccountControlCategoryPayload) -> dict[str,
     if category_type == "financial_statement" and row_type == "heading" and payload.parent_category_id is not None:
         raise HTTPException(400, "Headings must be top-level")
     presentation_role = _clean_presentation_role(payload.presentation_role, statement_section, row_type, payload.parent_category_id)
+    income_statement_role = _clean_income_statement_role(payload.income_statement_role, category_type, statement_section, row_type, payload.parent_category_id)
     return {
         "client_id": payload.client_id,
         "category_type": category_type,
@@ -1087,6 +1090,7 @@ def _clean_category_payload(payload: AccountControlCategoryPayload) -> dict[str,
         "label": label,
         "statement_section": statement_section,
         "presentation_role": presentation_role,
+        "income_statement_role": income_statement_role,
         "row_type": row_type,
         "parent_category_id": payload.parent_category_id,
         "source_statement_category_id": payload.source_statement_category_id,
@@ -1105,12 +1109,14 @@ def _clean_category_update(payload: AccountControlCategoryUpdatePayload) -> dict
     if category_type == "financial_statement" and row_type == "heading" and payload.parent_category_id is not None:
         raise HTTPException(400, "Headings must be top-level")
     presentation_role = _clean_presentation_role(payload.presentation_role, statement_section, row_type, payload.parent_category_id)
+    income_statement_role = _clean_income_statement_role(payload.income_statement_role, category_type, statement_section, row_type, payload.parent_category_id)
     return {
         "client_id": payload.client_id,
         "category_type": category_type,
         "label": label,
         "statement_section": statement_section,
         "presentation_role": presentation_role,
+        "income_statement_role": income_statement_role,
         "row_type": row_type,
         "parent_category_id": payload.parent_category_id,
         "source_statement_category_id": payload.source_statement_category_id,
@@ -1127,6 +1133,17 @@ def _clean_presentation_role(value, section, row_type, parent_id):
         raise HTTPException(400, "Choose Asset, Liability, Equity or Not set")
     if section != "balance_sheet" or (row_type == "category" and parent_id is not None):
         raise HTTPException(400, "Presentation is set on Balance Sheet headings or standalone categories")
+    return value
+
+
+def _clean_income_statement_role(value, category_type, section, row_type, parent_id):
+    """Role is set on Income Statement headings or standalone categories."""
+    if value is None:
+        return None
+    if value not in {"income", "expense"}:
+        raise HTTPException(400, "Choose Income, Expense or Not set")
+    if category_type != "financial_statement" or section != "income_statement" or (row_type == "category" and parent_id is not None):
+        raise HTTPException(400, "Income/Expense is set on Income Statement headings or standalone categories")
     return value
 
 
@@ -1301,7 +1318,8 @@ def list_account_control_categories(
     rows = execute_query_pg(
         f"""SELECT c.id, c.client_id, c.category_type, c.category_key,
                    CASE WHEN c.category_type = 'note' THEN COALESCE(s.label, c.label) ELSE c.label END AS label,
-                   c.statement_section, c.presentation_role, c.row_type, c.parent_category_id, c.source_statement_category_id,
+                   c.statement_section, c.presentation_role, c.income_statement_role,
+                   c.row_type, c.parent_category_id, c.source_statement_category_id,
                    s.statement_section AS source_statement_section,
                    CASE WHEN c.category_type = 'note' THEN (
                        SELECT COUNT(*) FROM account_control_assignments a
@@ -1708,9 +1726,9 @@ def create_account_control_category(payload: AccountControlCategoryPayload, sess
         raise HTTPException(409, "A category with this key already exists")
     execute_write_pg(
         """INSERT INTO account_control_categories
-           (client_id, category_type, category_key, label, statement_section, row_type, parent_category_id, source_statement_category_id, sort_order, is_active, presentation_role, updated_at)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)""",
-        (category["client_id"], category["category_type"], category["category_key"], category["label"], category["statement_section"], category["row_type"], category["parent_category_id"], category["source_statement_category_id"], category["sort_order"], category["is_active"], category["presentation_role"]),
+           (client_id, category_type, category_key, label, statement_section, row_type, parent_category_id, source_statement_category_id, sort_order, is_active, presentation_role, income_statement_role, updated_at)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)""",
+        (category["client_id"], category["category_type"], category["category_key"], category["label"], category["statement_section"], category["row_type"], category["parent_category_id"], category["source_statement_category_id"], category["sort_order"], category["is_active"], category["presentation_role"], category["income_statement_role"]),
     )
     return {"saved": True, "category": category}
 
@@ -1793,7 +1811,7 @@ def reorder_account_control_categories(payload: AccountControlCategoryReorderPay
 def update_account_control_category(category_id: int, payload: AccountControlCategoryUpdatePayload, session=Depends(require_admin)):
     category = _clean_category_update(payload)
     rows = execute_query_pg(
-        "SELECT id, source_statement_category_id, statement_section, row_type, parent_category_id, presentation_role FROM account_control_categories WHERE id = %s AND client_id = %s AND category_type = %s",
+        "SELECT id, source_statement_category_id, statement_section, row_type, parent_category_id, presentation_role, income_statement_role FROM account_control_categories WHERE id = %s AND client_id = %s AND category_type = %s",
         (category_id, category["client_id"], category["category_type"]),
     )
     if not rows:
@@ -1802,6 +1820,9 @@ def update_account_control_category(category_id: int, payload: AccountControlCat
     if "presentation_role" not in payload.model_fields_set:
         retained = rows[0].get("presentation_role")
         category["presentation_role"] = retained if category["statement_section"] == "balance_sheet" and (category["row_type"] == "heading" or category["parent_category_id"] is None) else None
+    if "income_statement_role" not in payload.model_fields_set:
+        retained = rows[0].get("income_statement_role")
+        category["income_statement_role"] = retained if category["statement_section"] == "income_statement" and (category["row_type"] == "heading" or category["parent_category_id"] is None) else None
     if category["category_type"] == "note" and rows[0]["source_statement_category_id"] != category["source_statement_category_id"]:
         old_source_id = rows[0]["source_statement_category_id"]
         new_source_id = category["source_statement_category_id"]
@@ -1851,9 +1872,9 @@ def update_account_control_category(category_id: int, payload: AccountControlCat
     execute_write_pg(
         """UPDATE account_control_categories
            SET label = %s, statement_section = %s, row_type = %s, parent_category_id = %s, source_statement_category_id = %s,
-               sort_order = %s, is_active = %s, presentation_role = %s, updated_at = CURRENT_TIMESTAMP
+               sort_order = %s, is_active = %s, presentation_role = %s, income_statement_role = %s, updated_at = CURRENT_TIMESTAMP
            WHERE id = %s AND client_id = %s AND category_type = %s""",
-        (category["label"], category["statement_section"], category["row_type"], category["parent_category_id"], category["source_statement_category_id"], category["sort_order"], category["is_active"], category["presentation_role"], category_id, category["client_id"], category["category_type"]),
+        (category["label"], category["statement_section"], category["row_type"], category["parent_category_id"], category["source_statement_category_id"], category["sort_order"], category["is_active"], category["presentation_role"], category["income_statement_role"], category_id, category["client_id"], category["category_type"]),
     )
     return {"saved": True, "category": {"id": category_id, **category}}
 
