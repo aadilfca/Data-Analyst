@@ -5331,13 +5331,13 @@
         const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
         return new Intl.DateTimeFormat('en-US', {month: 'short', day: '2-digit', year: 'numeric'}).format(date);
     }
-    function statementUploadOptionLabel(upload, isSelected) {
+    function statementUploadOptionLabel(upload) {
         const end = upload.period_end || upload.as_of_date;
         const start = upload.period_start;
         const range = start && end
             ? statementDateLabel(start) + ' to ' + statementDateLabel(end)
             : statementDateLabel(end || start);
-        return isSelected ? range : (upload.file_name || 'Trial Balance') + ' · ' + range;
+        return range;
     }
     function setStatementHeaderTitle(statementName) {
         const clientName = window.getSelectedClientName ? window.getSelectedClientName() : '';
@@ -5396,7 +5396,7 @@
             if (generation !== balanceSheetGeneration) return;
             if (!Array.isArray(options.uploads)) throw new Error('Trial Balance choices could not be loaded. Please retry.');
             selector.innerHTML = '<option value="">Select period</option>' + options.uploads.map(function (upload) {
-                const label = statementUploadOptionLabel(upload, String(upload.id) === selectedUpload);
+                const label = statementUploadOptionLabel(upload);
                 return '<option value="' + Number(upload.id) + '">' + escapeHtml(label) + '</option>';
             }).join('');
             const requested = selectedUpload || (!balanceSheetUploadsLoaded ? new URLSearchParams(window.location.search).get('trial_balance_upload_id') : '');
@@ -5414,7 +5414,7 @@
             selector.value = requested;
             const selectedOption = selector.selectedOptions[0];
             const selectedUploadInfo = options.uploads.find(function (upload) { return String(upload.id) === requested; });
-            if (selectedOption && selectedUploadInfo) selectedOption.textContent = statementUploadOptionLabel(selectedUploadInfo, true);
+            if (selectedOption && selectedUploadInfo) selectedOption.textContent = statementUploadOptionLabel(selectedUploadInfo);
             const endpoint = requestedSection === 'income_statement'
                 ? '/api/reconciliation/financial-statements/income-statement'
                 : '/api/reconciliation/financial-statements/balance-sheet';

@@ -58,7 +58,7 @@ One line per file group: what it is now. Full build history for every entry live
 - experiments/cashflow_fetch/*.py + tests/test_cashflow_fetch_benchmark.py → Standalone read-only transport benchmarks with exact source/report/export comparisons; never loaded by the app. See CHANGELOG_ARCHIVE.md.
 
 
-- static/reconciliation.html, static/reconciliation.js → Reports, Cashflows and Financial Statement Notes with category-normal-balance signs, unallocated rows, compact headers and review dialogs. See CHANGELOG_ARCHIVE.md.
+- static/reconciliation.html, static/reconciliation.js → Reports, Cashflows and Financial Statement Notes with Trial Balance period-range labels, normal-balance signs, unallocated rows and review dialogs. See CHANGELOG_ARCHIVE.md.
 
 ## Commands
 - Run app: [your actual run command]
@@ -259,6 +259,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-01: Statement Trial Balance choices in reconciliation.js now display entered period ranges instead of upload filenames. See CHANGELOG_ARCHIVE.md.
 - 2026-11-01: Trial Balance category/note filters in trial_balance.js/html add exact multi-select and retain contains search. See CHANGELOG_ARCHIVE.md.
 - 2026-11-01: Income Statement Notes use category-selected normal balances; main statement presentation remains unchanged. See CHANGELOG_ARCHIVE.md.
 - 2026-11-01: Financial Statement Notes show uncovered balances last within each category while retaining note-coverage warnings. See CHANGELOG_ARCHIVE.md.

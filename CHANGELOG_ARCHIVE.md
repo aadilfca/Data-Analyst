@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Statement Trial Balance period labels — 2026-11-01
+
+Balance Sheet, Balance Sheet Notes, Income Statement and Income Statement Notes now show the formatted Trial Balance period range for every upload choice instead of the file name. Upload IDs, selection behavior and the as-of-date fallback remain unchanged. All four views share the selector; no backend changes.
+
+**Verification:** `node --check static/reconciliation.js` and `git diff --check` pass. Aadil confirmed local behavior; automated tests were not run.
+
 ## Trial Balance exact category and note filters — 2026-11-01
 
 Replaced native datalist suggestions with searchable result panels. Typing retains contains matching; clicking result text applies that search, while checkboxes select exact displayed assignment values. Multiple choices within a field use OR; Category and Note filters combine. Selections persist per workflow and through setup return, and reset when the Trial Balance context changes. No backend or dependency changes; Trial Balance script cache version is 46.
