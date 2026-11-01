@@ -102,6 +102,12 @@ Added ACC-linked nested Income Statement notes with note references in statement
 
 **Verification:** Python and JavaScript syntax checks and `git diff --check` pass. Aadil confirmed the local-server hierarchy, signs, amounts, and coverage display.
 
+## Unallocated Financial Statement Note Balances — 2026-11-01
+
+Notes reports now place uncovered category balances in a final “Unallocated / awaiting note detail” row. The coverage review retains the original account counts and differences; statement totals and account assignments are unchanged.
+
+**Verification:** Aadil confirmed the local-server test. Python and JavaScript syntax checks and `git diff --check` pass; automated tests were not run.
+
 ## Balance Sheet Notes and statement links — 2026-10-31
 
 Added a read-only Balance Sheet Notes view using ACC-linked note roots, ordered nested breakdowns, account assignments and the selected Trial Balance's closing/opening balances. Main statement rows link to their note references; the notes view preserves the selected upload, includes report-only profit/opening-I/S items where linked, and reports unassigned accounts or differences without adjusting them. No schema change.

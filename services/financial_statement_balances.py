@@ -287,6 +287,69 @@ def build_statement_notes(accounts, assignments, note_categories, statement, sta
             'current_difference': _text(current_statement - note_current) if current_statement is not None else None,
             'comparative_difference': _text(comparative_statement - note_opening) if statement_section == 'balance_sheet' and comparative_statement is not None else None,
         })
+
+    # Keep uncovered balances visible under their statement category while the
+    # coverage review continues to show the original account count and difference.
+    coverage_by_category = {int(row['statement_category_id']): row for row in coverage}
+    for category_id, category in statement_categories.items():
+        row = coverage_by_category[category_id]
+        current_difference = _amount(row['current_difference']) if row['current_difference'] is not None else None
+        comparative_difference = _amount(row['comparative_difference']) if row['comparative_difference'] is not None else None
+        has_current_gap = current_difference is not None and abs(current_difference) > Decimal('0.01')
+        has_comparative_gap = comparative_difference is not None and abs(comparative_difference) > Decimal('0.01')
+        if not row['unassigned_account_count'] and not has_current_gap and not has_comparative_gap:
+            continue
+
+        root = root_amounts.get(category_id)
+        pending_id = -(2 * category_id + 1)
+        pending = {
+            'id': pending_id,
+            'label': 'Unallocated / awaiting note detail',
+            'source_statement_category_id': category_id,
+            'parent_category_id': int(root['id']) if root else -(2 * category_id),
+            'sort_order': 2147483647,
+            'is_active': True,
+            'is_unallocated_summary': True,
+            'current_amount': _text(current_difference),
+            'comparative_amount': _text(comparative_difference) if statement_section == 'balance_sheet' else None,
+            'account_count': int(row['unassigned_account_count']),
+            'current_system_amount': None,
+            'comparative_system_amount': None,
+            'children': [],
+        }
+        if root:
+            root['children'].append(pending)
+            if current_difference is not None:
+                root['current_amount'] = _text(_amount(root['current_amount']) + current_difference)
+            if statement_section == 'balance_sheet' and comparative_difference is not None:
+                root['comparative_amount'] = _text(_amount(root['comparative_amount']) + comparative_difference)
+            root['account_count'] += int(row['unassigned_account_count'])
+        else:
+            # Negative IDs are display-only keys; no report row is persisted.
+            synthetic_root_id = -(2 * category_id)
+            pending['parent_category_id'] = synthetic_root_id
+            root = {
+                'id': synthetic_root_id,
+                'label': category['label'],
+                'source_statement_category_id': category_id,
+                'parent_category_id': None,
+                'sort_order': 2147483647,
+                'is_active': True,
+                'is_unallocated_summary': True,
+                'current_amount': _text(current_difference) if current_difference is not None else '0',
+                'comparative_amount': _text(comparative_difference) if statement_section == 'balance_sheet' and comparative_difference is not None else ('0' if statement_section == 'balance_sheet' else None),
+                'account_count': int(row['unassigned_account_count']),
+                'current_system_amount': None,
+                'comparative_system_amount': None,
+                'children': [pending],
+            }
+            root_amounts[category_id] = root
+            note_roots.append(root)
+
+    note_roots.sort(key=lambda root: (
+        int(statement_categories.get(int(root['source_statement_category_id']), {}).get('sort_order') or 0),
+        int(root.get('sort_order') or 0), int(root['id'])
+    ))
     return {'statement_section': statement_section, 'roots': note_roots, 'coverage': coverage}
 
 

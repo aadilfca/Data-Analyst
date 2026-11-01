@@ -5089,6 +5089,11 @@
         const sign = /^0+$/.test(match[2]) && !fraction ? '' : match[1];
         return sign + whole + (fraction ? '.' + fraction : '');
     }
+    function statementNoteChildren(note) {
+        return (note.children || []).slice().sort(function (a, b) {
+            return Number(!!a.is_unallocated_summary) - Number(!!b.is_unallocated_summary);
+        });
+    }
     function statementNoteNumbers(notes, categories, calculations, section) {
         const positions = new Map();
         balanceSheetOutline(categories, calculations, section).forEach(function (row, index) {
@@ -5105,7 +5110,7 @@
             byStatementCategory.set(Number(root.source_statement_category_id), {id: Number(root.id), number: number});
             function indexChildren(note, path) {
                 byNoteId.set(Number(note.id), path);
-                (note.children || []).forEach(function (child, childIndex) {
+                statementNoteChildren(note).forEach(function (child, childIndex) {
                     indexChildren(child, path + '.' + String(childIndex + 1));
                 });
             }
@@ -5155,7 +5160,7 @@
             rendered.push('<tr id="' + prefix + 'Note-' + Number(note.id) + '" class="' + (isRoot ? 'bs-note-root' : 'bs-note-child') + (inactive ? ' bs-note-inactive' : '') + (Number(note.id) === Number(selectedNoteId) ? ' bs-note-selected' : '') + '"><td class="bs-note-number">' + escapeHtml(number) + '</td><th scope="row" class="bs-note-label" style="padding-left:' + (13 + depth * 22) + 'px">' + label + '</th>' + amounts + '</tr>');
             if (isBalanceSheet && note.current_system_amount != null) rendered.push('<tr class="bs-note-system"><td></td><th scope="row" style="padding-left:' + (35 + depth * 22) + 'px">Current-period profit/(loss) linked to this category</th>' + amountCell(note.current_system_amount) + amountCell(null) + '</tr>');
             if (isBalanceSheet && note.comparative_system_amount != null) rendered.push('<tr class="bs-note-system"><td></td><th scope="row" style="padding-left:' + (35 + depth * 22) + 'px">Opening I/S items included in comparative balance</th>' + amountCell(null) + amountCell(note.comparative_system_amount) + '</tr>');
-            (note.children || []).forEach(function (child, index) {
+            statementNoteChildren(note).forEach(function (child, index) {
                 renderNode(child, number + '.' + String(index + 1), depth + 1, false);
             });
             if (isRoot) {
