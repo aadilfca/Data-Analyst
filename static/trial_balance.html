@@ -543,11 +543,23 @@
         .tb-saved-table tbody tr:nth-child(even) td { background: #fafcff; }
         .tb-saved-table .tb-amount-cell { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
         .tb-saved-table input { box-sizing: border-box; width: 100%; }
-        .tb-saved-category-filter, .tb-saved-note-filter { display: flex; align-items: center; gap: 7px; }
+        .tb-saved-category-filter, .tb-saved-note-filter { display: flex; align-items: center; gap: 7px; position: relative; }
         .tb-saved-toolbar-row label { font-size: 13px; font-weight: 600; color: #34495e; white-space: nowrap; }
         #tbSavedCategorySearch, #tbSavedNoteSearch { box-sizing: border-box; width: 190px; max-width: 22vw; padding: 6px 9px; border: 1px solid #cbd5e1; border-radius: 6px; color: #1a1a2e; font: inherit; }
         #tbSavedCategorySearch:focus-visible, #tbSavedNoteSearch:focus-visible { outline: 2px solid #1769aa; outline-offset: 2px; }
         #tbSavedCategorySearch:disabled, #tbSavedNoteSearch:disabled { background: #f1f5f9; color: #64748b; cursor: not-allowed; }
+        .tb-saved-filter-options { position: absolute; z-index: 30; top: calc(100% + 4px); right: 0; box-sizing: border-box; width: max(240px, 100%); max-width: min(360px, 80vw); max-height: 280px; overflow: auto; padding: 5px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; box-shadow: 0 8px 22px rgba(15, 23, 42, .16); }
+        .tb-saved-filter-options[hidden] { display: none; }
+        .tb-saved-filter-options-header { position: sticky; top: -5px; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 8px; border-bottom: 1px solid #e2e8f0; background: #f8fafc; color: #64748b; font-size: 12px; }
+        .tb-saved-filter-clear { border: 0; padding: 2px 4px; background: transparent; color: #1769aa; font: inherit; cursor: pointer; }
+        .tb-saved-filter-clear[hidden] { display: none; }
+        .tb-saved-filter-option { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 2px 7px; border-radius: 5px; }
+        .tb-saved-filter-option:hover, .tb-saved-filter-option:focus-within { background: #eff6ff; }
+        .tb-saved-filter-option[hidden] { display: none; }
+        .tb-saved-filter-option input[type="checkbox"] { flex: 0 0 auto; width: auto; margin: 0; accent-color: #1769aa; }
+        .tb-saved-filter-text { flex: 1 1 auto; min-width: 0; border: 0; padding: 6px 2px; background: transparent; color: #1e293b; font: inherit; text-align: left; cursor: pointer; }
+        .tb-saved-filter-text:focus-visible, .tb-saved-filter-clear:focus-visible { outline: 2px solid #1769aa; outline-offset: 1px; }
+        .tb-saved-filter-no-matches { padding: 8px; color: #64748b; font-size: 13px; }
         #tbSavedCategoryNoMatches { margin: 0 0 10px; color: #64748b; font-size: 13px; }
         #tbSavedCategoryNoMatches[hidden] { display: none; }
         @media (max-width: 900px) { .tb-saved-toolbar-row { flex-wrap: wrap; } .tb-saved-toolbar-row--filters #deleteUploadBtn { margin-left: 0; } }
@@ -1104,13 +1116,13 @@
             <div class="tb-saved-toolbar-row tb-saved-toolbar-row--filters">
                 <div class="tb-saved-category-filter">
                     <label id="tbSavedCategoryLabel" for="tbSavedCategorySearch">FS Category</label>
-                    <input id="tbSavedCategorySearch" type="search" list="tbSavedCategoryOptions" placeholder="Search or choose" aria-label="Filter Trial Balance accounts by Account Control Centre category" autocomplete="off" disabled>
-                    <datalist id="tbSavedCategoryOptions"></datalist>
+                    <input id="tbSavedCategorySearch" type="search" placeholder="Search or choose" aria-label="Filter Trial Balance accounts by Account Control Centre category" aria-controls="tbSavedCategoryOptions" aria-expanded="false" autocomplete="off" disabled>
+                    <div id="tbSavedCategoryOptions" class="tb-saved-filter-options" role="group" aria-label="Category matches" hidden></div>
                 </div>
                 <div class="tb-saved-note-filter">
                     <label for="tbSavedNoteSearch">Note</label>
-                    <input id="tbSavedNoteSearch" type="search" list="tbSavedNoteOptions" placeholder="Search or choose" aria-label="Filter Trial Balance accounts by Notes to Financial Statements assignment" autocomplete="off" disabled>
-                    <datalist id="tbSavedNoteOptions"></datalist>
+                    <input id="tbSavedNoteSearch" type="search" placeholder="Search or choose" aria-label="Filter Trial Balance accounts by Notes to Financial Statements assignment" aria-controls="tbSavedNoteOptions" aria-expanded="false" autocomplete="off" disabled>
+                    <div id="tbSavedNoteOptions" class="tb-saved-filter-options" role="group" aria-label="Note matches" hidden></div>
                 </div>
                 <button class="btn-secondary-action" id="tbAssignCategoriesBtn" type="button">Assignments →</button>
                 <!-- Hidden until an upload is selected; removes the selected upload and its accounts. -->
@@ -1173,7 +1185,7 @@
     </dialog>
     <script src="/static/cashflow_workspace.js?v=1"></script>
     <script src="/static/verification_workspace.js?v=1"></script>
-    <script src="/static/trial_balance.js?v=45"></script>
+    <script src="/static/trial_balance.js?v=46"></script>
 
 </body>
 

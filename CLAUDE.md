@@ -35,7 +35,7 @@ One line per file group: what it is now. Full build history for every entry live
 - static/audit_workbook.js, static/audit_workbook.html → Audit Workbook: session rows, filtering, totals, shared Procedure Modal, and cached evidence/Form completion badges. See CHANGELOG_ARCHIVE.md.
 - routers/trial_balance.py → Trial Balance import, validation, batched code corrections, hierarchy, adjustments, draft totals, categories and saved uploads. See CHANGELOG_ARCHIVE.md.
 - routers/account_control_center.py → account mappings with validated FS/Note pairs, batched writes, statement outlines, presentation, profit linking, closing confirmation and Cashflow setup. See CHANGELOG_ARCHIVE.md.
-- static/trial_balance.*, static/account_assignment_shared.js, static/financial_statement_workspace.*, static/cashflow_workspace.* → TB import/review, scoped assignments and shared in-place FS/Notes/Cashflow editing/setup. See CHANGELOG_ARCHIVE.md.
+- static/trial_balance.*, static/account_assignment_shared.js, static/financial_statement_workspace.*, static/cashflow_workspace.* → Trial Balance review and scoped assignment workflows, with exact multi-select filters and shared in-place FS/Notes/Cashflow setup. See CHANGELOG_ARCHIVE.md.
 - static/account_control_center.* → retired screens; legacy page bookmarks redirect to the Trial Balance assignment workspace. APIs remain in the router. See CHANGELOG_ARCHIVE.md.
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Two-pane Audit Rules editor for Documents, Cross-checks, Categories, Voucher Checks and Assertions, plus Assign Categories. See CHANGELOG_ARCHIVE.md.
@@ -259,6 +259,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-01: Trial Balance category/note filters in trial_balance.js/html add exact multi-select and retain contains search. See CHANGELOG_ARCHIVE.md.
 - 2026-11-01: Income Statement Notes use category-selected normal balances; main statement presentation remains unchanged. See CHANGELOG_ARCHIVE.md.
 - 2026-11-01: Financial Statement Notes show uncovered balances last within each category while retaining note-coverage warnings. See CHANGELOG_ARCHIVE.md.
 - 2026-10-31: Balance Sheet uses a two-row header with the period in its Trial Balance dropdown and popup icons for status and review. See CHANGELOG_ARCHIVE.md.

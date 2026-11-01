@@ -178,6 +178,8 @@ let tbWorkflowLoadToken = 0;
 let tbWorkflowContext = '';
 const tbWorkflowStates = new Map();
 const tbWorkflowCache = new Map();
+const tbSavedCategorySelections = new Set();
+const tbSavedNoteSelections = new Set();
 let tbWorkflowReturnRestored = false;
 let tbFsWorkspace = null;
 let tbFsAccounts = [];
@@ -1835,7 +1837,13 @@ function closeSavedSetupMenu() {
 }
 function rememberSavedWorkflow() {
     tbWorkflowStates.set(tbWorkflowMode, {category: tbSavedCategorySearch ? tbSavedCategorySearch.value : '',
-        note: tbSavedNoteSearch ? tbSavedNoteSearch.value : '', left: availableAccountsTableWrapper ? availableAccountsTableWrapper.scrollLeft : 0, top: window.scrollY});
+        note: tbSavedNoteSearch ? tbSavedNoteSearch.value : '', categorySelections: Array.from(tbSavedCategorySelections),
+        noteSelections: Array.from(tbSavedNoteSelections), left: availableAccountsTableWrapper ? availableAccountsTableWrapper.scrollLeft : 0, top: window.scrollY});
+}
+function clearSavedWorkflowStates() {
+    tbWorkflowStates.clear();
+    tbSavedCategorySelections.clear();
+    tbSavedNoteSelections.clear();
 }
 function syncSavedWorkflowColumns() {
     const financial = tbWorkflowMode === 'financial';
@@ -1900,6 +1908,12 @@ function restoreSavedWorkflowFilters() {
     const state = tbWorkflowStates.get(tbWorkflowMode);
     if (tbSavedCategorySearch) tbSavedCategorySearch.value = state ? state.category : '';
     if (tbSavedNoteSearch) tbSavedNoteSearch.value = state ? state.note : '';
+    tbSavedCategorySelections.clear();
+    tbSavedNoteSelections.clear();
+    (state && state.categorySelections || []).forEach(value => tbSavedCategorySelections.add(String(value)));
+    (state && state.noteSelections || []).forEach(value => tbSavedNoteSelections.add(String(value)));
+    updateSavedFilterOptions('category');
+    updateSavedFilterOptions('note');
     if (state) requestAnimationFrame(function () {
         if (availableAccountsTableWrapper) availableAccountsTableWrapper.scrollLeft = state.left || 0;
         window.scrollTo(0, state.top || 0);
@@ -1927,6 +1941,8 @@ function finishSavedWorkflowLookup() {
     if(tbWorkflowMode==='financial' && tbFsIsAdmin)tbRenderFinancialAssignments();
     if(tbWorkflowMode==='cashflow' && tbFsIsAdmin)tbRenderCashflowAssignments();
     if(tbWorkflowMode==='verification' && tbFsIsAdmin)tbRenderVerificationAssignments();
+    syncSavedFilterOptionsFromRows('category');
+    if (tbWorkflowMode === 'financial') syncSavedFilterOptionsFromRows('note');
     applySavedCategoryFilter();
     fitSavedTrialBalanceAmountColumns();
 }
@@ -2160,33 +2176,99 @@ document.addEventListener('click', function (event) {
 });
 
 function populateSavedCategoryOptions(categories) {
-    if (!tbSavedCategoryOptions) return;
-    tbSavedCategoryOptions.replaceChildren();
-    const labels = new Set((Array.isArray(categories) ? categories : [])
-        .filter(category => category.is_active !== false)
-        .map(category => String(category.label || '').trim())
-        .filter(Boolean));
-    labels.add('Unassigned');
-    Array.from(labels).sort((left, right) => left.localeCompare(right)).forEach(function (label) {
-        const option = document.createElement('option');
-        option.value = label;
-        tbSavedCategoryOptions.appendChild(option);
-    });
+    populateSavedFilterOptions(tbSavedCategoryOptions, categories, 'category');
 }
 
 function populateSavedNoteOptions(categories) {
-    if (!tbSavedNoteOptions) return;
-    tbSavedNoteOptions.replaceChildren();
-    const labels = new Set((Array.isArray(categories) ? categories : [])
+    populateSavedFilterOptions(tbSavedNoteOptions, categories, 'note');
+}
+
+// Keep exact selections separate from the text query so users can add several exact values without losing contains-search.
+function populateSavedFilterOptions(container, categories, kind) {
+    if (!container) return;
+    const values = new Set((Array.isArray(categories) ? categories : [])
         .filter(category => category.is_active !== false)
         .map(category => String(category.label || '').trim())
         .filter(Boolean));
-    labels.add('Unassigned');
-    Array.from(labels).sort((left, right) => left.localeCompare(right)).forEach(function (label) {
-        const option = document.createElement('option');
-        option.value = label;
-        tbSavedNoteOptions.appendChild(option);
+    values.add('Unassigned');
+    renderSavedFilterValues(container, values, kind);
+}
+
+function renderSavedFilterValues(container, values, kind) {
+    container.replaceChildren();
+    const selection = kind === 'note' ? tbSavedNoteSelections : tbSavedCategorySelections;
+    const header = document.createElement('div');
+    header.className = 'tb-saved-filter-options-header';
+    const summary = document.createElement('span');
+    summary.dataset.savedFilterSummary = '';
+    summary.setAttribute('aria-live', 'polite');
+    const clear = document.createElement('button');
+    clear.type = 'button';
+    clear.className = 'tb-saved-filter-clear';
+    clear.dataset.savedFilterClear = kind;
+    clear.textContent = 'Clear selection';
+    header.append(summary, clear);
+    container.appendChild(header);
+    Array.from(values).sort((left, right) => left.localeCompare(right)).forEach(function (label) {
+        const option = document.createElement('div');
+        option.className = 'tb-saved-filter-option';
+        option.dataset.savedFilterOption = '';
+        option.dataset.savedFilterValue = label;
+        option.hidden = true;
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.dataset.savedFilterCheckbox = kind;
+        checkbox.value = label;
+        checkbox.checked = selection.has(label);
+        checkbox.setAttribute('aria-label', 'Filter to exact ' + (kind === 'note' ? 'note' : 'category') + ': ' + label);
+        const textSearch = document.createElement('button');
+        textSearch.type = 'button';
+        textSearch.className = 'tb-saved-filter-text';
+        textSearch.dataset.savedFilterText = kind;
+        textSearch.textContent = label;
+        option.append(checkbox, textSearch);
+        container.appendChild(option);
     });
+    const noMatches = document.createElement('div');
+    noMatches.className = 'tb-saved-filter-no-matches';
+    noMatches.dataset.savedFilterNoMatches = '';
+    noMatches.textContent = 'No matching ' + (kind === 'note' ? 'notes.' : 'categories.');
+    noMatches.hidden = true;
+    container.appendChild(noMatches);
+    const validLabels = new Set(Array.from(container.querySelectorAll('[data-saved-filter-option]'), option => option.dataset.savedFilterValue));
+    selection.forEach(value => { if (!validLabels.has(value)) selection.delete(value); });
+    updateSavedFilterOptions(kind);
+}
+
+function syncSavedFilterOptionsFromRows(kind) {
+    const container = kind === 'note' ? tbSavedNoteOptions : tbSavedCategoryOptions;
+    if (!container || !availableAccountsTableBody) return;
+    const field = kind === 'note' ? 'noteFilter' : 'categoryFilter';
+    const values = new Set(Array.from(availableAccountsTableBody.querySelectorAll('tr[data-category-filter]'))
+        .map(row => row.dataset[field] || '')
+        .filter(Boolean));
+    values.add('Unassigned');
+    renderSavedFilterValues(container, values, kind);
+}
+
+function updateSavedFilterOptions(kind) {
+    const input = kind === 'note' ? tbSavedNoteSearch : tbSavedCategorySearch;
+    const container = kind === 'note' ? tbSavedNoteOptions : tbSavedCategoryOptions;
+    if (!input || !container) return;
+    const selection = kind === 'note' ? tbSavedNoteSelections : tbSavedCategorySelections;
+    const query = input.value.trim().toLocaleLowerCase();
+    container.querySelectorAll('[data-saved-filter-option]').forEach(option => {
+        const value = option.dataset.savedFilterValue || '';
+        option.hidden = !!query && !value.toLocaleLowerCase().includes(query) && !selection.has(value);
+        const checkbox = option.querySelector('[data-saved-filter-checkbox]');
+        if (checkbox) checkbox.checked = selection.has(value);
+    });
+    const summary = container.querySelector('[data-saved-filter-summary]');
+    if (summary) summary.textContent = selection.size ? selection.size + ' exact selected' : 'Check exact matches';
+    const clear = container.querySelector('[data-saved-filter-clear]');
+    if (clear) clear.hidden = !selection.size;
+    const noMatches = container.querySelector('[data-saved-filter-no-matches]');
+    if (noMatches) noMatches.hidden = Array.from(container.querySelectorAll('[data-saved-filter-option]')).some(option => !option.hidden);
 }
 
 function applySavedCategoryFilter() {
@@ -2195,11 +2277,19 @@ function applySavedCategoryFilter() {
         ? String(tbSavedCategorySearch ? tbSavedCategorySearch.value : '').trim().toLocaleLowerCase() : '';
     const noteQuery = tbWorkflowMode === 'financial' && availableAccountNoteLookupReady
         ? String(tbSavedNoteSearch ? tbSavedNoteSearch.value : '').trim().toLocaleLowerCase() : '';
+    const categorySelections = availableAccountCategoryLookupReady ? tbSavedCategorySelections : new Set();
+    const noteSelections = tbWorkflowMode === 'financial' && availableAccountNoteLookupReady ? tbSavedNoteSelections : new Set();
     const rows = availableAccountsTableBody.querySelectorAll('tr[data-category-filter]');
     let visibleCount = 0;
     rows.forEach(function (row) {
-        const categoryMatches = !categoryQuery || String(row.dataset.categoryFilter || '').toLocaleLowerCase().includes(categoryQuery);
-        const noteMatches = !noteQuery || String(row.dataset.noteFilter || '').toLocaleLowerCase().includes(noteQuery);
+        const categoryValue = String(row.dataset.categoryFilter || '').toLocaleLowerCase();
+        const noteValue = String(row.dataset.noteFilter || '').toLocaleLowerCase();
+        const categoryMatches = categorySelections.size
+            ? categorySelections.has(row.dataset.categoryFilter || '')
+            : (!categoryQuery || categoryValue.includes(categoryQuery));
+        const noteMatches = noteSelections.size
+            ? noteSelections.has(row.dataset.noteFilter || '')
+            : (!noteQuery || noteValue.includes(noteQuery));
         const matches = categoryMatches && noteMatches;
         row.hidden = !matches;
         if (matches) visibleCount += 1;
@@ -2243,7 +2333,8 @@ function updateSavedDraftFilteredTotal() {
         ? tbSavedCategorySearch.value.trim() : '';
     const noteQuery = tbWorkflowMode === 'financial' && availableAccountNoteLookupReady && tbSavedNoteSearch
         ? tbSavedNoteSearch.value.trim() : '';
-    const hasActiveFilter = Boolean(categoryQuery || noteQuery);
+    const hasActiveFilter = Boolean(categoryQuery || noteQuery || tbSavedCategorySelections.size
+        || (tbWorkflowMode === 'financial' && tbSavedNoteSelections.size));
     if (!hasActiveFilter) {
         heading.classList.remove('tb-draft-filtered-total');
         heading.replaceChildren();
@@ -2390,7 +2481,7 @@ async function loadAvailableUploads(target = availableTrialBalancesBtn, requeste
     if (availableAccountsTableWrapper && availableAccountsTableWrapper._updateFloatingScrollbar) availableAccountsTableWrapper._updateFloatingScrollbar();
     if (availableAccountsTableBody) availableAccountsTableBody.innerHTML = '';
     availableAccountsLoadToken += 1;
-    tbWorkflowLoadToken++; tbWorkflowCache.clear(); tbWorkflowStates.clear();
+    tbWorkflowLoadToken++; tbWorkflowCache.clear(); clearSavedWorkflowStates();
     availableCategoryUploadId = null;
     availableAccountCategoryByCode = new Map();
     availableAccountCategoryLookupReady = false;
@@ -2452,7 +2543,7 @@ async function loadAvailableUploadAccounts(uploadId, target = availableUploadsDr
     const loadToken = ++availableAccountsLoadToken;
     const clientId = window.getSelectedClientId ? window.getSelectedClientId() : null;
     const context = String(clientId) + ':' + String(uploadId);
-    if (context !== tbWorkflowContext) { tbWorkflowStates.clear(); tbWorkflowContext = context; }
+    if (context !== tbWorkflowContext) { clearSavedWorkflowStates(); tbWorkflowContext = context; }
     tbWorkflowCache.clear();
     tbSetFinancialAccounts([],false);
     tbVerificationAccounts = []; tbVerificationLeaves = new Map();
@@ -2853,7 +2944,7 @@ if (availableUploadsDropdown) {
         const uploadId = this.value;
         if (!uploadId) {
             availableAccountsLoadToken += 1;
-            tbWorkflowLoadToken++; tbWorkflowCache.clear(); tbWorkflowStates.clear();
+            tbWorkflowLoadToken++; tbWorkflowCache.clear(); clearSavedWorkflowStates();
             availableCategoryUploadId = null;
             availableAccountCategoryByCode = new Map();
             availableAccountCategoryLookupReady = false;
@@ -2881,11 +2972,57 @@ if (availableUploadsDropdown) {
 }
 
 if (tbSavedCategorySearch) {
-    tbSavedCategorySearch.addEventListener('input', applySavedCategoryFilter);
+    tbSavedCategorySearch.addEventListener('focus', function () { tbSavedNoteOptions.hidden = true; tbSavedNoteSearch.setAttribute('aria-expanded', 'false'); tbSavedCategoryOptions.hidden = false; tbSavedCategorySearch.setAttribute('aria-expanded', 'true'); updateSavedFilterOptions('category'); });
+    tbSavedCategorySearch.addEventListener('input', function () { updateSavedFilterOptions('category'); applySavedCategoryFilter(); rememberSavedWorkflow(); });
 }
 if (tbSavedNoteSearch) {
-    tbSavedNoteSearch.addEventListener('input', applySavedCategoryFilter);
+    tbSavedNoteSearch.addEventListener('focus', function () { tbSavedCategoryOptions.hidden = true; tbSavedCategorySearch.setAttribute('aria-expanded', 'false'); tbSavedNoteOptions.hidden = false; tbSavedNoteSearch.setAttribute('aria-expanded', 'true'); updateSavedFilterOptions('note'); });
+    tbSavedNoteSearch.addEventListener('input', function () { updateSavedFilterOptions('note'); applySavedCategoryFilter(); rememberSavedWorkflow(); });
 }
+function closeSavedFilterOptions() {
+    [[tbSavedCategoryOptions, tbSavedCategorySearch], [tbSavedNoteOptions, tbSavedNoteSearch]].forEach(function ([container, input]) {
+        if (!container || !input) return;
+        container.hidden = true;
+        input.setAttribute('aria-expanded', 'false');
+    });
+}
+document.addEventListener('change', function (event) {
+    const checkbox = event.target.closest('[data-saved-filter-checkbox]');
+    if (!checkbox) return;
+    const selection = checkbox.dataset.savedFilterCheckbox === 'note' ? tbSavedNoteSelections : tbSavedCategorySelections;
+    if (checkbox.checked) selection.add(checkbox.value); else selection.delete(checkbox.value);
+    updateSavedFilterOptions(checkbox.dataset.savedFilterCheckbox);
+    applySavedCategoryFilter();
+    rememberSavedWorkflow();
+});
+document.addEventListener('click', function (event) {
+    const clear = event.target.closest('[data-saved-filter-clear]');
+    if (clear) {
+        const kind = clear.dataset.savedFilterClear;
+        (kind === 'note' ? tbSavedNoteSelections : tbSavedCategorySelections).clear();
+        updateSavedFilterOptions(kind);
+        applySavedCategoryFilter();
+        rememberSavedWorkflow();
+        return;
+    }
+    const textOption = event.target.closest('[data-saved-filter-text]');
+    if (textOption) {
+        const kind = textOption.dataset.savedFilterText;
+        const input = kind === 'note' ? tbSavedNoteSearch : tbSavedCategorySearch;
+        (kind === 'note' ? tbSavedNoteSelections : tbSavedCategorySelections).clear();
+        if (input) input.value = textOption.textContent;
+        updateSavedFilterOptions(kind);
+        applySavedCategoryFilter();
+        rememberSavedWorkflow();
+        input && input.focus();
+        closeSavedFilterOptions();
+        return;
+    }
+    if (!event.target.closest('.tb-saved-category-filter, .tb-saved-note-filter')) closeSavedFilterOptions();
+});
+document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') closeSavedFilterOptions();
+});
 
 // Confirmed fix: deletes the currently selected upload (and all its accounts) after
 // a native confirm() -- same single-flat-destructive-action pattern this file already
@@ -2972,7 +3109,7 @@ if (closeAvailableTrialBalancesBtn) {
         if (availableAccountsTableWrapper && availableAccountsTableWrapper._updateFloatingScrollbar) availableAccountsTableWrapper._updateFloatingScrollbar();
         if (availableAccountsTableBody) availableAccountsTableBody.innerHTML = '';
         availableAccountsLoadToken += 1;
-        tbWorkflowLoadToken++; tbWorkflowCache.clear(); tbWorkflowStates.clear();
+        tbWorkflowLoadToken++; tbWorkflowCache.clear(); clearSavedWorkflowStates();
         availableCategoryUploadId = null;
         availableAccountCategoryByCode = new Map();
         availableAccountCategoryLookupReady = false;

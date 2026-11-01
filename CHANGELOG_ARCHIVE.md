@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Trial Balance exact category and note filters — 2026-11-01
+
+Replaced native datalist suggestions with searchable result panels. Typing retains contains matching; clicking result text applies that search, while checkboxes select exact displayed assignment values. Multiple choices within a field use OR; Category and Note filters combine. Selections persist per workflow and through setup return, and reset when the Trial Balance context changes. No backend or dependency changes; Trial Balance script cache version is 46.
+
+**Verification:** JavaScript syntax and `git diff --check` pass. Aadil confirmed local behavior; automated tests were not run.
+
 ## Trial Balance assignment workspace cutover — Phase 6 — 2026-11-01
 
 Retired the standalone Account Control Centre page and navigation. Legacy page bookmarks redirect to the matching Trial Balance workflow while preserving valid upload/setup context; existing assignment APIs remain mounted. Trial Balance Cashflow Assignments opens local setup. Updated shared-navigation cache versions in all consuming pages. No schema or API changes.
