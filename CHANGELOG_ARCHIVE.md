@@ -9203,6 +9203,13 @@ The proof clears on source changes, errors and view transitions; Income Statemen
 **Acceptance:** Aadil confirmed this phase and authorized commit/push on 2026-10-30.
 
 
+## Tabular statement review dialog — 2026-11-01
+
+**Implementation:** The Balance Sheet review dialog separates numeric closing, profit and comparative opening checks from explanatory review items. Differences retain the existing 0.01 tolerance and normal-balance formatting; review content uses compact responsive tables. Income Statement diagnostics share the dialog structure. Accounting calculations and backend behavior are unchanged; reconciliation.js cache version is 70.
+
+**Verification:** JavaScript syntax and `git diff --check` pass. Aadil confirmed positive local testing. No automated suite or backend changes were needed.
+
+
 ## Balance Sheet opening comparatives and I/S review - 2026-10-30
 
 **Implementation:** The selected TB supplies current closing and comparative opening Dr-Cr through shared ACC categories, signs and formulas. Comparative headers identify the actual opening boundary from period_start, not an assumed financial year-end; missing dates remain unavailable. Source is labelled TB opening balances, pending prior-year final-account/adjustment verification.

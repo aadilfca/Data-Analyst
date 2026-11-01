@@ -5377,8 +5377,8 @@
         const selectedUpload = selector.value;
         table.hidden = true;
         element('balanceSheetRows').replaceChildren();
+        element('balanceSheetDiagnosticChecks').replaceChildren();
         element('balanceSheetDiagnostics').replaceChildren();
-        element('balanceSheetDiagnostics').hidden = true;
         setStatementHeaderTitle(statementName);
         status.hidden = false;
         status.classList.remove('is-error');
@@ -5482,23 +5482,64 @@
             }
             const controls = result.controls || {};
             const diagnostics = (result.diagnostics || []).map(function (item) { return item.message; });
+            const diagnosticChecks = [];
+            function diagnosticAmountCell(label, value) {
+                return '<td class="reconciliation-number"><div class="review-value"><span class="review-value-label">' + escapeHtml(label)
+                    + '</span><span class="review-number">' + escapeHtml(balanceSheetAmount(value, true)) + '</span></div></td>';
+            }
+            function diagnosticCheckRow(label, firstLabel, firstValue, secondLabel, secondValue, difference) {
+                const differenceNumber = Number(difference);
+                const differenceClass = difference == null || !Number.isFinite(differenceNumber)
+                    ? '' : (Math.abs(differenceNumber) > 0.01 ? ' review-difference-alert' : ' review-difference-match');
+                const formattedDifference = balanceSheetAmount(difference, true);
+                const shownDifference = formattedDifference.startsWith('-') ? '(' + formattedDifference.slice(1) + ')' : formattedDifference;
+                diagnosticChecks.push('<tr><th scope="row">' + escapeHtml(label) + '</th>'
+                    + diagnosticAmountCell(firstLabel, firstValue) + diagnosticAmountCell(secondLabel, secondValue)
+                    + '<td class="reconciliation-number' + differenceClass + '">' + escapeHtml(shownDifference) + '</td></tr>');
+            }
+            diagnosticCheckRow('ERP closing balances', 'Debit', controls.closing_dr, 'Credit', controls.closing_cr, controls.closing_difference);
             if (result.profit_link) {
                 const link = result.profit_link;
-                diagnostics.unshift('Final profit total: ' + balanceSheetAmount(link.final_profit, true) + ' · Mapped TB P&L net: ' + balanceSheetAmount(link.tb_profit, true) + ' · Difference: ' + balanceSheetAmount(link.difference, true));
+                diagnosticCheckRow('Final profit', 'Final profit total', link.final_profit, 'Mapped TB P&L net', link.tb_profit, link.difference);
                 if (requestedSection === 'income_statement') (link.reasons || []).forEach(function (reason) { diagnostics.push(reason); });
             }
-            diagnostics.unshift('ERP closing Dr: ' + balanceSheetAmount(controls.closing_dr, true) + ' · Cr: ' + balanceSheetAmount(controls.closing_cr, true) + ' · Difference: ' + balanceSheetAmount(controls.closing_difference, true));
             if (controls.unmapped_count) diagnostics.push('Unmapped account codes: ' + (controls.unmapped_account_codes || []).join(', ') + (controls.unmapped_count > 50 ? ' (first 50)' : ''));
             if (comparative) {
                 const openingControls = comparative.controls;
                 diagnostics.push('Comparative basis: TB opening balances; prior-year audit adjustments and financial year-end require verification.');
-                diagnostics.push('ERP opening Dr: ' + balanceSheetAmount(openingControls.opening_dr, true) + ' · Cr: ' + balanceSheetAmount(openingControls.opening_cr, true) + ' · Difference: ' + balanceSheetAmount(openingControls.opening_difference, true));
+                diagnosticCheckRow('ERP opening balances', 'Debit', openingControls.opening_dr, 'Credit', openingControls.opening_cr, openingControls.opening_difference);
                 (comparative.diagnostics || []).filter(function (item) { return item.code !== 'unclosed_profit_loss'; }).forEach(function (item) { diagnostics.push('Comparative: ' + item.message); });
                 if (review.account_count) diagnostics.push(review.account_count + ' opening I/S accounts need review. Current closing-balance profit includes their opening balances.');
             }
-            element('balanceSheetDiagnostics').innerHTML = diagnostics.map(function (message) { return '<li>' + escapeHtml(message) + '</li>'; }).join('');
-            element('balanceSheetDiagnostics').hidden = false;
+            function diagnosticItem(message) {
+                const text = String(message || '').trim();
+                const knownPrefixes = [
+                    ['Automatic TB differences are excluded:', 'Automatic TB differences'],
+                    ['Negative presented balances retained for review:', 'Negative presented balances'],
+                    ['Closing-balance profit/loss (including opening I/S) linked once to capital:', 'Profit linked to capital'],
+                    ['Comparative basis:', 'Comparative basis'],
+                    ['Unmapped account codes:', 'Unmapped account codes'],
+                    ['ERP closing debits and credits do not balance.', 'Closing balance review'],
+                    ['ERP opening debits and credits do not balance.', 'Opening balance review'],
+                ];
+                for (const [prefix, label] of knownPrefixes) {
+                    if (text.startsWith(prefix)) return {label: label, details: text.slice(prefix.length).trim() || text};
+                }
+                if (text.startsWith('Comparative: ')) return {label: 'Comparative check', details: text.slice('Comparative: '.length)};
+                if (/^\d+ opening I\/S accounts need review\./.test(text)) return {label: 'Opening I/S accounts', details: text};
+                if (text.startsWith('Opening I/S items need review')) return {label: 'Opening I/S review', details: text};
+                if (text.startsWith('Closing I/S net available to the current profit link:')) return {label: 'Profit roll-forward', details: text.slice(text.indexOf(':') + 1).trim()};
+                const separator = text.indexOf(':');
+                if (separator > 0 && separator <= 54) return {label: text.slice(0, separator), details: text.slice(separator + 1).trim()};
+                return {label: 'Review item', details: text};
+            }
+            element('balanceSheetDiagnosticChecks').innerHTML = diagnosticChecks.join('');
+            element('balanceSheetDiagnostics').innerHTML = diagnostics.length ? diagnostics.map(function (message) {
+                const item = diagnosticItem(message);
+                return '<tr><th scope="row">' + escapeHtml(item.label) + '</th><td class="review-item-detail">' + escapeHtml(item.details) + '</td></tr>';
+            }).join('') : '<tr><td colspan="2">No additional items need review.</td></tr>';
             element('balanceSheetDiagnosticsOpen').hidden = false;
+            element('balanceSheetDiagnosticsHeading').textContent = statementName + ' review items';
             element('balanceSheetDiagnosticsOpen').setAttribute('aria-label', 'Open ' + statementName + ' review items');
             currentStatementContext = { clientId: requestedClient, uploadId: requested, key: result.context_key, notesKey: notesKey, statementSection: requestedSection };
             element('statementClosingStatus').value = result.profit_link ? result.profit_link.closing_status : result.closing_status || 'not_confirmed';
