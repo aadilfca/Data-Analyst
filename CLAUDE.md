@@ -266,7 +266,7 @@ One line per file group: what it is now. Full build history for every entry live
 - 2026-10-30: ACC loads upload options first and opens account details on each tab's Load action. See CHANGELOG_ARCHIVE.md.
 - 2026-10-30: ACC indexes Trial Balance hierarchy, batches statement-calculation reads, and adds opt-in timings while preserving assignment results. See CHANGELOG_ARCHIVE.md.
 - 2026-10-30: Trial Balance and ACC Financial Statement/Notes views now link directly while preserving the selected upload. See CHANGELOG_ARCHIVE.md.
-- 2026-11-01: Trial Balance Phase 3 Cashflows is accepted/pushed; Phase 4 adds Verification editing and a direct assignment popup, pending local acceptance. See CHANGELOG_ARCHIVE.md.
+- 2026-11-01: Trial Balance Phases 3–4 are accepted/pushed; Phase 5 verifies assignment freshness and selected-upload retention through statements and Notes. See CHANGELOG_ARCHIVE.md.
 - 2026-10-30: Trial Balance validation adds a floating horizontal scrollbar synchronized with table and sticky headings. See CHANGELOG_ARCHIVE.md.
 - 2026-10-29: Trial Balance import reuses client mappings, validates mapped columns and preserves the full source preview. See CHANGELOG_ARCHIVE.md.
 - 2026-10-29: Trial Balance review preserves corrections, issue navigation, inline edits and wide-table scroll state. See CHANGELOG_ARCHIVE.md.

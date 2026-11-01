@@ -80,7 +80,7 @@ def test_comparative_statement_browser_isolated_sources_and_review(tmp_path):
         }
 
     state = dict(value=payload(), error=False, notes_error=False)
-    calls, errors = [], []
+    calls, errors, notes_uploads = [], [], []
 
     class QuietHandler(SimpleHTTPRequestHandler):
         def log_message(self, *args): pass
@@ -111,9 +111,11 @@ def test_comparative_statement_browser_isolated_sources_and_review(tmp_path):
                     query = parse_qs(parsed.query)
                     section = query.get('statement_section', ['balance_sheet'])[0]
                     chosen = int(query.get('trial_balance_upload_id', ['55'])[0])
+                    notes_uploads.append((section, chosen))
                     value = notes_payload(chosen=chosen, income=section == 'income_statement')
                 elif parsed.path.endswith('/financial-statements/income-statement'):
-                    value = payload(income=True)
+                    chosen = int(parse_qs(parsed.query).get('trial_balance_upload_id', ['55'])[0])
+                    value = payload(chosen=chosen, income=True)
                 elif parsed.path.endswith('/financial-statements/balance-sheet'):
                     if state['error']:
                         route.fulfill(status=409, json={'detail': 'Synthetic source unavailable'})
@@ -218,6 +220,30 @@ def test_comparative_statement_browser_isolated_sources_and_review(tmp_path):
             page.locator('#balanceSheetReload').click()
             expect(page.locator('#balanceSheetReload')).to_be_enabled()
             expect(page.locator('.opening-income-review td').last).to_have_text('0')
+            page.locator('#balanceSheetNotesOpen').click()
+            expect(page.locator('#balanceSheetNotesTable')).to_be_visible()
+            expect(page.locator('#balanceSheetNotesPeriod')).to_have_text('Jan 01, 2026 to Jun 30, 2026')
+            assert ('balance_sheet', 56) in notes_uploads
+            assert parse_qs(urlparse(page.url).query)['trial_balance_upload_id'] == ['56']
+            page.locator('#balanceSheetNotesFinancialStatements').click()
+            expect(page.locator('#financialStatementsView')).to_be_visible()
+            assert parse_qs(urlparse(page.url).query)['trial_balance_upload_id'] == ['56']
+            page.locator('#incomeStatementCard').click()
+            expect(page.locator('#balanceSheetTable')).to_be_visible()
+            expect(page.locator('#balanceSheetUpload')).to_have_value('56')
+            page.locator('#incomeStatementNotesOpen').click()
+            expect(page.locator('#incomeStatementNotesTable')).to_be_visible()
+            expect(page.locator('#incomeStatementNotesRows')).to_contain_text('Synthetic note')
+            assert ('income_statement', 56) in notes_uploads
+            assert parse_qs(urlparse(page.url).query)['trial_balance_upload_id'] == ['56']
+            page.locator('#incomeStatementNotesBack').click()
+            expect(page.locator('#balanceSheetTable')).to_be_visible()
+            assert parse_qs(urlparse(page.url).query)['trial_balance_upload_id'] == ['56']
+            page.locator('#balanceSheetBack').click()
+            expect(page.locator('#financialStatementsView')).to_be_visible()
+            page.locator('#balanceSheetCard').click()
+            expect(page.locator('#openingBalanceSheetReconciliation')).to_be_visible()
+            expect(page.locator('#balanceSheetUpload')).to_have_value('56')
             page.locator('.opening-income-review summary').click()
             expect(page.locator('.opening-income-review li')).to_have_count(2)
             changed = copy.deepcopy(data)

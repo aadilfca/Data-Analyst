@@ -1,5 +1,13 @@
 # Changelog Archive
 
+## Trial Balance integrated review and freshness — Phase 5 — 2026-11-01
+
+Extended the isolated statement browser regression to trace the selected upload through Balance Sheet → Notes → Financial Statements → Income Statement → Notes → back, asserting URL scope and Notes API scope at each step. Existing assignment, report refresh, TB totals and Verification routing contracts were reviewed; no reproducible stale-data defect required application changes.
+
+**Verification:** The six approved TB, ACC, statement, Cashflow and Verification suites passed before the test extension: 383 passed, 1 skipped. The extended Playwright browser regression passed separately. Existing Starlette/httpx and pytest-cache warnings remain. No live data writes, backend changes or package installation. `File_map.md` remains unchanged because no file was added, removed or repurposed.
+
+**Acceptance:** Awaiting Aadil's local-server review and explicit Git authorization.
+
 ## Trial Balance Verification workspace — Phase 4 — 2026-11-01
 
 Verification workstreams can now be edited in the TB assignment column; leaf updates use the existing mapping API and parent assignments use its confirmed bulk-child operation. The floating setup button and Assignments action open a searchable in-place account/workstream editor. Unlinked parents are disabled and marked “Check code.” ACC remains available as fallback. Verification routing and Audit Rules categories are unchanged; no backend, schema or dependency changes.
