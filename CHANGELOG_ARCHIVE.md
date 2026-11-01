@@ -1,5 +1,13 @@
 # Changelog Archive
 
+## Trial Balance Cashflows workspace — Phase 3 — 2026-11-01
+
+Cashflow is now an editable Trial Balance workflow. Leaf categories save through the existing scoped endpoint; parent selections confirm and use the existing bulk-child route. The category column, category filter and filtered account totals refresh from the saved setup response. The fixed setup button opens an in-place modal with category management, Cash/Bank account selection, transfer/customer-receipt settings and Client Data Bank template mapping. The selected client and upload scope are retained while the modal is open. ACC remains available and consumes the shared category option builder; historical/orphan assignment handling and the existing ACC setup screens remain unchanged. No backend, schema, report-engine or dependency changes.
+
+**Assets:** Added `static/cashflow_workspace.js` and `.css`; TB/ACC cache versions are 43/40 and shared module version 1. Updated TB setup tests and script fixtures.
+
+**Verification:** Four approved regression files passed: 190 tests and 12 subtests. Playwright covers TB leaf save, in-place setup, Cash/Bank and settings saves, while ACC Cashflow assignment/setup coverage remains green. JavaScript syntax and `git diff --check` pass. Existing pytest cache-directory and Starlette/httpx deprecation warnings remain. Tests use mocked browser APIs or isolated backend fixtures; no live Cashflow records were changed. Aadil then confirmed locally that TB category changes appear in ACC and the Cashflow report. Phase accepted; Aadil explicitly directed that this work remain uncommitted and unpushed.
+
 ## Trial Balance batch code corrections — 2026-11-01
 
 Import review stages multiple code edits locally, then revalidates them together before import. Unlinked overridden parents receive a pale-red warning and explicit confirmation before import; definite identity errors remain blocking. Imported Trial Balances now retain pending edits behind Save corrections/Discard controls. Page actions offer Save/Discard/Stay; browser refresh/close uses the native warning. Rejected saves retain the draft; successful saves refresh accounts once and reload assignment lookups.

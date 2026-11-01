@@ -266,7 +266,7 @@ function accOptionMarkup(selected) {
 }
 function accCategoryOptionMarkupFor(...args) { return accFsWorkspace.accCategoryOptionMarkupFor(...args); }
 function accCategoryOptionMarkup(...args) { return accFsWorkspace.accCategoryOptionMarkup(...args); }
-function accCashflowCategoryOptionMarkup(selected) { return accCategoryOptionMarkupFor(accCashflowCategories, selected); }
+function accCashflowCategoryOptionMarkup(selected) { return CashflowWorkspace.categoryOptions(accCashflowCategories, selected); }
 function accFinancialPickerLabel(...args) { return accFsWorkspace.accFinancialPickerLabel(...args); }
 function accFinancialPickerOptionMarkup(...args) { return accFsWorkspace.accFinancialPickerOptionMarkup(...args); }
 function accFinancialPickerSectionMarkup(...args) { return accFsWorkspace.accFinancialPickerSectionMarkup(...args); }

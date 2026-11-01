@@ -1257,7 +1257,7 @@ def test_hierarchy_index_preserves_account_and_assignment_results(browser, stati
     page.close()
 
 
-def test_tb_setup_launcher_opens_acc_and_restores_workflow_context(browser, static_server):
+def test_tb_cashflow_workspace_edits_assignments_and_opens_setup_in_place(browser, static_server):
     from urllib.parse import urlparse, parse_qs
     page = browser.new_page(viewport={'width': 1280, 'height': 900})
     calls = []
@@ -1287,18 +1287,32 @@ def test_tb_setup_launcher_opens_acc_and_restores_workflow_context(browser, stat
 
     page.route('**/api/**',api)
     page.goto(static_server+'/static/trial_balance.html?view=available&workflow=cashflow&upload_id=77',wait_until='load')
-    page.wait_for_function("document.querySelector('.tb-saved-category-cell')?.textContent === 'Receipts'")
+    page.wait_for_function("document.querySelector('.tb-saved-category-cell select option:checked')?.textContent === 'Receipts'")
+    page.locator('.tb-cashflow-category-picker').select_option('')
+    page.wait_for_function("document.querySelector('.tb-saved-category-cell select option:checked')?.textContent === 'Unassigned'")
+    assert ('/api/account-control-center/cashflow/category-assignment','PUT') in calls
+    page.locator('.tb-cashflow-category-picker').select_option('1')
+    page.wait_for_function("document.querySelector('.tb-saved-category-cell select option:checked')?.textContent === 'Receipts'")
     page.locator('#tbSavedCategorySearch').fill('Receipts')
     page.locator('#tbAssignmentSetup').click()
-    page.locator('#tbAssignmentSetupMenu a').filter(has_text='Cashflow categories').click()
-    page.wait_for_url('**/account_control_center.html?**')
-    page.wait_for_selector('#accCashflowCategoryModal',state='visible')
-    assert page.locator('#accTrialBalanceSelect').input_value() == '77'
-    assert page.locator('#accTabCashflow').get_attribute('aria-selected') == 'true'
-    page.locator('#accCashflowCategoryClose').click()
-    page.locator('[data-acc-toolbar-actions="cashflow"] [data-acc-trial-balance-link]').click()
-    page.wait_for_url('**/trial_balance.html?**')
-    page.wait_for_function("document.querySelector('.tb-saved-category-cell')?.textContent === 'Receipts'")
+    page.wait_for_selector('#cfwBackdrop:not([hidden])')
+    assert page.locator('#cfwCategories .cfw-category strong').all_text_contents() == ['Receipts']
+    assert page.locator('#cfwBackdrop').get_by_role('tab', name='Cash & Bank').count() == 1
+    assert page.locator('#tbAssignmentWorkflow').input_value() == 'cashflow'
+    assert page.locator('#availableUploadsDropdown').input_value() == '77'
+    page.get_by_role('tab', name='Cash & Bank').click()
+    page.locator('[data-treasury-code="A"]').select_option('cash')
+    page.locator('[data-cfw-save-accounts]').click()
+    page.wait_for_function("document.querySelector('#cfwStatus')?.textContent === 'Cash and Bank accounts saved.'")
+    assert ('/api/account-control-center/cashflow/treasury-accounts','PUT') in calls
+    page.get_by_role('tab', name='Transfers & receipts').click()
+    assert page.locator('#cfwReceipt').is_visible()
+    page.locator('[data-cfw-save-settings]').click()
+    page.wait_for_function("document.querySelector('#cfwStatus')?.textContent === 'Cashflow settings saved.'")
+    assert ('/api/account-control-center/cashflow/settings','PUT') in calls
+    page.get_by_role('tab', name='Transaction template').click()
+    assert page.locator('#cfwTemplateSelect').is_visible()
+    page.locator('[data-cfw-close]').click()
     assert page.locator('#tbAssignmentWorkflow').input_value() == 'cashflow'
     assert page.locator('#availableUploadsDropdown').input_value() == '77'
     assert page.locator('#tbSavedCategorySearch').input_value() == 'Receipts'
@@ -1309,7 +1323,7 @@ def test_tb_setup_launcher_opens_acc_and_restores_workflow_context(browser, stat
     page.wait_for_url('**/account_control_center.html?**')
     page.wait_for_function("document.querySelector('#accAccountRows')?.textContent.includes('Cash')")
     assert page.locator('#accTabVerification').get_attribute('aria-selected') == 'true'
-    assert all(method == 'GET' for _, method in calls)
+    assert all(method == 'GET' or (method == 'PUT' and path.endswith(('/cashflow/category-assignment','/cashflow/treasury-accounts','/cashflow/settings'))) for path, method in calls)
     page.close()
 
 

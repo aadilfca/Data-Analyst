@@ -190,6 +190,10 @@ let tbFsLockState = null;
 let tbFsRenderedCategories = null;
 let tbFsRenderedNotes = null;
 let tbFsMetadataRevision = 0;
+let tbCashflowWorkspace = null;
+let tbCashflowAccounts = [];
+let tbCashflowCategories = [];
+let tbCashflowLeaves = new Map();
 function savedAssignmentColumnCount() { return tbWorkflowMode === 'financial' ? 2 : 1; }
 async function tbReadAssignmentJson(url) {
     const response = await fetch(API_BASE + url);
@@ -1854,12 +1858,12 @@ function syncSavedWorkflowColumns() {
     if (tbAssignmentSetup) {
         tbAssignmentSetup.disabled = !availableUploadsDropdown || !availableUploadsDropdown.value;
         if (definition) { tbAssignmentSetup.title = definition.label + ' setup'; tbAssignmentSetup.setAttribute('aria-label', 'Open ' + definition.label + ' setup'); }
-        if(financial){tbAssignmentSetup.removeAttribute('aria-haspopup');tbAssignmentSetup.removeAttribute('aria-expanded');}
+        if(financial || tbWorkflowMode === 'cashflow'){tbAssignmentSetup.removeAttribute('aria-haspopup');tbAssignmentSetup.removeAttribute('aria-expanded');}
         else {tbAssignmentSetup.setAttribute('aria-haspopup','menu');if(!tbAssignmentSetup.hasAttribute('aria-expanded'))tbAssignmentSetup.setAttribute('aria-expanded','false');}
     }
     if (tbAssignmentSetupMenu && definition) {
         tbAssignmentSetupMenu.replaceChildren();
-        (financial?[]:definition.setups).forEach(function (action) {
+        (financial || tbWorkflowMode === 'cashflow'?[]:definition.setups).forEach(function (action) {
             const link = document.createElement('a'); link.textContent = action[1];
             link.href = AccountAssignments.accUrl(tbWorkflowMode, availableUploadsDropdown && availableUploadsDropdown.value, action[0]);
             if(tbWorkflowMode==='financial') {
@@ -1917,8 +1921,84 @@ function finishSavedWorkflowLookup() {
     });
     syncSavedWorkflowColumns();
     if(tbWorkflowMode==='financial' && tbFsIsAdmin)tbRenderFinancialAssignments();
+    if(tbWorkflowMode==='cashflow' && tbFsIsAdmin)tbRenderCashflowAssignments();
     applySavedCategoryFilter();
     fitSavedTrialBalanceAmountColumns();
+}
+function tbIndexCashflowLeaves(accounts) {
+    const byCode = new Map((accounts || []).map(account => [AccountAssignments.normaliseCode(account.account_code), account]));
+    const leaves = new Map();
+    (accounts || []).filter(account => account.is_leaf).forEach(function (leaf) {
+        let parentCode = AccountAssignments.normaliseCode(leaf.parent_account_code);
+        const seen = new Set();
+        while (parentCode && !seen.has(parentCode)) {
+            seen.add(parentCode);
+            if (!leaves.has(parentCode)) leaves.set(parentCode, []);
+            leaves.get(parentCode).push(leaf);
+            const parent = byCode.get(parentCode);
+            parentCode = parent ? AccountAssignments.normaliseCode(parent.parent_account_code) : '';
+        }
+    });
+    return leaves;
+}
+function tbCashflowCategoryFor(account) {
+    const direct = account.category_id;
+    if (account.is_leaf || direct != null) return direct == null ? '' : String(direct);
+    const values = Array.from(new Set((tbCashflowLeaves.get(AccountAssignments.normaliseCode(account.account_code)) || []).map(leaf => leaf.category_id == null ? '' : String(leaf.category_id))));
+    return values.length === 1 ? values[0] : values.length > 1 ? '__mixed' : '';
+}
+function tbRenderCashflowAssignments() {
+    if (tbWorkflowMode !== 'cashflow' || !tbFsIsAdmin || !availableAccountsTableBody || !tbCashflowAccounts.length) return;
+    const byCode = new Map(tbCashflowAccounts.map(account => [AccountAssignments.normaliseCode(account.account_code), account]));
+    for (const row of availableAccountsTableBody.querySelectorAll('tr[data-category-filter]')) {
+        const account = byCode.get(AccountAssignments.normaliseCode(row.dataset.accountCode));
+        const cell = row.querySelector('.tb-saved-category-cell');
+        if (!account || !cell) continue;
+        const selected = tbCashflowCategoryFor(account);
+        const category = tbCashflowCategories.find(item => String(item.id) === String(selected));
+        const label = selected === '__mixed' ? 'Mixed assignments' : category ? category.label : selected ? 'Category unavailable' : 'Unassigned';
+        row.dataset.categoryFilter = label;
+        availableAccountCategoryByCode.set(row.dataset.accountCode, label);
+        const signature = JSON.stringify([selected, tbCashflowCategories]);
+        if (row.dataset.cashflowSignature !== signature || !cell.querySelector('select.tb-cashflow-category-picker')) {
+            row.dataset.cashflowSignature = signature;
+            cell.innerHTML = tbCashflowWorkspace.categorySelect(account, tbCashflowCategories, selected);
+        }
+    }
+    applySavedCategoryFilter();
+}
+async function tbRefreshCashflowAssignments() {
+    const clientId = window.getSelectedClientId(), uploadId = availableUploadsDropdown.value;
+    AccountAssignments.invalidate(tbReadAssignmentJson);
+    const result = await AccountAssignments.read('cashflow', clientId, uploadId, tbReadAssignmentJson);
+    if (String(clientId) !== String(window.getSelectedClientId()) || String(uploadId) !== String(availableUploadsDropdown.value)) return;
+    tbCashflowAccounts = result.accounts || []; tbCashflowCategories = result.categories || [];
+    tbCashflowLeaves = tbIndexCashflowLeaves(tbCashflowAccounts);
+    availableAccountCategoryByCode = new Map(tbCashflowAccounts.map(account => {
+        const selected = tbCashflowCategoryFor(account);
+        const category = tbCashflowCategories.find(item => String(item.id) === String(selected));
+        return [AccountAssignments.normaliseCode(account.account_code), selected === '__mixed' ? 'Mixed assignments' : category ? category.label : selected ? 'Category unavailable' : 'Unassigned'];
+    }));
+    populateSavedCategoryOptions(tbCashflowCategories);
+    availableAccountCategoryLookupReady = true;
+    finishSavedWorkflowLookup();
+}
+async function tbHandleCashflowCategoryChange(event) {
+    const select = event.target.closest('.tb-cashflow-category-picker');
+    if (!select || tbWorkflowMode !== 'cashflow') return;
+    const account = tbCashflowAccounts.find(item => AccountAssignments.normaliseCode(item.account_code) === AccountAssignments.normaliseCode(select.dataset.cashflowCode));
+    if (!account) return;
+    const categoryId = select.value && select.value !== '__mixed' ? Number(select.value) : null;
+    try {
+        if (!account.is_leaf) {
+            if (!window.confirm('Apply this Cashflow category to all leaf accounts below ' + account.account_code + '?')) { tbRenderCashflowAssignments(); return; }
+            await tbFsApi('/api/account-control-center/cashflow/category-assignment/apply-to-children', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({client_id:window.getSelectedClientId(),trial_balance_upload_id:Number(availableUploadsDropdown.value),parent_account_code:account.account_code,category_id:categoryId})});
+        } else {
+            await tbFsApi('/api/account-control-center/cashflow/category-assignment', {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({client_id:window.getSelectedClientId(),trial_balance_upload_id:Number(availableUploadsDropdown.value),account_code:account.account_code,category_id:categoryId})});
+        }
+        showStatus('Cashflow category saved for ' + account.account_code + '.', 'success');
+        await tbRefreshCashflowAssignments();
+    } catch (error) { showStatus(error.message, 'error'); await tbRefreshCashflowAssignments().catch(() => {}); }
 }
 async function switchSavedWorkflow(value) {
     closeSavedSetupMenu();
@@ -1951,10 +2031,12 @@ async function switchSavedWorkflow(value) {
 if (tbAssignmentWorkflow) tbAssignmentWorkflow.addEventListener('change', function () { switchSavedWorkflow(this.value); });
 if (tbAssignmentSetup) tbAssignmentSetup.addEventListener('click', function () {
     if(tbWorkflowMode==='financial'){closeSavedSetupMenu();tbOpenFinancialSetup('financial');return;}
+    if(tbWorkflowMode==='cashflow'){closeSavedSetupMenu();tbOpenCashflowSetup();return;}
     const open = tbAssignmentSetupMenu.hidden;
     tbAssignmentSetupMenu.hidden = !open; this.setAttribute('aria-expanded', String(open));
     if (open && tbAssignmentSetupMenu.firstElementChild) tbAssignmentSetupMenu.firstElementChild.focus();
 });
+if (availableAccountsTableBody) availableAccountsTableBody.addEventListener('change', tbHandleCashflowCategoryChange);
 document.addEventListener('keydown', function (event) {
     if (event.key === 'Escape' && tbAssignmentSetupMenu && !tbAssignmentSetupMenu.hidden) {
         tbAssignmentSetupMenu.hidden = true; tbAssignmentSetup.setAttribute('aria-expanded', 'false'); tbAssignmentSetup.focus();
@@ -2094,6 +2176,11 @@ async function loadAvailableUploadCategories(uploadId, clientId, loadToken) {
             const result = await AccountAssignments.read(mode === 'cashflow' ? 'cashflow' : 'mapping', clientId, uploadId, tbReadAssignmentJson);
             if (!isCurrent()) return;
             const categories = mode === 'cashflow' ? result.categories || [] : AccountAssignments.workstreams.map(item => ({id: item.value, label: item.label, is_active: true}));
+            if (mode === 'cashflow') {
+                tbCashflowAccounts = result.accounts || [];
+                tbCashflowCategories = categories;
+                tbCashflowLeaves = tbIndexCashflowLeaves(tbCashflowAccounts);
+            }
             const labels = new Map(categories.map(item => [String(item.id), item.label]));
             availableAccountCategoryByCode = new Map(result.accounts.map(account => {
                 const id = mode === 'cashflow' ? account.category_id : account.assignment && account.assignment.verification_workstream;
@@ -3214,6 +3301,19 @@ async function tbOpenFinancialSetup(mode) {
     if(!availableUploadsDropdown?.value)return;
     if(!tbFsIsAdmin){showStatus('Only administrators can manage account assignments.','error');return;}
     try{await tbFsWorkspace.open(mode);}catch(error){showStatus(error.message,'error');}
+}
+tbCashflowWorkspace = CashflowWorkspace.create({
+    get clientId(){return window.getSelectedClientId?window.getSelectedClientId():null;},
+    get uploadId(){return availableUploadsDropdown && availableUploadsDropdown.value ? Number(availableUploadsDropdown.value) : null;},
+    get isAdmin(){return tbFsIsAdmin;},
+    request:(url,options)=>fetch(API_BASE+url,options||{}),
+    onSaved:tbRefreshCashflowAssignments,
+    onModalChanged:open=>{tbFsModalOpen=open;tbFsUpdateLock();},
+});
+async function tbOpenCashflowSetup() {
+    if(!availableUploadsDropdown?.value)return;
+    if(!tbFsIsAdmin){showStatus('Only administrators can manage Cashflow setup.','error');return;}
+    try{await tbCashflowWorkspace.open('categories');}catch(error){showStatus(error.message,'error');}
 }
 tbFsWorkspace=FinancialStatementWorkspace.create({
     lazyPickers:true,applyConfirmedChanges:tbApplyConfirmedFinancialChanges,

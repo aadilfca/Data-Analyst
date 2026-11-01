@@ -35,8 +35,8 @@ One line per file group: what it is now. Full build history for every entry live
 - static/audit_workbook.js, static/audit_workbook.html → Audit Workbook: session rows, filtering, totals, shared Procedure Modal, and cached evidence/Form completion badges. See CHANGELOG_ARCHIVE.md.
 - routers/trial_balance.py → Trial Balance import, validation, batched code corrections, hierarchy, adjustments, draft totals, categories and saved uploads. See CHANGELOG_ARCHIVE.md.
 - routers/account_control_center.py → account mappings with validated FS/Note pairs, batched writes, statement outlines, presentation, profit linking, closing confirmation and Cashflow setup. See CHANGELOG_ARCHIVE.md.
-- static/trial_balance.*, static/account_assignment_shared.js, static/financial_statement_workspace.* → TB import/review, scoped workflow assignments and shared in-place FS/Notes editing/setup. See CHANGELOG_ARCHIVE.md.
-- static/account_control_center.* → on-demand account mapping, shared FS/Notes controls, Cashflow setup and Trial Balance navigation. See CHANGELOG_ARCHIVE.md.
+- static/trial_balance.*, static/account_assignment_shared.js, static/financial_statement_workspace.*, static/cashflow_workspace.* → TB import/review, scoped assignments and shared in-place FS/Notes/Cashflow editing/setup. See CHANGELOG_ARCHIVE.md.
+- static/account_control_center.* → on-demand account mapping, shared FS/Notes/Cashflow controls and Trial Balance navigation during migration. See CHANGELOG_ARCHIVE.md.
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Two-pane Audit Rules editor for Documents, Cross-checks, Categories, Voucher Checks and Assertions, plus Assign Categories. See CHANGELOG_ARCHIVE.md.
 - category_control_center_prototype.html → standalone review-only prototype for the Category Control Center redesign; sample data only, no backend connection.
@@ -266,28 +266,10 @@ One line per file group: what it is now. Full build history for every entry live
 - 2026-10-30: ACC loads upload options first and opens account details on each tab's Load action. See CHANGELOG_ARCHIVE.md.
 - 2026-10-30: ACC indexes Trial Balance hierarchy, batches statement-calculation reads, and adds opt-in timings while preserving assignment results. See CHANGELOG_ARCHIVE.md.
 - 2026-10-30: Trial Balance and ACC Financial Statement/Notes views now link directly while preserving the selected upload. See CHANGELOG_ARCHIVE.md.
-- 2026-11-01: TB batches code corrections, fills blank mappings and protects populated assignments and hierarchy. See CHANGELOG_ARCHIVE.md, “Trial Balance batch code corrections”.
+- 2026-11-01: Trial Balance stages account corrections and handles locally accepted Cashflow assignments/setup; Aadil left Phase 3 uncommitted and unpushed. See CHANGELOG_ARCHIVE.md.
 - 2026-10-30: Trial Balance validation adds a floating horizontal scrollbar synchronized with table and sticky headings. See CHANGELOG_ARCHIVE.md.
-- 2026-10-29: Trial Balance validation shows mapped columns only while preserving the complete source preview. See CHANGELOG_ARCHIVE.md.
-- 2026-10-29: Trial Balance import stores mapped columns only; unmapped workbook columns remain visible in the source preview. See CHANGELOG_ARCHIVE.md.
-- 2026-10-29: Trial Balance hierarchy now matches zero-padded numeric segments across import and Account Control Centre assignment. See Financial Statement operating rules in CHANGELOG_ARCHIVE.md.
-- 2026-10-29: Trial Balance keeps last-run row observations visible while code/classification edits await revalidation. See CHANGELOG_ARCHIVE.md.
-- 2026-10-29: Trial Balance retains its critical-row review queue across corrections and returns to Revalidate after all rows are visited. See CHANGELOG_ARCHIVE.md.
-- 2026-10-29: Trial Balance adds a floating navigator that cycles through row-level blocking issues and highlights each target. See CHANGELOG_ARCHIVE.md.
-- 2026-10-29: Trial Balance code and classification editors now close in place without rebuilding the table or jumping the scroll position. See CHANGELOG_ARCHIVE.md.
-- 2026-10-29: Trial Balance removed guessed code suggestions, added inline double-click edits, and made current-hierarchy Parent code-format issues non-blocking. See CHANGELOG_ARCHIVE.md.
-- 2026-10-29: Trial Balance validation puts controls and subtotal count on row one, with a full-width issue alert below. See CHANGELOG_ARCHIVE.md.
-- 2026-10-29: Trial Balance excludes blank-code subtotal rows by original Excel row number and permits reviewers to restore candidates as accounts. See CHANGELOG_ARCHIVE.md.
-- 2026-10-29: Trial Balance validation now hides upload controls explicitly and restores the preserved upload state on Back. See CHANGELOG_ARCHIVE.md.
-- 2026-10-29: Trial Balance validation contains wide columns and keeps sticky headings aligned through local horizontal scrolling. See CHANGELOG_ARCHIVE.md.
-- 2026-10-29: Trial Balance validation opens as a separate view with shared processing feedback and preserves mapping state on Back. See CHANGELOG_ARCHIVE.md.
-- 2026-10-29: Existing PostgreSQL startup now creates the saved Trial Balance mapping table before client-scoped mapping routes use it.
-- 2026-10-29: Trial Balance can save one eight-field column map per client and reuse it when future file headers match.
-- 2026-10-29: Trial Balance preview shows 10 Client Excel rows with mirror wording, filling the mapping pane more closely.
-- 2026-10-29: Trial Balance mapping and preview use page scrolling; validation status sits beside Back, with accounting-check cards hidden.
-- 2026-10-29: Trial Balance validates mapped amounts and roll-forward before saving; full-file review keeps code and hierarchy corrections pre-save. See CHANGELOG_ARCHIVE.md.
-- 2026-10-29: Compressed historical Status entries into dated summaries; full project history remains in CHANGELOG_ARCHIVE.md.
-- 2026-10-29: Trial Balance period fields and selected-file details appear after file selection; toolbar wraps on narrow screens. See CHANGELOG_ARCHIVE.md.
+- 2026-10-29: Trial Balance import reuses client mappings, validates mapped columns and preserves the full source preview. See CHANGELOG_ARCHIVE.md.
+- 2026-10-29: Trial Balance review preserves corrections, issue navigation, inline edits and wide-table scroll state. See CHANGELOG_ARCHIVE.md.
 - 2026-10-28: Trial Balance flags date-formatted codes, retains imported codes, and supports selected-upload corrections with hierarchy and mapping checks. See CHANGELOG_ARCHIVE.md.
 - 2026-10-28: ACC places each page's searches, filters, actions, and selected Trial Balance in a shared toolbar below the four tabs. See CHANGELOG_ARCHIVE.md.
 - 2026-10-28: ACC totals chain earlier lines, block overlapping source roll-ups, and protect referenced lines. See CHANGELOG_ARCHIVE.md.

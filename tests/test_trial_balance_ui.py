@@ -31,6 +31,7 @@ def test_validation_grid_shows_mapped_columns_only_and_preserves_source_preview(
     """)
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / "static" / "cashflow_workspace.js"))
     page.add_script_tag(path=str(PROJECT_ROOT / "static" / "trial_balance.js"))
 
     result = page.evaluate("""() => {
@@ -87,6 +88,7 @@ def test_rollforward_differences_render_as_red_section_without_changing_source_r
     """)
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / "static" / "cashflow_workspace.js"))
     page.add_script_tag(path=str(PROJECT_ROOT / "static" / "trial_balance.js"))
 
     result = page.evaluate("""() => {
@@ -144,6 +146,7 @@ def test_global_differences_allow_save_without_review_controls(browser):
     page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / "static" / "cashflow_workspace.js"))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""async () => {
         window.API_BASE=''; window.isClientSelected=()=>true;
@@ -180,6 +183,7 @@ def test_global_difference_preserves_all_six_saved_columns(browser):
     page.set_content('<table><tbody id="availableAccountsTableBody"></tbody></table>')
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / "static" / "cashflow_workspace.js"))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""() => renderAvailableAccountsTable([], [{account_name: 'Opening footing',
         global_adjustment: true, opening_cr_adjustment: '100', closing_cr_adjustment: '100'}])""")
@@ -198,6 +202,7 @@ def test_saved_view_inline_edit_and_sticky_heading(browser):
     page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / "static" / "cashflow_workspace.js"))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""() => {
         availableTrialBalancesSection.style.display='block';
@@ -229,6 +234,7 @@ def test_saved_classification_and_amount_widths_and_floating_scroll(browser):
     page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / "static" / "cashflow_workspace.js"))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""() => {
         window.API_BASE=''; window.requests=[]; window.failOverride=false; window.getSelectedClientId=()=>42;
@@ -293,6 +299,7 @@ def test_saved_trial_balance_category_lookup_and_search_filter(browser):
     page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / "static" / "cashflow_workspace.js"))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""() => {
         window.API_BASE=''; window.getSelectedClientId=()=>42;
@@ -383,6 +390,7 @@ def test_saved_trial_balance_remains_available_when_category_lookup_fails(browse
     page.set_content('<div id="availableAccountsTableWrapper"><table><thead><tr><th>Code</th></tr></thead><tbody id="availableAccountsTableBody"></tbody></table></div><div id="tbSavedStickyHead"></div><select id="availableUploadsDropdown"><option value="59">TB</option></select><input id="tbSavedCategorySearch"><datalist id="tbSavedCategoryOptions"></datalist><p id="tbSavedCategoryNoMatches" hidden></p>')
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / "static" / "cashflow_workspace.js"))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""() => {
         window.API_BASE=''; window.getSelectedClientId=()=>42;
@@ -408,6 +416,7 @@ def test_saved_trial_balance_keeps_category_filter_when_note_lookup_fails(browse
     page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / "static" / "cashflow_workspace.js"))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""() => {
         window.API_BASE=''; window.getSelectedClientId=()=>42;
@@ -441,6 +450,7 @@ def test_manual_total_row_mapping_preview_gating_and_file_reset(browser):
     page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / "static" / "cashflow_workspace.js"))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""() => {
         window.isClientSelected = () => true;
@@ -486,6 +496,7 @@ def test_erp_control_footer_aligns_six_columns_and_keeps_original_leaf_totals(br
     """)
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / "static" / "cashflow_workspace.js"))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     result = page.evaluate("""() => {
         fileHeaders = ['Name', 'CC', 'Code', 'PD', 'OD', 'CD', 'OC', 'PC', 'Unmapped'];
@@ -547,6 +558,7 @@ def test_control_rounding_and_difference_colours_follow_server_tolerance(browser
     page.set_content('<table><thead id="tbValidationHead"></thead><tbody id="tbValidationBody"></tbody></table>')
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / "static" / "cashflow_workspace.js"))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     result=page.evaluate("""() => {
         fileHeaders=['Code','Name','OD','OC','PD','PC','CD','CC'];
@@ -586,6 +598,7 @@ def test_control_totals_fit_and_scrolling_keeps_headers_aligned(browser,width,to
     page.add_style_tag(path=str(PROJECT_ROOT / 'static' / 'style.css'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / "static" / "cashflow_workspace.js"))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""total => {
         fileHeaders=['Code','Name','OD','OC','PD','PC','CD','CC'];
@@ -638,6 +651,7 @@ def test_draft_footer_preserves_erp_values_and_shows_balanced_totals_in_both_vie
                      '<table><tbody id="availableAccountsTableBody"></tbody></table>')
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / "static" / "cashflow_workspace.js"))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     result=page.evaluate("""() => {
         fileHeaders=['Name','CC','Code','PD','OD','CD','OC','PC'];
@@ -692,6 +706,7 @@ def test_validation_floating_scrollbar_tracks_table_and_supports_pointer_keyboar
     page=browser.new_page(viewport={'width':1000,'height':900})
     page.set_content(re.sub(r'<script[\s\S]*?</script>','',html))
     page.add_style_tag(path=str(PROJECT_ROOT/'static'/'style.css'))
+    page.add_script_tag(path=str(PROJECT_ROOT / "static" / "cashflow_workspace.js"))
     page.add_script_tag(path=str(PROJECT_ROOT/'static'/'trial_balance.js'))
     page.evaluate("""() => {
         fileHeaders=['Code','Name','OD','OC','PD','PC','CD','CC'];
@@ -744,6 +759,7 @@ def test_assignment_workflows_preserve_filters_amounts_and_reject_late_results(b
     page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'account_assignment_shared.js'))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'financial_statement_workspace.js'))
+    page.add_script_tag(path=str(PROJECT_ROOT / "static" / "cashflow_workspace.js"))
     page.add_script_tag(path=str(PROJECT_ROOT / 'static' / 'trial_balance.js'))
     page.evaluate("""async () => {
         window.API_BASE=''; window.getSelectedClientId=()=>1; window.calls=[];
