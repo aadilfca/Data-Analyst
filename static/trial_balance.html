@@ -282,7 +282,7 @@
         }
 
         /* ---------- SECONDARY ACTION BUTTON (Available Trial Balances trigger + its own
-           Back button) -- outline style, distinct from the filled-green .btn-primary-action
+           Upload TB button) -- outline style, distinct from the filled-green .btn-primary-action
            used for the actual Upload & Classify submit. ---------- */
         .btn-secondary-action {
             padding: 7px 16px;
@@ -302,9 +302,7 @@
             border-color: #60a5fa;
         }
 
-        /* Only the period row's trigger button needs pushing to the far right of its row --
-           the Back button inside availableTrialBalancesSection reuses .btn-secondary-action
-           as-is (no auto margin), sitting naturally at the start of its own row. */
+        /* The Available Trial Balances trigger sits at the right end of the upload toolbar. */
         #availableTrialBalancesBtn {
             margin-left: auto;
         }
@@ -517,11 +515,17 @@
         }
         #availableTrialBalancesSection { padding: 0; margin-top: -4px; background: transparent; box-shadow: none; }
         .tb-saved-toolbar { display: grid; grid-template-rows: auto auto; gap: 6px; margin: 0 0 9px; }
-        .tb-saved-toolbar-row { display: flex; align-items: center; flex-wrap: nowrap; gap: 9px; min-height: 32px; }
+        .tb-saved-toolbar-row { display: flex; align-items: center; flex-wrap: nowrap; gap: 12px; min-height: 38px; }
         .tb-saved-toolbar-row h3 { flex: 0 0 auto; margin: 0; }
-        .tb-saved-toolbar-row--filters { gap: 8px; }
+        .tb-saved-toolbar-row--source h3 { margin-right: 8px; }
+        .tb-saved-toolbar-row--filters { gap: 12px; }
         #availableTrialBalancesSection [hidden] { display: none !important; }
-        #tbAssignmentWorkflow { max-width: 210px; padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; }
+        .tb-saved-toolbar-row select { box-sizing: border-box; min-height: 38px; padding: 7px 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #1e293b; font: inherit; font-size: 13px; }
+        #tbAssignmentWorkflow { width: 210px; max-width: 24vw; }
+        .tb-saved-period-field { display: flex; flex: 0 1 auto; align-items: center; gap: 9px; min-width: 0; }
+        #availableUploadsDropdown { width: 270px; max-width: min(34vw, 360px); }
+        .tb-saved-source-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; margin-left: auto; }
+        .tb-saved-toolbar-row .btn-secondary-action, .tb-saved-toolbar-row .btn-danger-action { box-sizing: border-box; display: inline-flex; min-height: 38px; align-items: center; justify-content: center; border-radius: 8px; }
         #tbAssignmentSetup { position: fixed; right: 24px; bottom: 48px; z-index: 100; display: grid; place-items: center; width: 46px; height: 46px; border: 0; border-radius: 50%; background: #234b67; color: #fff; box-shadow: 0 3px 12px #18364d35; cursor: pointer; }
         #tbAssignmentSetup:disabled { opacity: .5; cursor: default; }
         #tbAssignmentSetup svg { width: 23px; height: 23px; }
@@ -530,7 +534,6 @@
         #tbAssignmentSetupMenu a { padding: 9px 11px; color: #234b67; text-decoration: none; border-radius: 5px; font-size: 13px; }
         #tbAssignmentSetupMenu a:hover, #tbAssignmentSetupMenu a:focus-visible { background: #eef4f8; }
         .tb-saved-toolbar-row--filters #tbAssignCategoriesBtn { margin-left: 4px; }
-        .tb-saved-toolbar-row--filters #deleteUploadBtn { margin-left: auto; }
         #availableAccountsTableWrapper { max-height: none; overflow-y: visible; border: 0; border-radius: 0; }
         #availableAccountsTableWrapper { scrollbar-width: none; }
         #availableAccountsTableWrapper::-webkit-scrollbar { display: none; }
@@ -546,7 +549,7 @@
         .tb-saved-category-filter, .tb-saved-note-filter { display: flex; align-items: center; gap: 7px; position: relative; }
         .tb-saved-toolbar-row label { font-size: 13px; font-weight: 600; color: #34495e; white-space: nowrap; }
         .tb-saved-filter-picker { flex: 0 0 210px; width: 210px; min-width: 0; }
-        .tb-saved-filter-picker .acc2-fs-picker-trigger { min-height: 38px; border-radius: 999px; padding-right: 14px; padding-left: 14px; font-size: 13px; }
+        .tb-saved-filter-picker .acc2-fs-picker-trigger { min-height: 38px; border-radius: 8px; padding-right: 14px; padding-left: 14px; font-size: 13px; }
         .tb-saved-filter-picker .acc2-fs-picker-menu { max-width: calc(100vw - 24px); max-height: min(380px, calc(100vh - 24px)); }
         .tb-saved-filter-picker .acc2-fs-picker-search { box-sizing: border-box; width: calc(100% - 20px); }
         .tb-saved-filter-actions { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 10px; padding: 0 10px 7px; color: #748391; font-size: 11px; }
@@ -560,8 +563,17 @@
         .tb-saved-filter-no-matches { padding: 8px 12px; color: #748391; font-size: 11px; }
         #tbSavedCategoryNoMatches { margin: 0 0 10px; color: #64748b; font-size: 13px; }
         #tbSavedCategoryNoMatches[hidden] { display: none; }
-        @media (max-width: 900px) { .tb-saved-toolbar-row { flex-wrap: wrap; } .tb-saved-toolbar-row--filters #deleteUploadBtn { margin-left: 0; } }
-        @media (max-width: 600px) { .tb-saved-filter-picker { flex-basis: min(210px, 55vw); width: min(210px, 55vw); } }
+        @media (max-width: 900px) {
+            .tb-saved-toolbar-row { flex-wrap: wrap; }
+            .tb-saved-toolbar-row--source .tb-saved-source-actions { margin-left: auto; }
+            .tb-saved-toolbar-row--filters { align-items: flex-start; }
+        }
+        @media (max-width: 600px) {
+            .tb-saved-filter-picker { flex-basis: min(210px, 55vw); width: min(210px, 55vw); }
+            #tbAssignmentWorkflow { max-width: 55vw; }
+            #availableUploadsDropdown { max-width: 62vw; }
+            .tb-saved-source-actions { margin-left: 0; }
+        }
         #availableAccountsTableWrapper thead { display: none; }
 
         /* ---------- COLUMN MAPPING (Section 1, Phase 2) ---------- */
@@ -1102,16 +1114,22 @@
     <div class="tb-form-group" id="availableTrialBalancesSection" style="display:none;">
         <div class="tb-saved-toolbar">
             <div class="tb-saved-toolbar-row tb-saved-toolbar-row--source">
-                <button class="btn-secondary-action" id="closeAvailableTrialBalancesBtn" type="button">← Back</button>
                 <h3>📊 Available Trial Balances</h3>
-                <label for="tbAssignmentWorkflow">Workflow</label>
-                <select id="tbAssignmentWorkflow" title="Assignments apply to matching account codes for this client across Trial Balance uploads."><option value="financial">Financial Statements</option><option value="cashflow">Cashflows</option><option value="verification">Verification</option></select>
-                <label for="availableUploadsDropdown">Upload</label>
-                <select id="availableUploadsDropdown">
-                    <option value="">— Select an upload —</option>
-                </select>
+                <div class="tb-saved-period-field">
+                    <label for="availableUploadsDropdown">Period</label>
+                    <select id="availableUploadsDropdown">
+                        <option value="">— Select an upload —</option>
+                    </select>
+                </div>
+                <div class="tb-saved-source-actions">
+                    <button class="btn-secondary-action" id="closeAvailableTrialBalancesBtn" type="button">Upload TB</button>
+                    <!-- Hidden until an upload is selected; removes the selected upload and its accounts. -->
+                    <button class="btn-danger-action" id="deleteUploadBtn" type="button" style="display:none;">🗑️ Delete</button>
+                </div>
             </div>
             <div class="tb-saved-toolbar-row tb-saved-toolbar-row--filters">
+                <label for="tbAssignmentWorkflow">Workflow</label>
+                <select id="tbAssignmentWorkflow" title="Assignments apply to matching account codes for this client across Trial Balance uploads."><option value="financial">Financial Statements</option><option value="cashflow">Cashflows</option><option value="verification">Verification</option></select>
                 <div class="tb-saved-category-filter">
                     <label id="tbSavedCategoryLabel" for="tbSavedCategoryTrigger">FS Category</label>
                     <div class="tb-saved-filter-picker acc2-fs-picker" data-fs-picker data-saved-filter-picker="category">
@@ -1137,8 +1155,6 @@
                     </div>
                 </div>
                 <button class="btn-secondary-action" id="tbAssignCategoriesBtn" type="button">Assignments →</button>
-                <!-- Hidden until an upload is selected; removes the selected upload and its accounts. -->
-                <button class="btn-danger-action" id="deleteUploadBtn" type="button" style="display:none;">🗑️ Delete</button>
             </div>
         </div>
 

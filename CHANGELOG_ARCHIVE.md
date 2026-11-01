@@ -9229,6 +9229,12 @@ The proof clears on source changes, errors and view transitions; Income Statemen
 
 **Verification:** JavaScript syntax and `git diff --check` pass. Local visual acceptance remains pending.
 
+## Trial Balance toolbar order — 2026-11-01
+
+**Implementation:** The Available Trial Balances header now places the Period selector and right-aligned Upload TB/Delete actions on row one, with Workflow and assignment filters on row two. Upload TB retains the existing return-to-upload action; consistent control heights, rounded corners and spacing are page-scoped. No JavaScript or backend changes.
+
+**Verification:** `git diff --check` passes. Local visual acceptance remains pending.
+
 
 ## Trial Balance upload choices retry and guard client readiness — 2026-11-01
 

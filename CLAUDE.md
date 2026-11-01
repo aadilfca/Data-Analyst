@@ -259,6 +259,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-01: Trial Balance toolbar now groups Period and upload actions above Workflow and assignment filters.
 - 2026-11-01: Trial Balance FS Category and Note filters use grouped row-style popups with search and multi-select. See CHANGELOG_ARCHIVE.md.
 - 2026-11-01: Trial Balance upload choices wait for client context, retry transient failures and ignore stale requests. See CHANGELOG_ARCHIVE.md.
 - 2026-11-01: Trial Balance selections load account rows automatically; source changes clear stale rows and cancel older requests. See CHANGELOG_ARCHIVE.md.
