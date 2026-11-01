@@ -5542,7 +5542,8 @@
             element('balanceSheetDiagnosticsHeading').textContent = statementName + ' review items';
             element('balanceSheetDiagnosticsOpen').setAttribute('aria-label', 'Open ' + statementName + ' review items');
             currentStatementContext = { clientId: requestedClient, uploadId: requested, key: result.context_key, notesKey: notesKey, statementSection: requestedSection };
-            element('statementClosingStatus').value = result.profit_link ? result.profit_link.closing_status : result.closing_status || 'not_confirmed';
+            const loadedClosingStatus = result.profit_link ? result.profit_link.closing_status : result.closing_status;
+            element('statementClosingStatus').value = loadedClosingStatus && loadedClosingStatus !== 'not_confirmed' ? loadedClosingStatus : 'not_in_capital';
             element('statementClosingControls').hidden = false;
             element('statementClosingOpen').hidden = false;
             element('statementClosingOpen').setAttribute('aria-label', 'Profit closing status: ' + element('statementClosingStatus').selectedOptions[0].textContent);

@@ -435,7 +435,7 @@
             </dialog>
             <dialog id='statementClosingDialog' aria-labelledby='statementClosingHeading' hidden>
                 <div class='statement-dialog-header'><div><h3 id='statementClosingHeading'>Profit closing status</h3><p>Confirm whether this Trial Balance’s profit is already included in ERP capital.</p></div><button type='button' class='statement-dialog-close' data-statement-dialog-close aria-label='Close profit closing status'>×</button></div>
-                <div class='statement-dialog-body'><div id='statementClosingControls' hidden><label for='statementClosingStatus'>Profit closing status for this Trial Balance</label><select id='statementClosingStatus'><option value='not_confirmed'>Not confirmed</option><option value='not_in_capital'>Profit is not yet included in ERP capital</option><option value='already_in_capital'>Profit is already included in ERP capital</option></select><button type='button' id='statementClosingSave' class='cashflows-secondary'>Save closing status</button></div></div>
+                <div class='statement-dialog-body'><div id='statementClosingControls' hidden><label for='statementClosingStatus'>Profit closing status for this Trial Balance</label><select id='statementClosingStatus'><option value='not_confirmed'>Not confirmed</option><option value='not_in_capital' selected>Profit is not yet included in ERP capital</option><option value='already_in_capital'>Profit is already included in ERP capital</option></select><button type='button' id='statementClosingSave' class='cashflows-secondary'>Save closing status</button></div></div>
             </dialog>
             <article class='balance-sheet-paper'>
                 <p id='balanceSheetStatus' role='status' aria-live='polite'></p>
@@ -740,6 +740,6 @@
     </section>
     <script src='/static/client_context.js?v=28'></script>
     <script src='/static/loading_ui.js?v=ce6d21ca20c8'></script>
-    <script src='/static/reconciliation.js?v=71'></script>
+    <script src='/static/reconciliation.js?v=72'></script>
 </body>
 </html>

@@ -9217,6 +9217,13 @@ The proof clears on source changes, errors and view transitions; Income Statemen
 **Verification:** JavaScript syntax and whitespace checks pass. Aadil accepted the local result and authorized commit/push.
 
 
+## Profit closing status default — 2026-11-01
+
+**Implementation:** The profit closing dialog defaults to “Profit is not yet included in ERP capital” for missing or “Not confirmed” status. Saved confirmed choices remain selected. The default is not persisted until Save is clicked; backend and accounting calculations are unchanged. Reconciliation script cache version is 72.
+
+**Verification:** JavaScript syntax and whitespace checks pass. Aadil authorized commit/push.
+
+
 ## Balance Sheet opening comparatives and I/S review - 2026-10-30
 
 **Implementation:** The selected TB supplies current closing and comparative opening Dr-Cr through shared ACC categories, signs and formulas. Comparative headers identify the actual opening boundary from period_start, not an assumed financial year-end; missing dates remain unavailable. Source is labelled TB opening balances, pending prior-year final-account/adjustment verification.
