@@ -5108,13 +5108,14 @@
         roots.forEach(function (root, index) {
             const number = String(index + 1);
             byStatementCategory.set(Number(root.source_statement_category_id), {id: Number(root.id), number: number});
-            function indexChildren(note, path) {
+            function indexChildren(note, path, isRoot) {
                 byNoteId.set(Number(note.id), path);
+                const directAssignmentOffset = isRoot && Number(note.direct_account_count || 0) > 0 ? 1 : 0;
                 statementNoteChildren(note).forEach(function (child, childIndex) {
-                    indexChildren(child, path + '.' + String(childIndex + 1));
+                    indexChildren(child, path + '.' + String(childIndex + 1 + directAssignmentOffset), false);
                 });
             }
-            indexChildren(root, number);
+            indexChildren(root, number, true);
         });
         return {roots: roots, byStatementCategory: byStatementCategory, byNoteId: byNoteId};
     }
@@ -5155,20 +5156,17 @@
             const inactive = note.is_active === false || note.is_active === 0;
             const label = escapeHtml(note.label) + (inactive ? '<span class="bs-inactive-label">Inactive</span>' : '');
             const directAssignment = isRoot && Number(note.direct_account_count || 0) > 0;
-            const hasNoteChildren = isRoot && (note.children || []).some(function (child) { return !child.is_unallocated_summary; });
-            const rootLabel = directAssignment && hasNoteChildren
-                ? 'Direct assignment to ' + escapeHtml(note.label) + (inactive ? '<span class="bs-inactive-label">Inactive</span>' : '')
-                : label;
             const amounts = isRoot
-                ? directAssignment
-                    ? amountCell(note.direct_current_amount) + (isBalanceSheet ? amountCell(note.direct_comparative_amount) : '')
-                    : '<td class="balance-sheet-amount"></td>' + (isBalanceSheet ? '<td class="balance-sheet-amount"></td>' : '')
+                ? '<td class="balance-sheet-amount"></td>' + (isBalanceSheet ? '<td class="balance-sheet-amount"></td>' : '')
                 : amountCell(note.current_amount) + (isBalanceSheet ? amountCell(note.comparative_amount) : '');
-            rendered.push('<tr id="' + prefix + 'Note-' + Number(note.id) + '" class="' + (isRoot ? 'bs-note-root' : 'bs-note-child') + (inactive ? ' bs-note-inactive' : '') + (Number(note.id) === Number(selectedNoteId) ? ' bs-note-selected' : '') + '"><td class="bs-note-number">' + escapeHtml(number) + '</td><th scope="row" class="bs-note-label" style="padding-left:' + (13 + depth * 22) + 'px">' + rootLabel + '</th>' + amounts + '</tr>');
+            rendered.push('<tr id="' + prefix + 'Note-' + Number(note.id) + '" class="' + (isRoot ? 'bs-note-root' : 'bs-note-child') + (inactive ? ' bs-note-inactive' : '') + (Number(note.id) === Number(selectedNoteId) ? ' bs-note-selected' : '') + '"><td class="bs-note-number">' + escapeHtml(number) + '</td><th scope="row" class="bs-note-label" style="padding-left:' + (13 + depth * 22) + 'px">' + label + '</th>' + amounts + '</tr>');
+            if (directAssignment) {
+                rendered.push('<tr class="bs-note-child bs-note-direct-assignment' + (inactive ? ' bs-note-inactive' : '') + '"><td class="bs-note-number">' + escapeHtml(number + '.1') + '</td><th scope="row" class="bs-note-label" style="padding-left:' + (35 + depth * 22) + 'px">Direct assignment to ' + escapeHtml(note.label) + (inactive ? '<span class="bs-inactive-label">Inactive</span>' : '') + '</th>' + amountCell(note.direct_current_amount) + (isBalanceSheet ? amountCell(note.direct_comparative_amount) : '') + '</tr>');
+            }
             if (isBalanceSheet && note.current_system_amount != null) rendered.push('<tr class="bs-note-system"><td></td><th scope="row" style="padding-left:' + (35 + depth * 22) + 'px">Current-period profit/(loss) linked to this category</th>' + amountCell(note.current_system_amount) + amountCell(null) + '</tr>');
             if (isBalanceSheet && note.comparative_system_amount != null) rendered.push('<tr class="bs-note-system"><td></td><th scope="row" style="padding-left:' + (35 + depth * 22) + 'px">Opening I/S items included in comparative balance</th>' + amountCell(null) + amountCell(note.comparative_system_amount) + '</tr>');
             statementNoteChildren(note).forEach(function (child, index) {
-                renderNode(child, number + '.' + String(index + 1), depth + 1, false);
+                renderNode(child, number + '.' + String(index + 1 + (directAssignment ? 1 : 0)), depth + 1, false);
             });
             if (isRoot) {
                 rendered.push('<tr class="bs-note-subtotal"><td></td><th scope="row">Subtotal</th>' + amountCell(note.current_amount) + (isBalanceSheet ? amountCell(note.comparative_amount) : '') + '</tr>');
