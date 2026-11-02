@@ -52,7 +52,7 @@ function create(host) {
     }
     function accEffectiveFinancialCategory(account) {
         const direct = accAssignment(account).financial_statement_category_id;
-        if (account.is_leaf || direct) return direct == null ? '' : String(direct);
+        if (account.is_leaf) return direct == null ? '' : String(direct);
         const values = Array.from(new Set(accLeavesBelow(account.account_code).map(function (leaf) {
             const value = accAssignment(leaf).financial_statement_category_id;
             return value == null ? '' : String(value);
@@ -62,7 +62,7 @@ function create(host) {
 
     function accEffectiveNoteCategory(account) {
         const direct = accAssignment(account).note_category_id;
-        if (account.is_leaf || direct != null) return direct == null ? '' : String(direct);
+        if (account.is_leaf) return direct == null ? '' : String(direct);
         const values = Array.from(new Set(accLeavesBelow(account.account_code).map(function (leaf) {
             const value = accAssignment(leaf).note_category_id;
             return value == null ? '' : String(value);
@@ -945,7 +945,7 @@ function create(host) {
         const select = picker && picker.querySelector('.acc2-financial-category, .acc2-note-category');
         if (!select) return;
         const value = option.dataset.fsPickerValue || '';
-        if (select.value === value) { accCloseFinancialPicker(picker, true); return; }
+        if (select.value === value && select.dataset.accParent !== 'true') { accCloseFinancialPicker(picker, true); return; }
         select.value = value;
         accUpdateFinancialPickerSelection(select);
         accCloseFinancialPicker(picker, true);

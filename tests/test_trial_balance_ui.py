@@ -895,6 +895,7 @@ def test_verification_workspace_edits_accounts_and_opens_direct_assignment_popup
             if(url.includes('/mapping?')) return {ok:true,json:async()=>window.mapping};
             return {ok:true,json:async()=>({})};
         };
+        window.ApiUtils={apiFetch:(url,options)=>window.fetch(url,options),apiFetchMutate:(url,options)=>window.fetch(url,options)};
         availableTrialBalancesSection.style.display='block';
         availableUploadsDropdown.innerHTML='<option value="77">Test upload</option>';
         tbWorkflowMode='verification'; tbAssignmentWorkflow.value='verification';
@@ -934,6 +935,74 @@ def test_verification_workspace_edits_accounts_and_opens_direct_assignment_popup
     assert page.evaluate("JSON.parse(calls.find(call=>call.method==='POST').body).verification_workstream") == 'cash'
     page.locator('#vwBackdrop [data-vw-close]').click()
     assert page.locator('#vwBackdrop').is_hidden()
+    page.close()
+
+
+def test_financial_parent_can_reapply_same_category_to_all_descendant_leaves(browser):
+    import re
+
+    html = (PROJECT_ROOT / 'static' / 'trial_balance.html').read_text(encoding='utf-8')
+    page = browser.new_page()
+    page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
+    for script in ('loading_ui.js', 'account_assignment_shared.js', 'financial_statement_workspace.js', 'cashflow_workspace.js', 'verification_workspace.js', 'trial_balance.js'):
+        page.add_script_tag(path=str(PROJECT_ROOT / 'static' / script))
+    page.evaluate("""async () => {
+        window.API_BASE=''; window.getSelectedClientId=()=>1; tbFsIsAdmin=true;
+        window.confirm=()=>true; window.calls=[];
+        const rows=[
+            {id:1,account_code:'10-10-25',account_name:'Fixed assets',parent_account_code:'10-10',is_leaf:false,closing_dr:'100'},
+            {id:2,account_code:'10-10-25-10',account_name:'Property plant and equipment',parent_account_code:'10-10-25',is_leaf:false,closing_dr:'100'},
+            {id:3,account_code:'10-10-25-10-0001',account_name:'Factory land',parent_account_code:'10-10-25-10',is_leaf:true,closing_dr:'60'},
+            {id:4,account_code:'10-10-25-10-0002',account_name:'Factory building',parent_account_code:'10-10-25-10',is_leaf:true,closing_dr:'40'},
+            {id:5,account_code:'10-10-30',account_name:'Other fixed assets',parent_account_code:'10-10',is_leaf:false,closing_dr:'20'},
+            {id:6,account_code:'10-10-30-0001',account_name:'Other asset A',parent_account_code:'10-10-30',is_leaf:true,closing_dr:'10'},
+            {id:7,account_code:'10-10-30-0002',account_name:'Other asset B',parent_account_code:'10-10-30',is_leaf:true,closing_dr:'10'}
+        ];
+        window.mapping={client_id:1,upload:{id:77},accounts:rows.map(row=>({account_code:row.account_code,account_name:row.account_name,parent_account_code:row.parent_account_code,is_leaf:row.is_leaf,level:row.account_code.split('-').length,assignment:{financial_statement_category_id:row.is_leaf?(row.account_code.startsWith('10-10-25-')?8:(row.account_code.endsWith('0001')?4:null)):4,note_category_id:row.is_leaf?(row.account_code.startsWith('10-10-25-')?21:null):22}}))};
+        window.fetch=async (url,options={})=>{
+            const method=options.method||'GET'; window.calls.push({url,method,body:options.body||null});
+            if(url.includes('/api/trial-balance/accounts')) return {ok:true,json:async()=>({accounts:rows,adjustments:[],validation_controls:{}})};
+            if(url.includes('/mapping/apply-to-children')) {
+                const body=JSON.parse(options.body);
+                const leaves=window.mapping.accounts.filter(item=>item.account_code.startsWith(body.parent_account_code+'-')&&item.is_leaf);
+                leaves.forEach(item=>{item.assignment.financial_statement_category_id=body.financial_statement_category_id;});
+                return {ok:true,json:async()=>({saved:true,client_id:1,trial_balance_upload_id:77,assignment_changes:leaves.map(item=>({account_code:item.account_code,financial_statement_category_id:8,note_category_id:21}))})};
+            }
+            if(url.includes('/mapping?')) return {ok:true,json:async()=>window.mapping};
+            if(url.includes('category_type=note')) return {ok:true,json:async()=>({categories:[
+                {id:20,label:'Other assets note',source_statement_category_id:8,parent_category_id:null,is_active:true},
+                {id:21,label:'Asset details',source_statement_category_id:null,parent_category_id:20,is_active:true},
+                {id:22,label:'Old fixed assets note',source_statement_category_id:4,parent_category_id:null,is_active:true}
+            ]})};
+            if(url.includes('/categories?')) return {ok:true,json:async()=>({categories:[
+                {id:4,label:'Fixed assets',statement_section:'balance_sheet',is_active:true,row_type:'category'},
+                {id:8,label:'Other non current assets',statement_section:'balance_sheet',is_active:true,row_type:'category'}
+            ]})};
+            return {ok:true,json:async()=>({})};
+        };
+        window.ApiUtils={apiFetch:(url,options)=>window.fetch(url,options),apiFetchMutate:(url,options)=>window.fetch(url,options)};
+        availableTrialBalancesSection.style.display='block';
+        availableUploadsDropdown.innerHTML='<option value="77">Test upload</option>';
+        availableUploadsDropdown.value='77'; tbWorkflowMode='financial'; tbAssignmentWorkflow.value='financial';
+        await loadAvailableUploadAccounts('77');
+    }""")
+
+    page.wait_for_function("document.querySelector('tr[data-account-code=\\\"10-10-25\\\"] [data-fs-picker]:not(.acc2-note-picker) [data-fs-picker-trigger]')")
+    parent_picker = page.locator('tr[data-account-code="10-10-25"] [data-fs-picker]:not(.acc2-note-picker) [data-fs-picker-trigger]')
+    assert parent_picker.locator('[data-fs-picker-value-label]').inner_text().endswith('Other non current assets')
+    nested_picker = page.locator('tr[data-account-code="10-10-25-10"] [data-fs-picker]:not(.acc2-note-picker) [data-fs-picker-trigger]')
+    assert nested_picker.locator('[data-fs-picker-value-label]').inner_text().endswith('Other non current assets')
+    assert page.locator('tr[data-account-code="10-10-25"] .acc2-note-picker [data-fs-picker-value-label]').inner_text().endswith('Asset details')
+    assert page.locator('tr[data-account-code="10-10-25-10"] .acc2-note-picker [data-fs-picker-value-label]').inner_text().endswith('Asset details')
+    assert page.locator('tr[data-account-code="10-10-30"] [data-fs-picker]:not(.acc2-note-picker) [data-fs-picker-value-label]').inner_text() == 'Mixed assignments — choose one'
+    parent_picker.click()
+    page.locator('tr[data-account-code="10-10-25"] [data-fs-picker]:not(.acc2-note-picker) [data-fs-picker-option][data-fs-picker-value="8"]').click()
+
+    page.wait_for_function("calls.some(call=>call.url.includes('/mapping/apply-to-children')) && mapping.accounts.filter(item=>item.account_code.startsWith('10-10-25-')&&item.is_leaf).every(item=>item.assignment.financial_statement_category_id===8)")
+    writes = page.evaluate("calls.filter(call=>call.method==='POST')")
+    assert len(writes) == 1
+    assert writes[0]['url'].endswith('/mapping/apply-to-children')
+    assert page.evaluate("JSON.parse(calls.find(call=>call.method==='POST').body).parent_account_code") == '10-10-25'
     page.close()
 
 
