@@ -61,16 +61,16 @@ def _ledger_decimal(value, *, balance=False):
             text = '-' + parentheses[1].strip() + (parentheses[2] or '')
     match = re.fullmatch(r"([+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?:\s*(DR|CR))?", text)
     if not match or (match[2] and not balance):
-        raise HTTPException(400, "Ledger amounts must be finite numbers; only balances may carry DR/CR")
+        raise HTTPException(400, "Enter a valid number. Only balances may include DR or CR.")
     try:
         number = Decimal(match[1].replace(",", ""))
     except InvalidOperation as error:
         raise HTTPException(400, "Invalid ledger amount") from error
     if not number.is_finite() or (not balance and number < 0):
-        raise HTTPException(400, "Ledger debit/credit amounts must be finite and non-negative")
+        raise HTTPException(400, "Debit and credit must be finite, non-negative amounts.")
     if match[2]:
         if match[2] == "DR" and number < 0:
-            raise HTTPException(400, "Conflicting ledger balance sign and DR designation")
+            raise HTTPException(400, "Balance sign conflicts with the DR label.")
         number = abs(number) * (-1 if match[2] == "CR" else 1)
     return number
 
@@ -97,7 +97,7 @@ def get_ledger_upload_accounts(client_id: int):
         raise HTTPException(404, 'Client not found or inactive')
     accounts = _ledger_account_choices(client_id)
     if len({r['account_code'] for r in accounts}) != len(accounts):
-        raise HTTPException(409, 'Duplicate posting account codes exist in the latest Trial Balance. Review the Trial Balance before uploading ledgers.')
+        raise HTTPException(409, 'The latest Trial Balance has duplicate posting account codes. Resolve them before upload.')
     return {'accounts': [{'account_code': r['account_code'], 'account_name': r['account_name']} for r in accounts]}
 
 
@@ -109,25 +109,25 @@ def _resolve_ledger_context(request, template, *, lock=False):
         return None
     code = (request.ledger_account_code or "").strip()
     if not code or len(code) > 120:
-        raise HTTPException(400, "Select a ledger account")
+        raise HTTPException(400, "Choose a Trial Balance posting account.")
     try:
         start = datetime.strptime(request.ledger_period_start or "", "%Y-%m-%d").date().isoformat()
         end = datetime.strptime(request.ledger_period_end or "", "%Y-%m-%d").date().isoformat()
     except ValueError as error:
-        raise HTTPException(400, "Supply the ledger coverage dates as YYYY-MM-DD") from error
+        raise HTTPException(400, "Enter valid ledger coverage dates.") from error
     if start > end:
-        raise HTTPException(400, "Ledger coverage start must not follow its end")
+        raise HTTPException(400, "Coverage start must be on or before the end date.")
     if request.edited_cells or request.force_include_rows:
-        raise HTTPException(400, "Correct ledger source errors in Excel; ledger imports cannot override rejected or blank cells")
+        raise HTTPException(400, "Fix rejected or blank ledger rows in Excel before upload.")
     accounts = _ledger_account_choices(request.client_id, code)
     if len(accounts) != 1:
-        raise HTTPException(400, "Select one posting account from the latest Trial Balance")
+        raise HTTPException(400, "Choose an account from the latest Trial Balance.")
     roles = template.get("ledger_columns") or {}
     if isinstance(roles, str):
         roles = json.loads(roles)
     required = {"voucher", "date", "description", "debit", "credit", "balance"}
     if set(roles) != required or len(set(roles.values())) != len(required):
-        raise HTTPException(400, "Configure the ledger template's six column roles before uploading")
+        raise HTTPException(400, "Set all six ledger column roles in the template.")
     column_lock = " FOR SHARE OF m, p" if lock else ""
     columns = execute_query_pg(
         """SELECT m.id, m.column_name, m.data_type FROM template_column_mappings p
@@ -139,13 +139,13 @@ def _resolve_ledger_context(request, template, *, lock=False):
     if not columns or columns[0]["id"] != roles["voucher"] or any(
         column not in by_id or not mapped.get(column) for column in roles.values()
     ):
-        raise HTTPException(400, "Map all six ledger columns and keep Voucher first")
+        raise HTTPException(400, "Map all six ledger columns. Put Voucher first.")
     if any(column['column_name'].casefold() == LEDGER_SOURCE_NOTES.casefold() for column in columns):
-        raise HTTPException(400, f"Rename the template column '{LEDGER_SOURCE_NOTES}'; this name is reserved for attached ledger continuation notes.")
+        raise HTTPException(400, f"Rename '{LEDGER_SOURCE_NOTES}'; that name is reserved for attached ledger notes.")
     allowed = {"voucher": {"Text"}, "date": {"Date"}, "description": {"Text"},
                "debit": {"Numeric"}, "credit": {"Numeric"}, "balance": {"Text", "Numeric"}}
     if any(by_id[column]["data_type"] not in allowed[role] for role, column in roles.items()):
-        raise HTTPException(400, "The ledger template has incompatible shared column types")
+        raise HTTPException(400, "Ledger template column types do not match their roles.")
     # Configuration participates in the plan guard, including shared column types.
     configuration = hashlib.sha256(json.dumps([roles, columns], sort_keys=True).encode()).hexdigest()
     return {"account_code": code, "account_name": accounts[0]["account_name"],
@@ -370,7 +370,7 @@ def _prepare_ledger_rows(rows, request):
             if context["evidence"][kind] is not None or any(
                 item["kind"] == kind for item in context["evidence"]["control_rows"]
             ):
-                raise HTTPException(400, f"More than one ledger {kind} control row")
+                raise HTTPException(400, f"Only one {kind} balance row is allowed.")
             context["evidence"][kind] = str(value) if value is not None else None
             context["evidence"]["control_rows"].append({"row_number": number, "kind": kind})
             parent, previous_number = None, number
@@ -378,7 +378,7 @@ def _prepare_ledger_rows(rows, request):
         note = context.get('note_candidates', {}).get(id(row), _ledger_description_only(row, roles))
         if note:
             if parent is None or previous_number != number - 1 or number in excluded:
-                raise HTTPException(400, f"Ledger continuation note at Excel row {number} must immediately follow an included valid transaction or its notes; notes cannot be excluded. Review the source rows.")
+                raise HTTPException(400, f"Ledger note at row {number} must follow an included transaction. Keep notes with their voucher.")
             text = row[roles['description']]
             notes = context['row_notes'].setdefault(id(parent), [])
             notes.append(text)
@@ -405,9 +405,9 @@ def _prepare_ledger_rows(rows, request):
                         day = parse_date_flexible(value, request.date_delimiter if request.date_delimiter is not None else DEFAULT_DATE_DELIMITER,
                                                   request.date_order or DEFAULT_DATE_ORDER).date().isoformat()
                     except (ValueError, TypeError) as error:
-                        raise HTTPException(400, f"Invalid ledger transaction date at Excel row {number}") from error
+                        raise HTTPException(400, f"Enter a valid date on Excel row {number}.") from error
                 if not context["start"] <= day <= context["end"]:
-                    raise HTTPException(400, f"Ledger transaction at Excel row {number}, voucher '{voucher}', dated {day} is outside the declared coverage period {context['start']} to {context['end']}. Include its date or correct the source; the transaction was not removed.")
+                    raise HTTPException(400, f"Row {number}: {voucher} dated {day} is outside {context['start']}–{context['end']}. Widen coverage or correct the date.")
                 if blank_voucher or (amounts['debit'] is None and amounts['credit'] is None):
                     incomplete = True
                 else:
@@ -569,20 +569,20 @@ def _ledger_ancestry_is_current(request, item, check):
 def _ledger_balance_warnings(context):
     check = context['evidence'].get('balance_check') or {}
     warnings = [{'row_number': item['row_number'], 'column': 'Balance',
-                 'message': f"ERP balance {item['source']} differs from calculated balance {item['expected']} by {item['difference']}. Source values were retained."}
+                 'message': f"ERP balance {item['source']} differs from calculated {item['expected']} by {item['difference']}. ERP value kept."}
                 for item in check.get('differences', [])]
     if Decimal(check.get('closing_difference', '0')):
-        warnings.append({'column': 'Balance', 'message': f"The ERP closing control differs from the calculated closing by {check['closing_difference']}."})
+        warnings.append({'column': 'Balance', 'message': f"ERP closing balance differs by {check['closing_difference']}. ERP value kept."})
     continuity = check.get('continuity') or {}
     if continuity.get('status') == 'difference':
-        warnings.append({'column': 'Balance', 'message': f"Opening {check['opening']} differs from previous closing {continuity['expected_opening']} by {continuity['difference']}. The new source was retained."})
+        warnings.append({'column': 'Balance', 'message': f"Opening {check['opening']} differs from prior closing {continuity['expected_opening']} by {continuity['difference']}. ERP value kept."})
     elif continuity.get('status') == 'gap':
-        warnings.append({'column': 'Balance', 'message': f"Previous coverage ends {continuity['previous_end']}; intervening coverage is missing. No previous balance was carried forward."})
+        warnings.append({'column': 'Balance', 'message': f"Previous period ends {continuity['previous_end']}; a period is missing. No opening balance was carried forward."})
     elif continuity.get('status') == 'requires_revalidation':
-        warnings.append({'column': 'Balance', 'message': 'The previous ledger balance proof is missing or stale. Revalidate that coverage before using its closing as an opening.'})
-    reason = {'opening_unavailable': 'Opening balance unavailable. Supply ERP balance evidence or continuous verified prior coverage; zero was not assumed.',
-              'unordered': 'Transaction dates are out of sequence. Balance reconciliation is unavailable; use a chronological ledger export.',
-              'partial_or_incomplete': 'A partial or incomplete extract cannot establish complete-period calculated balances.'}.get(check.get('status'))
+        warnings.append({'column': 'Balance', 'message': 'Previous balance is missing or outdated. Validate the prior period again.'})
+    reason = {'opening_unavailable': 'No opening balance found. Add the ERP opening balance or upload continuous prior coverage.',
+              'unordered': 'Dates are out of order. Use a chronological report to check balances.',
+              'partial_or_incomplete': 'Balance checks need a complete-period report.'}.get(check.get('status'))
     if reason:
         warnings.append({'column': 'Balance', 'message': reason})
     return warnings
@@ -739,7 +739,7 @@ def _require_staged_upload(file_path: str) -> str:
     if not file_path or not os.path.isfile(file_path):
         raise HTTPException(410, detail={
             'code': 'staged_file_missing',
-            'message': 'The staged Excel file is no longer available. Select the source file again, confirm its settings and mapping, then validate before importing.',
+            'message': 'The staged file is missing. Select it again and validate before importing.',
         })
     return file_path
 
@@ -1996,7 +1996,7 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
               AND EXISTS (SELECT 1 FROM uploaded_files lu WHERE lu.id = cd.upload_id AND lu.ledger_account_code = %s)''',
             (client_id, template_id, sorted(incoming_groups), coverage['start'], coverage['end'], context['account_code']))
         if any(not row.get('extract_date') or not coverage['start'] <= str(row['extract_date'])[:10] <= coverage['end'] for row in boundary):
-            raise HTTPException(409, 'An uploaded ledger voucher already has lines outside this coverage. Include both dates in a wider ledger report.')
+            raise HTTPException(409, 'A voucher has lines outside this period. Include the full voucher in a wider report.')
     if context or coverage:
         if coverage and incoming_groups and not context:
             scope += ' OR cd.document_group_id = ANY(%s)'
@@ -2208,7 +2208,7 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
             (client_id, template_id, groups) + ((context['account_code'],) if context else ()),
             page_size=UPLOAD_COMPARISON_PAGE_SIZE)
         if {row['id'] for row in members} != old_ids:
-            raise HTTPException(409, 'A previous voucher has additional lines outside this report period. Use wider coverage so its complete previous version can be archived.')
+            raise HTTPException(409, 'A previous voucher has lines outside this period. Use wider coverage to include it completely.')
         if coverage and not context:
             scope_context['document_groups'] = sorted(set(scope_context['document_groups']) | set(groups))
     result['source_order_refresh_required'] = any(
@@ -2768,7 +2768,7 @@ def find_critical_blank_reasons(row: dict, critical_cols: dict, mapping_dict: di
             fields = _ledger_context.get()["excel_roles"]
             if all(_ledger_decimal(row.get(fields[side])) is None for side in ("debit", "credit")):
                 reasons.append({"role": "amount", "column": None, "excel_column": None,
-                                "message": "Both ledger Debit and Credit are blank"})
+                                "message": "Both Debit and Credit are blank."})
             continue
         if not t_col:
             continue
@@ -2785,7 +2785,7 @@ def find_critical_blank_reasons(row: dict, critical_cols: dict, mapping_dict: di
                 "role": role,
                 "column": t_col['column_name'],
                 "excel_column": excel_col,
-                "message": f"{CRITICAL_FIELD_LABELS[role]} ('{t_col['column_name']}') is blank"
+                "message": f"Missing {CRITICAL_FIELD_LABELS[role]}."
             })
     return reasons
 
@@ -2815,35 +2815,31 @@ def compute_data_quality_flag(row_data: dict, critical_cols: dict) -> Optional[s
 def _read_standalone_workbook(contents):
     """Reject web exports before staging; never fetch linked worksheet resources."""
     if not contents:
-        raise HTTPException(400, "The selected file is empty. Export a standalone Excel workbook and try again.")
+        raise HTTPException(400, "File is empty. Choose an Excel workbook.")
     if contents.startswith((b'\xff\xfe', b'\xfe\xff')):
         prefix = contents[:32768].decode('utf-16', errors='replace')
     else:
         prefix = contents[:32768].decode('utf-8-sig', errors='replace')
     if prefix.lstrip().startswith('<') and re.search(r'<(?:!doctype\s+html|html|table|frameset)\b', prefix, re.I):
         if re.search(r'<(?:frameset|frame)\b', prefix, re.I):
-            message = ("This file is an Excel web-page wrapper (frameset). Its worksheet data is in separate linked files, "
-                       "so this file alone does not contain the ledger transactions. Open the original export with its "
-                       "companion folder in Excel, then use Save As > Excel Workbook (.xlsx), or export a standalone "
-                       "Excel workbook from the ERP. Renaming the extension will not convert the file.")
+            message = ("This file links to worksheets stored elsewhere. Open the original with its companion folder and "
+                       "save as .xlsx, or export a standalone workbook from the ERP.")
         else:
-            message = ("This is an HTML web-page export saved with an Excel extension. Save or export it as a standalone "
-                       "Excel Workbook (.xlsx) or Excel 97-2003 Workbook (.xls), then upload that workbook. "
-                       "Renaming the extension will not convert the file.")
+            message = "HTML exports are not Excel workbooks. Export as .xlsx or .xls, then upload the workbook."
         raise HTTPException(400, message)
     try:
         return pd.read_excel(BytesIO(contents))
     except ImportError as error:
-        raise HTTPException(400, "The server's Excel reader is unavailable. Ask the administrator to check the installed Excel-reading dependencies.") from error
+        raise HTTPException(400, "Excel reader unavailable. Contact the administrator.") from error
     except Exception as error:
         logger.warning("Excel upload could not be read (%s)", type(error).__name__)
-        raise HTTPException(400, "The file could not be read as a standalone Excel workbook. Open it in Excel, check that it is not damaged or password-protected, then save a new .xlsx copy and retry.") from error
+        raise HTTPException(400, "Excel cannot read this workbook. Check for damage or a password, then save a new .xlsx copy.") from error
 
 
 @router.post("/api/import-excel")
 async def import_excel(file: UploadFile = File(...), session=Depends(get_current_user)):
     if not (file.filename or '').casefold().endswith(('.xlsx', '.xls')):
-        raise HTTPException(400, "Only .xlsx and .xls files are supported")
+        raise HTTPException(400, "Choose an .xlsx or .xls file.")
     contents = await file.read()
     df = _read_standalone_workbook(contents)
     file_path = _build_upload_storage_path(file.filename)
@@ -2892,7 +2888,7 @@ def auto_map_headers(request: AutoMapRequest):
             df = pd.read_excel(file_info[0]['file_path'])
             excel_headers = df.columns.tolist()
         except Exception as e2:
-            raise HTTPException(400, f"Error reading Excel file: {str(e2)}")
+            raise HTTPException(400, "Could not read the selected Excel sheet. Check the file and sheet, then retry.")
 
     mappings = []
     used = set()
@@ -3071,7 +3067,7 @@ def check_duplicates(request: ImportRequest):
     try:
         df = pd.read_excel(file_info[0]['file_path'], sheet_name=request.sheet_name)
     except Exception as e:
-        raise HTTPException(400, f"Error reading Excel: {str(e)}")
+        raise HTTPException(400, "Could not read the selected Excel sheet. Check the file and sheet, then retry.")
 
     rows, source_diagnostics = _prepare_source_rows(df, request, template_cols, col_mapping)
 
@@ -3159,7 +3155,7 @@ def preview_date_format(request: DatePreviewRequest):
     try:
         df = pd.read_excel(file_info[0]['file_path'], sheet_name=request.sheet_name)
     except Exception as e:
-        raise HTTPException(400, f"Error reading Excel: {str(e)}")
+        raise HTTPException(400, "Could not read the selected Excel sheet. Check the file and sheet, then retry.")
 
     samples = []
     for mapping in request.date_mappings:
@@ -3324,7 +3320,7 @@ def validate_only(request: ImportRequest, perf: bool = False):
             raise HTTPException(400, 'Map every complete-report column: ' + ', '.join(missing_mappings))
         for number, row in enumerate(rows, 2):
             if _ledger_row_number(row, number) in set(request.excluded_rows or []):
-                raise HTTPException(400, f'A complete report cannot exclude transaction rows (Excel row {_ledger_row_number(row, number)}). Correct the source or use partial correction.')
+                raise HTTPException(400, f"Complete reports cannot exclude row {_ledger_row_number(row, number)}. Fix it or use a partial extract.")
     rows = filter_excluded_rows(rows, request.excluded_rows)
 
     # Which columns fill the 3 "critical" roles (Document ID/Amount/Date) for this
@@ -3380,7 +3376,7 @@ def validate_only(request: ImportRequest, perf: bool = False):
                             "column": t_col['column_name'],
                             "excel_column": excel_col,
                             "error_type": "data_type",
-                            "message": f"Expected Numeric but got '{value}'"
+                "message": "Enter a number."
                         })
                 elif t_col['data_type'] == "Date":
                     kind = classify_date_cell(value)
@@ -3396,14 +3392,14 @@ def validate_only(request: ImportRequest, perf: bool = False):
                                 "column": t_col['column_name'],
                                 "excel_column": excel_col,
                                 "error_type": "data_type",
-                                "message": f"Expected Date ({effective_order}, delimiter '{effective_delimiter}') but got '{value}'"
+                                "message": "Enter a valid date in the selected format."
                             })
 
             # Row-level rejection: blank Document ID/Amount/Date (Phase 2 of the
             # blank-field-rejection requirement) -- distinct from the generic
             # data-type errors above, reported separately, does not add to row_errors.
             row_reasons = find_critical_blank_reasons(row, critical_cols, mapping_dict)
-        except Exception as e:
+        except Exception:
             # A row that fails to parse for any unforeseen reason (e.g. an
             # unexpected cell type) must not crash the whole /validate request --
             # surface it as a graceful per-row error instead of a 500.
@@ -3411,7 +3407,7 @@ def validate_only(request: ImportRequest, perf: bool = False):
                 "column": None,
                 "excel_column": None,
                 "error_type": "parse_error",
-                "message": f"Row could not be parsed: {e}"
+                "message": "This row could not be read. Check its values."
             }]
 
         if row_errors:
@@ -3460,11 +3456,11 @@ def validate_only(request: ImportRequest, perf: bool = False):
                 'has_rejections': bool(rejected_rows), 'rejected_count': len(rejected_rows),
                 'rejected_rows': rejected_rows, 'total_rows': len(rows),
                 'source_diagnostics': source_diagnostics,
-                'message': 'Complete report validation failed. Correct the listed source rows and validate again; no data was changed.'}
+                'message': 'Fix the listed rows and validate again. No data was changed.'}
     if request.comparison_mode == 'replace_range' and not unique_comparison_rows and not request.confirm_empty_period:
-        raise HTTPException(400, 'This report is empty. Explicitly confirm clearing the declared period before validating it.')
+        raise HTTPException(400, 'This report is empty. Confirm clearing this period to continue.')
     if request.comparison_mode == 'replace_range' and unique_comparison_rows and request.confirm_empty_period:
-        raise HTTPException(400, 'This report contains transactions. Untick the empty-report confirmation and validate again.')
+        raise HTTPException(400, 'This report has transactions. Uncheck “Empty report” and validate again.')
     if _ledger_context.get():
         _prepare_ledger_balance_proof(request)
         source_diagnostics['warnings'].extend(_ledger_balance_warnings(_ledger_context.get()))
@@ -4274,8 +4270,8 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
     # Read Excel data
     try:
         df = pd.read_excel(file_info[0]['file_path'], sheet_name=request.sheet_name)
-    except Exception as e:
-        raise HTTPException(400, f"Error reading Excel: {str(e)}")
+    except Exception:
+        raise HTTPException(400, "Could not read the selected Excel sheet. Check the file and sheet, then retry.")
     print(f"🔍 DataFrame shape: {df.shape}")  # rows, columns
     print(f"🔍 DataFrame columns: {df.columns.tolist()}")
     rows, source_diagnostics = _prepare_source_rows(df, request, template_cols, col_mapping)
@@ -4336,7 +4332,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
                             "column": t_col['column_name'],
                             "excel_column": excel_col,
                             "error_type": "data_type",
-                            "message": f"Expected Numeric but got '{value}'"
+                            "message": "Enter a number."
                         })
                 elif t_col['data_type'] == "Date":
                     kind = classify_date_cell(value)
@@ -4352,21 +4348,21 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
                                 "column": t_col['column_name'],
                                 "excel_column": excel_col,
                                 "error_type": "data_type",
-                                "message": f"Expected Date ({effective_order}, delimiter '{effective_delimiter}') but got '{value}'"
+                                "message": "Enter a valid date in the selected format."
                             })
 
             # Row-level rejection: blank Document ID/Amount/Date (Phase 2 of the
             # blank-field-rejection requirement) -- distinct from the generic
             # data-type errors above, reported separately, does not add to row_errors.
             row_reasons = find_critical_blank_reasons(row, critical_cols, mapping_dict)
-        except Exception as e:
+        except Exception:
             # Same graceful-degradation guarantee as validate_only(): a row that
             # fails to parse must not crash the whole /import request.
             row_errors = [{
                 "column": None,
                 "excel_column": None,
                 "error_type": "parse_error",
-                "message": f"Row could not be parsed: {e}"
+                "message": "This row could not be read. Check its values."
             }]
         if row_errors:
             validation_errors.append({"row_number": row_idx, "errors": row_errors})
@@ -4439,7 +4435,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
         date_order=effective_order,
     )
     if change_detection and (change_detection['changed_count'] or change_detection['missing_count']):
-        raise HTTPException(400, 'Validate this correction first. Changed or deleted source data requires a verified archive and validation plan.')
+        raise HTTPException(400, 'Validate this correction before importing. A verified archive is required.')
     # Preserve the established first-upload path for callers that intentionally
     # disable comparison (for example, an isolated import worker or legacy
     # integration). In that mode every validated row is a new row.

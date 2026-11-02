@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Upload field guidance and concise errors — 2026-11-02
+
+Upload issues now show a short stage, cause and next step. Missing account/coverage choices appear inline; mapping rows say “Mapped” or “Choose column.” Report type and coverage guidance are shorter. Error row links jump to the source row; common row/ledger errors name the field without raw values or parser text. Validation, import and archive safeguards are unchanged.
+
+**Verification:** Python compilation, JavaScript syntax and `git diff --check` pass. Automated tests and local-server acceptance were not run; no import or data writes occurred.
+
 ## Stable upload staging and missing-file recovery — 2026-11-02
 
 New uploads use an absolute `UPLOAD_STAGING_DIR` (default: the app's `uploads/` folder). Validation checks the staged workbook even when its checksum is already stored and returns a safe, recoverable missing-file error. The UI clears the stale file reference and validation plan, retains other settings and asks for a fresh selection. Duplicate checks, import receipts and plan safeguards are unchanged.

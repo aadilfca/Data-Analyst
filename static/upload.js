@@ -116,6 +116,29 @@ function ledgerUploadLabel() {
     const account = ledgerAccountChoices.find(a => a.account_code === ledgerSelectedAccountCode);
     return account ? `${account.account_name} (${account.account_code})` : '';
 }
+function clearUploadFieldError(field, help) {
+    field?.removeAttribute('aria-invalid');
+    field?.classList.remove('upload-field-error');
+    help?.classList.remove('upload-inline-error');
+    if (help?.id === 'ledgerAccountHelp') help.setAttribute('role', 'status');
+    if (help?.dataset.uploadError === 'true') {
+        help.hidden = true;
+        help.textContent = '';
+        delete help.dataset.uploadError;
+    }
+}
+function showUploadFieldError(field, help, message) {
+    if (!field || !help) return;
+    field.classList.add('upload-field-error');
+    field.setAttribute('aria-invalid', 'true');
+    help.classList.add('upload-inline-error');
+    help.setAttribute('role', 'alert');
+    help.dataset.uploadError = 'true';
+    help.textContent = message;
+    help.hidden = false;
+    field.scrollIntoView({block: 'center', behavior: 'smooth'});
+    field.focus({preventScroll: true});
+}
 function clearLedgerUploadContext() {
     finishLedgerAccountLoading();
     ledgerAccountChoices = []; ledgerSelectedAccountCode = ''; ledgerSelectionClientId = null;
@@ -144,6 +167,7 @@ function closeLedgerAccountOptions() {
 function selectLedgerUploadAccount(account) {
     // Only an explicit choice supplies the identity used by validation/import.
     ledgerSelectedAccountCode = account.account_code;
+    clearUploadFieldError(ledgerAccountSelect, document.getElementById('ledgerAccountHelp'));
     renderLedgerUploadAccounts();
     resetValidationState(); saveUploadSessionState();
 }
@@ -197,6 +221,7 @@ async function loadLedgerUploadAccounts(preferred = '', generation = uploadTempl
     ledgerAccountChoices = []; ledgerSelectedAccountCode = ''; ledgerSelectionClientId = null;
     renderLedgerUploadAccounts(); resetValidationState();
     const help = document.getElementById('ledgerAccountHelp');
+    clearUploadFieldError(ledgerAccountSelect, help);
     help.hidden = false;
     help.textContent = 'Loading accounts…';
     const load = {token: window.LoadingUI.startGlobalLoading(ledgerAccountSelect)};
@@ -213,7 +238,7 @@ async function loadLedgerUploadAccounts(preferred = '', generation = uploadTempl
         ledgerSelectedAccountCode = result.accounts.some(a => a.account_code === preferred) ? preferred : '';
         renderLedgerUploadAccounts();
         help.textContent = result.accounts.length ? ''
-            : 'No posting accounts found. Upload and parse this client’s Trial Balance, then select the template again.';
+            : 'No posting accounts. Upload a Trial Balance, then reselect this template.';
         help.hidden = result.accounts.length > 0;
         saveUploadSessionState();
     } catch (error) {
@@ -512,7 +537,7 @@ function renderRestorePreview(state) {
 
         const td4 = document.createElement('td');
         const icon = document.createElement('span');
-        icon.style.fontSize = '16px';
+        icon.style.fontSize = '12px';
         icon.textContent = m.is_matched ? '✅' : '❌';
         icon.style.color = m.is_matched ? '#16a34a' : '#dc2626';
         td4.appendChild(icon);
@@ -522,7 +547,7 @@ function renderRestorePreview(state) {
     });
 
     const matched = state.mappings.filter(m => m.is_matched).length;
-    if (mappingCount) mappingCount.textContent = matched + ' / ' + state.mappings.length + ' matched (locked preview)';
+    if (mappingCount) mappingCount.textContent = matched + '/' + state.mappings.length + ' columns mapped';
 
     // One-line locked banner above the mapping table, inserted directly into #leftPanel (not
     // #mappingPanel) so it stays at full opacity while the table content below it is dimmed --
@@ -697,13 +722,13 @@ async function fetchUpload(url, options) {
             || (path.endsWith('/templates') && !Array.isArray(result))
             || (path.endsWith('/upload-columns') && !Array.isArray(result.columns))
             || (path.endsWith('/auto-map') && (!Array.isArray(result.mappings) || !Array.isArray(result.excel_headers)));
-        if (invalidShape) throw new Error('The server response is incomplete. Retry this stage or retain the message for support.');
+        if (invalidShape) throw new Error('The server response is incomplete. Retry this step.');
         return {ok: response.ok, status: response.status, json: async () => result};
     } catch (error) {
         error.stage = stage;
         error.httpStatus = response?.status;
         error.outcomeUnknown = stage === 'Import' && (!response || response.status >= 500 || response.ok);
-        if (!response) error.message = 'The connection to the server was lost or unavailable.';
+        if (!response) error.message = 'Connection lost. Retry this step.';
         throw error;
     }
 }
@@ -731,20 +756,29 @@ function uploadFailureMessage(result, fallback) {
 }
 
 function showUploadFailure(message, stage = 'Upload', error = null) {
+    message = String(message || 'Upload failed.').replace(/^\s*(?:❌|⚠️)\s*/, '')
+        .replace(/^(?:Validation error|Import error|Upload error|Date preview failed|Auto-mapping failed|Error reading file|Error previewing file|Failed to load (?:templates|template columns)):\s*/i, '');
     const unknown = Boolean(error?.outcomeUnknown);
     const missingStagedFile = error?.result?.detail?.code === 'staged_file_missing';
     const action = missingStagedFile
-        ? 'The server copy is missing. Select this Excel file again to create a fresh upload; your other settings remain. Confirm the mapping and validate again before importing.'
+        ? 'Select the file again, then validate.'
         : unknown
-        ? 'The import may have completed. Keep this file, settings and validation plan unchanged. Retry Import after reconnecting so the existing receipt can reconcile the result safely. Check Data Bank if the result remains uncertain.'
+        ? 'Reconnect, then retry Import without changing the file or settings.'
         : error?.httpStatus === 401
-            ? 'Sign in again, then reopen Data Upload and validate the source before importing.'
-            : 'Review the details below, correct the source or settings where needed, then retry this stage. If the issue continues, retain this message for support.';
+            ? 'Sign in again, then reopen Data Upload.'
+            : null;
+    const focusTarget = stage === 'Ledger account selection' ? ledgerAccountSelect
+        : stage === 'Ledger coverage' ? uploadCoverageStart : null;
+    if (stage === 'Ledger account selection') {
+        showUploadFieldError(ledgerAccountSelect, document.getElementById('ledgerAccountHelp'), message);
+    } else if (stage === 'Ledger coverage') {
+        showUploadFieldError(uploadCoverageStart, document.getElementById('uploadCoverageHelp'), message);
+    }
     showStatus('', unknown ? 'warning' : 'error');
     // Voucher/account identifiers and server messages are source text, never HTML.
     if (statusMessage) statusMessage.textContent = unknown ? 'Import outcome unconfirmed. ' + message : message;
     showUploadIssue({stage: error?.stage || stage, severity: unknown ? 'unconfirmed' : 'error',
-        message, action, result: error?.result?.detail || error?.result});
+        message, action, focusTarget, result: error?.result?.detail || error?.result});
 }
 
 function showSourceDiagnostics(result) {
@@ -753,10 +787,10 @@ function showSourceDiagnostics(result) {
     showUploadIssue({stage: 'Source review', severity: controls.warnings?.length ? 'warning' : 'info',
         message: isLedgerUpload() && controls.warnings?.length
             ? `Ledger balance/source review: ${controls.warnings.length} item(s) need attention.`
-            : `${controls.excluded_count || 0} blank/total source row(s) recognised and excluded from transactions.`,
+            : `${controls.excluded_count || 0} blank or total rows skipped.`,
         action: controls.warnings?.length
-            ? 'Review the source control-total differences before importing. Transaction amounts remain unchanged.'
-            : 'Only transaction rows proceed to comparison. Review these source row numbers if needed.',
+            ? 'Review the balance differences before import.'
+            : 'Review these row numbers if needed.',
         rows: [...(controls.warnings || []), ...(controls.excluded_rows || []).map(row => ({
             row_number: row.row_number, message: `Excluded ${row.kind} row${row.label ? ': ' + row.label : ''}`
         }))]});
@@ -892,10 +926,17 @@ if (dateOrderDropdown) {
 
 if (comparisonModeDropdown) {
     comparisonModeDropdown.addEventListener('change', function() {
+        clearUploadCoverageError();
         updateUploadCoverageVisibility();
         resetValidationState();
         saveUploadSessionState();
     });
+}
+
+function clearUploadCoverageError() {
+    const help = document.getElementById('uploadCoverageHelp');
+    clearUploadFieldError(uploadCoverageStart, help);
+    clearUploadFieldError(uploadCoverageEnd, help);
 }
 
 function updateUploadCoverageVisibility() {
@@ -907,6 +948,7 @@ function updateUploadCoverageVisibility() {
 
 [uploadCoverageStart, uploadCoverageEnd, uploadConfirmEmpty].forEach(control => {
     if (control) control.addEventListener('change', () => {
+        clearUploadCoverageError();
         resetValidationState();
         saveUploadSessionState();
     });
@@ -1614,8 +1656,8 @@ async function autoMapColumns() {
         if (importBtn) importBtn.disabled = false;
 
         const matched = currentMappings.filter(m => m.is_matched).length;
-        if (mappingCount) mappingCount.textContent = matched + ' / ' + data.total_columns + ' matched';
-        setBadge('✅ ' + matched + '/' + data.total_columns + ' matched');
+        if (mappingCount) mappingCount.textContent = matched + '/' + data.total_columns + ' columns mapped';
+        setBadge(matched + '/' + data.total_columns + ' columns mapped');
         let mapStatusMsg = '✅ Auto‑mapped ' + matched + '/' + data.total_columns + ' columns';
         if (savedMappingAppliedCount > 0) {
             mapStatusMsg += ` (${savedMappingAppliedCount} from your saved mapping)`;
@@ -1658,6 +1700,12 @@ function renderMapping(mappings) {
 
     mappings.forEach((m, rowIndex) => {
         const tr = document.createElement('tr');
+        const setMappingStatus = (element, matched) => {
+            element.textContent = matched ? '✓ Mapped' : 'Choose column';
+            element.classList.toggle('is-unmapped', !matched);
+            element.setAttribute('aria-label', matched ? 'Mapped' : 'Choose an Excel column');
+            element.title = matched ? 'Mapped' : 'Choose an Excel column';
+        };
 
         const td1 = document.createElement('td');
         td1.textContent = m.column_name;
@@ -1669,6 +1717,7 @@ function renderMapping(mappings) {
         const select = document.createElement('select');
         select.dataset.rowIndex = rowIndex;
         select.dataset.columnId = m.column_id;
+        select.setAttribute('aria-label', `${m.column_name}: Excel column`);
 
         function buildOptions() {
             const selectedValues = currentMappings
@@ -1696,10 +1745,7 @@ function renderMapping(mappings) {
                 const statusTd = tr.children[3];
                 if (statusTd) {
                     const icon = statusTd.querySelector('span');
-                    if (icon) {
-                        icon.textContent = '❌';
-                        icon.style.color = '#dc2626';
-                    }
+                    if (icon) setMappingStatus(icon, false);
                 }
                 updateCounts();
             } else {
@@ -1718,15 +1764,7 @@ function renderMapping(mappings) {
             const statusTd = tr.children[3];
             if (statusTd) {
                 const icon = statusTd.querySelector('span');
-                if (icon) {
-                    if (m.is_matched) {
-                        icon.textContent = '✅';
-                        icon.style.color = '#16a34a';
-                    } else {
-                        icon.textContent = '❌';
-                        icon.style.color = '#dc2626';
-                    }
-                }
+                if (icon) setMappingStatus(icon, m.is_matched);
             }
             // Column mapping changed -- reset row selection grid checkboxes/flags (Phase 4
             // of the row-exclusion requirement), since the key column basis may have shifted.
@@ -1750,14 +1788,9 @@ function renderMapping(mappings) {
 
         const td4 = document.createElement('td');
         const icon = document.createElement('span');
+        icon.className = 'mapping-status';
         icon.style.fontSize = '16px';
-        if (m.is_matched) {
-            icon.textContent = '✅';
-            icon.style.color = '#16a34a';
-        } else {
-            icon.textContent = '❌';
-            icon.style.color = '#dc2626';
-        }
+        setMappingStatus(icon, m.is_matched);
         td4.appendChild(icon);
         tr.appendChild(td4);
 
@@ -1768,8 +1801,8 @@ function renderMapping(mappings) {
 
     function updateCounts() {
         const matched = currentMappings.filter(m => m.is_matched).length;
-        if (mappingCount) mappingCount.textContent = matched + ' / ' + currentMappings.length + ' matched';
-        setBadge('✅ ' + matched + '/' + currentMappings.length + ' matched');
+        if (mappingCount) mappingCount.textContent = matched + '/' + currentMappings.length + ' columns mapped';
+        setBadge(matched + '/' + currentMappings.length + ' columns mapped');
     }
 }
 
@@ -2068,7 +2101,7 @@ function showImportSummary(result, ledgerPresentation = null) {
 // ---------- SHOW VALIDATION ERRORS ----------
 // Reuse the existing issue dialog for every stage; page row details to keep
 // even a large rejected workbook responsive. All source text uses textContent.
-function showUploadIssue({stage = 'Validation', severity = 'error', message, action, result, rows = []}) {
+function showUploadIssue({stage = 'Validation', severity = 'error', message, action, focusTarget, result, rows = []}) {
     document.getElementById('validationErrorOverlay')?.remove();
     const previousFocus = document.activeElement;
     const overlay = document.createElement('div');
@@ -2090,7 +2123,7 @@ function showUploadIssue({stage = 'Validation', severity = 'error', message, act
     add('h2', title).id = 'uploadIssueTitle';
     add('p', 'Stage: ' + stage).className = 'upload-issue-stage';
     add('p', message || result?.message || 'Review the upload details.');
-    add('p', action || 'Correct the listed source rows, then validate again.').className = 'upload-issue-action';
+    if (action) add('p', action).className = 'upload-issue-action';
     const details = [...rows];
     for (const item of [...(result?.errors || []), ...(result?.rejected_rows || [])]) {
         const reasons = item.errors || item.reasons || [];
@@ -2102,7 +2135,7 @@ function showUploadIssue({stage = 'Validation', severity = 'error', message, act
         const tableBox = add('div', ''); tableBox.className = 'upload-issue-details';
         const table = add('table', '', tableBox);
         const head = add('tr', '', add('thead', '', table));
-        ['Excel row', 'Voucher / column', 'Details'].forEach(label => add('th', label, head));
+        ['Excel row', 'Voucher / field', 'What to fix'].forEach(label => add('th', label, head));
         const body = add('tbody', '', table);
         const nav = add('div', ''); nav.className = 'upload-issue-navigation';
         const prev = add('button', 'Previous', nav), label = add('span', '', nav), next = add('button', 'Next', nav);
@@ -2111,11 +2144,23 @@ function showUploadIssue({stage = 'Validation', severity = 'error', message, act
             body.replaceChildren();
             details.slice(page * 50, page * 50 + 50).forEach(item => {
                 const row = add('tr', '', body);
-                add('td', item.row_number ?? '—', row);
+                const rowNumberCell = add('td', '', row);
+                if (item.row_number !== undefined && item.row_number !== null) {
+                    const rowLink = add('button', item.row_number, rowNumberCell);
+                    rowLink.type = 'button';
+                    rowLink.className = 'upload-issue-row-link';
+                    rowLink.title = `Go to Excel row ${item.row_number}`;
+                    rowLink.addEventListener('click', () => {
+                        overlay.remove();
+                        focusUploadSourceRow(item.row_number);
+                    });
+                } else {
+                    rowNumberCell.textContent = '—';
+                }
                 add('td', item.voucher || item.column || '—', row);
                 add('td', item.message || '', row);
             });
-            label.textContent = `${page * 50 + 1}–${Math.min(details.length, page * 50 + 50)} of ${details.length} details`;
+            label.textContent = `Rows ${page * 50 + 1}–${Math.min(details.length, page * 50 + 50)} of ${details.length}`;
             prev.disabled = page === 0; next.disabled = (page + 1) * 50 >= details.length;
         };
         prev.addEventListener('click', () => { page--; render(); });
@@ -2123,7 +2168,12 @@ function showUploadIssue({stage = 'Validation', severity = 'error', message, act
         render();
     }
     const close = add('button', 'Close'); close.id = 'validationErrorCloseBtn';
-    const dismiss = () => { overlay.remove(); previousFocus?.focus(); };
+    const dismiss = () => {
+        overlay.remove();
+        const target = focusTarget && !focusTarget.disabled ? focusTarget : previousFocus;
+        target?.scrollIntoView?.({block: 'center'});
+        target?.focus?.({preventScroll: true});
+    };
     close.addEventListener('click', dismiss);
     overlay.addEventListener('click', event => { if (event.target === overlay) dismiss(); });
     overlay.appendChild(modal); document.body.appendChild(overlay); close.focus();
@@ -2146,11 +2196,27 @@ document.addEventListener('keydown', event => {
 });
 
 function showValidationErrors(result) {
-    if (isLedgerUpload()) result = {...result, message: `${ledgerUploadLabel()} · ${uploadCoverageStart.value} through ${uploadCoverageEnd.value}. ${result.message || 'Correct the listed ledger rows before importing.'}`};
+    const errorCount = Number(result.error_count || 0);
+    const rejectedCount = Number(result.rejected_count || 0);
+    const errorLabel = errorCount === 1 ? '1 row has an error' : `${errorCount} rows have errors`;
     showUploadIssue({stage: 'Validation', result,
-        message: result.message || `${result.error_count || 0} row(s) with format errors; ${result.rejected_count || 0} rejected row(s), in ${result.total_rows || 0} transaction rows.`,
-        action: 'Correct the listed source rows and validate again. Complete reports cannot import rejected transaction rows.'});
+        message: `${errorLabel}; ${rejectedCount} rejected of ${Number(result.total_rows || 0)}.`,
+        action: 'Fix the marked rows, then validate again.'});
 }
+
+function focusUploadSourceRow(rowNumber) {
+    const excelRow = Number(rowNumber);
+    const index = excelRow - 2;
+    const container = document.getElementById('rowExclusionContainer');
+    if (!container || !Number.isInteger(excelRow) || index < 0 || index >= rowExclusionAllRows.length) return;
+    rowExclusionCurrentPage = Math.floor(index / ROW_EXCLUSION_PAGE_SIZE) + 1;
+    container.style.display = 'block';
+    renderRowExclusionPage();
+    const row = container.querySelector(`[data-excel-row-number="${excelRow}"]`);
+    row?.scrollIntoView({block: 'center', behavior: 'smooth'});
+    row?.querySelector('input[type="checkbox"]')?.focus({preventScroll: true});
+}
+
 // ---------- OVERWRITE CONFIRMATION DIALOG (Enhanced) ----------
 function showOverwriteConfirmation(duplicates, count) {
     return new Promise((resolve) => {
@@ -2383,13 +2449,25 @@ if (importBtn) {
         };
         if (isLedgerUpload() && (ledgerSelectionClientId !== Number(clientId) || !ledgerSelectedAccountCode
             || !ledgerAccountChoices.some(a => a.account_code === ledgerSelectedAccountCode))) {
-            showUploadFailure('Select a current Trial Balance posting account before validation.', 'Ledger account selection'); return;
+            const help = document.getElementById('ledgerAccountHelp');
+            const message = ledgerAccountChoices.length
+                ? 'Choose a posting account from the Trial Balance.'
+                : (help.textContent || 'No posting accounts are available.');
+            showUploadFieldError(ledgerAccountSelect, help, message);
+            return;
         }
         if (isLedgerUpload() && (!payload.ledger_period_start || !payload.ledger_period_end || payload.ledger_period_start > payload.ledger_period_end)) {
-            showUploadFailure('Supply the ledger source coverage start and end using the existing coverage fields.', 'Ledger coverage'); return;
+            const reversed = payload.ledger_period_start && payload.ledger_period_end && payload.ledger_period_start > payload.ledger_period_end;
+            const coverageField = reversed || !payload.ledger_period_start ? uploadCoverageStart : uploadCoverageEnd;
+            showUploadFieldError(coverageField, document.getElementById('uploadCoverageHelp'),
+                reversed ? 'Start date must be on or before the end date.' : 'Enter both coverage dates.');
+            return;
         }
         if (payload.comparison_mode === 'replace_range' && (!payload.coverage_start || !payload.coverage_end || payload.coverage_start > payload.coverage_end)) {
-            showUploadFailure('Select the complete report coverage start/end before validation.');
+            const reversed = payload.coverage_start && payload.coverage_end && payload.coverage_start > payload.coverage_end;
+            const coverageField = reversed || !payload.coverage_start ? uploadCoverageStart : uploadCoverageEnd;
+            showUploadFieldError(coverageField, document.getElementById('uploadCoverageHelp'),
+                reversed ? 'Start date must be on or before the end date.' : 'Enter both report coverage dates.');
             return;
         }
 
@@ -2488,8 +2566,8 @@ if (importBtn) {
                 importBtn.innerHTML = 'Validate';
                 importBtn.disabled = false;
                 importBtn.style.background = '#22c55e'; // Keep green but maybe orange? We'll keep default.
-                showStatus('❌ Validation failed. Please fix errors and try again.', 'error', extraMsg + duplicateSummaryMsg + changePreviewMsg);
-                setBadge('❌ Validation failed', 'error');
+                showStatus('Fix the marked rows, then validate again.', 'error', extraMsg + duplicateSummaryMsg + changePreviewMsg);
+                setBadge('Rows need review', 'error');
                 return;
             }
 
@@ -3042,6 +3120,7 @@ function renderRowExclusionPage() {
         const excelRowNumber = startIndex + index + 2;
 
         const tr = document.createElement('tr');
+        tr.dataset.excelRowNumber = excelRowNumber;
         if (excludedRowNumbers.has(excelRowNumber)) tr.classList.add('row-excluded');
         const ledgerControl = isLedgerUpload() && ledgerRecognisedControlRows.has(excelRowNumber);
         const ledgerNote = isLedgerUpload() ? ledgerRecognisedNoteRows.get(excelRowNumber) : null;

@@ -605,6 +605,8 @@
             font-size: 13px;
             color: #64748b;
         }
+        .mapping-status { color: #16803c; font-size: 12px; font-weight: 600; white-space: nowrap; }
+        .mapping-status.is-unmapped { color: #b42318; }
 
         /* ---------- ACTION BAR (consolidated overwrite note + Upload/Reset;
            replaces the old two-row .mode-actions .mode-row / .btn-row stack) ---------- */
@@ -669,7 +671,10 @@
         #ledgerAccountOptions [role="option"]:hover, #ledgerAccountOptions [role="option"].active { background: #eaf2ff; }
         #ledgerAccountOptions .ledger-option-message { padding: 9px 8px; color: #64748b; font-size: 12px; }
 
-        #ledgerAccountHelp { margin: 6px 0 0; }
+        #ledgerAccountHelp, #uploadCoverageHelp { margin: 6px 0 0; }
+        #uploadCoverageHelp { flex-basis: 100%; }
+        .upload-field-error { border-color: #dc2626 !important; box-shadow: 0 0 0 2px #fee2e2; }
+        .upload-inline-error { color: #b42318; font-size: 12px; }
 
         #ledgerEvidenceSummary {
             margin: 0 28px 12px;
@@ -1404,13 +1409,13 @@
         }
     /* Upload-stage issues share one bounded, keyboard-accessible dialog. */
 #validationErrorOverlay { position:fixed; inset:0; z-index:3100; background:rgba(15,23,42,.5); display:flex; align-items:center; justify-content:center; padding:16px; }
-#validationErrorOverlay section { background:white; border-radius:12px; border-top:5px solid #dc2626; padding:24px; width:min(860px,100%); max-height:85vh; overflow:auto; box-shadow:0 20px 60px #0004; color:#1a1a2e; }
+#validationErrorOverlay section { background:white; border-radius:12px; border-top:5px solid #dc2626; padding:18px; width:min(820px,100%); max-height:85vh; overflow:auto; box-shadow:0 20px 60px #0004; color:#1a1a2e; }
 #validationErrorOverlay section[data-severity="warning"], #validationErrorOverlay section[data-severity="unconfirmed"] { border-color:#b45309; }
 #validationErrorOverlay section[data-severity="info"] { border-color:#0f766e; }
 #validationErrorOverlay h2 { margin:0 0 8px; font-size:21px; }
-#validationErrorOverlay p { overflow-wrap:anywhere; margin:10px 0; }
+#validationErrorOverlay p { overflow-wrap:anywhere; margin:7px 0; }
 #validationErrorOverlay .upload-issue-stage { color:#64748b; font-weight:600; }
-#validationErrorOverlay .upload-issue-action { background:#f1f5f9; padding:12px; border-radius:6px; }
+#validationErrorOverlay .upload-issue-action { background:#f1f5f9; padding:9px 11px; border-radius:6px; }
 #validationErrorOverlay .upload-issue-details { overflow:auto; max-height:40vh; border:1px solid #e2e8f0; border-radius:6px; }
 #validationErrorOverlay table { width:100%; border-collapse:collapse; font-size:13px; }
 #validationErrorOverlay th, #validationErrorOverlay td { padding:8px; text-align:left; border-bottom:1px solid #e2e8f0; vertical-align:top; overflow-wrap:anywhere; }
@@ -1418,6 +1423,7 @@
 #validationErrorOverlay .upload-issue-navigation { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin:12px 0; }
 #validationErrorOverlay button { padding:8px 16px; border:1px solid #cbd5e1; border-radius:6px; background:#f8fafc; cursor:pointer; }
 #validationErrorOverlay button:disabled { opacity:.5; cursor:default; }
+#validationErrorOverlay .upload-issue-row-link { padding:0; border:0; background:transparent; color:#2563eb; text-decoration:underline; }
 #validationErrorOverlay #validationErrorCloseBtn { display:block; margin:16px 0 0 auto; background:#2563eb; color:white; border-color:#2563eb; }
 </style>
 </head>
@@ -1572,7 +1578,7 @@
                             <table class="mapping-table">
                                 <thead>
                                     <tr>
-                                        <th>Template</th>
+                                        <th>Template column</th>
                                         <th>Excel Column</th>
                                         <th>Type</th>
                                         <th>Status</th>
@@ -1586,21 +1592,22 @@
                     <!-- Consolidated action bar: overwrite note + Upload/Reset (Download Template lives in the top bar) -->
                     <div class="action-bar" id="modeActions" style="display:none;">
                         <div class="action-note">
-                            <label for="comparisonModeDropdown" style="display:block; font-weight:600; margin-bottom:4px; color:#475569;">Upload treatment</label>
+                            <label for="comparisonModeDropdown" style="display:block; font-weight:600; margin-bottom:4px; color:#475569;">Report type</label>
                             <select id="comparisonModeDropdown" style="padding:5px 8px; border:1px solid #cbd5e1; border-radius:5px; font-size:12px; color:#334155;">
-                                <option value="replace_range">Complete report / replace declared coverage</option>
-                                <option value="correction">Partial extract / identifiable corrections only</option>
+                                <option value="replace_range">Complete report — replace coverage</option>
+                                <option value="correction">Partial extract — matched corrections</option>
                             </select>
                             <div id="uploadCoverageFields" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
-                                <label>Coverage from <input type="date" id="uploadCoverageStart"></label>
-                                <label>through <input type="date" id="uploadCoverageEnd"></label>
-                                <label id="uploadEmptyConfirmLabel" style="flex-basis:100%;"><input type="checkbox" id="uploadConfirmEmpty"> This report contains no transactions—clear the declared period</label>
+                                <label>From <input type="date" id="uploadCoverageStart" aria-describedby="uploadCoverageHelp"></label>
+                                <label>To <input type="date" id="uploadCoverageEnd" aria-describedby="uploadCoverageHelp"></label>
+                                <label id="uploadEmptyConfirmLabel" style="flex-basis:100%;"><input type="checkbox" id="uploadConfirmEmpty"> Empty report — clear this period</label>
+                                <p id="uploadCoverageHelp" class="upload-inline-error" role="alert" hidden></p>
                             </div>
-                            <div id="uploadCoverageHint" style="margin-top:4px;">Use the full ERP report period, including days with deleted vouchers. Leave the checkbox unticked for reports containing transactions.</div>
+                            <div id="uploadCoverageHint" style="margin-top:4px;">Use full ERP dates, including days with deleted vouchers. Leave unchecked when the report has transactions.</div>
                         </div>
                         <span class="action-note">📄 Review additions, revisions, and removals before import.</span>
                         <div id="ledgerUploadContext" hidden>
-                            <label for="ledgerAccountSelect">Account <span aria-hidden="true">*</span></label>
+                            <label for="ledgerAccountSelect">Trial Balance posting account <span aria-hidden="true">*</span></label>
                             <div class="ledger-account-control">
                                 <input id="ledgerAccountSelect" type="text" role="combobox" required autocomplete="off"
                                     aria-autocomplete="list" aria-controls="ledgerAccountOptions" aria-expanded="false"
