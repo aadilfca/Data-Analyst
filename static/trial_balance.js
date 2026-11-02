@@ -186,6 +186,8 @@ let availableCategoryUploadId = null;
 const tbAssignmentWorkflow = getElement('tbAssignmentWorkflow');
 const tbAssignmentSetup = getElement('tbAssignmentSetup');
 const tbAssignmentSetupMenu = getElement('tbAssignmentSetupMenu');
+const tbNextUnassigned = getElement('tbNextUnassigned');
+const tbNextUnassignedCount = getElement('tbNextUnassignedCount');
 let tbWorkflowMode = window.AccountAssignments ? AccountAssignments.mode(new URLSearchParams(location.search).get('workflow') || new URLSearchParams(location.search).get('acc_tab')) : 'financial';
 let tbWorkflowLoadToken = 0;
 let tbWorkflowContext = '';
@@ -198,6 +200,8 @@ let tbFsWorkspace = null;
 let tbFsAccounts = [];
 let tbFsMappingReady = false;
 let tbFsLeaves = new Map();
+let tbNextUnassignedLastOrder = -1;
+let tbNextUnassignedContext = '';
 let tbFsIsAdmin = false;
 let tbFsBusyCount = 0;
 let tbFsModalOpen = false;
@@ -1990,6 +1994,120 @@ function syncSavedWorkflowColumns() {
             tbAssignmentSetupMenu.appendChild(link);
         });
     }
+    tbUpdateNextUnassigned();
+}
+
+function tbNextUnassignedTargets() {
+    if (!availableAccountsTableBody || !tbFsWorkspace || tbWorkflowMode !== 'financial'
+        || !tbFsMappingReady || !tbFsWorkspace.STATE.notesLoaded) return [];
+    const accountsByCode = new Map(tbFsAccounts.map(account => [AccountAssignments.normaliseCode(account.account_code), account]));
+    const targets = [];
+    const rows = Array.from(availableAccountsTableBody.querySelectorAll('tr[data-category-filter]'));
+    rows.forEach(function (row, rowIndex) {
+        if (row.hidden) return;
+        const account = accountsByCode.get(AccountAssignments.normaliseCode(row.dataset.accountCode));
+        if (!account) return;
+        if (!account.is_leaf && !(tbFsLeaves.get(AccountAssignments.normaliseCode(account.account_code)) || []).length) return;
+        [
+            {kind: 'category', selector: '.tb-saved-category-cell'},
+            {kind: 'note', selector: '.tb-saved-note-cell'}
+        ].forEach(function (field, fieldIndex) {
+            const cell = row.querySelector(field.selector);
+            const picker = cell && cell.querySelector('[data-fs-picker]');
+            const trigger = picker && picker.querySelector('[data-fs-picker-trigger]');
+            const value = picker && picker.querySelector('[data-fs-picker-value-label]');
+            if (!trigger || trigger.disabled || !value || value.textContent.trim() !== 'Unassigned') return;
+            targets.push({account, field: field.kind, key: AccountAssignments.normaliseCode(account.account_code) + ':' + field.kind,
+                order: rowIndex * 2 + fieldIndex, row, picker});
+        });
+    });
+
+    // A parent whose whole subtree is unassigned is the most useful target; don't revisit its children.
+    const targetKeys = new Set(targets.map(target => target.key));
+    return targets.filter(function (target) {
+        let parentCode = AccountAssignments.normaliseCode(target.account.parent_account_code);
+        const seen = new Set();
+        while (parentCode && !seen.has(parentCode)) {
+            if (targetKeys.has(parentCode + ':' + target.field)) return false;
+            seen.add(parentCode);
+            const parent = accountsByCode.get(parentCode);
+            parentCode = parent ? AccountAssignments.normaliseCode(parent.parent_account_code) : '';
+        }
+        return true;
+    });
+}
+
+function tbUpdateNextUnassigned() {
+    if (!tbNextUnassigned) return;
+    const context = tbWorkflowMode + ':' + String(availableUploadsDropdown && availableUploadsDropdown.value || '');
+    if (context !== tbNextUnassignedContext) {
+        tbNextUnassignedContext = context;
+        tbNextUnassignedLastOrder = -1;
+    }
+    const active = tbWorkflowMode === 'financial' && tbFsIsAdmin && availableTrialBalancesSection
+        && availableTrialBalancesSection.style.display !== 'none';
+    tbNextUnassigned.hidden = !active;
+    if (!active) return;
+
+    const ready = !!(availableUploadsDropdown && availableUploadsDropdown.value && tbFsMappingReady
+        && tbFsWorkspace && tbFsWorkspace.STATE.notesLoaded);
+    const targets = ready ? tbNextUnassignedTargets() : [];
+    const hasFilters = !!(savedFilterQuery('category').trim() || savedFilterQuery('note').trim()
+        || tbSavedCategorySelections.size || tbSavedNoteSelections.size);
+    const message = !ready ? (availableUploadsDropdown && availableUploadsDropdown.value ? 'Checking assignments…' : 'Select a Trial Balance first')
+        : (targets.length ? 'Next unassigned category or note (' + targets.length + ')'
+            : (hasFilters ? 'No unassigned in this view' : 'All assigned'));
+    tbNextUnassigned.disabled = !ready || !targets.length;
+    tbNextUnassigned.title = message;
+    tbNextUnassigned.setAttribute('aria-label', message);
+    if (tbNextUnassignedCount) {
+        tbNextUnassignedCount.textContent = targets.length > 99 ? '99+' : String(targets.length);
+        tbNextUnassignedCount.hidden = !targets.length;
+        tbNextUnassignedCount.setAttribute('aria-label', targets.length + ' unassigned targets');
+    }
+}
+
+function tbGoToNextUnassigned() {
+    const targets = tbNextUnassignedTargets();
+    if (!targets.length || !tbFsWorkspace || !tbFsWorkspace.accOpenFinancialPicker) {
+        tbUpdateNextUnassigned();
+        return;
+    }
+    const target = targets.find(item => item.order > tbNextUnassignedLastOrder) || targets[0];
+    tbNextUnassignedLastOrder = target.order;
+    const trigger = target.picker.querySelector('[data-fs-picker-trigger]');
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const isVisible = rect.top >= 0 && rect.bottom <= window.innerHeight && rect.left >= 0 && rect.right <= window.innerWidth;
+    const openPicker = () => {
+        if (!trigger.isConnected) return;
+        trigger.focus({preventScroll: true});
+        tbFsWorkspace.accOpenFinancialPicker(target.picker);
+    };
+    if (isVisible) {
+        // Open after the button's outside-click handlers have finished bubbling.
+        requestAnimationFrame(openPicker);
+        return;
+    }
+    let settleTimer = null, hardStop = null, finished = false;
+    const finishScroll = () => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(settleTimer);
+        clearTimeout(hardStop);
+        document.removeEventListener('scroll', onScroll, true);
+        window.removeEventListener('scroll', onScroll);
+        openPicker();
+    };
+    const onScroll = () => {
+        clearTimeout(settleTimer);
+        settleTimer = setTimeout(finishScroll, 140);
+    };
+    document.addEventListener('scroll', onScroll, true);
+    window.addEventListener('scroll', onScroll, {passive: true});
+    hardStop = setTimeout(finishScroll, 1400);
+    trigger.scrollIntoView({behavior: 'smooth', block: 'center', inline: 'nearest'});
+    onScroll();
 }
 function saveSavedWorkflowReturnState() {
     rememberSavedWorkflow();
@@ -2269,6 +2387,7 @@ if (tbAssignmentSetup) tbAssignmentSetup.addEventListener('click', function () {
     tbAssignmentSetupMenu.hidden = !open; this.setAttribute('aria-expanded', String(open));
     if (open && tbAssignmentSetupMenu.firstElementChild) tbAssignmentSetupMenu.firstElementChild.focus();
 });
+if (tbNextUnassigned) tbNextUnassigned.addEventListener('click', tbGoToNextUnassigned);
 if (availableAccountsTableBody) availableAccountsTableBody.addEventListener('change', function (event) {
     tbHandleCashflowCategoryChange(event);
     tbHandleVerificationWorkstreamChange(event);
@@ -2508,6 +2627,7 @@ function applySavedCategoryFilter() {
     }
     updateSavedDraftFilteredTotal();
     fitSavedTrialBalanceAmountColumns();
+    tbUpdateNextUnassigned();
 }
 
 function sumSavedTrialBalanceValues(values) {

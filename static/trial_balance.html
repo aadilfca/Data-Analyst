@@ -540,6 +540,16 @@
         #tbAssignmentSetup:disabled { opacity: .5; cursor: default; }
         #tbAssignmentSetup svg { width: 23px; height: 23px; }
         #tbAssignmentSetup:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }
+        #tbNextUnassigned { position: fixed; right: 24px; bottom: 102px; z-index: 100; display: grid; place-items: center; width: 46px; height: 46px; border: 0; border-radius: 50%; background: #147d86; color: #fff; box-shadow: 0 3px 12px #18364d35; cursor: pointer; }
+        #tbNextUnassigned[hidden] { display: none; }
+        #tbNextUnassigned:hover:not(:disabled) { background: #106a72; }
+        #tbNextUnassigned:disabled { background: #64748b; cursor: default; }
+        #tbNextUnassigned svg { width: 23px; height: 23px; }
+        #tbNextUnassigned:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }
+        #tbNextUnassignedCount { position: absolute; top: -4px; right: -4px; display: grid; min-width: 19px; height: 19px; place-items: center; padding: 0 3px; border: 2px solid #fff; border-radius: 11px; background: #b42318; color: #fff; font-size: 10px; font-weight: 800; line-height: 1; }
+        #tbNextUnassignedCount[hidden] { display: none; }
+        #availableAccountsTableBody .acc2-fs-picker-trigger.is-unassigned { border-color: #f3b7b7; background: #fff5f5; }
+        #availableAccountsTableBody .acc2-fs-picker-trigger.is-unassigned [data-fs-picker-value-label] { color: #b42318; font-weight: 700; }
         #tbAssignmentSetupMenu { position: fixed; right: 24px; bottom: 104px; z-index: 101; display: grid; min-width: 220px; max-width: calc(100vw - 48px); padding: 6px; border: 1px solid #d6e0e8; border-radius: 9px; background: white; box-shadow: 0 6px 24px #18364d26; }
         #tbAssignmentSetupMenu a { padding: 9px 11px; color: #234b67; text-decoration: none; border-radius: 5px; font-size: 13px; }
         #tbAssignmentSetupMenu a:hover, #tbAssignmentSetupMenu a:focus-visible { background: #eef4f8; }
@@ -1168,6 +1178,10 @@
             </div>
         </div>
 
+        <button id="tbNextUnassigned" type="button" aria-label="Next unassigned category or note" title="Next unassigned" aria-describedby="tbNextUnassignedCount" hidden disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 7v10m-4-4 4 4 4-4"/></svg>
+            <span id="tbNextUnassignedCount" aria-hidden="true" hidden></span>
+        </button>
         <button id="tbAssignmentSetup" type="button" aria-label="Open assignment setup" title="Assignment setup" aria-haspopup="true" aria-controls="tbAssignmentSetupMenu" aria-expanded="false" disabled>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m9 3-.7 2.4-2.2 1L3.8 6l-1.5 2.6L4 10.5v3l-1.7 1.9L3.8 18l2.3-.4 2.2 1L9 21h3l.7-2.4 2.2-1 2.3.4 1.5-2.6-1.7-1.9v-3l1.7-1.9L17.2 6l-2.3.4-2.2-1L12 3Z"/><circle cx="10.5" cy="12" r="3"/></svg>
         </button>
@@ -1211,7 +1225,7 @@
     <script src="/static/client_context.js?v=28"></script>
     <script src="/static/utils.js"></script>
     <script src="/static/account_assignment_shared.js?v=2"></script>
-    <script src="/static/financial_statement_workspace.js?v=4"></script>
+    <script src="/static/financial_statement_workspace.js?v=5"></script>
     <dialog id="tbCodeCorrectionsDialog" aria-labelledby="tbCodeCorrectionsTitle">
         <h3 id="tbCodeCorrectionsTitle">Unsaved account codes</h3>
         <p>Save your corrections before continuing?</p>
@@ -1225,7 +1239,7 @@
     <script src="/static/cashflow_workspace.js?v=2"></script>
     <script src="/static/verification_workspace.js?v=2"></script>
     <script src="/static/api_utils.js?v=1"></script>
-    <script src="/static/trial_balance.js?v=51"></script>
+    <script src="/static/trial_balance.js?v=52"></script>
 
 </body>
 

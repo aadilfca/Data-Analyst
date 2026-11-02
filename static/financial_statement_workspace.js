@@ -47,7 +47,7 @@ function create(host) {
         const details=accPickerDetails(account,kind,selectedId,statementCategoryId,options||[]);
         const disabled=!host.isAdmin || (note && (!statementCategoryId || statementCategoryId==='__mixed' || !options.length));
         return '<div class="acc2-fs-picker'+(note?' acc2-note-picker':'')+'" data-fs-picker data-fs-picker-lazy="'+kind+'">'
-            +'<button type="button" class="acc2-fs-picker-trigger" data-fs-picker-trigger role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-controls="'+id+'_menu" title="'+accEscape(details)+'" aria-label="'+(note?'Note':'Financial Statement category')+' for account '+accEscape(account.account_code)+': '+accEscape(details)+'"'+(disabled?' disabled':'')+'><span data-fs-picker-value-label>'+accEscape(label)+'</span><span class="acc2-fs-picker-chevron" aria-hidden="true">▾</span></button>'
+            +'<button type="button" class="acc2-fs-picker-trigger'+(label==='Unassigned'?' is-unassigned':'')+'" data-fs-picker-trigger role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-controls="'+id+'_menu" title="'+accEscape(details)+'" aria-label="'+(note?'Note':'Financial Statement category')+' for account '+accEscape(account.account_code)+': '+accEscape(details)+'"'+(disabled?' disabled':'')+'><span data-fs-picker-value-label>'+accEscape(label)+'</span><span class="acc2-fs-picker-chevron" aria-hidden="true">▾</span></button>'
             +'<div class="acc2-fs-picker-menu" id="'+id+'_menu" data-fs-picker-menu hidden></div>'
             +'<select class="'+(note?'acc2-note-category':'acc2-financial-category')+'" data-acc-code="'+accEscape(account.account_code)+'" data-acc-parent="'+(!account.is_leaf)+'" aria-hidden="true" tabindex="-1" hidden'+(disabled?' disabled':'')+'><option selected value="'+accEscape(selectedId||'')+'">'+accEscape(label)+'</option></select></div>';
     }
@@ -206,7 +206,7 @@ function create(host) {
         const label = selectedId === '__mixed' ? accMixedPickerLabel(account, 'financial') : accFinancialPickerLabel(selectedId);
         const details = accPickerDetails(account, 'financial', selectedId, null, []);
         return '<div class="acc2-fs-picker" data-fs-picker>' +
-            '<button type="button" class="acc2-fs-picker-trigger" data-fs-picker-trigger role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-controls="' + pickerId + '_menu" title="' + accEscape(details) + '" aria-label="Financial Statement category for account ' + accEscape(account.account_code) + ': ' + accEscape(details) + '"' + (!host.isAdmin ? ' disabled' : '') + '><span data-fs-picker-value-label>' + accEscape(label) + '</span><span class="acc2-fs-picker-chevron" aria-hidden="true">▾</span></button>' +
+            '<button type="button" class="acc2-fs-picker-trigger' + (label === 'Unassigned' ? ' is-unassigned' : '') + '" data-fs-picker-trigger role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-controls="' + pickerId + '_menu" title="' + accEscape(details) + '" aria-label="Financial Statement category for account ' + accEscape(account.account_code) + ': ' + accEscape(details) + '"' + (!host.isAdmin ? ' disabled' : '') + '><span data-fs-picker-value-label>' + accEscape(label) + '</span><span class="acc2-fs-picker-chevron" aria-hidden="true">▾</span></button>' +
             '<div class="acc2-fs-picker-menu" id="' + pickerId + '_menu" data-fs-picker-menu hidden><label class="acc2-fs-picker-search-label" for="' + pickerId + '_search">Find a category</label><input type="search" class="acc2-fs-picker-search" id="' + pickerId + '_search" data-fs-picker-search-input placeholder="Search categories or headings" autocomplete="off">' + accFinancialPickerMenuMarkup(selectedId) + '</div>' +
             '<select class="acc2-financial-category" data-acc-code="' + accEscape(account.account_code) + '" data-acc-parent="' + (!account.is_leaf ? 'true' : 'false') + '" aria-hidden="true" tabindex="-1" hidden' + (!host.isAdmin ? ' disabled' : '') + '>' + accCategoryOptionMarkup(selectedId) + '</select></div>';
     }
@@ -298,7 +298,7 @@ function create(host) {
             optionMarkup = '<div class="acc2-fs-picker-empty-group" role="presentation">' + accEscape(label) + '</div>';
         }
         return '<div class="acc2-fs-picker acc2-note-picker" data-fs-picker>' +
-            '<button type="button" class="acc2-fs-picker-trigger" data-fs-picker-trigger role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-controls="' + pickerId + '_menu" title="' + accEscape(details) + '" aria-label="Note for account ' + accEscape(account.account_code) + ': ' + accEscape(details) + '"' + (disabled ? ' disabled' : '') + '><span data-fs-picker-value-label>' + accEscape(label) + '</span><span class="acc2-fs-picker-chevron" aria-hidden="true">▾</span></button>' +
+            '<button type="button" class="acc2-fs-picker-trigger' + (label === 'Unassigned' ? ' is-unassigned' : '') + '" data-fs-picker-trigger role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-controls="' + pickerId + '_menu" title="' + accEscape(details) + '" aria-label="Note for account ' + accEscape(account.account_code) + ': ' + accEscape(details) + '"' + (disabled ? ' disabled' : '') + '><span data-fs-picker-value-label>' + accEscape(label) + '</span><span class="acc2-fs-picker-chevron" aria-hidden="true">▾</span></button>' +
             '<div class="acc2-fs-picker-menu" id="' + pickerId + '_menu" data-fs-picker-menu hidden><label class="acc2-fs-picker-search-label" for="' + pickerId + '_search">Find a note</label><input type="search" class="acc2-fs-picker-search" id="' + pickerId + '_search" data-fs-picker-search-input placeholder="Search notes" autocomplete="off"><div class="acc2-fs-picker-option-wrap" data-fs-picker-option-wrap role="listbox" aria-label="Effective notes under ' + accEscape(source ? source.label : 'the assigned category') + '">' + optionMarkup + '<div class="acc2-fs-picker-no-results" data-fs-picker-no-results hidden>No matching notes.</div></div></div>' +
             '<select class="acc2-note-category" data-acc-code="' + accEscape(account.account_code) + '" data-acc-parent="' + (!account.is_leaf ? 'true' : 'false') + '" aria-hidden="true" tabindex="-1" hidden' + (disabled ? ' disabled' : '') + '>' + selectMarkup + '</select></div>';
     }
@@ -1000,6 +1000,7 @@ function create(host) {
         }
         if (trigger) {
             const kind = select.matches('.acc2-note-category') ? 'Note' : 'Financial Statement category';
+            trigger.classList.toggle('is-unassigned', !!label && label.textContent.trim() === 'Unassigned');
             trigger.title = details;
             trigger.setAttribute('aria-label', kind + ' for account ' + select.dataset.accCode + ': ' + details);
         }

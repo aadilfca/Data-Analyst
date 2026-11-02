@@ -956,7 +956,9 @@ def test_financial_parent_can_reapply_same_category_to_all_descendant_leaves(bro
             {id:4,account_code:'10-10-25-10-0002',account_name:'Factory building',parent_account_code:'10-10-25-10',is_leaf:true,closing_dr:'40'},
             {id:5,account_code:'10-10-30',account_name:'Other fixed assets',parent_account_code:'10-10',is_leaf:false,closing_dr:'20'},
             {id:6,account_code:'10-10-30-0001',account_name:'Other asset A',parent_account_code:'10-10-30',is_leaf:true,closing_dr:'10'},
-            {id:7,account_code:'10-10-30-0002',account_name:'Other asset B',parent_account_code:'10-10-30',is_leaf:true,closing_dr:'10'}
+            {id:7,account_code:'10-10-30-0002',account_name:'Other asset B',parent_account_code:'10-10-30',is_leaf:true,closing_dr:'10'},
+            {id:8,account_code:'10-10-35',account_name:'Other asset group',parent_account_code:'10-10',is_leaf:false,closing_dr:'10'},
+            {id:9,account_code:'10-10-35-0001',account_name:'Other asset C',parent_account_code:'10-10-35',is_leaf:true,closing_dr:'10'}
         ];
         window.mapping={client_id:1,upload:{id:77},accounts:rows.map(row=>({account_code:row.account_code,account_name:row.account_name,parent_account_code:row.parent_account_code,is_leaf:row.is_leaf,level:row.account_code.split('-').length,assignment:{financial_statement_category_id:row.is_leaf?(row.account_code.startsWith('10-10-25-')?8:(row.account_code.endsWith('0001')?4:null)):4,note_category_id:row.is_leaf?(row.account_code.startsWith('10-10-25-')?21:null):22}}))};
         window.fetch=async (url,options={})=>{
@@ -1003,6 +1005,43 @@ def test_financial_parent_can_reapply_same_category_to_all_descendant_leaves(bro
     assert mixed_picker.locator('[data-fs-picker-value-label]').inner_text() == 'Mixed (2)'
     assert 'Balance Sheet › Non Current Assets › Fixed assets (1 account)' in mixed_picker.get_attribute('title')
     assert 'Unassigned (1 account)' in mixed_picker.get_attribute('title')
+    unassigned_note = page.locator('tr[data-account-code="10-10-30-0001"] .tb-saved-note-cell .acc2-fs-picker-trigger')
+    unassigned_category = page.locator('tr[data-account-code="10-10-30-0002"] .tb-saved-category-cell .acc2-fs-picker-trigger')
+    assert 'is-unassigned' in unassigned_note.get_attribute('class').split()
+    assert 'is-unassigned' in unassigned_category.get_attribute('class').split()
+    assert unassigned_note.locator('[data-fs-picker-value-label]').evaluate("el=>getComputedStyle(el).color") == 'rgb(180, 35, 24)'
+    assert unassigned_note.locator('[data-fs-picker-value-label]').evaluate("el=>getComputedStyle(el).fontWeight") == '700'
+    assert 'is-unassigned' not in mixed_picker.get_attribute('class').split()
+    next_button = page.locator('#tbNextUnassigned')
+    assert next_button.is_visible() and next_button.is_enabled()
+    assert page.locator('#tbNextUnassignedCount').inner_text() == '3'
+    assert next_button.get_attribute('aria-label') == 'Next unassigned category or note (3)'
+    next_box = next_button.bounding_box()
+    setup_box = page.locator('#tbAssignmentSetup').bounding_box()
+    assert next_box['y'] + next_box['height'] < setup_box['y']
+    next_button.click()
+    page.wait_for_function("document.querySelector('tr[data-account-code=\\\"10-10-30-0001\\\"] .tb-saved-note-cell .acc2-fs-picker.is-open')", timeout=5000)
+    open_picker = page.locator('#availableAccountsTableBody [data-fs-picker].is-open')
+    assert open_picker.count() == 1
+    assert not page.evaluate("calls.some(call=>call.method==='POST')")
+    assert open_picker.locator('select').get_attribute('data-acc-code') == '10-10-30-0001'
+    assert open_picker.locator('select').get_attribute('class') == 'acc2-note-category'
+    page.keyboard.press('Escape')
+    next_button.click()
+    page.wait_for_function("document.querySelector('tr[data-account-code=\\\"10-10-30-0002\\\"] .tb-saved-category-cell .acc2-fs-picker.is-open')")
+    page.keyboard.press('Escape')
+    next_button.click()
+    page.wait_for_function("document.querySelector('tr[data-account-code=\\\"10-10-35\\\"] .tb-saved-note-cell .acc2-fs-picker.is-open')")
+    page.keyboard.press('Escape')
+    next_button.click()
+    page.wait_for_function("document.querySelector('tr[data-account-code=\\\"10-10-30-0001\\\"] .tb-saved-note-cell .acc2-fs-picker.is-open')")
+    page.keyboard.press('Escape')
+    page.locator('#tbSavedCategoryTrigger').click()
+    page.locator('#tbSavedCategorySearch').fill('Other non current assets')
+    page.wait_for_function("document.querySelector('#tbNextUnassigned').disabled && document.querySelector('#tbNextUnassigned').title==='No unassigned in this view'")
+    page.locator('#tbSavedCategorySearch').fill('')
+    page.evaluate("() => { tbFsAccounts.filter(account=>account.is_leaf).forEach(account=>{ if(account.assignment.financial_statement_category_id==null){account.assignment.financial_statement_category_id=8;account.assignment.note_category_id=21;} else if(String(account.assignment.financial_statement_category_id)==='4' && account.assignment.note_category_id==null){account.assignment.note_category_id=22;} }); tbRenderFinancialAssignments(); }")
+    page.wait_for_function("document.querySelector('#tbNextUnassigned').disabled && document.querySelector('#tbNextUnassigned').title==='All assigned'")
     parent_note_picker.click()
     assert page.locator('tr[data-account-code="10-10-25"] .acc2-note-picker [data-fs-picker-option]').filter(has_text='Other non current assets › Asset details').count() == 1
     parent_note_picker.click()
