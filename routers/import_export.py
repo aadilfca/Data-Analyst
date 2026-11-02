@@ -3874,7 +3874,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
         )
         guard_lifecycle(prepared, execute_query_pg)
         if prepared:
-            # A new validation or cleanup may supersede this plan during Drive I/O.
+            # A new validation or cleanup may supersede this plan during archive preparation.
             current_plan = execute_query_pg(
                 'SELECT status, expires_at FROM upload_validation_plans WHERE plan_id = %s FOR UPDATE',
                 (request.validation_plan_id,),

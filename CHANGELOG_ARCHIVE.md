@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Temporary local upload archive mode — 2026-11-02
+
+`UPLOAD_ARCHIVE_TO_DRIVE=false` keeps a checksum-verified protected local ZIP and lifecycle receipt while skipping only Drive calls. The default remains enabled; duplicate matching, validation, scope checks, locks, replacement guards and receipts are unchanged. The app `.env` disables Drive for local development; `.env.example` documents the setting. Re-enable before production imports.
+
+**Verification:** 60 upload lifecycle and duplicate-gate tests passed; Python compilation and `git diff --check` passed. Isolated checks confirmed Drive is skipped, local replacement receipts work and altered ZIPs are rejected. Pytest reported an existing cache-path warning. No live import occurred; full-database backup Drive is unchanged.
+
 ## Nested subtotals and category totals in Financial Statement Notes — 2026-11-02
 
 Notes with child notes render as amount-free headings, followed by a lighter single-rule subtotal. Root category rows remain amount-free and end with a stronger, double-rule “Total — [category]” row. Leaf amounts and report calculations are unchanged. Both Notes views use this styling. Reconciliation script cache version is 76; no backend or schema changes.

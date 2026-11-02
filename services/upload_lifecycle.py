@@ -18,6 +18,12 @@ from services.upload_observation_report import build_observation_report
 SOURCE_ROW_HASH_SQL = "encode(sha256(convert_to(jsonb_build_array(cd.id, COALESCE(cd.version, 1), cd.row_data, cd.extract_date, cd.source_identity)::text, 'UTF8')), 'hex')"
 
 
+def drive_archiving_enabled():
+    """Drive remains the default; local development can opt into verified ZIPs only."""
+    value = os.environ.get('UPLOAD_ARCHIVE_TO_DRIVE', 'true').strip().casefold()
+    return value not in {'0', 'false', 'no', 'off', 'disabled'}
+
+
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), default=str).encode()).hexdigest()
 
@@ -169,6 +175,17 @@ def prepare_lifecycle(request, payload, query, write, transaction, signature):
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
+        if not drive_archiving_enabled():
+            proof = {'drive_file_id': None, 'sha256': checksum, 'local_path': str(path)}
+            with transaction():
+                write("""UPDATE upload_lifecycle_runs
+                          SET status = 'verified', drive_file_id = NULL, archive_sha256 = %s,
+                              archive_path = %s, archive_state_hash = %s
+                        WHERE operation_id = %s AND status <> 'applied'""",
+                      (checksum, str(path), prepared['archive_state_hash'], operation))
+            prepared['archive'] = proof
+            prepared['archive_mode'] = 'local'
+            return prepared
         client = DriveArchive()
         saved = query('SELECT drive_file_id FROM upload_lifecycle_runs WHERE operation_id = %s', (operation,))
         remote_id = saved[0].get('drive_file_id') if saved else None
@@ -194,11 +211,27 @@ def guard_lifecycle(prepared, query):
     # Drive I/O occurs while these locks are held; normal report reads continue.
     query('LOCK TABLE client_data IN SHARE ROW EXCLUSIVE MODE')
     query('LOCK TABLE data_audit_log IN SHARE ROW EXCLUSIVE MODE')
-    rows = query('SELECT status FROM upload_lifecycle_runs WHERE operation_id = %s FOR UPDATE', (prepared['operation_id'],))
+    rows = query(
+        'SELECT status, archive_sha256, archive_path, drive_file_id '
+        'FROM upload_lifecycle_runs WHERE operation_id = %s FOR UPDATE',
+        (prepared['operation_id'],),
+    )
     if rows and rows[0]['status'] == 'applied':
         raise HTTPException(409, 'This import already completed. Retry to retrieve its saved result.')
     check_scope(prepared['lifecycle'], query)
     if prepared['ids']:
+        if prepared.get('archive_mode') == 'local':
+            proof = prepared.get('archive') or {}
+            try:
+                local_checksum = hashlib.sha256(Path(proof.get('local_path', '')).read_bytes()).hexdigest()
+            except (OSError, TypeError, ValueError):
+                local_checksum = None
+            receipt = rows[0] if rows else {}
+            if (local_checksum != proof.get('sha256')
+                    or local_checksum != receipt.get('archive_sha256')
+                    or str(proof.get('local_path') or '') != str(receipt.get('archive_path') or '')
+                    or receipt.get('drive_file_id') is not None):
+                raise HTTPException(409, 'The protected local recovery archive is missing or changed; validate again.')
         state = _archive_state(prepared['ids'], query)
         if digest(state) != prepared['archive_state_hash']:
             raise HTTPException(409, 'Archived source or audit data changed. Validate again before replacing it.')

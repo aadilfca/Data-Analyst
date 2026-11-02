@@ -51,7 +51,7 @@ One line per file group: what it is now. Full build history for every entry live
 - services/cashflow_preparation.py + scripts/backfill_cashflow_prepared_read_model.py -> metadata-only preparation/job recovery boundary; prepared transaction copies and rollups are no longer rebuilt. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_xlsx.py, reconciliation_export_jobs.py → Selected-account workbooks, complete voucher context, streaming, bounded owner-scoped jobs and private temporary files. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_balance_source.py → Independent balances, scoped voucher completeness, adjustment membership, posting comparisons and coverage controls. See CHANGELOG_ARCHIVE.md.
-- services/upload_lifecycle.py + drive_archive.py + upload_observation_report.py → Scope proofs, complete-voucher Excel evidence, verified external archives and compact receipts. See CHANGELOG_ARCHIVE.md.
+- services/upload_lifecycle.py + drive_archive.py + upload_observation_report.py → Scope proofs, complete-voucher evidence, Drive-default/local-development archives and compact receipts. See CHANGELOG_ARCHIVE.md.
 - routers/database_backup.py + services/database_backup.py + static/setup.* + scripts/rehearse_database_backup.py → Local backups, resumable Drive verification, processing feedback and isolated recovery rehearsals. See CHANGELOG_ARCHIVE.md.
 - tests/test_account_control_center*.py, test_trial_balance_account_flow_safety.py, test_trial_balance_ui.py, test_cashflows*.py, test_reconciliation*.py → Setup, accounting, account-flow safety, API/UI parity, and workbook evidence/export checks. See CHANGELOG_ARCHIVE.md.
 - tests/test_upload_lifecycle.py + test_data_deletion.py + test_import_duplicate_gates.py → Upload/archive lifecycle, rollback, retry, deletion and identity regression tests.
@@ -72,8 +72,8 @@ One line per file group: what it is now. Full build history for every entry live
 - **Locked upload contract (2026-10-11):** `client_data` is the sole canonical transaction store. Keep one active row per client/template/transaction identity, with raw values and report-required derived columns together and indexed; all reports and analysis read this set.
 - Supabase is a working store, not an archive: retain one current canonical set per client/template and no second durable transaction copy in reports, read models, occurrences, revisions, caches, or audit payloads. Audit events may retain only changed fields or fingerprints; initial INSERT events retain no row payload. Compact configuration, counts, fingerprints, checksums, and run metadata are allowed.
 - Validate every upload before writing; unchanged reports are no-ops and legitimate line multiplicity survives. Complete reports replace explicitly declared coverage: retain unchanged occurrences, archive unmatched old lines, insert unmatched incoming lines. Line IDs are optional; never invent correction pairings. Partial extracts retain absent rows and block ambiguous corrections.
-- Upload changes/removals require a protected external ZIP and downloaded/checksummed Google Drive copy before committing. Archive failure, stale source/configuration/plan or protected references block replacement; compact operation receipts reconcile lost acknowledgements. App OAuth settings are independent of Codex's Drive connector. See CHANGELOG_ARCHIVE.md, Declared-coverage upload lifecycle.
-- Operating policy: keep Render Free for reporting; replace uploaded data through the local Windows app with a protected archive outside the checkout and a verified Drive copy.
+- Uploads validate first; replacements require a protected local ZIP and, by default, verified Drive copy. Local development may disable only Drive; keep it enabled for production. See CHANGELOG_ARCHIVE.md, Temporary local upload archive mode.
+- Operating policy: keep Render Free for reporting; local development may use verified local upload archives with Drive disabled, but re-enable Drive before production replacements.
 - Active identities are database-unique where existing data is clean. Until duplicate legacy groups are resolved, application gates remain authoritative and migrations must report blockers rather than delete or merge rows.
 - Source workbooks, SQL dumps, reports, and workpapers stay in controlled external/offline storage. Supabase may hold temporary staging metadata only; rejected, ignored, or fully deleted upload files and metadata must be removed.
 - **Locked deletion contract:** guarded preview/apply permanently removes source rows, derived classifications, occurrence metadata, audit payloads, upload metadata, validation plans, and staged files. Soft-delete and restore are not valid source-data lifecycle operations; protected verification/evidence references block the purge.
@@ -259,6 +259,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-02: Local development upload archives can skip Drive while retaining verified ZIPs; production keeps Drive verification enabled. See CHANGELOG_ARCHIVE.md.
 - 2026-11-02: Financial Statement Notes distinguish nested subtotals from category totals with separate row styles. See CHANGELOG_ARCHIVE.md.
 - 2026-11-02: Trial Balance page and workspace notices use a fixed, dismissible top-right toast; loading and validation remain inline. See CHANGELOG_ARCHIVE.md.
 - 2026-11-01: Trial Balance toolbar now groups Period and upload actions above Workflow and assignment filters.
