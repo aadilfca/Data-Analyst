@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Nested subtotals and category totals in Financial Statement Notes — 2026-11-02
+
+Notes with child notes render as amount-free headings, followed by a lighter single-rule subtotal. Root category rows remain amount-free and end with a stronger, double-rule “Total — [category]” row. Leaf amounts and report calculations are unchanged. Both Notes views use this styling. Reconciliation script cache version is 76; no backend or schema changes.
+
+**Verification:** JavaScript syntax and `git diff --check` pass. Browser acceptance is pending; automated tests were not run.
+
 ## Trial Balance floating status messages — 2026-11-02
 
 Trial Balance page and Financial Statements, Cashflow and Verification workspaces now show success, error and informational notices in a fixed top-right toast with a close control and timed dismissal. Loading progress and persistent validation guidance remain inline; confirmations are unchanged. Updated page script cache versions. No backend changes.

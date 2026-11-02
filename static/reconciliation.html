@@ -137,7 +137,8 @@
         #balanceSheetNotesTable thead th, #balanceSheetNotesCoverageTable thead th { color: #64748b; font-weight: 500; text-align: left; }
         #balanceSheetNotesTable .balance-sheet-amount, #balanceSheetNotesCoverageTable .balance-sheet-amount { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
         #balanceSheetNotesTable .bs-note-root > * { border-top: 2px solid #9fb5c5; background: #f3f7fa; color: #18344b; font-weight: 700; }
-        #balanceSheetNotesTable .bs-note-subtotal > * { border-top: 1px solid #9fb5c5; background: #f3f7fa; color: #18344b; font-weight: 700; }
+        #balanceSheetNotesTable .bs-note-subtotal > *, #incomeStatementNotesTable .bs-note-subtotal > * { border-top: 1px solid #c4d2dc; background: #f8fafc; color: #455a6b; font-weight: 600; }
+        #balanceSheetNotesTable .bs-note-total > *, #incomeStatementNotesTable .bs-note-total > * { border-top: 3px double #71899b; background: #e8f0f5; color: #18344b; font-weight: 800; }
         #balanceSheetNotesTable .bs-note-group-gap > td { height: 18px; padding: 0; border: 0; background: transparent; }
         #balanceSheetNotesTable .bs-note-child > th { font-weight: 500; color: #34495e; }
         #balanceSheetNotesTable .bs-note-inactive { opacity: .58; }
@@ -151,7 +152,6 @@
         #balanceSheetNotesCoverageTable .notes-coverage-gap > * { color: #8a5b08; background: #fff8e7; }
         #balanceSheetNotesCoverage[hidden], #balanceSheetNotesTable[hidden] { display: none; }
         #balanceSheetNotesTable .bs-note-selected > * { box-shadow: inset 0 0 0 2px #1769aa; }
-        #incomeStatementNotesTable .bs-note-subtotal > * { border-top: 1px solid #9fb5c5; background: #f3f7fa; color: #18344b; font-weight: 700; }
         #incomeStatementNotesTable .bs-note-group-gap > td { height: 18px; padding: 0; border: 0; background: transparent; }
         #incomeStatementNotesStatus { padding: 18px 0; color: #64748b; font-size: 13px; }
         #incomeStatementNotesStatus.is-error { color: #b91c1c; }
@@ -740,6 +740,6 @@
     </section>
     <script src='/static/client_context.js?v=28'></script>
     <script src='/static/loading_ui.js?v=ce6d21ca20c8'></script>
-    <script src='/static/reconciliation.js?v=74'></script>
+    <script src='/static/reconciliation.js?v=76'></script>
 </body>
 </html>
