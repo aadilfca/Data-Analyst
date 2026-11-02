@@ -724,7 +724,24 @@ def _with_storage_status(result):
 
 def _build_upload_storage_path(original_filename: str) -> str:
     safe_name = os.path.basename(original_filename or 'upload.xlsx')
-    return os.path.join('uploads', f'{uuid4().hex}_{safe_name}')
+    configured_dir = os.environ.get('UPLOAD_STAGING_DIR')
+    app_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    staging_dir = configured_dir or os.path.join(app_root, 'uploads')
+    if not os.path.isabs(staging_dir):
+        staging_dir = os.path.join(app_root, staging_dir)
+    staging_dir = os.path.abspath(staging_dir)
+    os.makedirs(staging_dir, exist_ok=True)
+    return os.path.join(staging_dir, f'{uuid4().hex}_{safe_name}')
+
+
+def _require_staged_upload(file_path: str) -> str:
+    """Fail safely when a database upload reference outlives its staged workbook."""
+    if not file_path or not os.path.isfile(file_path):
+        raise HTTPException(410, detail={
+            'code': 'staged_file_missing',
+            'message': 'The staged Excel file is no longer available. Select the source file again, confirm its settings and mapping, then validate before importing.',
+        })
+    return file_path
 
 
 def _log_upload_timing(stage):
@@ -1496,10 +1513,9 @@ def _validation_file_sha256(file_path: str) -> str:
 
 def _ensure_uploaded_file_hash(file_id: int, file_path: str, current_hash: str = None) -> Optional[str]:
     """Persist a compact source-file hash when the stored path is available."""
+    file_path = _require_staged_upload(file_path)
     if current_hash:
         return current_hash
-    if not file_path or not os.path.isfile(file_path):
-        return None
     file_hash = _validation_file_sha256(file_path)
     execute_write_pg(
         "UPDATE uploaded_files SET file_sha256 = %s WHERE id = %s AND file_sha256 IS DISTINCT FROM %s",
@@ -2830,8 +2846,6 @@ async def import_excel(file: UploadFile = File(...), session=Depends(get_current
         raise HTTPException(400, "Only .xlsx and .xls files are supported")
     contents = await file.read()
     df = _read_standalone_workbook(contents)
-    upload_dir = "uploads"
-    os.makedirs(upload_dir, exist_ok=True)
     file_path = _build_upload_storage_path(file.filename)
     with open(file_path, "wb") as f:
         f.write(contents)
@@ -3228,6 +3242,7 @@ def validate_only(request: ImportRequest, perf: bool = False):
     if not client:
         raise HTTPException(404, "Client not found or inactive")
 
+    file_info[0]['file_path'] = _require_staged_upload(file_info[0].get('file_path'))
     file_sha256 = _ensure_uploaded_file_hash(
         request.file_id,
         file_info[0].get("file_path"),
@@ -4218,6 +4233,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
     if not client:
         raise HTTPException(404, "Client not found or inactive")
 
+    file_info[0]['file_path'] = _require_staged_upload(file_info[0].get("file_path"))
     file_sha256 = _ensure_uploaded_file_hash(
         request.file_id,
         file_info[0].get("file_path"),

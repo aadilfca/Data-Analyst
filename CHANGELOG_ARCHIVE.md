@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Stable upload staging and missing-file recovery — 2026-11-02
+
+New uploads use an absolute `UPLOAD_STAGING_DIR` (default: the app's `uploads/` folder). Validation checks the staged workbook even when its checksum is already stored and returns a safe, recoverable missing-file error. The UI clears the stale file reference and validation plan, retains other settings and asks for a fresh selection. Duplicate checks, import receipts and plan safeguards are unchanged.
+
+**Verification:** Staging recovery tests (2) and duplicate-gate tests (19) passed; Python compilation, JavaScript syntax and `git diff --check` passed. The broader lifecycle module had 21 failures at its protected recovery-archive guard; archive code was not changed.
+
 ## Temporary local upload archive mode — 2026-11-02
 
 `UPLOAD_ARCHIVE_TO_DRIVE=false` keeps a checksum-verified protected local ZIP and lifecycle receipt while skipping only Drive calls. The default remains enabled; duplicate matching, validation, scope checks, locks, replacement guards and receipts are unchanged. The app `.env` disables Drive for local development; `.env.example` documents the setting. Re-enable before production imports.

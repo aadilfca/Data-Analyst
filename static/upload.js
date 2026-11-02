@@ -732,7 +732,10 @@ function uploadFailureMessage(result, fallback) {
 
 function showUploadFailure(message, stage = 'Upload', error = null) {
     const unknown = Boolean(error?.outcomeUnknown);
-    const action = unknown
+    const missingStagedFile = error?.result?.detail?.code === 'staged_file_missing';
+    const action = missingStagedFile
+        ? 'The server copy is missing. Select this Excel file again to create a fresh upload; your other settings remain. Confirm the mapping and validate again before importing.'
+        : unknown
         ? 'The import may have completed. Keep this file, settings and validation plan unchanged. Retry Import after reconnecting so the existing receipt can reconcile the result safely. Check Data Bank if the result remains uncertain.'
         : error?.httpStatus === 401
             ? 'Sign in again, then reopen Data Upload and validate the source before importing.'
@@ -2534,6 +2537,7 @@ if (importBtn) {
 
         } catch (error) {
             resetValidationState();
+            if (error?.result?.detail?.code === 'staged_file_missing') fileId = null;
             showUploadFailure('❌ Validation error: ' + error.message, 'Validation', error);
             setBadge('❌ Validation failed', 'error');
             importBtn.innerHTML = 'Validate';

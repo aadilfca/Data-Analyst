@@ -28,6 +28,26 @@ def row(voucher='V1', day='15/04/2026', description='Supplies', amount=10):
             'Voucher Detail': description, 'Debit Amount': amount, 'Credit Amount': 0}
 
 
+def test_upload_staging_path_is_absolute_and_uses_configured_directory(monkeypatch, tmp_path):
+    monkeypatch.setenv('UPLOAD_STAGING_DIR', str(tmp_path))
+
+    path = upload._build_upload_storage_path('meezan bank.xlsx')
+
+    assert upload.os.path.dirname(path) == str(tmp_path)
+    assert upload.os.path.isabs(path)
+    assert upload.os.path.basename(path).endswith('_meezan bank.xlsx')
+
+
+def test_missing_staged_file_is_reported_even_when_hash_is_already_saved(tmp_path):
+    missing_path = str(tmp_path / 'missing.xlsx')
+
+    with pytest.raises(HTTPException) as error:
+        upload._ensure_uploaded_file_hash(99, missing_path, 'previously-saved-hash')
+
+    assert error.value.status_code == 410
+    assert error.value.detail['code'] == 'staged_file_missing'
+
+
 class Store:
     """Transaction-aware adapter executing the real validation/import orchestration."""
 
@@ -214,6 +234,8 @@ def pipeline(monkeypatch, tmp_path):
         monkeypatch.setattr(module, 'pg_transaction', lambda: state['store'].transaction())
     monkeypatch.setattr(storage_cleanup, '_count', lambda *a: int(state['store'].protected))
     monkeypatch.setattr(upload.pd, 'read_excel', lambda *a, **kw: pd.DataFrame(state['incoming'], columns=[c['column_name'] for c in COLUMNS]))
+    require_staged_upload = upload._require_staged_upload
+    monkeypatch.setattr(upload, '_require_staged_upload', lambda path: path if path == 'isolated.xlsx' else require_staged_upload(path))
     monkeypatch.setattr(upload, '_ensure_uploaded_file_hash', lambda *a: 'hash')
     monkeypatch.setattr(upload, '_validation_file_sha256', lambda *a: 'hash')
     monkeypatch.setattr(upload, 'get_rate_precision', lambda: 0)
