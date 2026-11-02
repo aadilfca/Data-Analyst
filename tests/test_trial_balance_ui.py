@@ -380,8 +380,17 @@ def test_saved_trial_balance_category_lookup_and_search_filter(browser):
     assert toolbar_rows.count() == 2
     row_positions = toolbar_rows.evaluate_all('rows => rows.map(row => Math.round(row.getBoundingClientRect().top))')
     assert row_positions[1] > row_positions[0]
+    source_items = toolbar_rows.nth(0).locator(':scope > *')
+    assert source_items.nth(1).get_attribute('class') == 'tb-saved-period-field'
+    assert source_items.nth(2).get_attribute('class') == 'tb-saved-workflow-field'
+    assert source_items.nth(3).get_attribute('class') == 'tb-saved-source-actions'
+    filter_items = toolbar_rows.nth(1).locator(':scope > *')
+    assert filter_items.nth(0).get_attribute('class') == 'tb-saved-category-filter'
+    assert filter_items.nth(1).get_attribute('class') == 'tb-saved-note-filter'
     filter_item_tops = toolbar_rows.nth(1).evaluate("row => Array.from(row.children).filter(item => item.getClientRects().length).map(item => Math.round(item.getBoundingClientRect().top))")
     assert max(filter_item_tops) - min(filter_item_tops) <= 2
+    page.set_viewport_size({'width': 560, 'height': 900})
+    assert toolbar_rows.evaluate_all('rows => rows.every(row => row.scrollWidth <= row.clientWidth + 1)')
     page.close()
 
 
