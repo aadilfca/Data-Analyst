@@ -136,6 +136,12 @@
                     <span class="stat-label">Database Size</span>
                     <span class="stat-value" id="dbSize">0</span>
                 </div>
+                <a class="stat-card" id="dataIntegrityCard" href="/static/data_integrity.html"
+                    aria-label="Open Data Integrity check"
+                    style="display:flex; flex-direction:column; color:inherit; text-decoration:none; cursor:pointer;">
+                    <span class="stat-label">Data Integrity</span>
+                    <span class="stat-value" id="dataIntegrityStatus" aria-live="polite">Checking</span>
+                </a>
                 <div class="stat-card">
                     <span class="stat-label">Open Queries</span>
                     <span class="stat-value" id="openQueries">0</span>
@@ -189,7 +195,7 @@
     <script src="/static/utils.js?v=2"></script>
     <script src="/static/loading_ui.js?v=2"></script>
     <script src="/static/api_utils.js?v=1"></script>
-    <script src="/static/script.js?v=6"></script>
+    <script src="/static/script.js?v=7"></script>
 </body>
 
 </html>

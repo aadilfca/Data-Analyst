@@ -15,8 +15,8 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, statements, category-role notes with unallocated rows, profit links, reconciliations, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
 
 - routers/clients.py + static/clients.* → firm-level client management; admin-only except the paginated `GET /api/clients`. See CHANGELOG_ARCHIVE.md.
-- routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, and database size with PostgreSQL table/index breakdown. See CHANGELOG_ARCHIVE.md.
-- routers/data.py + static/databank.* → Data Bank availability, chronological previews, scoped ledger/Cashflow selection and guarded mutations. See CHANGELOG_ARCHIVE.md.
+- routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, database size and selected-client integrity status. See CHANGELOG_ARCHIVE.md.
+- routers/data.py, routers/data_integrity.py + static/databank.*, static/data_integrity.* → Data Bank previews and client-scoped module sizes/duplicate checks. See CHANGELOG_ARCHIVE.md.
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
 - routers/import_export.py + static/upload.* → Upload validation, tabular review, highlighted source-cell errors, searchable ledger accounts and coverage safeguards. See CHANGELOG_ARCHIVE.md.
 - routers/settings.py + static/settings.* → application settings and the firm-wide Holiday list; header/tabs rendered by `client_context.js`. See CHANGELOG_ARCHIVE.md.
@@ -259,6 +259,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-02: Added a Data Integrity page and dashboard status for client-scoped module estimates and duplicate checks. See CHANGELOG_ARCHIVE.md, Data Integrity inventory.
 - 2026-11-02: Upload repairs reject nonfinite/Excel errors and tolerate absent retired copies; duplicate policies preserved. See CHANGELOG_ARCHIVE.md, Upload safety repairs.
 - 2026-11-02: Upload review uses count/safeguard tables; errors highlight fields in red, retain row links and concise guidance. See CHANGELOG_ARCHIVE.md, Upload dialog prototypes implemented.
 - 2026-11-02: Local upload staging is stable; missing workbooks prompt fresh validation. Development archives can skip Drive; duplicate and receipt safeguards remain. See CHANGELOG_ARCHIVE.md.

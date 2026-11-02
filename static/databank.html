@@ -770,6 +770,13 @@
             gap: 12px;
             margin-bottom: 12px;
         }
+        .btn-data-integrity {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            text-decoration: none;
+            white-space: nowrap;
+        }
 
         /* Wraps the search input so the clear (✕) icon can be positioned
            inside its right edge — see #yourDatasetsSearchClear below. */
@@ -925,6 +932,8 @@
                     <button type="button" id="yourDatasetsSearchClear" class="search-clear-btn"
                         style="display:none;" aria-label="Clear search">✕</button>
                 </div>
+                <a id="openDataIntegrityBtn" class="btn-upload-more btn-data-integrity"
+                    href="/static/data_integrity.html">🛡️ Data Integrity</a>
                 <button id="uploadMoreBtn" class="btn-upload-more">📤 Upload More</button>
             </div>
             <div style="background:white; border-radius:16px; overflow:auto; box-shadow:0 2px 8px rgba(0,0,0,0.06);">
@@ -1211,7 +1220,7 @@
     <script src="/static/loading_ui.js?v=2"></script>
     <script src="/static/client_context.js?v=28"></script>
     <script src="/static/api_utils.js?v=1"></script>
-    <script src="/static/databank.js?v=9"></script>
+    <script src="/static/databank.js?v=10"></script>
 </body>
 
 </html>

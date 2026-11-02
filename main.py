@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 from database import init_db, log_error, get_error_code_for_exception, execute_query
 from fastapi.concurrency import run_in_threadpool
 import os
-from routers import account_control_center, audit_rules, auth, clients, dashboard, data, database_backup, error_log, import_export, reconciliation, settings, storage_cleanup, templates, trial_balance, users, verification
+from routers import account_control_center, audit_rules, auth, clients, dashboard, data, data_integrity, database_backup, error_log, import_export, reconciliation, settings, storage_cleanup, templates, trial_balance, users, verification
 from routers.auth import get_current_user
 from datetime import datetime
 import traceback
@@ -97,6 +97,7 @@ app.include_router(import_export.router)
 app.include_router(templates.router)
 app.include_router(clients.router)
 app.include_router(data.router)
+app.include_router(data_integrity.router)
 app.include_router(error_log.router)
 app.include_router(settings.router)
 app.include_router(audit_rules.router)

@@ -133,6 +133,36 @@ async function loadDbSize() {
     }
 }
 
+// ---------- LOAD SELECTED CLIENT'S DATA INTEGRITY STATUS ----------
+let dataIntegritySummaryRequest = 0;
+async function loadDataIntegritySummary() {
+    const statusEl = document.getElementById('dataIntegrityStatus');
+    if (!statusEl) return;
+    const request = ++dataIntegritySummaryRequest;
+    try {
+        if (window.clientContextReady) await window.clientContextReady;
+        if (request !== dataIntegritySummaryRequest) return;
+        const clientId = typeof getSelectedClientId === 'function' ? getSelectedClientId() : null;
+        if (!clientId) {
+            statusEl.textContent = 'Select client';
+            return;
+        }
+        const response = await window.ApiUtils.apiFetch(
+            `/api/data-integrity/overview?client_id=${encodeURIComponent(clientId)}`
+        );
+        if (!response.ok) throw new Error('Data check unavailable');
+        const data = await response.json();
+        if (request !== dataIntegritySummaryRequest || Number(getSelectedClientId()) !== Number(clientId)) return;
+        const status = String(data.overall_status || 'Not checked');
+        statusEl.textContent = status.startsWith('Review') ? 'Review' : status;
+        statusEl.title = `Data Integrity for ${data.client_name || 'selected client'}: ${status}`;
+    } catch (error) {
+        if (request !== dataIntegritySummaryRequest) return;
+        statusEl.textContent = 'Unavailable';
+        statusEl.title = 'Data Integrity check unavailable';
+    }
+}
+
 // ---------- MODULE CARD NAVIGATION ----------
 // Every navigating dashboard card is wired here by id (no inline onclick in index.html).
 // Verification deliberately has no ?type= param — the verification hub itself is the
@@ -219,6 +249,7 @@ window.onload = function() {
     loadDbSize();
     loadKpiStats();
     loadOverdueUploads();
+    loadDataIntegritySummary();
     const overdueCard = document.getElementById('overdueUploadsCard');
     if (overdueCard) overdueCard.addEventListener('click', toggleOverdueUploadsPanel);
 };
@@ -230,6 +261,7 @@ document.addEventListener('keydown', function(e) {
         loadDbSize();
         loadKpiStats();
         loadOverdueUploads();
+        loadDataIntegritySummary();
     }
 });
 

@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Data Integrity</title>
+    <link rel="stylesheet" href="/static/style.css?v=76">
+    <style>
+        .integrity-main { max-width: 1180px; margin: 24px auto; padding: 0 20px 36px; }
+        .integrity-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+        .integrity-heading h1 { margin: 4px 0 6px; color:#172554; }
+        .integrity-heading p { margin:0; color:#64748b; }
+        .integrity-actions { display:flex; align-items:center; gap:10px; }
+        .integrity-button { border:0; border-radius:9px; padding:10px 15px; background:#1d4ed8; color:white; font-weight:650; cursor:pointer; }
+        .integrity-button:hover { background:#1e40af; }
+        .integrity-button:disabled { opacity:.6; cursor:wait; }
+        .integrity-card { margin-top:20px; background:white; border:1px solid #e2e8f0; border-radius:14px; box-shadow:0 2px 8px rgba(15,23,42,.05); overflow:hidden; }
+        .integrity-summary { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:16px 18px; border-bottom:1px solid #e2e8f0; }
+        .integrity-summary p { margin:4px 0 0; color:#64748b; font-size:13px; }
+        .integrity-status { display:inline-flex; align-items:center; gap:6px; border-radius:999px; padding:6px 11px; font-size:13px; font-weight:700; background:#ecfdf5; color:#166534; }
+        .integrity-status.review { background:#fff1f2; color:#b4232c; }
+        .integrity-status.incomplete { background:#fff7ed; color:#9a3412; }
+        .integrity-table-wrap { overflow-x:auto; }
+        .integrity-table { width:100%; min-width:800px; border-collapse:collapse; }
+        .integrity-table th, .integrity-table td { padding:13px 15px; text-align:left; border-bottom:1px solid #edf1f5; vertical-align:top; }
+        .integrity-table th { background:#f8fafc; color:#475569; font-size:12px; font-weight:700; white-space:nowrap; }
+        .integrity-table td { color:#243247; font-size:14px; }
+        .integrity-table tr:last-child td { border-bottom:0; }
+        .integrity-module { font-weight:700; color:#172554; }
+        .integrity-detail { display:block; margin-top:4px; color:#64748b; font-size:12px; line-height:1.4; }
+        .integrity-duplicate { display:inline-flex; border-radius:999px; padding:5px 9px; font-size:12px; font-weight:700; background:#ecfdf5; color:#166534; white-space:nowrap; }
+        .integrity-duplicate.review { background:#fff1f2; color:#b4232c; }
+        .integrity-duplicate.incomplete { background:#fff7ed; color:#9a3412; }
+        .integrity-notes { display:grid; gap:7px; padding:14px 18px 17px; border-top:1px solid #edf1f5; color:#64748b; font-size:12px; line-height:1.5; }
+        .integrity-message { margin-top:14px; padding:12px 14px; border-radius:10px; background:#f8fafc; color:#475569; font-size:13px; }
+        .integrity-message.error { background:#fff1f2; color:#9f1d25; }
+        .integrity-context { color:#64748b; font-size:12px; }
+        @media (max-width:600px) {
+            .integrity-main { margin:16px auto; padding:0 12px 24px; }
+            .integrity-heading h1 { font-size:22px; }
+            .integrity-actions { width:100%; }
+            .integrity-button { width:100%; }
+            .integrity-summary { align-items:flex-start; }
+            .navbar .nav-container { flex-wrap:wrap; gap:6px 12px; }
+            #navLeft { flex:1 1 100%; min-width:0; max-width:100%; flex-wrap:wrap; }
+            #clientControl { flex:1 1 auto; min-width:0; max-width:100%; }
+            #clientControl .nav-area { display:none; }
+            .nav-user { flex:0 1 auto; }
+        }
+    </style>
+</head>
+
+<body data-nav-module="Data Integrity" data-nav-parent="databank.html">
+    <nav class="navbar">
+        <div class="nav-container">
+            <div id="navLeft"></div>
+            <div class="nav-client" id="clientControl"></div>
+            <div class="nav-user"></div>
+        </div>
+    </nav>
+
+    <main class="integrity-main">
+        <header class="integrity-heading">
+            <div>
+                <a href="/static/databank.html" class="back-link">← Back to Data Bank</a>
+                <h1>Data Integrity</h1>
+                <p id="integrityClientLabel">Check stored data and duplicates for this client.</p>
+            </div>
+            <div class="integrity-actions">
+                <button type="button" id="refreshIntegrityBtn" class="integrity-button">Refresh check</button>
+            </div>
+        </header>
+
+        <section class="integrity-card" aria-labelledby="integrityTableTitle">
+            <div class="integrity-summary">
+                <div>
+                    <strong id="integrityTableTitle">Module inventory</strong>
+                    <p id="integrityScannedAt">Checking records…</p>
+                </div>
+                <span id="integrityOverallStatus" class="integrity-status" role="status" aria-live="polite">Checking</span>
+            </div>
+            <div class="integrity-table-wrap">
+                <table class="integrity-table">
+                    <thead>
+                        <tr>
+                            <th>Module</th>
+                            <th>Records</th>
+                            <th>Data size</th>
+                            <th>Associated data</th>
+                            <th>Total</th>
+                            <th>Duplicates</th>
+                        </tr>
+                    </thead>
+                    <tbody id="integrityTableBody">
+                        <tr><td colspan="6">Checking records…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="integrity-notes">
+                <div id="integritySizeNote">Sizes are estimates. Shared indexes are shown separately.</div>
+                <div id="integrityScopeNote">The same document ID in different modules is treated as separate data.</div>
+                <div id="integrityDatabaseContext" class="integrity-context"></div>
+            </div>
+        </section>
+        <div id="integrityMessage" class="integrity-message" role="status" aria-live="polite" hidden></div>
+    </main>
+
+    <script src="/static/client_context.js?v=28"></script>
+    <script src="/static/api_utils.js?v=1"></script>
+    <script src="/static/data_integrity.js?v=1"></script>
+</body>
+
+</html>

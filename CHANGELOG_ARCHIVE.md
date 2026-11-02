@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Data Integrity inventory — 2026-11-02
+
+Added read-only `GET /api/data-integrity/overview` and a linked Data Integrity page with module counts, stored/associated/total size estimates, scan status, source-file limitations and shared index context. Client Data follows the existing Data Bank size formula. Duplicate checks remain scoped to Client Data template identities, Trial Balance accounts within one upload, and reconciliation group/account/month; shared IDs across modules remain separate. The dashboard shows the selected client's status without waiting for other dashboard stats. No import, cleanup or stored-data behavior changes.
+
+Added `tests/test_data_integrity.py` and `tests/test_data_integrity_ui.py`. **28 focused tests pass** with the existing duplicate-gate suite, including safe text rendering, refresh/error states and mobile table scrolling. Compilation, JavaScript syntax, route registration and whitespace checks pass. Local Playwright confirmed three shared Voucher IDs across 50-row Account Ledger and Transaction Report samples, no cross-module duplicate findings, and unchanged Client Data/Trial Balance counts. Twenty-seven staged workbooks are unavailable for size measurement. A pre-existing local server retained the earlier API response shape; restart it to verify the final size alignment in the live page.
+
 ## Upload dialog prototypes implemented — 2026-11-02
 
 Approved UI scope implemented in `static/upload.js`/`upload.html` (script v21). Complete-report review presents unchanged/incoming/correction/removal counts in a table, separate voucher counts, short backup/period safeguards and optional tabular date moves. Back, Import and Escape retain their confirmation semantics. Validation uses a concise affected-row summary; structured field labels are red and instructions remain neutral. Errors/rejections on the same Excel row share one entry. Warning details, safe text, paging, source-row links and focus handling remain available. No backend, identity, archive or import-policy changes in this UI phase.
