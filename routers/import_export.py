@@ -6,6 +6,7 @@ from functools import wraps
 from contextvars import ContextVar
 from decimal import Decimal, InvalidOperation
 import re
+import math
 from time import perf_counter
 from uuid import uuid4
 from database import (
@@ -335,6 +336,83 @@ def _prepare_source_rows(frame, request, template_cols, col_mapping):
                 except (InvalidOperation, ValueError, TypeError):
                     pass  # Invalid transaction amounts are reported by normal validation.
     return rows, diagnostics
+
+
+def _workbook_input_errors(file_path, request, template_cols, col_mapping, frame):
+    """Inspect cell types before pandas can turn Excel errors/NaN text into blanks.
+
+    Only mapped, included cells participate. Valid values and all identity and
+    comparison rules remain untouched; this is a source-validation boundary.
+    """
+    headers = list(frame.columns)
+    mapped = {}
+    for column in template_cols:
+        source = col_mapping.get(column['column_name'])
+        if source in headers:
+            mapped.setdefault(headers.index(source), []).append(column)
+    if not mapped:
+        return []
+    excluded = set(request.excluded_rows or []) if request.comparison_mode != 'replace_range' else set()
+
+    def inspect(number, cells):
+        if number in excluded:
+            return None
+        errors, values = [], {}
+        for position, columns in mapped.items():
+            value, excel_error = cells.get(position, (None, False))
+            for column in columns:
+                safe = json_safe_cell_value(value)
+                if isinstance(safe, (float, Decimal)) and not math.isfinite(float(safe)):
+                    safe = str(safe)
+                values[column['column_name']] = safe
+                message, kind = None, 'data_type'
+                if excel_error:
+                    message, kind = 'Fix the Excel formula error.', 'excel_error'
+                elif column['data_type'] == 'Numeric' and value is not None and str(value).strip():
+                    try:
+                        if not math.isfinite(float(value)):
+                            message = 'Enter a valid number.'
+                    except (TypeError, ValueError, OverflowError):
+                        pass  # Ordinary numeric-format errors use the existing validator.
+                if message:
+                    errors.append({'column': column['column_name'],
+                                   'excel_column': col_mapping[column['column_name']],
+                                   'error_type': kind, 'message': message})
+        return {'row_number': number, 'row_data': values, 'errors': errors} if errors else None
+
+    errors = []
+    if str(file_path).casefold().endswith('.xls'):
+        import xlrd
+        book = xlrd.open_workbook(file_path, on_demand=True)
+        try:
+            sheet = book.sheet_by_name(request.sheet_name)
+            for index in range(1, sheet.nrows):
+                cells = {pos: (sheet.cell_value(index, pos), sheet.cell_type(index, pos) == xlrd.XL_CELL_ERROR)
+                         for pos in mapped if pos < sheet.ncols}
+                error = inspect(index + 1, cells)
+                if error:
+                    errors.append(error)
+        finally:
+            book.release_resources()
+    else:
+        book = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+        try:
+            sheet = book[request.sheet_name]
+            for number, row in enumerate(sheet.iter_rows(min_row=2, max_col=max(mapped) + 1), 2):
+                error = inspect(number, {pos: (row[pos].value, row[pos].data_type == 'e') for pos in mapped})
+                if error:
+                    errors.append(error)
+        finally:
+            book.close()
+    return errors
+
+
+def _source_input_failure(errors, total_rows):
+    """Use the existing row-error response so the UI can link to each source cell."""
+    return {'status': 'validation_failed', 'has_errors': True, 'can_import': False,
+            'error_count': len(errors), 'errors': errors, 'total_rows': total_rows,
+            'has_rejections': False, 'rejected_count': 0, 'rejected_rows': [],
+            'message': 'Fix the listed rows and validate again. No data was changed.'}
 
 
 def _ledger_description_only(row, roles):
@@ -3302,9 +3380,12 @@ def validate_only(request: ImportRequest, perf: bool = False):
     # Read Excel data
     try:
         df = pd.read_excel(file_info[0]['file_path'], sheet_name=request.sheet_name)
-    except Exception as e:
-        raise HTTPException(400, f"Error reading Excel: {str(e)}")
+    except Exception:
+        raise HTTPException(400, "Could not read the selected Excel sheet. Check the file and sheet, then retry.")
 
+    input_errors = _workbook_input_errors(file_info[0]['file_path'], request, template_cols, col_mapping, df)
+    if input_errors:
+        return _source_input_failure(input_errors, len(df))
     rows, source_diagnostics = _prepare_source_rows(df, request, template_cols, col_mapping)
     # Apply any typed blank-cell values before exclusion filtering (see
     # apply_edited_cell_values()'s docstring for why the ordering matters).
@@ -4274,6 +4355,9 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
         raise HTTPException(400, "Could not read the selected Excel sheet. Check the file and sheet, then retry.")
     print(f"🔍 DataFrame shape: {df.shape}")  # rows, columns
     print(f"🔍 DataFrame columns: {df.columns.tolist()}")
+    input_errors = _workbook_input_errors(file_info[0]['file_path'], request, template_cols, col_mapping, df)
+    if input_errors:
+        return _source_input_failure(input_errors, len(df))
     rows, source_diagnostics = _prepare_source_rows(df, request, template_cols, col_mapping)
     # Apply any typed blank-cell values before exclusion filtering (see
     # apply_edited_cell_values()'s docstring for why the ordering matters).

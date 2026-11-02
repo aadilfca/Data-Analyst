@@ -799,6 +799,12 @@ def purge_replaced_transaction_rows(client_id, template_id, row_ids, operator, a
         )
         # Retired report copies cannot retain rows that have just been removed.
         for table in ("cashflow_prepared_rollups", "cash_bank_summary_read_models", "cashflow_ledger_rollup_read_models", "upload_validation_plans"):
+            if table == 'cashflow_ledger_rollup_read_models':
+                # Fresh databases omit this retired copy; older databases must
+                # still purge it. Never recreate a second transaction store.
+                existing = execute_query_pg("SELECT to_regclass('public.cashflow_ledger_rollup_read_models') AS table_name")
+                if not existing or not existing[0].get('table_name'):
+                    continue
             execute_write_pg(f"DELETE FROM public.{table} WHERE client_id = %s AND template_id = %s", (client_id, template_id))
         execute_write_pg("DELETE FROM public.client_data WHERE id = ANY(%s)", (ids,))
         upload_ids = list({row["upload_id"] for row in rows if row.get("upload_id") is not None})

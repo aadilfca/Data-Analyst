@@ -1,5 +1,29 @@
 # Changelog Archive
 
+## Upload dialog prototypes implemented — 2026-11-02
+
+Approved UI scope implemented in `static/upload.js`/`upload.html` (script v21). Complete-report review presents unchanged/incoming/correction/removal counts in a table, separate voucher counts, short backup/period safeguards and optional tabular date moves. Back, Import and Escape retain their confirmation semantics. Validation uses a concise affected-row summary; structured field labels are red and instructions remain neutral. Errors/rejections on the same Excel row share one entry. Warning details, safe text, paging, source-row links and focus handling remain available. No backend, identity, archive or import-policy changes in this UI phase.
+
+New offline Chromium suite `tests/test_upload_dialogs.py`: **10 tests pass**, covering exact/zero counts, scope, safeguards, repeated confirmation/cancellation, date moves, 9,720-error summary, computed red text, paging/Escape/focus, source navigation, rejected rows, HTML safety, warnings and 360/768px widths. Both dialogs were visually inspected; screenshots are outside the repository. Node syntax, whitespace and documentation-budget checks pass. No working database, actual import or live-app browser test was used. Local acceptance and explicit commit/push approval remain pending; earlier uncommitted repair/experiment work is preserved.
+
+## Upload safety repairs — 2026-11-02
+
+Approved scope/approach implemented in `routers/import_export.py` and `services/storage_cleanup.py`: original mapped Excel error cells/nonfinite amounts now return concise row/column errors before comparison or plan creation; replacement cleanup skips the absent retired ledger-copy table while still purging existing copies. No schema migration, identity/comparison-policy change or ledger accounting-policy change.
+
+Added `tests/test_upload_input_errors.py`; updated deletion coverage and stale ledger/lifecycle fixtures/assertions. **237 affected tests pass.** `experiments/upload_safety/after_fixes.py` verifies **24 passing local PostgreSQL scenarios**, including removal/empty replacement, verified archives, SQL rollback, concurrency, receipt/renamed retries, explicit duplicate IDs, legitimate multiplicity, eight voucher months (45,836 lines) and two ledger scopes (926 postings). Fourteen duplicate/comparison functions match HEAD structurally. June's original Excel error is blocked; only its experiment copy is corrected. All 117 source workbooks and working SQLite checksums match.
+
+Details/limits: `experiments/upload_safety/REPORT.md`. Test server stopped; no working-app uploads, real Drive writes, report builds, dependency installation or Git mutations. Local-server acceptance and explicit commit/push approval remain pending. Existing Status/File_Map rows were updated within their size guards.
+
+## Upload safety experiments — 2026-11-02
+
+Added standalone `experiments/upload_safety/` runners/report. Approved real-workbook tests used fresh local PostgreSQL, synthetic setup, isolated SQLite auditing/staging and local-only recovery archives. Application source and all original workbooks remain unchanged; 123 protected-file checksums match. No dependencies were installed.
+
+Eight voucher months (45,836 lines), six ledgers (8,152 postings) and seven document workbooks were exercised. Repeat/renamed/concurrent imports, explicit line IDs, account isolation, SQL uniqueness, partial corrections, archives, actual rollback, receipts, malformed sources and offline browser error components were checked. All 22 original datasets/99,824 posting rows underwent mapped-cell comparison; ledger running balances were independently reconciled.
+
+Three confirmed findings are in KNOWN_ISSUES.md: nonfinite voucher amounts cause HTTP 500; fresh-bootstrap replacement cleanup references a missing retired table; a June Account Name `#REF!` becomes blank silently. Document date/footer corrections work in experiment copies. Ledger both-side postings/balance warnings require a policy decision. Existing regressions: 181 passed, 17 stale fixture/message failures. Full evidence, source corrections and limits: `experiments/upload_safety/REPORT.md`.
+
+No application fixes, live uploads, Drive writes or Git mutations. Test server stopped after checks; local-server acceptance and any commit/push require Aadil's approval. File_Map's existing experiment row was rewritten without increasing its 158-line size.
+
 ## Upload field guidance and concise errors — 2026-11-02
 
 Upload issues now show a short stage, cause and next step. Missing account/coverage choices appear inline; mapping rows say “Mapped” or “Choose column.” Report type and coverage guidance are shorter. Error row links jump to the source row; common row/ledger errors name the field without raw values or parser text. Validation, import and archive safeguards are unchanged.

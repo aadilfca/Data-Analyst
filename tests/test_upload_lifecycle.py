@@ -88,6 +88,8 @@ class Store:
 
     def query(self, sql, params=None, **kwargs):
         params = params or ()
+        if 'to_regclass' in sql:
+            return [{'table_name': None}]
         if 'LOCK TABLE' in sql or 'pg_advisory' in sql:
             return []
         if 'FROM templates' in sql:
@@ -212,6 +214,7 @@ def pipeline(monkeypatch, tmp_path):
     import pandas as pd
     state = {'store': None, 'incoming': [], 'failure': False, 'after_archive': None, 'transfers': 0}
     monkeypatch.setenv('UPLOAD_ARCHIVE_DIR', str(tmp_path / 'archives'))
+    monkeypatch.setenv('UPLOAD_ARCHIVE_TO_DRIVE', 'true')
 
     class Drive:
         def allocate_id(self):
@@ -234,6 +237,8 @@ def pipeline(monkeypatch, tmp_path):
         monkeypatch.setattr(module, 'pg_transaction', lambda: state['store'].transaction())
     monkeypatch.setattr(storage_cleanup, '_count', lambda *a: int(state['store'].protected))
     monkeypatch.setattr(upload.pd, 'read_excel', lambda *a, **kw: pd.DataFrame(state['incoming'], columns=[c['column_name'] for c in COLUMNS]))
+    # This adapter supplies synthetic rows; real workbook metadata has separate tests.
+    monkeypatch.setattr(upload, '_workbook_input_errors', lambda *a: [])
     require_staged_upload = upload._require_staged_upload
     monkeypatch.setattr(upload, '_require_staged_upload', lambda path: path if path == 'isolated.xlsx' else require_staged_upload(path))
     monkeypatch.setattr(upload, '_ensure_uploaded_file_hash', lambda *a: 'hash')
@@ -387,7 +392,7 @@ def test_extended_voucher_with_one_added_line_archives_the_complete_previous_vou
 def test_empty_confirmation_is_rejected_for_a_populated_report(pipeline):
     pipeline['store'] = Store([row()])
     pipeline['incoming'] = [row()]
-    with pytest.raises(HTTPException, match='Untick'):
+    with pytest.raises(HTTPException, match='Uncheck'):
         upload.validate_only(request(confirm_empty_period=True))
     assert pipeline['store'].source_writes == 0
 
@@ -395,7 +400,7 @@ def test_empty_confirmation_is_rejected_for_a_populated_report(pipeline):
 def test_absent_voucher_with_lines_on_both_sides_of_boundary_cannot_be_partly_removed(pipeline):
     pipeline['store'] = Store([row('ABSENT'), row('ABSENT', day='31/03/2026')])
     pipeline['incoming'] = []
-    with pytest.raises(HTTPException, match='complete previous version'):
+    with pytest.raises(HTTPException, match='lines outside this period'):
         upload.validate_only(request(confirm_empty_period=True))
     assert pipeline['store'].source_writes == 0
 

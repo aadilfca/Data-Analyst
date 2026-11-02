@@ -1409,22 +1409,62 @@
         }
     /* Upload-stage issues share one bounded, keyboard-accessible dialog. */
 #validationErrorOverlay { position:fixed; inset:0; z-index:3100; background:rgba(15,23,42,.5); display:flex; align-items:center; justify-content:center; padding:16px; }
-#validationErrorOverlay section { background:white; border-radius:12px; border-top:5px solid #dc2626; padding:18px; width:min(820px,100%); max-height:85vh; overflow:auto; box-shadow:0 20px 60px #0004; color:#1a1a2e; }
+#validationErrorOverlay section { background:white; border:1px solid #dce3ed; border-radius:14px; padding:0; width:min(700px,100%); max-height:85vh; overflow:auto; box-shadow:0 20px 60px #0004; color:#1a1a2e; }
 #validationErrorOverlay section[data-severity="warning"], #validationErrorOverlay section[data-severity="unconfirmed"] { border-color:#b45309; }
 #validationErrorOverlay section[data-severity="info"] { border-color:#0f766e; }
-#validationErrorOverlay h2 { margin:0 0 8px; font-size:21px; }
-#validationErrorOverlay p { overflow-wrap:anywhere; margin:7px 0; }
-#validationErrorOverlay .upload-issue-stage { color:#64748b; font-weight:600; }
-#validationErrorOverlay .upload-issue-action { background:#f1f5f9; padding:9px 11px; border-radius:6px; }
-#validationErrorOverlay .upload-issue-details { overflow:auto; max-height:40vh; border:1px solid #e2e8f0; border-radius:6px; }
+#validationErrorOverlay h2 { margin:0 0 6px; font-size:20px; }
+#validationErrorOverlay p { overflow-wrap:anywhere; margin:0; }
+#validationErrorOverlay .upload-issue-header { padding:22px 24px 18px; border-bottom:1px solid #e9edf3; }
+#validationErrorOverlay .upload-issue-stage { color:#64748b; font-size:13px; }
+#validationErrorOverlay .upload-issue-summary { margin:18px 24px 6px; font-weight:600; }
+#validationErrorOverlay .upload-issue-action { margin:0 24px 18px; color:#64748b; font-size:13px; }
+#validationErrorOverlay .upload-issue-details { overflow:auto; max-height:40vh; margin:16px 24px 0; }
 #validationErrorOverlay table { width:100%; border-collapse:collapse; font-size:13px; }
 #validationErrorOverlay th, #validationErrorOverlay td { padding:8px; text-align:left; border-bottom:1px solid #e2e8f0; vertical-align:top; overflow-wrap:anywhere; }
-#validationErrorOverlay th { position:sticky; top:0; background:#f1f5f9; }
-#validationErrorOverlay .upload-issue-navigation { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin:12px 0; }
+#validationErrorOverlay th { position:sticky; top:0; background:#f5f7fa; color:#64748b; font-size:12px; font-weight:500; }
+#validationErrorOverlay .upload-issue-navigation { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin:12px 24px 18px; font-size:12px; color:#64748b; }
+#validationErrorOverlay .upload-issue-item + .upload-issue-item { margin-top:8px; }
+#validationErrorOverlay .upload-issue-field { color:#bd252c; font-weight:600; display:block; }
+#validationErrorOverlay .upload-issue-label { font-weight:600; display:block; }
+#validationErrorOverlay .upload-issue-fix { display:block; color:#64748b; font-size:12px; margin-top:3px; }
+#validationErrorOverlay td:nth-child(2) { white-space:nowrap; }
 #validationErrorOverlay button { padding:8px 16px; border:1px solid #cbd5e1; border-radius:6px; background:#f8fafc; cursor:pointer; }
 #validationErrorOverlay button:disabled { opacity:.5; cursor:default; }
 #validationErrorOverlay .upload-issue-row-link { padding:0; border:0; background:transparent; color:#2563eb; text-decoration:underline; }
-#validationErrorOverlay #validationErrorCloseBtn { display:block; margin:16px 0 0 auto; background:#2563eb; color:white; border-color:#2563eb; }
+#validationErrorOverlay .upload-issue-footer { display:flex; justify-content:flex-end; margin-top:18px; padding:15px 24px; border-top:1px solid #e9edf3; background:#f8fafc; }
+#validationErrorOverlay #validationErrorCloseBtn { background:#28446b; color:white; border-color:#28446b; }
+/* Replacement confirmation uses the same compact, scoped dialog treatment. */
+#uploadReplacementReview { margin:auto; padding:0; border:1px solid #dce3ed; border-radius:14px; width:min(700px,calc(100% - 32px)); max-height:85vh; color:#1a1a2e; box-shadow:0 20px 60px #0004; overflow:auto; }
+#uploadReplacementReview::backdrop { background:rgba(15,23,42,.5); }
+#uploadReplacementReview header { padding:22px 24px 18px; border-bottom:1px solid #e9edf3; }
+#uploadReplacementReview h2 { font-size:20px; margin:0 0 6px; }
+#uploadReplacementReview header p { margin:0; font-size:13px; color:#64748b; overflow-wrap:anywhere; }
+#uploadReplacementReview .upload-review-content { padding:18px 24px; }
+#uploadReplacementReview table { border-collapse:collapse; width:100%; font-size:14px; }
+#uploadReplacementReview th, #uploadReplacementReview td { padding:10px; border-bottom:1px solid #edf0f5; text-align:left; vertical-align:top; overflow-wrap:anywhere; }
+#uploadReplacementReview th { padding:8px 10px; background:#f5f7fa; color:#64748b; font-size:12px; font-weight:500; }
+#uploadReplacementReview tbody tr:last-child td { border-bottom:0; }
+#uploadReplacementReview .upload-review-count { text-align:right; font-weight:600; font-variant-numeric:tabular-nums; white-space:nowrap; }
+#uploadReplacementReview #uploadReplacementVouchers { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; margin:16px 0; padding-top:14px; border-top:1px solid #e9edf3; font-size:13px; }
+#uploadReplacementReview #uploadReplacementVouchers[hidden], #uploadReplacementReview #uploadReplacementDateMoves[hidden] { display:none; }
+#uploadReplacementReview .upload-review-notes td { padding:7px 0; font-size:12px; }
+#uploadReplacementReview .upload-review-notes td:first-child { width:95px; color:#64748b; padding-right:12px; }
+#uploadReplacementReview #uploadReplacementDateMoves { margin-top:16px; max-height:160px; overflow:auto; }
+#uploadReplacementReview #uploadReplacementDateMoves h3 { font-size:13px; margin:0 0 8px; }
+#uploadReplacementReview #uploadReplacementDateMoves table { font-size:12px; }
+#uploadReplacementReview footer { display:flex; justify-content:flex-end; gap:10px; padding:15px 24px; border-top:1px solid #e9edf3; background:#f8fafc; }
+#uploadReplacementReview footer button { padding:9px 16px; border-radius:7px; border:1px solid #d4dce8; background:white; color:#243047; cursor:pointer; font:inherit; font-size:13px; }
+#uploadReplacementReview #uploadReplacementConfirm { background:#28446b; color:white; border-color:#28446b; }
+@media (max-width:440px) {
+    #validationErrorOverlay .upload-issue-header, #uploadReplacementReview header { padding:16px; }
+    #validationErrorOverlay .upload-issue-summary { margin:16px 16px 6px; }
+    #validationErrorOverlay .upload-issue-action { margin:0 16px 16px; }
+    #validationErrorOverlay .upload-issue-details { margin:16px 16px 0; }
+    #validationErrorOverlay .upload-issue-navigation { margin:12px 16px 16px; }
+    #validationErrorOverlay td:nth-child(2) { white-space:normal; }
+    #validationErrorOverlay .upload-issue-footer, #uploadReplacementReview footer { padding:14px 16px; }
+    #uploadReplacementReview .upload-review-content { padding:16px; }
+}
 </style>
 </head>
 
@@ -1763,18 +1803,42 @@
 
     <script src="/static/loading_ui.js?v=2"></script>
     <script src="/static/client_context.js?v=28"></script>
-    <dialog id="uploadReplacementReview" aria-label="Review complete report replacement" style="margin:auto;padding:24px;border:1px solid #cbd5e1;border-radius:12px;max-width:560px;color:#1a1a2e;">
-        <h2 style="margin-bottom:12px;">Review complete report</h2>
-        <p id="uploadReplacementScope" style="margin-bottom:12px;"></p>
-        <p id="uploadReplacementCounts" style="margin-bottom:12px;"></p>
-        <p id="uploadReplacementDateMoves" hidden style="margin-bottom:12px;max-height:140px;overflow:auto;white-space:pre-line;"></p>
-        <p style="margin-bottom:16px;">Complete previous vouchers and an Excel observation report will be archived and verified in Google Drive before replacement. A corrected voucher date may replace that same voucher outside this period; other vouchers outside it remain intact.</p>
-        <div style="display:flex;justify-content:flex-end;gap:12px;">
-            <button type="button" class="btn-neutral" id="uploadReplacementCancel">Cancel</button>
-            <button type="button" class="btn-primary" id="uploadReplacementConfirm">Archive and apply report</button>
+    <dialog id="uploadReplacementReview" aria-label="Review complete report replacement">
+        <header>
+            <h2>Review complete report</h2>
+            <p id="uploadReplacementScope"></p>
+            <p id="uploadReplacementPeriod"></p>
+        </header>
+        <div class="upload-review-content">
+            <table aria-label="Rows to review">
+                <thead><tr><th scope="col">Rows</th><th scope="col" class="upload-review-count">Count</th></tr></thead>
+                <tbody id="uploadReplacementCounts"></tbody>
+            </table>
+            <div id="uploadReplacementVouchers" hidden>
+                <span>Changed vouchers <strong id="uploadReplacementChangedVouchers"></strong></span>
+                <span>Removed vouchers <strong id="uploadReplacementRemovedVouchers"></strong></span>
+            </div>
+            <table class="upload-review-notes" aria-label="Replacement safeguards">
+                <tbody>
+                    <tr><td>Backup</td><td>Complete previous vouchers + Excel review report. Verified in Google Drive before replacement.</td></tr>
+                    <tr><td>Date changes</td><td>The same voucher may be replaced outside this period.</td></tr>
+                    <tr><td>Other vouchers</td><td>Outside this period: kept.</td></tr>
+                </tbody>
+            </table>
+            <div id="uploadReplacementDateMoves" hidden>
+                <h3>Voucher dates changed outside this period</h3>
+                <table aria-label="Voucher date changes">
+                    <thead><tr><th scope="col">Voucher</th><th scope="col">Previous dates</th><th scope="col">Incoming dates</th></tr></thead>
+                    <tbody id="uploadReplacementDateMoveRows"></tbody>
+                </table>
+            </div>
         </div>
+        <footer>
+            <button type="button" id="uploadReplacementCancel">Back</button>
+            <button type="button" id="uploadReplacementConfirm">Import</button>
+        </footer>
     </dialog>
-    <script src="/static/upload.js?v=20"></script>
+    <script src="/static/upload.js?v=21"></script>
 </body>
 
 </html>

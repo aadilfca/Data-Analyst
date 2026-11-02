@@ -1,6 +1,7 @@
 import os
 import unittest
 from unittest.mock import MagicMock, patch
+import pytest
 
 from fastapi import HTTPException
 
@@ -148,7 +149,7 @@ def test_replacement_purge_permanently_removes_exact_rows_and_old_payloads():
     from contextlib import nullcontext
     writes = []
     with patch.object(storage_cleanup, "pg_transaction", return_value=nullcontext()), \
-            patch.object(storage_cleanup, "execute_query_pg", side_effect=[[{'status': 'verified', 'drive_file_id': 'remote', 'archive_sha256': 'checksum'}], [{"id": 9, "upload_id": 4, "derived_voucher_id": "V1"}], []]), \
+            patch.object(storage_cleanup, "execute_query_pg", side_effect=[[{'status': 'verified', 'drive_file_id': 'remote', 'archive_sha256': 'checksum'}], [{"id": 9, "upload_id": 4, "derived_voucher_id": "V1"}], [{'table_name':None}], []]), \
             patch.object(storage_cleanup, "_count", return_value=0), \
             patch.object(storage_cleanup, "execute_write_pg", side_effect=lambda sql, params=None: writes.append((sql, params))):
         result = storage_cleanup.purge_replaced_transaction_rows(5, 1, [9], "test",
@@ -157,6 +158,27 @@ def test_replacement_purge_permanently_removes_exact_rows_and_old_payloads():
     assert any("DELETE FROM public.client_data WHERE id = ANY(%s)" in sql and params == ([9],) for sql, params in writes)
     assert any("DELETE FROM public.data_audit_log" in sql for sql, _ in writes)
     assert not any("is_deleted = TRUE" in sql for sql, _ in writes)
+
+
+@pytest.mark.parametrize('legacy_table', [None, 'cashflow_ledger_rollup_read_models'])
+def test_replacement_purge_cleans_legacy_copy_only_when_present(legacy_table):
+    from contextlib import nullcontext
+    writes = []
+    replies = [[{'status':'verified','drive_file_id':'remote','archive_sha256':'checksum'}],
+               [{'id':9,'upload_id':4,'derived_voucher_id':'V1'}],
+               [{'table_name':legacy_table}], []]
+    with patch.object(storage_cleanup,'pg_transaction',return_value=nullcontext()), \
+            patch.object(storage_cleanup,'execute_query_pg',side_effect=replies), \
+            patch.object(storage_cleanup,'_count',return_value=0), \
+            patch.object(storage_cleanup,'execute_write_pg',side_effect=lambda sql,params=None:writes.append((sql,params))):
+        result=storage_cleanup.purge_replaced_transaction_rows(5,1,[9],'test',
+            archive_proof={'operation_id':'operation','ids':[9],'archive':{'drive_file_id':'remote','sha256':'checksum'}})
+    assert result['deleted_count']==1
+    legacy=[(sql,params) for sql,params in writes if 'DELETE FROM public.cashflow_ledger_rollup_read_models' in sql]
+    assert bool(legacy)==bool(legacy_table)
+    if legacy:
+        assert legacy[0][1]==(5,1)
+    assert any('DELETE FROM public.client_data WHERE id = ANY(%s)' in sql and params==([9],) for sql,params in writes)
 
 
 if __name__ == "__main__":

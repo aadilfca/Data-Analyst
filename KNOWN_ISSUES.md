@@ -15,6 +15,15 @@ Every finding from a review session is recorded here — never fixed silently, n
 
 | Date | Module | Finding | Severity |
 |------|--------|---------|----------|
+| 2026-11-02 | Upload / numeric validation | Isolated PostgreSQL: voucher Infinity passes numeric validation, then invalid JSON aborts plan creation with HTTP 500. Reject nonfinite values with row/column guidance; canonical rows remain unchanged. See experiments/upload_safety/REPORT.md. | Fix |
+| 2026-11-02 | Upload / fresh database | Current PostgreSQL bootstrap omits cashflow_ledger_rollup_read_models, but replacement cleanup unconditionally deletes from it. Imports removing old lines/empty coverage fail on a fresh database; existing-database impact unverified. | Fix |
+| 2026-11-02 | Upload / Excel errors | June voucher source row 2 Account Name contains #REF!; independent and cumulative imports store null without warning. Detect source Excel errors before pandas missing-value conversion. | Fix |
+| 2026-11-02 | Upload / regression fixtures | 181 tests pass; 17 fail: eight missing staged-workbook fixtures and nine assertions on earlier wording. Align existing tests in a separate phase; isolated experiment checks preserve current safeguards. | Fix |
+| 2026-11-02 | Upload / ledger policy | Both debit/credit on one ledger posting and balance differences remain importable with warnings; voucher negatives are accepted while ledger negatives are blocked. Confirm accounting policy before tightening gates. | Feature |
+| 2026-11-02 | Upload / numeric validation | RESOLVED in working copy: mapped nonfinite amounts are rejected with row/column guidance before comparison or plan creation; duplicate policies unchanged. | Fix |
+| 2026-11-02 | Upload / fresh database | RESOLVED in working copy: replacement cleanup checks retired-table presence and still purges existing legacy copies; current-schema removal/empty-period imports verified locally. | Fix |
+| 2026-11-02 | Upload / Excel errors | RESOLVED in working copy: original mapped Excel error cells are reported before pandas blanks them; June source #REF! now blocks validation with row/column guidance. | Fix |
+| 2026-11-02 | Upload / regression fixtures | RESOLVED in working copy: ledger staging fixtures and stale message assertions aligned; 237 affected tests pass, including new input and optional-table cases. | Fix |
 | 2026-09-09 | Dashboard / Release | Render `/api/dashboard/db-size` reports `0 B` because the dashboard size query reads local SQLite while business data is in Postgres; release reporting needs a Postgres-backed size source or an explicit limitation. | Fix |
 | 2026-09-09 | Dashboard / Release | RESOLVED: `/api/dashboard/db-size` now uses the Postgres client-data size estimator; focused HTTP regression passed. | Fix |
 | 2026-09-09 | Backup / Release | RESOLVED for application data: full ZIP and isolated recovery preserve all checked tables, rows, settings, sequences and object permissions. Managed Supabase services/external files remain separate; legacy setup JSON remains limited. | Fix |

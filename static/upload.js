@@ -959,18 +959,38 @@ function reviewUploadReplacement(payload) {
     const summary = lastChangePreview || {};
     const count = key => Number(summary[key] || 0).toLocaleString();
     document.getElementById('uploadReplacementScope').textContent =
-        `${window.getSelectedClientName ? window.getSelectedClientName() : 'Selected client'}${payload.ledger_account_code ? ' · ' + ledgerUploadLabel() : ''} · ${templateDropdown?.selectedOptions[0]?.textContent || 'Selected template'} · ${payload.coverage_start} through ${payload.coverage_end}`;
-    document.getElementById('uploadReplacementCounts').textContent =
-        `${count('unchanged_count')} unchanged · ${count('new_count')} incoming new/revised lines · ${count('changed_count')} identifiable corrections · ${count('missing_count')} superseded/removed old lines`;
-    if (summary.changed_voucher_count !== undefined) {
-        document.getElementById('uploadReplacementCounts').textContent +=
-            ` (${count('changed_voucher_count')} changed vouchers, ${count('removed_voucher_count')} removed vouchers)`;
+        `${window.getSelectedClientName ? window.getSelectedClientName() : 'Selected client'}${payload.ledger_account_code ? ' · ' + ledgerUploadLabel() : ''} · ${templateDropdown?.selectedOptions[0]?.textContent || 'Selected template'}`;
+    const dateLabel = value => {
+        const day = new Date(value + 'T00:00:00');
+        return Number.isNaN(day.getTime()) ? value : day.toLocaleDateString('en-GB', {day: '2-digit', month: 'short', year: 'numeric'});
+    };
+    document.getElementById('uploadReplacementPeriod').textContent = `${dateLabel(payload.coverage_start)} – ${dateLabel(payload.coverage_end)}`;
+    // Presentation only: retain the server's separate occurrence/change counts.
+    const counts = document.getElementById('uploadReplacementCounts');
+    counts.replaceChildren();
+    for (const [label, key] of [['Unchanged', 'unchanged_count'], ['Incoming new / revised', 'new_count'],
+        ['Matched row corrections', 'changed_count'], ['Old rows replaced / removed', 'missing_count']]) {
+        const row = document.createElement('tr');
+        const name = document.createElement('td'); name.textContent = label;
+        const value = document.createElement('td'); value.className = 'upload-review-count'; value.textContent = count(key);
+        row.append(name, value); counts.appendChild(row);
     }
+    const vouchers = document.getElementById('uploadReplacementVouchers');
+    vouchers.hidden = summary.changed_voucher_count === undefined;
+    document.getElementById('uploadReplacementChangedVouchers').textContent = count('changed_voucher_count');
+    document.getElementById('uploadReplacementRemovedVouchers').textContent = count('removed_voucher_count');
     const dateMoves = document.getElementById('uploadReplacementDateMoves');
     const moves = summary.date_moves || [];
     dateMoves.hidden = moves.length === 0;
-    dateMoves.textContent = moves.length ? 'Voucher dates corrected beyond the declared period:\n' + moves.map(move =>
-        `${move.voucher_id}: ${move.previous_dates.join(', ')} → ${move.incoming_dates.join(', ')}`).join('\n') : '';
+    const moveBody = document.getElementById('uploadReplacementDateMoveRows');
+    moveBody.replaceChildren();
+    for (const move of moves) {
+        const row = document.createElement('tr');
+        for (const text of [move.voucher_id, move.previous_dates.join(', '), move.incoming_dates.join(', ')]) {
+            const cell = document.createElement('td'); cell.textContent = text; row.appendChild(cell);
+        }
+        moveBody.appendChild(row);
+    }
     return new Promise(resolve => {
         const confirm = document.getElementById('uploadReplacementConfirm');
         const cancel = document.getElementById('uploadReplacementCancel');
@@ -2118,24 +2138,31 @@ function showUploadIssue({stage = 'Validation', severity = 'error', message, act
         parent.appendChild(node);
         return node;
     };
+    const validation = stage === 'Validation' && severity === 'error' &&
+        (result?.errors?.length || result?.rejected_rows?.length);
+    const header = add('header', ''); header.className = 'upload-issue-header';
     const title = severity === 'unconfirmed' ? 'Import outcome unconfirmed'
-        : severity === 'warning' ? 'Upload warning' : severity === 'info' ? 'Source rows recognised' : 'Upload issue';
-    add('h2', title).id = 'uploadIssueTitle';
-    add('p', 'Stage: ' + stage).className = 'upload-issue-stage';
-    add('p', message || result?.message || 'Review the upload details.');
+        : severity === 'warning' ? 'Upload warning' : severity === 'info' ? 'Source rows recognised'
+        : validation ? 'Fix upload errors' : 'Upload issue';
+    add('h2', title, header).id = 'uploadIssueTitle';
+    add('p', stage, header).className = 'upload-issue-stage';
+    add('p', message || result?.message || 'Review the upload details.').className = 'upload-issue-summary';
     if (action) add('p', action).className = 'upload-issue-action';
     const details = [...rows];
+    const sourceRows = new Map();
     for (const item of [...(result?.errors || []), ...(result?.rejected_rows || [])]) {
         const reasons = item.errors || item.reasons || [];
-        details.push({row_number: item.row_number,
-            message: reasons.map(reason => `${reason.column || reason.excel_column || reason.role || 'Row'}: ${reason.message}`).join('; '),
+        const key = item.row_number == null ? item : String(item.row_number);
+        if (!sourceRows.has(key)) sourceRows.set(key, {row_number: item.row_number, reasons: [],
             voucher: item.row_data ? Object.values(item.row_data)[0] : ''});
+        sourceRows.get(key).reasons.push(...reasons);
     }
+    details.push(...sourceRows.values());
     if (details.length) {
         const tableBox = add('div', ''); tableBox.className = 'upload-issue-details';
         const table = add('table', '', tableBox);
         const head = add('tr', '', add('thead', '', table));
-        ['Excel row', 'Voucher / field', 'What to fix'].forEach(label => add('th', label, head));
+        ['Excel row', 'Voucher', 'What to fix'].forEach(label => add('th', label, head));
         const body = add('tbody', '', table);
         const nav = add('div', ''); nav.className = 'upload-issue-navigation';
         const prev = add('button', 'Previous', nav), label = add('span', '', nav), next = add('button', 'Next', nav);
@@ -2157,17 +2184,26 @@ function showUploadIssue({stage = 'Validation', severity = 'error', message, act
                 } else {
                     rowNumberCell.textContent = '—';
                 }
-                add('td', item.voucher || item.column || '—', row);
-                add('td', item.message || '', row);
+                add('td', item.voucher || '—', row);
+                const fix = add('td', '', row);
+                // Keep the affected field distinct from the instruction, using
+                // text nodes so workbook/server content can never become HTML.
+                for (const reason of item.reasons || [item]) {
+                    const entry = add('div', '', fix); entry.className = 'upload-issue-item';
+                    const field = reason.column || reason.excel_column || reason.role;
+                    if (field) add('span', field, entry).className = severity === 'error' ? 'upload-issue-field' : 'upload-issue-label';
+                    add('span', reason.message || '', entry).className = 'upload-issue-fix';
+                }
             });
-            label.textContent = `Rows ${page * 50 + 1}–${Math.min(details.length, page * 50 + 50)} of ${details.length}`;
+            label.textContent = `Showing ${page * 50 + 1}–${Math.min(details.length, page * 50 + 50)} of ${details.length.toLocaleString()}`;
             prev.disabled = page === 0; next.disabled = (page + 1) * 50 >= details.length;
         };
         prev.addEventListener('click', () => { page--; render(); });
         next.addEventListener('click', () => { page++; render(); });
         render();
     }
-    const close = add('button', 'Close'); close.id = 'validationErrorCloseBtn';
+    const footer = add('footer', ''); footer.className = 'upload-issue-footer';
+    const close = add('button', 'Close', footer); close.id = 'validationErrorCloseBtn';
     const dismiss = () => {
         overlay.remove();
         const target = focusTarget && !focusTarget.disabled ? focusTarget : previousFocus;
@@ -2198,10 +2234,16 @@ document.addEventListener('keydown', event => {
 function showValidationErrors(result) {
     const errorCount = Number(result.error_count || 0);
     const rejectedCount = Number(result.rejected_count || 0);
-    const errorLabel = errorCount === 1 ? '1 row has an error' : `${errorCount} rows have errors`;
+    const rowNumbers = new Set([...(result.errors || []), ...(result.rejected_rows || [])]
+        .filter(row => row.row_number != null).map(row => String(row.row_number)));
+    const affected = Math.max(rowNumbers.size, errorCount, rejectedCount);
+    const errorLabel = affected === 1 ? '1 row needs correction' : `${affected.toLocaleString()} rows need correction`;
+    const dateOnly = rejectedCount === 0 && result.errors?.length && result.errors.every(row =>
+        row.errors?.length && row.errors.every(error => error.error_type === 'data_type' &&
+            error.message === 'Enter a valid date in the selected format.'));
     showUploadIssue({stage: 'Validation', result,
-        message: `${errorLabel}; ${rejectedCount} rejected of ${Number(result.total_rows || 0)}.`,
-        action: 'Fix the marked rows, then validate again.'});
+        message: `${errorLabel}${rejectedCount ? ` · ${rejectedCount.toLocaleString()} rejected` : ''}`,
+        action: dateOnly ? 'Check Date format, then validate again.' : 'Fix the marked fields, then validate again.'});
 }
 
 function focusUploadSourceRow(rowNumber) {

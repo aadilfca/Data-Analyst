@@ -1,0 +1,4 @@
+private/
+inventory.json
+results.json
+*.log

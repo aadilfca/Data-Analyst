@@ -18,7 +18,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, and database size with PostgreSQL table/index breakdown. See CHANGELOG_ARCHIVE.md.
 - routers/data.py + static/databank.* → Data Bank availability, chronological previews, scoped ledger/Cashflow selection and guarded mutations. See CHANGELOG_ARCHIVE.md.
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
-- routers/import_export.py + static/upload.* → Ledger upload validation/import, concise issue details, searchable accounts, coverage and source-order safeguards. See CHANGELOG_ARCHIVE.md.
+- routers/import_export.py + static/upload.* → Upload validation, tabular review, highlighted source-cell errors, searchable ledger accounts and coverage safeguards. See CHANGELOG_ARCHIVE.md.
 - routers/settings.py + static/settings.* → application settings and the firm-wide Holiday list; header/tabs rendered by `client_context.js`. See CHANGELOG_ARCHIVE.md.
 - routers/templates.py + static/templates.*, static/columns.* → Master columns, transactional ledger setup, role configuration, mapping/reordering, rate rules and backup/restore. See CHANGELOG_ARCHIVE.md.
 - static/client_settings.html, static/client_settings.js -> retired direct-bookmark information page; all Verification account routing is configured centrally in Account Control Centre. See CHANGELOG_ARCHIVE.md.
@@ -27,7 +27,7 @@ One line per file group: what it is now. Full build history for every entry live
 - database.py (users/sessions) → authenticated users and session records for Login → Client Cards → Dashboard; bcrypt, session-stored selected client, seeded placeholder admin. See CHANGELOG_ARCHIVE.md.
 - routers/auth.py → login/logout, current-session lookup, client selection, `get_current_user()`/`require_admin()` guards; timezone-aware session expiry. See CHANGELOG_ARCHIVE.md.
 - routers/users.py → Admin user management (list/create/edit/deactivate/reactivate/reset password); every endpoint `require_admin`, mutations SQLite-audited. See CHANGELOG_ARCHIVE.md.
-- routers/storage_cleanup.py + services/storage_cleanup.py + static/storage_cleanup.* → Protected deletion, replacement cleanup, storage previews, and controlled PostgreSQL maintenance. See CHANGELOG_ARCHIVE.md.
+- routers/storage_cleanup.py + services/storage_cleanup.py + static/storage_cleanup.* → Protected deletion, replacement cleanup across legacy schemas, storage previews and PostgreSQL maintenance. See CHANGELOG_ARCHIVE.md.
 - static/users.html, static/users.js → firm-level Manage Users UI (sortable/searchable rows, add/edit, deactivate, password reset); shared Admin header/tab strip. See CHANGELOG_ARCHIVE.md.
 - static/login.html, static/login.js, static/app_info.html, static/privacy.html, static/terms.html, static/public_info.css → Login and public application/policy pages. See CHANGELOG_ARCHIVE.md.
 - static/client_select.html, static/client_select.js → standalone Client Cards page with guarded selection, admin entry, and loading feedback. See CHANGELOG_ARCHIVE.md.
@@ -54,7 +54,7 @@ One line per file group: what it is now. Full build history for every entry live
 - services/upload_lifecycle.py + drive_archive.py + upload_observation_report.py → Scope proofs, complete-voucher evidence, Drive-default/local-development archives and compact receipts. See CHANGELOG_ARCHIVE.md.
 - routers/database_backup.py + services/database_backup.py + static/setup.* + scripts/rehearse_database_backup.py → Local backups, resumable Drive verification, processing feedback and isolated recovery rehearsals. See CHANGELOG_ARCHIVE.md.
 - tests/test_account_control_center*.py, test_trial_balance_account_flow_safety.py, test_trial_balance_ui.py, test_cashflows*.py, test_reconciliation*.py → Setup, accounting, account-flow safety, API/UI parity, and workbook evidence/export checks. See CHANGELOG_ARCHIVE.md.
-- tests/test_upload_lifecycle.py + test_data_deletion.py + test_import_duplicate_gates.py → Upload/archive lifecycle, rollback, retry, deletion and identity regression tests.
+- tests/test_upload_lifecycle.py, test_data_deletion.py, test_import_duplicate_gates.py, test_upload_dialogs.py + experiments/upload_safety/ → Upload lifecycle, dialog accessibility, isolated experiments and duplicate safeguards. See CHANGELOG_ARCHIVE.md.
 - experiments/cashflow_fetch/*.py + tests/test_cashflow_fetch_benchmark.py → Standalone read-only transport benchmarks with exact source/report/export comparisons; never loaded by the app. See CHANGELOG_ARCHIVE.md.
 
 
@@ -259,7 +259,8 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
-- 2026-11-02: Upload errors now name the stage and affected field or row; mapping, account, and coverage controls use clearer, shorter labels. See CHANGELOG_ARCHIVE.md.
+- 2026-11-02: Upload repairs reject nonfinite/Excel errors and tolerate absent retired copies; duplicate policies preserved. See CHANGELOG_ARCHIVE.md, Upload safety repairs.
+- 2026-11-02: Upload review uses count/safeguard tables; errors highlight fields in red, retain row links and concise guidance. See CHANGELOG_ARCHIVE.md, Upload dialog prototypes implemented.
 - 2026-11-02: Local upload staging is stable; missing workbooks prompt fresh validation. Development archives can skip Drive; duplicate and receipt safeguards remain. See CHANGELOG_ARCHIVE.md.
 - 2026-11-02: Financial Statement Notes distinguish nested subtotals from category totals with separate row styles. See CHANGELOG_ARCHIVE.md.
 - 2026-11-02: Trial Balance page and workspace notices use a fixed, dismissible top-right toast; loading and validation remain inline. See CHANGELOG_ARCHIVE.md.

@@ -8,6 +8,7 @@ from datetime import datetime
 from unittest.mock import patch
 
 import pandas as pd
+import openpyxl
 import pytest
 from fastapi import HTTPException
 
@@ -466,14 +467,14 @@ def test_balance_evidence_is_compact_and_not_transaction_payload():
 
 @pytest.mark.parametrize("balance_only,date_kind", [(False, "text"), (False, "native"), (False, "serial"), (True, "text")])
 @pytest.mark.parametrize('mode', ['correction', 'replace_range'])
-def test_validate_and_import_extract_controls_and_never_classify_ledger_as_vouchers(balance_only, date_kind, mode):
+def test_validate_and_import_extract_controls_and_never_classify_ledger_as_vouchers(balance_only, date_kind, mode, tmp_path):
     """Exercise both public handlers with in-memory input and captured writes."""
     from contextlib import ExitStack
     state = {"status": "Pending", "plan": None}
     captured = []
     locks = []
     template = {**TEMPLATE, "template_name": "Any client ledger", "rate_source": None}
-    file = {"file_path": "unused.xlsx", "file_name": "anything.xlsx", "upload_date": None,
+    file = {"file_path": str(tmp_path / 'ledger.xlsx'), "file_name": "anything.xlsx", "upload_date": None,
             "uploaded_by": "Tester", "file_sha256": "hash", "client_id": 3, "template_id": 7}
 
     def query(sql, params=None, **kwargs):
@@ -538,6 +539,13 @@ def test_validate_and_import_extract_controls_and_never_classify_ledger_as_vouch
                               for text in ('Chq #: 123 Dt: 05-01-2026', 'Bill #: GRN-1')])
     closing = "100" if balance_only else "90"
     workbook_rows.append(row("", "", "Closing Balance", 0, 10, closing + " DR"))
+    book = openpyxl.Workbook()
+    book.active.title = 'Ledger'
+    book.active.append([c['column_name'] for c in COLUMNS])
+    for source in workbook_rows:
+        book.active.append([None if pd.isna(value) else value for value in source.values()])
+    book.save(file['file_path'])
+    book.close()
     expected_rows = 0 if balance_only else 1
     with ExitStack() as stack:
         for name, value in [
@@ -802,7 +810,7 @@ def test_ambiguous_or_excluded_continuation_cannot_be_silently_attached(case):
     if case == 'parent_excluded': excluded = [2]
     if case == 'note_excluded': excluded = [3]
     if case == 'invalid_parent': source[0]['Posting day'] = pd.NaT
-    with ledger(), pytest.raises(HTTPException, match='continuation note'):
+    with ledger(), pytest.raises(HTTPException, match='Ledger note'):
         prepare_note_source(source, request(excluded_rows=excluded))
 
 
@@ -830,7 +838,7 @@ def test_coverage_error_identifies_genuine_prior_year_voucher_and_does_not_drop_
     source = row('JV-1225-100', datetime(2025, 12, 31), 'Opening Balance Adjustment', 984286, 0, '984,286 DR')
     with ledger(), pytest.raises(HTTPException) as error:
         prepare_note_source([source])
-    assert all(text in error.value.detail for text in ('Excel row 2', 'JV-1225-100', '2025-12-31', '2026-01-01', '2026-01-31'))
+    assert all(text in error.value.detail for text in ('Row 2', 'JV-1225-100', '2025-12-31', '2026-01-01', '2026-01-31'))
     req = request(ledger_period_start='2025-12-31', comparison_mode='replace_range')
     with ledger(resolve(req)) as context:
         result, _ = prepare_note_source([source], req)
