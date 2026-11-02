@@ -975,8 +975,9 @@ def test_financial_parent_can_reapply_same_category_to_all_descendant_leaves(bro
                 {id:22,label:'Old fixed assets note',source_statement_category_id:4,parent_category_id:null,is_active:true}
             ]})};
             if(url.includes('/categories?')) return {ok:true,json:async()=>({categories:[
-                {id:4,label:'Fixed assets',statement_section:'balance_sheet',is_active:true,row_type:'category'},
-                {id:8,label:'Other non current assets',statement_section:'balance_sheet',is_active:true,row_type:'category'}
+                {id:3,label:'Non Current Assets',statement_section:'balance_sheet',is_active:true,row_type:'heading'},
+                {id:4,label:'Fixed assets',statement_section:'balance_sheet',parent_category_id:3,is_active:true,row_type:'category'},
+                {id:8,label:'Other non current assets',statement_section:'balance_sheet',parent_category_id:3,is_active:true,row_type:'category'}
             ]})};
             return {ok:true,json:async()=>({})};
         };
@@ -989,12 +990,22 @@ def test_financial_parent_can_reapply_same_category_to_all_descendant_leaves(bro
 
     page.wait_for_function("document.querySelector('tr[data-account-code=\\\"10-10-25\\\"] [data-fs-picker]:not(.acc2-note-picker) [data-fs-picker-trigger]')")
     parent_picker = page.locator('tr[data-account-code="10-10-25"] [data-fs-picker]:not(.acc2-note-picker) [data-fs-picker-trigger]')
-    assert parent_picker.locator('[data-fs-picker-value-label]').inner_text().endswith('Other non current assets')
+    assert parent_picker.locator('[data-fs-picker-value-label]').inner_text() == 'Other non current assets'
+    assert parent_picker.get_attribute('title') == 'Balance Sheet › Non Current Assets › Other non current assets'
+    assert '10-10-25: Balance Sheet › Non Current Assets › Other non current assets' in parent_picker.get_attribute('aria-label')
     nested_picker = page.locator('tr[data-account-code="10-10-25-10"] [data-fs-picker]:not(.acc2-note-picker) [data-fs-picker-trigger]')
-    assert nested_picker.locator('[data-fs-picker-value-label]').inner_text().endswith('Other non current assets')
-    assert page.locator('tr[data-account-code="10-10-25"] .acc2-note-picker [data-fs-picker-value-label]').inner_text().endswith('Asset details')
-    assert page.locator('tr[data-account-code="10-10-25-10"] .acc2-note-picker [data-fs-picker-value-label]').inner_text().endswith('Asset details')
-    assert page.locator('tr[data-account-code="10-10-30"] [data-fs-picker]:not(.acc2-note-picker) [data-fs-picker-value-label]').inner_text() == 'Mixed assignments — choose one'
+    assert nested_picker.locator('[data-fs-picker-value-label]').inner_text() == 'Other non current assets'
+    parent_note_picker = page.locator('tr[data-account-code="10-10-25"] .acc2-note-picker [data-fs-picker-trigger]')
+    assert parent_note_picker.locator('[data-fs-picker-value-label]').inner_text() == 'Asset details'
+    assert parent_note_picker.get_attribute('title') == 'Other non current assets › Asset details'
+    assert page.locator('tr[data-account-code="10-10-25-10"] .acc2-note-picker [data-fs-picker-value-label]').inner_text() == 'Asset details'
+    mixed_picker = page.locator('tr[data-account-code="10-10-30"] [data-fs-picker]:not(.acc2-note-picker) [data-fs-picker-trigger]')
+    assert mixed_picker.locator('[data-fs-picker-value-label]').inner_text() == 'Mixed (2)'
+    assert 'Balance Sheet › Non Current Assets › Fixed assets (1 account)' in mixed_picker.get_attribute('title')
+    assert 'Unassigned (1 account)' in mixed_picker.get_attribute('title')
+    parent_note_picker.click()
+    assert page.locator('tr[data-account-code="10-10-25"] .acc2-note-picker [data-fs-picker-option]').filter(has_text='Other non current assets › Asset details').count() == 1
+    parent_note_picker.click()
     parent_picker.click()
     page.locator('tr[data-account-code="10-10-25"] [data-fs-picker]:not(.acc2-note-picker) [data-fs-picker-option][data-fs-picker-value="8"]').click()
 
