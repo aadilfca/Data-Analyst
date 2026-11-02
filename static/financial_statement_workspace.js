@@ -19,11 +19,14 @@ function create(host) {
     const accHideStatus = element => { if(element) element.hidden=true; };
     const accShowStatus = (message, type) => {
         const modal=accElement('accFinancialSetupModal');
-        if(modal.hidden) { host.showStatus(message,type); return; }
+        if(message && type !== 'loading' && host.showStatus) { host.showStatus(message,type||'info'); return; }
+        if(modal.hidden) { if(message)host.showStatus(message,type||'info'); return; }
         let notice=modal.querySelector('[data-acc-popup-notice]');
         if(!notice) { notice=document.createElement('div'); notice.dataset.accPopupNotice=''; modal.querySelector('.acc2-modal-header').after(notice); }
-        notice.className='acc2-status acc2-modal-notice '+(type||'');notice.textContent=message;notice.hidden=false;notice.setAttribute('role',type==='error'?'alert':'status');
-        window.clearTimeout(noticeTimer);noticeTimer=window.setTimeout(()=>{notice.hidden=true;},4200);
+        notice.className='acc2-status acc2-modal-notice '+(type||'');notice.textContent=message||'';notice.hidden=!message;
+        if(message)notice.setAttribute('role',type==='error'?'alert':'status');
+        window.clearTimeout(noticeTimer);
+        if(message)noticeTimer=window.setTimeout(()=>{notice.hidden=true;},4200);
     };
     const accWithBusy = (message, operation) => host.withBusy(message,operation);
     const accWithTableBusy = (_id,message,operation) => accWithBusy(message,operation);

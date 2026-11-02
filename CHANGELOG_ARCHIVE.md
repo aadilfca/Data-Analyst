@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Trial Balance floating status messages — 2026-11-02
+
+Trial Balance page and Financial Statements, Cashflow and Verification workspaces now show success, error and informational notices in a fixed top-right toast with a close control and timed dismissal. Loading progress and persistent validation guidance remain inline; confirmations are unchanged. Updated page script cache versions. No backend changes.
+
+**Verification:** JavaScript syntax and `git diff --check` pass. Local browser acceptance is pending; automated tests were not run.
+
 ## Statement Trial Balance period labels — 2026-11-01
 
 Balance Sheet, Balance Sheet Notes, Income Statement and Income Statement Notes now show the formatted Trial Balance period range for every upload choice instead of the file name. Upload IDs, selection behavior and the as-of-date fallback remain unchanged. All four views share the selector; no backend changes.

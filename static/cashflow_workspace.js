@@ -44,8 +44,11 @@
             setup.querySelector('[data-cfw-save-template]').addEventListener('click', saveTemplate);
             document.addEventListener('keydown', event => { if (event.key === 'Escape' && setup && !setup.hidden) close(); });
         }
-        function notice(message, error) {
-            const status = el('cfwStatus'); status.textContent = message || ''; status.hidden = !message;
+        function notice(message, error, keepInline = false) {
+            const status = el('cfwStatus');
+            if (!message) { status.textContent = ''; status.hidden = true; return; }
+            if (!keepInline && host.showStatus) { status.hidden = true; host.showStatus(message, error ? 'error' : 'success'); return; }
+            status.textContent = message; status.hidden = false;
             status.className = 'cfw-status' + (error ? ' error' : ' success');
         }
         function selectTab(tab) {
@@ -62,10 +65,10 @@
         }
         async function open(tab) {
             if (!host.isAdmin) throw new Error('Only administrators can manage Cashflow setup.');
-            ensure(); setup.hidden = false; document.body.classList.add('cfw-open'); notice('Loading Cashflow setup…');
+            ensure(); setup.hidden = false; document.body.classList.add('cfw-open'); notice('Loading Cashflow setup…', false, true);
             if (host.onModalChanged) host.onModalChanged(true);
             try { await load(); notice(''); selectTab(tab || 'categories'); el('cfwTitle').focus?.(); }
-            catch (error) { notice(error.message, true); throw error; }
+            catch (error) { notice(''); throw error; }
         }
         function close() { if (setup) setup.hidden = true; document.body.classList.remove('cfw-open'); if (host.onModalChanged) host.onModalChanged(false); if (host.onClose) host.onClose(); }
         function renderCategories() {

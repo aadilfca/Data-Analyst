@@ -377,22 +377,74 @@ function waitForTrialBalancePaint() {
     });
 }
 
-// ---------- STATUS BAR ----------
-// Same show/hide + color-coded classes convention as upload.js's showStatus().
+// ---------- STATUS NOTICES ----------
+let tbToastTimer = null;
+let tbToastNode = null;
+function clearTrialBalanceToast() {
+    if (tbToastTimer) window.clearTimeout(tbToastTimer);
+    tbToastTimer = null;
+    if (tbToastNode) tbToastNode.remove();
+    tbToastNode = null;
+}
+function clearTrialBalanceStatus() {
+    clearTrialBalanceToast();
+    [statusBar, getElement('tbSavedStatus')].filter(Boolean).forEach(element => { element.style.display = 'none'; });
+}
+function showTrialBalanceToast(message, type) {
+    const region = getElement('tbToastRegion');
+    if (!region) return;
+    clearTrialBalanceToast();
+    const kind = ['success', 'error'].includes(type) ? type : 'info';
+    const toast = document.createElement('div');
+    toast.className = 'tb-toast ' + kind;
+    toast.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+    toast.setAttribute('aria-atomic', 'true');
+    const icon = document.createElement('span');
+    icon.className = 'tb-toast-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent = kind === 'success' ? '✓' : kind === 'error' ? '!' : 'ℹ';
+    const text = document.createElement('span');
+    text.className = 'tb-toast-message';
+    text.textContent = message;
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'tb-toast-close';
+    close.setAttribute('aria-label', 'Dismiss notification');
+    close.title = 'Dismiss';
+    close.textContent = '×';
+    close.addEventListener('click', clearTrialBalanceToast);
+    toast.append(icon, text, close);
+    region.appendChild(toast);
+    tbToastNode = toast;
+    const duration = kind === 'error' ? 7500 : 5000;
+    const startDismissTimer = () => {
+        if (tbToastTimer) window.clearTimeout(tbToastTimer);
+        tbToastTimer = window.setTimeout(clearTrialBalanceToast, duration);
+    };
+    toast.addEventListener('mouseenter', () => { if (tbToastTimer) window.clearTimeout(tbToastTimer); tbToastTimer = null; });
+    toast.addEventListener('mouseleave', startDismissTimer);
+    toast.addEventListener('focusin', () => { if (tbToastTimer) window.clearTimeout(tbToastTimer); tbToastTimer = null; });
+    toast.addEventListener('focusout', event => { if (!toast.contains(event.relatedTarget)) startDismissTimer(); });
+    startDismissTimer();
+}
+// Brief feedback floats over the page; in-progress work stays visible in its current flow.
 function showStatus(msg, type = 'info') {
     const savedStatus = getElement('tbSavedStatus');
-    if (savedStatus && availableTrialBalancesSection && availableTrialBalancesSection.style.display === 'block') {
-        savedStatus.textContent = msg;
-        savedStatus.className = 'status-bar ' + type;
-        savedStatus.style.display = 'flex';
+    if (savedStatus) savedStatus.style.display = 'none';
+    if (statusBar) statusBar.style.display = 'none';
+    if (!msg) { clearTrialBalanceToast(); return; }
+    if (type === 'loading') {
+        clearTrialBalanceToast();
+        const target = availableTrialBalancesSection && availableTrialBalancesSection.style.display === 'block'
+            ? savedStatus : statusBar;
+        if (target) {
+            target.textContent = msg;
+            target.className = 'status-bar loading';
+            target.style.display = 'flex';
+        }
         return;
     }
-    if (!statusBar || !statusMessage) return;
-    const icons = { info: 'ℹ️', success: '✅', error: '❌', loading: '⏳' };
-    if (statusIcon) statusIcon.textContent = icons[type] || icons.info;
-    statusMessage.textContent = msg;
-    statusBar.className = 'status-bar ' + type;
-    statusBar.style.display = 'flex';
+    showTrialBalanceToast(String(msg), type || 'info');
 }
 
 function formatFileSize(bytes) {
@@ -3781,6 +3833,7 @@ tbCashflowWorkspace = CashflowWorkspace.create({
     get uploadId(){return availableUploadsDropdown && availableUploadsDropdown.value ? Number(availableUploadsDropdown.value) : null;},
     get isAdmin(){return tbFsIsAdmin;},
     request:(url,options)=>tbApiRequest(API_BASE+url,options),
+    showStatus:(message,type)=>showStatus(message,type),
     onSaved:tbRefreshCashflowAssignments,
     onModalChanged:open=>{tbFsModalOpen=open;tbFsUpdateLock();},
 });
@@ -3804,6 +3857,7 @@ tbVerificationWorkspace = window.VerificationWorkspace ? VerificationWorkspace.c
     isAdmin:()=>tbFsIsAdmin,
     readMapping:()=>AccountAssignments.read('mapping',window.getSelectedClientId(),availableUploadsDropdown.value,tbReadAssignmentJson),
     save:(account,workstream,parent)=>tbSaveVerificationAssignment(account,workstream,parent),
+    showStatus:(message,type)=>showStatus(message,type),
     onSaved:change=>tbApplyVerificationAssignment(change.accountCode,change.workstream,change.parent),
     onModalChanged:open=>{tbFsModalOpen=open;tbFsUpdateLock();},
 }) : null;
@@ -3819,7 +3873,7 @@ tbFsWorkspace=FinancialStatementWorkspace.create({
     leavesBelow:code=>tbFsLeaves.get(AccountAssignments.normaliseCode(code))||[],
     uploadPayload:()=>({trial_balance_upload_id:Number(availableUploadsDropdown?.value)||null}),api:tbFsApi,
     refreshMapping:tbRefreshFinancialMapping,renderFinancialRows:tbRenderFinancialAssignments,renderNotesRows:tbRenderFinancialAssignments,
-    showStatus:(message,type)=>showStatus(message,type),clearStatus:()=>{const status=getElement('tbSavedStatus');if(status)status.style.display='none';},
+    showStatus:(message,type)=>showStatus(message,type),clearStatus:clearTrialBalanceStatus,
     focusTarget:()=>tbAssignmentSetup,withBusy:tbFsWithBusy,modalChanged:open=>{tbFsModalOpen=open;tbFsUpdateLock();},
 });
 if(availableAccountsTableBody)tbFsWorkspace.bindPickers(availableAccountsTableBody);

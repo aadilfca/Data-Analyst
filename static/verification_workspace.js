@@ -34,6 +34,18 @@
 
         function status(message, kind) {
             const target = el('vwStatus');
+            if (!message) {
+                target.textContent = '';
+                target.hidden = true;
+                target.className = 'vw-status';
+                return;
+            }
+            if ((kind === 'success' || kind === 'error') && host.showStatus) {
+                target.textContent = '';
+                target.hidden = true;
+                host.showStatus(message, kind);
+                return;
+            }
             target.textContent = message || '';
             target.hidden = !message;
             target.className = 'vw-status' + (kind ? ' ' + kind : '');
@@ -130,7 +142,7 @@
             if (host.onModalChanged) host.onModalChanged(true);
             status('Loading Verification assignments…');
             try { await load(); status(''); el('vwSearch').focus(); }
-            catch (error) { status(error.message, 'error'); throw error; }
+            catch (error) { status(''); throw error; }
         }
 
         function close() {
