@@ -1,5 +1,15 @@
 # Changelog Archive
 
+## Development upload backup controls — 2026-11-03
+
+Administration → Settings → Upload backups provides an administrator-only, saved development opt-out; default is compulsory backups. The shared PostgreSQL setting applies immediately across updated servers, survives restarts and supersedes the former environment flag. Dedicated routes enforce administrator access; generic Settings writes cannot bypass it. Upload rechecks permission on tab return and at import, invalidating a pending plan if backup becomes compulsory.
+
+Upload offers a checked Drive-backup option; changing it invalidates validation. Backup-off creates no ZIP or Drive copy; receipts retain fingerprints/mode, while scope/configuration checks, locks, rollback, duplicate and protected-evidence gates remain enforced. Backup-on requires verified Drive access even when the legacy API local-only setting is enabled. Render uses temporary scratch space when necessary; local retains its configured ZIP. Older API clients preserve protected archive behaviour. Disable development opt-out for commercial use.
+
+The existing validation-report download generates XLSX in the browser without retaining a server report file. No schema migration, dependency installation, live import or Drive write. Aadil authorised commit/push for Render testing; hosted acceptance and live OAuth configuration remain pending.
+
+Verification: **103 focused tests pass** across lifecycle, offline Chromium, duplicate and deletion suites. Coverage includes rollback/retry, permission/source changes, evidence, mode-bound validation, Render scratch cleanup, XLSX, administrator saving/reloading, role rejection, generic-route bypass, failed saves and Upload refresh. Compilation, JavaScript syntax and whitespace checks pass; existing TestClient deprecation warning only. No working database or live OAuth service was used.
+
 ## Data Integrity inventory — 2026-11-02
 
 Added read-only `GET /api/data-integrity/overview` and a linked Data Integrity page with module counts, stored/associated/total size estimates, scan status, source-file limitations and shared index context. Client Data follows the existing Data Bank size formula. Duplicate checks remain scoped to Client Data template identities, Trial Balance accounts within one upload, and reconciliation group/account/month; shared IDs across modules remain separate. The dashboard shows the selected client's status without waiting for other dashboard stats. No import, cleanup or stored-data behavior changes.

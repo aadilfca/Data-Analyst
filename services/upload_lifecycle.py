@@ -11,17 +11,42 @@ import tempfile
 import zipfile
 
 from fastapi import HTTPException
+from database import execute_query_pg
 from services.drive_archive import ArchiveError, DriveArchive, archive_directory
 from services.upload_observation_report import build_observation_report
 
 
 SOURCE_ROW_HASH_SQL = "encode(sha256(convert_to(jsonb_build_array(cd.id, COALESCE(cd.version, 1), cd.row_data, cd.extract_date, cd.source_identity)::text, 'UTF8')), 'hex')"
+UPLOAD_BACKUP_SETTING = 'development_allow_unbacked_uploads'
 
 
 def drive_archiving_enabled():
     """Drive remains the default; local development can opt into verified ZIPs only."""
     value = os.environ.get('UPLOAD_ARCHIVE_TO_DRIVE', 'true').strip().casefold()
     return value not in {'0', 'false', 'no', 'off', 'disabled'}
+
+
+def unbacked_uploads_allowed():
+    """Read the administrator's shared choice without a stale local cache."""
+    rows = execute_query_pg('SELECT value FROM app_settings WHERE key = %s', (UPLOAD_BACKUP_SETTING,))
+    return bool(rows and rows[0].get('value') == 'true')
+
+
+def check_backup_policy(request):
+    if getattr(request, 'backup_enabled', None) is False and not unbacked_uploads_allowed():
+        raise HTTPException(403, 'This server requires upload backups. Turn backup on and validate again.')
+
+
+def unbacked_receipt_matches(prepared, receipt):
+    """Never disguise an intentionally unbacked import as a verified archive."""
+    scope = receipt.get('scope_json') or {}
+    if isinstance(scope, str):
+        scope = json.loads(scope)
+    return (prepared.get('archive_mode') == 'none' and unbacked_uploads_allowed()
+            and receipt.get('status') == 'unbacked'
+            and scope.get('backup_mode') == 'none'
+            and receipt.get('archive_state_hash') == prepared.get('archive_state_hash')
+            and not receipt.get('drive_file_id') and not receipt.get('archive_sha256'))
 
 
 def digest(value):
@@ -118,6 +143,7 @@ def _archive_state(ids, query):
 
 
 def prepare_lifecycle(request, payload, query, write, transaction, signature):
+    check_backup_policy(request)
     lifecycle = payload.get('lifecycle')
     if not lifecycle:
         if payload.get('changed') or payload.get('missing'):
@@ -129,6 +155,9 @@ def prepare_lifecycle(request, payload, query, write, transaction, signature):
         raise HTTPException(409, 'Invalid upload operation. Validate the file again.')
     if payload.get('comparison_mode') == 'replace_range' and 'voucher_observations' not in payload:
         raise HTTPException(409, 'Validate again to prepare the complete-voucher observation report.')
+    lifecycle = dict(lifecycle)
+    if getattr(request, 'backup_enabled', None) is False:
+        lifecycle['backup_mode'] = 'none'
     with transaction():
         write('''INSERT INTO upload_lifecycle_runs (operation_id, file_id, client_id, template_id, request_signature, status, scope_json)
                  VALUES (%s, %s, %s, %s, %s, 'archiving', %s) ON CONFLICT (operation_id) DO NOTHING''',
@@ -144,6 +173,13 @@ def prepare_lifecycle(request, payload, query, write, transaction, signature):
     uploads = sorted({r['upload_id'] for r in state['rows'] if r.get('upload_id') is not None})
     state['uploads'] = query('SELECT * FROM uploaded_files WHERE id = ANY(%s) ORDER BY id', (uploads,)) if uploads else []
     prepared['archive_state_hash'] = digest({'rows': state['rows'], 'audit_events': state['audit_events']})
+    if getattr(request, 'backup_enabled', None) is False:
+        # Only a fingerprint and explicit receipt survive; no ZIP or Drive I/O.
+        with transaction():
+            write("UPDATE upload_lifecycle_runs SET status = 'unbacked', archive_state_hash = %s WHERE operation_id = %s AND status <> 'applied'",
+                  (prepared['archive_state_hash'], operation))
+        prepared['archive_mode'] = 'none'
+        return prepared
     state['manifest'] = {'format': 1, 'operation_id': operation, 'scope': lifecycle['scope'],
                          'source_fingerprint': lifecycle['source_fingerprint'],
                          'archive_state_hash': prepared['archive_state_hash'], 'template_columns': payload.get('template_columns', [])}
@@ -151,8 +187,17 @@ def prepare_lifecycle(request, payload, query, write, transaction, signature):
     if observations:
         state['manifest']['format'] = 2
         state['observations'] = observations
+    temporary_archive = None
     try:
-        root = archive_directory()
+        # Render Free uses scratch space only while creating the verified Drive
+        # copy. Local development retains its configured additional ZIP copy.
+        if (getattr(request, 'backup_enabled', None) is True
+                and os.environ.get('RENDER') == 'true'
+                and not os.environ.get('UPLOAD_ARCHIVE_DIR', '').strip()):
+            temporary_archive = tempfile.TemporaryDirectory(prefix='audit-upload-archive-')
+            root = Path(temporary_archive.name)
+        else:
+            root = archive_directory()
         scope = lifecycle['scope']
         filename = f"Client-{request.client_id}_Template-{request.template_id}_{scope.get('start') or 'corrections'}_{scope.get('end') or 'current'}_{operation}.zip"
         path = root / filename
@@ -175,7 +220,7 @@ def prepare_lifecycle(request, payload, query, write, transaction, signature):
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
-        if not drive_archiving_enabled():
+        if getattr(request, 'backup_enabled', None) is not True and not drive_archiving_enabled():
             proof = {'drive_file_id': None, 'sha256': checksum, 'local_path': str(path)}
             with transaction():
                 write("""UPDATE upload_lifecycle_runs
@@ -202,6 +247,9 @@ def prepare_lifecycle(request, payload, query, write, transaction, signature):
         return prepared
     except (ArchiveError, OSError) as error:
         raise HTTPException(503, str(error) if isinstance(error, ArchiveError) else 'External archive storage is unavailable. Current source data was not replaced.') from error
+    finally:
+        if temporary_archive is not None:
+            temporary_archive.cleanup()
 
 
 def guard_lifecycle(prepared, query):
@@ -212,7 +260,7 @@ def guard_lifecycle(prepared, query):
     query('LOCK TABLE client_data IN SHARE ROW EXCLUSIVE MODE')
     query('LOCK TABLE data_audit_log IN SHARE ROW EXCLUSIVE MODE')
     rows = query(
-        'SELECT status, archive_sha256, archive_path, drive_file_id '
+        'SELECT status, archive_sha256, archive_path, drive_file_id, archive_state_hash, scope_json '
         'FROM upload_lifecycle_runs WHERE operation_id = %s FOR UPDATE',
         (prepared['operation_id'],),
     )
@@ -235,12 +283,16 @@ def guard_lifecycle(prepared, query):
         state = _archive_state(prepared['ids'], query)
         if digest(state) != prepared['archive_state_hash']:
             raise HTTPException(409, 'Archived source or audit data changed. Validate again before replacing it.')
-        if not rows or rows[0]['status'] != 'verified':
+        if prepared.get('archive_mode') == 'none':
+            if not rows or not unbacked_receipt_matches(prepared, rows[0]):
+                raise HTTPException(409, 'Development backup permission changed; validate again with backups enabled.')
+        elif not rows or rows[0]['status'] != 'verified':
             raise HTTPException(409, 'A verified archive is required before replacement.')
 
 
 def finish_lifecycle(prepared, result, write):
     if prepared:
         compact = {key: result[key] for key in ('status', 'message', 'total_rows', 'imported_count', 'updated_count', 'deleted_count')}
+        compact.update({key: result[key] for key in ('backup_mode', 'archive_verified') if key in result})
         write("UPDATE upload_lifecycle_runs SET status = 'applied', result_json = %s WHERE operation_id = %s",
               (json.dumps(compact), prepared['operation_id']))

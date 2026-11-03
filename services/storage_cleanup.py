@@ -10,6 +10,7 @@ import json
 import logging
 import os
 from typing import Any, Dict, List
+from services.upload_lifecycle import unbacked_receipt_matches
 
 from database import (
     POSTGRES_INDEX_MAINTENANCE_ALLOWLIST,
@@ -762,15 +763,17 @@ def purge_replaced_transaction_rows(client_id, template_id, row_ids, operator, a
     ids = sorted(set(int(value) for value in row_ids))
     if not ids:
         return {"deleted_count": 0, "staged_paths": []}
-    if (not archive_proof or not archive_proof.get('archive')
+    if (not archive_proof or (not archive_proof.get('archive') and archive_proof.get('archive_mode') != 'none')
             or not set(ids).issubset(archive_proof.get('ids', []))):
         raise DataPurgeProtectedError('A verified external archive is required before removing replacement source rows.')
     with pg_transaction():
-        receipt = execute_query_pg('''SELECT status, drive_file_id, archive_sha256
+        receipt = execute_query_pg('''SELECT status, drive_file_id, archive_sha256, archive_state_hash, scope_json
             FROM upload_lifecycle_runs WHERE operation_id = %s AND client_id = %s AND template_id = %s FOR UPDATE''',
             (archive_proof['operation_id'], client_id, template_id))
-        proof = archive_proof['archive']
-        if (not receipt or receipt[0]['status'] != 'verified'
+        proof = archive_proof.get('archive') or {}
+        unbacked = bool(receipt and unbacked_receipt_matches(archive_proof, receipt[0]))
+        if not unbacked and (not receipt or receipt[0]['status'] != 'verified'
+                or not proof
                 or receipt[0]['drive_file_id'] != proof['drive_file_id']
                 or receipt[0]['archive_sha256'] != proof['sha256']):
             raise DataPurgeProtectedError('The replacement archive receipt is missing or does not match this scope.')

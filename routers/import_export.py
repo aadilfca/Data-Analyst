@@ -32,6 +32,7 @@ from services.upload_lifecycle import (
     declared_coverage, scope_sql, source_fingerprint, match_unchanged, digest,
     get_receipt, prepare_lifecycle, guard_lifecycle, finish_lifecycle,
     SOURCE_ROW_HASH_SQL,
+    unbacked_uploads_allowed, check_backup_policy,
 )
 
 # ⭐ MUST HAVE THIS LINE
@@ -160,6 +161,7 @@ def _with_ledger_context(function):
     """Reset context even on failed validation/import or a concurrent request."""
     @wraps(function)
     def wrapped(request, *args, **kwargs):
+        check_backup_policy(request)
         templates = execute_query_pg(
             "SELECT id, data_purpose, ledger_columns FROM templates WHERE id = %s AND is_active = TRUE",
             (request.template_id,),
@@ -2315,6 +2317,8 @@ class EditedCellValue(BaseModel):
     value: str
 
 class ImportRequest(BaseModel):
+    # None preserves older clients' protected local/Drive configuration.
+    backup_enabled: Optional[bool] = None
     template_id: int
     file_id: int
     client_id: int
@@ -3291,6 +3295,11 @@ def preview_date_format(request: DatePreviewRequest):
 
 
 # ---------- VALIDATE ONLY (NO IMPORT) ----------
+@router.get('/api/upload/backup-policy')
+def upload_backup_policy(session=Depends(get_current_user)):
+    return {'allow_without_backup': unbacked_uploads_allowed()}
+
+
 @router.post("/api/upload/validate")
 @_log_upload_timing("validate")
 @_with_ledger_context
@@ -3299,6 +3308,7 @@ def validate_only(request: ImportRequest, perf: bool = False):
     Validate the Excel file without importing any data.
     Returns row-by-row validation errors.
     """
+    check_backup_policy(request)
     # Validate template and file
     template = execute_query_pg("SELECT id, template_name, rate_source FROM templates WHERE id = %s AND is_active = TRUE", (request.template_id,))
     if not template:
@@ -3949,7 +3959,8 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
     if plan_payload.get('lifecycle'):
         if file_info[0].get('status') not in ('Pending', 'Validated'):
             raise HTTPException(409, 'Use a fresh staged upload; an imported source cannot be reassigned.')
-        IMPORT_PROGRESS[request.file_id]['status'] = 'archiving'
+        if request.backup_enabled is not False:
+            IMPORT_PROGRESS[request.file_id]['status'] = 'archiving'
     plan_payload['archive_labels'] = {'client': client[0].get('client_name') or f'Client {request.client_id}',
                                       'template': template[0]['template_name'],
                                       'source': file_info[0]['file_name'],
@@ -4178,12 +4189,16 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
             (request.validation_plan_id,),
         )
         import_message = f'Successfully imported: {inserted_count} added, {updated_count} changed, {deleted_count} removed'
+        if request.backup_enabled is False:
+            import_message += '. Development mode: no recovery backup was created.'
         if source_order_actions and not (inserted_count or updated_count or deleted_count):
             import_message += '. Original source row order restored; transaction values are unchanged.'
         finish_lifecycle(prepared, {
             'status': 'success', 'message': import_message,
             'total_rows': total_rows_attempted, 'imported_count': inserted_count,
             'updated_count': updated_count, 'deleted_count': deleted_count,
+            'backup_mode': prepared.get('archive_mode', 'drive' if prepared.get('archive') else 'not_required') if prepared else 'not_required',
+            'archive_verified': bool(prepared and prepared.get('archive')),
         }, execute_write_pg)
 
     if replacement_cleanup["staged_paths"]:
@@ -4268,6 +4283,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
         "status": "success",
         "source_diagnostics": plan_payload.get("source_diagnostics", {}),
         "archive_verified": bool(prepared and prepared.get('archive')),
+        "backup_mode": prepared.get('archive_mode', 'drive' if prepared.get('archive') else 'not_required') if prepared else 'not_required',
         "message": import_message,
         "total_rows": total_rows_attempted,
         "imported_count": inserted_count,
@@ -4291,6 +4307,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
 @_log_upload_timing("import")
 @_with_ledger_context
 def validate_and_import(request: ImportRequest, background_tasks: BackgroundTasks = None, perf: bool = False):
+    check_backup_policy(request)
     if request.validation_plan_id:
         return _import_validation_plan(request, background_tasks)
 

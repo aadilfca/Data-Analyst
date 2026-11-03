@@ -9,6 +9,120 @@ from playwright.sync_api import sync_playwright, expect
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_development_backup_policy_control_and_review_warning(page):
+    page.route('**/api/upload/backup-policy', lambda route: route.fulfill(
+        json={'allow_without_backup': True}))
+    page.evaluate('loadUploadBackupPolicy()')
+    toggle = page.locator('#uploadBackupEnabled')
+    expect(toggle).to_be_checked()
+    expect(toggle).to_be_enabled()
+    page.evaluate("validationStatus='valid'; validationPlanId='old-plan'")
+    toggle.evaluate("element => { for(let node=element.parentElement; node; node=node.parentElement) {node.style.display='block'; node.hidden=false;} }")
+    toggle.uncheck()
+    assert page.evaluate('validationPlanId') is None
+    expect(page.locator('#uploadBackupHelp')).to_contain_text('no recovery backup')
+    review(page)
+    page.locator('#uploadReplacementCancel').click()
+    page.evaluate('void reviewUploadReplacement({...window.reviewPayload, backup_enabled:false})')
+    expect(page.locator('#uploadReplacementBackup')).to_contain_text('no recovery backup')
+
+
+def test_unavailable_backup_policy_keeps_backup_required(page):
+    page.route('**/api/upload/backup-policy', lambda route: route.fulfill(status=503, body='unavailable'))
+    page.evaluate('loadUploadBackupPolicy()')
+    expect(page.locator('#uploadBackupEnabled')).to_be_checked()
+    expect(page.locator('#uploadBackupEnabled')).to_be_disabled()
+
+
+def test_administrator_revocation_restores_backup_and_invalidates_waiting_import(page):
+    policy = {'allow_without_backup': True}
+    page.route('**/api/upload/backup-policy', lambda route: route.fulfill(json=policy))
+    page.evaluate('loadUploadBackupPolicy()')
+    page.locator('#uploadBackupEnabled').evaluate("node => {node.checked=false; node.dispatchEvent(new Event('change'));}")
+    page.evaluate("validationPlanId='ready';validationStatus='valid'")
+    policy['allow_without_backup'] = False
+    page.evaluate('loadUploadBackupPolicy()')
+    expect(page.locator('#uploadBackupEnabled')).to_be_checked()
+    expect(page.locator('#uploadBackupEnabled')).to_be_disabled()
+    assert page.evaluate('validationPlanId') is None
+
+
+@pytest.fixture
+def settings_page():
+    html = (ROOT/'static/settings.html').read_text(encoding='utf-8')
+    html = re.sub(r'<script\b[^>]*>.*?</script>', '', html, flags=re.S|re.I)
+    html = re.sub(r'<link\b[^>]*>', '', html, flags=re.I)
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        current = browser.new_page(viewport={'width': 768, 'height': 900})
+        current.route('**/*', lambda route: route.fulfill(status=200, content_type='text/html', body=html)
+                      if route.request.resource_type == 'document' else route.abort())
+        current.goto('http://settings-tests.invalid/')
+        current.add_script_tag(content='var API_BASE="";\n' + (ROOT/'static/settings.js').read_text(encoding='utf-8'))
+        # This fixture loads scripts after the load event to avoid starting the
+        # unrelated legacy Settings requests. Wire the actual save action.
+        current.evaluate("document.getElementById('saveUploadBackupsBtn').addEventListener('click',saveUploadBackupSetting)")
+        yield current
+        browser.close()
+
+
+def test_visible_settings_switch_saves_and_reloads_without_restart(settings_page):
+    page = settings_page
+    state = {'allow_without_backup': False}
+    def endpoint(route):
+        if route.request.method == 'POST':
+            state.update(route.request.post_data_json)
+        route.fulfill(json=state)
+    page.route('**/api/settings/upload-backups', endpoint)
+    page.evaluate('loadUploadBackupSetting()')
+    toggle = page.locator('#allowUploadsWithoutBackup')
+    expect(page.locator('#uploadBackupsPanel')).to_be_visible()
+    expect(toggle).not_to_be_checked()
+    toggle.check()
+    page.locator('#saveUploadBackupsBtn').click()
+    expect(page.locator('#uploadBackupsStatus')).to_contain_text('Saved.')
+    page.evaluate('loadUploadBackupSetting()')
+    expect(toggle).to_be_checked()
+    toggle.uncheck()
+    page.locator('#saveUploadBackupsBtn').click()
+    expect(page.locator('#uploadBackupsStatus')).to_contain_text('Backups are now compulsory.')
+    assert state['allow_without_backup'] is False
+
+
+def test_settings_hides_administrator_switch_for_nonadmin_and_reports_failed_save(settings_page):
+    page = settings_page
+    page.route('**/api/settings/upload-backups', lambda route: route.fulfill(status=403, body='Forbidden'))
+    page.evaluate('loadUploadBackupSetting()')
+    expect(page.locator('#uploadBackupsPanel')).to_be_hidden()
+    page.unroute('**/api/settings/upload-backups')
+    page.route('**/api/settings/upload-backups', lambda route:
+               route.fulfill(json={'allow_without_backup': False}) if route.request.method == 'GET'
+               else route.fulfill(status=503, body='Unavailable'))
+    page.evaluate('loadUploadBackupSetting()')
+    page.locator('#allowUploadsWithoutBackup').check()
+    page.locator('#saveUploadBackupsBtn').click()
+    expect(page.locator('#uploadBackupsStatus')).to_contain_text('Save was not confirmed.')
+    page.evaluate('loadUploadBackupSetting()')
+    expect(page.locator('#allowUploadsWithoutBackup')).not_to_be_checked()
+
+
+def test_validation_excel_report_is_generated_in_browser(page):
+    page.add_script_tag(path=str(ROOT/'static/vendor/xlsx.full.min.js'))
+    page.evaluate('''() => {
+        window.reportFile=null;
+        XLSX.writeFile=(book,name)=>window.reportFile={name,
+            workbook:XLSX.write(book,{type:'base64',bookType:'xlsx'})};
+        downloadChangeReport([{action:'CHANGED',old_values:{Name:'Old'},new_values:{Name:'New'}}],{upload_id:12});
+    }''')
+    result = page.evaluate('window.reportFile')
+    assert result['name'] == 'upload-change-report-12.xlsx'
+    import base64, io
+    from openpyxl import load_workbook
+    book = load_workbook(io.BytesIO(base64.b64decode(result['workbook'])))
+    assert book.active.cell(2,14).value == 'CHANGED'
+    assert book.active.cell(2,19).value == '{"Name":"Old"}'
+
+
 @pytest.fixture
 def page():
     html = (ROOT/'static/upload.html').read_text(encoding='utf-8')

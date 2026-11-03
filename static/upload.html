@@ -1645,6 +1645,10 @@
                             </div>
                             <div id="uploadCoverageHint" style="margin-top:4px;">Use full ERP dates, including days with deleted vouchers. Leave unchecked when the report has transactions.</div>
                         </div>
+                        <div class="action-note">
+                            <label><input type="checkbox" id="uploadBackupEnabled" checked disabled> Back up replaced data to Google Drive</label>
+                            <p id="uploadBackupHelp" role="status">Backups are required on this server.</p>
+                        </div>
                         <span class="action-note">📄 Review additions, revisions, and removals before import.</span>
                         <div id="ledgerUploadContext" hidden>
                             <label for="ledgerAccountSelect">Trial Balance posting account <span aria-hidden="true">*</span></label>
@@ -1820,7 +1824,7 @@
             </div>
             <table class="upload-review-notes" aria-label="Replacement safeguards">
                 <tbody>
-                    <tr><td>Backup</td><td>Complete previous vouchers + Excel review report. Verified in Google Drive before replacement.</td></tr>
+                    <tr><td>Backup</td><td id="uploadReplacementBackup">Complete previous vouchers + Excel review report. Verified in Google Drive before replacement.</td></tr>
                     <tr><td>Date changes</td><td>The same voucher may be replaced outside this period.</td></tr>
                     <tr><td>Other vouchers</td><td>Outside this period: kept.</td></tr>
                 </tbody>
@@ -1838,7 +1842,7 @@
             <button type="button" id="uploadReplacementConfirm">Import</button>
         </footer>
     </dialog>
-    <script src="/static/upload.js?v=21"></script>
+    <script src="/static/upload.js?v=23"></script>
 </body>
 
 </html>

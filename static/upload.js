@@ -956,7 +956,12 @@ function updateUploadCoverageVisibility() {
 
 function reviewUploadReplacement(payload) {
     const dialog = document.getElementById('uploadReplacementReview');
+    dialog.querySelector('h2').textContent = payload.comparison_mode === 'correction'
+        ? 'Review matched corrections' : 'Review complete report';
     const summary = lastChangePreview || {};
+    document.getElementById('uploadReplacementBackup').textContent = payload.backup_enabled === false
+        ? 'Development mode: no recovery backup will be created. Replaced data cannot be restored from this import.'
+        : 'Complete previous vouchers + Excel review report. Verified in Google Drive before replacement.';
     const count = key => Number(summary[key] || 0).toLocaleString();
     document.getElementById('uploadReplacementScope').textContent =
         `${window.getSelectedClientName ? window.getSelectedClientName() : 'Selected client'}${payload.ledger_account_code ? ' · ' + ledgerUploadLabel() : ''} · ${templateDropdown?.selectedOptions[0]?.textContent || 'Selected template'}`;
@@ -964,7 +969,8 @@ function reviewUploadReplacement(payload) {
         const day = new Date(value + 'T00:00:00');
         return Number.isNaN(day.getTime()) ? value : day.toLocaleDateString('en-GB', {day: '2-digit', month: 'short', year: 'numeric'});
     };
-    document.getElementById('uploadReplacementPeriod').textContent = `${dateLabel(payload.coverage_start)} – ${dateLabel(payload.coverage_end)}`;
+    document.getElementById('uploadReplacementPeriod').textContent = payload.coverage_start
+        ? `${dateLabel(payload.coverage_start)} – ${dateLabel(payload.coverage_end)}` : 'Matched corrections';
     // Presentation only: retain the server's separate occurrence/change counts.
     const counts = document.getElementById('uploadReplacementCounts');
     counts.replaceChildren();
@@ -1410,6 +1416,11 @@ if (clearBtn) {
 
 function resetUpload() {
     ++uploadTemplateGeneration;
+    const backupToggle = document.getElementById('uploadBackupEnabled');
+    if (!backupToggle.checked) {
+        backupToggle.checked = true;
+        backupToggle.dispatchEvent(new Event('change'));
+    }
     ledgerSelectedAccountCode = ''; pendingLedgerRestoreCode = '';
     if (isLedgerUpload()) renderLedgerUploadAccounts();
     else clearLedgerUploadContext();
@@ -1854,13 +1865,6 @@ if (resetBtn) {
 function downloadChangeReport(report, summary = {}) {
     const reportRows = Array.isArray(report) ? report : [];
     const dateRange = summary.date_range || {};
-    const escapeCsv = value => {
-        let text = value;
-        if (Array.isArray(value)) text = value.join('; ');
-        else if (value && typeof value === 'object') text = JSON.stringify(value);
-        text = text ?? '';
-        return `"${String(text).replace(/"/g, '""')}"`;
-    };
     const header = [
         'Upload ID', 'Upload Date', 'Uploaded By', 'File Name', 'Template',
         'Comparison Mode', 'Date Range Start', 'Date Range End', 'Total Lines',
@@ -1894,15 +1898,14 @@ function downloadChangeReport(report, summary = {}) {
             item.new_values,
         ])
         : [[...metadata, 'SUMMARY', '', '', '', '', '', '']];
-    const csv = [header, ...rows].map(row => row.map(escapeCsv).join(',')).join('\r\n');
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `upload-change-report-${summary.upload_id || 'latest'}.csv`;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 0);
+    // Create the review workbook in the browser; no report file is retained by
+    // the server. Explicit strings remain text, including formula-like values.
+    const workbook = XLSX.utils.book_new();
+    const values = [header, ...rows].map(row => row.map(value =>
+        Array.isArray(value) ? value.join('; ') : value && typeof value === 'object'
+            ? JSON.stringify(value) : value ?? ''));
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(values), 'Upload review');
+    XLSX.writeFile(workbook, `upload-change-report-${summary.upload_id || 'latest'}.xlsx`);
 }
 
 function attachValidationReportDownload(report, summary) {
@@ -2463,6 +2466,7 @@ if (importBtn) {
         });
 
         const payload = {
+            backup_enabled: document.getElementById('uploadBackupEnabled').checked,
             template_id: selectedTemplateId,
             file_id: fileId,
             client_id: parseInt(clientId),
@@ -2675,7 +2679,7 @@ async function performImport(payload) {
     const ledgerPresentation = payload.ledger_account_code
         ? `${submittedAccount?.account_name || 'Ledger account'} (${payload.ledger_account_code}) · ${payload.ledger_period_start} through ${payload.ledger_period_end}` : null;
     try {
-        if (payload.comparison_mode === 'replace_range') {
+        if (payload.comparison_mode === 'replace_range' || payload.backup_enabled === false) {
             const confirmed = await reviewUploadReplacement(payload);
             if (!confirmed) {
                 showStatus('Upload cancelled. No data was changed.', 'info');
@@ -3338,8 +3342,44 @@ if (previewBtn) {
 }
 
 // ---------- INIT ----------
+let uploadBackupPolicyGeneration = 0;
+async function loadUploadBackupPolicy() {
+    const generation = ++uploadBackupPolicyGeneration;
+    const toggle = document.getElementById('uploadBackupEnabled');
+    const help = document.getElementById('uploadBackupHelp');
+    // Recheck on tab return so an administrator's change takes effect promptly.
+    // Failed reads restore the protected default rather than leaving an opt-out.
+    toggle.disabled = true;
+    let allowed = false;
+    try {
+        const response = await fetch(API_BASE + '/api/upload/backup-policy');
+        const policy = response.ok ? await response.json() : {};
+        allowed = policy.allow_without_backup === true;
+    } catch (_) { /* Keep backups required if policy cannot be loaded. */ }
+    if (generation !== uploadBackupPolicyGeneration) return;
+    if (!allowed && !toggle.checked) {
+        toggle.checked = true;
+        resetValidationState();
+    }
+    toggle.disabled = !allowed;
+    const update = () => {
+        help.textContent = !toggle.checked
+            ? 'Development mode: no recovery backup will be created.'
+            : toggle.disabled ? 'Backups are compulsory. Administrator: Settings → Upload backups.'
+                : 'A verified Google Drive copy is required before replacement.';
+    };
+    if (!toggle.dataset.policyBound) {
+        toggle.addEventListener('change', () => { resetValidationState(); update(); });
+        toggle.dataset.policyBound = 'true';
+    }
+    update();
+}
+
+window.addEventListener('focus', () => { void loadUploadBackupPolicy(); });
+
 window.onload = async function() {
     if (window.clientContextReady) await window.clientContextReady;
+    await loadUploadBackupPolicy();
     // Await so the Template dropdown's <option>s exist before restoreUploadSessionState()
     // (session-restore) tries to set the dropdown's value.
     await loadTemplates();

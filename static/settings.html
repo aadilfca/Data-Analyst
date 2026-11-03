@@ -67,6 +67,10 @@
             background: #16a34a;
         }
 
+        #uploadBackupsPanel input[type="checkbox"] { min-width:0; width:18px; height:18px; }
+        #uploadBackupsPanel label { display:flex; align-items:center; gap:10px; }
+        #uploadBackupsPanel p { color:#475569; font-size:13px; }
+
         #statusMessage {
             margin-top: 12px;
         }
@@ -150,6 +154,15 @@
         <div class="firm-tabs" id="firmTabs"></div>
 
         <div id="tabPanelAppSettings">
+            <div class="settings-group" id="uploadBackupsPanel" hidden>
+                <h3>Upload backups</h3>
+                <label><input type="checkbox" id="allowUploadsWithoutBackup" disabled>
+                    Allow uploads without backup — development only</label>
+                <p>When enabled, users can turn backup off on the Upload page. Replaced data will have no recovery backup.</p>
+                <p>Turn this off to make backups compulsory. Applies to all clients and servers using this database.</p>
+                <button class="save-btn" id="saveUploadBackupsBtn" type="button" disabled>Save Upload Backup Setting</button>
+                <p id="uploadBackupsStatus" role="status" aria-live="polite"></p>
+            </div>
             <div id="settingsContainer">
                 <!-- Settings will be loaded by JavaScript -->
             </div>
@@ -180,7 +193,7 @@
     </div>
 
     <script src="/static/client_context.js?v=28"></script>
-    <script src="/static/settings.js?v=3"></script>
+    <script src="/static/settings.js?v=4"></script>
 </body>
 
 </html>

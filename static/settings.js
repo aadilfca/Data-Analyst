@@ -69,6 +69,45 @@ const SETTINGS_DEF = {
 let currentSettings = {};
 let currentCashflowDefaults = {};
 
+async function loadUploadBackupSetting() {
+    const panel = document.getElementById('uploadBackupsPanel');
+    const toggle = document.getElementById('allowUploadsWithoutBackup');
+    const save = document.getElementById('saveUploadBackupsBtn');
+    const status = document.getElementById('uploadBackupsStatus');
+    // Authorization is also checked by the server on every read and save.
+    toggle.disabled = save.disabled = true;
+    try {
+        const response = await fetch(`${API_BASE}/api/settings/upload-backups`);
+        if (response.status === 401 || response.status === 403) { panel.hidden = true; return; }
+        panel.hidden = false;
+        if (!response.ok) throw new Error('Could not load the backup setting. Reload Settings to try again.');
+        const policy = await response.json();
+        toggle.checked = policy.allow_without_backup === true;
+        toggle.disabled = save.disabled = false;
+        status.textContent = toggle.checked ? 'Uploads without backup are allowed for development.' : 'Backups are compulsory.';
+    } catch (error) { panel.hidden = false; status.textContent = error.message; }
+}
+
+async function saveUploadBackupSetting() {
+    const toggle = document.getElementById('allowUploadsWithoutBackup');
+    const save = document.getElementById('saveUploadBackupsBtn');
+    const status = document.getElementById('uploadBackupsStatus');
+    const selected = toggle.checked;
+    toggle.disabled = save.disabled = true;
+    status.textContent = 'Saving…';
+    try {
+        const response = await fetch(`${API_BASE}/api/settings/upload-backups`, {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({allow_without_backup: selected})
+        });
+        if (!response.ok) throw new Error('Save was not confirmed. Reload Settings to check the saved choice.');
+        const policy = await response.json();
+        if (policy.allow_without_backup !== selected) throw new Error('Save was not confirmed. Reload Settings to check the saved choice.');
+        status.textContent = selected ? 'Saved. You can turn backup off on the Upload page.' : 'Saved. Backups are now compulsory.';
+    } catch (error) { status.textContent = error.message; }
+    finally { toggle.disabled = save.disabled = false; }
+}
+
 async function loadCashflowDefaults() {
     try {
         const res = await fetch(`${API_BASE}/api/settings/cashflows-defaults`);
@@ -334,7 +373,10 @@ async function deleteHoliday(id) {
     }
 }
 
-window.onload = function() {
+window.onload = async function() {
+    if (window.clientContextReady) await window.clientContextReady;
+    loadUploadBackupSetting();
+    document.getElementById('saveUploadBackupsBtn')?.addEventListener('click', saveUploadBackupSetting);
     loadSettings();
     loadHolidays();
     loadCashflowDefaults();

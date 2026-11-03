@@ -3,8 +3,9 @@
 # ==============================================
 
 from fastapi import APIRouter, Depends, HTTPException
-from database import execute_query, execute_write, log_audit
-from pydantic import BaseModel
+from database import execute_query, execute_write, log_audit, execute_write_pg
+from pydantic import BaseModel, StrictBool
+from services.upload_lifecycle import UPLOAD_BACKUP_SETTING, unbacked_uploads_allowed
 from typing import Optional
 from routers.auth import get_current_user, require_admin
 from datetime import date, datetime, timedelta
@@ -13,6 +14,10 @@ router = APIRouter()
 
 class SettingUpdate(BaseModel):
     value: str
+
+
+class UploadBackupPolicyUpdate(BaseModel):
+    allow_without_backup: StrictBool
 
 class CashflowDefaultsUpdate(BaseModel):
     fiscal_year_start_month: int = 1
@@ -213,6 +218,23 @@ def update_cashflow_defaults(update: CashflowDefaultsUpdate, session=Depends(req
     log_audit("Admin", "Update", "Settings", "Updated Cashflows reporting defaults")
     return _resolved_cashflow_defaults(values)
 
+# This policy belongs to the shared transaction database, not legacy SQLite
+# settings. Restrict writes to this dedicated administrator route.
+@router.get('/api/settings/upload-backups')
+def get_upload_backup_policy(session=Depends(require_admin)):
+    return {'allow_without_backup': unbacked_uploads_allowed()}
+
+
+@router.post('/api/settings/upload-backups')
+def save_upload_backup_policy(update: UploadBackupPolicyUpdate, session=Depends(require_admin)):
+    execute_write_pg('''INSERT INTO app_settings (key, value) VALUES (%s, %s)
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value''',
+        (UPLOAD_BACKUP_SETTING, 'true' if update.allow_without_backup else 'false'))
+    log_audit(session.get('username', 'Admin'), 'Update', 'Settings',
+              'Development uploads without backup: ' + ('allowed' if update.allow_without_backup else 'blocked'))
+    return {'allow_without_backup': update.allow_without_backup}
+
+
 @router.get("/api/settings")
 def get_settings():
     """
@@ -230,6 +252,8 @@ def get_setting(key: str):
 
 @router.post("/api/settings/{key}")
 def update_setting(key: str, update: SettingUpdate):
+    if key == UPLOAD_BACKUP_SETTING:
+        raise HTTPException(403, 'Use the administrator Upload backups setting.')
     # Validate key exists
     rows = execute_query("SELECT id FROM app_settings WHERE key = ?", (key,))
     if not rows:
