@@ -35,7 +35,7 @@ One line per file group: what it is now. Full build history for every entry live
 - static/audit_workbook.js, static/audit_workbook.html → Audit Workbook: session rows, filtering, totals, shared Procedure Modal, and cached evidence/Form completion badges. See CHANGELOG_ARCHIVE.md.
 - routers/trial_balance.py → Trial Balance import, validation, batched code corrections, hierarchy, adjustments, draft totals, categories and saved uploads. See CHANGELOG_ARCHIVE.md.
 - routers/account_control_center.py → account mappings with validated FS/Note pairs, batched writes, statement outlines, presentation, profit linking, closing confirmation and Cashflow setup. See CHANGELOG_ARCHIVE.md.
-- static/trial_balance.*, static/account_assignment_shared.js, static/financial_statement_workspace.*, static/cashflow_workspace.* → Trial Balance review and scoped account setup for statements, Cashflows and Verification. See CHANGELOG_ARCHIVE.md.
+- static/trial_balance.*, static/account_assignment_shared.js, static/financial_statement_workspace.*, static/cashflow_workspace.* → Trial Balance review with a default assignment-free view and scoped setup for statements, Cashflows and Verification. See CHANGELOG_ARCHIVE.md.
 - static/account_control_center.* → retired screens; legacy page bookmarks redirect to the Trial Balance assignment workspace. APIs remain in the router. See CHANGELOG_ARCHIVE.md.
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Two-pane Audit Rules editor for Documents, Cross-checks, Categories, Voucher Checks and Assertions, plus Assign Categories. See CHANGELOG_ARCHIVE.md.
@@ -265,6 +265,7 @@ One line per file group: what it is now. Full build history for every entry live
 - 2026-11-02: Local upload staging is stable; missing workbooks prompt fresh validation. Development archives can skip Drive; duplicate and receipt safeguards remain. See CHANGELOG_ARCHIVE.md.
 - 2026-11-02: Financial Statement Notes distinguish nested subtotals from category totals with separate row styles. See CHANGELOG_ARCHIVE.md.
 - 2026-11-02: Trial Balance page and workspace notices use a fixed, dismissible top-right toast; loading and validation remain inline. See CHANGELOG_ARCHIVE.md.
+- 2026-11-03: Trial Balance defaults to an assignment-free view; Financial Statements, Cashflows and Verification remain selectable. See CHANGELOG_ARCHIVE.md, Trial Balance default assignment-free view.
 - 2026-11-01: Trial Balance toolbar now groups Period and upload actions above Workflow and assignment filters.
 - 2026-11-01: Trial Balance FS Category and Note filters use grouped row-style popups with search and multi-select. See CHANGELOG_ARCHIVE.md.
 - 2026-11-01: Trial Balance upload choices wait for client context, retry transient failures and ignore stale requests. See CHANGELOG_ARCHIVE.md.
@@ -313,21 +314,10 @@ One line per file group: what it is now. Full build history for every entry live
 - 2026-10-21: Added independent Cashflow boundary, carry, role, source-correction and screen/export regression controls; accepted for commit/push. See CHANGELOG_ARCHIVE.md, Independent Cashflow controls.
 - 2026-10-21: Cashflows reconciles separate Treasury movements, aligns payment subtotal signs and exports complete deductions; locally accepted. See CHANGELOG_ARCHIVE.md.
 - 2026-10-21: Cashflows preserves signed customer/vendor reversals, adds period details and shared export totals; January–June combined reconciliation verified. See CHANGELOG_ARCHIVE.md.
-- 2026-10-20: Client Data and Cashflow transactions sort chronologically; upload metadata preserves source sequence and supports guarded position-only restoration. See CHANGELOG_ARCHIVE.md.
-- 2026-10-20: Upload ledger accounts now support name/code search, dropdown choices and keyboard selection, preserving validation safeguards. See CHANGELOG_ARCHIVE.md.
-- 2026-10-20: Cashflows adds expandable ledger balances, distinct calculations, split treasury totals and fresh evidence checks. See CHANGELOG_ARCHIVE.md.
-- 2026-10-20: Phase 4 adds optional ledger-backed Cashflow balances, coverage diagnostics and continuous calculated balances; manual inputs remain supported. See CHANGELOG_ARCHIVE.md.
-- 2026-10-20: Data Bank ledger preview adds searchable imported-account selection, scoped filters and cache isolation; Phase 2 accepted. See CHANGELOG_ARCHIVE.md.
-- 2026-10-20: Ledger uploads preserve source notes and balances; fixed table-lock result handling, guarded mapping submissions and root traceback retention. See CHANGELOG_ARCHIVE.md.
-- 2026-10-20: Upload recognises raw-source totals, preserves Excel row numbers and shows stage-specific issue dialogs. See CHANGELOG_ARCHIVE.md, Upload source controls and issue diagnostics.
-- 2026-10-20: Added public app, privacy and terms pages with shared styling and login links. See CHANGELOG_ARCHIVE.md.
-- 2026-10-19: Complete-voucher observations and scoped date corrections; local Drive archives verified, production branding pending. See CHANGELOG_ARCHIVE.md.
-- 2026-10-19: Complete uploads replace declared coverage after verified external archiving; compact receipts protect retries and concurrent changes. See CHANGELOG_ARCHIVE.md.
-- 2026-10-19: Upload compares calendar dates and description spacing, preserves planned dates, displays readable previews, and identifies genuine voucher conflicts.
-- 2026-10-19: Added ledger template roles, account-scoped upload safeguards and balance evidence with isolated regression coverage; actual uploads remain user-controlled.
-- 2026-10-19: Cashflows preloads bounded ledger roll-ups, shares revision/configuration-scoped browser caches, and paginates oversized categories; regression and export-parity checks added.
-- 2026-10-19: Fixed Cashflows transaction windows to read canonical Client Data; removed retired preview fallbacks and added source/filter regression coverage.
-- 2026-10-19: Added isolated read-only Cashflows fetching experiments and safety/parity tests; production integration remains separate. See CHANGELOG_ARCHIVE.md, Cashflows fetching sandbox.
+- 2026-10-20: Client Data preserves source order while Cashflows adds ledger balances and evidence checks; Data Bank and ledger uploads gain searchable account selection and safer mappings. See CHANGELOG_ARCHIVE.md.
+- 2026-10-20: Uploads add raw-source totals, row-aware issue reports, and public privacy/terms pages. See CHANGELOG_ARCHIVE.md.
+- 2026-10-19: Uploads add ledger roles, expiring validation plans, coverage replacement, correction safeguards, Drive archives and readable issue reports; production branding remains pending. See CHANGELOG_ARCHIVE.md.
+- 2026-10-19: Cashflows moves to canonical Client Data with bounded source fetching, coverage diagnostics, browser caches, exports and isolated experiments. See CHANGELOG_ARCHIVE.md.
 - Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; performance findings reference the investigation documents.
 - 2026-10-12: Cashflows uses canonical `client_data`, bounded Data Bank previews and evidence-gated PostgreSQL index/storage review; unsafe maintenance remains blocked. See CHANGELOG_ARCHIVE.md.
 - 2026-10-11: Cashflows cleanup and Client Data import/deletion gained canonical-source, identity, validation, correction and reference safeguards; deferred gaps remain documented. See CHANGELOG_ARCHIVE.md.

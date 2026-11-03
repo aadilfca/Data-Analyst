@@ -188,7 +188,10 @@ const tbAssignmentSetup = getElement('tbAssignmentSetup');
 const tbAssignmentSetupMenu = getElement('tbAssignmentSetupMenu');
 const tbNextUnassigned = getElement('tbNextUnassigned');
 const tbNextUnassignedCount = getElement('tbNextUnassignedCount');
-let tbWorkflowMode = window.AccountAssignments ? AccountAssignments.mode(new URLSearchParams(location.search).get('workflow') || new URLSearchParams(location.search).get('acc_tab')) : 'financial';
+const tbInitialWorkflow = new URLSearchParams(location.search).get('workflow') || new URLSearchParams(location.search).get('acc_tab');
+let tbWorkflowMode = window.AccountAssignments
+    ? AccountAssignments.mode(tbInitialWorkflow || 'trial_balance')
+    : (tbInitialWorkflow || 'trial_balance');
 let tbWorkflowLoadToken = 0;
 let tbWorkflowContext = '';
 const tbWorkflowStates = new Map();
@@ -216,7 +219,7 @@ let tbCashflowLeaves = new Map();
 let tbVerificationWorkspace = null;
 let tbVerificationAccounts = [];
 let tbVerificationLeaves = new Map();
-function savedAssignmentColumnCount() { return tbWorkflowMode === 'financial' ? 2 : 1; }
+function savedAssignmentColumnCount() { return tbWorkflowMode === 'trial_balance' ? 0 : tbWorkflowMode === 'financial' ? 2 : 1; }
 async function tbReadAssignmentJson(url) {
     const response = await tbApiRequest(API_BASE + url);
     const result = await response.json();
@@ -1957,26 +1960,32 @@ function clearSavedWorkflowStates() {
 }
 function syncSavedWorkflowColumns() {
     const financial = tbWorkflowMode === 'financial';
+    const trialBalance = tbWorkflowMode === 'trial_balance';
     const definition = window.AccountAssignments && AccountAssignments.workflows[tbWorkflowMode];
     if (tbAssignmentWorkflow) tbAssignmentWorkflow.value = tbWorkflowMode;
     const legacyAssignments = getElement('tbAssignCategoriesBtn');
-    if (legacyAssignments) legacyAssignments.hidden = financial;
+    if (legacyAssignments) legacyAssignments.hidden = financial || trialBalance;
+    const filtersRow = getElement('availableTrialBalancesSection')?.querySelector('.tb-saved-toolbar-row--filters');
+    if (filtersRow) filtersRow.hidden = trialBalance;
     if (tbSavedNoteSearch) tbSavedNoteSearch.closest('.tb-saved-note-filter').hidden = !financial;
     const label = getElement('tbSavedCategoryLabel');
     if (label && definition) label.textContent = definition.column;
     [availableAccountsTableWrapper, tbSavedStickyHead].filter(Boolean).forEach(function (container) {
         container.querySelectorAll('thead tr').forEach(function (row) {
             if (row.children[3] && definition) row.children[3].textContent = definition.column;
+            if (row.children[3]) row.children[3].hidden = trialBalance;
             if (row.children[4]) row.children[4].hidden = !financial;
         });
     });
     if (availableAccountsTableBody) {
         availableAccountsTableBody.querySelectorAll('tr[data-category-filter], tr.tb-generated-difference, tr.tb-draft-total').forEach(function (row) {
+            if (row.children[3]) row.children[3].hidden = trialBalance;
             if (row.children[4]) row.children[4].hidden = !financial;
         });
         availableAccountsTableBody.querySelectorAll('.tb-difference-section td, .tb-erp-warning td').forEach(cell => { cell.colSpan = 9 + savedAssignmentColumnCount(); });
     }
     if (tbAssignmentSetup) {
+        tbAssignmentSetup.hidden = trialBalance;
         tbAssignmentSetup.disabled = !availableUploadsDropdown || !availableUploadsDropdown.value;
         if (definition) { tbAssignmentSetup.title = definition.label + ' setup'; tbAssignmentSetup.setAttribute('aria-label', 'Open ' + definition.label + ' setup'); }
         if(financial || tbWorkflowMode === 'cashflow' || tbWorkflowMode === 'verification'){tbAssignmentSetup.removeAttribute('aria-haspopup');tbAssignmentSetup.removeAttribute('aria-expanded');}
@@ -2695,6 +2704,15 @@ function updateSavedDraftFilteredTotal() {
 }
 
 async function loadAvailableUploadCategories(uploadId, clientId, loadToken) {
+    if (tbWorkflowMode === 'trial_balance') {
+        availableAccountCategoryByCode = new Map();
+        availableAccountNoteByCode = new Map();
+        availableAccountCategoryLookupReady = true;
+        availableAccountNoteLookupReady = true;
+        availableAccountLookupMessage = '';
+        finishSavedWorkflowLookup();
+        return;
+    }
     if (!clientId) return;
     const mode = tbWorkflowMode;
     const workflowToken = ++tbWorkflowLoadToken;
@@ -3282,7 +3300,7 @@ function fitSavedTrialBalanceAmountColumns() {
         });
     }
     syncSavedWorkflowColumns();
-    const widths = [145, 220, 110, 180, ...(tbWorkflowMode === 'financial' ? [190] : []), ...Array(6).fill(amountWidth)];
+    const widths = [145, 220, 110, ...(tbWorkflowMode === 'trial_balance' ? [] : [180]), ...(tbWorkflowMode === 'financial' ? [190] : []), ...Array(6).fill(amountWidth)];
     [table, heading].forEach(function (target) {
         const group = document.createElement('colgroup');
         widths.forEach(function (width) { const col = document.createElement('col'); col.style.width = width + 'px'; group.appendChild(col); });

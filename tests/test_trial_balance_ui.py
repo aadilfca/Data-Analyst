@@ -788,14 +788,28 @@ def test_assignment_workflows_preserve_filters_amounts_and_reject_late_results(b
             }
             return {ok:true,json:async()=>({categories:url.includes('category_type=note')?[{id:11,label:'Cash note',is_active:true}]:[{id:7,label:'Cash',is_active:true},{id:8,label:'Bank',is_active:true}]})};
         };
+        window.ApiUtils={apiFetch:(url,options)=>window.fetch(url,options),apiFetchMutate:(url,options)=>window.fetch(url,options)};
         availableTrialBalancesSection.style.display='block';
         availableUploadsDropdown.innerHTML='<option value="77">TB</option>';
         await loadAvailableUploadAccounts('77');
     }""")
+    assert page.locator('#tbAssignmentWorkflow').input_value() == 'trial_balance'
+    assert page.locator('.tb-saved-toolbar-row--filters').is_hidden()
+    assert page.locator('#tbAssignmentSetup').is_hidden()
+    assert page.locator('#tbSavedStickyHead th:not([hidden])').count() == 9
+    assert page.locator('.tb-saved-category-cell').first.is_hidden()
+    assert page.evaluate("window.calls.filter(call=>call.url.includes('/mapping?') || call.url.includes('/cashflow/setup')).length") == 0
+    page.locator('#tbAssignmentWorkflow').select_option('financial')
     page.wait_for_function("document.querySelector('.tb-saved-note-cell').textContent === 'Cash note'")
+    def fill_saved_filter(kind, value):
+        search = page.locator('#tbSaved' + ('Note' if kind == 'note' else 'Category') + 'Search')
+        if not search.is_visible():
+            page.locator('#tbSaved' + ('Note' if kind == 'note' else 'Category') + 'Trigger').click()
+        search.fill(value)
+
     before = page.locator('tr[data-category-filter]').evaluate_all('rows=>rows.map(row=>row.dataset.tbAmounts)')
-    page.locator('#tbSavedCategorySearch').fill('Cash')
-    page.locator('#tbSavedNoteSearch').fill('Cash note')
+    fill_saved_filter('category', 'Cash')
+    fill_saved_filter('note', 'Cash note')
     assert page.locator('.tb-draft-heading .tb-amount-cell').all_text_contents() == ['10.25','0.00','0.00','0.00','20.50','0.00']
     page.evaluate('availableAccountsTableWrapper.scrollLeft=130')
     page.locator('#tbAssignmentWorkflow').select_option('cashflow')
@@ -809,15 +823,16 @@ def test_assignment_workflows_preserve_filters_amounts_and_reject_late_results(b
     assert page.locator('#availableAccountsTableWrapper thead th:visible').count() == 0  # synchronized heading is the visible copy
     assert page.locator('#tbSavedStickyHead th:not([hidden])').count() == 10
     assert page.locator('#tbSavedStickyHead col').count() == 10
-    page.locator('#tbSavedCategorySearch').fill('bank')
+    fill_saved_filter('category', 'bank')
     assert page.locator('tr[data-category-filter]:visible').count() == 1
     assert page.locator('tr[data-category-filter]:visible').get_attribute('data-account-code') == 'B'
     page.locator('#tbAssignmentWorkflow').select_option('cashflow')
     page.wait_for_function("tbWorkflowMode === 'cashflow' && typeof window.releaseCashflow === 'function'")
     page.evaluate('window.releaseCashflow()')
     page.wait_for_function("document.querySelector('.tb-saved-category-cell').textContent === 'Receipts'")
-    page.locator('#tbSavedCategorySearch').fill('Receipts')
+    fill_saved_filter('category', 'Receipts')
     assert page.locator('tr[data-category-filter]:visible').count() == 1
+    page.keyboard.press('Escape')
     page.evaluate('tbFsIsAdmin = true')
     page.locator('#tbAssignCategoriesBtn').click()
     page.wait_for_selector('#cfwBackdrop:not([hidden])')
@@ -863,6 +878,7 @@ def test_legacy_cashflow_setup_bookmark_opens_the_matching_trial_balance_panel(b
         availableUploadsDropdown.innerHTML='<option value="77">TB</option>';
         window.setupCalls=[];
         window.fetch=async url=>{setupCalls.push(url);return {ok:true,json:async()=>({client_id:1,upload:{id:77},accounts:[],categories:[],historical_orphans:[],treasury_accounts:{cash:[],bank:[]},settings:{},role_categories:{}})}};
+        window.ApiUtils={apiFetch:(url,options)=>window.fetch(url,options),apiFetchMutate:(url,options)=>window.fetch(url,options)};
         await tbOpenLegacySetup('template');
     }""")
     assert page.locator('#cfwBackdrop').is_visible()

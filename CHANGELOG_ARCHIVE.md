@@ -9353,3 +9353,10 @@ Reports/nav versions are 63/25 across all 19 shared navigation consumers; other 
 **Documentation:** Existing architecture/status entries rewritten; no files added or repurposed. File_Map.md remains at its existing 158 lines, with no new rows.
 
 **Acceptance:** Aadil confirmed this phase and authorized commit/push on 2026-10-30.
+
+
+## Trial Balance default assignment-free view — 2026-11-03
+
+**Implementation:** Available Trial Balances now defaults to a Trial Balance view unless a valid workflow is supplied in the URL. It shows source account details and all six balance columns while hiding assignment filters, FS/Note columns and assignment setup actions. This view skips Account Control Centre assignment reads. Financial Statements, Cashflows and Verification remain selectable; the shared workflow registry recognizes the new view without changing its existing fallback. Shared and Trial Balance script cache versions are 3 and 53. No backend or schema changes.
+
+**Verification:** The focused workflow and Cashflow bookmark regressions pass (2 tests); Account Control Centre UI tests pass (13 tests). JavaScript syntax and `git diff --check` pass. The broader Trial Balance UI suite remains unverified: it reported failures and timeouts, with the first isolated failure in `test_global_differences_allow_save_without_review_controls` (upload button remained disabled). Local-server acceptance is pending.

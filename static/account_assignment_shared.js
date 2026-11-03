@@ -8,6 +8,7 @@
         {value: 'contractor', label: 'Contractor'},
     ].map(Object.freeze));
     const workflows = Object.freeze({
+        trial_balance: Object.freeze({label: 'Trial Balance', column: 'Assignment', tab: 'trial_balance', setups: []}),
         financial: Object.freeze({label: 'Financial Statements', column: 'FS Category', tab: 'financial', setups: [['financial', 'Financial Statements setup'], ['notes', 'Notes setup']]}),
         cashflow: Object.freeze({label: 'Cashflows', column: 'Cashflow Category', tab: 'cashflow', setups: [['cashflow', 'Cashflow categories'], ['treasury', 'Cash & Bank configuration'], ['template', 'Transaction template']]}),
         verification: Object.freeze({label: 'Verification', column: 'Verification Workstream', tab: 'verification', setups: [['verification', 'Verification accounts']]}),
