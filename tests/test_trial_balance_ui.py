@@ -214,11 +214,26 @@ def test_saved_view_inline_edit_and_sticky_heading(browser):
     }""")
     assert page.locator('#availableAccountsTableBody tr:first-child td').nth(2).inner_text() == 'Leaf'
     code = page.locator('#availableAccountsTableBody tr:first-child .tb-account-code-display')
+    code_cell = page.locator('#availableAccountsTableBody tr:first-child td').first
+    original_cell_size = code_cell.evaluate('el => ({width:el.getBoundingClientRect().width,height:el.getBoundingClientRect().height})')
     code.dblclick()
     editor = page.locator('#availableAccountsTableBody tr:first-child input')
-    editor.fill('B0')
+    editor.fill('10:00:00')
     editor.press('Enter')
-    assert page.evaluate('tbPendingCodeCorrections.get(0).account_code') == 'B0'
+    error_popup = page.locator('#tbAccountCodeErrorPopup0')
+    assert error_popup.is_visible()
+    assert error_popup.get_attribute('role') == 'alert'
+    assert error_popup.locator('.tb-account-code-error-message').inner_text() == 'Use numbers and single hyphens only, e.g. 10-10-25.'
+    assert page.locator('#availableAccountsTableBody tr:first-child .tb-account-code-error-popup').count() == 0
+    assert code.evaluate('el => el.getAttribute("aria-describedby")') == 'tbAccountCodeErrorPopup0'
+    assert code_cell.evaluate('el => ({width:el.getBoundingClientRect().width,height:el.getBoundingClientRect().height})') == original_cell_size
+    assert page.evaluate('tbPendingCodeCorrections.size') == 0
+    code.dblclick()
+    assert not error_popup.is_visible()
+    editor = page.locator('#availableAccountsTableBody tr:first-child input')
+    editor.fill('001-01')
+    editor.press('Enter')
+    assert page.evaluate('tbPendingCodeCorrections.get(0).account_code') == '001-01'
     assert page.evaluate('window.savedCode') is None
     page.evaluate('availableAccountsTableWrapper.scrollLeft=200; window.scrollTo(0, 500)')
     page.wait_for_function("tbSavedStickyHead.querySelector('table').style.transform === `translateX(-${availableAccountsTableWrapper.scrollLeft}px)`")
@@ -1103,6 +1118,7 @@ def _batch_code_page(browser):
             body.corrections.forEach(c=>window.rows.find(row=>row.id===c.account_id).account_code=c.account_code);
             return {ok:true,json:async()=>({updated:true,upload_id:59,corrected_count:body.corrections.length})};
         };
+        window.ApiUtils={apiFetch:(url,options)=>window.fetch(url,options),apiFetchMutate:(url,options)=>window.fetch(url,options)};
         loadAvailableUploadAccounts=async()=>{window.reloads++;renderAvailableAccountsTable(window.rows,[]);return true;};
     }""")
     return page
@@ -1146,7 +1162,7 @@ def test_saved_code_draft_guard_cancel_discard_and_failed_save(browser):
     page.locator('#tbSaveCodeCorrections').click()
     page.wait_for_function('!tbCodeSaveRunning && calls.length===1')
     assert page.evaluate('tbPendingCodeCorrections.size') == 1
-    assert 'Conflicting mapping' in page.locator('#tbSavedStatus').inner_text()
+    assert 'Conflicting mapping' in page.locator('#tbToastRegion .tb-toast-message').text_content()
     assert page.evaluate('reloads') == 0
     page.locator('#tbDiscardCodeCorrections').click()
     assert page.locator('.tb-account-code-display').first.inner_text() == 'BAD1'

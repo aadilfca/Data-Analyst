@@ -9360,3 +9360,17 @@ Reports/nav versions are 63/25 across all 19 shared navigation consumers; other 
 **Implementation:** Available Trial Balances now defaults to a Trial Balance view unless a valid workflow is supplied in the URL. It shows source account details and all six balance columns while hiding assignment filters, FS/Note columns and assignment setup actions. This view skips Account Control Centre assignment reads. Financial Statements, Cashflows and Verification remain selectable; the shared workflow registry recognizes the new view without changing its existing fallback. Shared and Trial Balance script cache versions are 3 and 53. No backend or schema changes.
 
 **Verification:** The focused workflow and Cashflow bookmark regressions pass (2 tests); Account Control Centre UI tests pass (13 tests). JavaScript syntax and `git diff --check` pass. The broader Trial Balance UI suite remains unverified: it reported failures and timeouts, with the first isolated failure in `test_global_differences_allow_save_without_review_controls` (upload button remained disabled). Local-server acceptance is pending.
+
+
+## Strict Trial Balance code edits — 2026-11-03
+
+**Implementation:** Manual saved-code edits and both correction API paths now accept only ASCII digits separated by single hyphens, up to the existing 120-character limit; leading zeros remain unchanged. Invalid edits show a row-level message and are not staged. The API validates the whole correction draft before mapping copies or writes. Upload parsing and duplicate, hierarchy, and assignment-carry-forward policies are unchanged. Trial Balance script cache version is 54; no schema changes.
+
+**Verification:** Manual-edit UI tests pass (4); code-batch API tests pass (16); JavaScript/Python syntax checks and `git diff --check` pass. The full account-flow safety module reports one unrelated Income Statement note-role failure; local-server acceptance is pending.
+
+
+## Trial Balance code-edit error popup — 2026-11-03
+
+**Implementation:** Replaced the validation sentence inside the narrow account-code cell with a compact fixed popup positioned beside that cell. The popup stays until dismissed or the editor is reopened, announces the error accessibly, follows the cell during scroll/resize, and does not change the table row or column size. Trial Balance script cache version is 55; code validation and API behavior are unchanged.
+
+**Verification:** The Playwright inline-edit regression passes, including popup text/role, cell-size stability, and clearing when editing resumes. JavaScript syntax and `git diff --check` pass. Local-server acceptance is pending.

@@ -33,9 +33,9 @@ One line per file group: what it is now. Full build history for every entry live
 - static/client_select.html, static/client_select.js → standalone Client Cards page with guarded selection, admin entry, and loading feedback. See CHANGELOG_ARCHIVE.md.
 - static/procedure_modal.js → shared Verification/Audit Workbook Procedure modal for grouped Data Table search, evidence/Forms, procedures, and observations. See CHANGELOG_ARCHIVE.md.
 - static/audit_workbook.js, static/audit_workbook.html → Audit Workbook: session rows, filtering, totals, shared Procedure Modal, and cached evidence/Form completion badges. See CHANGELOG_ARCHIVE.md.
-- routers/trial_balance.py → Trial Balance import, validation, batched code corrections, hierarchy, adjustments, draft totals, categories and saved uploads. See CHANGELOG_ARCHIVE.md.
+- routers/trial_balance.py → Trial Balance import, validation, strict manual code corrections, hierarchy, adjustments, totals, categories and saved uploads. See CHANGELOG_ARCHIVE.md.
 - routers/account_control_center.py → account mappings with validated FS/Note pairs, batched writes, statement outlines, presentation, profit linking, closing confirmation and Cashflow setup. See CHANGELOG_ARCHIVE.md.
-- static/trial_balance.*, static/account_assignment_shared.js, static/financial_statement_workspace.*, static/cashflow_workspace.* → Trial Balance review with a default assignment-free view and scoped setup for statements, Cashflows and Verification. See CHANGELOG_ARCHIVE.md.
+- static/trial_balance.*, static/account_assignment_shared.js, static/financial_statement_workspace.*, static/cashflow_workspace.* → Default Trial Balance review, strict code edits, and scoped assignment workflows. See CHANGELOG_ARCHIVE.md.
 - static/account_control_center.* → retired screens; legacy page bookmarks redirect to the Trial Balance assignment workspace. APIs remain in the router. See CHANGELOG_ARCHIVE.md.
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Two-pane Audit Rules editor for Documents, Cross-checks, Categories, Voucher Checks and Assertions, plus Assign Categories. See CHANGELOG_ARCHIVE.md.
@@ -266,6 +266,8 @@ One line per file group: what it is now. Full build history for every entry live
 - 2026-11-02: Financial Statement Notes distinguish nested subtotals from category totals with separate row styles. See CHANGELOG_ARCHIVE.md.
 - 2026-11-02: Trial Balance page and workspace notices use a fixed, dismissible top-right toast; loading and validation remain inline. See CHANGELOG_ARCHIVE.md.
 - 2026-11-03: Trial Balance defaults to an assignment-free view; Financial Statements, Cashflows and Verification remain selectable. See CHANGELOG_ARCHIVE.md, Trial Balance default assignment-free view.
+- 2026-11-03: Manual Trial Balance code edits accept digits and single hyphens only; upload parsing remains flexible. See CHANGELOG_ARCHIVE.md, Strict Trial Balance code edits.
+- 2026-11-03: Invalid Trial Balance code edits now use a dismissible, field-anchored popup. See CHANGELOG_ARCHIVE.md, Trial Balance code-edit error popup.
 - 2026-11-01: Trial Balance toolbar now groups Period and upload actions above Workflow and assignment filters.
 - 2026-11-01: Trial Balance FS Category and Note filters use grouped row-style popups with search and multi-select. See CHANGELOG_ARCHIVE.md.
 - 2026-11-01: Trial Balance upload choices wait for client context, retry transient failures and ignore stale requests. See CHANGELOG_ARCHIVE.md.

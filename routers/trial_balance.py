@@ -1765,9 +1765,9 @@ def _save_account_code_corrections(upload_id: int, corrections: list[AccountCode
                 raise HTTPException(404, "A corrected account is not in this Trial Balance.")
             if row["account_code"] != item.expected_account_code:
                 raise HTTPException(409, "Account codes changed elsewhere. Reload before correcting them.")
-            code = item.account_code.strip()
-            if not code or len(code) > 120:
-                raise HTTPException(400, "Account codes must contain 1 to 120 characters.")
+            code = item.account_code
+            if not re.fullmatch(r"[0-9]+(?:-[0-9]+)*", code) or len(code) > 120:
+                raise HTTPException(400, "Use numbers and single hyphens only, e.g. 10-10-25.")
             if code in occupied and occupied[code] != item.account_id:
                 raise HTTPException(409, f"Account code {code} already belongs to another account. Choose an unused code.")
             if code != row["account_code"]:

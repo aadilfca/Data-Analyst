@@ -612,6 +612,10 @@
         }
 
         .tb-code-review-input { min-width: 150px; width: 100%; }
+        .tb-account-code-error-popup { position:fixed; z-index:1500; display:flex; align-items:flex-start; gap:9px; width:max-content; max-width:min(280px, calc(100vw - 24px)); box-sizing:border-box; padding:8px 10px; border:1px solid #efb2b2; border-radius:8px; background:#fff7f7; color:#9f2020; box-shadow:0 6px 20px #25344930; font-size:12px; font-weight:650; line-height:1.4; }
+        .tb-account-code-error-message { flex:1 1 auto; }
+        .tb-account-code-error-close { flex:0 0 auto; margin:-2px -3px 0 0; border:0; padding:2px 4px; background:transparent; color:inherit; font:inherit; font-size:15px; line-height:1; cursor:pointer; }
+        .tb-account-code-error-close:focus-visible { outline:2px solid #b42318; outline-offset:2px; border-radius:3px; }
         .tb-code-correction-cell { min-width: 210px; }
 
         .tb-mapping-review-grid {
@@ -1243,7 +1247,7 @@
     <script src="/static/cashflow_workspace.js?v=2"></script>
     <script src="/static/verification_workspace.js?v=2"></script>
     <script src="/static/api_utils.js?v=1"></script>
-    <script src="/static/trial_balance.js?v=53"></script>
+    <script src="/static/trial_balance.js?v=55"></script>
 
 </body>
 

@@ -22,6 +22,7 @@ let availableUploadsRequestToken = 0;
 let currentUploadId = null;
 // Draft account codes never alter the saved hierarchy or assignments until one save succeeds.
 const tbPendingCodeCorrections = new Map();
+let tbAccountCodeErrorPopup = null;
 let tbCodeSaveRunning = false;
 let tbImportCodeChangesPending = false;
 let tbCodeDecisionPending = null;
@@ -2974,8 +2975,61 @@ async function loadAvailableUploadAccounts(uploadId, target = availableUploadsDr
     }
 }
 
+function clearTbAccountCodeErrorPopup() {
+    if (!tbAccountCodeErrorPopup) return;
+    const {node, display, position} = tbAccountCodeErrorPopup;
+    window.removeEventListener('scroll', position, true);
+    window.removeEventListener('resize', position);
+    if (display.getAttribute('aria-describedby') === node.id) display.removeAttribute('aria-describedby');
+    node.remove();
+    tbAccountCodeErrorPopup = null;
+}
+
+function showTbAccountCodeErrorPopup(cell, display, accountId) {
+    clearTbAccountCodeErrorPopup();
+    const popup = document.createElement('div');
+    popup.className = 'tb-account-code-error-popup';
+    popup.id = 'tbAccountCodeErrorPopup' + accountId;
+    popup.setAttribute('role', 'alert');
+    popup.setAttribute('aria-atomic', 'true');
+    const message = document.createElement('span');
+    message.className = 'tb-account-code-error-message';
+    message.textContent = 'Use numbers and single hyphens only, e.g. 10-10-25.';
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'tb-account-code-error-close';
+    close.setAttribute('aria-label', 'Dismiss account code error');
+    close.textContent = '×';
+    close.addEventListener('click', clearTbAccountCodeErrorPopup);
+    popup.append(message, close);
+    document.body.appendChild(popup);
+    display.setAttribute('aria-describedby', popup.id);
+
+    const position = function () {
+        if (!popup.isConnected) return;
+        const rect = cell.getBoundingClientRect();
+        if (!rect.width || rect.bottom <= 0 || rect.top >= window.innerHeight || rect.right <= 0 || rect.left >= window.innerWidth) {
+            clearTbAccountCodeErrorPopup();
+            return;
+        }
+        const popupRect = popup.getBoundingClientRect();
+        const margin = 12;
+        const left = Math.max(margin, Math.min(rect.left, window.innerWidth - popupRect.width - margin));
+        const below = rect.bottom + 6;
+        const top = below + popupRect.height <= window.innerHeight - margin
+            ? below : Math.max(margin, rect.top - popupRect.height - 6);
+        popup.style.left = left + 'px';
+        popup.style.top = top + 'px';
+    };
+    tbAccountCodeErrorPopup = {node: popup, display, position};
+    position();
+    window.addEventListener('scroll', position, true);
+    window.addEventListener('resize', position);
+}
+
 // Saved account codes and classifications use the same deliberate editing gesture.
 function renderAvailableAccountsTable(accounts, adjustments, controls = {}) {
+    clearTbAccountCodeErrorPopup();
     availableAccountsTableBody.innerHTML = '';
 
     const amountFields = ['opening_dr', 'opening_cr', 'period_dr', 'period_cr', 'closing_dr', 'closing_cr'];
@@ -3002,16 +3056,25 @@ function renderAvailableAccountsTable(accounts, adjustments, controls = {}) {
         display.addEventListener('dblclick', function () {
             const input = document.createElement('input');
             if (tbCodeSaveRunning || tbFsBusyCount > 0 || tbFsModalOpen || trialBalanceActionsInFlight.has('account-code-upload:' + availableUploadsDropdown.value)) return;
+            clearTbAccountCodeErrorPopup();
             input.type = 'text'; input.className = 'tb-code-review-input'; input.maxLength = 120;
             input.value = display.textContent || '';
             input.setAttribute('aria-label', 'Account code for ' + (account.account_name || account.account_code));
+            display.removeAttribute('aria-describedby');
             tdCode.replaceChildren(input); input.focus(); input.select();
             input.addEventListener('keydown', function (event) {
                 if (event.key === 'Escape') input.value = display.textContent || '';
                 if (event.key === 'Enter' || event.key === 'Escape') input.blur();
             });
             input.addEventListener('blur', function () {
-                tbStageAccountCode(account, input.value, display);
+                const value = input.value;
+                if (value === display.textContent) { tdCode.replaceChildren(display); return; }
+                if (!/^[0-9]+(?:-[0-9]+)*$/.test(value)) {
+                    tdCode.replaceChildren(display);
+                    showTbAccountCodeErrorPopup(tdCode, display, account.id);
+                    return;
+                }
+                tbStageAccountCode(account, value, display);
                 tdCode.replaceChildren(display);
             }, { once: true });
         });
@@ -3123,7 +3186,7 @@ function tbUpdateCodeCorrectionsBar() {
 
 function tbStageAccountCode(account, code, display) {
     if (tbCodeSaveRunning) return;
-    const value = code.trim();
+    const value = code;
     if (value === account.account_code) tbPendingCodeCorrections.delete(account.id);
     else tbPendingCodeCorrections.set(account.id, {account, account_code:value, display});
     display.textContent = value;
@@ -3148,9 +3211,9 @@ async function tbSaveAccountCodes() {
     const corrections = [...tbPendingCodeCorrections.values()].map(item => ({
         account_id:item.account.id, account_code:item.account_code, expected_account_code:item.account.account_code
     }));
-    if (corrections.some(item => !item.account_code || item.account_code.length > 120)
+    if (corrections.some(item => !/^[0-9]+(?:-[0-9]+)*$/.test(item.account_code) || item.account_code.length > 120)
         || new Set(corrections.map(item => item.account_code)).size !== corrections.length) {
-        showStatus('Enter distinct, nonblank account codes of up to 120 characters.', 'error'); return false;
+        showStatus('Use distinct codes made of numbers and single hyphens, e.g. 10-10-25.', 'error'); return false;
     }
     const sourceControls = [availableUploadsDropdown, tbAssignmentWorkflow].filter(Boolean).map(control => [control, control.disabled]);
     sourceControls.forEach(([control]) => { control.disabled = true; });

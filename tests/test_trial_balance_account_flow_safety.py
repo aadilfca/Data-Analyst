@@ -319,12 +319,27 @@ def test_code_batch_rebuilds_hierarchy_once_and_preserves_overrides(correction_s
     assert len(correction_store['writes'])==1
 
 
+@pytest.mark.parametrize('code',['10-10-25','001-01'])
+def test_code_batch_accepts_numeric_segments_and_preserves_leading_zeros(correction_store,code):
+    result=trial_balance._save_account_code_corrections(59,[
+        trial_balance.AccountCodeCorrection(account_id=1,account_code=code,expected_account_code='BAD')])
+    assert result['updated'] is True
+    assert correction_store['copies']==[(5,'BAD',code,59)]
+    assert code in correction_store['writes'][0][1]
+
+
 @pytest.mark.parametrize('corrections',[
     [(1,'10','BAD'),(3,'10','BAD2')], # duplicate final codes
     [(1,'10-01','BAD')], # existing account
     [(1,'10','STALE')], # concurrent correction
     [(999,'10','BAD')], # wrong upload/account
     [(1,'','BAD')],
+    [(1,'10:00:00','BAD')], # Excel date/time text
+    [(1,'A-10','BAD')], # letters
+    [(1,'10 01','BAD')], # spaces
+    [(1,'-10','BAD')], # leading hyphen
+    [(1,'10-','BAD')], # trailing hyphen
+    [(1,'10--01','BAD')], # repeated hyphen
 ])
 def test_code_batch_rejects_whole_draft_before_copy_or_update(correction_store,corrections):
     items=[trial_balance.AccountCodeCorrection(account_id=i,account_code=c,expected_account_code=o) for i,c,o in corrections]
