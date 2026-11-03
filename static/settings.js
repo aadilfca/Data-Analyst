@@ -71,7 +71,7 @@ let currentCashflowDefaults = {};
 
 async function loadUploadBackupSetting() {
     const panel = document.getElementById('uploadBackupsPanel');
-    const toggle = document.getElementById('allowUploadsWithoutBackup');
+    const toggle = document.getElementById('uploadBackupRequired');
     const save = document.getElementById('saveUploadBackupsBtn');
     const status = document.getElementById('uploadBackupsStatus');
     // Authorization is also checked by the server on every read and save.
@@ -82,14 +82,14 @@ async function loadUploadBackupSetting() {
         panel.hidden = false;
         if (!response.ok) throw new Error('Could not load the backup setting. Reload Settings to try again.');
         const policy = await response.json();
-        toggle.checked = policy.allow_without_backup === true;
+        toggle.checked = policy.allow_without_backup !== true;
         toggle.disabled = save.disabled = false;
-        status.textContent = toggle.checked ? 'Uploads without backup are allowed for development.' : 'Backups are compulsory.';
+        status.textContent = toggle.checked ? 'Backups are ON for all users.' : 'Backups are OFF for all users during development.';
     } catch (error) { panel.hidden = false; status.textContent = error.message; }
 }
 
 async function saveUploadBackupSetting() {
-    const toggle = document.getElementById('allowUploadsWithoutBackup');
+    const toggle = document.getElementById('uploadBackupRequired');
     const save = document.getElementById('saveUploadBackupsBtn');
     const status = document.getElementById('uploadBackupsStatus');
     const selected = toggle.checked;
@@ -98,12 +98,12 @@ async function saveUploadBackupSetting() {
     try {
         const response = await fetch(`${API_BASE}/api/settings/upload-backups`, {
             method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({allow_without_backup: selected})
+            body: JSON.stringify({allow_without_backup: !selected})
         });
         if (!response.ok) throw new Error('Save was not confirmed. Reload Settings to check the saved choice.');
         const policy = await response.json();
-        if (policy.allow_without_backup !== selected) throw new Error('Save was not confirmed. Reload Settings to check the saved choice.');
-        status.textContent = selected ? 'Saved. You can turn backup off on the Upload page.' : 'Saved. Backups are now compulsory.';
+        if (policy.allow_without_backup !== !selected) throw new Error('Save was not confirmed. Reload Settings to check the saved choice.');
+        status.textContent = selected ? 'Saved. Backups are ON for all users.' : 'Saved. Backups are OFF for all users during development.';
     } catch (error) { status.textContent = error.message; }
     finally { toggle.disabled = save.disabled = false; }
 }

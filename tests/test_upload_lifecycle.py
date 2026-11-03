@@ -218,6 +218,7 @@ def pipeline(monkeypatch, tmp_path):
              'allow_without_backup': False}
     monkeypatch.setattr(lifecycle, 'execute_query_pg', lambda *args, **kwargs:
                         [{'value': 'true' if state['allow_without_backup'] else 'false'}])
+    monkeypatch.setattr(lifecycle, 'unbacked_uploads_allowed', lambda query=None: state['allow_without_backup'])
     monkeypatch.setenv('UPLOAD_ARCHIVE_DIR', str(tmp_path / 'archives'))
     monkeypatch.setenv('UPLOAD_ARCHIVE_TO_DRIVE', 'true')
 
@@ -449,14 +450,14 @@ def test_archive_failure_leaves_source_unchanged_and_same_plan_can_retry(pipelin
     assert len(state['store'].jobs) == 1
 
 
-def test_unbacked_upload_requires_explicit_server_permission(pipeline, monkeypatch):
+@pytest.mark.parametrize('client_choice', [None, False, True])
+def test_global_backup_on_applies_even_if_client_asks_to_skip(pipeline, client_choice):
     pipeline['allow_without_backup'] = False
-    pipeline['store'] = Store([])
-    for action in (upload.validate_only, upload.validate_and_import):
-        with pytest.raises(HTTPException) as error:
-            action(request(backup_enabled=False))
-        assert error.value.status_code == 403
-    assert pipeline['store'].source_writes == 0 and not pipeline['store'].jobs
+    pipeline['store'] = Store([row(description='Old')])
+    pipeline['incoming'] = [row(description='New')]
+    result, validation = validate_then_import(pipeline, backup_enabled=client_choice)
+    assert validation['backup_enabled'] is True
+    assert result['archive_verified'] and pipeline['transfers'] == 1
 
 
 @pytest.fixture
@@ -515,7 +516,8 @@ def test_backup_setting_rejects_nonadministrator_reads_and_writes(backup_setting
 
 
 @pytest.mark.parametrize('protected', [False, True])
-def test_development_replacement_skips_all_archives_but_protects_evidence(pipeline, monkeypatch, protected):
+@pytest.mark.parametrize('client_choice', [None, False, True])
+def test_development_replacement_skips_all_archives_but_protects_evidence(pipeline, monkeypatch, protected, client_choice):
     pipeline['allow_without_backup'] = True
     state = pipeline
     state['store'] = Store([row(description='Old')])
@@ -524,8 +526,9 @@ def test_development_replacement_skips_all_archives_but_protects_evidence(pipeli
     monkeypatch.setattr(lifecycle, 'archive_directory', lambda: pytest.fail('No local archive allowed'))
     monkeypatch.setattr(lifecycle, 'DriveArchive', lambda: pytest.fail('No Drive calls allowed'))
     before = deepcopy(state['store'].rows)
-    validation = upload.validate_only(request(backup_enabled=False))
-    importing = request(backup_enabled=False, validation_plan_id=validation['validation_plan_id'])
+    validation = upload.validate_only(request(backup_enabled=client_choice))
+    assert validation['backup_enabled'] is False
+    importing = request(backup_enabled=client_choice, validation_plan_id=validation['validation_plan_id'])
     if protected:
         with pytest.raises(HTTPException) as error:
             upload.validate_and_import(importing)
@@ -541,19 +544,16 @@ def test_development_replacement_skips_all_archives_but_protects_evidence(pipeli
     assert all(not job.get('archive_path') and not job.get('drive_file_id') for job in state['store'].jobs.values())
 
 
-def test_backup_choice_is_bound_to_validation_and_permission_is_rechecked(pipeline, monkeypatch):
-    pipeline['allow_without_backup'] = True
+@pytest.mark.parametrize('initial', [True, False])
+def test_global_backup_setting_is_bound_to_validation_in_both_directions(pipeline, initial):
+    pipeline['allow_without_backup'] = initial
     state = pipeline
     state['store'] = Store([row(description='Old')]); state['incoming'] = [row(description='New')]
-    validation = upload.validate_only(request(backup_enabled=True))
+    validation = upload.validate_only(request())
+    pipeline['allow_without_backup'] = not initial
     with pytest.raises(HTTPException) as error:
-        upload.validate_and_import(request(backup_enabled=False, validation_plan_id=validation['validation_plan_id']))
-    assert error.value.status_code == 409
-    validation = upload.validate_only(request(backup_enabled=False))
-    pipeline['allow_without_backup'] = False
-    with pytest.raises(HTTPException) as error:
-        upload.validate_and_import(request(backup_enabled=False, validation_plan_id=validation['validation_plan_id']))
-    assert error.value.status_code == 403 and state['store'].source_writes == 0
+        upload.validate_and_import(request(validation_plan_id=validation['validation_plan_id']))
+    assert error.value.status_code == 409 and state['store'].source_writes == 0
 
 
 def test_render_backup_on_verifies_drive_without_persistent_local_directory(pipeline, monkeypatch):

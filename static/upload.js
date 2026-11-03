@@ -1416,11 +1416,6 @@ if (clearBtn) {
 
 function resetUpload() {
     ++uploadTemplateGeneration;
-    const backupToggle = document.getElementById('uploadBackupEnabled');
-    if (!backupToggle.checked) {
-        backupToggle.checked = true;
-        backupToggle.dispatchEvent(new Event('change'));
-    }
     ledgerSelectedAccountCode = ''; pendingLedgerRestoreCode = '';
     if (isLedgerUpload()) renderLedgerUploadAccounts();
     else clearLedgerUploadContext();
@@ -2466,7 +2461,7 @@ if (importBtn) {
         });
 
         const payload = {
-            backup_enabled: document.getElementById('uploadBackupEnabled').checked,
+            backup_enabled: uploadBackupRequired,
             template_id: selectedTemplateId,
             file_id: fileId,
             client_id: parseInt(clientId),
@@ -2626,6 +2621,11 @@ if (importBtn) {
             lastRateModeInfo = result.rate_mode || null;
             renderRateModeIndicator();
             const canImport = Boolean(result.can_import && result.validation_plan_id);
+            if (typeof result.backup_enabled === 'boolean') {
+                ++uploadBackupPolicyGeneration;
+                uploadBackupRequired = result.backup_enabled;
+                renderUploadBackupPolicy();
+            }
             validationPlanId = canImport ? result.validation_plan_id : null;
             validationStatus = canImport ? 'valid' : 'ignored';
             importBtn.textContent = canImport ? (result.ledger_evidence_refresh ? 'Refresh balance evidence' : '🚀 Import selected changes') : 'No changes to import';
@@ -2679,6 +2679,14 @@ async function performImport(payload) {
     const ledgerPresentation = payload.ledger_account_code
         ? `${submittedAccount?.account_name || 'Ledger account'} (${payload.ledger_account_code}) · ${payload.ledger_period_start} through ${payload.ledger_period_end}` : null;
     try {
+        if (!await loadUploadBackupPolicy()) {
+            showUploadFailure('Could not check the app backup setting. Retry Import.', 'Import');
+            return;
+        }
+        if (payload.backup_enabled !== uploadBackupRequired) {
+            showUploadFailure('The administrator changed the backup setting. Validate again.', 'Validation');
+            return;
+        }
         if (payload.comparison_mode === 'replace_range' || payload.backup_enabled === false) {
             const confirmed = await reviewUploadReplacement(payload);
             if (!confirmed) {
@@ -3343,36 +3351,32 @@ if (previewBtn) {
 
 // ---------- INIT ----------
 let uploadBackupPolicyGeneration = 0;
+let uploadBackupRequired = true;
+function renderUploadBackupPolicy() {
+    document.getElementById('uploadBackupHelp').textContent = uploadBackupRequired
+        ? 'Backups are ON. A verified Google Drive copy is required before replacement.'
+        : 'Backups are OFF for development. No recovery backup will be created.';
+}
+
 async function loadUploadBackupPolicy() {
     const generation = ++uploadBackupPolicyGeneration;
-    const toggle = document.getElementById('uploadBackupEnabled');
     const help = document.getElementById('uploadBackupHelp');
-    // Recheck on tab return so an administrator's change takes effect promptly.
-    // Failed reads restore the protected default rather than leaving an opt-out.
-    toggle.disabled = true;
     let allowed = false;
+    let loaded = false;
     try {
         const response = await fetch(API_BASE + '/api/upload/backup-policy');
-        const policy = response.ok ? await response.json() : {};
+        if (!response.ok) throw new Error('Backup setting unavailable');
+        const policy = await response.json();
+        if (typeof policy.allow_without_backup !== 'boolean') throw new Error('Backup setting unavailable');
         allowed = policy.allow_without_backup === true;
+        loaded = true;
     } catch (_) { /* Keep backups required if policy cannot be loaded. */ }
-    if (generation !== uploadBackupPolicyGeneration) return;
-    if (!allowed && !toggle.checked) {
-        toggle.checked = true;
-        resetValidationState();
-    }
-    toggle.disabled = !allowed;
-    const update = () => {
-        help.textContent = !toggle.checked
-            ? 'Development mode: no recovery backup will be created.'
-            : toggle.disabled ? 'Backups are compulsory. Administrator: Settings → Upload backups.'
-                : 'A verified Google Drive copy is required before replacement.';
-    };
-    if (!toggle.dataset.policyBound) {
-        toggle.addEventListener('change', () => { resetValidationState(); update(); });
-        toggle.dataset.policyBound = 'true';
-    }
-    update();
+    if (generation !== uploadBackupPolicyGeneration) return false;
+    if (uploadBackupRequired !== !allowed) resetValidationState();
+    uploadBackupRequired = !allowed;
+    renderUploadBackupPolicy();
+    if (!loaded) help.textContent = 'Could not check the app backup setting. Retry before importing.';
+    return loaded;
 }
 
 window.addEventListener('focus', () => { void loadUploadBackupPolicy(); });

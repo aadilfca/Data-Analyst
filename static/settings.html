@@ -156,10 +156,11 @@
         <div id="tabPanelAppSettings">
             <div class="settings-group" id="uploadBackupsPanel" hidden>
                 <h3>Upload backups</h3>
-                <label><input type="checkbox" id="allowUploadsWithoutBackup" disabled>
-                    Allow uploads without backup — development only</label>
-                <p>When enabled, users can turn backup off on the Upload page. Replaced data will have no recovery backup.</p>
-                <p>Turn this off to make backups compulsory. Applies to all clients and servers using this database.</p>
+                <label><input type="checkbox" id="uploadBackupRequired" checked disabled>
+                    Back up replaced data to Google Drive</label>
+                <p>On: a verified Drive backup is required before replacement.</p>
+                <p>Off: all users can upload without backup during development. Replaced data has no recovery backup.</p>
+                <p>Applies to all clients and servers using this database.</p>
                 <button class="save-btn" id="saveUploadBackupsBtn" type="button" disabled>Save Upload Backup Setting</button>
                 <p id="uploadBackupsStatus" role="status" aria-live="polite"></p>
             </div>
@@ -193,7 +194,7 @@
     </div>
 
     <script src="/static/client_context.js?v=28"></script>
-    <script src="/static/settings.js?v=4"></script>
+    <script src="/static/settings.js?v=5"></script>
 </body>
 
 </html>

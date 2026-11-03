@@ -32,7 +32,7 @@ from services.upload_lifecycle import (
     declared_coverage, scope_sql, source_fingerprint, match_unchanged, digest,
     get_receipt, prepare_lifecycle, guard_lifecycle, finish_lifecycle,
     SOURCE_ROW_HASH_SQL,
-    unbacked_uploads_allowed, check_backup_policy,
+    unbacked_uploads_allowed, apply_upload_backup_policy,
 )
 
 # ⭐ MUST HAVE THIS LINE
@@ -161,7 +161,7 @@ def _with_ledger_context(function):
     """Reset context even on failed validation/import or a concurrent request."""
     @wraps(function)
     def wrapped(request, *args, **kwargs):
-        check_backup_policy(request)
+        apply_upload_backup_policy(request, execute_query_pg)
         templates = execute_query_pg(
             "SELECT id, data_purpose, ledger_columns FROM templates WHERE id = %s AND is_active = TRUE",
             (request.template_id,),
@@ -2317,7 +2317,7 @@ class EditedCellValue(BaseModel):
     value: str
 
 class ImportRequest(BaseModel):
-    # None preserves older clients' protected local/Drive configuration.
+    # Accepted for older clients; the server replaces this with the shared policy.
     backup_enabled: Optional[bool] = None
     template_id: int
     file_id: int
@@ -3297,7 +3297,7 @@ def preview_date_format(request: DatePreviewRequest):
 # ---------- VALIDATE ONLY (NO IMPORT) ----------
 @router.get('/api/upload/backup-policy')
 def upload_backup_policy(session=Depends(get_current_user)):
-    return {'allow_without_backup': unbacked_uploads_allowed()}
+    return {'allow_without_backup': unbacked_uploads_allowed(execute_query_pg)}
 
 
 @router.post("/api/upload/validate")
@@ -3308,7 +3308,6 @@ def validate_only(request: ImportRequest, perf: bool = False):
     Validate the Excel file without importing any data.
     Returns row-by-row validation errors.
     """
-    check_backup_policy(request)
     # Validate template and file
     template = execute_query_pg("SELECT id, template_name, rate_source FROM templates WHERE id = %s AND is_active = TRUE", (request.template_id,))
     if not template:
@@ -3656,6 +3655,7 @@ def validate_only(request: ImportRequest, perf: bool = False):
 
     return {
         "status": "validation_complete",
+        "backup_enabled": request.backup_enabled,
         "source_diagnostics": source_diagnostics,
         "has_errors": len(validation_errors) > 0,
         "error_count": len(validation_errors),
@@ -4307,7 +4307,6 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
 @_log_upload_timing("import")
 @_with_ledger_context
 def validate_and_import(request: ImportRequest, background_tasks: BackgroundTasks = None, perf: bool = False):
-    check_backup_policy(request)
     if request.validation_plan_id:
         return _import_validation_plan(request, background_tasks)
 

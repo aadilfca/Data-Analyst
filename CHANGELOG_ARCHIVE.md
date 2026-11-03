@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Shared upload backup switch — 2026-11-03
+
+Simplified Settings → Upload backups to one administrator checkbox: checked requires verified Drive; unchecked skips all recovery backups for every uploader. The existing shared database value is preserved, so previously allowed development uploads now skip backups automatically. Upload displays status and has no per-file checkbox. The server derives policy for every request, including stale/older API clients; changing policy invalidates validation in both directions and is rechecked before replacement. Former environment overrides no longer control uploads. No schema change, dependency installation or live data/Drive operation.
+
+Verification: **110 focused tests pass** across API/browser, lifecycle, duplicate and deletion checks, covering the global rule, altered client flags, permission changes, evidence, rollback and report generation. Compilation, JavaScript syntax and whitespace checks pass; existing TestClient deprecation warning only. Hosted acceptance remains pending.
+
 ## Development upload backup controls — 2026-11-03
 
 Administration → Settings → Upload backups provides an administrator-only, saved development opt-out; default is compulsory backups. The shared PostgreSQL setting applies immediately across updated servers, survives restarts and supersedes the former environment flag. Dedicated routes enforce administrator access; generic Settings writes cannot bypass it. Upload rechecks permission on tab return and at import, invalidating a pending plan if backup becomes compulsory.

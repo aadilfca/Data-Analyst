@@ -771,7 +771,7 @@ def purge_replaced_transaction_rows(client_id, template_id, row_ids, operator, a
             FROM upload_lifecycle_runs WHERE operation_id = %s AND client_id = %s AND template_id = %s FOR UPDATE''',
             (archive_proof['operation_id'], client_id, template_id))
         proof = archive_proof.get('archive') or {}
-        unbacked = bool(receipt and unbacked_receipt_matches(archive_proof, receipt[0]))
+        unbacked = bool(receipt and unbacked_receipt_matches(archive_proof, receipt[0], execute_query_pg))
         if not unbacked and (not receipt or receipt[0]['status'] != 'verified'
                 or not proof
                 or receipt[0]['drive_file_id'] != proof['drive_file_id']

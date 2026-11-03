@@ -20,29 +20,23 @@ SOURCE_ROW_HASH_SQL = "encode(sha256(convert_to(jsonb_build_array(cd.id, COALESC
 UPLOAD_BACKUP_SETTING = 'development_allow_unbacked_uploads'
 
 
-def drive_archiving_enabled():
-    """Drive remains the default; local development can opt into verified ZIPs only."""
-    value = os.environ.get('UPLOAD_ARCHIVE_TO_DRIVE', 'true').strip().casefold()
-    return value not in {'0', 'false', 'no', 'off', 'disabled'}
-
-
-def unbacked_uploads_allowed():
+def unbacked_uploads_allowed(query=None):
     """Read the administrator's shared choice without a stale local cache."""
-    rows = execute_query_pg('SELECT value FROM app_settings WHERE key = %s', (UPLOAD_BACKUP_SETTING,))
+    rows = (query or execute_query_pg)('SELECT value FROM app_settings WHERE key = %s', (UPLOAD_BACKUP_SETTING,))
     return bool(rows and rows[0].get('value') == 'true')
 
 
-def check_backup_policy(request):
-    if getattr(request, 'backup_enabled', None) is False and not unbacked_uploads_allowed():
-        raise HTTPException(403, 'This server requires upload backups. Turn backup on and validate again.')
+def apply_upload_backup_policy(request, query=None):
+    """The administrator's shared setting governs every uploader and API client."""
+    request.backup_enabled = not unbacked_uploads_allowed(query)
 
 
-def unbacked_receipt_matches(prepared, receipt):
+def unbacked_receipt_matches(prepared, receipt, query=None):
     """Never disguise an intentionally unbacked import as a verified archive."""
     scope = receipt.get('scope_json') or {}
     if isinstance(scope, str):
         scope = json.loads(scope)
-    return (prepared.get('archive_mode') == 'none' and unbacked_uploads_allowed()
+    return (prepared.get('archive_mode') == 'none' and unbacked_uploads_allowed(query)
             and receipt.get('status') == 'unbacked'
             and scope.get('backup_mode') == 'none'
             and receipt.get('archive_state_hash') == prepared.get('archive_state_hash')
@@ -143,7 +137,8 @@ def _archive_state(ids, query):
 
 
 def prepare_lifecycle(request, payload, query, write, transaction, signature):
-    check_backup_policy(request)
+    if request.backup_enabled != (not unbacked_uploads_allowed(query)):
+        raise HTTPException(409, 'The upload backup setting changed. Validate again.')
     lifecycle = payload.get('lifecycle')
     if not lifecycle:
         if payload.get('changed') or payload.get('missing'):
@@ -220,17 +215,6 @@ def prepare_lifecycle(request, payload, query, write, transaction, signature):
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
-        if getattr(request, 'backup_enabled', None) is not True and not drive_archiving_enabled():
-            proof = {'drive_file_id': None, 'sha256': checksum, 'local_path': str(path)}
-            with transaction():
-                write("""UPDATE upload_lifecycle_runs
-                          SET status = 'verified', drive_file_id = NULL, archive_sha256 = %s,
-                              archive_path = %s, archive_state_hash = %s
-                        WHERE operation_id = %s AND status <> 'applied'""",
-                      (checksum, str(path), prepared['archive_state_hash'], operation))
-            prepared['archive'] = proof
-            prepared['archive_mode'] = 'local'
-            return prepared
         client = DriveArchive()
         saved = query('SELECT drive_file_id FROM upload_lifecycle_runs WHERE operation_id = %s', (operation,))
         remote_id = saved[0].get('drive_file_id') if saved else None
@@ -268,6 +252,8 @@ def guard_lifecycle(prepared, query):
         raise HTTPException(409, 'This import already completed. Retry to retrieve its saved result.')
     check_scope(prepared['lifecycle'], query)
     if prepared['ids']:
+        if (prepared.get('archive_mode') == 'none') != unbacked_uploads_allowed(query):
+            raise HTTPException(409, 'The upload backup setting changed. Validate again.')
         if prepared.get('archive_mode') == 'local':
             proof = prepared.get('archive') or {}
             try:
@@ -284,7 +270,7 @@ def guard_lifecycle(prepared, query):
         if digest(state) != prepared['archive_state_hash']:
             raise HTTPException(409, 'Archived source or audit data changed. Validate again before replacing it.')
         if prepared.get('archive_mode') == 'none':
-            if not rows or not unbacked_receipt_matches(prepared, rows[0]):
+            if not rows or not unbacked_receipt_matches(prepared, rows[0], query):
                 raise HTTPException(409, 'Development backup permission changed; validate again with backups enabled.')
         elif not rows or rows[0]['status'] != 'verified':
             raise HTTPException(409, 'A verified archive is required before replacement.')

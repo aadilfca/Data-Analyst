@@ -13,14 +13,9 @@ def test_development_backup_policy_control_and_review_warning(page):
     page.route('**/api/upload/backup-policy', lambda route: route.fulfill(
         json={'allow_without_backup': True}))
     page.evaluate('loadUploadBackupPolicy()')
-    toggle = page.locator('#uploadBackupEnabled')
-    expect(toggle).to_be_checked()
-    expect(toggle).to_be_enabled()
-    page.evaluate("validationStatus='valid'; validationPlanId='old-plan'")
-    toggle.evaluate("element => { for(let node=element.parentElement; node; node=node.parentElement) {node.style.display='block'; node.hidden=false;} }")
-    toggle.uncheck()
-    assert page.evaluate('validationPlanId') is None
-    expect(page.locator('#uploadBackupHelp')).to_contain_text('no recovery backup')
+    assert page.locator('#uploadBackupEnabled').count() == 0
+    assert page.evaluate('uploadBackupRequired') is False
+    expect(page.locator('#uploadBackupHelp')).to_contain_text('No recovery backup')
     review(page)
     page.locator('#uploadReplacementCancel').click()
     page.evaluate('void reviewUploadReplacement({...window.reviewPayload, backup_enabled:false})')
@@ -30,20 +25,20 @@ def test_development_backup_policy_control_and_review_warning(page):
 def test_unavailable_backup_policy_keeps_backup_required(page):
     page.route('**/api/upload/backup-policy', lambda route: route.fulfill(status=503, body='unavailable'))
     page.evaluate('loadUploadBackupPolicy()')
-    expect(page.locator('#uploadBackupEnabled')).to_be_checked()
-    expect(page.locator('#uploadBackupEnabled')).to_be_disabled()
+    assert page.evaluate('uploadBackupRequired') is True
+    expect(page.locator('#uploadBackupHelp')).to_contain_text('Could not check')
 
 
 def test_administrator_revocation_restores_backup_and_invalidates_waiting_import(page):
     policy = {'allow_without_backup': True}
     page.route('**/api/upload/backup-policy', lambda route: route.fulfill(json=policy))
     page.evaluate('loadUploadBackupPolicy()')
-    page.locator('#uploadBackupEnabled').evaluate("node => {node.checked=false; node.dispatchEvent(new Event('change'));}")
+    assert page.evaluate('uploadBackupRequired') is False
     page.evaluate("validationPlanId='ready';validationStatus='valid'")
     policy['allow_without_backup'] = False
     page.evaluate('loadUploadBackupPolicy()')
-    expect(page.locator('#uploadBackupEnabled')).to_be_checked()
-    expect(page.locator('#uploadBackupEnabled')).to_be_disabled()
+    assert page.evaluate('uploadBackupRequired') is True
+    expect(page.locator('#uploadBackupHelp')).to_contain_text('Backups are ON')
     assert page.evaluate('validationPlanId') is None
 
 
@@ -75,17 +70,17 @@ def test_visible_settings_switch_saves_and_reloads_without_restart(settings_page
         route.fulfill(json=state)
     page.route('**/api/settings/upload-backups', endpoint)
     page.evaluate('loadUploadBackupSetting()')
-    toggle = page.locator('#allowUploadsWithoutBackup')
+    toggle = page.locator('#uploadBackupRequired')
     expect(page.locator('#uploadBackupsPanel')).to_be_visible()
-    expect(toggle).not_to_be_checked()
-    toggle.check()
-    page.locator('#saveUploadBackupsBtn').click()
-    expect(page.locator('#uploadBackupsStatus')).to_contain_text('Saved.')
-    page.evaluate('loadUploadBackupSetting()')
     expect(toggle).to_be_checked()
     toggle.uncheck()
     page.locator('#saveUploadBackupsBtn').click()
-    expect(page.locator('#uploadBackupsStatus')).to_contain_text('Backups are now compulsory.')
+    expect(page.locator('#uploadBackupsStatus')).to_contain_text('Saved.')
+    page.evaluate('loadUploadBackupSetting()')
+    expect(toggle).not_to_be_checked()
+    toggle.check()
+    page.locator('#saveUploadBackupsBtn').click()
+    expect(page.locator('#uploadBackupsStatus')).to_contain_text('Backups are ON for all users.')
     assert state['allow_without_backup'] is False
 
 
@@ -99,11 +94,11 @@ def test_settings_hides_administrator_switch_for_nonadmin_and_reports_failed_sav
                route.fulfill(json={'allow_without_backup': False}) if route.request.method == 'GET'
                else route.fulfill(status=503, body='Unavailable'))
     page.evaluate('loadUploadBackupSetting()')
-    page.locator('#allowUploadsWithoutBackup').check()
+    page.locator('#uploadBackupRequired').uncheck()
     page.locator('#saveUploadBackupsBtn').click()
     expect(page.locator('#uploadBackupsStatus')).to_contain_text('Save was not confirmed.')
     page.evaluate('loadUploadBackupSetting()')
-    expect(page.locator('#allowUploadsWithoutBackup')).not_to_be_checked()
+    expect(page.locator('#uploadBackupRequired')).to_be_checked()
 
 
 def test_validation_excel_report_is_generated_in_browser(page):
