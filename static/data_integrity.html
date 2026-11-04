@@ -36,12 +36,38 @@
         .integrity-message { margin-top:14px; padding:12px 14px; border-radius:10px; background:#f8fafc; color:#475569; font-size:13px; }
         .integrity-message.error { background:#fff1f2; color:#9f1d25; }
         .integrity-context { color:#64748b; font-size:12px; }
+        .integrity-tabs { display:flex; gap:8px; margin-top:20px; flex-wrap:wrap; }
+        .integrity-tab { padding:10px 14px; border:1px solid #cbd5e1; border-radius:9px; background:white; color:#334155; font-weight:650; cursor:pointer; }
+        .integrity-tab[aria-selected="true"] { color:#1e40af; background:#eff6ff; border-color:#93c5fd; }
+        .integrity-tab:focus-visible, .integrity-button:focus-visible, .safeguard-explanation summary:focus-visible { outline:3px solid #60a5fa; outline-offset:3px; }
+        .integrity-panel[hidden] { display:none; }
+        .safeguard-summary { align-items:flex-start; }
+        .safeguard-summary strong { display:block; margin-bottom:8px; }
+        .safeguard-description { margin:12px 0; padding:0 18px; color:#475569; font-size:14px; line-height:1.6; }
+        .safeguard-modules { display:grid; gap:12px; padding:4px 18px 18px; }
+        .safeguard-module { border:1px solid #e2e8f0; border-radius:10px; padding:14px; min-width:0; }
+        .safeguard-module-header { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; }
+        .safeguard-module h2 { margin:0; color:#172554; font-size:16px; }
+        .safeguard-checks { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; margin-top:14px; }
+        .safeguard-check { min-width:0; overflow-wrap:anywhere; }
+        .safeguard-check strong { display:block; margin-bottom:6px; font-size:13px; }
+        .safeguard-check p { color:#475569; font-size:13px; line-height:1.5; margin:7px 0 0; }
+        .safeguard-explanation { padding:16px 18px; border-top:1px solid #e2e8f0; color:#475569; font-size:13px; line-height:1.6; }
+        .safeguard-explanation summary { font-weight:700; color:#1e40af; cursor:pointer; }
+        .safeguard-explanation ul { padding-left:20px; }
+        .safeguard-explanation p:last-child { margin-bottom:0; }
+        .safeguard-limit { background:#f8fafc; }
         @media (max-width:600px) {
             .integrity-main { margin:16px auto; padding:0 12px 24px; }
             .integrity-heading h1 { font-size:22px; }
             .integrity-actions { width:100%; }
             .integrity-button { width:100%; }
             .integrity-summary { align-items:flex-start; }
+            .safeguard-checks { grid-template-columns:1fr; }
+            .safeguard-modules { padding:4px 12px 12px; }
+        }
+        @media (max-width:900px) {
+            .navbar { height:auto; min-height:70px; padding:12px; }
             .navbar .nav-container { flex-wrap:wrap; gap:6px 12px; }
             #navLeft { flex:1 1 100%; min-width:0; max-width:100%; flex-wrap:wrap; }
             #clientControl { flex:1 1 auto; min-width:0; max-width:100%; }
@@ -65,17 +91,48 @@
             <div>
                 <a href="/static/databank.html" class="back-link">← Back to Data Bank</a>
                 <h1>Data Integrity</h1>
-                <p id="integrityClientLabel">Check stored data and duplicates for this client.</p>
+                <p id="integrityClientLabel">Check database safeguards and stored data for this client.</p>
             </div>
             <div class="integrity-actions">
                 <button type="button" id="refreshIntegrityBtn" class="integrity-button">Refresh check</button>
             </div>
         </header>
 
-        <section class="integrity-card" aria-labelledby="integrityTableTitle">
+        <div class="integrity-tabs" role="tablist" aria-label="Data Integrity views">
+            <button type="button" id="safeguardsTab" class="integrity-tab" role="tab" aria-selected="true" aria-controls="safeguardsPanel">Database safeguards</button>
+            <button type="button" id="inventoryTab" class="integrity-tab" role="tab" aria-selected="false" aria-controls="inventoryPanel" tabindex="-1">Module inventory</button>
+        </div>
+
+        <section id="safeguardsPanel" class="integrity-card integrity-panel" role="tabpanel" aria-labelledby="safeguardsTab">
+            <div class="integrity-summary safeguard-summary">
+                <div>
+                    <strong>Database safeguards</strong>
+                    <span id="safeguardsOverallStatus" class="integrity-status incomplete" role="status" aria-live="polite">Checking</span>
+                    <p id="safeguardsScannedAt">Checking records…</p>
+                </div>
+            </div>
+            <p id="safeguardsSummary" class="safeguard-description">Checking the required indexes, record identification and duplicates.</p>
+            <div id="safeguardsModules" class="safeguard-modules"></div>
+            <details class="safeguard-explanation">
+                <summary>What does this check confirm?</summary>
+                <ul>
+                    <li>Required index structures match the app's baseline, are valid and ready for use.</li>
+                    <li>Records have the identifying details needed for the listed duplicate checks.</li>
+                    <li>Duplicates are checked within each module's own scope.</li>
+                </ul>
+                <p>Indexes are shared lookup structures, not numbered slots assigned to individual rows. The database maintains their entries when data is uploaded or deleted.</p>
+                <p id="safeguardsScopeNote">Index checks cover the three listed modules. Record checks cover the selected client.</p>
+            </details>
+            <div class="integrity-notes safeguard-limit">
+                <div id="safeguardsLimitNote">This is a check of the required baseline, not a physical index inspection or a guarantee of query speed.</div>
+                <div>Storage efficiency is a separate review. A Passed result does not mean every index is necessary or that all unused storage has been reclaimed.</div>
+            </div>
+        </section>
+
+        <section id="inventoryPanel" class="integrity-card integrity-panel" role="tabpanel" aria-labelledby="inventoryTab" hidden>
             <div class="integrity-summary">
                 <div>
-                    <strong id="integrityTableTitle">Module inventory</strong>
+                    <strong id="integrityTableTitle">Module inventory · duplicates</strong>
                     <p id="integrityScannedAt">Checking records…</p>
                 </div>
                 <span id="integrityOverallStatus" class="integrity-status" role="status" aria-live="polite">Checking</span>
@@ -106,9 +163,9 @@
         <div id="integrityMessage" class="integrity-message" role="status" aria-live="polite" hidden></div>
     </main>
 
-    <script src="/static/client_context.js?v=28"></script>
+    <script src="/static/client_context.js?v=29"></script>
     <script src="/static/api_utils.js?v=1"></script>
-    <script src="/static/data_integrity.js?v=1"></script>
+    <script src="/static/data_integrity.js?v=2"></script>
 </body>
 
 </html>

@@ -120,6 +120,24 @@ def _overview(status="Review; scan incomplete"):
     }
 
 
+def _safeguards(status='Passed'):
+    return {
+        'status': status,
+        'scope_note': 'Shared structures; record checks cover this client only.',
+        'limit_note': 'Does not inspect every physical index entry or measure speed or storage.',
+        'modules': [
+            {'module': name, 'row_count': 0 if name == 'Reconciliation' else 4,
+             'status': status,
+             'checks': [
+                 {'label': label, 'status': status,
+                  'detail': 'No records to check.' if name == 'Reconciliation' and label == 'Record identification'
+                  else 'Missing, different or unavailable: Duplicate prevention' if status == 'Needs attention'
+                  else 'Check unavailable.' if status == 'Not checked' else 'Required check passed.'}
+                 for label in ('Required indexes', 'Record identification', 'Duplicate check')],
+             } for name in ('Client Data', 'Trial Balance', 'Reconciliation')],
+    }
+
+
 def open_integrity_page(browser, static_server, *, response_status=200, overview=None):
     page = browser.new_page(viewport={"width": 1280, "height": 900})
     calls = []
@@ -144,6 +162,7 @@ def test_integrity_page_renders_module_counts_sizes_and_duplicate_status(browser
     page, calls = open_integrity_page(browser, static_server)
     try:
         page.wait_for_function("() => document.querySelectorAll('#integrityTableBody tr').length === 3")
+        page.get_by_role('tab', name='Module inventory', exact=True).click()
         assert "Leather Crop" in page.locator("#integrityClientLabel").inner_text()
         assert page.locator("#integrityOverallStatus").inner_text() == "Review · incomplete"
         rows = page.locator("#integrityTableBody tr")
@@ -166,6 +185,7 @@ def test_integrity_page_refresh_rechecks_and_keeps_safe_text(browser, static_ser
     page, calls = open_integrity_page(browser, static_server, overview=malicious)
     try:
         page.wait_for_function("() => document.querySelectorAll('#integrityTableBody tr').length === 3")
+        page.get_by_role('tab', name='Module inventory', exact=True).click()
         assert page.locator("#integrityTableBody img").count() == 0
         assert "<img src=x onerror=alert(1)>" in page.locator("#integrityTableBody").inner_text()
         page.locator("#refreshIntegrityBtn").click()
@@ -179,6 +199,9 @@ def test_integrity_page_shows_retry_message_for_api_failure(browser, static_serv
     page, _ = open_integrity_page(browser, static_server, response_status=503)
     try:
         page.wait_for_function("() => document.querySelector('#integrityOverallStatus').textContent === 'Unavailable'")
+        assert page.locator('#safeguardsOverallStatus').inner_text() == 'Not checked'
+        assert page.locator('#safeguardsModules').get_by_text('Not checked', exact=True).count() == 12
+        page.get_by_role('tab', name='Module inventory', exact=True).click()
         assert "Data check unavailable. Try again." in page.locator("#integrityMessage").inner_text()
         assert page.locator("#integrityTableBody").inner_text() == "Data check unavailable. Try again."
     finally:
@@ -189,12 +212,128 @@ def test_integrity_page_table_scrolls_on_mobile_without_page_overflow(browser, s
     page, _ = open_integrity_page(browser, static_server)
     try:
         page.wait_for_function("() => document.querySelectorAll('#integrityTableBody tr').length === 3")
+        page.get_by_role('tab', name='Module inventory', exact=True).click()
         page.set_viewport_size({"width": 360, "height": 800})
         metrics = page.locator(".integrity-table-wrap").evaluate(
             "el => ({width:el.clientWidth, scrollWidth:el.scrollWidth, bodyWidth:document.body.scrollWidth})"
         )
         assert metrics["scrollWidth"] > metrics["width"]
         assert metrics["bodyWidth"] <= 360
+    finally:
+        page.close()
+
+
+@pytest.mark.parametrize('status', ['Passed', 'Needs attention', 'Not checked'])
+def test_safeguards_default_tab_status_details_and_empty_module(browser, static_server, status):
+    overview = _overview()
+    overview['safeguards'] = _safeguards(status)
+    page, calls = open_integrity_page(browser, static_server, overview=overview)
+    try:
+        page.wait_for_function('() => document.querySelectorAll(".safeguard-module").length === 3')
+        assert page.locator('#safeguardsPanel').is_visible()
+        assert not page.locator('#inventoryPanel').is_visible()
+        assert page.locator('#safeguardsOverallStatus').inner_text() == status
+        assert page.locator('.safeguard-check').count() == 9
+        assert 'No records for this client.' in page.locator('.safeguard-module').nth(2).inner_text()
+        page.locator('summary').click()
+        assert page.locator('#safeguardsScopeNote').is_visible()
+        assert 'physical index entry' in page.locator('#safeguardsLimitNote').inner_text()
+        assert len(calls) == 1
+        assert page.locator('button').filter(has_text='Repair').count() == 0
+    finally:
+        page.close()
+
+
+@pytest.mark.parametrize('width', [320, 390, 768])
+def test_safeguards_mobile_layout_and_keyboard_tabs(browser, static_server, width):
+    overview = _overview()
+    overview['safeguards'] = _safeguards()
+    page, _ = open_integrity_page(browser, static_server, overview=overview)
+    try:
+        page.wait_for_function('() => document.querySelector("#safeguardsOverallStatus").textContent === "Passed"')
+        page.set_viewport_size({'width': width, 'height': 850})
+        assert page.evaluate('document.documentElement.scrollWidth') <= width
+        assert page.locator('.navbar').evaluate('''nav => {
+            const bounds = nav.getBoundingClientRect();
+            return ['#navLeft', '#clientControl', '.nav-user'].every(selector => {
+                const child = document.querySelector(selector).getBoundingClientRect();
+                return child.top >= bounds.top && child.bottom <= bounds.bottom;
+            });
+        }''')
+        page.locator('#safeguardsTab').focus()
+        page.keyboard.press('ArrowRight')
+        assert page.locator('#inventoryTab').get_attribute('aria-selected') == 'true'
+        assert page.locator('#inventoryPanel').is_visible()
+        assert 'feature=module-inventory' in page.url
+        page.keyboard.press('Home')
+        assert page.locator('#safeguardsTab').get_attribute('aria-selected') == 'true'
+        assert page.locator('#safeguardsPanel').is_visible()
+    finally:
+        page.close()
+
+
+@pytest.mark.parametrize('missing', ['safeguards', 'module', 'check', 'status'])
+def test_missing_safeguard_evidence_never_shows_overall_passed(browser, static_server, missing):
+    overview = _overview()
+    if missing != 'safeguards':
+        overview['safeguards'] = _safeguards()
+        if missing == 'module':
+            overview['safeguards']['modules'].pop()
+        elif missing == 'check':
+            overview['safeguards']['modules'][0]['checks'].pop()
+        else:
+            overview['safeguards']['modules'][0]['checks'][0]['status'] = 'unknown'
+    page, _ = open_integrity_page(browser, static_server, overview=overview)
+    try:
+        page.wait_for_function('() => document.querySelectorAll(".safeguard-module").length === 3')
+        assert page.locator('#safeguardsOverallStatus').inner_text() == 'Not checked'
+    finally:
+        page.close()
+
+
+def test_refresh_clears_previous_success_and_failure_keeps_not_checked(browser, static_server):
+    overview = _overview()
+    overview['safeguards'] = _safeguards()
+    page, _ = open_integrity_page(browser, static_server, overview=overview)
+    try:
+        page.wait_for_function('() => document.querySelector("#safeguardsOverallStatus").textContent === "Passed"')
+        page.route('**/api/data-integrity/overview?*', lambda route: route.fulfill(status=403, json={'detail': 'unavailable'}))
+        page.locator('#refreshIntegrityBtn').click()
+        page.wait_for_function('() => document.querySelector("#integrityOverallStatus").textContent === "Unavailable"')
+        assert page.locator('#safeguardsOverallStatus').inner_text() == 'Not checked'
+        assert page.locator('#safeguardsModules').get_by_text('Passed', exact=True).count() == 0
+        assert page.locator('#refreshIntegrityBtn').is_enabled()
+    finally:
+        page.close()
+
+
+def test_search_registration_deep_links_and_safe_safeguard_text(browser, static_server):
+    overview = _overview()
+    overview['safeguards'] = _safeguards('Needs attention')
+    overview['safeguards']['modules'][0]['checks'][0]['detail'] = '<img src=x onerror=alert(1)>'
+    page, _ = open_integrity_page(browser, static_server, overview=overview)
+    try:
+        page.wait_for_function('() => document.querySelectorAll(".safeguard-module").length === 3')
+        assert page.locator('#safeguardsModules img').count() == 0
+        assert '<img src=x onerror=alert(1)>' in page.locator('#safeguardsModules').inner_text()
+        entries = page.evaluate("flattenNavManifest().filter(item => item.url && item.url.includes('data_integrity.html'))")
+        assert {entry['label'] for entry in entries} == {'Database safeguards', 'Module inventory'}
+        page.goto(static_server + '/static/data_integrity.html?feature=module-inventory')
+        assert page.locator('#inventoryPanel').is_visible()
+        assert not page.locator('#safeguardsPanel').is_visible()
+    finally:
+        page.close()
+
+
+def test_scope_mismatch_cannot_render_another_clients_success(browser, static_server):
+    overview = _overview()
+    overview['client_id'] = 99
+    overview['safeguards'] = _safeguards()
+    page, _ = open_integrity_page(browser, static_server, overview=overview)
+    try:
+        page.wait_for_function('() => document.querySelector("#integrityOverallStatus").textContent === "Unavailable"')
+        assert page.locator('#safeguardsOverallStatus').inner_text() == 'Not checked'
+        assert page.locator('#safeguardsModules').get_by_text('Passed', exact=True).count() == 0
     finally:
         page.close()
 

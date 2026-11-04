@@ -4,6 +4,114 @@ const integrityScannedAt = document.getElementById('integrityScannedAt');
 const integrityMessage = document.getElementById('integrityMessage');
 const refreshIntegrityBtn = document.getElementById('refreshIntegrityBtn');
 let integrityRequest = 0;
+const safeguardsOverallStatus = document.getElementById('safeguardsOverallStatus');
+const safeguardsModules = document.getElementById('safeguardsModules');
+const safeguardsScannedAt = document.getElementById('safeguardsScannedAt');
+const integrityTabs = [document.getElementById('safeguardsTab'), document.getElementById('inventoryTab')];
+
+function selectIntegrityTab(feature, updateUrl = true) {
+    const inventory = feature === 'module-inventory';
+    integrityTabs.forEach((tab, index) => {
+        const selected = inventory === (index === 1);
+        tab.setAttribute('aria-selected', String(selected));
+        tab.tabIndex = selected ? 0 : -1;
+        document.getElementById(tab.getAttribute('aria-controls')).hidden = !selected;
+    });
+    if (updateUrl) {
+        const url = new URL(window.location.href);
+        url.searchParams.set('feature', inventory ? 'module-inventory' : 'database-safeguards');
+        window.history.replaceState(null, '', url);
+    }
+}
+
+integrityTabs.forEach((tab, index) => {
+    const activate = () => selectIntegrityTab(index ? 'module-inventory' : 'database-safeguards');
+    tab.addEventListener('click', activate);
+    tab.addEventListener('keydown', event => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        event.preventDefault();
+        const target = event.key === 'Home' ? 0 : event.key === 'End' ? 1 : 1 - index;
+        integrityTabs[target].click();
+        integrityTabs[target].focus();
+    });
+});
+selectIntegrityTab(new URLSearchParams(window.location.search).get('feature'), false);
+
+function safeguardStatus(value) {
+    return ['Passed', 'Needs attention', 'Not checked'].includes(value) ? value : 'Not checked';
+}
+
+function setSafeguardBadge(element, status) {
+    element.textContent = status;
+    element.className = `integrity-status ${status === 'Needs attention' ? 'review' : status === 'Passed' ? '' : 'incomplete'}`.trim();
+}
+
+function combinedSafeguardStatus(statuses) {
+    if (statuses.includes('Needs attention')) return 'Needs attention';
+    return statuses.length && statuses.every(status => status === 'Passed') ? 'Passed' : 'Not checked';
+}
+
+function renderDatabaseSafeguards(data) {
+    const safeguards = data.safeguards || {};
+    safeguardsModules.replaceChildren();
+    const moduleStatuses = [];
+    let incomplete = false;
+    // Missing module/check evidence is shown explicitly, including an older server response.
+    ['Client Data', 'Trial Balance', 'Reconciliation'].forEach(name => {
+        const module = (safeguards.modules || []).find(item => item.module === name) || {};
+        const card = document.createElement('article');
+        card.className = 'safeguard-module';
+        const header = document.createElement('div');
+        header.className = 'safeguard-module-header';
+        const title = document.createElement('h2');
+        title.textContent = name;
+        const badge = document.createElement('span');
+        header.append(title, badge);
+        const checks = document.createElement('div');
+        checks.className = 'safeguard-checks';
+        const checkStatuses = [];
+        ['Required indexes', 'Record identification', 'Duplicate check'].forEach(label => {
+            const check = (module.checks || []).find(item => item.label === label) || {};
+            const status = safeguardStatus(check.status);
+            checkStatuses.push(status);
+            if (status === 'Not checked') incomplete = true;
+            const block = document.createElement('div');
+            block.className = 'safeguard-check';
+            const heading = document.createElement('strong');
+            heading.textContent = label;
+            const result = document.createElement('span');
+            setSafeguardBadge(result, status);
+            const detail = document.createElement('p');
+            detail.textContent = check.detail || 'This check is unavailable. Refresh or restart the updated server.';
+            block.append(heading, result, detail);
+            checks.appendChild(block);
+        });
+        const status = combinedSafeguardStatus([...checkStatuses, safeguardStatus(module.status)]);
+        setSafeguardBadge(badge, status);
+        moduleStatuses.push(status);
+        card.append(header, checks);
+        if (module.row_count === 0) {
+            const empty = document.createElement('p');
+            empty.className = 'integrity-detail';
+            empty.textContent = 'No records for this client. Index structure checks still apply.';
+            card.appendChild(empty);
+        }
+        safeguardsModules.appendChild(card);
+    });
+    const status = combinedSafeguardStatus([...moduleStatuses, safeguardStatus(safeguards.status)]);
+    setSafeguardBadge(safeguardsOverallStatus, status);
+    const descriptions = {
+        'Passed': 'Required checks passed for the three listed modules.',
+        'Needs attention': 'One or more checks need review. Expand the explanation below for the check scope.',
+        'Not checked': 'Some safeguards could not be verified. This is not a successful check.'
+    };
+    document.getElementById('safeguardsSummary').textContent = descriptions[status] +
+        (status === 'Needs attention' && incomplete ? ' Some checks are also unavailable.' : '');
+    document.getElementById('safeguardsScopeNote').textContent = safeguards.scope_note ||
+        'Index checks cover the three listed modules. Record checks cover the selected client.';
+    document.getElementById('safeguardsLimitNote').textContent = safeguards.limit_note ||
+        'This checks the required baseline, not every physical index entry, all stored values, query speed or reclaimable storage.';
+}
 
 function integrityCount(value) {
     return Number(value || 0).toLocaleString();
@@ -11,7 +119,7 @@ function integrityCount(value) {
 
 function integrityStatusClass(value) {
     if (String(value || '').toLowerCase().includes('review')) return 'review';
-    if (String(value || '').toLowerCase().includes('incomplete')) return 'incomplete';
+    if (/incomplete|not fully|unavailable|checking/i.test(String(value || ''))) return 'incomplete';
     return '';
 }
 
@@ -81,14 +189,16 @@ function showIntegrityMessage(text, isError = false) {
 
 function renderIntegrityOverview(data) {
     renderIntegrityModules(data);
+    renderDatabaseSafeguards(data);
     const status = data.overall_status || 'Not fully checked';
     integrityOverallStatus.textContent = status.includes('scan incomplete') ? 'Review · incomplete' : status;
     integrityOverallStatus.className = `integrity-status ${integrityStatusClass(status)}`.trim();
     integrityScannedAt.textContent = data.scanned_at
         ? `Checked ${new Date(data.scanned_at).toLocaleString()}`
         : 'Check complete';
+    safeguardsScannedAt.textContent = integrityScannedAt.textContent;
     document.getElementById('integrityClientLabel').textContent =
-        `Stored data and duplicate checks · ${data.client_name || 'Selected client'}`;
+        `Database safeguards and stored data · ${data.client_name || 'Selected client'}`;
     document.getElementById('integritySizeNote').textContent = data.size_note || 'Sizes are estimates.';
     document.getElementById('integrityScopeNote').textContent = data.scope_note ||
         'Matching IDs across modules are treated as separate data.';
@@ -108,10 +218,15 @@ async function loadDataIntegrityOverview() {
     const request = ++integrityRequest;
     const clientId = typeof getSelectedClientId === 'function' ? getSelectedClientId() : null;
     if (!clientId) {
+        renderDatabaseSafeguards({});
+        safeguardsScannedAt.textContent = 'No client selected';
+        refreshIntegrityBtn.disabled = false;
+        refreshIntegrityBtn.textContent = 'Refresh check';
         integrityOverallStatus.textContent = 'Select a client';
         integrityOverallStatus.className = 'integrity-status incomplete';
         integrityScannedAt.textContent = 'No client selected';
         integrityTableBody.replaceChildren();
+        document.getElementById('integrityDatabaseContext').textContent = '';
         showIntegrityMessage('Select a client from the Dashboard to check its data.');
         return;
     }
@@ -119,8 +234,14 @@ async function loadDataIntegrityOverview() {
     refreshIntegrityBtn.disabled = true;
     refreshIntegrityBtn.textContent = 'Checking…';
     integrityScannedAt.textContent = 'Checking records…';
+    safeguardsScannedAt.textContent = 'Checking records…';
+    safeguardsModules.replaceChildren();
+    setSafeguardBadge(safeguardsOverallStatus, 'Checking');
+    document.getElementById('safeguardsSummary').textContent = 'Checking the required indexes, record identification and duplicates.';
+    integrityTableBody.replaceChildren();
+    document.getElementById('integrityDatabaseContext').textContent = '';
     integrityOverallStatus.textContent = 'Checking';
-    integrityOverallStatus.className = 'integrity-status';
+    integrityOverallStatus.className = 'integrity-status incomplete';
     showIntegrityMessage('');
     try {
         const response = await window.ApiUtils.apiFetch(
@@ -129,9 +250,12 @@ async function loadDataIntegrityOverview() {
         if (!response.ok) throw new Error('Could not load data check.');
         const data = await response.json();
         if (request !== integrityRequest || Number(getSelectedClientId()) !== Number(clientId)) return;
+        if (Number(data.client_id) !== Number(clientId)) throw new Error('Client scope mismatch.');
         renderIntegrityOverview(data);
     } catch (error) {
         if (request !== integrityRequest) return;
+        renderDatabaseSafeguards({});
+        safeguardsScannedAt.textContent = 'Check could not be completed';
         integrityTableBody.replaceChildren();
         const row = document.createElement('tr');
         const cell = addIntegrityCell(row, 'Data check unavailable. Try again.');

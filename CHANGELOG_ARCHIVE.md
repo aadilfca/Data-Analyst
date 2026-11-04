@@ -1,5 +1,13 @@
 # Changelog Archive
 
+## Data Integrity safeguards — 2026-11-04
+
+Data Integrity now defaults to Database safeguards, retaining Module inventory as a second tab. One read-only repeatable snapshot checks 14 baseline index requirements across Client Data, Trial Balance and reconciliation balance inputs: primary/unique protection and established lookup structures. Definitions, leading lookup keys, predicates, default key semantics, validity/readiness and immediate uniqueness are checked; equivalent renamed/covering lookup indexes are accepted. Selected-client identification checks include missing/blank keys, alongside existing module-scoped duplicate scans. Passed, Needs attention and Not checked remain distinct; missing evidence, failed refreshes and older server responses cannot retain a success badge. Empty modules explicitly have no records to inspect.
+
+Checks do not inspect individual physical index entries, certify all stored values, measure speed/storage waste, or perform repairs. Existing dashboard duplicate status remains separate. Both tabs are searchable through NAV_MANIFEST; all 19 shared-script consumers use v29. No schema, dependency, deletion or upload changes.
+
+Verification: 54 focused backend, duplicate-gate and hermetic Playwright tests pass, plus 15 parameterized subtests; includes unavailable/mismatched indexes, missing evidence, scoped responses, refresh failures, safe text, keyboard tabs and 320/390/768px layouts. Read-only live execution passes all 14 requirements for 97,979 Client Data and 2,986 Trial Balance rows; reconciliation has zero rows. Aadil confirmed local acceptance and authorised commit/push. Inventory sizing reports 49 unavailable source files, limiting file-size measurement rather than the database-row checks. No live data/index writes occurred.
+
 ## Changed/Deleted Data Bank history — Phase 3 redesign — 2026-11-04
 
 The Data Bank history action now sits beside each template's existing actions, including templates with no active rows. Its preview-style table filters All, Changed or Deleted and adds a ledger-account selector for Account Ledger templates. Deleted entries show the saved prior row; Changed entries show only changed fields as underlined old/red and new/green values, keeping the document ID for context. The table includes action, local time and operator. `client_data_history` now records exact changed field values and ledger account code/name in the import transaction. Existing local and PostgreSQL schemas add the nullable fields safely; older changed entries without saved field detail are clearly identified. The existing per-row Revision History popover is unchanged.

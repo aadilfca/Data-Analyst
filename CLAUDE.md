@@ -16,7 +16,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 - routers/clients.py + static/clients.* → firm-level client management; admin-only except the paginated `GET /api/clients`. See CHANGELOG_ARCHIVE.md.
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, database size and selected-client integrity status. See CHANGELOG_ARCHIVE.md.
-- routers/data.py, routers/data_integrity.py + static/databank.*, static/data_integrity.* → Data Bank previews, changed/deleted upload history, and client-scoped module sizes/duplicate checks. See CHANGELOG_ARCHIVE.md.
+- routers/data.py, routers/data_integrity.py + static/databank.*, static/data_integrity.* → Data Bank previews, upload history, module inventory, duplicate checks and database safeguards. See CHANGELOG_ARCHIVE.md.
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
 - routers/import_export.py + static/upload.* → Validated uploads, clear row-level comparisons, prior-row history, Drive reports, ledger coverage and shared backup controls. See CHANGELOG_ARCHIVE.md.
 - routers/settings.py + routers/google_drive_auth.py + static/settings.* → App settings, administrator upload-backup controls, firm-wide holidays and Drive reconnection. See CHANGELOG_ARCHIVE.md.
@@ -265,7 +265,7 @@ One line per file group: what it is now. Full build history for every entry live
 - 2026-11-03: Upload reviews classify safe corrections as changed, explain unchanged rows, and verify applied counts against the plan. See CHANGELOG_ARCHIVE.md.
 - 2026-11-03: PostgreSQL startup creates upload history on existing databases; changed/deleted rows can be retained and purged by scope. See CHANGELOG_ARCHIVE.md.
 - 2026-11-03: Admin controls Drive upload backups; dated Excel reports and Google reconnection are available in Settings. See CHANGELOG_ARCHIVE.md.
-- 2026-11-02: Added a Data Integrity page and dashboard status for client-scoped module estimates and duplicate checks. See CHANGELOG_ARCHIVE.md, Data Integrity inventory.
+- 2026-11-04: Data Integrity adds read-only database safeguards, required-index checks and record identification. See CHANGELOG_ARCHIVE.md, Data Integrity safeguards.
 - 2026-11-02: Upload repairs reject nonfinite/Excel errors and tolerate absent retired copies; duplicate policies preserved. See CHANGELOG_ARCHIVE.md, Upload safety repairs.
 - 2026-11-02: Upload review uses count/safeguard tables; errors highlight fields in red, retain row links and concise guidance. See CHANGELOG_ARCHIVE.md, Upload dialog prototypes implemented.
 - 2026-11-02: Financial Statement Notes distinguish nested subtotals from category totals with separate row styles. See CHANGELOG_ARCHIVE.md.

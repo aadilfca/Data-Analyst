@@ -206,7 +206,13 @@ const NAV_MANIFEST = [
             { label: 'Upload Client Data', url: '/static/upload.html', state: 'ready', module: 'Upload Data',
                 children: [{ label: 'Account Ledger upload', url: '/static/upload.html?feature=account-ledger', state: 'ready',
                     keywords: ['ledger', 'cash bank ledger', 'opening closing balances'] }] },
-            { label: 'Client Data Bank', url: '/static/databank.html', state: 'ready', module: 'Data Bank' },
+            { label: 'Client Data Bank', url: '/static/databank.html', state: 'ready', module: 'Data Bank',
+                children: [
+                    { label: 'Database safeguards', url: '/static/data_integrity.html?feature=database-safeguards', state: 'ready',
+                        keywords: ['data integrity', 'indexes', 'index health', 'database safeguards', 'duplicate protection'] },
+                    { label: 'Module inventory', url: '/static/data_integrity.html?feature=module-inventory', state: 'ready',
+                        keywords: ['data integrity', 'record counts', 'data size', 'duplicates', 'stored data'] },
+                ] },
             { label: 'Trial Balance', url: '/static/trial_balance.html', state: 'ready', module: 'Trial Balance',
                 children: ['financial', 'cashflow', 'verification'].map(function (mode) {
                     const label = {financial: 'Financial Statement assignments', cashflow: 'Cashflow assignments', verification: 'Verification assignments'}[mode];
