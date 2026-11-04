@@ -708,8 +708,31 @@ def _purge_scoped_count(
     client_id: int,
     template_id: int | None = None,
 ) -> int:
+    if table_name == "cashflow_ledger_rollup_read_models" and not _first(
+        "SELECT to_regclass('public.cashflow_ledger_rollup_read_models') AS table_name"
+    ).get("table_name"):
+        return 0
     predicate, params = _purge_scope_predicate(alias, client_id, template_id)
     return _count(f"SELECT COUNT(*) AS count FROM public.{table_name} {alias} WHERE {predicate}", params)
+
+
+def _purge_audit_log_ids(client_id: int, template_id: int | None) -> List[int]:
+    """Match only structured purge events; unrelated application logs stay intact."""
+    rows = execute_query_pg(
+        "SELECT id, details FROM public.audit_log "
+        "WHERE (action = 'Permanent data delete' AND module = 'DataBank') "
+        "OR (action = 'Replacement data purge' AND module = 'Upload') ORDER BY id"
+    )
+    ids = []
+    for row in rows:
+        try:
+            details = row["details"] if isinstance(row["details"], dict) else json.loads(row["details"] or "{}")
+        except (TypeError, ValueError):
+            continue
+        if (isinstance(details, dict) and details.get("client_id") == client_id
+                and (template_id is None or details.get("template_id") == template_id)):
+            ids.append(int(row["id"]))
+    return ids
 
 
 def _purge_protected_counts(client_id: int, template_id: int | None = None) -> Dict[str, int]:
@@ -835,6 +858,7 @@ def _purge_preview_hash(preview: Dict[str, Any]) -> str:
         "counts": preview["counts"],
         "protected": preview["protected"],
         "source_fingerprint": preview.get("source_fingerprint"),
+        "audit_log_ids": preview.get("audit_log_ids", []),
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -862,6 +886,7 @@ def get_client_data_purge_preview(
 
     uploads = _purge_target_uploads(client_id, template_id)
     upload_ids = [int(row["id"]) for row in uploads]
+    audit_log_ids = _purge_audit_log_ids(client_id, template_id)
     predicate, params = _purge_scope_predicate("cd", client_id, template_id)
     counts = {
         "client_data": _purge_scoped_count("client_data", "cd", client_id, template_id),
@@ -903,6 +928,10 @@ def get_client_data_purge_preview(
             (upload_ids,),
         ) if upload_ids else 0,
         "uploaded_files": len(upload_ids),
+        "audit_log": len(audit_log_ids),
+        "upload_lifecycle_runs": _purge_scoped_count(
+            "upload_lifecycle_runs", "l", client_id, template_id
+        ),
     }
     if template_id is None:
         counts.update({
@@ -939,6 +968,7 @@ def get_client_data_purge_preview(
             "is_active": bool(client["is_active"]),
         },
         "upload_ids": upload_ids,
+        "audit_log_ids": audit_log_ids,
         "staged_file_names": [row["file_name"] for row in uploads],
         "counts": counts,
         "protected": protected,
@@ -1011,7 +1041,6 @@ def apply_client_data_purge(
     upload_rows = _purge_target_uploads(client_id, template_id)
     staged_paths = [row["file_path"] for row in upload_rows]
     predicate, params = _purge_scope_predicate("cd", client_id, template_id)
-    operator = (operator or "Unknown administrator")[:200]
     deleted_counts: Dict[str, int] = {}
 
     with pg_transaction():
@@ -1048,6 +1077,7 @@ def apply_client_data_purge(
                 WHERE a.client_data_id = cd.id AND {predicate}
             """),
             ("upload_validation_plans", f"DELETE FROM public.upload_validation_plans p WHERE {predicate.replace('cd.', 'p.')}"),
+            ("upload_lifecycle_runs", f"DELETE FROM public.upload_lifecycle_runs l WHERE {predicate.replace('cd.', 'l.')}"),
         ]
         if upload_ids:
             delete_specs.append((
@@ -1055,6 +1085,11 @@ def apply_client_data_purge(
                 "DELETE FROM public.verifications WHERE file_id = ANY(%s)",
             ))
         for name, sql in delete_specs:
+            if name == "cashflow_ledger_rollup_read_models" and not _first(
+                "SELECT to_regclass('public.cashflow_ledger_rollup_read_models') AS table_name"
+            ).get("table_name"):
+                deleted_counts[name] = 0
+                continue
             sql_params = (upload_ids,) if name == "verifications" else params
             deleted_counts[name] = _delete_count(sql.replace("%s", "%s")) if not sql_params else _count(
                 "WITH deleted AS (" + sql.rstrip() + " RETURNING 1) SELECT COUNT(*) AS count FROM deleted",
@@ -1073,6 +1108,20 @@ def apply_client_data_purge(
                     (client_id,),
                 )
 
+        # Keep reusable Cashflows settings, but detach the source upload before
+        # removing its metadata (also supports older schemas without the FK).
+        if upload_ids:
+            execute_write_pg(
+                "UPDATE public.account_control_cashflow_settings SET source_upload_id = NULL "
+                "WHERE client_id = %s AND source_upload_id = ANY(%s)",
+                (client_id, upload_ids),
+            )
+        audit_ids = locked_preview.get("audit_log_ids", [])
+        deleted_counts["audit_log"] = _count(
+            "WITH deleted AS (DELETE FROM public.audit_log WHERE id = ANY(%s) RETURNING 1) "
+            "SELECT COUNT(*) AS count FROM deleted", (audit_ids,),
+        ) if audit_ids else 0
+
         deleted_counts["client_data"] = _count(
             "WITH deleted AS (DELETE FROM public.client_data cd WHERE "
             + predicate
@@ -1088,14 +1137,7 @@ def apply_client_data_purge(
         else:
             deleted_counts["uploaded_files"] = 0
 
-        execute_write_pg(
-            "INSERT INTO audit_log (\"user\", action, module, details) VALUES (%s, %s, %s, %s)",
-            (operator, "Permanent data delete", "DataBank", json.dumps({
-                "client_id": client_id,
-                "template_id": template_id,
-                "deleted_counts": deleted_counts,
-            }, sort_keys=True)),
-        )
+        # A permanent scope purge intentionally leaves no new deletion receipt.
 
     file_cleanup_failures = _remove_staged_upload_files(staged_paths)
     return {
