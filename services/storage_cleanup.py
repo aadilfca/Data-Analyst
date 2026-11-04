@@ -52,6 +52,7 @@ REQUIRED_CLIENT_DATA_INDEXES = (
 )
 PROTECTED_DATA_TABLES = (
     "client_data",
+    "client_data_history",
     "verification_details",
     "trial_balance_accounts",
     "trial_balance_uploads",
@@ -891,6 +892,9 @@ def get_client_data_purge_preview(
             """,
             params,
         ),
+        "client_data_history": _purge_scoped_count(
+            "client_data_history", "h", client_id, template_id
+        ),
         "upload_validation_plans": _purge_scoped_count(
             "upload_validation_plans", "p", client_id, template_id
         ),
@@ -1037,6 +1041,7 @@ def apply_client_data_purge(
             ("cashflow_ledger_rollup_read_models", f"DELETE FROM public.cashflow_ledger_rollup_read_models r WHERE {predicate.replace('cd.', 'r.')}"),
             ("cash_bank_transaction_classifications", f"DELETE FROM public.cash_bank_transaction_classifications c WHERE {predicate.replace('cd.', 'c.')}"),
             ("cashflow_voucher_occurrences", f"DELETE FROM public.cashflow_voucher_occurrences o WHERE {predicate.replace('cd.', 'o.')}"),
+            ("client_data_history", f"DELETE FROM public.client_data_history h WHERE {predicate.replace('cd.', 'h.')}"),
             ("data_audit_log", f"""
                 DELETE FROM public.data_audit_log a
                 USING public.client_data cd
@@ -1356,7 +1361,7 @@ def compact_storage(
         )
 
     compacted_tables = compact_postgres_tables(
-        ("client_data", "data_audit_log", "upload_validation_plans"),
+        ("client_data", "client_data_history", "data_audit_log", "upload_validation_plans"),
         full=bool(full),
     )
     try:
@@ -1374,7 +1379,7 @@ def compact_storage(
         "post_verification": post_verification,
         "requires_review": post_verification["status"] != "passed",
         "safety": [
-            "Only the allow-listed client_data, data_audit_log, and upload_validation_plans tables were compacted.",
+            "Only allow-listed transaction, history, audit, and validation-plan tables were compacted.",
             "No rows were deleted by this operation.",
             "VACUUM FULL may lock and rewrite tables; run it only during an approved maintenance window.",
         ],

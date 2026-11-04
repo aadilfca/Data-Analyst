@@ -5,7 +5,7 @@ from datetime import datetime
 
 from openpyxl import load_workbook
 
-from services.upload_observation_report import build_observation_report
+from services.upload_observation_report import build_change_report, build_observation_report
 
 
 COLUMNS = [{'column_name': name, 'data_type': kind} for name, kind in [
@@ -71,3 +71,27 @@ def test_partial_upload_report_labels_incoming_rows_as_an_extract():
     workbook = load_workbook(BytesIO(build_observation_report(observations, previous, COLUMNS, SCOPE,
         {'incoming_title': 'Incoming extract'})))
     assert workbook.sheetnames[-1] == 'Incoming extract'
+
+
+def test_standalone_change_report_keeps_new_changed_and_removed_rows_separate():
+    plan = {
+        'new': [{'row_data': {'Voucher ID': 'NEW-1', 'Account code': 'A', 'Description': 'New line',
+                              'Debit': 100, 'Credit': 0}}],
+        'changed': [{'old_row_data': {'Voucher ID': 'OLD-1', 'Account code': 'A', 'Description': 'Before',
+                                      'Debit': 50, 'Credit': 0},
+                     'new_row_data': {'Voucher ID': 'OLD-1', 'Account code': 'A', 'Description': '=AFTER()',
+                                      'Debit': 75, 'Credit': 0}}],
+        'missing': [{'old_row_data': {'Voucher ID': 'OLD-2', 'Account code': 'A', 'Description': 'Removed line',
+                                      'Debit': 20, 'Credit': 0}}],
+    }
+    data = build_change_report(plan, COLUMNS, {**SCOPE, 'start': '2026-10-01', 'end': '2026-10-31'},
+                               {'client': 'Leather Crop', 'template': 'Account Ledger'},
+                               '2026-11-03 14:30:00 PKT')
+    workbook = load_workbook(BytesIO(data))
+    assert workbook.sheetnames == ['Import summary', 'Incoming changes', 'Previous records']
+    assert 'Check the app result popup' in workbook['Import summary']['B2'].value
+    assert [workbook['Incoming changes'].cell(row, 1).value for row in (2, 3)] == ['Changed', 'Added']
+    assert [workbook['Previous records'].cell(row, 1).value for row in (2, 3)] == ['Changed', 'Removed']
+    assert workbook['Incoming changes']['D2'].value == '=AFTER()'
+    assert workbook['Incoming changes']['D2'].data_type == 's'
+    assert workbook['Incoming changes']['E3'].value == 100

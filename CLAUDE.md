@@ -18,11 +18,11 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, database size and selected-client integrity status. See CHANGELOG_ARCHIVE.md.
 - routers/data.py, routers/data_integrity.py + static/databank.*, static/data_integrity.* → Data Bank previews and client-scoped module sizes/duplicate checks. See CHANGELOG_ARCHIVE.md.
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
-- routers/import_export.py + static/upload.* → Validated uploads, review workbooks, ledger coverage and development backup controls. See CHANGELOG_ARCHIVE.md.
-- routers/settings.py + static/settings.* → App settings, administrator upload-backup controls and firm-wide holidays. See CHANGELOG_ARCHIVE.md.
+- routers/import_export.py + static/upload.* → Validated uploads, clear row-level comparisons, prior-row history, Drive reports, ledger coverage and shared backup controls. See CHANGELOG_ARCHIVE.md.
+- routers/settings.py + routers/google_drive_auth.py + static/settings.* → App settings, administrator upload-backup controls, firm-wide holidays and Drive reconnection. See CHANGELOG_ARCHIVE.md.
 - routers/templates.py + static/templates.*, static/columns.* → Master columns, transactional ledger setup, role configuration, mapping/reordering, rate rules and backup/restore. See CHANGELOG_ARCHIVE.md.
 - static/client_settings.html, static/client_settings.js -> retired direct-bookmark information page; all Verification account routing is configured centrally in Account Control Centre. See CHANGELOG_ARCHIVE.md.
-- database.py, main.py → Schemas, source metadata, guarded pools, diagnostics, routing, Rulebook snapshots, export lifecycle, and Trial Balance provenance, mappings and adjustments. See CHANGELOG_ARCHIVE.md.
+- database.py, main.py → Schemas, source and upload-history metadata, guarded pools, diagnostics, routing, Rulebook snapshots, export lifecycle, and Trial Balance provenance, mappings and adjustments. See CHANGELOG_ARCHIVE.md.
 - backfill_extract_amount.py → SQLite backfill, PostgreSQL assessment, portable repair plans and isolated local repair rehearsals; live apply remains disabled. See CHANGELOG_ARCHIVE.md.
 - database.py (users/sessions) → authenticated users and session records for Login → Client Cards → Dashboard; bcrypt, session-stored selected client, seeded placeholder admin. See CHANGELOG_ARCHIVE.md.
 - routers/auth.py → login/logout, current-session lookup, client selection, `get_current_user()`/`require_admin()` guards; timezone-aware session expiry. See CHANGELOG_ARCHIVE.md.
@@ -51,7 +51,7 @@ One line per file group: what it is now. Full build history for every entry live
 - services/cashflow_preparation.py + scripts/backfill_cashflow_prepared_read_model.py -> metadata-only preparation/job recovery boundary; prepared transaction copies and rollups are no longer rebuilt. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_xlsx.py, reconciliation_export_jobs.py → Selected-account workbooks, complete voucher context, streaming, bounded owner-scoped jobs and private temporary files. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_balance_source.py → Independent balances, scoped voucher completeness, adjustment membership, posting comparisons and coverage controls. See CHANGELOG_ARCHIVE.md.
-- services/upload_lifecycle.py + drive_archive.py + upload_observation_report.py → Scope proofs, verified archives, explicit development exceptions and compact receipts. See CHANGELOG_ARCHIVE.md.
+- services/upload_lifecycle.py + drive_archive.py + upload_observation_report.py → Scope proofs, verified ZIPs, dated Drive Excel reports, development exceptions and compact receipts. See CHANGELOG_ARCHIVE.md.
 - routers/database_backup.py + services/database_backup.py + static/setup.* + scripts/rehearse_database_backup.py → Local backups, resumable Drive verification, processing feedback and isolated recovery rehearsals. See CHANGELOG_ARCHIVE.md.
 - tests/test_account_control_center*.py, test_trial_balance_account_flow_safety.py, test_trial_balance_ui.py, test_cashflows*.py, test_reconciliation*.py → Setup, accounting, account-flow safety, API/UI parity, and workbook evidence/export checks. See CHANGELOG_ARCHIVE.md.
 - tests/test_upload_lifecycle.py, test_data_deletion.py, test_import_duplicate_gates.py, test_upload_dialogs.py + experiments/upload_safety/ → Upload lifecycle, dialog accessibility, isolated experiments and duplicate safeguards. See CHANGELOG_ARCHIVE.md.
@@ -70,18 +70,18 @@ One line per file group: what it is now. Full build history for every entry live
 
 ## Database management and backup rules
 - **Locked upload contract (2026-10-11):** `client_data` is the sole canonical transaction store. Keep one active row per client/template/transaction identity, with raw values and report-required derived columns together and indexed; all reports and analysis read this set.
-- Supabase is a working store, not an archive: retain one current canonical set per client/template and no second durable transaction copy in reports, read models, occurrences, revisions, caches, or audit payloads. Audit events may retain only changed fields or fingerprints; initial INSERT events retain no row payload. Compact configuration, counts, fingerprints, checksums, and run metadata are allowed.
+- Keep one current canonical transaction set. The only full-row history is `client_data_history`: one prior snapshot per imported change/deletion, with a scope/time index; scoped permanent data purge clears it. `client_data.created_at` records when a row was first added. No duplicate current rows in reports, read models, occurrences, revisions, caches, or audit payloads; compact audit events retain only changed fields or fingerprints.
 - Validate every upload before writing; unchanged reports are no-ops and legitimate line multiplicity survives. Complete reports replace explicitly declared coverage: retain unchanged occurrences, archive unmatched old lines, insert unmatched incoming lines. Line IDs are optional; never invent correction pairings. Partial extracts retain absent rows and block ambiguous corrections.
-- Administrator Settings → Upload backups controls every uploader/API client: on requires verified Drive; off skips backups during development. See CHANGELOG_ARCHIVE.md, Shared upload backup switch.
-- Backup-on retains local's configured ZIP; Render may use temporary scratch space. Enable backups for commercial use. Policy changes invalidate pending validation; environment/client choices cannot override it.
+- Administrator Settings → Upload backups controls every uploader/API client: on requires verified Drive archives/reports; off saves no external copies during development. See CHANGELOG_ARCHIVE.md, Shared upload backup switch.
+- Backup-on retains local ZIP copies and verified dated Drive Excel reports; Render may use temporary ZIP scratch space. Policy changes invalidate pending validation; environment/client choices cannot override it.
 - Active identities are database-unique where existing data is clean. Until duplicate legacy groups are resolved, application gates remain authoritative and migrations must report blockers rather than delete or merge rows.
-- Source workbooks, SQL dumps, reports, and workpapers stay in controlled external/offline storage. Supabase may hold temporary staging metadata only; rejected, ignored, or fully deleted upload files and metadata must be removed.
-- **Locked deletion contract:** guarded preview/apply permanently removes source rows, derived classifications, occurrence metadata, audit payloads, upload metadata, validation plans, and staged files. Soft-delete and restore are not valid source-data lifecycle operations; protected verification/evidence references block the purge.
+- Source workbooks, SQL dumps, reports, and workpapers stay in controlled external/offline storage. Supabase holds current data, scoped change history, and temporary metadata; rejected, ignored, or fully deleted upload files and metadata must be removed.
+- **Locked deletion contract:** replacement permanently removes active source rows after saving any prior changed/deleted row to history. Guarded administrator purge clears current rows and their history, derived classifications, occurrence metadata, audit payloads, upload metadata, validation plans, and staged files. Protected verification/evidence references block the purge.
 - Development deletion may use the approved app flow without an export gate. Before production deletion, reinstate an approved scoped CSV/XLSX export; whole-database/schema destruction still requires a logical SQL dump.
 - Keep two protected external backup copies and test restoration quarterly. Uploads warn at 300 MB and block projected allocation at 400 MB, reserving payload/index overhead. Never approach Supabase Free's 500 MB quota.
 - Validation plans are temporary: only one ready plan may exist per client/template, successful imports delete the plan immediately, and expired/applied/superseded plans are removable through the targeted plan-only cleanup route without deleting audit history.
 - Retain primary/unique and measured query indexes. The active-identity uniqueness index is mandatory; index removal requires usage evidence and query-plan review. After large deletes, inspect bloat; physical reclamation requires the separate administrator compaction action, with `VACUUM FULL` reserved for an approved maintenance window.
-- Retain audit-procedure definitions and compact run metadata, not full transaction rows. Future import, deletion, report, cleanup, or backup changes must preserve this contract and update `CHANGELOG_ARCHIVE.md`.
+- Retain audit-procedure definitions and compact run metadata; full transaction snapshots belong only in scoped upload history. Future import, deletion, report, cleanup, or backup changes must preserve this contract and update `CHANGELOG_ARCHIVE.md`.
 
 ## Conventions
 - Account Ledger templates use explicit purpose/column roles and upload-level account/coverage; balance controls remain metadata, and ledger imports never feed voucher movements.
@@ -259,15 +259,17 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-04: Existing PostgreSQL startup now adds the saved-mapping comparison column safely. See CHANGELOG_ARCHIVE.md, Render saved-mapping column migration.
+- 2026-11-04: Upload mappings now exclude selected fields from change detection while refreshing their values safely on confirmed import. See CHANGELOG_ARCHIVE.md.
+- 2026-11-03: Upload reviews classify safe corrections as changed, explain unchanged rows, and verify applied counts against the plan. See CHANGELOG_ARCHIVE.md.
+- 2026-11-03: PostgreSQL startup creates upload history on existing databases; changed/deleted rows can be retained and purged by scope. See CHANGELOG_ARCHIVE.md.
+- 2026-11-03: Admin controls Drive upload backups; dated Excel reports and Google reconnection are available in Settings. See CHANGELOG_ARCHIVE.md.
 - 2026-11-02: Added a Data Integrity page and dashboard status for client-scoped module estimates and duplicate checks. See CHANGELOG_ARCHIVE.md, Data Integrity inventory.
 - 2026-11-02: Upload repairs reject nonfinite/Excel errors and tolerate absent retired copies; duplicate policies preserved. See CHANGELOG_ARCHIVE.md, Upload safety repairs.
 - 2026-11-02: Upload review uses count/safeguard tables; errors highlight fields in red, retain row links and concise guidance. See CHANGELOG_ARCHIVE.md, Upload dialog prototypes implemented.
-- 2026-11-03: One administrator upload-backup switch now applies automatically to all users; Upload displays status only. See CHANGELOG_ARCHIVE.md, Shared upload backup switch.
 - 2026-11-02: Financial Statement Notes distinguish nested subtotals from category totals with separate row styles. See CHANGELOG_ARCHIVE.md.
 - 2026-11-02: Trial Balance page and workspace notices use a fixed, dismissible top-right toast; loading and validation remain inline. See CHANGELOG_ARCHIVE.md.
-- 2026-11-03: Trial Balance defaults to an assignment-free view; Financial Statements, Cashflows and Verification remain selectable. See CHANGELOG_ARCHIVE.md, Trial Balance default assignment-free view.
-- 2026-11-03: Manual Trial Balance code edits accept digits and single hyphens only; upload parsing remains flexible. See CHANGELOG_ARCHIVE.md, Strict Trial Balance code edits.
-- 2026-11-03: Invalid Trial Balance code edits now use a dismissible, field-anchored popup. See CHANGELOG_ARCHIVE.md, Trial Balance code-edit error popup.
+- 2026-11-03: Trial Balance defaults assignment-free; code edits are strict with field notices. See CHANGELOG_ARCHIVE.md.
 - 2026-11-01: Trial Balance toolbar now groups Period and upload actions above Workflow and assignment filters.
 - 2026-11-01: Trial Balance FS Category and Note filters use grouped row-style popups with search and multi-select. See CHANGELOG_ARCHIVE.md.
 - 2026-11-01: Trial Balance upload choices wait for client context, retry transient failures and ignore stale requests. See CHANGELOG_ARCHIVE.md.

@@ -446,6 +446,17 @@ class ErrorTraceEvidenceTests(unittest.TestCase):
 
 
 class PostgresSchemaBootstrapTests(unittest.TestCase):
+    def test_saved_mapping_comparison_preference_migration_is_idempotent_sql(self):
+        conn = FakeConn()
+
+        database._ensure_postgres_saved_column_mappings(conn)
+
+        self.assertEqual(conn.executed, [(
+            "ALTER TABLE saved_column_mappings ADD COLUMN IF NOT EXISTS compare_for_changes BOOLEAN",
+            None,
+        )])
+        self.assertEqual(conn.rollbacks, 0)
+
     def test_form_field_column_migration_adds_missing_columns(self):
         conn = FakeConn(rows=[("id",), ("document_id",), ("field_name",)])
 
@@ -520,10 +531,13 @@ class PostgresSchemaBootstrapTests(unittest.TestCase):
             "_ensure_postgres_storage_cleanup_runs",
             "_ensure_postgres_upload_validation_plans",
             "_ensure_postgres_upload_summary_columns",
+            "_ensure_postgres_client_data_history",
+            "_ensure_postgres_saved_column_mappings",
             "_ensure_postgres_cash_bank_transaction_classifications",
             "_ensure_postgres_cashflow_voucher_occurrences",
             "_ensure_postgres_cashflow_prepared_tables",
             "_ensure_postgres_cashflow_report_source_policy",
+            "_ensure_postgres_trial_balance_column_mappings",
             "_ensure_postgres_audit_rule_assertions",
             "_ensure_postgres_category_compiled_rulebooks",
             "_ensure_postgres_category_document_assertions",

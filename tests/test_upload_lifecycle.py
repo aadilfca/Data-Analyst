@@ -10,10 +10,13 @@ import sqlite3
 import zipfile
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 
 import database
 from routers import import_export as upload
+from routers import google_drive_auth as drive_auth
+from routers.auth import require_admin
 from services import upload_lifecycle as lifecycle, storage_cleanup, drive_archive
 
 
@@ -23,9 +26,104 @@ COLUMNS = [{'id': i, 'column_name': name, 'data_type': kind} for i, (name, kind)
 ], 1)]
 
 
+@pytest.fixture(autouse=True)
+def no_saved_drive_credential_queries(monkeypatch):
+    """Keep Drive tests isolated from the app's real PostgreSQL database."""
+    monkeypatch.setattr(drive_archive, 'load_saved_refresh_token', lambda *_: None)
+
+
 def row(voucher='V1', day='15/04/2026', description='Supplies', amount=10):
     return {'Voucher ID': voucher, 'Transaction Date': day, 'Account Detail': 'A',
             'Voucher Detail': description, 'Debit Amount': amount, 'Credit Amount': 0}
+
+
+def _google_drive_auth_client():
+    app = FastAPI()
+    app.include_router(drive_auth.router)
+    app.dependency_overrides[require_admin] = lambda: {'role': 'admin'}
+    return TestClient(app, follow_redirects=False)
+
+
+def _configure_google_drive_oauth(monkeypatch):
+    monkeypatch.setenv('DRIVE_CLIENT_ID', 'web-client-id')
+    monkeypatch.setenv('DRIVE_CLIENT_SECRET', 'web-client-secret')
+    monkeypatch.setenv('DRIVE_OAUTH_REDIRECT_URI', 'https://example.test/api/google-drive/callback')
+    monkeypatch.setenv('DRIVE_ARCHIVE_FOLDER_ID', 'folder-id')
+
+
+def test_google_drive_reconnect_uses_state_pkce_and_clears_cookies_on_cancel(monkeypatch):
+    from urllib.parse import parse_qs, urlsplit
+    _configure_google_drive_oauth(monkeypatch)
+    client = _google_drive_auth_client()
+    started = client.get('/api/google-drive/connect')
+    query = parse_qs(urlsplit(started.headers['location']).query)
+    assert query['client_id'] == ['web-client-id']
+    assert query['redirect_uri'] == ['https://example.test/api/google-drive/callback']
+    assert query['access_type'] == ['offline'] and query['prompt'] == ['consent']
+    assert query['code_challenge_method'] == ['S256']
+    assert client.cookies.get('drive_oauth_state') == query['state'][0]
+    assert client.cookies.get('drive_oauth_verifier')
+
+    cancelled = client.get('/api/google-drive/callback', params={
+        'state': query['state'][0], 'error': 'access_denied'})
+    assert cancelled.status_code == 303
+    assert 'drive_oauth=cancelled' in cancelled.headers['location']
+    assert all('Max-Age=0' in value for value in cancelled.headers.get_list('set-cookie'))
+
+
+def test_google_drive_reconnect_verifies_folder_before_saving_token(monkeypatch):
+    from urllib.parse import parse_qs, urlsplit
+    _configure_google_drive_oauth(monkeypatch)
+    saved = []
+
+    class VerifiedDrive:
+        client_secret = 'web-client-secret'
+        def __init__(self, refresh_token_override=None):
+            assert refresh_token_override == 'new-refresh-token'
+        def verify_archive_folder(self):
+            saved.append('verified')
+
+    monkeypatch.setattr(drive_auth, '_exchange_code', lambda code, verifier: 'new-refresh-token')
+    monkeypatch.setattr(drive_auth, 'DriveArchive', VerifiedDrive)
+    monkeypatch.setattr(drive_auth, 'save_refresh_token', lambda token, secret: saved.append((token, secret)))
+    client = _google_drive_auth_client()
+    started = client.get('/api/google-drive/connect')
+    query = parse_qs(urlsplit(started.headers['location']).query)
+    callback = client.get('/api/google-drive/callback', params={
+        'state': query['state'][0], 'code': 'one-time-code'})
+    assert callback.status_code == 303 and 'drive_oauth=connected' in callback.headers['location']
+    assert saved == ['verified', ('new-refresh-token', 'web-client-secret')]
+    assert 'new-refresh-token' not in callback.headers['location']
+
+
+def test_google_drive_refresh_token_is_encrypted_and_secret_bound():
+    encrypted = drive_archive.encrypt_refresh_token('sample-token', 'secret-a')
+    assert encrypted != 'sample-token'
+    assert drive_archive.decrypt_refresh_token(encrypted, 'secret-a') == 'sample-token'
+    with pytest.raises(drive_archive.ArchiveError, match='cannot be unlocked'):
+        drive_archive.decrypt_refresh_token(encrypted, 'secret-b')
+
+
+def test_saved_change_report_lists_informational_values_without_transaction_change():
+    from openpyxl import load_workbook
+    from services.upload_observation_report import build_change_report
+
+    report = build_change_report({
+        'new': [], 'changed': [], 'missing': [],
+        'informational_updates': [{
+            'client_data_id': 42,
+            'field_updates': {'Balance': '80 DR'},
+            'old_field_values': {'Balance': '100 DR'},
+        }],
+    }, [{'column_name': 'Voucher ID', 'data_type': 'Text'},
+        {'column_name': 'Balance', 'data_type': 'Text'}],
+       {'client_id': 5, 'template_id': 1, 'start': '2026-10-01', 'end': '2026-10-31'})
+    workbook = load_workbook(io.BytesIO(report), data_only=False)
+
+    assert 'Informational refreshes' in workbook.sheetnames
+    rows = list(workbook['Informational refreshes'].values)
+    assert rows[1] == (42, 'Balance', '100 DR', '80 DR')
+    assert workbook['Import summary']['B9'].value == 1
 
 
 def test_upload_staging_path_is_absolute_and_uses_configured_directory(monkeypatch, tmp_path):
@@ -53,7 +151,7 @@ class Store:
 
     def __init__(self, rows):
         self.rows = []
-        self.jobs, self.plans, self.audits = {}, {}, []
+        self.jobs, self.plans, self.audits, self.history = {}, {}, [], []
         self.columns = deepcopy(COLUMNS)
         self.file = {'id': 99, 'file_path': 'isolated.xlsx', 'file_name': 'isolated.xlsx', 'status': 'Pending'}
         self.depth = 0
@@ -75,13 +173,13 @@ class Store:
 
     @contextmanager
     def transaction(self):
-        before = deepcopy((self.rows, self.jobs, self.plans, self.file, self.audits, self.source_writes, self.metadata_writes)) if self.depth == 0 else None
+        before = deepcopy((self.rows, self.jobs, self.plans, self.file, self.audits, self.history, self.source_writes, self.metadata_writes)) if self.depth == 0 else None
         self.depth += 1
         try:
             yield self
         except BaseException:
             if before is not None:
-                self.rows, self.jobs, self.plans, self.file, self.audits, self.source_writes, self.metadata_writes = before
+                self.rows, self.jobs, self.plans, self.file, self.audits, self.history, self.source_writes, self.metadata_writes = before
             raise
         finally:
             self.depth -= 1
@@ -152,7 +250,10 @@ class Store:
             elif 'drive_file_id = ' in sql:
                 job['drive_file_id'] = job.get('drive_file_id') or params[0]
             elif "status = 'verified'" in sql:
-                job.update(status='verified', archive_sha256=params[0], archive_path=params[1], archive_state_hash=params[2])
+                if len(params) == 4:
+                    job.update(status='verified', archive_sha256=params[0], archive_path=params[1], archive_state_hash=params[2])
+                else:
+                    job.update(status='verified', archive_state_hash=params[0])
             elif "status = 'applied'" in sql:
                 job.update(status='applied', result_json=params[0])
         elif 'INSERT INTO upload_validation_plans' in sql:
@@ -198,11 +299,26 @@ class Store:
         if 'INSERT INTO data_audit_log' in sql:
             for value in values:
                 self.audits.append({'id': len(self.audits) + 1, 'client_data_id': value[0], 'action': value[2]})
+        elif 'INSERT INTO client_data_history' in sql:
+            for value in values:
+                self.history.append({
+                    'client_id': value[0], 'template_id': value[1], 'client_data_id': value[2],
+                    'action': value[3], 'source_upload_id': value[5],
+                    'replacing_upload_id': value[6], 'source_identity': value[7],
+                    'row_data': deepcopy(value[8].adapted),
+                })
         elif 'UPDATE client_data SET source_row_number' in sql:
             for number, source, key, client, template in values:
                 target = next(r for r in self.rows if r['id'] == key and r['client_id'] == client and r['template_id'] == template)
                 target.update(source_row_number=number, source_order_upload_id=source)
                 self.metadata_writes += 1
+        elif 'SET row_data = %s, upload_id = %s, source_identity = %s' in sql:
+            for value in values:
+                target = next(r for r in self.rows if r['id'] == value[-1])
+                target.update(row_data=deepcopy(value[0].adapted), upload_id=value[1],
+                              source_identity=value[2], source_fingerprint=value[3],
+                              source_row_number=value[4], source_order_upload_id=value[5])
+                self.source_writes += 1
         elif 'UPDATE client_data' in sql:
             for value in values:
                 target = next(r for r in self.rows if r['id'] == value[-1])
@@ -214,7 +330,7 @@ class Store:
 @pytest.fixture
 def pipeline(monkeypatch, tmp_path):
     import pandas as pd
-    state = {'store': None, 'incoming': [], 'failure': False, 'after_archive': None, 'transfers': 0,
+    state = {'store': None, 'incoming': [], 'failure': False, 'after_archive': None, 'transfers': 0, 'reports': 0,
              'allow_without_backup': False}
     monkeypatch.setattr(lifecycle, 'execute_query_pg', lambda *args, **kwargs:
                         [{'value': 'true' if state['allow_without_backup'] else 'false'}])
@@ -235,6 +351,16 @@ def pipeline(monkeypatch, tmp_path):
             if state['after_archive']:
                 state['after_archive'](state['store'])
             return {'drive_file_id': file_id, 'sha256': expected, 'local_path': str(path)}
+
+        def upload_change_report(self, content, filename, client_name, import_date, operation_id):
+            state['reports'] += 1
+            assert content.startswith(b'PK') and state['store'].source_writes == 0
+            if state['failure']:
+                raise drive_archive.ArchiveError('Change report unavailable')
+            return {'file_id': 'report', 'file_url': 'https://drive.google.com/file/d/report/view',
+                    'folder_url': 'https://drive.google.com/drive/folders/day',
+                    'folder_path': f'Upload Change Reports/{client_name}/{import_date[:4]}/{import_date}',
+                    'filename': filename}
 
     monkeypatch.setattr(lifecycle, 'DriveArchive', Drive)
     for module in (upload, storage_cleanup):
@@ -338,6 +464,58 @@ def test_repeated_unchanged_source_is_noop_without_archive_or_plan(pipeline):
     assert not state['store'].jobs and not state['transfers']
 
 
+def test_99_unchanged_complete_report_rows_are_not_written_again(pipeline):
+    state = pipeline
+    state['incoming'] = [row(voucher=f'V-{index:03}') for index in range(1, 100)]
+    state['store'] = Store(state['incoming'])
+    before = deepcopy(state['store'].rows)
+
+    validation = upload.validate_only(request())
+
+    changes = validation['change_detection']
+    assert not validation['can_import']
+    assert changes['unchanged_count'] == 99
+    assert changes['new_count'] == changes['changed_count'] == changes['missing_count'] == 0
+    assert state['store'].rows == before
+    assert state['store'].source_writes == 0
+    assert state['store'].history == []
+    assert not state['store'].jobs and not state['transfers']
+
+
+def test_unchecked_balance_refreshes_only_after_confirmed_import_without_history(pipeline, monkeypatch):
+    import sys
+    columns = deepcopy(COLUMNS) + [{'id': 7, 'column_name': 'Balance', 'data_type': 'Text'}]
+    monkeypatch.setattr(sys.modules[__name__], 'COLUMNS', columns)
+    state = pipeline
+    old = {**row(), 'Balance': '100 DR'}
+    state['store'] = Store([old])
+    state['incoming'] = [{**old, 'Balance': '80 DR'}]
+
+    validation_request = request()
+    validation_request.mappings[-1].compare_for_changes = False
+    validation = upload.validate_only(validation_request)
+
+    assert validation['can_import']
+    assert validation['change_detection']['unchanged_count'] == 1
+    assert validation['change_detection']['informational_update_count'] == 1
+    assert validation['change_detection']['changed_count'] == 0
+    assert state['store'].rows[0]['row_data']['Balance'] == '100 DR'
+    assert state['store'].source_writes == 0 and state['store'].history == []
+
+    import_request = request(validation_plan_id=validation['validation_plan_id'])
+    import_request.mappings[-1].compare_for_changes = False
+    result = upload.validate_and_import(import_request)
+
+    assert result['updated_count'] == 0
+    assert result['informational_updated_count'] == 1
+    assert result['change_detection']['unchanged_count'] == 1
+    assert result['change_detection']['changed_count'] == 0
+    assert len(state['store'].rows) == 1
+    assert state['store'].rows[0]['id'] == 1
+    assert state['store'].rows[0]['row_data']['Balance'] == '80 DR'
+    assert state['store'].history == []
+
+
 def test_legacy_source_order_refresh_keeps_values_ids_and_receipt_without_financial_archive(pipeline):
     state=pipeline
     state['store']=Store([row('V1'),row('V1'),row('V9'),row('OUTSIDE','01/05/2026')])
@@ -366,14 +544,56 @@ def test_changed_voucher_archives_unchanged_sibling_lines_and_keeps_their_ids(pi
     state['store'] = Store(original)
     state['incoming'] = [original[2], row(description='Revised detail'), original[0]]
     result, validation = validate_then_import(state)
-    assert result['deleted_count'] == result['imported_count'] == 1
+    assert result['updated_count'] == 1
+    assert result['deleted_count'] == result['imported_count'] == 0
     assert {r['id'] for r in state['store'].rows if r['row_data']['Voucher Detail'] == 'Keep sibling'} == {1, 3}
+    assert len(state['store'].history) == 1
+    assert state['store'].history[0]['action'] == 'changed'
+    assert state['store'].history[0]['row_data']['Voucher Detail'] == 'Old detail'
     assert validation['change_detection']['changed_voucher_count'] == 1
     with zipfile.ZipFile(next(iter(state['store'].jobs.values()))['archive_path']) as archive:
         assert len(json.loads(archive.read('rows.json'))) == 3
         from openpyxl import load_workbook
         report = load_workbook(io.BytesIO(archive.read('Upload observation report.xlsx')))
         assert report['Previous vouchers'].max_row == report['Incoming vouchers'].max_row == 8
+
+
+def test_changed_and_removed_rows_are_saved_to_independent_history(pipeline):
+    state = pipeline
+    state['store'] = Store([row(description='Old detail')])
+    state['incoming'] = [row(description='Revised detail')]
+
+    result, _ = validate_then_import(state, comparison_mode='correction')
+    assert result['updated_count'] == 1 and result['deleted_count'] == 0
+    assert [(item['action'], item['client_data_id'], item['row_data']['Voucher Detail'])
+            for item in state['store'].history] == [('changed', 1, 'Old detail')]
+
+    state['store'] = Store([row('REMOVE', description='Old deleted')])
+    state['incoming'] = []
+    result, _ = validate_then_import(state, confirm_empty_period=True)
+    assert result['deleted_count'] == 1
+    assert [(item['action'], item['client_data_id'], item['row_data']['Voucher ID'])
+            for item in state['store'].history] == [('deleted', 1, 'REMOVE')]
+    assert all(item['client_id'] == 5 and item['template_id'] == 1
+               and item['source_upload_id'] == 1
+               and item['replacing_upload_id'] == 99 for item in state['store'].history)
+
+
+def test_history_write_rolls_back_with_failed_import(pipeline, monkeypatch):
+    state = pipeline
+    state['store'] = Store([row(description='Old detail')])
+    state['incoming'] = [row(description='Revised detail')]
+    before = deepcopy(state['store'].rows)
+
+    def fail_after_history(*args, **kwargs):
+        raise RuntimeError('Derived write failed')
+
+    monkeypatch.setattr(upload, 'upsert_classification_rows_postgres', fail_after_history)
+    with pytest.raises(RuntimeError, match='Derived write failed'):
+        validate_then_import(state)
+
+    assert state['store'].rows == before
+    assert state['store'].history == []
 
 
 def test_reordered_duplicate_looking_lines_remain_a_noop(pipeline):
@@ -450,6 +670,87 @@ def test_archive_failure_leaves_source_unchanged_and_same_plan_can_retry(pipelin
     assert len(state['store'].jobs) == 1
 
 
+def test_new_only_import_saves_a_verified_excel_report_and_returns_its_location(pipeline):
+    state = pipeline
+    state['store'] = Store([])
+    state['incoming'] = [row(voucher='NEW-1')]
+    validation = upload.validate_only(request())
+    assert validation['can_import']
+    result = upload.validate_and_import(request(validation_plan_id=validation['validation_plan_id']))
+    assert result['status'] == 'success'
+    assert result['backup_mode'] == 'drive' and not result['archive_verified']
+    assert result['change_report']['file_url'] == 'https://drive.google.com/file/d/report/view'
+    assert result['change_report']['folder_path'].startswith('Upload Change Reports/')
+    assert state['reports'] == 1 and state['transfers'] == 0
+    retry = upload.validate_and_import(request(validation_plan_id=validation['validation_plan_id']))
+    assert retry['recovered_commit'] and retry['change_report'] == result['change_report']
+
+
+def test_change_report_failure_blocks_new_only_import(pipeline):
+    state = pipeline
+    state['store'] = Store([])
+    state['incoming'] = [row(voucher='NEW-1')]
+    validation = upload.validate_only(request())
+    state['failure'] = True
+    with pytest.raises(HTTPException) as error:
+        upload.validate_and_import(request(validation_plan_id=validation['validation_plan_id']))
+    assert error.value.status_code == 503
+    assert state['store'].source_writes == 0 and len(state['store'].rows) == 0
+
+
+def test_backup_policy_shows_drive_address_only_for_a_complete_connection(monkeypatch):
+    monkeypatch.setattr(upload, 'execute_query_pg', lambda *args, **kwargs: [{'value': 'false'}])
+    for name in ['DRIVE_CLIENT_ID', 'DRIVE_CLIENT_SECRET', 'DRIVE_REFRESH_TOKEN', 'DRIVE_ARCHIVE_FOLDER_ID']:
+        monkeypatch.setenv(name, 'configured')
+    monkeypatch.setenv('DRIVE_ARCHIVE_FOLDER_ID', 'folder_123')
+    response = upload.upload_backup_policy(session={'role': 'admin'})
+    assert response == {'allow_without_backup': False,
+                        'archive_folder_url': 'https://drive.google.com/drive/folders/folder_123',
+                        'drive_connection_ready': True}
+    monkeypatch.delenv('DRIVE_REFRESH_TOKEN')
+    response = upload.upload_backup_policy(session={'role': 'admin'})
+    assert response['archive_folder_url'] == 'https://drive.google.com/drive/folders/folder_123'
+    assert response['drive_connection_ready'] is False
+
+
+def test_revoked_refresh_token_has_a_clear_reconnect_message_without_secrets(monkeypatch):
+    from urllib.error import HTTPError
+    for name in ['DRIVE_CLIENT_ID', 'DRIVE_CLIENT_SECRET', 'DRIVE_REFRESH_TOKEN', 'DRIVE_ARCHIVE_FOLDER_ID']:
+        monkeypatch.setenv(name, 'configured')
+    def rejected(url, *args, **kwargs):
+        assert url.full_url == 'https://oauth2.googleapis.com/token'
+        raise HTTPError(url.full_url, 400, 'Bad Request', {},
+                        io.BytesIO(b'{"error":"invalid_grant","error_description":"Token has been expired or revoked."}'))
+    monkeypatch.setattr(drive_archive, 'urlopen', rejected)
+    client = drive_archive.DriveArchive()
+    with pytest.raises(drive_archive.ArchiveError) as error:
+        client._open('https://www.googleapis.com/drive/v3/files')
+    assert error.value.code == 'drive_auth_reconnect_required'
+    assert error.value.outcome == 'not_applied'
+    assert 'Reconnect Google Drive in Settings' in str(error.value)
+    assert 'No app data was changed' in str(error.value)
+
+
+def test_revoked_refresh_token_import_response_says_no_data_was_applied(pipeline, monkeypatch):
+    state = pipeline
+    state['store'] = Store([])
+    state['incoming'] = [row(voucher='NEW-1')]
+    validation = upload.validate_only(request())
+
+    class ExpiredDrive:
+        def upload_change_report(self, *args, **kwargs):
+            raise drive_archive.ArchiveError('Authorization expired',
+                code='drive_auth_reconnect_required', outcome='not_applied')
+
+    monkeypatch.setattr(lifecycle, 'DriveArchive', ExpiredDrive)
+    with pytest.raises(HTTPException) as error:
+        upload.validate_and_import(request(validation_plan_id=validation['validation_plan_id']))
+    assert error.value.status_code == 503
+    assert error.value.detail == {'message': 'Authorization expired',
+        'code': 'drive_auth_reconnect_required', 'outcome': 'not_applied'}
+    assert state['store'].source_writes == 0 and state['store'].rows == []
+
+
 @pytest.mark.parametrize('client_choice', [None, False, True])
 def test_global_backup_on_applies_even_if_client_asks_to_skip(pipeline, client_choice):
     pipeline['allow_without_backup'] = False
@@ -517,7 +818,7 @@ def test_backup_setting_rejects_nonadministrator_reads_and_writes(backup_setting
 
 @pytest.mark.parametrize('protected', [False, True])
 @pytest.mark.parametrize('client_choice', [None, False, True])
-def test_development_replacement_skips_all_archives_but_protects_evidence(pipeline, monkeypatch, protected, client_choice):
+def test_development_replacement_skips_archives_and_retains_changed_rows_in_history(pipeline, monkeypatch, protected, client_choice):
     pipeline['allow_without_backup'] = True
     state = pipeline
     state['store'] = Store([row(description='Old')])
@@ -529,18 +830,16 @@ def test_development_replacement_skips_all_archives_but_protects_evidence(pipeli
     validation = upload.validate_only(request(backup_enabled=client_choice))
     assert validation['backup_enabled'] is False
     importing = request(backup_enabled=client_choice, validation_plan_id=validation['validation_plan_id'])
-    if protected:
-        with pytest.raises(HTTPException) as error:
-            upload.validate_and_import(importing)
-        assert error.value.status_code == 409
-        assert state['store'].rows == before
-    else:
-        result = upload.validate_and_import(importing)
-        assert result['status'] == 'success' and result['backup_mode'] == 'none'
-        assert not result['archive_verified'] and state['transfers'] == 0
-        assert len(state['store'].rows) == 1
-        recovered = upload.validate_and_import(importing)
-        assert recovered['recovered_commit'] and recovered['backup_mode'] == 'none'
+    result = upload.validate_and_import(importing)
+    assert result['status'] == 'success' and result['backup_mode'] == 'none'
+    assert result['updated_count'] == 1 and result['imported_count'] == result['deleted_count'] == 0
+    assert not result['archive_verified'] and state['transfers'] == 0
+    assert len(state['store'].rows) == 1 and state['store'].rows[0]['id'] == before[0]['id']
+    assert state['store'].rows[0]['row_data']['Voucher Detail'] == 'New'
+    assert len(state['store'].history) == 1
+    assert state['store'].history[0]['row_data']['Voucher Detail'] == 'Old'
+    recovered = upload.validate_and_import(importing)
+    assert recovered['recovered_commit'] and recovered['backup_mode'] == 'none'
     assert all(not job.get('archive_path') and not job.get('drive_file_id') for job in state['store'].jobs.values())
 
 
@@ -624,16 +923,17 @@ def test_changes_during_archive_reject_stale_plan_without_source_replacement(pip
     assert next(iter(state['store'].jobs.values()))['status'] == 'verified'
 
 
-def test_protected_evidence_blocks_transaction_and_keeps_verified_archive(pipeline):
+def test_changed_row_with_protected_evidence_keeps_old_values_in_history(pipeline):
     state = pipeline
     state['store'] = Store([row(description='Old')]); state['incoming'] = [row(description='New')]
     state['store'].protected = True
-    before = deepcopy(state['store'].rows)
     validation = upload.validate_only(request())
-    with pytest.raises(HTTPException) as error:
-        upload.validate_and_import(request(validation_plan_id=validation['validation_plan_id']))
-    assert error.value.status_code == 409 and state['store'].rows == before
-    assert next(iter(state['store'].jobs.values()))['status'] == 'verified'
+    result = upload.validate_and_import(request(validation_plan_id=validation['validation_plan_id']))
+    assert result['updated_count'] == 1 and result['imported_count'] == result['deleted_count'] == 0
+    assert state['store'].rows[0]['id'] == 1
+    assert state['store'].rows[0]['row_data']['Voucher Detail'] == 'New'
+    assert state['store'].history[0]['row_data']['Voucher Detail'] == 'Old'
+    assert next(iter(state['store'].jobs.values()))['status'] == 'applied'
 
 
 @pytest.mark.parametrize('options', [{'excluded_rows': [2]}, {'force_include_rows': [2]}, {'coverage_end': '2026-04-10'}])
@@ -649,7 +949,8 @@ def test_shifted_voucher_date_follows_same_id_and_retains_other_outside_vouchers
     state['store'] = Store([row(day='31/03/2026'), row('OUTSIDE', day='31/03/2026')])
     state['incoming'] = [row()]
     result, validation = validate_then_import(state)
-    assert result['imported_count'] == result['deleted_count'] == 1
+    assert result['updated_count'] == 1
+    assert result['imported_count'] == result['deleted_count'] == 0
     assert len(state['store'].rows) == 2
     assert {(r['row_data']['Voucher ID'], r['extract_date']) for r in state['store'].rows} == {
         ('V1', '2026-04-15'), ('OUTSIDE', '2026-03-31')}
@@ -729,7 +1030,7 @@ def test_google_drive_downloading_wrong_bytes_never_verifies(monkeypatch, tmp_pa
 def test_app_connection_is_required_and_local_archive_cannot_live_in_checkout(monkeypatch):
     for name in ['DRIVE_CLIENT_ID', 'DRIVE_CLIENT_SECRET', 'DRIVE_REFRESH_TOKEN', 'DRIVE_ARCHIVE_FOLDER_ID']:
         monkeypatch.delenv(name, raising=False)
-    with pytest.raises(drive_archive.ArchiveError, match='not configured'):
+    with pytest.raises(drive_archive.ArchiveError, match='Configure DRIVE_CLIENT_ID'):
         drive_archive.DriveArchive()
     monkeypatch.setenv('UPLOAD_ARCHIVE_DIR', str(__import__('pathlib').Path(__file__).resolve().parents[1] / 'uploads'))
     with pytest.raises(drive_archive.ArchiveError, match='outside'):
@@ -751,7 +1052,8 @@ def test_database_failure_after_source_writes_rolls_back_and_can_retry(pipeline,
     assert next(iter(state['store'].jobs.values()))['status'] == 'verified'
     monkeypatch.setattr(upload, 'upsert_classification_rows_postgres', lambda *a, **kw: None)
     result = upload.validate_and_import(request(validation_plan_id=validation['validation_plan_id']))
-    assert result['deleted_count'] == result['imported_count'] == 1
+    assert result['updated_count'] == 1
+    assert result['deleted_count'] == result['imported_count'] == 0
 
 
 def test_postgres_scope_guard_uses_small_server_aggregate_instead_of_returning_rows():
@@ -794,6 +1096,71 @@ def test_google_drive_create_and_retry_verify_identical_remote_file(monkeypatch,
         proof = client.upload_and_verify('remote', path, 'operation', checksum)
         assert proof['sha256'] == checksum
     assert sum('upload/drive' in url for url in calls) == 1
+
+
+def test_google_drive_dated_change_report_is_verified_and_retry_reuses_file(monkeypatch):
+    from urllib.parse import parse_qs
+    for name in ['DRIVE_CLIENT_ID', 'DRIVE_CLIENT_SECRET', 'DRIVE_REFRESH_TOKEN', 'DRIVE_ARCHIVE_FOLDER_ID']:
+        monkeypatch.setenv(name, 'configured')
+    client = drive_archive.DriveArchive()
+    content = b'PK sample workbook bytes'
+    folders = {'configured': {'id': 'configured', 'name': 'Internal Audit Upload Archives',
+        'mimeType': 'application/vnd.google-apps.folder', 'parents': [], 'capabilities': {'canAddChildren': True}}}
+    files = {}
+    next_id = iter(['folder-1', 'folder-2', 'folder-3', 'folder-4', 'report-1'])
+    upload_calls = []
+
+    def json_api(path, data=None, method=None):
+        if path.startswith('files/configured?'):
+            return folders['configured']
+        if path.startswith('files/generateIds?'):
+            return {'ids': [next(next_id)]}
+        if path.startswith('files?supportsAllDrives=true'):
+            values = json.loads(data)
+            identifier = next(next_id)
+            folder = {'id': identifier, **values, 'webViewLink': f'https://drive.google.com/drive/folders/{identifier}'}
+            folders[identifier] = folder
+            return folder
+        if path.startswith('files?'):
+            query = parse_qs(path.split('?', 1)[1]).get('q', [''])[0]
+            parent = next((key for key in folders if f"'{key}' in parents" in query), None)
+            name = next((folder for folder in folders.values()
+                         if folder.get('name') in query and parent in folder.get('parents', [])), None)
+            report = next((item for item in files.values()
+                           if item['name'] in query and parent in item['parents']), None)
+            return {'files': [report] if report else [name] if name else []}
+        if path.startswith('files/report-1?'):
+            return files['report-1']
+        raise AssertionError(path)
+
+    def metadata(identifier):
+        return files[identifier]
+
+    def network(url, data=None, *args, **kwargs):
+        if '/upload/drive/v3/files?' in url:
+            upload_calls.append(url)
+            identifier = 'report-1'
+            parent = next(value for value in folders if value.startswith('folder-4'))
+            files[identifier] = {'id': identifier,
+                'name': '143000-Account-Ledger-' + ('a' * 32) + '.xlsx',
+                'mimeType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                'parents': [parent], 'size': len(content), 'trashed': False,
+                'webViewLink': 'https://drive.google.com/file/d/report-1/view',
+                'appProperties': {'operation_id': 'a' * 32, 'sha256': hashlib.sha256(content).hexdigest()}}
+            return io.BytesIO(b'{}')
+        if '/files/report-1?alt=media' in url:
+            return io.BytesIO(content)
+        raise AssertionError(url)
+
+    monkeypatch.setattr(client, '_json', json_api)
+    monkeypatch.setattr(client, '_metadata', metadata)
+    monkeypatch.setattr(client, '_open', network)
+    for _ in range(2):
+        result = client.upload_change_report(content, '143000-Account-Ledger-' + ('a' * 32) + '.xlsx',
+            'Leather-Crop', '2026-11-03', 'a' * 32)
+        assert result['file_url'] == 'https://drive.google.com/file/d/report-1/view'
+        assert result['folder_path'] == 'Upload Change Reports/Leather-Crop/2026/2026-11-03'
+    assert len(upload_calls) == 1
 
 
 @pytest.mark.parametrize('field,value', [('parents', ['other-folder']), ('size', 999), ('trashed', True),

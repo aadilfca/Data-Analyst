@@ -108,6 +108,43 @@ async function saveUploadBackupSetting() {
     finally { toggle.disabled = save.disabled = false; }
 }
 
+async function loadGoogleDriveStatus() {
+    const panel = document.getElementById('googleDrivePanel');
+    const button = document.getElementById('connectGoogleDriveBtn');
+    const status = document.getElementById('googleDriveStatus');
+    try {
+        const response = await fetch(`${API_BASE}/api/google-drive/status`);
+        if (response.status === 401 || response.status === 403) { panel.hidden = true; return; }
+        panel.hidden = false;
+        const result = await response.json();
+        if (!response.ok) throw new Error('Could not check Google Drive. Reload Settings to try again.');
+        status.textContent = result.message || (result.connected ? 'Google Drive is connected.' : 'Google Drive needs to be connected.');
+        status.dataset.connected = result.connected ? 'true' : 'false';
+    } catch (error) {
+        panel.hidden = false;
+        status.textContent = error.message || 'Could not check Google Drive. Reload Settings to try again.';
+        status.dataset.connected = 'false';
+    } finally {
+        button.disabled = false;
+    }
+}
+
+function beginGoogleDriveReconnect() {
+    const button = document.getElementById('connectGoogleDriveBtn');
+    button.disabled = true;
+    button.textContent = 'Opening Google…';
+    window.location.href = `${API_BASE}/api/google-drive/connect`;
+}
+
+function showDriveOAuthResult() {
+    const outcome = new URLSearchParams(window.location.search).get('drive_oauth');
+    if (!outcome) return null;
+    history.replaceState(null, '', window.location.pathname);
+    if (outcome === 'connected') return 'Connected. Google Drive and the archive folder were verified.';
+    if (outcome === 'cancelled') return 'Google access was not approved; the previous connection is unchanged.';
+    return 'Connection was not completed. Check the Google OAuth settings and try again.';
+}
+
 async function loadCashflowDefaults() {
     try {
         const res = await fetch(`${API_BASE}/api/settings/cashflows-defaults`);
@@ -375,6 +412,10 @@ async function deleteHoliday(id) {
 
 window.onload = async function() {
     if (window.clientContextReady) await window.clientContextReady;
+    document.getElementById('connectGoogleDriveBtn')?.addEventListener('click', beginGoogleDriveReconnect);
+    const driveOAuthResult = showDriveOAuthResult();
+    await loadGoogleDriveStatus();
+    if (driveOAuthResult) document.getElementById('googleDriveStatus').textContent = driveOAuthResult;
     loadUploadBackupSetting();
     document.getElementById('saveUploadBackupsBtn')?.addEventListener('click', saveUploadBackupSetting);
     loadSettings();

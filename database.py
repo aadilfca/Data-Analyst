@@ -1377,6 +1377,13 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS google_drive_credentials (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                encrypted_refresh_token TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
         
         # Seed default settings
         default_settings = [
@@ -1482,6 +1489,25 @@ def init_db():
         ''')
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_data_audit_log_clientdata ON data_audit_log (client_data_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_data_audit_log_action ON data_audit_log (action)")
+        # Full prior-row snapshots survive replacement purges. Deliberately no
+        # foreign key to client_data or uploaded_files: both active rows and
+        # upload metadata may be removed after a replacement.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS client_data_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+                client_data_id INTEGER NOT NULL,
+                action TEXT NOT NULL CHECK (action IN ('changed', 'deleted')),
+                changed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                changed_by TEXT DEFAULT 'System',
+                source_upload_id INTEGER,
+                replacing_upload_id INTEGER,
+                source_identity TEXT,
+                row_data TEXT NOT NULL
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_client_data_history_scope_time ON client_data_history (client_id, template_id, changed_at)")
         conn.execute('''
             CREATE TABLE IF NOT EXISTS storage_cleanup_runs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1835,6 +1861,7 @@ def init_db():
                 template_id INTEGER NOT NULL,
                 template_column_id INTEGER NOT NULL,
                 excel_column TEXT NOT NULL,
+                compare_for_changes INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
@@ -1842,6 +1869,9 @@ def init_db():
                 UNIQUE(client_id, template_id, template_column_id)
             )
         ''')
+        saved_mapping_columns = {row[1] for row in conn.execute("PRAGMA table_info(saved_column_mappings)").fetchall()}
+        if "compare_for_changes" not in saved_mapping_columns:
+            conn.execute("ALTER TABLE saved_column_mappings ADD COLUMN compare_for_changes INTEGER")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_saved_column_mappings_client_template ON saved_column_mappings (client_id, template_id)")
         print("✅ Created saved_column_mappings table")
 
@@ -4590,6 +4620,31 @@ def _ensure_postgres_storage_cleanup_runs(conn):
     with conn.cursor() as cleanup_cur:
         cleanup_cur.execute(_STORAGE_CLEANUP_RUNS_SQL)
 
+
+def _ensure_postgres_client_data_history(conn):
+    """Create prior-row history on both fresh and already-bootstrapped schemas."""
+    with conn.cursor() as cur:
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS client_data_history (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+                client_data_id INTEGER NOT NULL,
+                action TEXT NOT NULL CHECK (action IN ('changed', 'deleted')),
+                changed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                changed_by TEXT DEFAULT 'System',
+                source_upload_id INTEGER,
+                replacing_upload_id INTEGER,
+                source_identity TEXT,
+                row_data JSONB NOT NULL
+            )
+        ''')
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_client_data_history_scope_time "
+            "ON client_data_history (client_id, template_id, changed_at)"
+        )
+
+
 def _ensure_postgres_upload_validation_plans(conn):
     """Create the short-lived server-side upload action-plan store."""
     with conn.cursor() as cur:
@@ -4689,6 +4744,15 @@ def _ensure_postgres_upload_summary_columns(conn):
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_uploaded_files_source_hash_scope "
             "ON uploaded_files (client_id, template_id, file_sha256, status)"
+        )
+
+
+def _ensure_postgres_saved_column_mappings(conn):
+    """Add the comparison preference to saved mappings on existing schemas."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "ALTER TABLE saved_column_mappings "
+            "ADD COLUMN IF NOT EXISTS compare_for_changes BOOLEAN"
         )
 
 
@@ -5278,6 +5342,8 @@ def init_db_postgres(conn):
         _ensure_postgres_storage_cleanup_runs(conn)
         _ensure_postgres_upload_validation_plans(conn)
         _ensure_postgres_upload_summary_columns(conn)
+        _ensure_postgres_saved_column_mappings(conn)
+        _ensure_postgres_client_data_history(conn)
         migrated_document_type = _ensure_postgres_audit_rule_document_type_constraint(conn)
         migrated_form_columns = _ensure_postgres_form_field_columns(conn)
         migrated_form_tables = _ensure_postgres_form_tables(conn)
@@ -5858,6 +5924,13 @@ def init_db_postgres(conn):
             created_at TIMESTAMPTZ DEFAULT now()
         )
     ''', "app_settings")
+    run('''
+        CREATE TABLE IF NOT EXISTS google_drive_credentials (
+            id SMALLINT PRIMARY KEY CHECK (id = 1),
+            encrypted_refresh_token TEXT NOT NULL,
+            updated_at TIMESTAMPTZ DEFAULT now()
+        )
+    ''', "google_drive_credentials")
 
     # Durable singleton version for stable Audit Rules/Rulebook configuration. It is kept
     # separate from app_settings so setup backup/restore cannot roll back safety state.
@@ -5904,6 +5977,25 @@ def init_db_postgres(conn):
     run("CREATE INDEX IF NOT EXISTS idx_data_audit_log_clientdata ON data_audit_log (client_data_id)")
     run("CREATE INDEX IF NOT EXISTS idx_data_audit_log_action ON data_audit_log (action)")
 
+    # Complete previous rows are retained separately from the compact audit log.
+    # No FK to client_data/uploaded_files: replacement cleanup removes both.
+    run('''
+        CREATE TABLE IF NOT EXISTS client_data_history (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+            client_data_id INTEGER NOT NULL,
+            action TEXT NOT NULL CHECK (action IN ('changed', 'deleted')),
+            changed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            changed_by TEXT DEFAULT 'System',
+            source_upload_id INTEGER,
+            replacing_upload_id INTEGER,
+            source_identity TEXT,
+            row_data JSONB NOT NULL
+        )
+    ''', "client_data_history")
+    run("CREATE INDEX IF NOT EXISTS idx_client_data_history_scope_time ON client_data_history (client_id, template_id, changed_at)")
+
     # ---------- 16a. storage_cleanup_runs ----------
     run(_STORAGE_CLEANUP_RUNS_SQL, "storage_cleanup_runs")
 
@@ -5929,11 +6021,13 @@ def init_db_postgres(conn):
             template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
             template_column_id INTEGER NOT NULL,
             excel_column TEXT NOT NULL,
+            compare_for_changes BOOLEAN,
             created_at TIMESTAMPTZ DEFAULT now(),
             updated_at TIMESTAMPTZ DEFAULT now(),
             UNIQUE(client_id, template_id, template_column_id)
         )
     ''', "saved_column_mappings")
+    run("ALTER TABLE saved_column_mappings ADD COLUMN IF NOT EXISTS compare_for_changes BOOLEAN")
     run("CREATE INDEX IF NOT EXISTS idx_saved_column_mappings_client_template ON saved_column_mappings (client_id, template_id)")
 
     # ---------- 19. client_template_upload_frequency ----------
@@ -7586,6 +7680,7 @@ def compact_postgres_tables(table_names, full=False):
     """
     allowed = {
         "client_data",
+        "client_data_history",
         "data_audit_log",
         "upload_validation_plans",
     }

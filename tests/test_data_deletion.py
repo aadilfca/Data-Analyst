@@ -1,15 +1,96 @@
 import os
+import sqlite3
 import unittest
+from contextlib import ExitStack
 from unittest.mock import MagicMock, patch
 import pytest
 
 from fastapi import HTTPException
 
+import database
 from routers import clients
 from services import storage_cleanup
 
 
 class PermanentDataDeletionTests(unittest.TestCase):
+    def test_local_schema_has_scoped_history_table_and_single_lookup_index(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            database, "DB_NAME", os.path.join(directory, "history-test.db")
+        ):
+            database.init_db()
+            conn = sqlite3.connect(database.DB_NAME)
+            try:
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(client_data_history)")}
+                indexes = {row[1] for row in conn.execute("PRAGMA index_list(client_data_history)")}
+            finally:
+                conn.close()
+
+        self.assertTrue({"client_id", "template_id", "client_data_id", "action", "changed_at", "row_data"}.issubset(columns))
+        self.assertIn("idx_client_data_history_scope_time", indexes)
+
+    def test_existing_postgres_schema_creates_history_table_and_index(self):
+        class CursorStub:
+            def __init__(self):
+                self.statements = []
+
+            def execute(self, statement, params=None):
+                self.statements.append(statement)
+
+            def fetchone(self):
+                return ("audit_rules_config_state",)
+
+            def close(self):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        conn = MagicMock()
+        cursor = CursorStub()
+        conn.cursor.return_value = cursor
+        migration_helpers = (
+            "_ensure_postgres_storage_cleanup_runs",
+            "_ensure_postgres_upload_validation_plans",
+            "_ensure_postgres_upload_summary_columns",
+            "_ensure_postgres_audit_rule_document_type_constraint",
+            "_ensure_postgres_form_field_columns",
+            "_ensure_postgres_form_tables",
+            "_ensure_account_ledger_schema",
+            "_ensure_upload_lifecycle_schema",
+            "_ensure_postgres_report_category_tables",
+            "_ensure_postgres_account_set_tables",
+            "_ensure_postgres_trial_balance_source_code",
+            "_ensure_postgres_trial_balance_column_mappings",
+            "_ensure_postgres_trial_balance_rollforward_adjustments",
+            "_ensure_postgres_cash_bank_transaction_classifications",
+            "_ensure_postgres_cashflow_voucher_occurrences",
+            "_ensure_postgres_cashflow_prepared_tables",
+            "_ensure_postgres_cashflow_report_source_policy",
+            "_ensure_postgres_audit_rule_assertions",
+            "_ensure_postgres_category_compiled_rulebooks",
+            "_ensure_postgres_category_document_assertions",
+            "_ensure_postgres_category_cross_check_assertions",
+            "_ensure_postgres_voucher_check_assertions",
+            "_ensure_postgres_applied_ruleset_hash",
+            "_ensure_postgres_local_vendor_discovery_indexes",
+            "_ensure_postgres_client_data_canonical_columns",
+        )
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(database, "_POSTGRES_SCHEMA_READY", False))
+            for helper in migration_helpers:
+                stack.enter_context(patch.object(database, helper, return_value=False))
+            database.init_db_postgres(conn)
+
+        statements = "\n".join(cursor.statements)
+        self.assertIn("CREATE TABLE IF NOT EXISTS client_data_history", statements)
+        self.assertIn("idx_client_data_history_scope_time", statements)
+        conn.commit.assert_called_once_with()
+
     def test_scope_predicate_is_parameterized_for_client_and_template(self):
         predicate, params = storage_cleanup._purge_scope_predicate("cd", 5, 1)
         self.assertEqual(predicate, "cd.client_id = %s AND cd.template_id = %s")
@@ -101,7 +182,9 @@ class PermanentDataDeletionTests(unittest.TestCase):
         self.assertEqual(result["staged_file_cleanup_failures"], [])
         sql_text = "\n".join(delete_sql)
         self.assertLess(sql_text.index("cashflow_prepared_lines"), sql_text.index("client_data"))
-        self.assertLess(sql_text.index("client_data"), sql_text.index("uploaded_files"))
+        self.assertLess(sql_text.index("DELETE FROM public.client_data_history"),
+                        sql_text.index("DELETE FROM public.client_data cd"))
+        self.assertLess(sql_text.index("DELETE FROM public.client_data cd"), sql_text.index("uploaded_files"))
 
     def test_preview_route_is_admin_scoped_and_read_only(self):
         expected = {"mode": "permanent_data_delete_dry_run"}
@@ -157,6 +240,7 @@ def test_replacement_purge_permanently_removes_exact_rows_and_old_payloads():
     assert result["deleted_count"] == 1
     assert any("DELETE FROM public.client_data WHERE id = ANY(%s)" in sql and params == ([9],) for sql, params in writes)
     assert any("DELETE FROM public.data_audit_log" in sql for sql, _ in writes)
+    assert not any("DELETE FROM public.client_data_history" in sql for sql, _ in writes)
     assert not any("is_deleted = TRUE" in sql for sql, _ in writes)
 
 

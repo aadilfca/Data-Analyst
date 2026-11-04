@@ -19,7 +19,74 @@ def test_development_backup_policy_control_and_review_warning(page):
     review(page)
     page.locator('#uploadReplacementCancel').click()
     page.evaluate('void reviewUploadReplacement({...window.reviewPayload, backup_enabled:false})')
-    expect(page.locator('#uploadReplacementBackup')).to_contain_text('no recovery backup')
+    expect(page.locator('#uploadReplacementBackup')).to_contain_text('no recovery ZIP or saved Excel report')
+
+
+def test_backup_review_shows_real_drive_folder_link_when_configured(page):
+    page.evaluate("uploadArchiveFolderUrl='https://drive.google.com/drive/folders/archive123'")
+    page.evaluate('uploadDriveConnectionReady=true')
+    review(page)
+    link = page.locator('#uploadReplacementBackup a')
+    expect(link).to_have_attribute('href', 'https://drive.google.com/drive/folders/archive123')
+    expect(page.locator('#uploadReplacementBackup')).to_contain_text('Upload Change Reports / client / year / import date')
+
+
+def test_review_exposes_known_folder_but_warns_if_drive_connection_is_incomplete(page):
+    page.evaluate("uploadArchiveFolderUrl='https://drive.google.com/drive/folders/archive123'; uploadDriveConnectionReady=false")
+    review(page)
+    expect(page.locator('#uploadReplacementBackup a')).to_have_attribute(
+        'href', 'https://drive.google.com/drive/folders/archive123')
+    expect(page.locator('#uploadReplacementBackup')).to_contain_text('Drive connection is incomplete')
+
+
+def test_known_oauth_failure_is_not_shown_as_an_unconfirmed_import(page):
+    page.route('**/api/upload/import', lambda route: route.fulfill(status=503, json={'detail': {
+        'message': 'Google Drive authorization expired.', 'code': 'drive_auth_reconnect_required',
+        'outcome': 'not_applied'}}))
+    state = page.evaluate('''async () => {
+        try { await fetchUpload('/api/upload/import', {method:'POST'}); }
+        catch (error) {
+            showUploadFailure(error.message, 'Import', error);
+            return {outcomeUnknown:error.outcomeUnknown};
+        }
+    }''')
+    assert state['outcomeUnknown'] is False
+    expect(page.locator('#statusMessage')).to_contain_text('Import not applied')
+    expect(page.locator('.upload-issue-action')).to_contain_text('Reconnect this app to Google Drive')
+
+
+def test_success_popup_shows_saved_report_and_folder_links(page):
+    page.evaluate('''() => showImportSummary({status:'success', total_rows:1, imported_count:1,
+        change_report:{file_url:'https://drive.google.com/file/d/report/view',
+          folder_url:'https://drive.google.com/drive/folders/day',
+          folder_path:'Upload Change Reports/Leather-Crop/2026/2026-11-03'}})''')
+    expect(page.locator('#importSummarySavedReport')).to_contain_text('Verified Excel change report saved')
+    expect(page.locator('#importSummarySavedReport a').nth(0)).to_have_attribute(
+        'href', 'https://drive.google.com/file/d/report/view')
+    expect(page.locator('#importSummarySavedReport')).to_contain_text('Leather-Crop/2026/2026-11-03')
+
+
+def test_success_popup_reports_actual_added_changed_deleted_and_unchanged_rows(page):
+    page.evaluate('''() => showImportSummary({status:'success', total_rows:4, imported_count:1,
+        updated_count:1, deleted_count:1, change_detection:{comparison_mode:'replace_range', unchanged_count:1,
+          new_count:1, changed_count:1, missing_count:1}})''')
+    summary = page.locator('#importSummaryOverlay').inner_text()
+    assert '1 new row added · 1 existing row changed · 1 old row deleted' in summary
+    assert 'Unchanged — kept in database' in summary
+    assert 'Incoming new — added' in summary
+    assert 'Changed — updated' in summary
+    assert 'Deleted — removed' in summary
+    assert 'Unchanged rows stay in the database and are not imported again.' in summary
+
+
+def test_ignored_import_explains_that_unchanged_rows_were_not_imported(page):
+    page.evaluate('''() => showImportSummary({status:'success', ignored:true, total_rows:99,
+        imported_count:0, updated_count:0, deleted_count:0,
+        change_detection:{unchanged_count:99, new_count:0, changed_count:0, missing_count:0}})''')
+    summary = page.locator('#importSummaryOverlay').inner_text()
+    assert 'All validated transactions were already in the database.' in summary
+    assert '99' in summary and 'Unchanged — kept in database' in summary
+    assert '0 new row' not in summary
 
 
 def test_unavailable_backup_policy_keeps_backup_required(page):
@@ -114,8 +181,8 @@ def test_validation_excel_report_is_generated_in_browser(page):
     import base64, io
     from openpyxl import load_workbook
     book = load_workbook(io.BytesIO(base64.b64decode(result['workbook'])))
-    assert book.active.cell(2,14).value == 'CHANGED'
-    assert book.active.cell(2,19).value == '{"Name":"Old"}'
+    assert book.active.cell(2,15).value == 'CHANGED'
+    assert book.active.cell(2,20).value == '{"Name":"Old"}'
 
 
 @pytest.fixture
@@ -158,14 +225,23 @@ def date_errors(page, count=51):
 
 
 def test_review_tables_preserve_all_counts_scope_and_safeguards(page):
+    page.evaluate("uploadArchiveFolderUrl='https://drive.google.com/drive/folders/archive123'")
     review(page)
     rows = page.locator('#uploadReplacementCounts tr').all_text_contents()
-    assert rows == ['Unchanged2,250','Incoming new / revised7,470','Matched row corrections0','Old rows replaced / removed2,436']
+    assert rows == [
+        'Unchanged — already in database — not imported2,250',
+        'Incoming new — will be added7,470',
+        'Changed — existing rows to update0',
+        'Rows with unchecked-field values to refresh0',
+        'Deleted — absent from this complete report2,436',
+    ]
     expect(page.locator('#uploadReplacementChangedVouchers')).to_have_text('842')
     expect(page.locator('#uploadReplacementRemovedVouchers')).to_have_text('1')
     expect(page.locator('#uploadReplacementScope')).to_have_text('Leather Crop · Transaction Report')
     expect(page.locator('#uploadReplacementPeriod')).to_have_text('01 Oct 2026 – 02 Nov 2026')
-    assert 'Verified in Google Drive before replacement.' in page.locator('.upload-review-notes').inner_text()
+    assert 'verified in Google Drive before import.' in page.locator('.upload-review-notes').inner_text()
+    expect(page.locator('#uploadReplacementBackup a')).to_have_attribute(
+        'href', 'https://drive.google.com/drive/folders/archive123')
     assert 'same voucher may be replaced outside this period' in page.locator('.upload-review-notes').inner_text()
     assert 'Outside this period: kept.' in page.locator('.upload-review-notes').inner_text()
     assert page.evaluate('JSON.stringify(lastChangePreview)===window.summaryBefore')
@@ -193,7 +269,7 @@ def test_review_date_moves_are_tabular_safe_and_cleared_on_reopen(page):
     expect(page.locator('#uploadReplacementDateMoves')).not_to_be_visible()
     expect(page.locator('#uploadReplacementVouchers')).not_to_be_visible()
     assert page.locator('#uploadReplacementDateMoveRows tr').count()==0
-    assert page.locator('#uploadReplacementCounts .upload-review-count').all_text_contents()==['0']*4
+    assert page.locator('#uploadReplacementCounts .upload-review-count').all_text_contents()==['0']*5
 
 
 def test_validation_summary_is_short_and_only_affected_field_is_red(page):

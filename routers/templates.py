@@ -618,6 +618,7 @@ class BackupData(BaseModel):
     columns: list
     templates: list
     mappings: list
+    saved_column_mappings: list = []
     clients: list = []
     # uploaded_files (Postgres cutover fix): client_data.upload_id is a real FK
     # to uploaded_files(id) now (Phase 1) - the original backup never included
@@ -635,6 +636,9 @@ def export_backup():
     columns = execute_query_pg("SELECT * FROM master_columns ORDER BY id")
     templates = execute_query_pg("SELECT * FROM templates ORDER BY id")
     mappings = execute_query_pg("SELECT * FROM template_column_mappings ORDER BY template_id, sort_order")
+    saved_column_mappings = execute_query_pg(
+        "SELECT * FROM saved_column_mappings ORDER BY client_id, template_id, template_column_id"
+    )
     clients = execute_query_pg("SELECT * FROM clients ORDER BY id")
     uploaded_files = execute_query_pg("SELECT * FROM uploaded_files ORDER BY id")
 
@@ -653,12 +657,13 @@ def export_backup():
         client_data.append(row_dict)
 
     settings = execute_query_pg("SELECT key, value FROM app_settings")
-    print(f"💾 Backup: {len(columns)} columns, {len(templates)} templates, {len(mappings)} mappings, {len(clients)} clients, {len(uploaded_files)} uploaded files, {len(client_data)} data rows, {len(settings)} settings")
+    print(f"💾 Backup: {len(columns)} columns, {len(templates)} templates, {len(mappings)} template mappings, {len(saved_column_mappings)} saved upload mappings, {len(clients)} clients, {len(uploaded_files)} uploaded files, {len(client_data)} data rows, {len(settings)} settings")
 
     return {
         "columns": columns,
         "templates": templates,
         "mappings": mappings,
+        "saved_column_mappings": saved_column_mappings,
         "clients": clients,
         "uploaded_files": uploaded_files,
         "client_data": client_data,
@@ -690,6 +695,7 @@ def import_backup(data: BackupData = Body(...)):
         cur.execute("DELETE FROM uploaded_files")
         cur.execute("DELETE FROM clients")
         cur.execute("DELETE FROM template_column_mappings")
+        cur.execute("DELETE FROM saved_column_mappings")
         cur.execute("DELETE FROM templates")
         cur.execute("DELETE FROM app_settings")
         cur.execute("DELETE FROM master_columns")
@@ -744,6 +750,17 @@ def import_backup(data: BackupData = Body(...)):
             )
         if data.clients:
             cur.execute("SELECT setval(pg_get_serial_sequence('clients', 'id'), (SELECT MAX(id) FROM clients), true)")
+
+        for saved in data.saved_column_mappings:
+            cur.execute(
+                "INSERT INTO saved_column_mappings "
+                "(id, client_id, template_id, template_column_id, excel_column, compare_for_changes, created_at, updated_at) "
+                "OVERRIDING SYSTEM VALUE VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (saved['id'], saved['client_id'], saved['template_id'], saved['template_column_id'],
+                 saved['excel_column'], saved.get('compare_for_changes'), saved.get('created_at'), saved.get('updated_at')),
+            )
+        if data.saved_column_mappings:
+            cur.execute("SELECT setval(pg_get_serial_sequence('saved_column_mappings', 'id'), (SELECT MAX(id) FROM saved_column_mappings), true)")
 
         # Restore uploaded_files (must come before client_data - its FK target)
         for uf in data.uploaded_files:

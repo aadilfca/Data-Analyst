@@ -19,6 +19,7 @@ import database
 from routers import database_backup as api
 from routers.auth import get_current_user
 from services import database_backup as backup
+from services import drive_archive
 from services.drive_archive import ArchiveError
 
 
@@ -27,6 +28,7 @@ def isolated(monkeypatch, tmp_path):
     def forbidden(*args, **kwargs):
         pytest.fail('App database pool must never be used by backup tests')
     monkeypatch.setattr(database, 'get_pg_pool', forbidden)
+    monkeypatch.setattr(drive_archive, 'load_saved_refresh_token', lambda *_: None)
     monkeypatch.setattr(backup.platform, 'system', lambda: 'Windows')
     monkeypatch.delenv('RENDER', raising=False)
     monkeypatch.setenv('LOCAL_DATABASE_BACKUP_ENABLED', 'true')
@@ -496,7 +498,14 @@ def test_long_archive_path_stops_before_native_export(isolated, monkeypatch, tmp
 
 @pytest.mark.parametrize('key', ['DATABASE_BACKUP_BIN_DIR', 'DRIVE_REFRESH_TOKEN'])
 def test_missing_requirements_stop_before_dump(isolated, monkeypatch, key):
-    monkeypatch.setenv(key, 'not-a-valid-tool-folder' if key == 'DATABASE_BACKUP_BIN_DIR' else '')
+    if key == 'DRIVE_REFRESH_TOKEN':
+        monkeypatch.setattr(backup, 'DriveArchive', drive_archive.DriveArchive)
+        monkeypatch.setenv('DRIVE_CLIENT_ID', 'web-client-id')
+        monkeypatch.setenv('DRIVE_CLIENT_SECRET', 'web-client-secret')
+        monkeypatch.setenv('DRIVE_ARCHIVE_FOLDER_ID', 'folder-id')
+        monkeypatch.delenv('DRIVE_REFRESH_TOKEN', raising=False)
+    else:
+        monkeypatch.setenv(key, 'not-a-valid-tool-folder')
     with pytest.raises(backup.BackupError): backup.create_backup('a' * 32, '7')
     assert not isolated.calls
 

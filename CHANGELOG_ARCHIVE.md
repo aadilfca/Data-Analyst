@@ -1,5 +1,45 @@
 # Changelog Archive
 
+## Render saved-mapping column migration — 2026-11-04
+
+The existing-PostgreSQL startup path now adds `compare_for_changes` to `saved_column_mappings`, matching fresh-schema setup. Render’s existing database can gain the missing column when the updated app starts.
+
+Verification: **22 focused PostgreSQL startup and deletion tests pass**; Python compilation and `git diff --check` pass. No live Render/Supabase migration was run.
+
+## Upload informational fields and Balance refresh — 2026-11-04
+
+Upload mappings now save a per-column “Compare for changes” choice. It defaults on, except Account Ledger Balance defaults off. Matching and duplicate checks ignore unchecked fields, while validation plans and full-row fingerprints still protect import from stale data. After the user confirms, unchecked values refresh on matched rows without changing transaction status/history or updated-row counts. Any such write remains inside the verified backup lifecycle. Review and saved Excel reports list refreshed fields and previous/incoming values separately. Full database backup/restore carries the mapping choices.
+
+Verification: **108 focused duplicate-gate, lifecycle, date-plan, upload-dialog and Balance-refresh tests pass**; the informational Excel-report regression also passes. Python compilation, JavaScript syntax and `git diff --check` pass. The broad validation/dialog run reports **32 failures** among legacy tests that lack staged-file or backup-setting fixtures and unrelated upload-message assertions; local-server acceptance is pending.
+
+## Upload review counts and safe correction matching — 2026-11-03
+
+Complete-report comparison now pairs an unmatched old/new row as Changed when the document plus a unique account/debit-credit anchor supports that match. Ambiguous complete-report lines remain explicit add/delete rows; correction-mode ambiguity still blocks. Review and success popups label new, unchanged, changed and deleted rows plainly. Success counts use actual applied counts, and the transaction stops if those counts differ from the validated plan. The unchanged-row skip, canonical identity collision check and unique active-identity index remain in place.
+
+Verification: **117 upload-dialog, upload-lifecycle and duplicate-gate tests pass**, including 99 identical complete-report rows counted unchanged, one absent row counted deleted, changed rows retaining their IDs and prior values in history, and outcome-count mismatch rejection. The broad `test_upload_validation_counts.py` run reported 127 passed and 32 failures in test setup/expectations for backup-policy loading, missing staged files and upload messaging; focused comparison and popup tests passed. JavaScript syntax and scoped whitespace checks pass. See the outstanding local acceptance steps before commit/push.
+
+## Transaction change history — Phase 2 — 2026-11-03
+
+Added `client_data_history` in SQLite and PostgreSQL for full prior-row snapshots when imports change or remove active transactions. PostgreSQL startup now ensures the table and scope/time index for both fresh and already-bootstrapped databases. The import writes history in the same transaction as replacement, preserving rollback safety; `client_data.created_at` records newly added rows. Both import paths retain snapshots with source/replacing upload IDs and identity. Scoped permanent purge deletes matching history; replacement purge preserves it. Duplicate comparison and active identity gates are unchanged.
+
+Verification: **107 focused deletion, upload-lifecycle and duplicate-gate tests pass**. A temporary local instance applied the existing-schema migration; replacement and deletion imports succeeded, and the purge preview counted three retained snapshots. A description-only edit still appears as an add/remove pair; review matching separately. Aadil's local retry and Render acceptance remain pending.
+
+## In-app Google Drive reconnect — 2026-11-03
+
+Settings now offers an administrator-only Connect / reconnect button. Google sign-in uses state and PKCE checks; the callback verifies the configured archive folder before saving the refresh token encrypted in a singleton PostgreSQL table. Upload archives and full-database backups use that shared token, with the existing environment token retained as a fallback. SQLite/PostgreSQL bootstrap schemas include the credential table. `cryptography==50.0.2` provides authenticated encryption; changing the OAuth client secret requires reconnecting.
+
+Render/local setup requires a Google **Web application** OAuth client and `DRIVE_OAUTH_REDIRECT_URI`, exactly matching `https://<app-host>/api/google-drive/callback`, registered in Google Cloud. Existing client ID, secret and archive folder settings remain required. The consent app is still External/Testing, so Google refresh tokens may expire after seven days; automatic renewal cannot skip Google's approval. No Google Cloud, Render environment, live Drive, or production setting was changed here.
+
+Verification: **142 focused upload and full-backup tests pass; 1 skipped**, including OAuth state/PKCE, cancellation cookie cleanup, folder-before-save ordering and token encryption. Python/JavaScript syntax and whitespace checks pass. OAuth exchanges were mocked; no live Google authorization was performed. Local-server and Render acceptance remain pending.
+
+## Dated Excel upload reports — Phase 1 — 2026-11-03
+
+With shared backups ON, actionable uploads now create a standalone workbook containing a summary, full incoming rows and prior changed/removed rows. Drive stores it under `Upload Change Reports/<client>/<year>/<date>`; the date/time is fixed in the server-side validation plan so retries reuse the same name. Drive verifies file scope, size and SHA-256 after upload. The result popup returns direct report/folder links, while the pre-import Backup row links the configured root and shows the folder pattern. Backups OFF creates neither the report nor ZIP. Existing verified pre-replacement ZIP behavior remains for imports that replace old rows; new-only imports now receive a compact lifecycle receipt and verified report without an unnecessary recovery ZIP. Workbook outcome text refers users to the app result because it is prepared before the source transaction. A failed report upload blocks source writes; a later failed import may leave a clearly non-final, pending-evidence workbook in Drive.
+
+The reported Drive HTTP 400 was traced to Google's `invalid_grant`: the app's saved refresh token had expired or been revoked. This is separate from the Drive folder and Excel file. The app now identifies this authorization problem, instructs reconnection, and marks this specific failure as “Import not applied” instead of “outcome unconfirmed.”
+
+Verification: **92 focused tests pass** across upload lifecycle, report workbook and offline Chromium dialogs, including new-only imports, backup-off, failed storage, retry idempotence, literal text, complete row evidence, configured-folder links, unchanged source rows on failures, and clear OAuth failure handling. Python compilation, JavaScript syntax and whitespace checks pass; existing Starlette/httpx deprecation warning only. No live Drive write or Render upload was performed; hosted link/storage acceptance remains pending.
+
 ## Shared upload backup switch — 2026-11-03
 
 Simplified Settings → Upload backups to one administrator checkbox: checked requires verified Drive; unchecked skips all recovery backups for every uploader. The existing shared database value is preserved, so previously allowed development uploads now skip backups automatically. Upload displays status and has no per-file checkbox. The server derives policy for every request, including stale/older API clients; changing policy invalidates validation in both directions and is rechecked before replacement. Former environment overrides no longer control uploads. No schema change, dependency installation or live data/Drive operation.

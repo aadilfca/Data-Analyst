@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 from database import init_db, log_error, get_error_code_for_exception, execute_query
 from fastapi.concurrency import run_in_threadpool
 import os
-from routers import account_control_center, audit_rules, auth, clients, dashboard, data, data_integrity, database_backup, error_log, import_export, reconciliation, settings, storage_cleanup, templates, trial_balance, users, verification
+from routers import account_control_center, audit_rules, auth, clients, dashboard, data, data_integrity, database_backup, error_log, google_drive_auth, import_export, reconciliation, settings, storage_cleanup, templates, trial_balance, users, verification
 from routers.auth import get_current_user
 from datetime import datetime
 import traceback
@@ -108,6 +108,7 @@ app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(storage_cleanup.router)
 app.include_router(database_backup.router)
+app.include_router(google_drive_auth.router)
 
 # ---------- GLOBAL EXCEPTION HANDLER ----------
 from fastapi import Request, status

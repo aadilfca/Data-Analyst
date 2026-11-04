@@ -9,6 +9,7 @@ from routers.import_export import (
     _canonical_source_identities,
     _deduplicate_exact_rows,
     _is_duplicate_upload_noop,
+    _assert_upload_outcome_matches_plan,
     _strict_duplicate_row_errors,
 )
 
@@ -87,6 +88,13 @@ class ImportDuplicateGateTests(unittest.TestCase):
                 {"new_count": 0, "changed_count": 0, "missing_count": 0},
             )
         )
+
+    def test_success_counts_must_match_the_validated_actions(self):
+        _assert_upload_outcome_matches_plan(99, 2, 1, 99, 2, 1)
+        with self.assertRaises(HTTPException) as raised:
+            _assert_upload_outcome_matches_plan(99, 0, 100, 0, 0, 100)
+        self.assertEqual(raised.exception.status_code, 500)
+        self.assertIn("No changes were committed", raised.exception.detail)
 
     def test_exact_duplicate_rows_are_retained_and_counted(self):
         rows = [
@@ -198,6 +206,51 @@ def test_repeat_comparison_requests_a_bounded_snapshot_and_preserves_occurrences
     assert result["new"] == result["changed"] == result["missing"] == []
 
 
+def test_unchecked_ledger_balance_stays_unchanged_and_creates_separate_refresh_action():
+    from routers.import_export import compare_transactions, _build_validation_plan_payload, _comparison_column_names, ColumnMapping
+
+    columns = [
+        {"id": 1, "column_name": "Voucher ID", "data_type": "Text"},
+        {"id": 2, "column_name": "Transaction Date", "data_type": "Date"},
+        {"id": 3, "column_name": "Description", "data_type": "Text"},
+        {"id": 4, "column_name": "Debit Amount", "data_type": "Numeric"},
+        {"id": 5, "column_name": "Credit Amount", "data_type": "Numeric"},
+        {"id": 6, "column_name": "Balance", "data_type": "Text"},
+    ]
+    old = {"Voucher ID": "BPV-1", "Transaction Date": "01/10/2026",
+           "Description": "Rent", "Debit Amount": 0, "Credit Amount": 20, "Balance": "100 DR"}
+    incoming = [{**old, "Balance": "80 DR"}]
+    mappings = [
+        ColumnMapping(
+            template_column_id=column['id'], template_column_name=column['column_name'],
+            excel_column_name=column['column_name'], compare_for_changes=column['column_name'] != 'Balance'
+        ) for column in columns
+    ]
+    with patch("routers.import_export.execute_query_pg", return_value=[{
+        "id": 77, "row_data": old, "version": 3, "extract_date": "2026-10-01",
+        "source_identity": "old-identity", "validation_status": "Verified",
+    }]):
+        changes = compare_transactions(
+            5, 1, columns, incoming, {name: name for name in old}, {},
+            included_fields={name for name in old if name != "Balance"},
+        )
+
+    assert changes["unchanged_count"] == 1
+    assert changes["changed_count"] == changes["new_count"] == changes["missing_count"] == 0
+    assert changes["informational_update_count"] == 1
+    assert changes["informational_updates"][0]["field_updates"] == {"Balance": "80 DR"}
+    plan = _build_validation_plan_payload(changes, columns, 1, 1, [], 0, None, "/", "DMY")
+    assert plan["informational_update_count"] == 1
+    assert plan["informational_updates"][0]["client_data_id"] == 77
+    assert "Balance" not in plan["comparison_fields"]
+
+    legacy_mappings = [ColumnMapping(template_column_id=c['id'], template_column_name=c['column_name'])
+                       for c in columns]
+    assert _comparison_column_names(columns, legacy_mappings, {
+        'data_purpose': 'account_ledger', 'ledger_columns': {'balance': 6}
+    }) == {column['column_name'] for column in columns if column['column_name'] != 'Balance'}
+
+
 def test_ledger_account_context_cannot_leak_into_ordinary_document_identity():
     from routers.import_export import _ledger_context, get_document_group_id
     columns = [{"id": 1, "column_name": "Voucher", "data_type": "Text"}]
@@ -272,6 +325,50 @@ def test_real_description_change_reports_only_meaningful_fields_and_preserves_id
     assert result['changed_count'] == 1
     assert result['changed'][0]['source_identity'] == 'original-1'
     assert build_change_report(result, _formatting_columns(), 1)[0]['changed_fields'] == ['Voucher Detail']
+
+
+def test_complete_report_classifies_a_single_corrected_line_as_changed():
+    columns = _formatting_columns()
+    old = {"id": 1, "row_data": _formatting_row(**{"Voucher Detail": "Old detail"}),
+           "extract_date": "2026-04-01", "source_identity": "original-1"}
+    incoming = [_formatting_row(**{"Voucher Detail": "Corrected detail"})]
+    with patch("routers.import_export.execute_query_pg", side_effect=[[old], [{"id": 1}] ]):
+        from routers.import_export import compare_transactions
+        result = compare_transactions(
+            5, 1, columns, incoming,
+            {column["column_name"]: column["column_name"] for column in columns}, {},
+            comparison_mode="replace_range", coverage_start="2026-04-01", coverage_end="2026-04-30",
+            date_delimiter="-",
+        )
+    assert result["unchanged_count"] == 0
+    assert result["changed_count"] == 1
+    assert result["new_count"] == result["missing_count"] == 0
+    assert result["changed"][0]["client_data_id"] == 1
+
+
+def test_complete_report_keeps_99_matching_rows_unchanged_and_only_deletes_the_absent_row():
+    columns = _formatting_columns()
+    incoming = []
+    existing = []
+    for number in range(1, 100):
+        row = _formatting_row(**{"Voucher ID": f"V-{number:03}", "Voucher Detail": "Same"})
+        incoming.append(row)
+        existing.append({"id": number, "row_data": dict(row), "extract_date": "2026-04-01"})
+    absent = _formatting_row(**{"Voucher ID": "V-100", "Voucher Detail": "Was here"})
+    existing.append({"id": 100, "row_data": absent, "extract_date": "2026-04-01"})
+    with patch("routers.import_export.execute_query_pg", side_effect=[existing, [{"id": 100}]]):
+        from routers.import_export import compare_transactions
+        result = compare_transactions(
+            5, 1, columns, incoming,
+            {column["column_name"]: column["column_name"] for column in columns}, {},
+            comparison_mode="replace_range", coverage_start="2026-04-01", coverage_end="2026-04-30",
+            date_delimiter="-",
+        )
+    assert result["total_existing_before_import"] == 100
+    assert result["unchanged_count"] == 99
+    assert result["new_count"] == result["changed_count"] == 0
+    assert result["missing_count"] == 1
+    assert result["missing"][0]["client_data_id"] == 100
 
 
 def test_genuine_repeated_tag_changes_still_block_with_voucher_account_and_fields():

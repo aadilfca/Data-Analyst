@@ -24,7 +24,7 @@ from services.drive_archive import ArchiveError, DriveArchive
 
 _PROJECT = Path(__file__).resolve().parents[1]
 _OPERATION = re.compile(r'^[0-9a-f]{32}$')
-_DRIVE_SETTINGS = ('DRIVE_CLIENT_ID', 'DRIVE_CLIENT_SECRET', 'DRIVE_REFRESH_TOKEN', 'DRIVE_ARCHIVE_FOLDER_ID')
+_DRIVE_SETTINGS = ('DRIVE_CLIENT_ID', 'DRIVE_CLIENT_SECRET', 'DRIVE_REFRESH_TOKEN', 'DRIVE_ARCHIVE_FOLDER_ID', 'DRIVE_OAUTH_REDIRECT_URI')
 _MAX_DUMP_BYTES = 256 * 1024 * 1024  # Reviewed manual-backup size limit; transfer memory is chunk-bounded.
 _TIMEOUT = 900
 _DRIVE_CHUNK = 256 * 1024
@@ -126,7 +126,9 @@ def configuration():
             check()
         except BackupError as error:
             requirements.append(error.detail)
-    if not all(os.environ.get(key, '').strip() for key in _DRIVE_SETTINGS):
+    try:
+        DriveArchive()
+    except ArchiveError:
         requirements.append('The app Google Drive archive connection must be configured.')
     return {'ready': not requirements, 'requirements': requirements}
 

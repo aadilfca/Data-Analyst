@@ -97,6 +97,7 @@ let lastRateModeInfo = null;
 
 // Ledger identity belongs to this client/upload, never to repeated Excel cells.
 let uploadTemplatePurpose = 'standard';
+let uploadLedgerColumnRoles = {};
 let uploadTemplateCatalog = [];
 let uploadTemplateGeneration = 0;
 let ledgerAccountChoices = [];
@@ -700,9 +701,9 @@ function uploadRequestStage(url) {
 async function fetchUpload(url, options) {
     const stage = uploadRequestStage(url);
     let response;
+    let result;
     try {
         response = await fetch(url, options);
-        let result;
         try { result = await response.json(); } catch (_) {
             throw new Error(response.status === 401 || response.redirected
                 ? 'Your session has expired. Sign in again.'
@@ -727,7 +728,8 @@ async function fetchUpload(url, options) {
     } catch (error) {
         error.stage = stage;
         error.httpStatus = response?.status;
-        error.outcomeUnknown = stage === 'Import' && (!response || response.status >= 500 || response.ok);
+        const outcomeNotApplied = result?.detail?.outcome === 'not_applied';
+        error.outcomeUnknown = stage === 'Import' && (!response || (response.status >= 500 && !outcomeNotApplied) || response.ok);
         if (!response) error.message = 'Connection lost. Retry this step.';
         throw error;
     }
@@ -760,7 +762,10 @@ function showUploadFailure(message, stage = 'Upload', error = null) {
         .replace(/^(?:Validation error|Import error|Upload error|Date preview failed|Auto-mapping failed|Error reading file|Error previewing file|Failed to load (?:templates|template columns)):\s*/i, '');
     const unknown = Boolean(error?.outcomeUnknown);
     const missingStagedFile = error?.result?.detail?.code === 'staged_file_missing';
-    const action = missingStagedFile
+    const outcomeNotApplied = error?.result?.detail?.outcome === 'not_applied';
+    const action = outcomeNotApplied
+        ? 'Reconnect this app to Google Drive, then validate again and retry.'
+        : missingStagedFile
         ? 'Select the file again, then validate.'
         : unknown
         ? 'Reconnect, then retry Import without changing the file or settings.'
@@ -776,7 +781,8 @@ function showUploadFailure(message, stage = 'Upload', error = null) {
     }
     showStatus('', unknown ? 'warning' : 'error');
     // Voucher/account identifiers and server messages are source text, never HTML.
-    if (statusMessage) statusMessage.textContent = unknown ? 'Import outcome unconfirmed. ' + message : message;
+    if (statusMessage) statusMessage.textContent = unknown ? 'Import outcome unconfirmed. ' + message
+        : outcomeNotApplied ? 'Import not applied. ' + message : message;
     showUploadIssue({stage: error?.stage || stage, severity: unknown ? 'unconfirmed' : 'error',
         message, action, focusTarget, result: error?.result?.detail || error?.result});
 }
@@ -959,9 +965,38 @@ function reviewUploadReplacement(payload) {
     dialog.querySelector('h2').textContent = payload.comparison_mode === 'correction'
         ? 'Review matched corrections' : 'Review complete report';
     const summary = lastChangePreview || {};
-    document.getElementById('uploadReplacementBackup').textContent = payload.backup_enabled === false
-        ? 'Development mode: no recovery backup will be created. Replaced data cannot be restored from this import.'
-        : 'Complete previous vouchers + Excel review report. Verified in Google Drive before replacement.';
+    const backupCell = document.getElementById('uploadReplacementBackup');
+    backupCell.replaceChildren();
+    const backupText = document.createElement('span');
+    backupText.textContent = payload.backup_enabled === false
+        ? 'Development mode: no recovery ZIP or saved Excel report will be created.'
+        : 'A recovery ZIP (when old rows are replaced) and a separate Excel change report will be verified in Google Drive before import.';
+    backupCell.appendChild(backupText);
+    if (payload.backup_enabled !== false && uploadArchiveFolderUrl) {
+        const folderLink = document.createElement('a');
+        folderLink.href = uploadArchiveFolderUrl;
+        folderLink.target = '_blank';
+        folderLink.rel = 'noopener';
+        folderLink.textContent = 'Open configured Drive folder';
+        folderLink.style.display = 'block';
+        folderLink.style.marginTop = '5px';
+        backupCell.appendChild(folderLink);
+        const pathHint = document.createElement('small');
+        pathHint.textContent = 'Excel reports: Upload Change Reports / client / year / import date';
+        pathHint.style.display = 'block';
+        backupCell.appendChild(pathHint);
+        if (!uploadDriveConnectionReady) {
+            const connectionWarning = document.createElement('small');
+            connectionWarning.textContent = 'The folder is identified, but this server’s Drive connection is incomplete; imports need all Drive settings.';
+            connectionWarning.style.display = 'block';
+            backupCell.appendChild(connectionWarning);
+        }
+    } else if (payload.backup_enabled !== false) {
+        const missing = document.createElement('small');
+        missing.textContent = 'Drive folder address is not configured on this server.';
+        missing.style.display = 'block';
+        backupCell.appendChild(missing);
+    }
     const count = key => Number(summary[key] || 0).toLocaleString();
     document.getElementById('uploadReplacementScope').textContent =
         `${window.getSelectedClientName ? window.getSelectedClientName() : 'Selected client'}${payload.ledger_account_code ? ' · ' + ledgerUploadLabel() : ''} · ${templateDropdown?.selectedOptions[0]?.textContent || 'Selected template'}`;
@@ -974,8 +1009,16 @@ function reviewUploadReplacement(payload) {
     // Presentation only: retain the server's separate occurrence/change counts.
     const counts = document.getElementById('uploadReplacementCounts');
     counts.replaceChildren();
-    for (const [label, key] of [['Unchanged', 'unchanged_count'], ['Incoming new / revised', 'new_count'],
-        ['Matched row corrections', 'changed_count'], ['Old rows replaced / removed', 'missing_count']]) {
+    const deletedLabel = payload.comparison_mode === 'correction'
+        ? 'Deleted — not applicable to correction uploads'
+        : 'Deleted — absent from this complete report';
+    for (const [label, key] of [
+        ['Unchanged — already in database — not imported', 'unchanged_count'],
+        ['Incoming new — will be added', 'new_count'],
+        ['Changed — existing rows to update', 'changed_count'],
+        ['Rows with unchecked-field values to refresh', 'informational_update_count'],
+        [deletedLabel, 'missing_count'],
+    ]) {
         const row = document.createElement('tr');
         const name = document.createElement('td'); name.textContent = label;
         const value = document.createElement('td'); value.className = 'upload-review-count'; value.textContent = count(key);
@@ -1182,7 +1225,7 @@ if (templateDropdown) {
         }
                 const id = this.value;
         if (!id) {
-            ++uploadTemplateGeneration; uploadTemplatePurpose = 'standard'; clearLedgerUploadContext();
+            ++uploadTemplateGeneration; uploadTemplatePurpose = 'standard'; uploadLedgerColumnRoles = {}; clearLedgerUploadContext();
             selectedTemplateId = null;
             if (mappingPanel) mappingPanel.style.display = 'none';
             if (leftPanel) leftPanel.style.display = 'none';
@@ -1217,7 +1260,7 @@ if (templateDropdown) {
 async function selectTemplate(id) {
     selectedTemplateId = parseInt(id);
     const generation = ++uploadTemplateGeneration;
-    uploadTemplatePurpose = 'standard'; clearLedgerUploadContext();
+    uploadTemplatePurpose = 'standard'; uploadLedgerColumnRoles = {}; clearLedgerUploadContext();
     saveUploadSessionState(); // Template chosen -- worth remembering even if the fetch below fails
     // A template is now chosen -- reveal Sheet/Download together and advance the step
     // strip, regardless of whether the column-fetch below succeeds (Download only needs
@@ -1233,6 +1276,7 @@ async function selectTemplate(id) {
         if (generation !== uploadTemplateGeneration || Number(id) !== selectedTemplateId) return;
         templateColumns = data.columns;
         uploadTemplatePurpose = data.data_purpose || 'standard';
+        uploadLedgerColumnRoles = data.ledger_columns || {};
         if (isLedgerUpload()) {
             document.getElementById('ledgerUploadContext').hidden = false;
             await loadLedgerUploadAccounts(pendingLedgerRestoreCode, generation);
@@ -1518,7 +1562,8 @@ if (saveMappingBtn) {
         // endpoint's own blank-skip to handle.
         const mappingsToSave = currentMappings
             .filter(m => m.excel_column)
-            .map(m => ({ template_column_id: m.column_id, excel_column: m.excel_column }));
+            .map(m => ({ template_column_id: m.column_id, excel_column: m.excel_column,
+                compare_for_changes: m.compare_for_changes !== false }));
 
         if (mappingsToSave.length === 0) {
             showUploadFailure('⚠️ Map at least one column before saving.');
@@ -1541,7 +1586,7 @@ if (saveMappingBtn) {
             });
             const result = await res.json();
             if (!res.ok) throw new Error(result.detail || result.message || 'Save failed');
-            showStatus(`💾 Mapping saved (${result.saved_count} column${result.saved_count === 1 ? '' : 's'}) — it will auto-fill next time you upload this template for this client.`, 'success');
+            showStatus(`💾 Mapping and comparison choices saved (${result.saved_count} column${result.saved_count === 1 ? '' : 's'}) — they will be reused for this client and template.`, 'success');
         } catch (error) {
             console.error('Save mapping error:', error);
             showUploadFailure('Failed to save mapping: ' + error.message, 'Save mapping', error);
@@ -1626,9 +1671,12 @@ async function applySavedMapping() {
 
     let appliedCount = 0;
     data.mappings.forEach(saved => {
-        if (!saved.excel_column || !excelHeaders.includes(saved.excel_column)) return; // header no longer present -- fall back to auto-mapping
         const target = currentMappings.find(m => m.column_id === saved.template_column_id);
         if (!target) return;
+        if (typeof saved.compare_for_changes === 'boolean') {
+            target.compare_for_changes = saved.compare_for_changes;
+        }
+        if (!saved.excel_column || !excelHeaders.includes(saved.excel_column)) return; // header no longer present -- fall back to auto-mapping
         target.excel_column = saved.excel_column;
         target.is_matched = true;
         appliedCount++;
@@ -1724,7 +1772,13 @@ function renderMapping(mappings) {
         return;
     }
 
+    let ledgerRoles = uploadLedgerColumnRoles || {};
     mappings.forEach((m, rowIndex) => {
+        if (typeof m.compare_for_changes !== 'boolean') {
+            const isBalance = uploadTemplatePurpose === 'account_ledger'
+                && Number(ledgerRoles.balance) === Number(m.column_id);
+            m.compare_for_changes = !isBalance;
+        }
         const tr = document.createElement('tr');
         const setMappingStatus = (element, matched) => {
             element.textContent = matched ? '✓ Mapped' : 'Choose column';
@@ -1768,11 +1822,10 @@ function renderMapping(mappings) {
             if (m.excel_column && ![...select.options].some(o => o.value === m.excel_column)) {
                 m.excel_column = null;
                 m.is_matched = false;
-                const statusTd = tr.children[3];
-                if (statusTd) {
-                    const icon = statusTd.querySelector('span');
-                    if (icon) setMappingStatus(icon, false);
-                }
+                const status = tr.querySelector('.mapping-status');
+                if (status) setMappingStatus(status, false);
+                const compare = tr.querySelector('input[data-compare-column]');
+                if (compare) compare.disabled = true;
                 updateCounts();
             } else {
                 if (m.excel_column) {
@@ -1787,11 +1840,10 @@ function renderMapping(mappings) {
             const newVal = this.value || null;
             m.excel_column = newVal;
             m.is_matched = !!newVal;
-            const statusTd = tr.children[3];
-            if (statusTd) {
-                const icon = statusTd.querySelector('span');
-                if (icon) setMappingStatus(icon, m.is_matched);
-            }
+            const status = tr.querySelector('.mapping-status');
+            if (status) setMappingStatus(status, m.is_matched);
+            const compare = tr.querySelector('input[data-compare-column]');
+            if (compare) compare.disabled = !m.is_matched;
             // Column mapping changed -- reset row selection grid checkboxes/flags (Phase 4
             // of the row-exclusion requirement), since the key column basis may have shifted.
             resetRowExclusionSelections();
@@ -1811,6 +1863,27 @@ function renderMapping(mappings) {
         badge.textContent = m.data_type;
         td3.appendChild(badge);
         tr.appendChild(td3);
+
+        const compareCell = document.createElement('td');
+        const compareCheckbox = document.createElement('input');
+        compareCheckbox.type = 'checkbox';
+        compareCheckbox.dataset.compareColumn = 'true';
+        compareCheckbox.checked = m.compare_for_changes;
+        compareCheckbox.disabled = !m.is_matched;
+        compareCheckbox.setAttribute('aria-label', `${m.column_name}: include in transaction change check`);
+        compareCheckbox.title = m.compare_for_changes
+            ? 'Differences in this column count as transaction changes.'
+            : 'By itself, a difference refreshes this value after confirmed import; changes in checked columns still mark the transaction changed.';
+        compareCheckbox.addEventListener('change', () => {
+            m.compare_for_changes = compareCheckbox.checked;
+            compareCheckbox.title = compareCheckbox.checked
+                ? 'Differences in this column count as transaction changes.'
+                : 'By itself, a difference refreshes this value after confirmed import; changes in checked columns still mark the transaction changed.';
+            resetValidationState();
+            saveUploadSessionState();
+        });
+        compareCell.appendChild(compareCheckbox);
+        tr.appendChild(compareCell);
 
         const td4 = document.createElement('td');
         const icon = document.createElement('span');
@@ -1852,7 +1925,7 @@ if (resetBtn) {
         resetUpload();
         if (templateDropdown) templateDropdown.value = '';
         selectedTemplateId = null;
-        uploadTemplatePurpose = 'standard'; clearLedgerUploadContext(); updateUploadCoverageVisibility();
+        uploadTemplatePurpose = 'standard'; uploadLedgerColumnRoles = {}; clearLedgerUploadContext(); updateUploadCoverageVisibility();
         setBadge('⏳ Select a template');
         showStatus('🔄 Reset complete. Select a template and upload a file.', 'info');
     });
@@ -1863,7 +1936,7 @@ function downloadChangeReport(report, summary = {}) {
     const header = [
         'Upload ID', 'Upload Date', 'Uploaded By', 'File Name', 'Template',
         'Comparison Mode', 'Date Range Start', 'Date Range End', 'Total Lines',
-        'Added', 'Changed', 'Removed', 'Unchanged', 'Action', 'Client Data ID',
+        'Added', 'Changed', 'Removed', 'Unchanged', 'Unchecked-field refreshes', 'Action', 'Client Data ID',
         'Document ID', 'Line Key', 'Changed Fields', 'Old Values', 'New Values'
     ];
     const metadata = [
@@ -1880,6 +1953,7 @@ function downloadChangeReport(report, summary = {}) {
         summary.changed_count,
         summary.removed_count,
         summary.unchanged_count,
+        summary.informational_update_count,
     ];
     const rows = reportRows.length
         ? reportRows.map(item => [
@@ -1940,9 +2014,13 @@ function showImportSummary(result, ledgerPresentation = null) {
     // --- Change detection counts ---
     const cd = result.change_detection || {};
     const unchanged = cd.unchanged_count || 0;
-    const changed = cd.changed_count || 0;
-    const newRows = cd.new_count || 0;
-    const deleted = cd.missing_count || result.deleted_count || 0;
+    const informationalUpdated = Number(result.informational_updated_count ?? cd.informational_update_count ?? 0);
+    const changed = Number(result.updated_count ?? cd.changed_count ?? 0);
+    const newRows = Number(result.imported_count ?? cd.new_count ?? 0);
+    const deleted = Number(result.deleted_count ?? cd.missing_count ?? 0);
+    const deletedOutcomeLabel = cd.comparison_mode === 'correction'
+        ? 'Deleted — not used in correction uploads'
+        : 'Deleted — removed';
     const changeReport = cd.report || [];
     const uploadSummary = result.upload_summary || {};
     
@@ -1958,44 +2036,46 @@ function showImportSummary(result, ledgerPresentation = null) {
     // Build a plain, single-line outcome summary (no inline emoji, no run-on sentence).
     let detailMessage = '';
     if (result.ignored) {
-        detailMessage = 'All validated lines were unchanged. No data was written.';
-    } else if (inserted > 0 && updated > 0) {
-        detailMessage = `${inserted} new row${inserted === 1 ? '' : 's'} inserted &middot; ${updated} existing row${updated === 1 ? '' : 's'} updated`;
-    } else if (inserted > 0) {
-        detailMessage = `${inserted} new row${inserted === 1 ? '' : 's'} inserted`;
-    } else if (updated > 0) {
-        detailMessage = `${updated} existing row${updated === 1 ? '' : 's'} updated`;
+        detailMessage = 'All validated transactions were already in the database. No rows were imported or changed.';
     } else {
-        detailMessage = 'No changes were made';
+        const appliedActions = [];
+        if (inserted > 0) appliedActions.push(`${inserted} new row${inserted === 1 ? '' : 's'} added`);
+        if (updated > 0) appliedActions.push(`${updated} existing row${updated === 1 ? '' : 's'} changed`);
+        if (informationalUpdated > 0) appliedActions.push(`${informationalUpdated} row${informationalUpdated === 1 ? '' : 's'} refreshed without transaction changes`);
+        if (deleted > 0) appliedActions.push(`${deleted} old row${deleted === 1 ? '' : 's'} deleted`);
+        if (informationalUpdated > 0) appliedActions.push(`${informationalUpdated} row${informationalUpdated === 1 ? '' : 's'} refreshed; transactions unchanged`);
+        detailMessage = appliedActions.length ? appliedActions.join(' · ') : 'No transaction rows changed.';
     }
 
     // Change Detection Summary: labeled stat block matching the tile styling below, color-coded via left border instead of emoji.
     let changeSummary = '';
-    if (unchanged > 0 || changed > 0 || newRows > 0 || deleted > 0) {
+    if (unchanged > 0 || changed > 0 || newRows > 0 || deleted > 0 || informationalUpdated > 0) {
         changeSummary = `
             <div style="margin-top:20px;">
-                <div style="font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:0.04em; color:#94a3b8; margin-bottom:8px;">Change Detection</div>
-                <div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:8px;">
+                <div style="font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:0.04em; color:#94a3b8; margin-bottom:8px;">Import result by transaction row</div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
                     <div style="background:#f8fafc; border-left:3px solid #94a3b8; border-radius:6px; padding:8px 10px;">
                         <div style="font-size:18px; font-weight:700; color:#334155;">${unchanged}</div>
-                        <div style="font-size:11px; color:#64748b;">Unchanged</div>
+                        <div style="font-size:11px; color:#64748b;">Unchanged — kept in database</div>
                     </div>
                     <div style="background:#f8fafc; border-left:3px solid #f59e0b; border-radius:6px; padding:8px 10px;">
                         <div style="font-size:18px; font-weight:700; color:#334155;">${changed}</div>
-                        <div style="font-size:11px; color:#64748b;">Changed</div>
+                        <div style="font-size:11px; color:#64748b;">Changed — updated</div>
                     </div>
                     <div style="background:#f8fafc; border-left:3px solid #16a34a; border-radius:6px; padding:8px 10px;">
                         <div style="font-size:18px; font-weight:700; color:#334155;">${newRows}</div>
-                        <div style="font-size:11px; color:#64748b;">Added</div>
+                        <div style="font-size:11px; color:#64748b;">Incoming new — added</div>
                     </div>
                     <div style="background:#f8fafc; border-left:3px solid #dc2626; border-radius:6px; padding:8px 10px;">
                         <div style="font-size:18px; font-weight:700; color:#334155;">${deleted}</div>
-                        <div style="font-size:11px; color:#64748b;">Removed</div>
+                        <div style="font-size:11px; color:#64748b;">${deletedOutcomeLabel}</div>
                     </div>
+                    ${informationalUpdated > 0 ? `<div style="background:#f8fafc; border-left:3px solid #0f766e; border-radius:6px; padding:8px 10px;">
+                        <div style="font-size:18px; font-weight:700; color:#334155;">${informationalUpdated}</div>
+                        <div style="font-size:11px; color:#64748b;">Rows refreshed; transaction unchanged</div>
+                    </div>` : ''}
                 </div>
-                <div style="font-size:11px; color:#94a3b8; margin-top:8px;">
-                    Changed rows have been reset to "Pending" and require re-verification.
-                </div>
+                ${changed > 0 ? '<div style="font-size:11px; color:#94a3b8; margin-top:8px;">Changed rows were reset to Pending and require re-verification.</div>' : ''}
             </div>
         `;
     }
@@ -2037,10 +2117,16 @@ function showImportSummary(result, ledgerPresentation = null) {
         ? `<div id="importSummaryPreparationWarning" style="font-size:12px; color:#92400e; background:#fffbeb; border-left:3px solid #f59e0b; padding:10px 12px; border-radius:6px; margin-top:16px;"></div>`
         : '';
 
+    const savedReportStatus = result.change_report
+        ? 'Verified Excel change report saved in Google Drive.'
+        : result.backup_mode === 'none'
+            ? 'Development mode: no recovery ZIP or saved Excel report was created.'
+            : '';
+
     // Explanatory note about debit/credit lines, styled as a plain muted info box.
     const note = `<div style="font-size:12px; color:#64748b; background:#f8fafc; padding:10px 12px; border-radius:6px; margin-top:16px;">
         <strong style="color:#475569;">Note:</strong> A voucher can contain several accounting lines.
-        Every valid line is preserved. Re-uploading unchanged data does not create duplicate records.
+        Every valid line is preserved. Unchanged rows stay in the database and are not imported again.
     </div>`;
 
     modal.innerHTML = `
@@ -2066,6 +2152,7 @@ function showImportSummary(result, ledgerPresentation = null) {
         ${changeSummary}
         ${rejectionSummary}
         ${preparationWarning}
+        ${savedReportStatus ? '<div id="importSummarySavedReport" style="font-size:12px; color:#166534; background:#f0fdf4; border-left:3px solid #22c55e; padding:10px 12px; border-radius:6px; margin-top:16px;"></div>' : ''}
         ${note}
         ${errorCount > 0 ? `
             <div style="background:#fef2f2; border:1px solid #fecaca; padding:12px; border-radius:8px; margin-top:16px; max-height:150px; overflow-y:auto;">
@@ -2096,6 +2183,33 @@ function showImportSummary(result, ledgerPresentation = null) {
     const preparationWarningBox = overlay.querySelector('#importSummaryPreparationWarning');
     if (preparationWarningBox) {
         preparationWarningBox.textContent = result.cashflow_preparation_warning;
+    }
+
+    const reportBox = overlay.querySelector('#importSummarySavedReport');
+    if (reportBox) {
+        reportBox.textContent = savedReportStatus;
+        if (result.change_report) {
+            for (const [label, value] of [['Open saved Excel report', result.change_report.file_url],
+                ['Open dated report folder', result.change_report.folder_url]]) {
+                try {
+                    const url = new URL(value);
+                    if (url.protocol !== 'https:' || url.hostname !== 'drive.google.com') continue;
+                    const link = document.createElement('a');
+                    link.href = url.href;
+                    link.target = '_blank';
+                    link.rel = 'noopener';
+                    link.textContent = label;
+                    link.style.display = 'block';
+                    reportBox.appendChild(link);
+                } catch (_) { /* Do not render an invalid or untrusted link. */ }
+            }
+            if (result.change_report.folder_path) {
+                const location = document.createElement('small');
+                location.textContent = 'Drive folder: ' + result.change_report.folder_path;
+                location.style.display = 'block';
+                reportBox.appendChild(location);
+            }
+        }
     }
 
     const downloadReportBtn = overlay.querySelector('#downloadChangeReportBtn');
@@ -2455,7 +2569,8 @@ if (importBtn) {
                     template_column_name: mapping.column_name,
                     excel_column_name: select.value || null,
                     matched: !!select.value,
-                    mapping_status: select.value ? 'matched' : 'unmatched'
+                    mapping_status: select.value ? 'matched' : 'unmatched',
+                    compare_for_changes: mapping.compare_for_changes !== false
                 });
             }
         });
@@ -2590,7 +2705,8 @@ if (importBtn) {
             const duplicateSkippedCount = result.duplicate_skipped_count || (lastChangePreview && lastChangePreview.duplicate_skipped_count) || 0;
             const duplicateGroupCount = result.duplicate_group_count || (lastChangePreview && lastChangePreview.duplicate_group_count) || 0;
             const extraMsg = `<span style="color: maroon; font-weight: bold;">${newRowsCount} new row(s) can be uploaded • ${existingRowsCount} already exists in client data</span>`;
-            const changePreviewMsg = `<br><span style="color: #475569; font-weight: 600;">${previewAdded} added · ${previewChanged} changed · ${previewRemoved} removed · ${previewUnchanged} unchanged</span>`;
+            const previewInformational = Number(lastChangePreview?.informational_update_count || 0);
+            const changePreviewMsg = `<br><span style="color: #475569; font-weight: 600;">${previewAdded} added · ${previewChanged} changed · ${previewRemoved} removed · ${previewUnchanged} unchanged${previewInformational ? ` · ${previewInformational} rows with unchecked-field refreshes` : ''}</span>`;
             const duplicateSummaryMsg = duplicateRowCount
                 ? `<br><span style="color: #92400e; font-weight: 600;">${duplicateRowCount} duplicate row(s) found in ${duplicateGroupCount} group(s); ${duplicateSkippedCount} repeated copy/copies will be skipped.</span>`
                 : '';
@@ -2637,7 +2753,7 @@ if (importBtn) {
                 showStatus('This data is already uploaded. Nothing needs to be uploaded.', 'info', extraMsg + duplicateSummaryMsg + changePreviewMsg);
                 setBadge('Same data - upload stopped');
             } else if (canImport) {
-                showStatus('✅ Validation passed. Import will process only additions, changes, and removals.', 'success', extraMsg + duplicateSummaryMsg + changePreviewMsg);
+                showStatus('✅ Validation passed. Import will process additions, transaction changes, removals, and any unchecked-field refreshes.', 'success', extraMsg + duplicateSummaryMsg + changePreviewMsg);
                 setBadge('✅ Changes validated, ready to import');
             } else {
                 showStatus('ℹ️ Validation complete. All validated lines are unchanged; no import is available.', 'info', extraMsg + duplicateSummaryMsg + changePreviewMsg);
@@ -2687,7 +2803,8 @@ async function performImport(payload) {
             showUploadFailure('The administrator changed the backup setting. Validate again.', 'Validation');
             return;
         }
-        if (payload.comparison_mode === 'replace_range' || payload.backup_enabled === false) {
+        if (payload.comparison_mode === 'replace_range' || payload.backup_enabled === false
+            || Number(lastChangePreview?.informational_update_count || 0) > 0) {
             const confirmed = await reviewUploadReplacement(payload);
             if (!confirmed) {
                 showStatus('Upload cancelled. No data was changed.', 'info');
@@ -3352,6 +3469,8 @@ if (previewBtn) {
 // ---------- INIT ----------
 let uploadBackupPolicyGeneration = 0;
 let uploadBackupRequired = true;
+let uploadArchiveFolderUrl = null;
+let uploadDriveConnectionReady = false;
 function renderUploadBackupPolicy() {
     document.getElementById('uploadBackupHelp').textContent = uploadBackupRequired
         ? 'Backups are ON. A verified Google Drive copy is required before replacement.'
@@ -3369,6 +3488,12 @@ async function loadUploadBackupPolicy() {
         const policy = await response.json();
         if (typeof policy.allow_without_backup !== 'boolean') throw new Error('Backup setting unavailable');
         allowed = policy.allow_without_backup === true;
+        try {
+            const folderUrl = new URL(policy.archive_folder_url || '');
+            uploadArchiveFolderUrl = folderUrl.protocol === 'https:' && folderUrl.hostname === 'drive.google.com'
+                ? folderUrl.href : null;
+        } catch (_) { uploadArchiveFolderUrl = null; }
+        uploadDriveConnectionReady = policy.drive_connection_ready === true;
         loaded = true;
     } catch (_) { /* Keep backups required if policy cannot be loaded. */ }
     if (generation !== uploadBackupPolicyGeneration) return false;

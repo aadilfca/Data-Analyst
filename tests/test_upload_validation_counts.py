@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -402,7 +403,8 @@ def test_replacement_popup_cancel_escape_and_confirm_only_send_on_approval(uploa
         }''')
         assert page.locator('#uploadReplacementReview').is_visible()
         assert '2026-04-01 through 2026-04-30' in page.locator('#uploadReplacementScope').inner_text()
-        assert '3 superseded/removed' in page.locator('#uploadReplacementCounts').inner_text()
+        assert 'Deleted — absent from this complete report' in page.locator('#uploadReplacementCounts').inner_text()
+        assert '3' in page.locator('#uploadReplacementCounts').inner_text()
         assert imports == []
         if choice == 'escape':
             page.keyboard.press('Escape')
@@ -418,7 +420,7 @@ def test_replacement_popup_cancel_escape_and_confirm_only_send_on_approval(uploa
 
 def test_review_identifies_date_corrections_safely_and_explains_empty_checkbox(upload_formatting_page):
     page = upload_formatting_page
-    assert 'This report contains no transactions—clear the declared period' in page.locator('#uploadConfirmEmpty').locator('..').text_content()
+    assert 'Empty report — clear this period' in page.locator('#uploadConfirmEmpty').locator('..').text_content()
     page.evaluate('''() => {
         lastChangePreview = {unchanged_count: 0, new_count: 2, missing_count: 2,
             changed_voucher_count: 1, removed_voucher_count: 0,
@@ -428,9 +430,9 @@ def test_review_identifies_date_corrections_safely_and_explains_empty_checkbox(u
             .then(() => window.dateReviewClosed = true);
     }''')
     assert page.locator('#uploadReplacementDateMoves').is_visible()
-    assert '<b>V1</b>: 2026-03-31 → 2026-04-15' in page.locator('#uploadReplacementDateMoves').inner_text()
+    assert page.locator('#uploadReplacementDateMoveRows tr').inner_text() == '<b>V1</b>\t2026-03-31\t2026-04-15'
     assert page.locator('#uploadReplacementDateMoves b').count() == 0
-    assert '1 changed vouchers' in page.locator('#uploadReplacementCounts').inner_text()
+    assert page.locator('#uploadReplacementChangedVouchers').inner_text() == '1'
     page.locator('#uploadReplacementCancel').click()
     page.wait_for_function('window.dateReviewClosed')
 
@@ -443,6 +445,16 @@ class UploadValidationCountTests(unittest.TestCase):
 
     def tearDown(self):
         self.tmpdir.cleanup()
+
+    def test_saved_mapping_comparison_setting_is_nullable_on_fresh_sqlite(self):
+        conn = sqlite3.connect(database.DB_NAME)
+        try:
+            columns = {row[1]: row for row in conn.execute('PRAGMA table_info(saved_column_mappings)')}
+        finally:
+            conn.close()
+        self.assertIn('compare_for_changes', columns)
+        self.assertEqual(columns['compare_for_changes'][3], 0)
+        self.assertIsNone(columns['compare_for_changes'][4])
 
     def test_same_name_uploads_use_distinct_storage_paths(self):
         first_path = _build_upload_storage_path('All voucher one fine.xlsx')
@@ -2110,6 +2122,19 @@ def _arrange_staged_ledger_mapping(page, columns):
         renderMapping(currentMappings); leftPanel.style.display='block'; mappingPanel.style.display='block';
         modeActions.style.display='block'; importBtn.disabled=false; setDateFormatGroupVisible(true);
     }""",columns)
+
+
+def test_ledger_balance_compare_setting_defaults_off_and_can_be_enabled(upload_formatting_page):
+    page = upload_formatting_page
+    columns = _arrange_ledger_upload_page(page)
+    _arrange_staged_ledger_mapping(page, columns)
+    balance = page.locator('.mapping-table tbody tr').filter(has_text='Balance')
+    balance_checkbox = balance.locator('input[data-compare-column]')
+    assert not balance_checkbox.is_checked()
+    assert page.locator('.mapping-table tbody tr input[data-compare-column]').count() == 6
+    assert page.locator('.mapping-table tbody tr input[data-compare-column]').nth(0).is_checked()
+    balance_checkbox.check()
+    assert page.evaluate("() => currentMappings.find(item => item.column_name === 'Balance').compare_for_changes")
 
 
 def _select_upload_ledger_account(page, code):

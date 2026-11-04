@@ -26,6 +26,7 @@ from services.cashflow_voucher_occurrence_store import resolve_upload_occurrence
 from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime, time, timedelta
+from zoneinfo import ZoneInfo
 from routers.auth import get_current_user
 from services.storage_cleanup import purge_replaced_transaction_rows, DataPurgeProtectedError, _remove_staged_upload_files
 from services.upload_lifecycle import (
@@ -1251,6 +1252,29 @@ def _row_comparison_fingerprint(row_data: dict) -> tuple:
     return tuple(sorted(normalized))
 
 
+def _comparison_column_names(template_cols: list, request_mappings: list, template: dict) -> set:
+    """Resolve the fields that decide whether a transaction itself changed."""
+    mappings = {item.template_column_id: item for item in request_mappings}
+    roles = template.get('ledger_columns') or {}
+    if isinstance(roles, str):
+        try:
+            roles = json.loads(roles)
+        except (TypeError, ValueError):
+            roles = {}
+    ledger_balance_id = roles.get('balance') if template.get('data_purpose') == 'account_ledger' else None
+    ledger_balance = next((column['column_name'] for column in template_cols
+                           if str(column['id']) == str(ledger_balance_id)), None)
+    included = set()
+    for column in template_cols:
+        mapping = mappings.get(column['id'])
+        compare = getattr(mapping, 'compare_for_changes', None) if mapping else None
+        if compare is None:
+            compare = column['column_name'] != ledger_balance
+        if compare:
+            included.add(column['column_name'])
+    return included
+
+
 def _comparison_calendar_date(value, delimiter, order, *, stored=False):
     """Resolve comparison-only dates; never guess an old ambiguous text order."""
     try:
@@ -1278,9 +1302,11 @@ def _comparison_calendar_date(value, delimiter, order, *, stored=False):
 
 
 def _formatting_comparison_values(row_data, template_cols, delimiter, order,
-                                 *, primary_date=None, stored=False):
+                                 *, primary_date=None, stored=False, included_fields=None):
     """Comparable views only: identities, concurrency guards and raw rows stay exact."""
     values = dict(_row_comparison_fingerprint(row_data))
+    if included_fields is not None:
+        values = {name: value for name, value in values.items() if name in included_fields}
     date_columns = [c['column_name'] for c in template_cols if c.get('data_type') == 'Date']
     context = _ledger_context.get()
     primary_column = (context['roles']['date'] if context else
@@ -1399,6 +1425,19 @@ def build_change_report(change_detection: dict, template_cols: list, template_id
             "line_key": _comparison_line_key(template_cols, row_data, template_id),
             "changed_fields": [],
         })
+    for item in change_detection.get("informational_updates", []):
+        old_row = item.get("old_row_data") or {}
+        new_row = item.get("new_row_data") or {}
+        fields = sorted(item.get("field_updates", {}))
+        report.append({
+            "action": "Informational update",
+            "client_data_id": item.get("client_data_id"),
+            "document_id": old_row.get(template_cols[0]["column_name"]) if template_cols else None,
+            "line_key": _comparison_line_key(template_cols, new_row, template_id),
+            "changed_fields": fields,
+            "old_values": {field: old_row.get(field) for field in fields},
+            "new_values": {field: new_row.get(field) for field in fields},
+        })
     for item in change_detection.get("missing", []):
         old_row = item.get("old_row_data") or {}
         report.append({
@@ -1424,6 +1463,7 @@ def public_change_detection(change_detection: dict, template_cols: list, templat
         'removed_voucher_count': sum(item['status'] == 'Removed' for item in observations),
         'date_moves': moves,
         "unchanged_count": change_detection.get("unchanged_count", 0),
+        "informational_update_count": len(change_detection.get("informational_updates", [])),
         "changed_count": change_detection.get("changed_count", 0),
         "new_count": change_detection.get("new_count", 0),
         "missing_count": change_detection.get("missing_count", 0),
@@ -1471,6 +1511,7 @@ def _build_upload_summary(
         "changed_count": change_detection.get("changed_count", 0),
         "removed_count": change_detection.get("missing_count", 0),
         "unchanged_count": change_detection.get("unchanged_count", 0),
+        "informational_update_count": change_detection.get("informational_update_count", 0),
         "duplicate_group_count": change_detection.get("duplicate_group_count", 0),
         "duplicate_row_count": change_detection.get("duplicate_row_count", 0),
         "duplicate_skipped_count": change_detection.get("duplicate_skipped_count", 0),
@@ -1525,8 +1566,22 @@ def _is_duplicate_upload_noop(prior_same_file: Optional[dict], change_detection:
         return False
     return not any(
         change_detection.get(key, 0)
-        for key in ("new_count", "changed_count", "missing_count", "source_order_refresh_required")
+        for key in ("new_count", "changed_count", "missing_count", "informational_update_count", "source_order_refresh_required")
     )
+
+
+def _assert_upload_outcome_matches_plan(
+    inserted, updated, deleted, planned_new, planned_changed, planned_deleted,
+    informational_updated=0, planned_informational=0,
+):
+    """Do not report success if the committed actions differ from the reviewed plan."""
+    if ((inserted, updated, deleted, informational_updated)
+            != (planned_new, planned_changed, planned_deleted, planned_informational)):
+        raise HTTPException(
+            500,
+            "Import stopped because the saved row counts did not match the validated review. "
+            "No changes were committed; validate the file again.",
+        )
 
 def _row_fingerprint_token(row_data: dict) -> str:
     """Stable compact guard for one current Client Data row."""
@@ -1714,6 +1769,8 @@ def _build_validation_plan_payload(
             "line_key": _comparison_line_key(template_cols, old_row, template_id),
         })
 
+    history_estimated_bytes = _history_storage_estimate(change_detection)
+
     payload = {
         "total_rows": total_rows,
         "rejected_rows": [
@@ -1722,20 +1779,36 @@ def _build_validation_plan_payload(
         ],
         "force_included_count": force_included_count,
         "comparison_mode": change_detection.get("comparison_mode"),
+        "comparison_fields": change_detection.get("comparison_fields", []),
         "date_range": change_detection.get("date_range"),
         "rate_source": rate_source,
         "date_delimiter": date_delimiter,
         "date_order": date_order,
         "unchanged_count": change_detection.get("unchanged_count", 0),
+        "informational_update_count": len(change_detection.get("informational_updates", [])),
         "changed_count": len(changed),
         "new_count": len(new_rows),
         "missing_count": len(missing),
+        "history_estimated_bytes": history_estimated_bytes,
         "duplicate_group_count": change_detection.get("duplicate_group_count", 0),
         "duplicate_row_count": change_detection.get("duplicate_row_count", 0),
         "duplicate_skipped_count": change_detection.get("duplicate_skipped_count", 0),
         "duplicate_row_numbers": change_detection.get("duplicate_row_numbers", []),
         "duplicate_skipped_row_numbers": change_detection.get("duplicate_skipped_row_numbers", []),
         "changed": changed,
+        "informational_updates": [
+            {
+                "client_data_id": item["client_data_id"],
+                "field_updates": item.get("field_updates", {}),
+                "old_field_values": {field: (item.get("old_row_data") or {}).get(field)
+                                     for field in item.get("field_updates", {})},
+                "expected_old_fingerprint": item["expected_old_fingerprint"],
+                "expected_old_version": item.get("expected_old_version", 1),
+                "source_identity": item.get("source_identity"),
+                "source_row_number": item.get("source_row_number"),
+            }
+            for item in change_detection.get("informational_updates", [])
+        ],
         "new": new_rows,
         "missing": missing,
         "source_order": change_detection.get("source_order", []),
@@ -1775,7 +1848,11 @@ def _create_validation_plan(
         execute_query_pg("SELECT pg_advisory_xact_lock(hashtext('upload-storage-budget'))")
         execute_query_pg("SELECT pg_advisory_xact_lock(hashtext(%s))",
                          (f"upload-validation:{request.client_id}:{request.template_id}",))
-        _check_upload_storage_budget(len(json.dumps(plan_payload, default=str).encode("utf-8")) * 4 + 1_048_576)
+        _check_upload_storage_budget(
+            len(json.dumps(plan_payload, default=str).encode("utf-8")) * 4
+            + int(plan_payload.get("history_estimated_bytes", 0))
+            + 1_048_576
+        )
         execute_write_pg(
             """DELETE FROM upload_validation_plans
                WHERE (client_id = %s AND template_id = %s)
@@ -1858,7 +1935,7 @@ def _legacy_compare_transactions(client_id: int, template_id: int, template_cols
     # Fetch existing client_data rows for this client+template, with their document_group_id and validation status
     existing_rows = execute_query_pg(
         """
-        SELECT cd.id, cd.row_data, cd.version, cd.document_group_id,
+        SELECT cd.id, cd.row_data, cd.version, cd.upload_id AS source_upload_id, cd.document_group_id,
                vd.validation_status, vd.id AS verification_detail_id
         FROM client_data cd
         LEFT JOIN verification_details vd ON vd.client_data_id = cd.id
@@ -1987,7 +2064,8 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
                          date_delimiter: str = DEFAULT_DATE_DELIMITER,
                          date_order: str = DEFAULT_DATE_ORDER,
                          coverage_start: Optional[str] = None,
-                         coverage_end: Optional[str] = None) -> dict:
+                         coverage_end: Optional[str] = None,
+                         included_fields: Optional[set] = None) -> dict:
     """Compare exact lines first, then classify unmatched lines within each document."""
     if comparison_mode not in {"correction", "replace_range"}:
         raise HTTPException(400, "Invalid upload comparison mode")
@@ -2008,6 +2086,8 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
         "missing_count": 0,
         "total_existing_before_import": 0,
         "unchanged": [],
+        "informational_updates": [],
+        "informational_update_count": 0,
         "changed": [],
         "new": [],
         "new_source_identities": [],
@@ -2028,7 +2108,10 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
             raise HTTPException(400, 'Every transaction must have a valid date inside the declared complete-report coverage.')
         if date_text:
             incoming_dates.append(date_text)
-        occurrence_key = (document_group_id, _row_fingerprint_token(row_data))
+        occurrence_fingerprint = _row_comparison_fingerprint(row_data)
+        if included_fields is not None:
+            occurrence_fingerprint = tuple(item for item in occurrence_fingerprint if item[0] in included_fields)
+        occurrence_key = (document_group_id, occurrence_fingerprint)
         incoming_occurrences[occurrence_key] = incoming_occurrences.get(occurrence_key, 0) + 1
         record = {
             "row_data": row_data,
@@ -2120,6 +2203,7 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
             "old_validation_status": row.get("validation_status") or "Pending",
             "verification_detail_id": row.get("verification_detail_id"),
             "source_identity": row.get("source_identity"),
+            "source_upload_id": row.get("source_upload_id"),
             "source_row_number": row.get("source_row_number"),
             "source_order_upload_id": row.get("source_order_upload_id"),
             "comparison_date": _date_text(row.get("extract_date")),
@@ -2137,11 +2221,12 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
         unmatched_incoming = []
         unmatched_existing = list(existing)
         new_values = {id(r): _formatting_comparison_values(
-            r['row_data'], template_cols, date_delimiter, date_order, primary_date=r['date_text']
+            r['row_data'], template_cols, date_delimiter, date_order, primary_date=r['date_text'],
+            included_fields=included_fields,
         ) for r in incoming}
         old_values = {id(r): _formatting_comparison_values(
             r['old_row_data'], template_cols, date_delimiter, date_order,
-            primary_date=r['comparison_date'], stored=True
+            primary_date=r['comparison_date'], stored=True, included_fields=included_fields
         ) for r in existing}
 
         def changed_item(old, new):
@@ -2154,6 +2239,7 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
                 "old_version": old["old_version"],
                 "verification_detail_id": old["verification_detail_id"],
                 "source_identity": old.get("source_identity"),
+                "source_upload_id": old.get("source_upload_id"),
                 "source_row_number": new['source_row_number'],
                 "changed_fields": sorted(k for k in before.keys() | after.keys()
                                          if before.get(k, '') != after.get(k, '')),
@@ -2185,12 +2271,37 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
             # Include the resolved date when known, avoiding equal text with
             # different DMY/MDY interpretations being accepted as unchanged.
             primary = record.get('comparison_date' if stored else 'date_text')
-            return _row_comparison_fingerprint(raw), primary
+            fingerprint = _row_comparison_fingerprint(raw)
+            if included_fields is not None:
+                fingerprint = tuple(item for item in fingerprint if item[0] in included_fields)
+            return fingerprint, primary
 
         matched, unmatched_incoming, unmatched_existing = match_unchanged(incoming, existing, exact, equivalent)
-        result['unchanged'].extend(old['client_data_id'] for old in matched)
+        matched_existing = [old for _new, old in matched]
+        result['unchanged'].extend(old['client_data_id'] for old in matched_existing)
         result['unchanged_count'] += len(matched)
-        result.setdefault('source_order', []).extend(_source_order_pairs(incoming, matched, exact, equivalent))
+        result.setdefault('source_order', []).extend(_source_order_pairs(incoming, matched_existing, exact, equivalent))
+        excluded_fields = (set(column['column_name'] for column in template_cols) - included_fields
+                           if included_fields is not None else set())
+        for new_record, old_record in matched:
+            field_updates = {
+                field: new_record['row_data'].get(field)
+                for field in excluded_fields
+                if str(old_record['old_row_data'].get(field) or '').strip()
+                != str(new_record['row_data'].get(field) or '').strip()
+            }
+            if field_updates:
+                result['informational_updates'].append({
+                    'client_data_id': old_record['client_data_id'],
+                    'field_updates': field_updates,
+                    'old_row_data': old_record['old_row_data'],
+                    'new_row_data': new_record['row_data'],
+                    'expected_old_fingerprint': _row_fingerprint_token(old_record['old_row_data']),
+                    'expected_old_version': old_record.get('old_version', 1),
+                    'source_identity': new_record['source_identity'],
+                    'source_row_number': new_record['source_row_number'],
+                })
+        result['informational_update_count'] = len(result['informational_updates'])
 
         # Explicit line IDs are authoritative. Unmatched IDs must remain new or
         # removed lines and must never inherit another transaction's history.
@@ -2212,7 +2323,10 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
                 result["changed_count"] += 1
 
         pairs = []
-        if not coverage and not line_column and unmatched_incoming and unmatched_existing:
+        if not line_column and unmatched_incoming and unmatched_existing:
+            # Pair only where the document and available row anchors make a
+            # correction safe. Ambiguous corrections block correction uploads;
+            # complete reports retain unpaired lines as explicit add/remove.
             account_column = next((column["column_name"] for column in template_cols
                                    if str(column["column_name"]).strip().casefold()
                                    in {"account code", "account_code", "account detail", "ledger code"}), None)
@@ -2233,11 +2347,11 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
                         pairs.append((old, new))
                         unmatched_existing.remove(old)
                         unmatched_incoming.remove(new)
-                    elif existing_matches:
+                    elif existing_matches and not coverage:
                         ambiguous_correction(incoming_matches, existing_matches, new['row_data'].get(account_column))
             elif len(unmatched_incoming) == len(unmatched_existing) == 1:
                 pairs.append((unmatched_existing.pop(), unmatched_incoming.pop()))
-            else:
+            elif not coverage:
                 ambiguous_correction(unmatched_incoming, unmatched_existing)
         for old, new in pairs:
             result["changed"].append(changed_item(old, new))
@@ -2254,6 +2368,8 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
                     "old_row_data": old["old_row_data"],
                     "validation_status": old["old_validation_status"],
                     "verification_detail_id": old["verification_detail_id"],
+                    "source_upload_id": old.get("source_upload_id"),
+                    "source_identity": old.get("source_identity"),
                 })
                 result["missing_count"] += 1
 
@@ -2262,7 +2378,9 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
         if existing and ((coverage and (unmatched_incoming or unmatched_existing))
                          or result['changed_count'] > changed_before):
             from collections import Counter
-            comparison_columns = [c['column_name'] for c in template_cols] + ([LEDGER_SOURCE_NOTES] if context else [])
+            comparison_columns = [c['column_name'] for c in template_cols
+                                  if included_fields is None or c['column_name'] in included_fields]
+            comparison_columns += [LEDGER_SOURCE_NOTES] if context else []
             fields = sorted(name for name in comparison_columns if
                 Counter(str(old_values[id(r)].get(name, '')) for r in existing) !=
                 Counter(str(new_values[id(r)].get(name, '')) for r in incoming))
@@ -2294,7 +2412,8 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
     result['source_order_refresh_required'] = any(
         item['source_row_number'] != item['expected_source_row_number']
         or item['expected_source_order_upload_id'] is None for item in result.get('source_order', []))
-    if coverage or result['changed'] or result['missing'] or result['source_order_refresh_required']:
+    if (coverage or result['changed'] or result['new'] or result['missing']
+            or result['informational_updates'] or result['source_order_refresh_required']):
         result['lifecycle'] = {'scope': scope_context, 'source_fingerprint': source_fingerprint(existing_rows),
                                'fingerprint_method': 'postgres' if existing_rows and 'scope_row_hash' in existing_rows[0] else 'python'}
     return result
@@ -2307,6 +2426,7 @@ class ColumnMapping(BaseModel):
     excel_column_name: Optional[str] = None
     matched: bool = False
     mapping_status: str = "unmatched"
+    compare_for_changes: Optional[bool] = None
 
 class EditedCellValue(BaseModel):
     # A value the user typed into a blank cell in the Row Selection grid (Phase 3/4 of the
@@ -2368,6 +2488,7 @@ class AutoMapRequest(BaseModel):
 class SavedMappingEntry(BaseModel):
     template_column_id: int
     excel_column: str
+    compare_for_changes: Optional[bool] = None
 
 class SaveMappingRequest(BaseModel):
     client_id: int
@@ -3033,7 +3154,7 @@ def save_column_mapping(request: SaveMappingRequest):
         raise HTTPException(404, "Template not found")
 
     entries = [
-        (request.client_id, request.template_id, entry.template_column_id, entry.excel_column)
+        (request.client_id, request.template_id, entry.template_column_id, entry.excel_column, entry.compare_for_changes)
         for entry in request.mappings
         if entry.excel_column and entry.excel_column.strip()
     ]
@@ -3046,8 +3167,9 @@ def save_column_mapping(request: SaveMappingRequest):
             execute_batch_pg(
                 conn,
                 """
-                INSERT INTO saved_column_mappings (client_id, template_id, template_column_id, excel_column)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO saved_column_mappings
+                    (client_id, template_id, template_column_id, excel_column, compare_for_changes)
+                VALUES (%s, %s, %s, %s, %s)
                 """,
                 entries,
             )
@@ -3069,12 +3191,13 @@ def get_saved_column_mapping(client_id: int, template_id: int):
     to check has_saved_mapping, no special-case error handling required on the frontend.
     """
     rows = execute_query_pg(
-        "SELECT template_column_id, excel_column FROM saved_column_mappings WHERE client_id = %s AND template_id = %s",
+        "SELECT template_column_id, excel_column, compare_for_changes FROM saved_column_mappings WHERE client_id = %s AND template_id = %s",
         (client_id, template_id)
     )
     return {
         "has_saved_mapping": len(rows) > 0,
-        "mappings": [{"template_column_id": r["template_column_id"], "excel_column": r["excel_column"]} for r in rows]
+        "mappings": [{"template_column_id": r["template_column_id"], "excel_column": r["excel_column"],
+                      "compare_for_changes": r.get("compare_for_changes")} for r in rows]
     }
 
 
@@ -3297,7 +3420,13 @@ def preview_date_format(request: DatePreviewRequest):
 # ---------- VALIDATE ONLY (NO IMPORT) ----------
 @router.get('/api/upload/backup-policy')
 def upload_backup_policy(session=Depends(get_current_user)):
-    return {'allow_without_backup': unbacked_uploads_allowed(execute_query_pg)}
+    folder_id = os.environ.get('DRIVE_ARCHIVE_FOLDER_ID', '').strip()
+    drive_names = ('DRIVE_CLIENT_ID', 'DRIVE_CLIENT_SECRET', 'DRIVE_REFRESH_TOKEN', 'DRIVE_ARCHIVE_FOLDER_ID')
+    drive_ready = all(os.environ.get(name, '').strip() for name in drive_names)
+    folder_url = ('https://drive.google.com/drive/folders/' + folder_id
+                  if re.fullmatch(r'[A-Za-z0-9_-]+', folder_id) else None)
+    return {'allow_without_backup': unbacked_uploads_allowed(execute_query_pg),
+            'archive_folder_url': folder_url, 'drive_connection_ready': drive_ready}
 
 
 @router.post("/api/upload/validate")
@@ -3309,7 +3438,7 @@ def validate_only(request: ImportRequest, perf: bool = False):
     Returns row-by-row validation errors.
     """
     # Validate template and file
-    template = execute_query_pg("SELECT id, template_name, rate_source FROM templates WHERE id = %s AND is_active = TRUE", (request.template_id,))
+    template = execute_query_pg("SELECT id, template_name, rate_source, data_purpose, ledger_columns FROM templates WHERE id = %s AND is_active = TRUE", (request.template_id,))
     if not template:
         raise HTTPException(404, "Template not found")
     file_info = execute_query_pg(
@@ -3353,6 +3482,8 @@ def validate_only(request: ImportRequest, perf: bool = False):
     )
     if not template_cols:
         raise HTTPException(400, "Template has no columns")
+
+    included_fields = _comparison_column_names(template_cols, request.mappings, template[0])
 
     mapping_dict = {m.template_column_id: m for m in request.mappings}
 
@@ -3568,7 +3699,9 @@ def validate_only(request: ImportRequest, perf: bool = False):
         date_order=effective_order,
         coverage_start=request.coverage_start,
         coverage_end=request.coverage_end,
+        included_fields=included_fields,
     )
+    change_detection['comparison_fields'] = sorted(included_fields)
     change_detection.update({
         key: value
         for key, value in deduplication.items()
@@ -3581,6 +3714,7 @@ def validate_only(request: ImportRequest, perf: bool = False):
         change_detection["new_count"]
         or change_detection["changed_count"]
         or change_detection["missing_count"]
+        or change_detection.get("informational_update_count")
         or change_detection.get('source_order_refresh_required')
     )
     if _ledger_context.get() and not prior_same_file:
@@ -3624,6 +3758,7 @@ def validate_only(request: ImportRequest, perf: bool = False):
             effective_order,
         )
         plan_payload["source_diagnostics"] = source_diagnostics
+        plan_payload['archive_timestamp'] = datetime.now(ZoneInfo('Asia/Karachi')).isoformat()
         validation_plan_id = _create_validation_plan(
             request,
             file_info[0]["file_path"],
@@ -3709,6 +3844,41 @@ def _audit_row_params(client_data_id, action, old_data=None, new_data=None, user
     )
 
 
+CLIENT_DATA_HISTORY_INSERT_SQL = """
+    INSERT INTO client_data_history
+        (client_id, template_id, client_data_id, action, changed_by,
+         source_upload_id, replacing_upload_id, source_identity, row_data)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+"""
+
+
+def _history_row_params(request, item, action, row_data=None):
+    """Retain a complete prior row without tying it to purgeable active rows."""
+    old_data = row_data if row_data is not None else item.get("old_row_data") or {}
+    if isinstance(old_data, str):
+        old_data = json.loads(old_data)
+    return (
+        request.client_id,
+        request.template_id,
+        item["client_data_id"],
+        action,
+        "Analyst",
+        item.get("source_upload_id", item.get("upload_id")),
+        request.file_id,
+        item.get("source_identity"),
+        Json(old_data, dumps=lambda value: json.dumps(value, default=str)),
+    )
+
+
+def _history_storage_estimate(change_detection):
+    previous_rows = [
+        item.get("old_row_data") or {}
+        for key in ("changed", "missing")
+        for item in change_detection.get(key, [])
+    ]
+    return sum(len(json.dumps(row, default=str).encode("utf-8")) + 256 for row in previous_rows)
+
+
 # ---------- PLAN-BASED IMPORT ----------
 def _guard_plan_configuration(request, payload):
     if not payload.get('lifecycle'):
@@ -3729,7 +3899,7 @@ def _guard_plan_configuration(request, payload):
 def _import_validation_plan(request: ImportRequest, background_tasks: BackgroundTasks = None):
     """Apply only the actionable rows captured by Validate."""
     template = execute_query_pg(
-        "SELECT id, template_name, rate_source FROM templates WHERE id = %s AND is_active = TRUE",
+        "SELECT id, template_name, rate_source, data_purpose, ledger_columns FROM templates WHERE id = %s AND is_active = TRUE",
         (request.template_id,),
     )
     if not template:
@@ -3778,12 +3948,23 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
     if not template_cols:
         raise HTTPException(400, "Template has no columns")
 
+    included_fields = _comparison_column_names(template_cols, request.mappings, template[0])
+    planned_comparison_fields = plan_payload.get("comparison_fields")
+    # Validation plans created before comparison settings were recorded (or
+    # assembled directly by older integrations) have no authoritative field
+    # list to compare. New plans always include it, so retain the stale-setting
+    # guard whenever that recorded list is present.
+    if planned_comparison_fields and sorted(included_fields) != sorted(planned_comparison_fields):
+        raise HTTPException(409, "The column change settings changed after validation. Validate again.")
+
     changed_actions = plan_payload.get("changed", [])
     missing_actions = plan_payload.get("missing", [])
     source_order_actions = plan_payload.get('source_order', [])
+    informational_actions = plan_payload.get('informational_updates', [])
     guarded_ids = list(dict.fromkeys(
         [item["client_data_id"] for item in changed_actions]
         + [item["client_data_id"] for item in missing_actions]
+        + [item["client_data_id"] for item in informational_actions]
     ))
     current_by_id = {}
     if guarded_ids:
@@ -3854,6 +4035,29 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
             "verification_detail_id": current.get("verification_detail_id"),
         })
 
+    informational_updates = []
+    for item in informational_actions:
+        current = current_by_id.get(item["client_data_id"])
+        if not current:
+            raise HTTPException(409, "Current data changed after validation. Validate the file again.")
+        current_data = current["row_data"]
+        if isinstance(current_data, str):
+            current_data = json.loads(current_data)
+        if (current.get("version", 1) != item.get("expected_old_version", 1)
+                or _row_fingerprint_token(current_data) != item["expected_old_fingerprint"]):
+            raise HTTPException(409, "Current data changed after validation. Validate the file again.")
+        new_data = dict(current_data)
+        new_data.update(item.get("field_updates", {}))
+        informational_updates.append({
+            "client_data_id": current["id"],
+            "old_row_data": current_data,
+            "new_row_data": new_data,
+            "source_identity": item.get("source_identity") or _canonical_source_identity(
+                template_cols, new_data, request.template_id
+            ),
+            "source_row_number": item.get("source_row_number"),
+        })
+
     new_rows = [item["row_data"] for item in plan_payload.get("new", [])]
     new_row_identities = [
         item.get("source_identity") or _canonical_source_identity(
@@ -3877,7 +4081,8 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
                   AND source_identity = ANY(%s)
                   AND NOT (id = ANY(%s))
                 """,
-                (request.client_id, request.template_id, new_source_identities, [item['client_data_id'] for item in missing]),
+                (request.client_id, request.template_id, new_source_identities,
+                 [item['client_data_id'] for item in missing + changed + informational_updates]),
             )
             if existing_new_identities:
                 raise HTTPException(409, "New data was added after validation. Validate the file again.")
@@ -3888,6 +4093,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
         )
         for item in changed
     ] + new_row_identities
+    planned_identities += [item["source_identity"] for item in informational_updates]
     if len(planned_identities) != len(set(planned_identities)):
         raise HTTPException(
             409,
@@ -3898,12 +4104,14 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
         request.client_id,
         request.template_id,
         planned_identities,
-        [item["client_data_id"] for item in changed + missing],
+        [item["client_data_id"] for item in changed + missing + informational_updates],
     )
 
     change_detection = {
         'voucher_observations': plan_payload.get('voucher_observations', []),
         "unchanged_count": plan_payload.get("unchanged_count", 0),
+        "informational_update_count": len(informational_updates),
+        "informational_updates": informational_updates,
         "changed_count": len(changed),
         "new_count": len(new_rows),
         "missing_count": len(missing),
@@ -3953,7 +4161,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
     cashflow_voucher_resolution = None
     IMPORT_PROGRESS[request.file_id] = {
         "current": 0,
-        "total": len(new_rows) + len(changed) + len(missing),
+        "total": len(new_rows) + len(changed) + len(missing) + len(informational_updates),
         "status": "processing",
     }
     if plan_payload.get('lifecycle'):
@@ -3970,7 +4178,11 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
 
     with pg_transaction() as conn:
         execute_query_pg("SELECT pg_advisory_xact_lock(hashtext('upload-storage-budget'))")
-        _check_upload_storage_budget(len(json.dumps(plan_payload, default=str).encode("utf-8")) * 4 + 1_048_576)
+        _check_upload_storage_budget(
+            len(json.dumps(plan_payload, default=str).encode("utf-8")) * 4
+            + int(plan_payload.get("history_estimated_bytes", 0))
+            + 1_048_576
+        )
         execute_query_pg(
             "SELECT pg_advisory_xact_lock(hashtext(%s))",
             (f"upload-validation:{request.client_id}:{request.template_id}",),
@@ -3987,10 +4199,11 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
                 raise HTTPException(409, 'Validation plan expired or was superseded while archiving. Validate again; no replacement was applied.')
         _guard_plan_configuration(request, plan_payload)
         _apply_source_order_updates(conn, request, source_order_actions)
+        locked_by_id = {}
         if guarded_ids:
             locked_rows = execute_query_pg(
                 """
-                SELECT id, row_data, version
+                SELECT id, row_data, version, upload_id, source_identity
                 FROM client_data
                 WHERE id = ANY(%s)
                   AND client_id = %s
@@ -4001,7 +4214,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
                 (guarded_ids, request.client_id, request.template_id),
             )
             locked_by_id = {row["id"]: row for row in locked_rows}
-            for item in changed_actions + missing_actions:
+            for item in changed_actions + missing_actions + informational_actions:
                 locked = locked_by_id.get(item["client_data_id"])
                 locked_data = locked.get("row_data") if locked else None
                 if isinstance(locked_data, str):
@@ -4015,6 +4228,22 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
                         409,
                         "Current data changed after validation. Validate the file again.",
                     )
+        history_params = []
+        for action, actions in (("changed", changed_actions), ("deleted", missing_actions)):
+            for item in actions:
+                locked = locked_by_id.get(item["client_data_id"])
+                if not locked:
+                    raise HTTPException(409, "Current data changed after validation. Validate the file again.")
+                history_item = {
+                    "client_data_id": item["client_data_id"],
+                    "source_upload_id": locked.get("upload_id"),
+                    "source_identity": locked.get("source_identity"),
+                }
+                history_params.append(_history_row_params(
+                    request, history_item, action, row_data=locked.get("row_data")
+                ))
+        if history_params:
+            execute_batch_pg(conn, CLIENT_DATA_HISTORY_INSERT_SQL, history_params)
         _assert_active_identity_collisions(
             request.client_id,
             request.template_id,
@@ -4097,6 +4326,34 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
                 """,
                 changed_client_data_params,
             )
+        informational_client_data_params = []
+        for item in informational_updates:
+            new_row_data = item["new_row_data"]
+            informational_client_data_params.append((
+                Json(new_row_data, dumps=lambda value: json.dumps(value, default=str)),
+                request.file_id,
+                item["source_identity"],
+                _row_fingerprint_token(new_row_data),
+                item.get("source_row_number"),
+                request.file_id if item.get("source_row_number") else None,
+                item["client_data_id"],
+            ))
+        if informational_client_data_params:
+            execute_batch_pg(
+                conn,
+                """
+                UPDATE client_data
+                SET row_data = %s, upload_id = %s, source_identity = %s,
+                    source_fingerprint = %s, source_row_number = %s,
+                    source_order_upload_id = %s
+                WHERE id = %s
+                """,
+                informational_client_data_params,
+            )
+            informational_updated_count = len(informational_client_data_params)
+            IMPORT_PROGRESS[request.file_id]["current"] += informational_updated_count
+        else:
+            informational_updated_count = 0
         if changed_verification_params:
             execute_batch_pg(
                 conn,
@@ -4181,6 +4438,11 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
                 upload_id=request.file_id,
                 row_data=cashflow_occurrence_rows,
             )
+        _assert_upload_outcome_matches_plan(
+            inserted_count, updated_count, deleted_count,
+            len(new_rows), len(changed), len(missing),
+            informational_updated_count, len(informational_updates),
+        )
         execute_write_pg(
             """
             DELETE FROM upload_validation_plans
@@ -4189,6 +4451,8 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
             (request.validation_plan_id,),
         )
         import_message = f'Successfully imported: {inserted_count} added, {updated_count} changed, {deleted_count} removed'
+        if informational_updated_count:
+            import_message += f', {informational_updated_count} balance-only row(s) refreshed'
         if request.backup_enabled is False:
             import_message += '. Development mode: no recovery backup was created.'
         if source_order_actions and not (inserted_count or updated_count or deleted_count):
@@ -4197,8 +4461,10 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
             'status': 'success', 'message': import_message,
             'total_rows': total_rows_attempted, 'imported_count': inserted_count,
             'updated_count': updated_count, 'deleted_count': deleted_count,
+            'informational_updated_count': informational_updated_count,
             'backup_mode': prepared.get('archive_mode', 'drive' if prepared.get('archive') else 'not_required') if prepared else 'not_required',
             'archive_verified': bool(prepared and prepared.get('archive')),
+            'change_report': prepared.get('change_report') if prepared else None,
         }, execute_write_pg)
 
     if replacement_cleanup["staged_paths"]:
@@ -4284,11 +4550,13 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
         "source_diagnostics": plan_payload.get("source_diagnostics", {}),
         "archive_verified": bool(prepared and prepared.get('archive')),
         "backup_mode": prepared.get('archive_mode', 'drive' if prepared.get('archive') else 'not_required') if prepared else 'not_required',
+        "change_report": prepared.get('change_report') if prepared else None,
         "message": import_message,
         "total_rows": total_rows_attempted,
         "imported_count": inserted_count,
         "updated_count": updated_count,
         "deleted_count": deleted_count,
+        "informational_updated_count": informational_updated_count,
         "validation_errors": [],
         "source_order_refreshed": bool(source_order_actions),
         "rejected_rows": rejected_rows,
@@ -4311,7 +4579,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
         return _import_validation_plan(request, background_tasks)
 
     # Validate template and file
-    template = execute_query_pg("SELECT id, template_name, rate_source FROM templates WHERE id = %s AND is_active = TRUE", (request.template_id,))
+    template = execute_query_pg("SELECT id, template_name, rate_source, data_purpose, ledger_columns FROM templates WHERE id = %s AND is_active = TRUE", (request.template_id,))
     if not template:
         raise HTTPException(404, "Template not found")
     file_info = execute_query_pg(
@@ -4354,6 +4622,8 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
     )
     if not template_cols:
         raise HTTPException(400, "Template has no columns")
+
+    included_fields = _comparison_column_names(template_cols, request.mappings, template[0])
 
     mapping_dict = {m.template_column_id: m for m in request.mappings}
 
@@ -4533,7 +4803,10 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
         comparison_mode=request.comparison_mode,
         date_delimiter=effective_delimiter,
         date_order=effective_order,
+        included_fields=included_fields,
     )
+    if change_detection and change_detection.get('informational_update_count'):
+        raise HTTPException(400, 'Validate this upload and use the confirmed Import button to refresh informational values.')
     if change_detection and (change_detection['changed_count'] or change_detection['missing_count']):
         raise HTTPException(400, 'Validate this correction before importing. A verified archive is required.')
     # Preserve the established first-upload path for callers that intentionally
@@ -4695,7 +4968,11 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
             (f"upload-validation:{request.client_id}:{request.template_id}",),
         )
         growth_rows = change_detection.get("new", []) + [item["new_row_data"] for item in change_detection.get("changed", [])]
-        _check_upload_storage_budget(len(json.dumps(growth_rows, default=str).encode("utf-8")) * 4 + 1_048_576)
+        _check_upload_storage_budget(
+            len(json.dumps(growth_rows, default=str).encode("utf-8")) * 4
+            + _history_storage_estimate(change_detection)
+            + 1_048_576
+        )
         _apply_source_order_updates(conn, request, change_detection.get('source_order', []))
         execute_write_pg("UPDATE uploaded_files SET status = 'Imported', client_id = %s WHERE id = %s",
                          (request.client_id, request.file_id))
@@ -4706,6 +4983,15 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
             [item.get("client_data_id") for item in change_detection.get("changed", [])],
         )
         treasury_mapping = load_treasury_mapping_postgres(conn, request.client_id)
+        history_params = [
+            _history_row_params(request, item, "changed")
+            for item in change_detection.get("changed", [])
+        ] + [
+            _history_row_params(request, item, "deleted")
+            for item in change_detection.get("missing", [])
+        ]
+        if history_params:
+            execute_batch_pg(conn, CLIENT_DATA_HISTORY_INSERT_SQL, history_params)
         if change_detection is not None and change_detection.get("unchanged") is not None:
             # --- Re-upload scenario: handle each category ---
             # 1. Unchanged: skip — retain existing validation status (no action needed)

@@ -1,4 +1,4 @@
-"""Deterministic Excel evidence for complete previous and incoming vouchers.
+"""Deterministic Excel evidence for uploaded changes and complete vouchers.
 
 Uses the application's existing OpenPyXL export stack; no extra runtime is
 required on the server. The workbook is part of the verified recovery ZIP.
@@ -148,6 +148,125 @@ def build_observation_report(observations, old_rows, template_columns, scope, la
             content = source.read(name)
             if name == 'docProps/core.xml':
                 # Preserve namespace declarations used by xsi:type QNames.
+                content = re.sub(rb'(<dcterms:(?:created|modified)\b[^>]*>)[^<]*(</dcterms:(?:created|modified)>)',
+                                 rb'\g<1>2000-01-01T00:00:00Z\g<2>', content)
+            info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            target.writestr(info, content)
+    return deterministic.getvalue()
+
+
+def build_change_report(change_detection, template_columns, scope, labels=None, imported_at=None):
+    """Build a human-readable, complete row report for one validated import plan.
+
+    The workbook is deliberately labelled as pending until the database transaction
+    succeeds. Previous and incoming lines are separate so no correction pairing is
+    inferred by the report itself.
+    """
+    labels = labels or {}
+    columns = [column['column_name'] for column in template_columns]
+    incoming = []
+    previous = []
+    for item in change_detection.get('changed', []):
+        incoming.append(('Changed', item.get('new_row_data') or {}))
+        previous.append(('Changed', item.get('old_row_data') or {}))
+    incoming.extend(('Added', item.get('row_data', item) if isinstance(item, dict) else item)
+                    for item in change_detection.get('new', []))
+    previous.extend(('Removed', item.get('old_row_data') or {})
+                     for item in change_detection.get('missing', []))
+    informational = [
+        (item.get('client_data_id'), field, (item.get('old_field_values') or {}).get(field), value)
+        for item in change_detection.get('informational_updates', [])
+        for field, value in (item.get('field_updates') or {}).items()
+    ]
+
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    workbook.properties.creator = 'Internal Audit App'
+    workbook.properties.created = workbook.properties.modified = datetime(2000, 1, 1)
+    context = f"{labels.get('client', 'Client ' + str(scope.get('client_id')))} / {labels.get('template', 'Template ' + str(scope.get('template_id')))}"
+    summary = workbook.create_sheet('Import summary')
+    summary.sheet_view.showGridLines = False
+    summary_rows = [
+        ('Upload change report', ''),
+        ('Import outcome', 'Check the app result popup; this workbook contains the validated changes.'),
+        ('Client and template', context),
+        ('Source file', labels.get('source', '')),
+        ('Prepared at (Asia/Karachi)', imported_at or ''),
+        ('Report period', f"{scope.get('start') or ''} – {scope.get('end') or ''}".strip(' –')),
+        ('Ledger account', scope.get('account_code') or ''),
+        ('New rows', len(change_detection.get('new', []))),
+        ('Rows with informational field refreshes', len(change_detection.get('informational_updates', []))),
+        ('Revised rows', len(change_detection.get('changed', []))),
+        ('Removed rows', len(change_detection.get('missing', []))),
+    ]
+    for row_index, (label, value) in enumerate(summary_rows, 1):
+        _cell(summary, row_index, 1, label, text=True)
+        _cell(summary, row_index, 2, value, text=isinstance(value, str))
+    summary.column_dimensions['A'].width = 30
+    summary.column_dimensions['B'].width = 72
+    for row in summary.iter_rows():
+        for cell in row:
+            cell.font = Font(name='Calibri', size=11, bold=cell.column == 1, color=INK)
+            cell.alignment = Alignment(vertical='top', wrap_text=True)
+    summary['A1'].font = Font(name='Calibri', size=16, bold=True, color=INK)
+    summary.freeze_panes = 'A2'
+
+    def write_rows(name, records):
+        sheet = workbook.create_sheet(name)
+        headers = ['Change'] + columns
+        sheet.sheet_view.showGridLines = False
+        sheet.append(headers)
+        for cell in sheet[1]:
+            cell.font = Font(name='Calibri', size=11, bold=True, color=INK)
+            cell.fill = PatternFill('solid', fgColor=GREEN)
+            cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        sheet.freeze_panes = 'B2'
+        sheet.auto_filter.ref = f'A1:{get_column_letter(max(1, len(headers)))}{max(1, len(records) + 1)}'
+        sheet.column_dimensions['A'].width = 16
+        for index, column in enumerate(template_columns, 2):
+            name_text = column['column_name']
+            sheet.column_dimensions[get_column_letter(index)].width = (
+                42 if any(word in name_text.casefold() for word in ('detail', 'description', 'name'))
+                else 18 if column.get('data_type') == 'Numeric' else 22
+            )
+        for action, data in records:
+            row = [action] + [data.get(column) for column in columns]
+            sheet.append([None] * len(headers))
+            for index, value in enumerate(row, 1):
+                numeric = index > 1 and template_columns[index - 2].get('data_type') == 'Numeric'
+                cell = _cell(sheet, sheet.max_row, index, value, text=not numeric)
+                if numeric and isinstance(value, (int, float)) and not isinstance(value, bool):
+                    cell.number_format = '#,##0.00########;(#,##0.00########);0'
+            sheet.row_dimensions[sheet.max_row].height = 34
+        sheet.sheet_properties.pageSetUpPr.fitToPage = True
+        sheet.page_setup.orientation = 'landscape'
+        sheet.page_setup.fitToWidth, sheet.page_setup.fitToHeight = 1, 0
+        return sheet
+
+    write_rows('Incoming changes', incoming)
+    write_rows('Previous records', previous)
+    if informational:
+        sheet = workbook.create_sheet('Informational refreshes')
+        sheet.sheet_view.showGridLines = False
+        sheet.append(['Client Data ID', 'Field', 'Previous value', 'Incoming value'])
+        for cell in sheet[1]:
+            cell.font = Font(name='Calibri', size=11, bold=True, color=INK)
+            cell.fill = PatternFill('solid', fgColor=GREEN)
+            cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        sheet.freeze_panes = 'A2'
+        sheet.auto_filter.ref = f'A1:D{len(informational) + 1}'
+        for column, width in zip('ABCD', (18, 24, 34, 34)):
+            sheet.column_dimensions[column].width = width
+        for client_data_id, field, old_value, new_value in informational:
+            sheet.append([client_data_id, field, old_value, new_value])
+    output = BytesIO()
+    workbook.save(output)
+    deterministic = BytesIO()
+    with zipfile.ZipFile(output) as source, zipfile.ZipFile(deterministic, 'w', zipfile.ZIP_DEFLATED) as target:
+        for name in sorted(source.namelist()):
+            content = source.read(name)
+            if name == 'docProps/core.xml':
                 content = re.sub(rb'(<dcterms:(?:created|modified)\b[^>]*>)[^<]*(</dcterms:(?:created|modified)>)',
                                  rb'\g<1>2000-01-01T00:00:00Z\g<2>', content)
             info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
