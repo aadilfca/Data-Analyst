@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import unittest
+from datetime import datetime
 from contextlib import ExitStack
 from unittest.mock import MagicMock, patch
 import pytest
@@ -9,10 +10,59 @@ from fastapi import HTTPException
 
 import database
 from routers import clients
+from routers import data
 from services import storage_cleanup
 
 
 class PermanentDataDeletionTests(unittest.TestCase):
+    def test_upload_history_api_is_scoped_paginated_and_newest_first(self):
+        rows = [{"id": 9, "client_data_id": 44, "action": "deleted",
+                 "changed_at": datetime(2026, 11, 4, 10, 30),
+                 "changed_by": "Analyst", "row_data": {"Voucher": "V-1"}}]
+        with patch.object(data, "execute_query_pg", side_effect=[
+            [{"id": 5}], [{"id": 2, "template_name": "Ledger"}], [{"total": 26}], rows
+        ]) as query, patch.object(data, "get_template_columns_ordered", return_value=[{"column_name": "Voucher"}]):
+            result = data.get_client_data_history(5, 2, 2, 25, "all", None)
+
+        self.assertEqual(result["total"], 26)
+        self.assertEqual(result["total_pages"], 2)
+        self.assertEqual(result["rows"][0]["changed_at"], "2026-11-04T10:30:00")
+        self.assertIn("ORDER BY h.changed_at DESC, h.id DESC", query.call_args_list[-1].args[0])
+        self.assertEqual(query.call_args_list[-1].args[1], (5, 2, 25, 25))
+
+    def test_upload_history_api_rejects_inactive_client(self):
+        with patch.object(data, "execute_query_pg", return_value=[]):
+            with self.assertRaises(HTTPException) as error:
+                data.get_client_data_history(5, 2, 1, 25, "all", None)
+        self.assertEqual(error.exception.status_code, 404)
+
+    def test_upload_history_api_filters_by_action_and_ledger_account(self):
+        with patch.object(data, "execute_query_pg", side_effect=[
+            [{"id": 5}],
+            [{"id": 2, "template_name": "Ledger", "data_purpose": "account_ledger"}],
+            [{"id": 1}],
+            [{"total": 1}],
+            [{"id": 9, "client_data_id": 44, "action": "changed", "row_data": {},
+              "changed_fields": {"Debit": {"old_value": 1, "new_value": 2}}}],
+        ]) as query, patch.object(
+            data, "get_template_columns_ordered", return_value=[{"column_name": "Voucher"}]
+        ):
+            result = data.get_client_data_history(5, 2, 1, 25, "changed", "50-95-0003")
+
+        self.assertEqual(result["rows"][0]["changed_fields"]["Debit"]["new_value"], 2)
+        self.assertIn("h.action = %s", query.call_args_list[-2].args[0])
+        self.assertIn("COALESCE(h.ledger_account_code, uf.ledger_account_code) = %s", query.call_args_list[-1].args[0])
+        self.assertEqual(query.call_args_list[-1].args[1], (5, 2, "changed", "50-95-0003", 25, 0))
+
+    def test_ledger_account_choices_include_history_accounts(self):
+        with patch.object(data, "execute_query_pg", side_effect=[
+            [{"id": 5}], [{"id": 2, "data_purpose": "account_ledger"}],
+            [{"account_code": "CURRENT", "account_name": "Current"}],
+            [{"account_code": "OLD", "account_name": "Old"}],
+        ]):
+            result = data.get_preview_ledger_accounts(5, 2)
+        self.assertEqual({row["account_code"] for row in result["accounts"]}, {"CURRENT", "OLD"})
+
     def test_local_schema_has_scoped_history_table_and_single_lookup_index(self):
         import tempfile
         with tempfile.TemporaryDirectory() as directory, patch.object(
@@ -27,7 +77,32 @@ class PermanentDataDeletionTests(unittest.TestCase):
                 conn.close()
 
         self.assertTrue({"client_id", "template_id", "client_data_id", "action", "changed_at", "row_data"}.issubset(columns))
+        self.assertTrue({"changed_fields", "ledger_account_code", "ledger_account_name"}.issubset(columns))
         self.assertIn("idx_client_data_history_scope_time", indexes)
+
+    def test_local_schema_adds_history_details_to_an_existing_table(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            database, "DB_NAME", os.path.join(directory, "old-history-test.db")
+        ):
+            conn = sqlite3.connect(database.DB_NAME)
+            conn.execute("""CREATE TABLE client_data_history (
+                id INTEGER PRIMARY KEY, client_id INTEGER NOT NULL,
+                template_id INTEGER NOT NULL, client_data_id INTEGER NOT NULL,
+                action TEXT NOT NULL, changed_at TIMESTAMP, changed_by TEXT,
+                source_upload_id INTEGER, replacing_upload_id INTEGER,
+                source_identity TEXT, row_data TEXT NOT NULL
+            )""")
+            conn.commit()
+            conn.close()
+            database.init_db()
+            conn = sqlite3.connect(database.DB_NAME)
+            try:
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(client_data_history)")}
+            finally:
+                conn.close()
+
+        self.assertTrue({"changed_fields", "ledger_account_code", "ledger_account_name"}.issubset(columns))
 
     def test_existing_postgres_schema_creates_history_table_and_index(self):
         class CursorStub:
@@ -88,6 +163,9 @@ class PermanentDataDeletionTests(unittest.TestCase):
 
         statements = "\n".join(cursor.statements)
         self.assertIn("CREATE TABLE IF NOT EXISTS client_data_history", statements)
+        self.assertIn("ADD COLUMN IF NOT EXISTS changed_fields JSONB", statements)
+        self.assertIn("ADD COLUMN IF NOT EXISTS ledger_account_code TEXT", statements)
+        self.assertIn("ADD COLUMN IF NOT EXISTS ledger_account_name TEXT", statements)
         self.assertIn("idx_client_data_history_scope_time", statements)
         conn.commit.assert_called_once_with()
 

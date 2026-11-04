@@ -134,6 +134,41 @@ def open_databank(browser, static_server, *, ledger_accounts=None):
             calls.append({'kind':'accounts','page':0,'search':None,'params':query})
             route.fulfill(json={'accounts':ledger_accounts or []})
             return
+        if path.endswith('/api/data/history'):
+            history_page = int(query.get('page', ['1'])[0])
+            calls.append({'kind':'history','page':history_page,'params':query})
+            action = query.get('action', ['all'])[0]
+            row_action = 'deleted' if action == 'deleted' or (action == 'all' and history_page == 2) else 'changed'
+            route.fulfill(status=200, content_type='application/json', body=json.dumps({
+                'client_id': 1,
+                'template_id': 1,
+                'template_name': 'Invoices',
+                'data_purpose': 'account_ledger' if ledger_accounts is not None else 'standard',
+                'document_key_column': 'Document No',
+                'columns': [
+                    {'column_name':'Document No','data_type':'Text'},
+                    {'column_name':'Date','data_type':'Date'},
+                    {'column_name':'Amount','data_type':'Numeric'},
+                ],
+                'page': history_page,
+                'limit': 25,
+                'total': 1 if action != 'all' else 26,
+                'total_pages': 1 if action != 'all' else 2,
+                'rows': [] if action == 'changed' and history_page > 1 else [{
+                    'id': history_page,
+                    'client_data_id': 100 + history_page,
+                    'action': row_action,
+                    'changed_at': '2026-11-04T10:30:00+00:00',
+                    'changed_by': 'Analyst',
+                    'row_data': {'Document No': '<old-invoice>', 'Date':'2026-01-01', 'Amount': 100},
+                    'changed_fields': {'Amount': {'old_value':100, 'new_value':125}} if row_action == 'changed' else None,
+                }],
+            }))
+            return
+        if path.endswith('/api/data/ledger-accounts'):
+            calls.append({'kind':'history_accounts','params':query})
+            route.fulfill(json={'accounts':ledger_accounts or []})
+            return
         if path.endswith("/api/data/preview"):
             page_number = int(query.get("page", ["1"])[0])
             limit = int(query.get("limit", ["50"])[0])
@@ -157,6 +192,69 @@ def open_databank(browser, static_server, *, ledger_accounts=None):
 
 def preview_calls(calls, page_number, search=None):
     return [call for call in calls if call["page"] == page_number and call["search"] == search]
+
+
+def test_changed_deleted_history_view_is_scoped_and_paginated(browser, static_server):
+    page, calls = open_databank(browser, static_server)
+    try:
+        page.locator('button[title="Changed/Deleted data"]').click()
+        page.wait_for_selector('#historyModal', state='visible')
+        page.wait_for_function("() => document.querySelector('#historyTableBody').innerText.includes('<old-invoice>')")
+
+        assert page.locator('#historyTitle').inner_text() == '📜 Changed/Deleted data — Invoices'
+        assert page.locator('#historyTableBody').inner_text().find('Changed') >= 0
+        assert page.locator('#historyTableBody').inner_text().find('Analyst') >= 0
+        assert page.locator('#historyTableBody').inner_text().find('old-invoice') >= 0
+        assert page.locator('#historyTableBody').inner_text().find('100') >= 0
+        assert page.locator('#historyTableBody').inner_text().find('125') >= 0
+        assert page.locator('#historyTableBody').inner_text().find('2026-01-01') == -1
+        history_calls = [call for call in calls if call['kind'] == 'history']
+        assert history_calls[0]['params']['client_id'] == ['1']
+        assert history_calls[0]['params']['template_id'] == ['1']
+        assert history_calls[0]['params']['page'] == ['1']
+
+        page.locator('#historyActionFilter').select_option('changed')
+        page.wait_for_function("() => document.querySelector('#historyTableBody').innerText.includes('Changed')")
+        assert [call['params']['action'][0] for call in calls if call['kind'] == 'history'][-1] == 'changed'
+        page.locator('#historyActionFilter').select_option('deleted')
+        page.wait_for_function("() => document.querySelector('#historyTableBody').innerText.includes('Deleted')")
+        assert [call['params']['action'][0] for call in calls if call['kind'] == 'history'][-1] == 'deleted'
+        page.locator('#historyActionFilter').select_option('all')
+        page.wait_for_function("() => document.querySelector('#historyTableBody').innerText.includes('Changed')")
+        page.locator('#historyNextBtn').click()
+        page.wait_for_function("() => document.querySelector('#historyTableBody').innerText.includes('Deleted')")
+        assert page.locator('#historyTableBody').inner_text().find('2026-01-01') >= 0
+        assert [call['page'] for call in calls if call['kind'] == 'history'] == [1, 1, 1, 1, 2]
+        page.locator('#closeHistoryBtn').click()
+        assert page.locator('#historyModal').is_hidden()
+    finally:
+        page.close()
+
+
+def test_history_action_remains_available_when_template_has_no_active_rows(browser, static_server):
+    page, _calls = open_databank(browser, static_server)
+    try:
+        actions = page.evaluate("""() => {
+            const cell = buildDatasetActionButtons({template_id: 88, template_name: 'Empty ledger', total_row_count: 0});
+            return Array.from(cell.querySelectorAll('button')).map(button => button.title);
+        }""")
+        assert actions == ['Changed/Deleted data']
+    finally:
+        page.close()
+
+
+def test_ledger_history_selector_filters_by_account(browser, static_server):
+    page, calls = open_databank(browser, static_server, ledger_accounts=ACCOUNTS)
+    try:
+        page.locator('button[title="Changed/Deleted data"]').click()
+        page.wait_for_selector('#historyModal', state='visible')
+        page.wait_for_function("() => !document.querySelector('#historyLedgerControl').hidden")
+        page.locator('#historyLedgerSelect').select_option('A-1')
+        page.wait_for_function("() => performance.getEntriesByType('resource').some(entry => entry.name.includes('ledger_account_code=A-1'))")
+        history_calls = [call for call in calls if call['kind'] == 'history']
+        assert history_calls[-1]['params']['ledger_account_code'] == ['A-1']
+    finally:
+        page.close()
 
 
 def test_databank_loads_each_scope_once_and_reuses_preview_pages(browser, static_server):

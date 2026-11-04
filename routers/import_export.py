@@ -7,6 +7,7 @@ from contextvars import ContextVar
 from decimal import Decimal, InvalidOperation
 import re
 import math
+import database
 from time import perf_counter
 from uuid import uuid4
 from database import (
@@ -3847,16 +3848,38 @@ def _audit_row_params(client_data_id, action, old_data=None, new_data=None, user
 CLIENT_DATA_HISTORY_INSERT_SQL = """
     INSERT INTO client_data_history
         (client_id, template_id, client_data_id, action, changed_by,
-         source_upload_id, replacing_upload_id, source_identity, row_data)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+         source_upload_id, replacing_upload_id, source_identity, row_data,
+         changed_fields, ledger_account_code, ledger_account_name)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 """
 
 
 def _history_row_params(request, item, action, row_data=None):
-    """Retain a complete prior row without tying it to purgeable active rows."""
+    """Retain prior rows and exact changed fields without tying them to active rows."""
     old_data = row_data if row_data is not None else item.get("old_row_data") or {}
     if isinstance(old_data, str):
         old_data = json.loads(old_data)
+    changed_values = None
+    if action == "changed":
+        new_data = item.get("new_row_data") or {}
+        if isinstance(new_data, str):
+            new_data = json.loads(new_data)
+        raw_diffs = {
+            change["field"]: change
+            for change in database.diff_row_data(old_data, new_data)
+        }
+        selected_fields = item.get("changed_fields")
+        if selected_fields is None:
+            selected_fields = sorted(raw_diffs)
+        changed_values = {
+            field: {
+                "old_value": raw_diffs[field]["old_value"],
+                "new_value": raw_diffs[field]["new_value"],
+            }
+            for field in selected_fields
+            if field in raw_diffs
+        }
+    ledger = _ledger_context.get() or {}
     return (
         request.client_id,
         request.template_id,
@@ -3867,6 +3890,10 @@ def _history_row_params(request, item, action, row_data=None):
         request.file_id,
         item.get("source_identity"),
         Json(old_data, dumps=lambda value: json.dumps(value, default=str)),
+        Json(changed_values, dumps=lambda value: json.dumps(value, default=str))
+        if changed_values is not None else None,
+        ledger.get("account_code"),
+        ledger.get("account_name"),
     )
 
 
@@ -3876,7 +3903,28 @@ def _history_storage_estimate(change_detection):
         for key in ("changed", "missing")
         for item in change_detection.get(key, [])
     ]
-    return sum(len(json.dumps(row, default=str).encode("utf-8")) + 256 for row in previous_rows)
+    changed_details = []
+    for item in change_detection.get("changed", []):
+        old_data = item.get("old_row_data") or {}
+        new_data = item.get("new_row_data") or {}
+        raw_diffs = {
+            change["field"]: change
+            for change in database.diff_row_data(old_data, new_data)
+        }
+        fields = item.get("changed_fields")
+        if fields is None:
+            fields = sorted(raw_diffs)
+        changed_details.append({
+            field: {
+                "old_value": raw_diffs[field]["old_value"],
+                "new_value": raw_diffs[field]["new_value"],
+            }
+            for field in fields if field in raw_diffs
+        })
+    return (
+        sum(len(json.dumps(row, default=str).encode("utf-8")) + 256 for row in previous_rows)
+        + sum(len(json.dumps(fields, default=str).encode("utf-8")) + 64 for fields in changed_details)
+    )
 
 
 # ---------- PLAN-BASED IMPORT ----------
@@ -4238,6 +4286,8 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
                     "client_data_id": item["client_data_id"],
                     "source_upload_id": locked.get("upload_id"),
                     "source_identity": locked.get("source_identity"),
+                    "new_row_data": item.get("new_row_data"),
+                    "changed_fields": item.get("changed_fields"),
                 }
                 history_params.append(_history_row_params(
                     request, history_item, action, row_data=locked.get("row_data")

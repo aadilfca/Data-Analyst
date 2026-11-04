@@ -16,7 +16,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 - routers/clients.py + static/clients.* → firm-level client management; admin-only except the paginated `GET /api/clients`. See CHANGELOG_ARCHIVE.md.
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, database size and selected-client integrity status. See CHANGELOG_ARCHIVE.md.
-- routers/data.py, routers/data_integrity.py + static/databank.*, static/data_integrity.* → Data Bank previews and client-scoped module sizes/duplicate checks. See CHANGELOG_ARCHIVE.md.
+- routers/data.py, routers/data_integrity.py + static/databank.*, static/data_integrity.* → Data Bank previews, changed/deleted upload history, and client-scoped module sizes/duplicate checks. See CHANGELOG_ARCHIVE.md.
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
 - routers/import_export.py + static/upload.* → Validated uploads, clear row-level comparisons, prior-row history, Drive reports, ledger coverage and shared backup controls. See CHANGELOG_ARCHIVE.md.
 - routers/settings.py + routers/google_drive_auth.py + static/settings.* → App settings, administrator upload-backup controls, firm-wide holidays and Drive reconnection. See CHANGELOG_ARCHIVE.md.
@@ -259,6 +259,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-04: Data Bank shows upload history in a filtered preview, with exact changed fields and saved ledger-account scope. See CHANGELOG_ARCHIVE.md.
 - 2026-11-04: Existing PostgreSQL startup now adds the saved-mapping comparison column safely. See CHANGELOG_ARCHIVE.md, Render saved-mapping column migration.
 - 2026-11-04: Upload mappings now exclude selected fields from change detection while refreshing their values safely on confirmed import. See CHANGELOG_ARCHIVE.md.
 - 2026-11-03: Upload reviews classify safe corrections as changed, explain unchanged rows, and verify applied counts against the plan. See CHANGELOG_ARCHIVE.md.

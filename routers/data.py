@@ -602,7 +602,117 @@ def get_preview_ledger_accounts(client_id: int, template_id: int):
               AND ledger_account_code IS NOT NULL AND ledger_account_code <> ''
         ) accounts WHERE latest = 1 ORDER BY LOWER(account_name), account_code
         """, (client_id, template_id))
+    historical_accounts = execute_query_pg("""
+        SELECT DISTINCT
+               COALESCE(NULLIF(h.ledger_account_name, ''), NULLIF(u.ledger_account_name, ''),
+                        COALESCE(h.ledger_account_code, u.ledger_account_code)) AS account_name,
+               COALESCE(h.ledger_account_code, u.ledger_account_code) AS account_code
+        FROM client_data_history h
+        LEFT JOIN uploaded_files u ON u.id = h.source_upload_id
+        WHERE h.client_id = %s AND h.template_id = %s
+          AND COALESCE(h.ledger_account_code, u.ledger_account_code) IS NOT NULL
+          AND COALESCE(h.ledger_account_code, u.ledger_account_code) <> ''
+        ORDER BY account_name, account_code
+        """, (client_id, template_id))
+    known_codes = {row["account_code"] for row in accounts}
+    accounts.extend(row for row in historical_accounts if row["account_code"] not in known_codes)
+    accounts.sort(key=lambda row: ((row.get("account_name") or "").casefold(), row["account_code"]))
     return {'accounts': accounts}
+
+
+@router.get("/api/data/history")
+def get_client_data_history(
+    client_id: int = Query(..., description="Client ID"),
+    template_id: int = Query(..., description="Template ID"),
+    page: int = Query(1, ge=1, description="Page number"),
+    limit: int = Query(25, ge=1, le=100, description="Rows per page (max 100)"),
+    action: str = Query("all", description="all, changed, or deleted"),
+    ledger_account_code: Optional[str] = Query(None, description="Optional ledger account code"),
+):
+    """Return upload history and exact changed fields for one client/template scope."""
+    if not execute_query_pg(
+        "SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,)
+    ):
+        raise HTTPException(404, "Client not found or inactive")
+    template = execute_query_pg(
+        "SELECT id, template_name, data_purpose FROM templates WHERE id = %s AND is_active = TRUE",
+        (template_id,),
+    )
+    if not template:
+        raise HTTPException(404, "Template not found or inactive")
+
+    action = (action or "all").strip().lower()
+    if action not in {"all", "changed", "deleted"}:
+        raise HTTPException(400, "Choose All, Changed, or Deleted history.")
+    if ledger_account_code is not None:
+        ledger_account_code = ledger_account_code.strip()
+        if template[0].get("data_purpose") != "account_ledger" or not ledger_account_code or len(ledger_account_code) > 120:
+            raise HTTPException(400, "Choose a valid account for an Account Ledger template.")
+        account_match = execute_query_pg("""
+            SELECT 1 FROM uploaded_files
+            WHERE client_id = %s AND template_id = %s AND ledger_account_code = %s
+            UNION ALL
+            SELECT 1 FROM client_data_history
+            WHERE client_id = %s AND template_id = %s AND ledger_account_code = %s
+            LIMIT 1
+            """, (client_id, template_id, ledger_account_code,
+                  client_id, template_id, ledger_account_code))
+        if not account_match:
+            raise HTTPException(400, "This ledger account has no upload or history for the selected template.")
+
+    where = ["h.client_id = %s", "h.template_id = %s"]
+    params = [client_id, template_id]
+    if action != "all":
+        where.append("h.action = %s")
+        params.append(action)
+    if ledger_account_code is not None:
+        where.append("COALESCE(h.ledger_account_code, uf.ledger_account_code) = %s")
+        params.append(ledger_account_code)
+    where_sql = " AND ".join(where)
+    join_upload = "LEFT JOIN uploaded_files uf ON uf.id = h.source_upload_id"
+    count_rows = execute_query_pg(
+        f"SELECT COUNT(*) AS total FROM client_data_history h {join_upload} WHERE {where_sql}",
+        params,
+    )
+    total = int(count_rows[0]["total"]) if count_rows else 0
+    offset = (page - 1) * limit
+    rows = execute_query_pg(
+        f"""SELECT h.id, h.client_data_id, h.action, h.changed_at, h.changed_by,
+                  h.source_upload_id, h.replacing_upload_id, h.source_identity,
+                  h.row_data, h.changed_fields,
+                  COALESCE(h.ledger_account_code, uf.ledger_account_code) AS ledger_account_code,
+                  COALESCE(NULLIF(h.ledger_account_name, ''), NULLIF(uf.ledger_account_name, '')) AS ledger_account_name
+           FROM client_data_history h {join_upload}
+           WHERE {where_sql}
+           ORDER BY h.changed_at DESC, h.id DESC
+           LIMIT %s OFFSET %s""",
+        (*params, limit, offset),
+    ) if total else []
+    for row in rows:
+        for json_field in ("row_data", "changed_fields"):
+            value = row.get(json_field)
+            if isinstance(value, str):
+                try:
+                    row[json_field] = json.loads(value)
+                except (TypeError, ValueError):
+                    row[json_field] = None if json_field == "changed_fields" else {}
+        changed_at = row.get("changed_at")
+        if isinstance(changed_at, datetime):
+            row["changed_at"] = changed_at.isoformat()
+    columns = get_template_columns_ordered(template_id)
+    return {
+        "client_id": client_id,
+        "template_id": template_id,
+        "template_name": template[0]["template_name"],
+        "page": page,
+        "limit": limit,
+        "total": total,
+        "total_pages": (total + limit - 1) // limit,
+        "data_purpose": template[0].get("data_purpose") or "standard",
+        "columns": columns,
+        "document_key_column": (columns or [{}])[0].get("column_name"),
+        "rows": rows,
+    }
 
 
 @router.get("/api/data/preview")

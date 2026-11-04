@@ -134,6 +134,26 @@ let overdueUploadsData = [];
 
 // Preview modal elements
 const previewModal = document.getElementById('previewModal');
+const historyModal = document.getElementById('historyModal');
+const closeHistoryBtn = document.getElementById('closeHistoryBtn');
+const historyTitle = document.getElementById('historyTitle');
+const historyStatus = document.getElementById('historyStatus');
+const historyActionFilter = document.getElementById('historyActionFilter');
+const historyLedgerControl = document.getElementById('historyLedgerControl');
+const historyLedgerSelect = document.getElementById('historyLedgerSelect');
+const historyTableHead = document.getElementById('historyTableHead');
+const historyTableBody = document.getElementById('historyTableBody');
+const historyPageInfo = document.getElementById('historyPageInfo');
+const historyPrevBtn = document.getElementById('historyPrevBtn');
+const historyNextBtn = document.getElementById('historyNextBtn');
+let historyPage = 1;
+let historyTotalPages = 1;
+let historyClientId = null;
+let historyTemplateId = null;
+let historyTemplateName = '';
+let historyDocumentKeyColumn = null;
+let historyColumns = [];
+let historyRequestSequence = 0;
 const previewTitle = document.getElementById('previewTitle');
 const previewTableHead = document.getElementById('previewTableHead');
 const previewTableBody = document.getElementById('previewTableBody');
@@ -1085,10 +1105,22 @@ function buildDatasetActionButtons(item) {
             deleteTemplateData(item.template_id, item.template_name, item.total_row_count, deleteBtn);
         });
         tdActions.appendChild(deleteBtn);
-    } else {
-        tdActions.textContent = '—';
-        tdActions.style.color = '#94a3b8';
     }
+
+    // History remains available when a complete upload has removed every active
+    // row from this template; that is when users may need the deletion record most.
+    const historyBtn = document.createElement('button');
+    historyBtn.className = 'action-btn preview';
+    historyBtn.textContent = '🕘';
+    historyBtn.title = 'Changed/Deleted data';
+    historyBtn.setAttribute('aria-label', `Changed/Deleted data for ${item.template_name}`);
+    historyBtn.setAttribute('data-tooltip', 'Review transactions changed or removed by uploads');
+    historyBtn.style.marginLeft = '6px';
+    historyBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        openUploadHistory(item);
+    });
+    tdActions.appendChild(historyBtn);
 
     return tdActions;
 }
@@ -1389,6 +1421,8 @@ async function loadPreviewLedgerAccounts(opening, clientId, templateId, preferre
 }
 
 async function openPreview(templateId, templateName, mode = 'raw') {
+    historyRequestSequence++;
+    historyModal.style.display = 'none';
     // The shared range (already validated by whichever caller reached this
     // point — confirmSharedRangePopover()) is read fresh here as a defensive
     // fallback, not a copy — see getDateRangeFromFilter().
@@ -1464,6 +1498,188 @@ async function openPreview(templateId, templateName, mode = 'raw') {
 
     // Fetch data
     fetchPreviewData();
+}
+
+function formatHistoryTimestamp(value) {
+    if (!value) return 'Time unavailable';
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime())
+        ? String(value)
+        : parsed.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function appendHistoryChangeValue(cell, change) {
+    const oldValue = document.createElement('span');
+    oldValue.className = 'history-old-value';
+    oldValue.textContent = formatCellValue(change.old_value);
+    const arrow = document.createTextNode(' → ');
+    const newValue = document.createElement('span');
+    newValue.className = 'history-new-value';
+    newValue.textContent = formatCellValue(change.new_value);
+    cell.append(oldValue, arrow, newValue);
+}
+
+function renderUploadHistory(data) {
+    historyTableHead.replaceChildren();
+    historyTableBody.replaceChildren();
+    const header = document.createElement('tr');
+    ['Action', 'Changed at', 'Changed by', ...historyColumns.map(column => column.column_name)].forEach((label) => {
+        const th = document.createElement('th');
+        th.scope = 'col';
+        th.textContent = label;
+        header.appendChild(th);
+    });
+    historyTableHead.appendChild(header);
+
+    const rows = data.rows || [];
+    if (!rows.length) {
+        historyStatus.textContent = 'No transactions match these history filters.';
+        const empty = document.createElement('tr');
+        const cell = document.createElement('td');
+        cell.className = 'history-empty';
+        cell.colSpan = historyColumns.length + 3;
+        cell.textContent = 'No changed or deleted transactions found.';
+        empty.appendChild(cell);
+        historyTableBody.appendChild(empty);
+    } else {
+        historyStatus.textContent = `${data.total} record${data.total === 1 ? '' : 's'} · newest first`;
+        rows.forEach((entry) => {
+            const rowData = entry.row_data || {};
+            const changes = entry.changed_fields || null;
+            const tr = document.createElement('tr');
+            const isDeleted = entry.action === 'deleted';
+            tr.className = isDeleted ? 'history-row-deleted' : 'history-row-changed';
+            const actionCell = document.createElement('td');
+            actionCell.textContent = isDeleted ? 'Deleted' : 'Changed';
+            actionCell.style.fontWeight = '600';
+            actionCell.style.color = isDeleted ? '#b91c1c' : '#1d4ed8';
+            tr.appendChild(actionCell);
+            const changedAtCell = document.createElement('td');
+            changedAtCell.textContent = formatHistoryTimestamp(entry.changed_at);
+            changedAtCell.style.whiteSpace = 'nowrap';
+            tr.appendChild(changedAtCell);
+            const changedByCell = document.createElement('td');
+            changedByCell.textContent = entry.changed_by || 'System';
+            tr.appendChild(changedByCell);
+
+            historyColumns.forEach((column) => {
+                const name = column.column_name;
+                const cell = document.createElement('td');
+                const change = changes && changes[name];
+                if (isDeleted) {
+                    cell.textContent = formatCellValue(rowData[name]);
+                } else if (change) {
+                    appendHistoryChangeValue(cell, change);
+                } else if (name === historyDocumentKeyColumn) {
+                    // Keep the document/voucher identifier visible as context;
+                    // other unchanged fields stay blank to focus on the effect.
+                    cell.textContent = formatCellValue(rowData[name]);
+                }
+                tr.appendChild(cell);
+            });
+            historyTableBody.appendChild(tr);
+
+            if (!isDeleted && (!changes || Object.keys(changes).length === 0)) {
+                const note = document.createElement('tr');
+                note.className = 'history-row-note';
+                const noteCell = document.createElement('td');
+                noteCell.colSpan = historyColumns.length + 3;
+                noteCell.textContent = changes === null
+                    ? 'Field-by-field details were not saved for this earlier change.'
+                    : 'No specific field values were available for this change.';
+                note.appendChild(noteCell);
+                historyTableBody.appendChild(note);
+            }
+        });
+    }
+    historyPage = data.page || 1;
+    historyTotalPages = data.total_pages || 1;
+    historyPageInfo.textContent = `Page ${historyPage} of ${historyTotalPages}`;
+    historyPrevBtn.disabled = historyPage <= 1;
+    historyNextBtn.disabled = historyPage >= historyTotalPages;
+}
+
+async function loadHistoryLedgerAccounts(sequence) {
+    const params = new URLSearchParams({
+        client_id: String(historyClientId),
+        template_id: String(historyTemplateId),
+    });
+    const response = await fetch(`${API_BASE}/api/data/ledger-accounts?${params}`);
+    if (!response.ok) throw new Error('Could not load ledger accounts');
+    const data = await response.json();
+    if (sequence !== historyRequestSequence) return;
+    historyLedgerSelect.replaceChildren();
+    const all = document.createElement('option');
+    all.value = '';
+    all.textContent = 'All ledger accounts';
+    historyLedgerSelect.appendChild(all);
+    (data.accounts || []).forEach((account) => {
+        const option = document.createElement('option');
+        option.value = account.account_code;
+        option.textContent = `${account.account_name} (${account.account_code})`;
+        historyLedgerSelect.appendChild(option);
+    });
+}
+
+async function openUploadHistory(item) {
+    const clientId = getSelectedClientId();
+    if (!clientId || !item.template_id) return;
+    historyRequestSequence++;
+    historyClientId = Number(clientId);
+    historyTemplateId = Number(item.template_id);
+    historyTemplateName = item.template_name || `Template ${item.template_id}`;
+    historyColumns = [];
+    historyDocumentKeyColumn = null;
+    historyPage = 1;
+    historyTotalPages = 1;
+    historyActionFilter.value = 'all';
+    historyLedgerSelect.replaceChildren();
+    historyLedgerControl.hidden = true;
+    historyTableHead.replaceChildren();
+    historyTableBody.replaceChildren();
+    historyTitle.textContent = `📜 Changed/Deleted data — ${historyTemplateName}`;
+    historyStatus.textContent = 'Loading history…';
+    historyModal.style.display = 'flex';
+    await fetchUploadHistory(1);
+}
+
+async function fetchUploadHistory(page = 1) {
+    if (!historyClientId || !historyTemplateId) return;
+    const sequence = ++historyRequestSequence;
+    historyStatus.textContent = 'Loading history…';
+    historyTableBody.replaceChildren();
+    const params = new URLSearchParams({
+        client_id: String(historyClientId),
+        template_id: String(historyTemplateId),
+        page: String(page),
+        limit: '50',
+        action: historyActionFilter.value || 'all',
+    });
+    if (historyLedgerSelect.value) params.set('ledger_account_code', historyLedgerSelect.value);
+    try {
+        const response = await fetch(`${API_BASE}/api/data/history?${params}`);
+        if (!response.ok) throw new Error('History request failed');
+        const data = await response.json();
+        if (sequence !== historyRequestSequence
+            || Number(getSelectedClientId()) !== historyClientId
+            || Number(data.template_id) !== historyTemplateId) return;
+        historyTemplateName = data.template_name || historyTemplateName;
+        historyColumns = data.columns || [];
+        historyDocumentKeyColumn = data.document_key_column || null;
+        historyTitle.textContent = `📜 Changed/Deleted data — ${historyTemplateName}`;
+        historyLedgerControl.hidden = data.data_purpose !== 'account_ledger';
+        renderUploadHistory(data);
+        if (data.data_purpose === 'account_ledger' && historyLedgerSelect.options.length <= 1) {
+            try {
+                await loadHistoryLedgerAccounts(sequence);
+            } catch (error) {
+                historyStatus.textContent += ' Ledger account choices could not be loaded.';
+            }
+        }
+    } catch (error) {
+        if (sequence !== historyRequestSequence) return;
+        historyStatus.textContent = 'Could not load history. Please close this window and try again.';
+    }
 }
 
 function openClassificationPreview(templateId, templateName) {
@@ -2143,6 +2359,24 @@ closePreviewBtn.addEventListener('click', () => {
     hideRowHistoryPopover();
     closeSharedRangePopover();
 });
+closeHistoryBtn.addEventListener('click', () => {
+    historyRequestSequence++;
+    historyModal.style.display = 'none';
+});
+historyModal.addEventListener('click', (event) => {
+    if (event.target === historyModal) {
+        historyRequestSequence++;
+        historyModal.style.display = 'none';
+    }
+});
+historyActionFilter.addEventListener('change', () => fetchUploadHistory(1));
+historyLedgerSelect.addEventListener('change', () => fetchUploadHistory(1));
+historyPrevBtn.addEventListener('click', () => {
+    if (historyPage > 1) fetchUploadHistory(historyPage - 1);
+});
+historyNextBtn.addEventListener('click', () => {
+    if (historyPage < historyTotalPages) fetchUploadHistory(historyPage + 1);
+});
 previewModal.addEventListener('click', (e) => {
     if (e.target === previewModal) {
         previewModal.style.display = 'none';
@@ -2344,6 +2578,11 @@ document.addEventListener('click', (e) => {
 // ESC key closes preview (or just the shared range modal / template
 // calendar modal, if either is open)
 document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && historyModal.style.display === 'flex') {
+        historyRequestSequence++;
+        historyModal.style.display = 'none';
+        return;
+    }
     if (e.key === 'Escape' && sharedRangePopover.style.display === 'flex') {
         closeSharedRangePopover();
         return;
@@ -2372,6 +2611,8 @@ window.onClientChange = function(clientId) {
     finishPreviewLedgerLoading(); closePreviewLedgerOptions();
     clientChangeTimeout = setTimeout(() => {
         if (clientId) {
+            historyRequestSequence++;
+            historyModal.style.display = 'none';
             invalidateDataBankCaches();
             // Redesign Phase 6: reads the popover's own inputs, now the
             // persisted date-range state (see getDateRangeFromFilter()).

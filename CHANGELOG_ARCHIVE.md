@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Changed/Deleted Data Bank history — Phase 3 redesign — 2026-11-04
+
+The Data Bank history action now sits beside each template's existing actions, including templates with no active rows. Its preview-style table filters All, Changed or Deleted and adds a ledger-account selector for Account Ledger templates. Deleted entries show the saved prior row; Changed entries show only changed fields as underlined old/red and new/green values, keeping the document ID for context. The table includes action, local time and operator. `client_data_history` now records exact changed field values and ledger account code/name in the import transaction. Existing local and PostgreSQL schemas add the nullable fields safely; older changed entries without saved field detail are clearly identified. The existing per-row Revision History popover is unchanged.
+
+Verification: **116 focused history, import-lifecycle and Playwright Data Bank tests pass**. JavaScript syntax and `git diff --check` pass. Local and Render acceptance remain pending; no live database migration was run.
+
 ## Render saved-mapping column migration — 2026-11-04
 
 The existing-PostgreSQL startup path now adds `compare_for_changes` to `saved_column_mappings`, matching fresh-schema setup. Render’s existing database can gain the missing column when the updated app starts.

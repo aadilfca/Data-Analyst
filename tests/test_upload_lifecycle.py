@@ -306,6 +306,8 @@ class Store:
                     'action': value[3], 'source_upload_id': value[5],
                     'replacing_upload_id': value[6], 'source_identity': value[7],
                     'row_data': deepcopy(value[8].adapted),
+                    'changed_fields': deepcopy(value[9].adapted) if value[9] else None,
+                    'ledger_account_code': value[10], 'ledger_account_name': value[11],
                 })
         elif 'UPDATE client_data SET source_row_number' in sql:
             for number, source, key, client, template in values:
@@ -550,6 +552,9 @@ def test_changed_voucher_archives_unchanged_sibling_lines_and_keeps_their_ids(pi
     assert len(state['store'].history) == 1
     assert state['store'].history[0]['action'] == 'changed'
     assert state['store'].history[0]['row_data']['Voucher Detail'] == 'Old detail'
+    assert state['store'].history[0]['changed_fields']['Voucher Detail'] == {
+        'old_value': 'Old detail', 'new_value': 'Revised detail'
+    }
     assert validation['change_detection']['changed_voucher_count'] == 1
     with zipfile.ZipFile(next(iter(state['store'].jobs.values()))['archive_path']) as archive:
         assert len(json.loads(archive.read('rows.json'))) == 3
@@ -567,6 +572,9 @@ def test_changed_and_removed_rows_are_saved_to_independent_history(pipeline):
     assert result['updated_count'] == 1 and result['deleted_count'] == 0
     assert [(item['action'], item['client_data_id'], item['row_data']['Voucher Detail'])
             for item in state['store'].history] == [('changed', 1, 'Old detail')]
+    assert state['store'].history[0]['changed_fields']['Voucher Detail'] == {
+        'old_value': 'Old detail', 'new_value': 'Revised detail'
+    }
 
     state['store'] = Store([row('REMOVE', description='Old deleted')])
     state['incoming'] = []
@@ -574,9 +582,33 @@ def test_changed_and_removed_rows_are_saved_to_independent_history(pipeline):
     assert result['deleted_count'] == 1
     assert [(item['action'], item['client_data_id'], item['row_data']['Voucher ID'])
             for item in state['store'].history] == [('deleted', 1, 'REMOVE')]
+    assert state['store'].history[0]['changed_fields'] is None
     assert all(item['client_id'] == 5 and item['template_id'] == 1
                and item['source_upload_id'] == 1
                and item['replacing_upload_id'] == 99 for item in state['store'].history)
+
+
+def test_history_snapshots_retain_ledger_account_context():
+    from types import SimpleNamespace
+    token = upload._ledger_context.set({
+        'account_code': '50-95-0003', 'account_name': 'Electricity Bills'
+    })
+    try:
+        params = upload._history_row_params(
+            SimpleNamespace(client_id=5, template_id=2, file_id=99),
+            {
+                'client_data_id': 40,
+                'old_row_data': {'Voucher ID': 'V1', 'Debit': 10},
+                'new_row_data': {'Voucher ID': 'V1', 'Debit': 12},
+                'changed_fields': ['Debit'],
+            },
+            'changed',
+        )
+    finally:
+        upload._ledger_context.reset(token)
+
+    assert params[9].adapted == {'Debit': {'old_value': 10, 'new_value': 12}}
+    assert params[10:12] == ('50-95-0003', 'Electricity Bills')
 
 
 def test_history_write_rolls_back_with_failed_import(pipeline, monkeypatch):

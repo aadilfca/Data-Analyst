@@ -685,6 +685,86 @@
             background: #cbd5e1;
         }
 
+        #historyModal .modal-content {
+            background: #fff;
+            border-radius: 16px;
+            padding: 30px;
+            width: min(1200px, 96vw);
+            max-height: 90vh;
+            overflow: auto;
+            box-shadow: 0 20px 50px rgba(15, 23, 42, .25);
+        }
+
+        #historyModal .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 12px;
+        }
+
+        #historyModal .history-controls {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 10px;
+            margin: 12px 0;
+            padding: 10px 0;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        #historyModal .history-controls label {
+            color: #475569;
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        #historyModal .history-controls select {
+            min-width: 145px;
+            padding: 7px 10px;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            background: #fff;
+            color: #1e293b;
+        }
+
+        #historyModal .history-table-wrap {
+            overflow: auto;
+            max-height: 58vh;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+        }
+
+        #historyModal table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        #historyModal th, #historyModal td {
+            text-align: left;
+            vertical-align: top;
+            padding: 7px 10px;
+            border-top: 1px solid #e2e8f0;
+            overflow-wrap: anywhere;
+        }
+
+        #historyModal thead th {
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            background: #f8fafc;
+            color: #334155;
+            white-space: nowrap;
+        }
+
+        #historyModal .history-row-changed { background: #fff; }
+        #historyModal .history-row-deleted { background: #fffafa; }
+        #historyModal .history-old-value { color: #b91c1c; text-decoration: underline; text-decoration-color: #fca5a5; }
+        #historyModal .history-new-value { color: #15803d; font-weight: 600; }
+        #historyModal .history-row-note td { color: #64748b; font-style: italic; background: #f8fafc; }
+        #historyModal .history-empty { padding: 30px; text-align: center; color: #64748b; }
+
         .btn-upload-more {
             padding: 8px 20px;
             background: #22c55e;
@@ -1134,6 +1214,41 @@
                         style="padding:4px 16px; border:1px solid #d0d5dd; border-radius:4px; background:white; cursor:pointer;">&raquo;</button>
                 </div>
                 <div id="previewCountInfo" style="font-size:13px; color:#64748b;">0 rows</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Complete previous-row snapshots from upload change/deletion history. -->
+    <div id="historyModal" class="preview-modal"
+        style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15,23,42,.58); z-index:1100; justify-content:center; align-items:center;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="historyTitle">📜 Changed/Deleted data</h2>
+                <button type="button" class="modal-close" id="closeHistoryBtn" aria-label="Close history">&times;</button>
+            </div>
+            <div class="history-controls">
+                <label for="historyActionFilter">Show</label>
+                <select id="historyActionFilter" aria-label="Filter changed or deleted transactions">
+                    <option value="all" selected>All</option>
+                    <option value="deleted">Deleted</option>
+                    <option value="changed">Changed</option>
+                </select>
+                <div id="historyLedgerControl" style="display:flex; align-items:center; gap:8px;" hidden>
+                    <label for="historyLedgerSelect">Ledger account</label>
+                    <select id="historyLedgerSelect" aria-label="Filter ledger account"></select>
+                </div>
+            </div>
+            <div id="historyStatus" role="status" style="color:#64748b; margin:8px 0;"></div>
+            <div class="history-table-wrap">
+                <table>
+                    <thead id="historyTableHead"></thead>
+                    <tbody id="historyTableBody"></tbody>
+                </table>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-top:14px;">
+                <button type="button" id="historyPrevBtn" class="btn-secondary">Previous</button>
+                <span id="historyPageInfo" aria-live="polite">Page 1 of 1</span>
+                <button type="button" id="historyNextBtn" class="btn-secondary">Next</button>
             </div>
         </div>
     </div>

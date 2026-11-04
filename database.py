@@ -1504,9 +1504,20 @@ def init_db():
                 source_upload_id INTEGER,
                 replacing_upload_id INTEGER,
                 source_identity TEXT,
-                row_data TEXT NOT NULL
+                row_data TEXT NOT NULL,
+                changed_fields TEXT,
+                ledger_account_code TEXT,
+                ledger_account_name TEXT
             )
         ''')
+        history_columns = {row[1] for row in conn.execute("PRAGMA table_info(client_data_history)").fetchall()}
+        for column, sql_type in (
+            ("changed_fields", "TEXT"),
+            ("ledger_account_code", "TEXT"),
+            ("ledger_account_name", "TEXT"),
+        ):
+            if column not in history_columns:
+                conn.execute(f"ALTER TABLE client_data_history ADD COLUMN {column} {sql_type}")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_client_data_history_scope_time ON client_data_history (client_id, template_id, changed_at)")
         conn.execute('''
             CREATE TABLE IF NOT EXISTS storage_cleanup_runs (
@@ -4636,9 +4647,15 @@ def _ensure_postgres_client_data_history(conn):
                 source_upload_id INTEGER,
                 replacing_upload_id INTEGER,
                 source_identity TEXT,
-                row_data JSONB NOT NULL
+                row_data JSONB NOT NULL,
+                changed_fields JSONB,
+                ledger_account_code TEXT,
+                ledger_account_name TEXT
             )
         ''')
+        cur.execute("ALTER TABLE client_data_history ADD COLUMN IF NOT EXISTS changed_fields JSONB")
+        cur.execute("ALTER TABLE client_data_history ADD COLUMN IF NOT EXISTS ledger_account_code TEXT")
+        cur.execute("ALTER TABLE client_data_history ADD COLUMN IF NOT EXISTS ledger_account_name TEXT")
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_client_data_history_scope_time "
             "ON client_data_history (client_id, template_id, changed_at)"
@@ -5991,7 +6008,10 @@ def init_db_postgres(conn):
             source_upload_id INTEGER,
             replacing_upload_id INTEGER,
             source_identity TEXT,
-            row_data JSONB NOT NULL
+            row_data JSONB NOT NULL,
+            changed_fields JSONB,
+            ledger_account_code TEXT,
+            ledger_account_name TEXT
         )
     ''', "client_data_history")
     run("CREATE INDEX IF NOT EXISTS idx_client_data_history_scope_time ON client_data_history (client_id, template_id, changed_at)")
