@@ -15,19 +15,19 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, statements, category-role notes with unallocated rows, profit links, reconciliations, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
 
 - routers/clients.py + static/clients.* → firm-level client management; admin-only except the paginated `GET /api/clients`. See CHANGELOG_ARCHIVE.md.
-- routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, database size and selected-client integrity status. See CHANGELOG_ARCHIVE.md.
+- routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, allocated database size and selected-client integrity status. See CHANGELOG_ARCHIVE.md.
 - routers/data.py, routers/data_integrity.py + static/databank.*, static/data_integrity.* → Data Bank previews, upload history, module inventory, duplicate checks and database safeguards. See CHANGELOG_ARCHIVE.md.
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
 - routers/import_export.py + static/upload.* → Validated uploads, clear row-level comparisons, prior-row history, Drive reports, ledger coverage and shared backup controls. See CHANGELOG_ARCHIVE.md.
 - routers/settings.py + routers/google_drive_auth.py + static/settings.* → App settings, administrator upload-backup controls, firm-wide holidays and Drive reconnection. See CHANGELOG_ARCHIVE.md.
 - routers/templates.py + static/templates.*, static/columns.* → Master columns, transactional ledger setup, role configuration, mapping/reordering, rate rules and backup/restore. See CHANGELOG_ARCHIVE.md.
 - static/client_settings.html, static/client_settings.js -> retired direct-bookmark information page; all Verification account routing is configured centrally in Account Control Centre. See CHANGELOG_ARCHIVE.md.
-- database.py, main.py → Schemas, source and upload-history metadata, guarded pools, diagnostics, routing, Rulebook snapshots, export lifecycle, and Trial Balance provenance, mappings and adjustments. See CHANGELOG_ARCHIVE.md.
+- database.py, main.py → Schemas, pooled connections, read snapshots, guarded maintenance, upload/Trial Balance metadata, routing and Rulebook snapshots. See CHANGELOG_ARCHIVE.md.
 - backfill_extract_amount.py → SQLite backfill, PostgreSQL assessment, portable repair plans and isolated local repair rehearsals; live apply remains disabled. See CHANGELOG_ARCHIVE.md.
 - database.py (users/sessions) → authenticated users and session records for Login → Client Cards → Dashboard; bcrypt, session-stored selected client, seeded placeholder admin. See CHANGELOG_ARCHIVE.md.
 - routers/auth.py → login/logout, current-session lookup, client selection, `get_current_user()`/`require_admin()` guards; timezone-aware session expiry. See CHANGELOG_ARCHIVE.md.
 - routers/users.py → Admin user management (list/create/edit/deactivate/reactivate/reset password); every endpoint `require_admin`, mutations SQLite-audited. See CHANGELOG_ARCHIVE.md.
-- routers/storage_cleanup.py + services/storage_cleanup.py + static/storage_cleanup.* → Protected deletion, replacement cleanup across legacy schemas, storage previews and PostgreSQL maintenance. See CHANGELOG_ARCHIVE.md.
+- routers/storage_cleanup.py + services/storage_cleanup.py + static/storage_cleanup.* → Guarded deletion, exact-scope finalization, allocation diagnostics and separately approved PostgreSQL maintenance. See CHANGELOG_ARCHIVE.md.
 - static/users.html, static/users.js → firm-level Manage Users UI (sortable/searchable rows, add/edit, deactivate, password reset); shared Admin header/tab strip. See CHANGELOG_ARCHIVE.md.
 - static/login.html, static/login.js, static/app_info.html, static/privacy.html, static/terms.html, static/public_info.css → Login and public application/policy pages. See CHANGELOG_ARCHIVE.md.
 - static/client_select.html, static/client_select.js → standalone Client Cards page with guarded selection, admin entry, and loading feedback. See CHANGELOG_ARCHIVE.md.
@@ -77,7 +77,7 @@ One line per file group: what it is now. Full build history for every entry live
 - Active identities are database-unique where existing data is clean. Until duplicate legacy groups are resolved, application gates remain authoritative and migrations must report blockers rather than delete or merge rows.
 - Source workbooks, SQL dumps, reports, and workpapers stay in controlled external/offline storage. Supabase holds current data, scoped change history, and temporary metadata; rejected, ignored, or fully deleted upload files and metadata must be removed.
 - **Locked deletion contract:** replacement permanently removes active source rows after saving any prior changed/deleted row to history. Guarded administrator purge clears current rows and their history, derived classifications, occurrence metadata, audit payloads, upload metadata, validation plans, and staged files. Protected verification/evidence references block the purge.
-- Development deletion may use the approved app flow without an export gate. Before production deletion, reinstate an approved scoped CSV/XLSX export; whole-database/schema destruction still requires a logical SQL dump.
+- Data Bank's template bin prepares current/history XLSX and starts download before purge. Full database backups remain optional and separate; administrator deletion supports local and Render. Whole-database/schema destruction requires a logical SQL dump.
 - Keep two protected external backup copies and test restoration quarterly. Uploads warn at 300 MB and block projected allocation at 400 MB, reserving payload/index overhead. Never approach Supabase Free's 500 MB quota.
 - Validation plans are temporary: only one ready plan may exist per client/template, successful imports delete the plan immediately, and expired/applied/superseded plans are removable through the targeted plan-only cleanup route without deleting audit history.
 - Retain primary/unique and measured query indexes. The active-identity uniqueness index is mandatory; index removal requires usage evidence and query-plan review. After large deletes, inspect bloat; physical reclamation requires the separate administrator compaction action, with `VACUUM FULL` reserved for an approved maintenance window.
@@ -259,6 +259,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-04: Completed scoped audit cleanup and empty-table index reclamation; deletion/re-upload plan verified. See CHANGELOG_ARCHIVE.md, Template deletion and storage closure.
 - 2026-11-04: Data Bank shows upload history in a filtered preview, with exact changed fields and saved ledger-account scope. See CHANGELOG_ARCHIVE.md.
 - 2026-11-04: Existing PostgreSQL startup now adds the saved-mapping comparison column safely. See CHANGELOG_ARCHIVE.md, Render saved-mapping column migration.
 - 2026-11-04: Upload mappings now exclude selected fields from change detection while refreshing their values safely on confirmed import. See CHANGELOG_ARCHIVE.md.

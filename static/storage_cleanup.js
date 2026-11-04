@@ -54,13 +54,54 @@ function renderTableSizes(rows) {
     tableSizesBody.innerHTML = '';
     (rows || []).forEach(row => {
         const tr = document.createElement('tr');
-        [row.table_name, row.classification, Number(row.table_bytes || 0).toLocaleString() + ' B', Number(row.index_bytes || 0).toLocaleString() + ' B', row.formatted].forEach((value, index) => {
+        [row.table_name, row.classification, formatBytes(row.table_bytes), formatBytes(row.index_bytes),
+            formatBytes(row.other_relation_bytes),
+            row.estimated_live_rows == null ? 'Unavailable' : formatNumber(row.estimated_live_rows),
+            row.estimated_dead_rows == null ? 'Unavailable' : formatNumber(row.estimated_dead_rows),
+            row.last_autovacuum ? new Date(row.last_autovacuum).toLocaleString() : 'Not recorded',
+            row.formatted].forEach((value, index) => {
             const td = document.createElement('td');
             td.textContent = value;
             if (index === 1) td.className = row.classification === 'protected data' ? 'protected-label' : 'removable-label';
             tr.appendChild(td);
         });
         tableSizesBody.appendChild(tr);
+    });
+}
+
+function renderStorageDiagnostics(preview) {
+    const target = document.getElementById('storageDiagnostics');
+    if (!target) return;
+    target.replaceChildren();
+    const diagnostics = preview.storage_diagnostics;
+    const paragraph = (text) => {
+        const p = document.createElement('p');
+        p.textContent = text;
+        target.appendChild(p);
+    };
+    if (!diagnostics) {
+        paragraph('Detailed storage evidence is unavailable. No saving or index-removal recommendation can be made.');
+        return;
+    }
+    paragraph(diagnostics.explanation);
+    paragraph(`Allocated database files: ${formatBytes(diagnostics.allocated_bytes)}. Public tables and their indexes: ${formatBytes(diagnostics.public_relation_bytes)}. Other database allocation: ${formatBytes(diagnostics.other_database_bytes)}.`);
+    paragraph(diagnostics.statistics_note);
+    const maintenance = diagnostics.maintenance || {};
+    if (maintenance.available) {
+        paragraph(`Long snapshot transactions visible to this role: ${formatNumber(maintenance.long_snapshot_transactions)}. These can delay reuse of deleted-row space.`);
+        const auto = (maintenance.settings || []).find(item => item.name === 'autovacuum');
+        paragraph(`Automatic vacuum setting: ${auto ? auto.setting : 'Unavailable'}. A missing vacuum timestamp does not measure wasted space.`);
+    } else {
+        paragraph(maintenance.reason || 'Maintenance statistics are unavailable.');
+    }
+    const audit = diagnostics.audit_breakdown || {};
+    if (audit.available) {
+        (audit.actions || []).forEach(row => paragraph(`Audit action ${row.action}: ${formatNumber(row.row_count)} records; ${formatBytes(row.payload_bytes)} in old/new value payloads. This excludes record overhead and indexes.`));
+    } else paragraph(audit.reason || 'Audit action breakdown is unavailable.');
+    const emptyReviews = diagnostics.empty_table_reviews || [];
+    if (emptyReviews.length) paragraph('Empty tables still need index structures for future uploads. Their allocated index files are listed below; this is not a measurement of waste or recoverable space. Rebuilding requires separate administrator approval.');
+    emptyReviews.forEach(row => {
+        paragraph(`${row.table_name}: ${formatNumber(row.exact_row_count)} records; ${formatBytes(row.allocated_index_bytes)} allocated to indexes.`);
     });
 }
 
@@ -197,6 +238,7 @@ function renderPreview(preview) {
     setText('retiredCount', formatNumber(preview.removable.retired_client_data.row_count));
     setText('logStorage', (logBytes / (1024 * 1024)).toFixed(1) + ' MB');
     renderTableSizes(preview.table_sizes);
+    renderStorageDiagnostics(preview);
     renderCandidates(preview);
     renderIndexReview(preview);
     previewStatus.textContent = `Fresh preview generated ${new Date(preview.generated_at).toLocaleString()}`;

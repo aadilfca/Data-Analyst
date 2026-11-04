@@ -15,6 +15,11 @@ Every finding from a review session is recorded here — never fixed silently, n
 
 | Date | Module | Finding | Severity |
 |------|--------|---------|----------|
+| 2026-11-04 | Purchase Order / mapping | Receive date is configured Date but contains numeric received quantities in all 8,013 checked backup/source rows; Receive Quantity is blank. Re-upload preserves values. Review template/source mapping separately. | Fix |
+| 2026-11-04 | Data Bank / history indicator | Fresh rows show a history warning because attach_history_flags counts INSERT audit events. Changed/Deleted history is empty; distinguish fresh creation from prior revisions. | Fix |
+| 2026-11-04 | Upload / attribution | Checked upload metadata uses uploaded_by=app while fresh row INSERT audits use Analyst. Timestamps are fresh; authenticated-operator attribution needs a separate correction. | Fix |
+| 2026-11-04 | Upload / ledger re-upload | Standard deletion-backup re-upload is verified. Account Ledger compatibility remains expressly deferred pending account-scope design. | Defer |
+| 2026-11-04 | Tests / lifecycle receipt | test_pg_pool_retry's upload_lifecycle_locks fixture still supplies archiving without the current unbacked receipt contract; one broader regression fails after Drive retirement. Update its fixture separately. | Fix |
 | 2026-11-02 | Upload / numeric validation | Isolated PostgreSQL: voucher Infinity passes numeric validation, then invalid JSON aborts plan creation with HTTP 500. Reject nonfinite values with row/column guidance; canonical rows remain unchanged. See experiments/upload_safety/REPORT.md. | Fix |
 | 2026-11-02 | Upload / fresh database | Current PostgreSQL bootstrap omits cashflow_ledger_rollup_read_models, but replacement cleanup unconditionally deletes from it. Imports removing old lines/empty coverage fail on a fresh database; existing-database impact unverified. | Fix |
 | 2026-11-02 | Upload / Excel errors | June voucher source row 2 Account Name contains #REF!; independent and cumulative imports store null without warning. Detect source Excel errors before pandas missing-value conversion. | Fix |

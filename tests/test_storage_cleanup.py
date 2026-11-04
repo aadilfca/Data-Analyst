@@ -1,5 +1,6 @@
 import unittest
 import os
+import copy
 from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException
@@ -9,6 +10,224 @@ import audit_postgres_indexes
 from routers import storage_cleanup
 from routers.auth import require_admin
 from services import storage_cleanup as cleanup_service
+
+
+class StorageAllocationDiagnosticsTests(unittest.TestCase):
+    def test_estimated_statistics_do_not_change_cleanup_authorization(self):
+        preview = {"database": {}, "table_sizes": [{"table_name": "client_data", "total_bytes": 100,
+                    "estimated_dead_rows": 10}], "index_review": {}, "protected": {}, "removable": {}}
+        before = cleanup_service._preview_hash(preview)
+        preview["table_sizes"][0]["estimated_dead_rows"] = 20
+        self.assertEqual(before, cleanup_service._preview_hash(preview))
+        preview["table_sizes"][0]["total_bytes"] = 200
+        self.assertNotEqual(before, cleanup_service._preview_hash(preview))
+
+    def test_inventory_includes_all_public_tables_and_labels_estimates(self):
+        with patch.object(cleanup_service, "execute_query_pg", return_value=[{
+            "table_name": "another_module", "table_bytes": 100, "index_bytes": 30,
+            "total_bytes": 150, "n_live_tup": 5, "n_dead_tup": 2,
+        }]) as query:
+            rows = cleanup_service._table_sizes()
+        self.assertNotIn("c.relname = ANY", query.call_args.args[0])
+        self.assertEqual(rows[0]["other_relation_bytes"], 20)
+        self.assertEqual(rows[0]["estimated_live_rows"], 5)
+        self.assertEqual(rows[0]["estimated_dead_rows"], 2)
+
+    def test_empty_table_review_does_not_promise_savings_or_enable_actions(self):
+        sizes = [{"table_name": "cash_bank_transaction_classifications", "index_bytes": 100, "total_bytes": 150}]
+        removable = {"cashflow_legacy_transaction_copies": {"tables": {
+            "cash_bank_transaction_classifications": {"row_count": 0}}}}
+        with patch.object(cleanup_service, "execute_query_pg", return_value=[]), \
+             patch.object(cleanup_service, "execute_write_pg") as write:
+            result = cleanup_service._storage_diagnostics(500, sizes, removable)
+        item = result["empty_table_reviews"][0]
+        self.assertIsNone(item["reclaimable_bytes"])
+        self.assertFalse(item["live_action_enabled"])
+        self.assertEqual(result["other_database_bytes"], 350)
+        write.assert_not_called()
+
+    def test_statistics_failure_remains_unavailable_not_zero(self):
+        with patch.object(cleanup_service, "execute_query_pg", side_effect=RuntimeError("private connection detail")):
+            result = cleanup_service._storage_diagnostics(100, [], {})
+        self.assertFalse(result["maintenance"]["available"])
+        self.assertFalse(result["audit_breakdown"]["available"])
+        self.assertNotIn("private connection", str(result))
+        self.assertEqual(result["empty_table_reviews"], [])
+
+    def test_nonempty_legacy_table_is_not_a_rebuild_candidate(self):
+        with patch.object(cleanup_service, "execute_query_pg", return_value=[]):
+            result = cleanup_service._storage_diagnostics(100, [], {
+                "cashflow_legacy_transaction_copies": {"tables": {
+                    "cash_bank_transaction_classifications": {"row_count": 1}}}})
+        self.assertEqual(result["empty_table_reviews"], [])
+
+    def test_rehearsal_rejects_nonlocal_connection_before_sql(self):
+        conn = MagicMock(closed=False, autocommit=False)
+        conn.get_transaction_status.return_value = 0
+        conn.get_dsn_parameters.return_value = {"host": "production.example", "dbname": "production"}
+        with self.assertRaises(RuntimeError):
+            database.rehearse_empty_legacy_index_rebuild(conn, "cash_bank_transaction_classifications")
+        conn.cursor.assert_not_called()
+
+    def test_rehearsal_rejects_arbitrary_table_before_connection(self):
+        conn = MagicMock()
+        with self.assertRaises(ValueError):
+            database.rehearse_empty_legacy_index_rebuild(conn, "client_data")
+        conn.cursor.assert_not_called()
+
+    def test_rehearsal_rejects_nonempty_table_before_reindex(self):
+        conn = MagicMock()
+        cursor = conn.cursor.return_value.__enter__.return_value
+        cursor.fetchone.return_value = (True,)
+        with patch.object(database, "run_isolated_pg_transaction", side_effect=lambda c, fn: fn(c)):
+            with self.assertRaises(ValueError):
+                database.rehearse_empty_legacy_index_rebuild(conn, "cash_bank_transaction_classifications")
+        self.assertFalse(any("REINDEX" in call.args[0] for call in cursor.execute.call_args_list))
+
+    def test_rehearsal_preserves_index_definitions_and_measures_bytes(self):
+        conn = MagicMock()
+        cursor = conn.cursor.return_value.__enter__.return_value
+        definitions = [("test_index", "CREATE INDEX test_index ...", False, False, True, True)]
+        cursor.fetchall.side_effect = [definitions, definitions]
+        cursor.fetchone.side_effect = [(False,), (1048576,), (0,), (65536,)]
+        with patch.object(database, "run_isolated_pg_transaction", side_effect=lambda c, fn: fn(c)) as guard:
+            result = database.rehearse_empty_legacy_index_rebuild(conn, "cash_bank_transaction_classifications")
+        guard.assert_called_once()
+        self.assertTrue(result["index_definitions_preserved"])
+        self.assertEqual(result["reclaimed_bytes"], 983040)
+        sql = [call.args[0] for call in cursor.execute.call_args_list]
+        self.assertTrue(any("ACCESS EXCLUSIVE" in query for query in sql))
+        self.assertFalse(any("DROP INDEX" in query or "DELETE FROM" in query for query in sql))
+
+    def test_rehearsal_definition_mismatch_raises_for_transaction_rollback(self):
+        conn = MagicMock()
+        cursor = conn.cursor.return_value.__enter__.return_value
+        cursor.fetchone.side_effect = [(False,), (100,)]
+        cursor.fetchall.side_effect = [[("before", "definition", False, False, True, True)], []]
+        with patch.object(database, "run_isolated_pg_transaction", side_effect=lambda c, fn: fn(c)):
+            with self.assertRaises(RuntimeError):
+                database.rehearse_empty_legacy_index_rebuild(conn, "cash_bank_transaction_classifications")
+
+
+class TemplateCleanupFinalizationTests(unittest.TestCase):
+    def _preview(self):
+        indexes = [{"table_name": "cash_bank_transaction_classifications", "index_name": f"index_{i}",
+                    "definition": f"CREATE INDEX index_{i} ...", "is_primary": i == 0,
+                    "is_unique": i == 0, "is_valid": True, "is_ready": True} for i in range(8)]
+        return {"scope": {"client_id": 5, "template_id": 3, "audit_log_id": 5534},
+                "preview_hash": "reviewed-hash", "target_indexes": indexes,
+                "controls": {"tables": [{"table_name": "client_data", "row_count": 12,
+                                          "fingerprint": "unchanged-values"}], "indexes": indexes}}
+
+    def test_wrong_confirmation_cannot_start_a_transaction(self):
+        with patch.object(cleanup_service, "pg_transaction") as transaction:
+            with self.assertRaises(cleanup_service.CleanupConfirmationError):
+                cleanup_service.finalize_reviewed_template_cleanup(5, 3, 5534, "hash", "wrong")
+        transaction.assert_not_called()
+
+    def test_preview_rejects_other_scope_malformed_or_unrelated_log(self):
+        entries = [
+            {"action": "Permanent data delete", "module": "DataBank", "details": '{"client_id":6,"template_id":3}'},
+            {"action": "Permanent data delete", "module": "DataBank", "details": '{"client_id":5,"template_id":4}'},
+            {"action": "Other event", "module": "DataBank", "details": '{"client_id":5,"template_id":3}'},
+            {"action": "Permanent data delete", "module": "DataBank", "details": 'invalid-json'},
+            {},
+        ]
+        for entry in entries:
+            with self.subTest(entry=entry), patch.object(cleanup_service, "_first", return_value=entry), \
+                 patch.object(cleanup_service, "_finalization_controls") as controls:
+                with self.assertRaises(ValueError):
+                    cleanup_service._template_cleanup_finalization_preview(5, 3, 5534)
+                controls.assert_not_called()
+
+    def test_preview_refuses_nonempty_table_or_unreviewed_index_count(self):
+        entry = {"action": "Permanent data delete", "module": "DataBank",
+                 "details": {"client_id": 5, "template_id": 3}}
+        with patch.object(cleanup_service, "_first", return_value=entry), \
+             patch.object(cleanup_service, "_count", return_value=1):
+            with self.assertRaises(cleanup_service.IndexMaintenanceBlockedError):
+                cleanup_service._template_cleanup_finalization_preview(5, 3, 5534)
+        controls = self._preview()["controls"]
+        controls["indexes"].pop()
+        with patch.object(cleanup_service, "_first", return_value=entry), \
+             patch.object(cleanup_service, "_count", return_value=0), \
+             patch.object(cleanup_service, "_finalization_controls", return_value=controls):
+            with self.assertRaises(cleanup_service.IndexMaintenanceBlockedError):
+                cleanup_service._template_cleanup_finalization_preview(5, 3, 5534)
+
+    def _apply(self, *, after=None, stale=False, missing=False, rebuild_error=None):
+        before = self._preview()
+        conn = MagicMock(closed=False)
+        conn.cursor.return_value.__enter__.return_value.fetchone.return_value = None if missing else (5534,)
+        pool = MagicMock()
+        with patch.object(database, "_getconn_pg_checked", return_value=conn), \
+             patch.object(database, "get_pg_pool", return_value=pool), \
+             patch.object(cleanup_service, "_template_cleanup_finalization_preview", return_value=before), \
+             patch.object(cleanup_service, "_finalization_controls", return_value=before["controls"] if after is None else after), \
+             patch.object(cleanup_service, "_count", return_value=1) as delete, \
+             patch.object(cleanup_service, "rebuild_empty_classification_indexes", side_effect=rebuild_error,
+                          return_value={"index_count": 8}) as rebuild:
+            try:
+                result = cleanup_service.finalize_reviewed_template_cleanup(
+                    5, 3, 5534, "stale" if stale else "reviewed-hash", cleanup_service.TEMPLATE_FINALIZATION_CONFIRMATION)
+                return result, conn, delete, rebuild
+            except Exception as exc:
+                return exc, conn, delete, rebuild
+
+    def test_only_exact_log_deleted_and_validated_operation_commits(self):
+        result, conn, delete, rebuild = self._apply()
+        self.assertEqual(result["verification"], "passed")
+        conn.commit.assert_called_once()
+        conn.rollback.assert_not_called()
+        self.assertEqual(delete.call_args.args[1], (5534,))
+        self.assertIn("DELETE FROM public.audit_log WHERE id = %s", delete.call_args.args[0])
+        self.assertEqual(len(rebuild.call_args.args[0]), 8)
+        commands = [call.args[0] for call in conn.cursor.return_value.__enter__.return_value.execute.call_args_list]
+        self.assertTrue(any("NOWAIT" in command for command in commands))
+
+    def test_stale_or_missing_entry_cannot_delete_or_rebuild(self):
+        for options in ({"stale": True}, {"missing": True}):
+            with self.subTest(options=options):
+                result, conn, delete, rebuild = self._apply(**options)
+                self.assertIsInstance(result, cleanup_service.CleanupPreviewStaleError)
+                conn.rollback.assert_called_once()
+                conn.commit.assert_not_called()
+                delete.assert_not_called()
+                rebuild.assert_not_called()
+
+    def test_record_or_definition_mismatch_rolls_back_without_write_retry(self):
+        for key in ("tables", "indexes"):
+            after = copy.deepcopy(self._preview()["controls"])
+            after[key].pop()
+            with self.subTest(key=key):
+                result, conn, delete, rebuild = self._apply(after=after)
+                self.assertIsInstance(result, RuntimeError)
+                conn.rollback.assert_called_once()
+                conn.commit.assert_not_called()
+                delete.assert_called_once()
+                rebuild.assert_called_once()
+
+    def test_rebuild_failure_rolls_back_audit_deletion_without_retry(self):
+        result, conn, delete, rebuild = self._apply(rebuild_error=RuntimeError("rebuild failed"))
+        self.assertIsInstance(result, RuntimeError)
+        conn.rollback.assert_called_once()
+        conn.commit.assert_not_called()
+        delete.assert_called_once()
+        rebuild.assert_called_once()
+
+    def test_live_database_helper_cannot_borrow_a_connection_or_weaken_rehearsal_guard(self):
+        with patch.object(database, "get_raw_conn_pg") as borrow:
+            with self.assertRaises(RuntimeError):
+                database.rebuild_empty_classification_indexes([("definition",)] * 8)
+        borrow.assert_not_called()
+        conn = MagicMock()
+        token = database._pg_transaction.set(conn)
+        try:
+            with self.assertRaises(RuntimeError):
+                database.rebuild_empty_classification_indexes([("definition",)] * 7)
+        finally:
+            database._pg_transaction.reset(token)
+        conn.cursor.assert_not_called()
 
 
 class StorageCleanupPreviewTests(unittest.TestCase):
@@ -821,7 +1040,14 @@ if __name__ == "__main__":
 def test_replacement_returns_orphan_paths_for_post_commit_cleanup_only():
     from contextlib import nullcontext
     queries = []
-    results = iter([[{"id": 9, "upload_id": 4, "derived_voucher_id": "V1"}], [{"id": 4, "file_path": "uploads/old.xlsx"}]])
+    # Supply the existing archive-proof contract and retired-table probe so this
+    # test reaches the post-commit file-cleanup boundary it is intended to check.
+    results = iter([
+        [{"status": "verified", "drive_file_id": "external-copy", "archive_sha256": "checksum"}],
+        [{"id": 9, "upload_id": 4, "derived_voucher_id": "V1"}],
+        [{"table_name": None}],
+        [{"id": 4, "file_path": "uploads/old.xlsx"}],
+    ])
     def query(sql, params=None):
         queries.append((sql, params))
         return next(results)
@@ -830,9 +1056,12 @@ def test_replacement_returns_orphan_paths_for_post_commit_cleanup_only():
             patch.object(cleanup_service, "_count", return_value=0), \
             patch.object(cleanup_service, "execute_write_pg") as write, \
             patch.object(cleanup_service, "_remove_staged_upload_files") as remove:
-        result = cleanup_service.purge_replaced_transaction_rows(5, 1, [9], "test")
+        result = cleanup_service.purge_replaced_transaction_rows(5, 1, [9], "test", archive_proof={
+            "operation_id": "isolated-operation", "ids": [9],
+            "archive": {"drive_file_id": "external-copy", "sha256": "checksum"},
+        })
     remove.assert_not_called()
     assert result == {"deleted_count": 1, "staged_paths": ["uploads/old.xlsx"]}
-    assert queries[0][1] == (5, 1, [9])
-    assert "NOT EXISTS (SELECT 1 FROM public.client_data" in queries[1][0]
+    assert queries[1][1] == (5, 1, [9])
+    assert "NOT EXISTS (SELECT 1 FROM public.client_data" in queries[3][0]
     assert any("DELETE FROM public.uploaded_files" in call.args[0] for call in write.call_args_list)

@@ -10,6 +10,7 @@ import json
 import logging
 import os
 from typing import Any, Dict, List
+from psycopg2 import sql
 from services.upload_lifecycle import unbacked_receipt_matches
 
 from database import (
@@ -20,6 +21,8 @@ from database import (
     execute_write_pg,
     pg_transaction,
     reindex_postgres_index_concurrently,
+    rebuild_empty_classification_indexes,
+    run_read_snapshot_pg,
 )
 
 
@@ -31,6 +34,7 @@ VALIDATION_PLAN_CLEANUP_CONFIRMATION = "DELETE APPROVED VALIDATION PLANS"
 COMPACTION_CONFIRMATION_TEXT = "COMPACT APPROVED STORAGE DATA"
 FULL_COMPACTION_CONFIRMATION_TEXT = "FULL COMPACTION APPROVED"
 INDEX_MAINTENANCE_CONFIRMATION_TEXT = "REMOVE APPROVED INDEX"
+TEMPLATE_FINALIZATION_CONFIRMATION = "FINALIZE REVIEWED TEMPLATE CLEANUP"
 INDEX_BLOAT_REINDEX_THRESHOLDS = {
     "avg_leaf_density_below": 70.0,
     "leaf_fragmentation_above": 30.0,
@@ -352,15 +356,18 @@ def _table_sizes() -> List[Dict[str, Any]]:
         SELECT c.relname AS table_name,
                pg_relation_size(c.oid) AS table_bytes,
                pg_indexes_size(c.oid) AS index_bytes,
-               pg_total_relation_size(c.oid) AS total_bytes
+               pg_total_relation_size(c.oid) AS total_bytes,
+               stats.n_live_tup, stats.n_dead_tup,
+               stats.last_vacuum, stats.last_autovacuum,
+               stats.last_analyze, stats.last_autoanalyze,
+               c.reloptions AS maintenance_options
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE c.relkind = 'r'
+        LEFT JOIN pg_stat_user_tables stats ON stats.relid = c.oid
+        WHERE c.relkind IN ('r', 'm')
           AND n.nspname = 'public'
-          AND c.relname = ANY(%s)
         ORDER BY pg_total_relation_size(c.oid) DESC, c.relname
         """,
-        (list(SIZING_TABLES),),
     )
     removable = set(REMOVABLE_LOG_TABLES)
     temporary = set(TEMPORARY_PLAN_TABLES)
@@ -378,15 +385,76 @@ def _table_sizes() -> List[Dict[str, Any]]:
                     else "temporary validation data" if table_name in temporary
                     else "protected data" if table_name in protected
                     else "derived current data" if table_name in derived
-                    else "operational metadata"
+                    else "operational metadata" if table_name in SIZING_TABLES
+                    else "other module / configuration"
                 ),
                 "table_bytes": int(row.get("table_bytes") or 0),
                 "index_bytes": int(row.get("index_bytes") or 0),
                 "total_bytes": total,
                 "formatted": _format_bytes(total),
+                "other_relation_bytes": max(0, total - int(row.get("table_bytes") or 0) - int(row.get("index_bytes") or 0)),
+                "estimated_live_rows": row.get("n_live_tup"),
+                "estimated_dead_rows": row.get("n_dead_tup"),
+                "last_vacuum": row.get("last_vacuum"),
+                "last_autovacuum": row.get("last_autovacuum"),
+                "last_analyze": row.get("last_analyze"),
+                "last_autoanalyze": row.get("last_autoanalyze"),
+                "maintenance_options": row.get("maintenance_options") or [],
             }
         )
     return result
+
+
+def _storage_diagnostics(database_bytes: int, sizes: List[Dict[str, Any]], removable: Dict[str, Any]) -> Dict[str, Any]:
+    """Explain allocation without equating statistics or empty tables with reclaimable bytes."""
+    maintenance = {"available": False}
+    audit = {"available": False}
+    try:
+        settings = execute_query_pg(
+            "SELECT name, setting, unit FROM pg_settings WHERE name = ANY(%s) ORDER BY name",
+            (["autovacuum", "autovacuum_naptime", "autovacuum_vacuum_threshold",
+              "autovacuum_vacuum_scale_factor", "autovacuum_vacuum_insert_threshold",
+              "autovacuum_vacuum_insert_scale_factor"],),
+        )
+        blockers = _first("""SELECT COUNT(*) AS long_transaction_count,
+                   COALESCE(MAX(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - xact_start))), 0) AS oldest_seconds
+            FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()
+              AND backend_xmin IS NOT NULL AND xact_start < CURRENT_TIMESTAMP - INTERVAL '5 minutes'""")
+        maintenance = {"available": True, "settings": settings,
+                       "long_snapshot_transactions": int(blockers.get("long_transaction_count") or 0),
+                       "oldest_snapshot_seconds": float(blockers.get("oldest_seconds") or 0),
+                       "visibility": "Transactions visible to this database role; no query text is collected."}
+    except Exception:
+        maintenance = {"available": False, "reason": "Maintenance statistics unavailable; reclamation decisions need further evidence."}
+    try:
+        rows = execute_query_pg("""SELECT action, COUNT(*) AS row_count,
+            COALESCE(SUM(COALESCE(pg_column_size(old_row_data), 0)
+                         + COALESCE(pg_column_size(new_row_data), 0)), 0) AS payload_bytes
+            FROM public.data_audit_log GROUP BY action ORDER BY action""")
+        audit = {"available": True, "actions": rows,
+                 "policy": "These counts do not authorize audit deletion; review INSERT metadata separately from required change history."}
+    except Exception:
+        audit = {"available": False, "reason": "Audit action breakdown unavailable."}
+
+    by_name = {row["table_name"]: row for row in sizes}
+    legacy = removable.get("cashflow_legacy_transaction_copies", {}).get("tables", {})
+    review = []
+    for name, candidate in legacy.items():
+        size = by_name.get(name, {})
+        if candidate.get("row_count") == 0 and int(size.get("index_bytes") or 0) > 0:
+            review.append({"table_name": name, "exact_row_count": 0,
+                           "allocated_index_bytes": size["index_bytes"],
+                           "reclaimable_bytes": None, "live_action_enabled": False,
+                           "recommendation": "Empty tables still need index structures for future uploads. Allocated bytes are not promised savings; any rebuild needs separate measurement and approval."})
+    inventoried = sum(int(row.get("total_bytes") or 0) for row in sizes)
+    return {
+        "measurement": "allocated_database_files", "byte_unit": "bytes",
+        "allocated_bytes": database_bytes, "public_relation_bytes": inventoried,
+        "other_database_bytes": max(0, database_bytes - inventoried),
+        "explanation": "DELETE removes records. Space inside table and index files may remain allocated for reuse. Allocated size alone cannot prove duplication or quantify waste.",
+        "statistics_note": "Live/dead row counts are PostgreSQL estimates. Dead-row estimates are not a measurement of reclaimable bytes. Other database allocation includes catalogs and objects outside this public-table inventory.",
+        "maintenance": maintenance, "audit_breakdown": audit, "empty_table_reviews": review,
+    }
 
 
 def _client_data_index_review(
@@ -651,7 +719,11 @@ def _preview_fingerprint_payload(preview: Dict[str, Any]) -> Dict[str, Any]:
     """Select all candidate/protection aggregates that must match before apply."""
     return {
         "database": preview["database"],
-        "table_sizes": preview["table_sizes"],
+        # Estimated row statistics and maintenance timestamps are diagnostic;
+        # they do not expand the approved cleanup scope.
+        "table_sizes": [{key: row.get(key) for key in (
+            "table_name", "classification", "table_bytes", "index_bytes", "total_bytes", "formatted"
+        )} for row in preview["table_sizes"]],
         "index_review": preview["index_review"],
         "protected": preview["protected"],
         "removable": preview["removable"],
@@ -733,6 +805,116 @@ def _purge_audit_log_ids(client_id: int, template_id: int | None) -> List[int]:
                 and (template_id is None or details.get("template_id") == template_id)):
             ids.append(int(row["id"]))
     return ids
+
+
+def _finalization_controls(audit_log_id: int) -> Dict[str, Any]:
+    """Compare stored values without retaining source rows or a database receipt.
+
+    Session/presence/error traffic is excluded explicitly. Only the exact approved
+    audit entry is excluded from the audit-table fingerprint; other logs remain.
+    Catalog-sourced names are quoted identifiers, never interpolated arguments.
+    """
+    tables = execute_query_pg("""SELECT c.relname AS table_name
+        FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relkind = 'r'
+          AND c.relname <> ALL(%s) ORDER BY c.relname""",
+        (["sessions", "verification_presence", "error_log"],))
+    if not tables or not {"client_data", "uploaded_files", "audit_log"}.issubset(
+        {row["table_name"] for row in tables}
+    ):
+        raise RuntimeError("Protected table inventory is incomplete")
+    statements = []
+    params = []
+    for row in tables:
+        name = row["table_name"]
+        condition = sql.SQL("WHERE r.id <> %s") if name == "audit_log" else sql.SQL("")
+        statements.append(sql.SQL("""SELECT {label} AS table_name, COUNT(*) AS row_count,
+            md5(COALESCE(string_agg(md5(to_jsonb(r)::text), ''
+                ORDER BY md5(to_jsonb(r)::text)), '')) AS fingerprint
+            FROM public.{table} r {condition}""").format(
+                label=sql.Literal(name), table=sql.Identifier(name), condition=condition))
+        if name == "audit_log":
+            params.append(audit_log_id)
+    rows = execute_query_pg(sql.SQL(" UNION ALL ").join(statements), tuple(params))
+    if len(rows) != len(tables):
+        raise RuntimeError("Protected record checks are incomplete")
+    indexes = execute_query_pg("""SELECT t.relname AS table_name, c.relname AS index_name,
+        pg_get_indexdef(i.indexrelid) AS definition, i.indisprimary AS is_primary,
+        i.indisunique AS is_unique, i.indisvalid AS is_valid, i.indisready AS is_ready
+        FROM pg_index i JOIN pg_class t ON t.oid = i.indrelid
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+        JOIN pg_class c ON c.oid = i.indexrelid
+        WHERE n.nspname = 'public' ORDER BY t.relname, c.relname""")
+    if not indexes:
+        raise RuntimeError("Protected index checks are incomplete")
+    return {"tables": sorted(rows, key=lambda row: row["table_name"]), "indexes": indexes,
+            "excluded_volatile_tables": ["sessions", "verification_presence", "error_log"]}
+
+
+def _template_cleanup_finalization_preview(client_id, template_id, audit_log_id):
+    entry = _first("SELECT id, action, module, details FROM public.audit_log WHERE id = %s", (audit_log_id,))
+    try:
+        details = entry.get("details")
+        details = details if isinstance(details, dict) else json.loads(details or "{}")
+    except (TypeError, ValueError):
+        details = None
+    if (not isinstance(details, dict) or entry.get("action") != "Permanent data delete"
+            or entry.get("module") != "DataBank" or details.get("client_id") != client_id
+            or details.get("template_id") != template_id):
+        raise ValueError("The exact legacy deletion entry does not match the reviewed client/template")
+    if _count("SELECT COUNT(*) AS count FROM public.cash_bank_transaction_classifications") != 0:
+        raise IndexMaintenanceBlockedError("The reviewed classification table is no longer empty")
+    controls = _finalization_controls(audit_log_id)
+    target_indexes = [row for row in controls["indexes"]
+                      if row["table_name"] == "cash_bank_transaction_classifications"]
+    if len(target_indexes) != 8 or not all(row["is_valid"] and row["is_ready"] for row in target_indexes):
+        raise IndexMaintenanceBlockedError("The eight reviewed indexes are not all present and ready")
+    evidence = {"scope": {"client_id": client_id, "template_id": template_id,
+                          "audit_log_id": audit_log_id}, "entry": entry, "controls": controls}
+    encoded = json.dumps(evidence, sort_keys=True, separators=(",", ":"), default=str)
+    return {"scope": evidence["scope"], "preview_hash": hashlib.sha256(encoded.encode()).hexdigest(),
+            "controls": controls, "target_indexes": target_indexes}
+
+
+def get_template_cleanup_finalization_preview(client_id: int, template_id: int, audit_log_id: int):
+    """Operator-only preview; no HTTP route, startup hook, or automatic maintenance."""
+    return run_read_snapshot_pg(lambda _conn: _template_cleanup_finalization_preview(
+        client_id, template_id, audit_log_id))
+
+
+def finalize_reviewed_template_cleanup(client_id: int, template_id: int, audit_log_id: int,
+                                      preview_hash: str, confirmation: str):
+    """One explicit, non-retried transaction; rollback on stale/unexpected evidence.
+
+    Requires action-time administrator approval. It removes one scoped old audit
+    entry, rebuilds only empty classification indexes and keeps no new receipt.
+    """
+    if confirmation != TEMPLATE_FINALIZATION_CONFIRMATION:
+        raise CleanupConfirmationError("The exact finalization confirmation is required")
+    with pg_transaction() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SET LOCAL lock_timeout = '5s'")
+            cursor.execute("SET LOCAL statement_timeout = '120s'")
+            cursor.execute("LOCK TABLE public.cash_bank_transaction_classifications IN ACCESS EXCLUSIVE MODE NOWAIT")
+            cursor.execute("SELECT id FROM public.audit_log WHERE id = %s FOR UPDATE NOWAIT", (audit_log_id,))
+            if not cursor.fetchone():
+                raise CleanupPreviewStaleError("The reviewed legacy audit entry is no longer present")
+        before = _template_cleanup_finalization_preview(client_id, template_id, audit_log_id)
+        if before["preview_hash"] != preview_hash:
+            raise CleanupPreviewStaleError("Finalization evidence changed; refresh the preview")
+        deleted = _count("WITH deleted AS (DELETE FROM public.audit_log WHERE id = %s RETURNING id) "
+                         "SELECT COUNT(*) AS count FROM deleted", (audit_log_id,))
+        if deleted != 1:
+            raise RuntimeError("Legacy deletion did not affect exactly one entry")
+        fields = ("index_name", "definition", "is_primary", "is_unique", "is_valid", "is_ready")
+        definitions = [tuple(row[field] for field in fields) for row in before["target_indexes"]]
+        rebuild = rebuild_empty_classification_indexes(definitions)
+        after = _finalization_controls(audit_log_id)
+        if before["controls"] != after:
+            raise RuntimeError("Protected data or index checks changed; finalization will roll back")
+    return {"mode": "reviewed_template_cleanup_finalized", "scope": before["scope"],
+            "deleted_audit_entries": deleted, "index_rebuild": rebuild,
+            "protected_controls": after, "verification": "passed"}
 
 
 def _purge_protected_counts(client_id: int, template_id: int | None = None) -> Dict[str, int]:
@@ -1246,6 +1428,9 @@ def get_storage_cleanup_preview() -> Dict[str, Any]:
             "VACUUM, reindex, and index removal are separate explicit maintenance actions with post-checks.",
         ],
     }
+    preview["storage_diagnostics"] = _storage_diagnostics(
+        database_bytes, sizes, preview["removable"]
+    )
     preview["preview_hash"] = _preview_hash(preview)
     return preview
 

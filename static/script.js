@@ -120,16 +120,19 @@ function toggleOverdueUploadsPanel() {
 
 // ---------- LOAD DATABASE SIZE (Database Size Visibility, Phase A2) ----------
 async function loadDbSize() {
+    const value = document.getElementById('dbSize');
+    if (!value) return;
+    value.title = 'Database files include current records, indexes, other modules and space available for reuse. Deleting records may not reduce this number immediately.';
     try {
         const res = await window.ApiUtils.apiFetch('/api/dashboard/db-size');
         if (res.ok) {
             const data = await res.json();
-            document.getElementById('dbSize').textContent = data.formatted || '0 B';
+            value.textContent = data.formatted || 'Unavailable';
         } else {
-            document.getElementById('dbSize').textContent = '0 B';
+            value.textContent = 'Unavailable';
         }
     } catch (error) {
-        document.getElementById('dbSize').textContent = '⚠️';
+        value.textContent = 'Unavailable';
     }
 }
 

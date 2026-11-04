@@ -7648,6 +7648,74 @@ POSTGRES_INDEX_MAINTENANCE_ALLOWLIST = {
 }
 
 
+def _rebuild_empty_classification_indexes(conn, expected_definitions=None):
+    """Shared locked operation; callers supply the rehearsal or approved live gate."""
+    table_name = "cash_bank_transaction_classifications"
+    with conn.cursor() as cur:
+        cur.execute("SET LOCAL lock_timeout = '5s'")
+        cur.execute("SET LOCAL statement_timeout = '120s'")
+        cur.execute(f'LOCK TABLE public."{table_name}" IN ACCESS EXCLUSIVE MODE NOWAIT')
+        cur.execute(f'SELECT EXISTS (SELECT 1 FROM public."{table_name}" LIMIT 1)')
+        if cur.fetchone()[0]:
+            raise ValueError("Index rebuild requires an empty table; no rows were changed")
+
+        def definitions():
+            cur.execute("""SELECT c.relname, pg_get_indexdef(i.indexrelid),
+                i.indisprimary, i.indisunique, i.indisvalid, i.indisready
+                FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+                WHERE i.indrelid = %s::regclass ORDER BY c.relname""",
+                ("public." + table_name,))
+            return cur.fetchall()
+
+        before_definitions = definitions()
+        if not before_definitions or any(not row[4] or not row[5] for row in before_definitions):
+            raise ValueError("Index rebuild requires existing valid, ready indexes")
+        if expected_definitions is not None and before_definitions != expected_definitions:
+            raise RuntimeError("Index definitions differ from the approved preview")
+        cur.execute("SELECT pg_total_relation_size(%s::regclass)", ("public." + table_name,))
+        before_bytes = int(cur.fetchone()[0])
+        cur.execute(f'REINDEX TABLE public."{table_name}"')
+        if definitions() != before_definitions:
+            raise RuntimeError("Index definitions changed; maintenance will roll back")
+        cur.execute(f'SELECT COUNT(*) FROM public."{table_name}"')
+        if cur.fetchone()[0] != 0:
+            raise RuntimeError("Table contents changed; maintenance will roll back")
+        cur.execute("SELECT pg_total_relation_size(%s::regclass)", ("public." + table_name,))
+        after_bytes = int(cur.fetchone()[0])
+    return {"table_name": table_name, "before_bytes": before_bytes,
+            "after_bytes": after_bytes, "reclaimed_bytes": max(0, before_bytes - after_bytes),
+            "row_count": 0, "index_definitions_preserved": True,
+            "index_count": len(before_definitions)}
+
+
+def rebuild_empty_classification_indexes(expected_definitions):
+    """Live operation only inside the caller's explicit, non-retried transaction.
+
+    No startup/API invocation. The service verifies preview, scope and protected
+    fingerprints before commit; the isolated rehearsal guard remains separate.
+    """
+    conn = _pg_transaction.get()
+    if conn is None or not expected_definitions or len(expected_definitions) != 8:
+        raise RuntimeError("An approved transaction and the eight reviewed index definitions are required")
+    return _rebuild_empty_classification_indexes(conn, expected_definitions)
+
+
+def rehearse_empty_legacy_index_rebuild(conn, table_name):
+    """Measure an empty legacy-table rebuild on an isolated local test database.
+
+    This deliberately uses the existing loopback/named-database rehearsal guard;
+    it cannot run against the application pool or a production connection.
+    """
+    if table_name != "cash_bank_transaction_classifications":
+        raise ValueError("Only the reviewed legacy classification table can be rehearsed")
+
+    def rebuild(local_conn):
+        result = _rebuild_empty_classification_indexes(local_conn)
+        return {**result, "environment": "isolated_local_rehearsal"}
+
+    return run_isolated_pg_transaction(conn, rebuild)
+
+
 def drop_postgres_index_concurrently(index_name):
     """Drop one explicitly allow-listed non-integrity index outside a transaction."""
     if index_name not in POSTGRES_INDEX_MAINTENANCE_ALLOWLIST:
