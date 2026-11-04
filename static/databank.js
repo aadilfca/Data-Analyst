@@ -72,6 +72,7 @@ const availabilityInFlight = new Map();
 // Phase 3B: delete is scoped per template, so one confirmed destructive action blocks only its
 // own repeated request while other datasets and unrelated controls remain available.
 const deleteTemplateInFlight = new Set();
+let pendingTemplateDelete = null;
 
 // Coverage Calendar state — independent of the shared date range (see
 // sharedRangeFromInput/sharedRangeToInput below). As of the Coverage
@@ -134,6 +135,12 @@ let overdueUploadsData = [];
 
 // Preview modal elements
 const previewModal = document.getElementById('previewModal');
+const templateDeleteModal = document.getElementById('templateDeleteModal');
+const templateDeleteTitle = document.getElementById('templateDeleteTitle');
+const templateDeleteStatus = document.getElementById('templateDeleteStatus');
+const backupAndDeleteTemplateBtn = document.getElementById('backupAndDeleteTemplateBtn');
+const cancelTemplateDeleteBtn = document.getElementById('cancelTemplateDeleteBtn');
+const closeTemplateDeleteBtn = document.getElementById('closeTemplateDeleteBtn');
 const historyModal = document.getElementById('historyModal');
 const closeHistoryBtn = document.getElementById('closeHistoryBtn');
 const historyTitle = document.getElementById('historyTitle');
@@ -1093,19 +1100,22 @@ function buildDatasetActionButtons(item) {
         });
         tdActions.appendChild(exportBtn);
 
-        // Delete button
-        const deleteBtn = document.createElement('button');
-        deleteBtn.className = 'action-btn delete';
-        deleteBtn.textContent = '🗑️';
-        deleteBtn.title = 'Delete all data for this template';
-        deleteBtn.setAttribute('data-tooltip', 'Delete all imported data for this template');
-        deleteBtn.style.marginLeft = '6px';
-        deleteBtn.style.color = '#dc2626';
-        deleteBtn.addEventListener('click', () => {
-            deleteTemplateData(item.template_id, item.template_name, item.total_row_count, deleteBtn);
-        });
-        tdActions.appendChild(deleteBtn);
     }
+
+    // Deletion remains available when only changed/deleted upload history is
+    // left, so users can clear the complete template scope after backing it up.
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'action-btn delete';
+    deleteBtn.textContent = '🗑️';
+    deleteBtn.title = 'Back up and delete this template’s data';
+    deleteBtn.setAttribute('aria-label', `Back up and delete data for ${item.template_name}`);
+    deleteBtn.setAttribute('data-tooltip', 'Download current data and changed/deleted history, then delete');
+    deleteBtn.style.marginLeft = '6px';
+    deleteBtn.style.color = '#dc2626';
+    deleteBtn.addEventListener('click', () => {
+        deleteTemplateData(item.template_id, item.template_name, deleteBtn);
+    });
+    tdActions.appendChild(deleteBtn);
 
     // History remains available when a complete upload has removed every active
     // row from this template; that is when users may need the deletion record most.
@@ -1223,54 +1233,196 @@ async function renderFilteredYourDatasetsTable(progressTarget = null) {
     await renderYourDatasetsTable(filtered, emptyMessage, progressTarget);
 }
 
-async function deleteTemplateData(templateId, templateName, rowCount, triggerTarget = null) {
+function deleteTemplateData(templateId, templateName, triggerTarget = null) {
     const clientId = getSelectedClientId();
     if (!clientId) {
         showStatus('⚠️ No client selected.', 'error');
         return;
     }
-    
-    // Confirm deletion
-    const confirmMsg = `⚠️ Are you sure you want to delete ALL ${rowCount} rows for template "${templateName}"?\n\n` +
-                       `This will permanently remove this data from the system (soft-delete).\n` +
-                       `Templates and columns will NOT be affected.`;
-    if (!confirm(confirmMsg)) {
-        return;
+    if (deleteTemplateInFlight.has(String(templateId))) return;
+    pendingTemplateDelete = {
+        clientId: Number(clientId),
+        templateId: Number(templateId),
+        templateName: templateName || `Template ${templateId}`,
+        triggerTarget,
+    };
+    templateDeleteTitle.textContent = `Back up and delete ${pendingTemplateDelete.templateName}`;
+    templateDeleteStatus.textContent = '';
+    templateDeleteStatus.style.display = 'none';
+    backupAndDeleteTemplateBtn.disabled = false;
+    cancelTemplateDeleteBtn.disabled = false;
+    closeTemplateDeleteBtn.disabled = false;
+    templateDeleteModal.style.display = 'flex';
+    backupAndDeleteTemplateBtn.focus();
+}
+
+async function fetchTemplateBackupRows(clientId, templateId) {
+    const rows = [];
+    let page = 1;
+    let metadata = null;
+    do {
+        const params = new URLSearchParams({ client_id: String(clientId), page: String(page), limit: '1000' });
+        const response = await fetch(`${API_BASE}/api/data/template/${templateId}/backup-rows?${params}`);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || 'Could not read current template data.');
+        metadata = data;
+        rows.push(...(data.rows || []));
+        page += 1;
+    } while (metadata && page <= metadata.total_pages);
+    return { rows, columns: metadata ? metadata.columns || [] : [] };
+}
+
+async function fetchTemplateBackupHistory(clientId, templateId) {
+    const rows = [];
+    let page = 1;
+    let metadata = null;
+    do {
+        const params = new URLSearchParams({
+            client_id: String(clientId), template_id: String(templateId),
+            page: String(page), limit: '100', action: 'all',
+        });
+        const response = await fetch(`${API_BASE}/api/data/history?${params}`);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || 'Could not read changed/deleted history.');
+        metadata = data;
+        rows.push(...(data.rows || []));
+        page += 1;
+    } while (metadata && page <= metadata.total_pages);
+    return { rows, columns: metadata ? metadata.columns || [] : [] };
+}
+
+function downloadTemplateBackup(templateName, templateColumns, currentRows, historyRows) {
+    if (typeof XLSX === 'undefined') throw new Error('Excel workbook support is unavailable. No data was deleted.');
+    const columnNames = templateColumns.map((column) => column.column_name).filter(Boolean);
+    const dataHeaders = columnNames.length
+        ? columnNames
+        : (currentRows[0] ? Object.keys(currentRows[0]) : []);
+    if (currentRows.length + 1 > 1048576 || historyRows.length + 1 > 1048576) {
+        throw new Error('This template exceeds Excel’s worksheet row limit. No data was deleted.');
     }
 
+    const workbook = XLSX.utils.book_new();
+    const toCellValue = (value) => value && typeof value === 'object'
+        ? JSON.stringify(value)
+        : (value ?? '');
+    const dataSheet = XLSX.utils.aoa_to_sheet([
+        dataHeaders,
+        ...currentRows.map((row) => dataHeaders.map((name) => toCellValue(row[name]))),
+    ]);
+    XLSX.utils.book_append_sheet(workbook, dataSheet, 'Data');
+
+    const historyHeaders = ['Action', 'Changed At', 'Changed By', ...dataHeaders, 'Changed Fields'];
+    const historySheet = XLSX.utils.aoa_to_sheet([
+        historyHeaders,
+        ...historyRows.map((entry) => [
+            entry.action || '', entry.changed_at || '', entry.changed_by || '',
+            ...dataHeaders.map((name) => toCellValue((entry.row_data || {})[name])),
+            entry.changed_fields ? JSON.stringify(entry.changed_fields) : '',
+        ]),
+    ]);
+    XLSX.utils.book_append_sheet(workbook, historySheet, 'Changed-Deleted History');
+
+    const bytes = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    if (!bytes || !bytes.byteLength) throw new Error('The Excel backup could not be created. No data was deleted.');
+    const safeName = (templateName || 'template').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').slice(0, 100);
+    const date = new Date().toISOString().slice(0, 10);
+    const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${safeName}_backup_${date}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+async function runTemplateBackupAndDelete() {
+    if (!pendingTemplateDelete) return;
+    const { clientId, templateId, templateName, triggerTarget } = pendingTemplateDelete;
     const key = String(templateId);
     if (deleteTemplateInFlight.has(key)) return;
     deleteTemplateInFlight.add(key);
     const previousDisabled = triggerTarget ? triggerTarget.disabled : undefined;
     if (triggerTarget) triggerTarget.disabled = true;
+    backupAndDeleteTemplateBtn.disabled = true;
+    cancelTemplateDeleteBtn.disabled = true;
+    closeTemplateDeleteBtn.disabled = true;
     const globalLoadingToken = window.LoadingUI
-        ? window.LoadingUI.startGlobalLoading(triggerTarget)
+        ? window.LoadingUI.startGlobalLoading(backupAndDeleteTemplateBtn)
         : null;
-    const finishDelete = () => {
+    let downloadStarted = false;
+    let deletionApplied = false;
+
+    try {
+        templateDeleteStatus.textContent = 'Checking the deletion scope…';
+        templateDeleteStatus.style.display = 'block';
+        showStatus('⏳ Preparing the template backup…', 'loading');
+
+        const previewResponse = await fetch(
+            `${API_BASE}/api/clients/${clientId}/data-purge-preview?template_id=${templateId}`
+        );
+        const preview = await previewResponse.json();
+        if (!previewResponse.ok) throw new Error(preview.detail || 'Could not check the deletion scope.');
+        if (!preview.can_apply) {
+            const protectedItems = Object.entries(preview.protected || {})
+                .filter(([, count]) => Number(count) > 0)
+                .map(([name, count]) => `${name}: ${count}`)
+                .join(', ');
+            throw new Error(`Deletion is blocked by linked verification or evidence${protectedItems ? ` (${protectedItems})` : ''}.`);
+        }
+
+        templateDeleteStatus.textContent = 'Collecting all current data and changed/deleted history…';
+        const [current, history] = await Promise.all([
+            fetchTemplateBackupRows(clientId, templateId),
+            fetchTemplateBackupHistory(clientId, templateId),
+        ]);
+        const columns = current.columns.length ? current.columns : history.columns;
+        downloadTemplateBackup(templateName, columns, current.rows, history.rows);
+        downloadStarted = true;
+        templateDeleteStatus.textContent = 'Backup download started. Deleting the template data…';
+        showStatus('⏳ Backup prepared; deleting template data…', 'loading');
+        await new Promise((resolve) => window.setTimeout(resolve, 150));
+
+        const response = await fetch(`${API_BASE}/api/clients/${clientId}/data-purge`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                preview_hash: preview.preview_hash,
+                confirmation: 'PERMANENTLY DELETE SELECTED DATA',
+                template_id: templateId,
+            }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || 'Deletion was not confirmed by the server.');
+        deletionApplied = true;
+
+        templateDeleteModal.style.display = 'none';
+        pendingTemplateDelete = null;
+        invalidateDataBankCaches({ clientId, templateId });
+        await fetchAvailability();
+        const failures = result.staged_file_cleanup_failures || [];
+        showStatus(failures.length
+            ? `⚠️ Template data was deleted, but ${failures.length} staged upload file(s) could not be removed.`
+            : '✅ Backup downloaded and template data permanently deleted.', failures.length ? 'error' : 'success');
+    } catch (error) {
+        console.error('Template backup/delete error:', error);
+        if (deletionApplied) {
+            showStatus('✅ Backup downloaded and template data deleted. Reload the Data Bank because its list could not refresh.', 'success');
+            return;
+        }
+        const prefix = downloadStarted
+            ? 'The backup download was started, but deletion was not confirmed. Refresh the Data Bank before retrying. '
+            : 'No deletion was performed. ';
+        templateDeleteStatus.textContent = prefix + error.message;
+        backupAndDeleteTemplateBtn.disabled = false;
+        cancelTemplateDeleteBtn.disabled = false;
+        closeTemplateDeleteBtn.disabled = false;
+        showStatus(`❌ ${prefix}${error.message}`, 'error');
+    } finally {
         if (triggerTarget) triggerTarget.disabled = previousDisabled;
         if (globalLoadingToken) window.LoadingUI.stopGlobalLoading(globalLoadingToken);
         deleteTemplateInFlight.delete(key);
-    };
-    
-    try {
-        showStatus('⏳ Deleting data...', 'loading');
-        const res = await fetch(`${API_BASE}/api/data/template/${templateId}?client_id=${clientId}`, {
-            method: 'DELETE'
-        });
-        if (!res.ok) {
-            const err = await res.json();
-            throw new Error(err.detail || 'Failed to delete data');
-        }
-        const result = await res.json();
-        showStatus(`✅ ${result.message}`, 'success');
-        // Refresh the availability table
-        invalidateDataBankCaches({ clientId, templateId });
-        await fetchAvailability();
-    } catch (error) {
-        console.error('Delete error:', error);
-        showStatus('❌ Error deleting data: ' + error.message, 'error');
-    } finally {
-        finishDelete();
     }
 }
 // ==============================================
@@ -2363,6 +2515,21 @@ closeHistoryBtn.addEventListener('click', () => {
     historyRequestSequence++;
     historyModal.style.display = 'none';
 });
+function closeTemplateDeleteModal() {
+    if (pendingTemplateDelete && deleteTemplateInFlight.has(String(pendingTemplateDelete.templateId))) return;
+    templateDeleteModal.style.display = 'none';
+    pendingTemplateDelete = null;
+    templateDeleteStatus.textContent = '';
+    templateDeleteStatus.style.display = 'none';
+}
+
+backupAndDeleteTemplateBtn.addEventListener('click', runTemplateBackupAndDelete);
+cancelTemplateDeleteBtn.addEventListener('click', closeTemplateDeleteModal);
+closeTemplateDeleteBtn.addEventListener('click', closeTemplateDeleteModal);
+templateDeleteModal.addEventListener('click', (event) => {
+    if (event.target === templateDeleteModal) closeTemplateDeleteModal();
+});
+
 historyModal.addEventListener('click', (event) => {
     if (event.target === historyModal) {
         historyRequestSequence++;
@@ -2578,6 +2745,10 @@ document.addEventListener('click', (e) => {
 // ESC key closes preview (or just the shared range modal / template
 // calendar modal, if either is open)
 document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && templateDeleteModal.style.display === 'flex') {
+        closeTemplateDeleteModal();
+        return;
+    }
     if (e.key === 'Escape' && historyModal.style.display === 'flex') {
         historyRequestSequence++;
         historyModal.style.display = 'none';
@@ -2609,6 +2780,7 @@ window.onClientChange = function(clientId) {
     clearTimeout(clientChangeTimeout);
     previewRequestSequence++; previewOpenSequence++;
     finishPreviewLedgerLoading(); closePreviewLedgerOptions();
+    if (templateDeleteModal.style.display === 'flex') closeTemplateDeleteModal();
     clientChangeTimeout = setTimeout(() => {
         if (clientId) {
             historyRequestSequence++;

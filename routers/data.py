@@ -2,7 +2,7 @@
 # 📊 CLIENT DATA BANK – BACKEND (FIXED)
 # ==============================================
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from database import execute_query_pg, execute_write_pg, log_audit, log_data_audit_pg, get_data_audit_history_pg, diff_row_data, estimate_client_data_size_pg
 from typing import Optional, List
 from pydantic import BaseModel
@@ -19,6 +19,7 @@ import database
 from routers.verification import get_assignment_status_map
 from routers.audit_rules import build_verification_field_policy
 from services.cash_bank_classification import load_cashflow_classification_preview, normalize_cashflow_account_selection
+from routers.auth import require_admin
 
 router = APIRouter()
 
@@ -712,6 +713,57 @@ def get_client_data_history(
         "columns": columns,
         "document_key_column": (columns or [{}])[0].get("column_name"),
         "rows": rows,
+    }
+
+
+@router.get("/api/data/template/{template_id}/backup-rows")
+def get_template_backup_rows(
+    template_id: int,
+    client_id: int = Query(..., description="Client ID"),
+    page: int = Query(1, ge=1, description="Page number"),
+    limit: int = Query(1000, ge=1, le=1000, description="Rows per page"),
+    session=Depends(require_admin),
+):
+    """Return unfiltered current template rows for the guarded delete workbook."""
+    if not execute_query_pg(
+        "SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,)
+    ):
+        raise HTTPException(404, "Client not found or inactive")
+    template = execute_query_pg(
+        "SELECT id, template_name FROM templates WHERE id = %s AND is_active = TRUE",
+        (template_id,),
+    )
+    if not template:
+        raise HTTPException(404, "Template not found or inactive")
+
+    where_sql = (
+        "client_id = %s AND template_id = %s AND COALESCE(is_deleted, FALSE) = FALSE "
+        "AND COALESCE(change_detection_status, '') <> 'deleted'"
+    )
+    params = (client_id, template_id)
+    total_rows = execute_query_pg(
+        f"SELECT COUNT(*) AS total FROM client_data WHERE {where_sql}", params
+    )
+    total = int(total_rows[0]["total"]) if total_rows else 0
+    offset = (page - 1) * limit
+    rows = execute_query_pg(
+        f"""SELECT row_data FROM client_data
+            WHERE {where_sql}
+            ORDER BY extract_date ASC NULLS LAST, source_order_upload_id ASC NULLS LAST,
+                     source_row_number ASC NULLS LAST, id
+            LIMIT %s OFFSET %s""",
+        (*params, limit, offset),
+    ) if total else []
+    return {
+        "client_id": client_id,
+        "template_id": template_id,
+        "template_name": template[0]["template_name"],
+        "columns": get_template_columns_ordered(template_id),
+        "page": page,
+        "limit": limit,
+        "total": total,
+        "total_pages": (total + limit - 1) // limit,
+        "rows": [row.get("row_data") or {} for row in rows],
     }
 
 
