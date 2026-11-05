@@ -855,13 +855,18 @@ def get_preview_rows(
                 if field.get("available") and field.get("column_name")
             ] + [field["column_name"] for field in verification_policy["optional_fields"]]
 
-    # Document grouping / subtotal support: resolve the document-key column
-    # (first template column), the Date column, and all Amount (Numeric)
+    # Resolve the configured document key (first column only for legacy templates),
+    # the Date column, and all Amount (Numeric)
     # columns once per request - reused for both the empty-result early
     # return and the main response below, and to compute each row's
     # document_group_id.
     template_cols = get_template_columns_ordered(template_id)
-    doc_key_column = template_cols[0]["column_name"] if template_cols else None
+    try:
+        doc_column = database.resolve_document_column(template_cols)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    doc_key_column = doc_column['column_name'] if doc_column else None
+    configured_document_key = bool(doc_column and doc_column.get('reconciliation_role') == 'document_id')
     date_column = next((c["column_name"] for c in template_cols if c["data_type"] == "Date"), None)
     amount_columns = [c["column_name"] for c in template_cols if c["data_type"] == "Numeric"]
 
@@ -983,7 +988,7 @@ def get_preview_rows(
             # under a since-changed template setting.
             "rate_source": r["rate_source"],
             "document_group_id": ((r.get('document_group_id') or f"__row_{r['id']}") if is_ledger else
-                                  compute_preview_document_group_id(row_dict, r["extract_date"], doc_key_column, r["id"]))
+                                  compute_preview_document_group_id(row_dict, r["extract_date"], doc_key_column, r["id"], include_date=not configured_document_key))
         })
 
     # Batch-flag rows that have revision history (one query for the whole page)
@@ -1205,7 +1210,7 @@ def get_template_columns_ordered(template_id: int) -> list:
     """
     return execute_query_pg(
         """
-        SELECT m.column_name, m.data_type
+        SELECT m.column_name, m.data_type, p.reconciliation_role
         FROM template_column_mappings p
         JOIN master_columns m ON p.column_id = m.id
         WHERE p.template_id = %s AND m.is_active = TRUE
@@ -1215,41 +1220,32 @@ def get_template_columns_ordered(template_id: int) -> list:
     )
 
 
-def compute_preview_document_group_id(row_data: dict, extract_date: Optional[str], doc_key_column: Optional[str], row_id: int) -> str:
+def compute_preview_document_group_id(row_data: dict, extract_date: Optional[str], doc_key_column: Optional[str], row_id: int, *, include_date=True) -> str:
     """
-    Groups Data Bank preview rows into documents: same document key (first
-    template column, same convention as get_document_group_id() in
-    routers/import_export.py) + same date. Falls back to a per-row-unique id
+    Group display rows using their document key without collapsing detail rows.
+    Configured keys exclude date; legacy templates retain key plus date.
+    Falls back to a per-row-unique id
     when there's no key column or the key value is blank, so such rows are
     never silently grouped together with unrelated rows.
     """
     if doc_key_column:
         doc_value = row_data.get(doc_key_column)
         if doc_value is not None and str(doc_value).strip() != '':
-            return f"{str(doc_value).strip()}||{extract_date}"
+            return f"{str(doc_value).strip()}||{extract_date}" if include_date else str(doc_value).strip()
     return f"__row_{row_id}"
 
 
 def get_template_document_key_column(template_id: int) -> Optional[str]:
     """
-    Returns the column_name of a template's unique document key: the first
-    column by sort_order, mirroring get_document_group_id()'s (routers/
-    import_export.py) "first template column = unique document key"
-    convention used elsewhere for voucher/document grouping. Returns None if
+    Return the configured Document ID name (legacy: first by sort_order),
+    sharing upload identity resolution. Returns None if
     the template has no active columns configured.
     """
-    row = execute_query_pg(
-        """
-        SELECT m.column_name
-        FROM template_column_mappings p
-        JOIN master_columns m ON p.column_id = m.id
-        WHERE p.template_id = %s AND m.is_active = TRUE
-        ORDER BY p.sort_order ASC
-        LIMIT 1
-        """,
-        (template_id,)
-    )
-    return row[0]["column_name"] if row else None
+    try:
+        column = database.resolve_document_column(get_template_columns_ordered(template_id))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return column['column_name'] if column else None
 
 
 # Caps how many of get_availability()'s per-template DB calls run at once -
@@ -1274,13 +1270,13 @@ async def _compute_document_count(client_id: int, tid: int, fallback_row_count: 
     async with _AVAILABILITY_DB_SEMAPHORE:
         doc_count_result = await asyncio.to_thread(
             execute_query_pg,
-            f"""
-            SELECT COUNT(DISTINCT cd.row_data->>'{key_column}') as doc_count
+            """
+            SELECT COUNT(DISTINCT NULLIF(BTRIM(cd.row_data->>%s), '')) as doc_count
             FROM client_data cd
             WHERE cd.client_id = %s AND cd.template_id = %s AND cd.is_deleted = FALSE
               AND cd.change_detection_status != 'deleted'
             """,
-            (client_id, tid)
+            (key_column, client_id, tid)
         )
     return doc_count_result[0]["doc_count"] if doc_count_result else 0
 

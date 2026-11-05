@@ -486,7 +486,7 @@ def test_99_unchanged_complete_report_rows_are_not_written_again(pipeline):
 
 def test_unchecked_balance_refreshes_only_after_confirmed_import_without_history(pipeline, monkeypatch):
     import sys
-    columns = deepcopy(COLUMNS) + [{'id': 7, 'column_name': 'Balance', 'data_type': 'Text'}]
+    columns = deepcopy(COLUMNS) + [{'id': 7, 'column_name': 'Balance', 'data_type': 'Text', 'compare_for_changes': False}]
     monkeypatch.setattr(sys.modules[__name__], 'COLUMNS', columns)
     state = pipeline
     old = {**row(), 'Balance': '100 DR'}
@@ -494,7 +494,7 @@ def test_unchecked_balance_refreshes_only_after_confirmed_import_without_history
     state['incoming'] = [{**old, 'Balance': '80 DR'}]
 
     validation_request = request()
-    validation_request.mappings[-1].compare_for_changes = False
+    validation_request.mappings[-1].compare_for_changes = True  # Cannot override the template.
     validation = upload.validate_only(validation_request)
 
     assert validation['can_import']
@@ -505,7 +505,7 @@ def test_unchecked_balance_refreshes_only_after_confirmed_import_without_history
     assert state['store'].source_writes == 0 and state['store'].history == []
 
     import_request = request(validation_plan_id=validation['validation_plan_id'])
-    import_request.mappings[-1].compare_for_changes = False
+    import_request.mappings[-1].compare_for_changes = True
     result = upload.validate_and_import(import_request)
 
     assert result['updated_count'] == 0

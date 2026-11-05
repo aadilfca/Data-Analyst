@@ -15,6 +15,62 @@ from routers.import_export import (
 
 
 class ImportDuplicateGateTests(unittest.TestCase):
+    def test_comparison_policy_change_invalidates_an_existing_plan(self):
+        from types import SimpleNamespace
+        from routers import import_export as uploads
+        old = [dict(id=1,column_name='Voucher',data_type='Text',compare_for_changes=True)]
+        new = [dict(old[0],compare_for_changes=False)]
+        def query(sql,params=None):
+            return [{'rate_source':None}] if 'FROM templates' in sql else new
+        with patch.object(uploads,'execute_query_pg',side_effect=query):
+            with self.assertRaises(HTTPException) as error:
+                uploads._guard_plan_configuration(SimpleNamespace(template_id=1,mappings=[]),
+                    {'lifecycle':{'id':'old'},'template_fingerprint':uploads.digest([old,None])})
+        self.assertEqual(error.exception.status_code,409)
+
+    def test_template_comparisons_ignore_upload_choices_and_block_unresolved_migration(self):
+        from routers.import_export import _comparison_column_names, ColumnMapping
+        columns = [dict(id=1,column_name='Voucher',data_type='Text',compare_for_changes=True),
+                   dict(id=2,column_name='Description',data_type='Text',compare_for_changes=False),
+                   dict(id=3,column_name='Balance',data_type='Text')]
+        ledger = {'data_purpose':'account_ledger','ledger_columns':{'balance':3}}
+        for choice in (False,True):
+            request_choices = [ColumnMapping(template_column_id=c['id'],template_column_name=c['column_name'],compare_for_changes=choice) for c in columns]
+            self.assertEqual(_comparison_column_names(columns,request_choices,ledger),{'Voucher'})
+        columns[1]['comparison_review_required'] = True
+        with self.assertRaises(HTTPException) as error:
+            _comparison_column_names(columns,[],ledger)
+        self.assertEqual(error.exception.status_code,409)
+        self.assertIn('Edit Template',error.exception.detail)
+
+    def test_configured_document_key_preserves_values_and_repeated_detail_rows(self):
+        from routers.import_export import get_document_group_id, get_critical_field_columns
+        columns = [
+            {'id': 1, 'column_name': 'Voucher', 'data_type': 'Text'},
+            {'id': 2, 'column_name': 'Document', 'data_type': 'Text', 'reconciliation_role': 'document_id'},
+            {'id': 3, 'column_name': 'Amount', 'data_type': 'Numeric', 'reconciliation_role': 'footing'},
+        ]
+        rows = [{'Voucher': 'V1', 'Document': doc, 'Amount': 100} for doc in ['D1', 'D1', 'D2']]
+        groups = [get_document_group_id(columns, row, 7) for row in rows]
+        self.assertEqual(groups, ['7-D1', '7-D1', '7-D2'])
+        self.assertEqual(len(set(_canonical_source_identities(columns, rows, 7))), 3)
+        self.assertEqual(get_critical_field_columns(columns)['document_id']['id'], 2)
+        self.assertEqual(_canonical_source_identities(columns, rows, 7),
+                         _canonical_source_identities([columns[2], columns[1], columns[0]], rows, 7))
+
+    def test_marking_current_key_retains_stored_identity(self):
+        columns = [{'id': 1, 'column_name': 'Voucher', 'data_type': 'Text'}]
+        row = {'Voucher': 'V1'}
+        original = _canonical_source_identity(columns, row, 7)
+        self.assertEqual(original, _canonical_source_identity(
+            [dict(columns[0], reconciliation_role='document_id')], row, 7))
+
+    def test_ambiguous_document_fields_are_rejected(self):
+        from routers.import_export import get_document_group_id
+        columns = [{'column_name': key, 'data_type': 'Text', 'reconciliation_role': 'document_id'} for key in ['A', 'B']]
+        with self.assertRaises(HTTPException):
+            get_document_group_id(columns, {'A': 'one', 'B': 'two'}, 1)
+
     def setUp(self):
         self.template_cols = [
             {"id": 1, "column_name": "Voucher ID", "data_type": "Text"},

@@ -487,11 +487,17 @@ def init_db():
                 template_id INTEGER NOT NULL,
                 column_id INTEGER NOT NULL,
                 sort_order INTEGER NOT NULL DEFAULT 0,
+                reconciliation_role TEXT DEFAULT NULL,
+                compare_for_changes INTEGER,
+                comparison_review_required INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY (template_id) REFERENCES templates(id) ON DELETE CASCADE,
                 FOREIGN KEY (column_id) REFERENCES master_columns(id) ON DELETE CASCADE,
                 UNIQUE(template_id, column_id)
             )
         ''')
+
+        _ensure_template_column_roles(conn)
+        _ensure_template_comparisons(conn)
 
         conn.execute('''
             CREATE TABLE IF NOT EXISTS uploaded_files (
@@ -5343,6 +5349,172 @@ def _ensure_postgres_cashflow_report_source_policy(conn):
         cur.close()
 
 
+def _ensure_template_column_roles(conn, *, postgres=False):
+    """Move role ownership to template mappings once, without altering transaction data.
+
+    Retain the superseded master-column field if it exists; it is never read by
+    current configuration APIs. Only migrate an old document role when it was the
+    template's first key or the template already has data whose identities must survive.
+    Reference-only uses in empty templates and global footing choices need local selection.
+    """
+    cur = conn.cursor()
+    try:
+        if postgres:
+            cur.execute("""SELECT 1 FROM information_schema.columns WHERE table_schema='public'
+                AND table_name='template_column_mappings' AND column_name='reconciliation_role'""")
+            exists = bool(cur.fetchone())
+        else:
+            cur.execute('PRAGMA table_info(template_column_mappings)')
+            exists = any(row[1] == 'reconciliation_role' for row in cur.fetchall())
+        if exists:
+            return
+        cur.execute('SAVEPOINT template_roles_upgrade')
+        try:
+            cur.execute('ALTER TABLE template_column_mappings ADD COLUMN reconciliation_role TEXT DEFAULT NULL')
+            if postgres:
+                cur.execute("""SELECT 1 FROM information_schema.columns WHERE table_schema='public'
+                    AND table_name='master_columns' AND column_name='reconciliation_role'""")
+                legacy = bool(cur.fetchone())
+                cur.execute("SELECT to_regclass('public.client_data')")
+                has_data = cur.fetchone()[0] is not None
+            else:
+                cur.execute('PRAGMA table_info(master_columns)')
+                legacy = any(row[1] == 'reconciliation_role' for row in cur.fetchall())
+                cur.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='client_data'")
+                has_data = bool(cur.fetchone())
+            if legacy:
+                populated = set()
+                if has_data:
+                    cur.execute('SELECT DISTINCT template_id FROM client_data WHERE is_deleted = ' + ('FALSE' if postgres else '0'))
+                    populated = {row[0] for row in cur.fetchall()}
+                cur.execute('''SELECT p.id, p.template_id, m.reconciliation_role FROM template_column_mappings p
+                    JOIN master_columns m ON m.id=p.column_id WHERE m.is_active = ''' + ('TRUE' if postgres else '1') + '''
+                    ORDER BY p.template_id, p.sort_order, p.id''')
+                groups = {}
+                for row in cur.fetchall():
+                    groups.setdefault(row[1], []).append(row)
+                for tid, rows in groups.items():
+                    document = [row for row in rows if row[2] == 'document_id']
+                    if len(document) == 1 and (document[0][0] == rows[0][0] or tid in populated):
+                        placeholder = '%s' if postgres else '?'
+                        cur.execute("UPDATE template_column_mappings SET reconciliation_role='document_id' WHERE id=" + placeholder,
+                                    (document[0][0],))
+                # Any reviewed plan predates the change of role ownership.
+                if postgres:
+                    cur.execute("SELECT to_regclass('public.upload_validation_plans')")
+                    has_plans = cur.fetchone()[0] is not None
+                else:
+                    cur.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='upload_validation_plans'")
+                    has_plans = bool(cur.fetchone())
+                if has_plans:
+                    cur.execute("UPDATE upload_validation_plans SET status='superseded' WHERE status='ready'")
+            cur.execute('RELEASE SAVEPOINT template_roles_upgrade')
+        except Exception:
+            cur.execute('ROLLBACK TO SAVEPOINT template_roles_upgrade')
+            cur.execute('RELEASE SAVEPOINT template_roles_upgrade')
+            raise
+    finally:
+        cur.close()
+
+
+def _ensure_postgres_template_column_roles(conn):
+    _ensure_template_column_roles(conn, postgres=True)
+    _ensure_template_comparisons(conn, postgres=True)
+
+
+def _ensure_template_comparisons(conn, *, postgres=False):
+    """Promote unanimous saved choices once; retain conflicting choices for review."""
+    cur = conn.cursor()
+    try:
+        if postgres:
+            cur.execute("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='template_column_mappings'")
+            fields = {r[0] for r in cur.fetchall()}
+        else:
+            cur.execute('PRAGMA table_info(template_column_mappings)')
+            fields = {r[1] for r in cur.fetchall()}
+        if {'compare_for_changes', 'comparison_review_required'} <= fields:
+            return
+        cur.execute('SAVEPOINT template_comparisons_upgrade')
+        try:
+            if 'compare_for_changes' not in fields:
+                cur.execute('ALTER TABLE template_column_mappings ADD COLUMN compare_for_changes ' + ('BOOLEAN' if postgres else 'INTEGER'))
+            if 'comparison_review_required' not in fields:
+                cur.execute('ALTER TABLE template_column_mappings ADD COLUMN comparison_review_required ' +
+                            ('BOOLEAN NOT NULL DEFAULT FALSE' if postgres else 'INTEGER NOT NULL DEFAULT 0'))
+            if postgres:
+                cur.execute("SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='saved_column_mappings' AND column_name='compare_for_changes'")
+                has_saved = bool(cur.fetchone())
+            else:
+                cur.execute('PRAGMA table_info(saved_column_mappings)')
+                has_saved = any(r[1] == 'compare_for_changes' for r in cur.fetchall())
+            if has_saved:
+                cur.execute('''SELECT template_id, template_column_id,
+                    MIN(CASE WHEN compare_for_changes THEN 1 ELSE 0 END),
+                    MAX(CASE WHEN compare_for_changes THEN 1 ELSE 0 END)
+                    FROM saved_column_mappings WHERE compare_for_changes IS NOT NULL
+                    GROUP BY template_id, template_column_id''')
+                choices = cur.fetchall()
+                placeholder = '%s' if postgres else '?'
+                sql = ('UPDATE template_column_mappings SET compare_for_changes=' + placeholder +
+                       ', comparison_review_required=' + placeholder + ' WHERE template_id=' + placeholder +
+                       ' AND column_id=' + placeholder + ' AND compare_for_changes IS NULL')
+                for tid, cid, low, high in choices:
+                    cur.execute(sql, (bool(low) if low == high else None, low != high, tid, cid))
+            if postgres:
+                cur.execute("SELECT to_regclass('public.upload_validation_plans')")
+                has_plans = cur.fetchone()[0] is not None
+            else:
+                cur.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='upload_validation_plans'")
+                has_plans = bool(cur.fetchone())
+            if has_plans:
+                cur.execute("UPDATE upload_validation_plans SET status='superseded' WHERE status='ready'")
+            cur.execute('RELEASE SAVEPOINT template_comparisons_upgrade')
+        except Exception:
+            cur.execute('ROLLBACK TO SAVEPOINT template_comparisons_upgrade')
+            cur.execute('RELEASE SAVEPOINT template_comparisons_upgrade')
+            raise
+    finally:
+        cur.close()
+
+
+def resolve_column_comparison(column, template):
+    """All fields default on except the explicitly configured ledger Balance role."""
+    chosen = column.get('compare_for_changes')
+    if chosen is not None:
+        return bool(chosen)
+    roles = template.get('ledger_columns') or {}
+    if isinstance(roles, str):
+        roles = json.loads(roles)
+    cid = column.get('id', column.get('column_id'))
+    return not (template.get('data_purpose') == 'account_ledger' and roles.get('balance') is not None
+                and str(cid) == str(roles['balance']))
+
+
+def resolve_column_type(data_type, reconciliation_role=None):
+    """Keep reconciliation meaning separate from Text/Numeric validation."""
+    if data_type not in ('Text', 'Numeric', 'Date'):
+        raise ValueError('Choose Text, Numeric or Date. Document ID and Footing are selected in Edit Template.')
+    if reconciliation_role not in (None, 'document_id', 'footing'):
+        raise ValueError('Unknown reconciliation role.')
+    if (reconciliation_role == 'document_id' and data_type != 'Text'
+            or reconciliation_role == 'footing' and data_type != 'Numeric'):
+        raise ValueError('Document ID requires Text; Footing requires Numeric.')
+    return data_type, reconciliation_role
+
+
+def resolve_document_column(columns):
+    """Resolve one document field, retaining legacy order only for unconfigured templates.
+
+    Identifiers group detail rows; they never collapse or deduplicate those rows.
+    """
+    selected = [c for c in columns if c.get('reconciliation_role') == 'document_id']
+    if len(selected) > 1:
+        raise ValueError('Use one Document ID column per template; it can contain many document values.')
+    if selected and selected[0].get('data_type') != 'Text':
+        raise ValueError('The Document ID column must have the Text base type.')
+    return selected[0] if selected else (columns[0] if columns else None)
+
+
 def init_db_postgres(conn):
     global _POSTGRES_SCHEMA_READY
 
@@ -5356,6 +5528,7 @@ def init_db_postgres(conn):
     cur.execute("SELECT to_regclass('public.audit_rules_config_state')")
     if cur.fetchone()[0] is not None:
         cur.close()
+        _ensure_postgres_template_column_roles(conn)
         _ensure_postgres_storage_cleanup_runs(conn)
         _ensure_postgres_upload_validation_plans(conn)
         _ensure_postgres_upload_summary_columns(conn)
@@ -5492,9 +5665,13 @@ def init_db_postgres(conn):
             template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
             column_id INTEGER NOT NULL REFERENCES master_columns(id) ON DELETE CASCADE,
             sort_order INTEGER NOT NULL DEFAULT 0,
+            reconciliation_role TEXT DEFAULT NULL,
+            compare_for_changes BOOLEAN,
+            comparison_review_required BOOLEAN NOT NULL DEFAULT FALSE,
             UNIQUE(template_id, column_id)
         )
     ''', "template_column_mappings")
+    _ensure_postgres_template_column_roles(conn)
 
     # ---------- 6. uploaded_files ----------
     run('''

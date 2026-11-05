@@ -14,7 +14,7 @@ from database import (
     execute_query_pg, execute_write_pg, log_audit, pg_transaction,
     log_data_audit_pg, execute_batch_pg, execute_batch_insert_with_ids_pg,
     start_db_metrics, get_db_metrics, get_db_query_details, stop_db_metrics, log_error,
-    compact_audit_payloads, get_database_storage_budget_pg,
+    compact_audit_payloads, get_database_storage_budget_pg, resolve_document_column,
 )
 from psycopg2.extras import Json
 from services.cash_bank_classification import load_treasury_mapping_postgres, upsert_classification_rows_postgres
@@ -134,7 +134,7 @@ def _resolve_ledger_context(request, template, *, lock=False):
         raise HTTPException(400, "Set all six ledger column roles in the template.")
     column_lock = " FOR SHARE OF m, p" if lock else ""
     columns = execute_query_pg(
-        """SELECT m.id, m.column_name, m.data_type FROM template_column_mappings p
+        """SELECT m.id, m.column_name, m.data_type, p.reconciliation_role, p.compare_for_changes, p.comparison_review_required FROM template_column_mappings p
            JOIN master_columns m ON m.id = p.column_id AND m.is_active = TRUE
            WHERE p.template_id = %s ORDER BY p.sort_order""" + column_lock, (request.template_id,),
     )
@@ -285,7 +285,7 @@ def _prepare_source_rows(frame, request, template_cols, col_mapping):
     roles = (context or {}).get('excel_roles', {})
     if context:
         context['note_candidates'] = {}
-    key = roles.get('voucher') or col_mapping.get(template_cols[0]['column_name'])
+    key = roles.get('voucher') or col_mapping.get(resolve_document_column(template_cols)['column_name'])
     protected = {col_mapping.get(c['column_name']) for c in template_cols
                  if c['data_type'] == 'Date' or 'account' in c['column_name'].casefold()}
     protected.discard(None)
@@ -1254,26 +1254,11 @@ def _row_comparison_fingerprint(row_data: dict) -> tuple:
 
 
 def _comparison_column_names(template_cols: list, request_mappings: list, template: dict) -> set:
-    """Resolve the fields that decide whether a transaction itself changed."""
-    mappings = {item.template_column_id: item for item in request_mappings}
-    roles = template.get('ledger_columns') or {}
-    if isinstance(roles, str):
-        try:
-            roles = json.loads(roles)
-        except (TypeError, ValueError):
-            roles = {}
-    ledger_balance_id = roles.get('balance') if template.get('data_purpose') == 'account_ledger' else None
-    ledger_balance = next((column['column_name'] for column in template_cols
-                           if str(column['id']) == str(ledger_balance_id)), None)
-    included = set()
-    for column in template_cols:
-        mapping = mappings.get(column['id'])
-        compare = getattr(mapping, 'compare_for_changes', None) if mapping else None
-        if compare is None:
-            compare = column['column_name'] != ledger_balance
-        if compare:
-            included.add(column['column_name'])
-    return included
+    """Template metadata is authoritative; legacy request choices cannot override it."""
+    conflicts = [c['column_name'] for c in template_cols if c.get('comparison_review_required')]
+    if conflicts:
+        raise HTTPException(409, 'Previous client comparison settings differ. Ask an administrator to review Compare for changes in Edit Template and save it. Fields: ' + ', '.join(conflicts))
+    return {c['column_name'] for c in template_cols if database.resolve_column_comparison(c, template)}
 
 
 def _comparison_calendar_date(value, delimiter, order, *, stored=False):
@@ -1406,7 +1391,7 @@ def build_change_report(change_detection: dict, template_cols: list, template_id
         report.append({
             "action": "Changed",
             "client_data_id": item.get("client_data_id"),
-            "document_id": old_row.get(template_cols[0]["column_name"]) if template_cols else None,
+            "document_id": old_row.get(resolve_document_column(template_cols)["column_name"]) if template_cols else None,
             "line_key": _comparison_line_key(template_cols, new_row, template_id),
             "changed_fields": changed_fields,
             "old_values": {
@@ -1422,7 +1407,7 @@ def build_change_report(change_detection: dict, template_cols: list, template_id
         report.append({
             "action": "Added",
             "client_data_id": None,
-            "document_id": row_data.get(template_cols[0]["column_name"]) if template_cols else None,
+            "document_id": row_data.get(resolve_document_column(template_cols)["column_name"]) if template_cols else None,
             "line_key": _comparison_line_key(template_cols, row_data, template_id),
             "changed_fields": [],
         })
@@ -1433,7 +1418,7 @@ def build_change_report(change_detection: dict, template_cols: list, template_id
         report.append({
             "action": "Informational update",
             "client_data_id": item.get("client_data_id"),
-            "document_id": old_row.get(template_cols[0]["column_name"]) if template_cols else None,
+            "document_id": old_row.get(resolve_document_column(template_cols)["column_name"]) if template_cols else None,
             "line_key": _comparison_line_key(template_cols, new_row, template_id),
             "changed_fields": fields,
             "old_values": {field: old_row.get(field) for field in fields},
@@ -1444,7 +1429,7 @@ def build_change_report(change_detection: dict, template_cols: list, template_id
         report.append({
             "action": "Removed",
             "client_data_id": item.get("client_data_id"),
-            "document_id": old_row.get(template_cols[0]["column_name"]) if template_cols else None,
+            "document_id": old_row.get(resolve_document_column(template_cols)["column_name"]) if template_cols else None,
             "line_key": _comparison_line_key(template_cols, old_row, template_id),
             "changed_fields": [],
         })
@@ -2248,7 +2233,7 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
 
         def ambiguous_correction(uploaded, current, account=None):
             voucher = (incoming or [{}])[0].get('row_data', {}).get(
-                template_cols[0]['column_name'], document_group_id) if template_cols else document_group_id
+                resolve_document_column(template_cols)['column_name'], document_group_id) if template_cols else document_group_id
             # Compare field populations, not every possible row pairing. A
             # matching amount population must not be labelled an amount change.
             from collections import Counter
@@ -2387,7 +2372,7 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
                 Counter(str(new_values[id(r)].get(name, '')) for r in incoming))
             result['voucher_observations'].append({
                 'document_group_id': document_group_id,
-                'voucher_id': (incoming[0]['row_data'] if incoming else existing[0]['old_row_data']).get(template_cols[0]['column_name'], document_group_id),
+                'voucher_id': (incoming[0]['row_data'] if incoming else existing[0]['old_row_data']).get(resolve_document_column(template_cols)['column_name'], document_group_id),
                 'status': 'Changed' if incoming else 'Removed',
                 'changed_fields': fields or ['Line composition'],
                 'old_ids': [r['client_data_id'] for r in existing],
@@ -2427,6 +2412,7 @@ class ColumnMapping(BaseModel):
     excel_column_name: Optional[str] = None
     matched: bool = False
     mapping_status: str = "unmatched"
+    # Accepted for older clients only; authoritative policy is stored on the template.
     compare_for_changes: Optional[bool] = None
 
 class EditedCellValue(BaseModel):
@@ -2797,15 +2783,18 @@ def _assert_active_identity_collisions(
         )
 
 
-# ---------- HELPER: Compute document_group_id from the first template column ----------
+# ---------- HELPER: Resolve configured document identity; preserve legacy templates ----------
 def get_document_group_id(template_cols: list, row_data: dict, template_id: int) -> str:
     """
-    Returns a unique document group ID by taking the value of the first template column
-    (lowest sort_order) and prefixing it with the template_id for uniqueness.
+    Prefix the configured Document ID with the template ID (and ledger account).
+    Unconfigured templates retain their existing first-column convention.
     If the column value is empty/missing, returns a fallback hash.
     """
-    # Find the first column by sort_order (lowest sort_order = first column)
-    first_col = template_cols[0] if template_cols else None
+    # Resolving a document never aggregates its source detail rows.
+    try:
+        first_col = resolve_document_column(template_cols)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     context = _ledger_context.get()
     prefix = f"{template_id}-ledger:{context['account_code']}:" if context else f"{template_id}-"
     if first_col:
@@ -2927,10 +2916,8 @@ def get_critical_field_columns(template_cols: list) -> dict:
     """
     Identifies which template columns fill the 3 "critical" roles used for
     row-level blank rejection -- Document ID / Amount / Date -- using the SAME
-    positional conventions already established elsewhere in this file, since
-    this schema has no explicit "Document ID"/"Amount"/"Date" column names:
-      - document_id = the first template column by sort_order (matches
-        get_document_group_id()'s "first column = unique document key" rule)
+    configured/legacy conventions shared by document grouping and validation:
+      - document_id = configured Document ID (first column for legacy templates)
       - amount      = the first Numeric-typed column (matches
         extract_columns_from_row()'s "take first numeric" rule)
       - date        = the first Date-typed column (matches
@@ -2943,7 +2930,7 @@ def get_critical_field_columns(template_cols: list) -> dict:
         return {key: by_name[context["roles"][role]] for key, role in
                 (("document_id", "voucher"), ("amount", "debit"), ("date", "date"))}
     return {
-        'document_id': template_cols[0] if template_cols else None,
+        'document_id': resolve_document_column(template_cols),
         'amount': next((c for c in template_cols if c['data_type'] == 'Numeric'), None),
         'date': next((c for c in template_cols if c['data_type'] == 'Date'), None),
     }
@@ -3068,7 +3055,7 @@ def auto_map_headers(request: AutoMapRequest):
     # Fetch template columns
     template_cols = execute_query_pg(
         """
-        SELECT m.id AS column_id, m.column_name, m.data_type, p.sort_order
+        SELECT m.id AS column_id, m.column_name, m.data_type, p.reconciliation_role, p.compare_for_changes, p.comparison_review_required, p.sort_order
         FROM template_column_mappings p
         JOIN master_columns m ON p.column_id = m.id
         WHERE p.template_id = %s AND m.is_active = TRUE
@@ -3123,6 +3110,8 @@ def auto_map_headers(request: AutoMapRequest):
             "column_id": t_col['column_id'],
             "column_name": t_col['column_name'],
             "data_type": t_col['data_type'],
+            "reconciliation_role": t_col.get('reconciliation_role'),
+            "compare_for_changes": t_col.get('compare_for_changes'),
             "excel_column": best_match,
             "is_matched": best_match is not None,
             "match_score": best_score,
@@ -3155,22 +3144,24 @@ def save_column_mapping(request: SaveMappingRequest):
         raise HTTPException(404, "Template not found")
 
     entries = [
-        (request.client_id, request.template_id, entry.template_column_id, entry.excel_column, entry.compare_for_changes)
+        (request.client_id, request.template_id, entry.template_column_id, entry.excel_column)
         for entry in request.mappings
         if entry.excel_column and entry.excel_column.strip()
     ]
     with pg_transaction() as conn:
         execute_write_pg(
-            "DELETE FROM saved_column_mappings WHERE client_id = %s AND template_id = %s",
-            (request.client_id, request.template_id)
+            "DELETE FROM saved_column_mappings WHERE client_id = %s AND template_id = %s AND NOT (template_column_id = ANY(%s::int[]))",
+            (request.client_id, request.template_id, [entry[2] for entry in entries])
         )
         if entries:
             execute_batch_pg(
                 conn,
                 """
                 INSERT INTO saved_column_mappings
-                    (client_id, template_id, template_column_id, excel_column, compare_for_changes)
-                VALUES (%s, %s, %s, %s, %s)
+                    (client_id, template_id, template_column_id, excel_column)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (client_id, template_id, template_column_id) DO UPDATE
+                SET excel_column = EXCLUDED.excel_column, updated_at = CURRENT_TIMESTAMP
                 """,
                 entries,
             )
@@ -3192,13 +3183,12 @@ def get_saved_column_mapping(client_id: int, template_id: int):
     to check has_saved_mapping, no special-case error handling required on the frontend.
     """
     rows = execute_query_pg(
-        "SELECT template_column_id, excel_column, compare_for_changes FROM saved_column_mappings WHERE client_id = %s AND template_id = %s",
+        "SELECT template_column_id, excel_column FROM saved_column_mappings WHERE client_id = %s AND template_id = %s",
         (client_id, template_id)
     )
     return {
         "has_saved_mapping": len(rows) > 0,
-        "mappings": [{"template_column_id": r["template_column_id"], "excel_column": r["excel_column"],
-                      "compare_for_changes": r.get("compare_for_changes")} for r in rows]
+        "mappings": [{"template_column_id": r["template_column_id"], "excel_column": r["excel_column"]} for r in rows]
     }
 
 
@@ -3249,7 +3239,7 @@ def check_duplicates(request: ImportRequest):
     # Get template columns with their types
     template_cols = execute_query_pg(
         """
-        SELECT m.id, m.column_name, m.data_type
+        SELECT m.id, m.column_name, m.data_type, p.reconciliation_role, p.compare_for_changes, p.comparison_review_required
         FROM template_column_mappings p
         JOIN master_columns m ON p.column_id = m.id
         WHERE p.template_id = %s AND m.is_active = TRUE
@@ -3291,13 +3281,16 @@ def check_duplicates(request: ImportRequest):
                 row_data[t_col_name] = value
         row_data_list.append(row_data)
 
-    # If no unique column selected, return empty (no duplicates to check)
-    if not request.unique_column_id:
+    # Configured document roles govern this legacy advisory endpoint as well as
+    # the full Validate/import comparison. Preserve the old selector for legacy templates.
+    configured_key = resolve_document_column(template_cols)
+    configured_key = configured_key if configured_key and configured_key.get('reconciliation_role') == 'document_id' else None
+    if not configured_key and not request.unique_column_id:
         return {"has_duplicates": False, "duplicates": []}
 
     # Get the unique column name
     col_id_to_name = {col['id']: col['column_name'] for col in template_cols}
-    unique_col_name = col_id_to_name.get(request.unique_column_id)
+    unique_col_name = configured_key['column_name'] if configured_key else col_id_to_name.get(request.unique_column_id)
     if not unique_col_name:
         return {"has_duplicates": False, "duplicates": []}
 
@@ -3310,14 +3303,18 @@ def check_duplicates(request: ImportRequest):
 
                 # Case‑insensitive matching – compare lowercased values. json_extract's
                 # '$."col"' path -> the JSONB ->> text-extraction operator.
+        predicate = ('BTRIM(row_data->>%s) = %s' if configured_key
+                     else 'LOWER(row_data->>%s) = LOWER(%s)')
         existing = execute_query_pg(
-            """
+            f"""
             SELECT id, row_data, extract_amount, extract_date
             FROM client_data
             WHERE client_id = %s AND template_id = %s AND is_deleted = FALSE
-            AND LOWER(row_data->>'{}') = LOWER(%s)
-            """.format(unique_col_name),
-            (request.client_id, request.template_id, str(unique_value))
+            AND {predicate}
+            ORDER BY id
+            """,
+            (request.client_id, request.template_id, unique_col_name,
+             str(unique_value).strip() if configured_key else str(unique_value))
         )
 
         if existing:
@@ -3328,6 +3325,9 @@ def check_duplicates(request: ImportRequest):
             duplicates.append({
                 "unique_value": unique_value,
                 "old_data": old_data,
+                # Keep every candidate line; the first-row compatibility display
+                # is advisory and never decides which rows Validate/import preserves.
+                "existing_rows": existing,
                 "new_data": row_data,
                 "columns": col_names  # <-- ADD THIS: all column names for the frontend
             })
@@ -3473,7 +3473,7 @@ def validate_only(request: ImportRequest, perf: bool = False):
     # Get template columns with their types
     template_cols = execute_query_pg(
         """
-        SELECT m.id, m.column_name, m.data_type
+        SELECT m.id, m.column_name, m.data_type, p.reconciliation_role, p.compare_for_changes, p.comparison_review_required
         FROM template_column_mappings p
         JOIN master_columns m ON p.column_id = m.id
         WHERE p.template_id = %s AND m.is_active = TRUE
@@ -3932,7 +3932,7 @@ def _guard_plan_configuration(request, payload):
     if not payload.get('lifecycle'):
         return
     templates = execute_query_pg('SELECT rate_source FROM templates WHERE id = %s AND is_active = TRUE FOR SHARE', (request.template_id,))
-    columns = execute_query_pg('''SELECT m.id, m.column_name, m.data_type
+    columns = execute_query_pg('''SELECT m.id, m.column_name, m.data_type, p.reconciliation_role, p.compare_for_changes, p.comparison_review_required
         FROM template_column_mappings p JOIN master_columns m ON p.column_id = m.id
         WHERE p.template_id = %s AND m.is_active = TRUE ORDER BY p.sort_order FOR SHARE OF m, p''', (request.template_id,))
     if not templates:
@@ -3985,7 +3985,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
                 context["planned_dates"][id(item[key])] = day
     template_cols = execute_query_pg(
         """
-        SELECT m.id, m.column_name, m.data_type
+        SELECT m.id, m.column_name, m.data_type, p.reconciliation_role, p.compare_for_changes, p.comparison_review_required
         FROM template_column_mappings p
         JOIN master_columns m ON p.column_id = m.id
         WHERE p.template_id = %s AND m.is_active = TRUE
@@ -4662,7 +4662,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
     # Get template columns with their types
     template_cols = execute_query_pg(
         """
-        SELECT m.id, m.column_name, m.data_type
+        SELECT m.id, m.column_name, m.data_type, p.reconciliation_role, p.compare_for_changes, p.comparison_review_required
         FROM template_column_mappings p
         JOIN master_columns m ON p.column_id = m.id
         WHERE p.template_id = %s AND m.is_active = TRUE
@@ -5401,7 +5401,7 @@ def download_template(template_id: int):
         raise HTTPException(404, "Template not found")
     columns = execute_query_pg(
         """
-        SELECT m.column_name, m.data_type
+        SELECT m.column_name, m.data_type, p.reconciliation_role, p.compare_for_changes, p.comparison_review_required
         FROM template_column_mappings p
         JOIN master_columns m ON p.column_id = m.id
         WHERE p.template_id = %s AND m.is_active = TRUE

@@ -9,6 +9,21 @@ from playwright.sync_api import sync_playwright, expect
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_upload_uses_template_comparisons_without_editable_controls_or_saved_overrides(page):
+    page.route('**/api/upload/saved-mapping*',lambda route:route.fulfill(json={
+        'has_saved_mapping':True,'mappings':[{'template_column_id':1,'excel_column':'Voucher','compare_for_changes':False}]}))
+    page.evaluate('''async()=>{
+        selectedTemplateId=1; excelHeaders=['Voucher'];
+        window.getSelectedClientId=()=>5;
+        currentMappings=[{column_id:1,column_name:'Voucher',data_type:'Text',excel_column:'Voucher',is_matched:true,compare_for_changes:true}];
+        renderMapping(currentMappings);
+        await applySavedMapping();
+    }''')
+    assert page.locator('#mappingBody input[type=checkbox]').count()==0
+    assert 'Compare for changes' not in page.locator('#mappingPanel').inner_text()
+    assert page.evaluate('currentMappings[0].compare_for_changes') is True
+
+
 def test_development_backup_policy_control_and_review_warning(page):
     page.route('**/api/upload/backup-policy', lambda route: route.fulfill(
         json={'allow_without_backup': True}))

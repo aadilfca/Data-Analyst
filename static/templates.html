@@ -6,6 +6,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Manage Templates</title>
     <link rel="stylesheet" href="/static/style.css?v=76">
+    <style>
+        #templateModal .template-reconciliation-role { max-width:140px; padding:5px; border:1px solid #d0d5dd; border-radius:5px; background:#fff; color:#1a1a2e; font-size:13px; }
+        #templateModal .selected-item > span:nth-child(3) { min-width:0; overflow-wrap:anywhere; }
+        #templateModal .selected-item, #templateModal .selected-columns-heading { display:grid; grid-template-columns:18px 22px minmax(80px,1fr)115px 110px 22px; gap:6px; align-items:center; min-width:480px; }
+        #templateModal .selected-columns-heading { padding:6px 10px; position:sticky; top:0; z-index:1; background:#fafafa; font-size:12px; color:#64748b; }
+        #templateModal .template-compare-cell { display:flex; align-items:center; justify-content:center; }
+        #templateModal .template-compare-cell input { width:16px; height:16px; }
+        @media (max-width:560px) {
+            #templateModal .template-reconciliation-role { font-size:16px; }
+        }
+    </style>
 </head>
 
 <body data-nav-module="Templates" data-nav-parent="setup.html">
@@ -145,14 +156,17 @@
                         selected</span>
                 </div>
                 <div id="selectedColumnsContainer"
-                    style="min-height:60px; max-height:250px; overflow-y:auto; border:2px dashed #e2e8f0; border-radius:8px; padding:10px; background:#fafafa;">
+                    style="min-height:60px; max-height:250px; overflow:auto; border:2px dashed #e2e8f0; border-radius:8px; padding:10px; background:#fafafa;">
+                    <div class="selected-columns-heading"><span></span><span></span><span>Column</span><span>Role</span><span style="text-align:center;" title="All fields default to checked except Account Ledger Balance. Unchecked fields refresh after import without marking the transaction changed.">Compare for changes</span><span></span></div>
                     <div id="emptySelectedMessage"
                         style="color:#94a3b8; font-size:13px; text-align:center; padding:20px 0;">Search and select
                         columns above to build your template.</div>
                     <div id="selectedColumnsList"></div>
                 </div>
+                <div id="templateComparisonReview" hidden style="margin-top:6px; color:#92400e; font-size:12px;" role="status"></div>
                 <div id="templateColumnOrderHint" style="margin-top:6px; font-size:12px; color:#94a3b8;">💡 Drag ☰ to reorder. Click ✕ to remove a
                     column.</div>
+                <div style="margin-top:6px; font-size:12px; color:#64748b;">Roles apply only here. Choose one Document ID and any Numeric Footing fields; other columns remain references. Until an ID is chosen, the first column remains the document key. Footing checks require an Excel total row; add SUM(range) if the ERP has none.</div>
             </div>
             <input type="hidden" id="editTemplateId">
             <div style="display:flex; gap:10px; justify-content:flex-end; border-top:1px solid #eee; padding-top:15px;">
@@ -227,7 +241,7 @@
     <script src="/static/utils.js?v=2"></script>
     <script src="/static/loading_ui.js?v=2"></script>
     <script src="/static/client_context.js?v=29"></script>
-    <script src="/static/templates.js?v=5"></script>
+    <script src="/static/templates.js?v=7"></script>
 </body>
 
 </html>

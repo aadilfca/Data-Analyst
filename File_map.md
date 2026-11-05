@@ -152,7 +152,7 @@ This document lists all source files in the project, grouped by directory, with 
 - **Routers** are mounted in `main.py`; each handles one domain (clients, verification, data, audit_rules, trial_balance, etc.).
 - **Database**: PostgreSQL (Supabase) holds canonical production data; `database.py` maintains PostgreSQL and legacy SQLite schemas.
 - **Uploads** are stored in the `uploads/` directory (created at runtime).
-- **Change detection** uses `document_group_id`/`change_detection_status` on `client_data`; document grouping everywhere in the app assumes the first template column (lowest `sort_order`) is a unique document key.
+- **Change detection** uses `document_group_id`/`change_detection_status`; template-specific Document ID roles govern uploads/counts, while unconfigured templates retain the first-column key. Detail rows remain separate.
 - **Verification routing** uses Account Control Centre account assignments for every workstream. Voucher-prefix rows remain historical compatibility data only; Cash/Bank Payment vs Receipt uses the selected Treasury account leg.
 
 *This file map is maintained alongside the project — updated whenever a file is added, removed, or repurposed. Full build history and verification detail live in `CHANGELOG_ARCHIVE.md`, not here.*

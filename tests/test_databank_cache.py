@@ -573,3 +573,11 @@ def test_classification_preview_keeps_its_own_filters_without_ledger_selector(br
         assert not [c for c in calls if c['kind']=='accounts']
         assert page.evaluate("buildPreviewRequestSpec().params.has('ledger_account_code')") is False
     finally:page.close()
+
+
+def test_configured_document_preview_key_does_not_combine_date():
+    from routers.data import compute_preview_document_group_id
+    first = compute_preview_document_group_id({'Reference': 'D1'}, '2026-01-01', 'Reference', 10, include_date=False)
+    second = compute_preview_document_group_id({'Reference': 'D1'}, '2026-01-02', 'Reference', 11, include_date=False)
+    assert first == second == 'D1'
+    assert compute_preview_document_group_id({'Reference': ''}, '2026-01-01', 'Reference', 10, include_date=False) == '__row_10'

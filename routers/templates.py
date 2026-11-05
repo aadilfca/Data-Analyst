@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Body, Query, Response
-from database import execute_query_pg, execute_write_pg, log_audit, get_raw_conn_pg, release_raw_conn_pg, pg_transaction
+from database import execute_query_pg, execute_write_pg, log_audit, get_raw_conn_pg, release_raw_conn_pg, pg_transaction, resolve_column_type, resolve_document_column, resolve_column_comparison
 from psycopg2.extras import Json
 import json
 from typing import List, Optional
@@ -25,7 +25,7 @@ def get_cached_template_columns(template_id: int) -> list:
         _template_columns_cache.pop(template_id, None)
     columns = execute_query_pg(
         """
-        SELECT m.id AS column_id, m.column_name, m.data_type, p.sort_order
+        SELECT m.id AS column_id, m.column_name, m.data_type, p.reconciliation_role, p.compare_for_changes, p.comparison_review_required, p.sort_order
         FROM template_column_mappings p
         JOIN master_columns m ON p.column_id = m.id
         WHERE p.template_id = %s AND m.is_active = TRUE
@@ -73,6 +73,7 @@ class ColumnCreate(BaseModel):
     data_type: str
     category: str = "General"
     notes: str | None = None
+    reconciliation_role: str | None = None
 
 class ColumnUpdate(BaseModel):
     column_name: str
@@ -80,6 +81,118 @@ class ColumnUpdate(BaseModel):
     category: str = "General"
     is_active: bool = 1
     notes: str | None = None
+    reconciliation_role: str | None = None
+
+
+def _column_type(data_type, role):
+    try:
+        return resolve_column_type(data_type, role)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+def _master_column_type(data_type, role):
+    if role is not None:
+        raise HTTPException(400, 'Select Document ID or Footing in Edit Template; shared columns keep their base type.')
+    return _column_type(data_type, None)[0]
+
+
+def _lock_column_configuration():
+    """Serialize shared-column/template edits before locking their metadata rows.
+
+    Uploads continue using their existing shared row locks; no source rows are copied.
+    """
+    execute_query_pg('SELECT pg_advisory_xact_lock(746102)')
+
+
+def _guard_document_configuration(template_id, columns, old_columns=None):
+    """Reject ambiguity and identity-changing edits before touching source metadata.
+
+    Equivalent document values need no rekey: row IDs, source identities and links stay
+    intact. A non-equivalent change requires a separately reviewed data migration.
+    """
+    try:
+        for column in columns:
+            resolve_column_type(column['data_type'], column.get('reconciliation_role'))
+        key = resolve_document_column(columns)
+        old_key = resolve_document_column(old_columns) if old_columns is not None else key
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    template = execute_query_pg('SELECT data_purpose, ledger_columns FROM templates WHERE id = %s FOR UPDATE', (template_id,))
+    if template and template[0].get('data_purpose') == 'account_ledger':
+        roles = template[0].get('ledger_columns') or {}
+        roles = json.loads(roles) if isinstance(roles, str) else roles
+        if key and str(key.get('id', key.get('column_id'))) != str(roles.get('voucher')):
+            raise HTTPException(400, 'The Document ID must match the configured ledger Voucher column.')
+    old_name = old_key['column_name'] if old_key else None
+    new_name = key['column_name'] if key else None
+    if old_name != new_name:
+        # JSON keys are parameters; an identifier change must never silently regroup data.
+        changed = execute_query_pg('''SELECT id FROM client_data WHERE template_id = %s
+            AND is_deleted = FALSE AND (
+                NULLIF(BTRIM(row_data->>%s), '') IS DISTINCT FROM NULLIF(BTRIM(row_data->>%s), '')
+                OR NULLIF(BTRIM(row_data->>%s), '') IS NULL) LIMIT 1''',
+            (template_id, old_name, new_name, new_name))
+        if changed:
+            raise HTTPException(409, 'This changes document identities in existing data. Keep the current Document ID; changing it requires a reviewed migration. No rows were changed.')
+
+
+def _guard_column_role_change(column_id, replacement):
+    """Check every affected template in one transaction before saving a shared column."""
+    templates = execute_query_pg('''SELECT DISTINCT template_id FROM template_column_mappings
+        WHERE column_id = %s ORDER BY template_id''', (column_id,))
+    for item in templates:
+        tid = item['template_id']
+        execute_query_pg('SELECT id FROM templates WHERE id = %s FOR UPDATE', (tid,))
+        mapped = execute_query_pg('''SELECT m.id, m.column_name, m.data_type, p.reconciliation_role, p.compare_for_changes, p.comparison_review_required, m.is_active
+            FROM template_column_mappings p JOIN master_columns m ON m.id = p.column_id
+            WHERE p.template_id = %s ORDER BY p.sort_order FOR UPDATE OF m, p''', (tid,))
+        before = [c for c in mapped if c.get('is_active', True)]
+        after = [dict(c, **replacement) if c['id'] == column_id else c for c in mapped]
+        after = [c for c in after if c.get('is_active', True)]
+        _guard_document_configuration(tid, after, before)
+        execute_write_pg("UPDATE upload_validation_plans SET status = 'superseded' WHERE template_id = %s AND status = 'ready'", (tid,))
+
+
+def _guard_selected_document_columns(template_id, selected_columns, column_roles=None, column_comparisons=None):
+    """Apply the same role checks to template edit, reorder and removal."""
+    before = execute_query_pg('''SELECT m.id, m.column_name, m.data_type, p.reconciliation_role, p.compare_for_changes, p.comparison_review_required
+        FROM template_column_mappings p JOIN master_columns m ON m.id = p.column_id
+        WHERE p.template_id = %s AND m.is_active = TRUE ORDER BY p.sort_order FOR UPDATE OF m, p''', (template_id,))
+    selected = execute_query_pg('''SELECT id, column_name, data_type FROM master_columns
+        WHERE id = ANY(%s) AND is_active = TRUE ORDER BY id FOR SHARE''', (selected_columns,))
+    by_id = {c['id']: c for c in selected}
+    if len(by_id) != len(selected_columns):
+        raise HTTPException(400, 'Select distinct active template columns.')
+    ordered = _assign_template_roles(selected_columns, by_id, before, column_roles, column_comparisons)
+    _guard_document_configuration(template_id, ordered, before)
+    execute_write_pg("UPDATE upload_validation_plans SET status = 'superseded' WHERE template_id = %s AND status = 'ready'", (template_id,))
+    return ordered
+
+
+def _assign_template_roles(selected_columns, by_id, before=(), column_roles=None, column_comparisons=None):
+    """Role edits belong only to selected mappings; omitted edits preserve saved roles."""
+    roles = column_roles or {}
+    if set(roles) - set(selected_columns):
+        raise HTTPException(400, 'Reconciliation roles must belong to selected template columns.')
+    saved = {c.get('id', c.get('column_id')): c.get('reconciliation_role') for c in before}
+    ordered = [dict(by_id[cid], reconciliation_role=roles.get(cid, saved.get(cid))) for cid in selected_columns]
+    comparisons = column_comparisons or {}
+    if set(comparisons) - set(selected_columns):
+        raise HTTPException(400, 'Comparison settings must belong to selected template columns.')
+    previous = {c.get('id', c.get('column_id')): c for c in before}
+    for column in ordered:
+        cid = column['id']
+        old = previous.get(cid, {})
+        column['compare_for_changes'] = comparisons[cid] if cid in comparisons else old.get('compare_for_changes')
+        column['comparison_review_required'] = False if cid in comparisons else old.get('comparison_review_required', False)
+    try:
+        for column in ordered:
+            resolve_column_type(column['data_type'], column.get('reconciliation_role'))
+        resolve_document_column(ordered)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return ordered
 
 @router.get("/api/columns")
 def get_columns():
@@ -94,6 +207,7 @@ def get_all_columns():
 
 @router.post("/api/columns")
 def create_column(column: ColumnCreate):
+    base = _master_column_type(column.data_type, column.reconciliation_role)
     # Case-insensitive duplicate check so "invoice date" is blocked against "Invoice Date"
     existing = execute_query_pg(
         "SELECT id, column_name FROM master_columns WHERE LOWER(column_name) = LOWER(%s)",
@@ -103,7 +217,7 @@ def create_column(column: ColumnCreate):
         raise HTTPException(400, f"Column name already exists: '{existing[0]['column_name']}'")
     col_id = execute_write_pg(
         "INSERT INTO master_columns (column_name, data_type, category, notes) VALUES (%s, %s, %s, %s) RETURNING id",
-        (column.column_name, column.data_type, column.category, column.notes)
+        (column.column_name, base, column.category, column.notes)
     )
     log_audit("Admin", "Create", "Columns", f"Added column: {column.column_name}")
     invalidate_template_cache()
@@ -111,13 +225,18 @@ def create_column(column: ColumnCreate):
 
 @router.put("/api/columns/{column_id}")
 def update_column(column_id: int, column: ColumnUpdate):
-    existing = execute_query_pg("SELECT id FROM master_columns WHERE id = %s", (column_id,))
-    if not existing:
-        raise HTTPException(404, "Column not found")
-    execute_write_pg(
-        "UPDATE master_columns SET column_name=%s, data_type=%s, category=%s, is_active=%s, notes=%s WHERE id=%s",
-        (column.column_name, column.data_type, column.category, column.is_active, column.notes, column_id)
-    )
+    with pg_transaction():
+        _lock_column_configuration()
+        existing = execute_query_pg("SELECT id, data_type FROM master_columns WHERE id = %s", (column_id,))
+        if not existing:
+            raise HTTPException(404, "Column not found")
+        base = _master_column_type(column.data_type, column.reconciliation_role)
+        _guard_column_role_change(column_id, {'column_name': column.column_name, 'data_type': base,
+            'is_active': bool(column.is_active)})
+        execute_write_pg(
+            "UPDATE master_columns SET column_name=%s, data_type=%s, category=%s, is_active=%s, notes=%s WHERE id=%s",
+            (column.column_name, base, column.category, column.is_active, column.notes, column_id)
+        )
     log_audit("Admin", "Update", "Columns", f"Updated column: {column.column_name}")
     invalidate_template_cache()
     return {"message": f"Column '{column.column_name}' updated successfully"}
@@ -127,7 +246,10 @@ def delete_column(column_id: int):
     existing = execute_query_pg("SELECT column_name FROM master_columns WHERE id = %s AND is_active = TRUE", (column_id,))
     if not existing:
         raise HTTPException(404, "Column not found")
-    execute_write_pg("UPDATE master_columns SET is_active = FALSE WHERE id = %s", (column_id,))
+    with pg_transaction():
+        _lock_column_configuration()
+        _guard_column_role_change(column_id, {'is_active': False})
+        execute_write_pg("UPDATE master_columns SET is_active = FALSE WHERE id = %s", (column_id,))
     log_audit("Admin", "Delete", "Columns", f"Deleted column: {existing[0]['column_name']}")
     invalidate_template_cache()
     return {"message": "Column deleted successfully"}
@@ -222,6 +344,8 @@ class TemplateCreate(BaseModel):
     has_subtotals_by_default: bool = False
     data_purpose: str = "standard"
     ledger_columns: dict[str, int] = {}
+    column_roles: Optional[dict[int, Optional[str]]] = None
+    column_comparisons: Optional[dict[int, bool]] = None
 
 class TemplateUpdate(BaseModel):
     template_name: str
@@ -231,6 +355,8 @@ class TemplateUpdate(BaseModel):
     # Older template editors must preserve ledger configuration when omitted.
     data_purpose: Optional[str] = None
     ledger_columns: Optional[dict[str, int]] = None
+    column_roles: Optional[dict[int, Optional[str]]] = None
+    column_comparisons: Optional[dict[int, bool]] = None
 
 
 def validate_ledger_template_configuration(purpose, roles, selected_columns):
@@ -282,6 +408,7 @@ class LedgerSetupRequest(BaseModel):
     template_name: str = 'Account Ledger'
     ledger_columns: dict[str, Optional[int]]
     has_subtotals_by_default: bool = False
+    column_comparisons: Optional[dict[str, bool]] = None
 
 
 def _ledger_setup_choices():
@@ -311,6 +438,7 @@ def save_ledger_setup(request: LedgerSetupRequest):
     if not name or len(name) > 200 or set(request.ledger_columns) != set(LEDGER_SETUP_COLUMNS):
         raise HTTPException(400, 'Supply a template name and all six ledger column roles.')
     with pg_transaction():
+        _lock_column_configuration()
         # Setup is rare. Serialize it against ordinary column/template writes as
         # well as double clicks, without altering shared names/types or schema.
         execute_write_pg('LOCK TABLE master_columns, templates IN SHARE ROW EXCLUSIVE MODE')
@@ -331,16 +459,28 @@ def save_ledger_setup(request: LedgerSetupRequest):
             roles[role] = selected
         selected_columns = list(roles.values())
         validate_ledger_template_configuration('account_ledger', roles, selected_columns)
+        if request.column_comparisons is not None and set(request.column_comparisons) - set(roles):
+            raise HTTPException(400, 'Comparison settings must use ledger column roles.')
+        comparisons = ({roles[role]: value for role, value in request.column_comparisons.items()}
+                       if request.column_comparisons is not None else None)
         existing = execute_query_pg('SELECT id, data_purpose, ledger_columns, is_active FROM templates WHERE LOWER(TRIM(template_name)) = LOWER(%s)', (name,))
         if existing:
             previous = existing[0].get('ledger_columns') or {}
             previous = json.loads(previous) if isinstance(previous, str) else previous
             if (len(existing) == 1 and existing[0].get('is_active', True)
                     and existing[0].get('data_purpose') == 'account_ledger' and previous == roles):
+                if comparisons is not None:
+                    saved_columns = get_cached_template_columns(existing[0]['id'])
+                    context = {'data_purpose': 'account_ledger', 'ledger_columns': roles}
+                    if any(c.get('comparison_review_required') or
+                           comparisons.get(c['column_id'], resolve_column_comparison(c, context)) != resolve_column_comparison(c, context)
+                           for c in saved_columns):
+                        raise HTTPException(409, 'Open the existing template to review its comparison settings.')
                 return {'template_id': existing[0]['id'], 'message': 'Account Ledger template already configured.', 'reused': True}
             raise HTTPException(409, 'This template name already exists with different settings. Open it for review or choose another name.')
         result = create_template(TemplateCreate(template_name=name, selected_columns=selected_columns,
-            data_purpose='account_ledger', ledger_columns=roles, has_subtotals_by_default=request.has_subtotals_by_default))
+            data_purpose='account_ledger', ledger_columns=roles, has_subtotals_by_default=request.has_subtotals_by_default,
+            column_comparisons=comparisons))
     invalidate_template_cache()
     return result
 
@@ -375,7 +515,7 @@ def get_templates(
         t['ledger_columns'] = json.loads(t['ledger_columns']) if isinstance(t.get('ledger_columns'), str) else t.get('ledger_columns') or {}
         mappings = execute_query_pg(
             """
-            SELECT m.id, m.column_name, m.data_type, p.sort_order
+            SELECT m.id, m.column_name, m.data_type, p.reconciliation_role, p.compare_for_changes, p.comparison_review_required, p.sort_order
             FROM template_column_mappings p
             JOIN master_columns m ON p.column_id = m.id
             WHERE p.template_id = %s AND m.is_active = TRUE
@@ -406,7 +546,7 @@ def get_template(template_id: int):
     template['ledger_columns'] = json.loads(template['ledger_columns']) if isinstance(template.get('ledger_columns'), str) else template.get('ledger_columns') or {}
     mappings = execute_query_pg(
         """
-        SELECT m.column_name, m.data_type
+        SELECT m.id, m.column_name, m.data_type, p.reconciliation_role, p.compare_for_changes, p.comparison_review_required
         FROM template_column_mappings p
         JOIN master_columns m ON p.column_id = m.id
         WHERE p.template_id = %s AND m.is_active = TRUE
@@ -436,25 +576,35 @@ def get_template_columns(template_id: int):
 
 @router.post("/api/templates")
 def create_template(template: TemplateCreate):
-    existing = execute_query_pg("SELECT id FROM templates WHERE template_name = %s", (template.template_name,))
-    if existing:
-        raise HTTPException(400, "Template name already exists")
-    if not template.selected_columns:
-        raise HTTPException(400, "Select at least one column")
+    with pg_transaction():
+        _lock_column_configuration()
+        existing = execute_query_pg("SELECT id FROM templates WHERE template_name = %s", (template.template_name,))
+        if existing:
+            raise HTTPException(400, "Template name already exists")
+        if not template.selected_columns:
+            raise HTTPException(400, "Select at least one column")
 
-    roles = validate_ledger_template_configuration(template.data_purpose, template.ledger_columns, template.selected_columns)
+        selected = execute_query_pg('SELECT id, column_name, data_type FROM master_columns WHERE id = ANY(%s) AND is_active = TRUE FOR SHARE', (template.selected_columns,))
+        if len(selected) != len(template.selected_columns) or len(set(template.selected_columns)) != len(template.selected_columns):
+            raise HTTPException(400, 'Select distinct active template columns.')
+        ordered = _assign_template_roles(template.selected_columns, {c['id']: c for c in selected},
+            column_roles=template.column_roles, column_comparisons=template.column_comparisons)
 
-    resolved_rate_source = resolve_rate_source(template.template_name, template.rate_source)
-    template_id = execute_write_pg(
-        "INSERT INTO templates (template_name, created_by, rate_source, has_subtotals_by_default, data_purpose, ledger_columns) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-        (template.template_name, template.created_by, resolved_rate_source, template.has_subtotals_by_default, template.data_purpose, json.dumps(roles))
-    )
+        roles = validate_ledger_template_configuration(template.data_purpose, template.ledger_columns, template.selected_columns)
+        if template.data_purpose == 'account_ledger' and resolve_document_column(ordered)['id'] != roles['voucher']:
+            raise HTTPException(400, 'The Document ID must match the configured ledger Voucher column.')
 
-    for idx, col_id in enumerate(template.selected_columns):
-        execute_write_pg(
-            "INSERT INTO template_column_mappings (template_id, column_id, sort_order) VALUES (%s, %s, %s)",
-            (template_id, col_id, idx)
+        resolved_rate_source = resolve_rate_source(template.template_name, template.rate_source)
+        template_id = execute_write_pg(
+            "INSERT INTO templates (template_name, created_by, rate_source, has_subtotals_by_default, data_purpose, ledger_columns) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            (template.template_name, template.created_by, resolved_rate_source, template.has_subtotals_by_default, template.data_purpose, json.dumps(roles))
         )
+
+        for idx, column in enumerate(ordered):
+            execute_write_pg(
+                "INSERT INTO template_column_mappings (template_id, column_id, sort_order, reconciliation_role, compare_for_changes, comparison_review_required) VALUES (%s, %s, %s, %s, %s, %s)",
+                (template_id, column['id'], idx, column.get('reconciliation_role'), column.get('compare_for_changes'), column.get('comparison_review_required', False))
+            )
 
     log_audit(template.created_by, "Create", "Templates", f"Created template: {template.template_name}")
     invalidate_template_cache(template_id)
@@ -463,6 +613,7 @@ def create_template(template: TemplateCreate):
 @router.put("/api/templates/{template_id}")
 def update_template(template_id: int, template: TemplateUpdate):
     with pg_transaction():
+        _lock_column_configuration()
         existing = execute_query_pg("SELECT id, data_purpose, ledger_columns FROM templates WHERE id = %s AND is_active = TRUE FOR UPDATE", (template_id,))
         if not existing:
             raise HTTPException(404, "Template not found")
@@ -483,20 +634,23 @@ def update_template(template_id: int, template: TemplateUpdate):
                 raise HTTPException(409, "A template with imported data cannot change its ledger purpose or column roles")
 
         resolved_rate_source = resolve_rate_source(template.template_name, template.rate_source)
+        ordered = _guard_selected_document_columns(template_id, template.selected_columns, template.column_roles, template.column_comparisons)
+        if purpose == 'account_ledger' and resolve_document_column(ordered)['id'] != roles['voucher']:
+            raise HTTPException(400, 'The Document ID must match the configured ledger Voucher column.')
         execute_write_pg(
             "UPDATE templates SET template_name = %s, rate_source = %s, has_subtotals_by_default = %s, data_purpose = %s, ledger_columns = %s WHERE id = %s",
             (template.template_name, resolved_rate_source, template.has_subtotals_by_default, purpose, json.dumps(roles), template_id)
         )
         execute_write_pg("DELETE FROM template_column_mappings WHERE template_id = %s", (template_id,))
-        for idx, col_id in enumerate(template.selected_columns):
+        for idx, column in enumerate(ordered):
             execute_write_pg(
-                "INSERT INTO template_column_mappings (template_id, column_id, sort_order) VALUES (%s, %s, %s)",
-                (template_id, col_id, idx)
+                "INSERT INTO template_column_mappings (template_id, column_id, sort_order, reconciliation_role, compare_for_changes, comparison_review_required) VALUES (%s, %s, %s, %s, %s, %s)",
+                (template_id, column['id'], idx, column.get('reconciliation_role'), column.get('compare_for_changes'), column.get('comparison_review_required', False))
             )
 
         log_audit("Admin", "Update", "Templates", f"Updated template: {template.template_name}")
-        invalidate_template_cache(template_id)
-        return {"message": f"Template '{template.template_name}' updated successfully"}
+    invalidate_template_cache(template_id)
+    return {"message": f"Template '{template.template_name}' updated successfully"}
 
 @router.delete("/api/templates/{template_id}")
 def delete_template(template_id: int):
@@ -543,7 +697,7 @@ def get_template_upload_columns(template_id: int):
         raise HTTPException(404, "Template not found")
     mappings = execute_query_pg(
         """
-        SELECT m.id, m.column_name, m.data_type, m.category, p.sort_order
+        SELECT m.id, m.column_name, m.data_type, p.reconciliation_role, p.compare_for_changes, p.comparison_review_required, m.category, p.sort_order
         FROM template_column_mappings p
         JOIN master_columns m ON p.column_id = m.id
         WHERE p.template_id = %s AND m.is_active = TRUE
@@ -564,28 +718,32 @@ def get_template_upload_columns(template_id: int):
 def reorder_template_columns(template_id: int, column_ids: List[int] = Body(...)):
     """Update sort_order for all columns of a template."""
     with pg_transaction():
+        _lock_column_configuration()
         existing = execute_query_pg("SELECT id FROM templates WHERE id = %s AND is_active = TRUE", (template_id,))
         if not existing:
             raise HTTPException(404, "Template not found")
         _guard_ledger_column_change(template_id, column_ids)
+        _guard_selected_document_columns(template_id, column_ids)
         for idx, col_id in enumerate(column_ids):
             execute_write_pg(
                 "UPDATE template_column_mappings SET sort_order = %s WHERE template_id = %s AND column_id = %s",
                 (idx, template_id, col_id)
             )
         log_audit("Admin", "Reorder", "Templates", f"Reordered columns for template ID {template_id}")
-        invalidate_template_cache(template_id)
-        return {"message": "Order updated successfully"}
+    invalidate_template_cache(template_id)
+    return {"message": "Order updated successfully"}
 
 @router.delete("/api/templates/{template_id}/columns/{column_id}")
 def remove_template_column(template_id: int, column_id: int):
     """Remove a specific column mapping from a template."""
     with pg_transaction():
+        _lock_column_configuration()
         existing = execute_query_pg("SELECT id FROM templates WHERE id = %s AND is_active = TRUE", (template_id,))
         if not existing:
             raise HTTPException(404, "Template not found")
         current_columns = get_cached_template_columns(template_id)
         _guard_ledger_column_change(template_id, [row['column_id'] for row in current_columns if row['column_id'] != column_id])
+        _guard_selected_document_columns(template_id, [row['column_id'] for row in current_columns if row['column_id'] != column_id])
         # RETURNING id (Postgres cutover fix): execute_write_pg only returns a value when
         # the query has RETURNING - SQLite's version relied on cursor.lastrowid after a
         # DELETE, which is meaningless (leftover from the last INSERT, unrelated to this
@@ -598,8 +756,8 @@ def remove_template_column(template_id: int, column_id: int):
         if deleted_id is None:
             raise HTTPException(404, "Column mapping not found")
         log_audit("Admin", "RemoveColumn", "Templates", f"Removed column {column_id} from template {template_id}")
-        invalidate_template_cache(template_id)
-        return {"message": "Column removed from template"}
+    invalidate_template_cache(template_id)
+    return {"message": "Column removed from template"}
 
 @router.get("/api/templates/by-name/{template_name}")
 def get_template_by_name(template_name: str):
@@ -670,6 +828,54 @@ def export_backup():
         "settings": settings
     }
 
+def _backup_mapping_roles(data):
+    """Validate scoped roles before restore writes; adapt older global-role backups."""
+    by_id = {c['id']: c for c in data.columns}
+    populated = {r['template_id'] for r in data.client_data if not r.get('is_deleted', False)}
+    groups = {}
+    for mapping in sorted(data.mappings, key=lambda m: (m['template_id'], m['sort_order'], m['id'])):
+        if mapping['column_id'] not in by_id:
+            raise HTTPException(400, 'A backup template refers to a missing column.')
+        if by_id[mapping['column_id']].get('is_active', True):
+            groups.setdefault(mapping['template_id'], []).append(mapping)
+    inherited = set()
+    for tid, mappings in groups.items():
+        document = [m for m in mappings if by_id[m['column_id']].get('reconciliation_role') == 'document_id']
+        if len(document) == 1 and (document[0]['id'] == mappings[0]['id'] or tid in populated):
+            inherited.add(document[0]['id'])
+    roles = {m['id']: (m.get('reconciliation_role') if 'reconciliation_role' in m else
+                      ('document_id' if m['id'] in inherited else None)) for m in data.mappings}
+    for mapping in data.mappings:
+        _column_type(by_id[mapping['column_id']]['data_type'], roles[mapping['id']])
+    for mappings in groups.values():
+        _assign_template_roles([m['column_id'] for m in mappings], by_id,
+            column_roles={m['column_id']: roles[m['id']] for m in mappings})
+    return roles
+
+
+def _backup_template_comparisons(data):
+    """Keep new scoped choices; adapt old client choices without picking conflicts."""
+    saved = {}
+    for entry in data.saved_column_mappings:
+        value = entry.get('compare_for_changes')
+        if value is not None:
+            if value not in (True, False):
+                raise HTTPException(400, 'Invalid saved comparison setting in backup.')
+            saved.setdefault((entry['template_id'], entry['template_column_id']), set()).add(bool(value))
+    result = {}
+    for mapping in data.mappings:
+        if 'compare_for_changes' in mapping:
+            value = mapping['compare_for_changes']
+            review = mapping.get('comparison_review_required', False)
+            if value is not None and value not in (True, False) or review not in (True, False):
+                raise HTTPException(400, 'Invalid template comparison setting in backup.')
+            result[mapping['id']] = (None if value is None else bool(value), bool(review))
+        else:
+            choices = saved.get((mapping['template_id'], mapping['column_id']), set())
+            result[mapping['id']] = (next(iter(choices)) if len(choices) == 1 else None, len(choices) > 1)
+    return result
+
+
 @router.post("/api/backup/import")
 def import_backup(data: BackupData = Body(...)):
     """
@@ -686,6 +892,8 @@ def import_backup(data: BackupData = Body(...)):
       restored one - a real bug a naive port would otherwise introduce silently.
     - row_data is JSONB - written via Json(...) instead of json.dumps().
     """
+    mapping_roles = _backup_mapping_roles(data)
+    mapping_comparisons = _backup_template_comparisons(data)
     conn = get_raw_conn_pg()
     cur = conn.cursor()
     try:
@@ -702,10 +910,11 @@ def import_backup(data: BackupData = Body(...)):
 
         # Restore master_columns
         for col in data.columns:
+            base = _column_type(col['data_type'], None)[0]
             cur.execute(
                 "INSERT INTO master_columns (id, column_name, data_type, category, is_active) "
                 "OVERRIDING SYSTEM VALUE VALUES (%s, %s, %s, %s, %s)",
-                (col['id'], col['column_name'], col['data_type'], col.get('category', 'General'), bool(col.get('is_active', True)))
+                (col['id'], col['column_name'], base, col.get('category', 'General'), bool(col.get('is_active', True)))
             )
         if data.columns:
             cur.execute("SELECT setval(pg_get_serial_sequence('master_columns', 'id'), (SELECT MAX(id) FROM master_columns), true)")
@@ -723,10 +932,12 @@ def import_backup(data: BackupData = Body(...)):
 
         # Restore template_column_mappings
         for mp in data.mappings:
+            role = mapping_roles[mp['id']]
+            compare, review = mapping_comparisons[mp['id']]
             cur.execute(
-                "INSERT INTO template_column_mappings (id, template_id, column_id, sort_order) "
-                "OVERRIDING SYSTEM VALUE VALUES (%s, %s, %s, %s)",
-                (mp['id'], mp['template_id'], mp['column_id'], mp['sort_order'])
+                "INSERT INTO template_column_mappings (id, template_id, column_id, sort_order, reconciliation_role, compare_for_changes, comparison_review_required) "
+                "OVERRIDING SYSTEM VALUE VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (mp['id'], mp['template_id'], mp['column_id'], mp['sort_order'], role, compare, review)
             )
         if data.mappings:
             cur.execute("SELECT setval(pg_get_serial_sequence('template_column_mappings', 'id'), (SELECT MAX(id) FROM template_column_mappings), true)")

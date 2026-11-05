@@ -1,5 +1,51 @@
 # Changelog Archive
 
+## Template comparison settings — Phase 1.1 — 2026-11-05
+
+Selected template columns now show one Compare for changes heading with a checkbox per row, alongside the independent reconciliation role. Defaults are checked for every field except the configured Account Ledger Balance. Edits remain local until Save Template; older API edits preserve existing choices. Prepared-ledger creation follows the same defaults. Upload no longer offers comparison checkboxes or applies client-saved choices; server-side comparison ignores legacy request overrides. Unchecked-field refresh/history semantics are retained.
+
+Nullable comparison values and a conflict-review flag are stored on template mappings. Idempotent PostgreSQL/SQLite upgrades preserve unanimous old client choices and flag disagreements for explicit template review; unresolved conflicts block validation. Header-mapping saves preserve retained legacy values without making them authoritative. Template saves supersede pending plans and fingerprints include policy metadata. New/old setup backups preserve scoped choices or identify legacy conflicts before restore writes.
+
+The upgrade passed isolated agreement/conflict/rollback tests and a live rollback rehearsal, then was committed: 35,867 source rows and 93 mappings unchanged, six existing settings preserved, zero conflicts. A read-only call to the new handler verified seven templates/93 fields; Account Ledger Balance is the sole unchecked field. The initial running process needed a restart before acceptance.
+
+Verification: 127 affected template/duplicate/lifecycle/dialog tests pass; two focused policy tests additionally verify request-override rejection and stale-plan fingerprints. An offline browser preview confirms the shared heading and checkbox-only cells. Syntax and scoped whitespace checks pass. Aadil accepted Phases 1/1.1 and authorized their combined commit/push, limited to this work. Transaction data was not rewritten. The exact staged snapshot passed 156 isolated tests; pending Drive/backup/cleanup work was excluded.
+
+## Template role upgrade applied — 2026-11-05
+
+Live `/api/templates` returned 500 because template_column_mappings.reconciliation_role was absent; `/healthz` reported degraded PostgreSQL initialization. The narrow role upgrade succeeded in a rollback-only rehearsal, then was applied and committed. All 35,867 source rows and 93 mappings were preserved; three Document ID mappings were retained by the compatibility conversion. No transaction values were rewritten.
+
+Templates and upload-columns now return HTTP 200. A browser check using the live column API opened Purchase Order with all 16 fields. The process retains its earlier degraded startup status until initialization is rerun on restart; the running server was not stopped. No application code change or Git mutation was needed for this deployment repair.
+
+## Template-specific reconciliation roles — Phase 1 correction — 2026-11-05
+
+Safety review found global roles incorrectly classify shared references: PO No can identify Purchase Orders while remaining a reference in GRN/Vendor Bill. The earlier global-role design below is superseded. Existing Text/Numeric/Date values and all transaction identities remain unchanged; no Git reset/revert was used.
+
+Role selectors now belong to each selected column in Create/Edit Template and save through Save Template. Master-column editing returns to base types. Template APIs, upload configuration/fingerprints, previews/counts and setup backup/restore read template_column_mappings.reconciliation_role. One Document ID and multiple numeric Footing fields are supported independently per template; multiple document values/repeated detail occurrences remain preserved. Existing unsafe identity changes still block for reviewed migration.
+
+Fresh schemas have no global role field. Existing databases retain the obsolete master field without using it at runtime. A transactional, one-time mapping upgrade preserves a legacy Document ID where it was the first key or its template already has data; empty reference-only templates do not inherit it. Legacy global Footing choices require explicit template selection. Startup conversion preserves source rows/links, supersedes old plans and never repeats inheritance after local edits. Backup role validation occurs before restore opens a connection.
+
+Phase 2 remains pending; Phase 3 still reconciles approved Excel detail against stored SQL in Import Successful. No live database startup/migration, client upload, package installation, stage, commit or push was performed. Local acceptance remains required.
+
+Verification: 118 template/duplicate/lifecycle/dialog tests pass. Tests cover independent PO/GRN roles, omitted-role compatibility, master-type preservation, migration idempotence/source preservation and pre-connection backup validation. A broader preview run reports 65 passed/one unchanged Data Bank action-expectation failure. Syntax/whitespace checks pass; an offline screenshot confirms the existing template editor fits the controls. PostgreSQL DDL remains mock-verified rather than exercised against a live server.
+
+## Import reconciliation column roles — Phase 1 — 2026-11-05
+
+Setup offers Text - Document ID and Numeric - Footing with concise guidance. Base types remain Text/Numeric; nullable reconciliation_role metadata is added for fresh/existing PostgreSQL and SQLite schemas. Existing roles are not assigned automatically. Column/template APIs and backup restore carry the metadata.
+
+One configured Document ID column governs upload grouping, critical-field validation, document labels, row-selection hints, Data Bank grouping and distinct counts. It supports many document values per voucher and repeated lines; occurrence-based transaction identities remain separate. Multiple ID columns in one template are rejected. Unconfigured templates retain legacy behaviour.
+
+Shared-column/template edits serialize configuration checks, invalidate pending plans and refresh caches after commit. Marking the current key retains stored identities. Selecting a different key is allowed only when existing values agree; identity-changing edits are blocked for a separately reviewed migration. No source rows, verification links or financial values are rewritten. Ledger Voucher-role compatibility remains enforced.
+
+Footing is metadata in this phase; mandatory source-footer checks follow in Phase 2. No live database migration/import or Git mutation was performed. Local acceptance is pending.
+
+Verification: 16 focused role/schema/form/preservation tests pass; the wider run reports 243 passed/33 failed (32 legacy upload-count tests with documented fixture/message issues; one Data Bank action expectation). The three-file focused run reports 61 passed/that same Data Bank failure. These unrelated fixtures were not changed. Python/JavaScript syntax and scoped whitespace checks pass. Read-only workbook processing produces 116 source lines, 29 document groups and 116 distinct line identities. PostgreSQL DDL is tested with mocks; a real server upgrade remains for local acceptance.
+
+## Import reconciliation roadmap revision — 2026-11-05
+
+Phases remain: 1 column roles/identity; 2 source control rows and backend totals; 3 result assurance; 4 compact preview headlines; 5 correctness/performance acceptance. Phase 3 is revised: compare approved Excel detail with actual stored SQL data in Import Successful, scoped consistently. Pre-import review retains proposed transaction actions. Post-write checks must not confuse a committed import with a failed verification request; partial extracts cannot claim complete-period equality.
+
+Corrected workbook baseline: 116 detail lines, 29 distinct documents, Debit/Credit each 77,108,960; row 118 agrees. The earlier prototype included the footer in its detail sum and incorrectly showed a mismatch.
+
 ## Database policy clarification — 2026-11-05
 
 Updated CLAUDE.md's existing database rules and Cashflows guidance in place: replacement history and permanent wipe are distinct, legitimate line multiplicity survives, durable transaction copies remain prohibited, and reusable data/indexes stay protected. Added post-purge/re-upload checks and distinguished disk allocation from retained records. Existing backup/capacity safeguards remain. Older superseded decisions below are marked historical; live evidence remains under Data Bank local Excel library. Documentation only; no application or database changes.

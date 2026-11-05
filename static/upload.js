@@ -401,6 +401,7 @@ function saveUploadSessionState() {
             column_name: m.column_name,
             excel_column: m.excel_column,
             data_type: m.data_type,
+            reconciliation_role: m.reconciliation_role || null,
             is_matched: m.is_matched
         })),
         totalRows: rowExclusionAllRows.length,
@@ -1562,8 +1563,7 @@ if (saveMappingBtn) {
         // endpoint's own blank-skip to handle.
         const mappingsToSave = currentMappings
             .filter(m => m.excel_column)
-            .map(m => ({ template_column_id: m.column_id, excel_column: m.excel_column,
-                compare_for_changes: m.compare_for_changes !== false }));
+            .map(m => ({ template_column_id: m.column_id, excel_column: m.excel_column }));
 
         if (mappingsToSave.length === 0) {
             showUploadFailure('⚠️ Map at least one column before saving.');
@@ -1673,9 +1673,6 @@ async function applySavedMapping() {
     data.mappings.forEach(saved => {
         const target = currentMappings.find(m => m.column_id === saved.template_column_id);
         if (!target) return;
-        if (typeof saved.compare_for_changes === 'boolean') {
-            target.compare_for_changes = saved.compare_for_changes;
-        }
         if (!saved.excel_column || !excelHeaders.includes(saved.excel_column)) return; // header no longer present -- fall back to auto-mapping
         target.excel_column = saved.excel_column;
         target.is_matched = true;
@@ -1772,13 +1769,7 @@ function renderMapping(mappings) {
         return;
     }
 
-    let ledgerRoles = uploadLedgerColumnRoles || {};
     mappings.forEach((m, rowIndex) => {
-        if (typeof m.compare_for_changes !== 'boolean') {
-            const isBalance = uploadTemplatePurpose === 'account_ledger'
-                && Number(ledgerRoles.balance) === Number(m.column_id);
-            m.compare_for_changes = !isBalance;
-        }
         const tr = document.createElement('tr');
         const setMappingStatus = (element, matched) => {
             element.textContent = matched ? '✓ Mapped' : 'Choose column';
@@ -1863,27 +1854,6 @@ function renderMapping(mappings) {
         badge.textContent = m.data_type;
         td3.appendChild(badge);
         tr.appendChild(td3);
-
-        const compareCell = document.createElement('td');
-        const compareCheckbox = document.createElement('input');
-        compareCheckbox.type = 'checkbox';
-        compareCheckbox.dataset.compareColumn = 'true';
-        compareCheckbox.checked = m.compare_for_changes;
-        compareCheckbox.disabled = !m.is_matched;
-        compareCheckbox.setAttribute('aria-label', `${m.column_name}: include in transaction change check`);
-        compareCheckbox.title = m.compare_for_changes
-            ? 'Differences in this column count as transaction changes.'
-            : 'By itself, a difference refreshes this value after confirmed import; changes in checked columns still mark the transaction changed.';
-        compareCheckbox.addEventListener('change', () => {
-            m.compare_for_changes = compareCheckbox.checked;
-            compareCheckbox.title = compareCheckbox.checked
-                ? 'Differences in this column count as transaction changes.'
-                : 'By itself, a difference refreshes this value after confirmed import; changes in checked columns still mark the transaction changed.';
-            resetValidationState();
-            saveUploadSessionState();
-        });
-        compareCell.appendChild(compareCheckbox);
-        tr.appendChild(compareCell);
 
         const td4 = document.createElement('td');
         const icon = document.createElement('span');
@@ -2569,8 +2539,7 @@ if (importBtn) {
                     template_column_name: mapping.column_name,
                     excel_column_name: select.value || null,
                     matched: !!select.value,
-                    mapping_status: select.value ? 'matched' : 'unmatched',
-                    compare_for_changes: mapping.compare_for_changes !== false
+                    mapping_status: select.value ? 'matched' : 'unmatched'
                 });
             }
         });
@@ -3063,7 +3032,10 @@ function renderRowExclusionGrid() {
 // (see get_document_group_id() / the Conventions note in CLAUDE.md).
 function getRowExclusionKeyColumnIndex() {
     if (!currentMappings || currentMappings.length === 0) return -1;
-    const keyMapping = currentMappings[0];
+    const configured = currentMappings.filter(mapping => mapping.reconciliation_role === 'document_id');
+    // Ambiguous configuration is rejected by the server; never guess a key in the grid.
+    if (configured.length > 1) return -1;
+    const keyMapping = configured[0] || currentMappings[0];
     if (!keyMapping || !keyMapping.excel_column) return -1;
     return (rowExclusionHeaders || []).indexOf(keyMapping.excel_column);
 }

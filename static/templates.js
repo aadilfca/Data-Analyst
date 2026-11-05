@@ -92,11 +92,14 @@ function ledgerRoleTypeMatches(role, kind) {
 }
 function syncPreparedLedgerColumns() {
     if (!ledgerSetupDraft) return;
+    const previous = new Map(selectedColumns.map(c => [c.id, c.compare_for_changes]));
     selectedColumns = ledgerRoleDefinitions.map(([role, label, name, kind], index) => {
         const id = ledgerColumnRoles[role];
         const existing = allMasterColumns.find(col => col.id === id);
-        return existing ? {id, name: existing.column_name, type: existing.data_type}
+        const column = existing ? {id, name: existing.column_name, type: existing.data_type}
             : {id: -(index + 1), name: name + ' (create on Save)', type: kind};
+        if (typeof previous.get(column.id) === 'boolean') column.compare_for_changes = previous.get(column.id);
+        return column;
     });
 }
 function renderLedgerRoleControls() {
@@ -130,6 +133,7 @@ function renderLedgerRoleControls() {
         select.addEventListener('change', () => {
             ledgerColumnRoles[role] = Number(select.value) || null;
             if (ledgerSetupDraft) { syncPreparedLedgerColumns(); renderSelectedColumns(); updateSelectedCount(); }
+            else renderSelectedColumns();
         });
         field.appendChild(select); container.appendChild(field);
     });
@@ -139,6 +143,7 @@ function renderLedgerRoleControls() {
 }
 ledgerPurposeSelect.addEventListener('change', () => {
     ledgerColumnRoles = {}; renderLedgerRoleControls(); updateRateSourceVisibility();
+    renderSelectedColumns();
 });
 document.getElementById('prepareLedgerBtn').addEventListener('click', async function() {
     if (templateActionsInFlight.has('ledger-prepare')) return;
@@ -644,8 +649,17 @@ function removeFromSelected(colId) {
     updateSelectedCount();
 }
 
+function templateColumnComparison(column) {
+    if (typeof column.compare_for_changes === 'boolean') return column.compare_for_changes;
+    return !(ledgerPurposeSelect.value === 'account_ledger' && Number(column.id) === Number(ledgerColumnRoles.balance));
+}
+
 function renderSelectedColumns() {
     selectedColumnsList.innerHTML = '';
+    const conflicts = selectedColumns.filter(c => c.comparison_review_required).map(c => c.name);
+    const review = document.getElementById('templateComparisonReview');
+    review.hidden = conflicts.length === 0;
+    review.textContent = conflicts.length ? 'Previous client comparison choices differ for: ' + conflicts.join(', ') + '. Review the checkboxes and Save Template before uploading.' : '';
     if (selectedColumns.length === 0) {
         emptySelectedMsg.style.display = 'block';
         return;
@@ -656,7 +670,7 @@ function renderSelectedColumns() {
         const div = document.createElement('div');
         div.className = 'selected-item';
         div.dataset.id = col.id;
-        div.style.cssText = 'display:flex; align-items:center; gap:10px; padding:8px 10px; border-bottom:1px solid #f0f2f5; background:white; border-radius:6px; margin-bottom:4px;';
+        div.style.cssText = 'padding:8px 10px; border-bottom:1px solid #f0f2f5; background:white; border-radius:6px; margin-bottom:4px;';
 
         const handle = document.createElement('span');
         handle.textContent = ledgerSetupDraft ? '' : '☰';
@@ -677,12 +691,51 @@ function renderSelectedColumns() {
         appendNotesIcon(nameWrap, col.notes ? col.notes.trim() : '');
         div.appendChild(nameWrap);
 
+        // Roles belong to this selected mapping; the reusable master column is unchanged.
+        if (!ledgerSetupDraft) {
+            const roleSelect = document.createElement('select');
+            roleSelect.className = 'template-reconciliation-role';
+            roleSelect.setAttribute('aria-label', 'Reconciliation role for ' + col.name);
+            const options = [['', 'Standard']];
+            if (col.type === 'Text') options.push(['document_id', 'Document ID']);
+            if (col.type === 'Numeric') options.push(['footing', 'Footing']);
+            options.forEach(([value, label]) => {
+                const option = document.createElement('option');
+                option.value = value; option.textContent = label; roleSelect.appendChild(option);
+            });
+            roleSelect.value = col.reconciliation_role || '';
+            roleSelect.disabled = options.length === 1;
+            roleSelect.addEventListener('change', () => {
+                if (roleSelect.value === 'document_id') {
+                    selectedColumns.forEach(other => {
+                        if (other.id !== col.id && other.reconciliation_role === 'document_id') other.reconciliation_role = null;
+                    });
+                }
+                col.reconciliation_role = roleSelect.value || null;
+                renderSelectedColumns();
+            });
+            div.appendChild(roleSelect);
+        } else {
+            div.appendChild(document.createElement('span'));
+        }
+
+        const compareCell = document.createElement('span');
+        compareCell.className = 'template-compare-cell';
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = templateColumnComparison(col);
+        checkbox.setAttribute('aria-label', 'Compare for changes: ' + col.name);
+        checkbox.addEventListener('change', () => { col.compare_for_changes = checkbox.checked; });
+        compareCell.appendChild(checkbox);
+        div.appendChild(compareCell);
+
         const removeBtn = document.createElement('button');
         removeBtn.type = 'button';
         removeBtn.textContent = '✕';
         removeBtn.style.cssText = 'background:none; border:none; color:#dc2626; cursor:pointer; font-size:16px; padding:0 6px;';
         removeBtn.addEventListener('click', function() { removeFromSelected(col.id); });
         if (!ledgerSetupDraft) div.appendChild(removeBtn);
+        else div.appendChild(document.createElement('span'));
 
         selectedColumnsList.appendChild(div);
     });
@@ -759,7 +812,10 @@ async function openModal(title, templateData = null, triggerBtn = null) {
         const cols = templateData.columns || [];
         cols.forEach(col => {
             const masterCol = columns.find(c => c.id === col.id);
-            selectedColumns.push({ id: col.id, name: col.column_name, type: col.data_type, notes: masterCol ? masterCol.notes : null });
+            selectedColumns.push({ id: col.id, name: col.column_name, type: col.data_type,
+                reconciliation_role: col.reconciliation_role || null,
+                compare_for_changes: col.compare_for_changes, comparison_review_required: col.comparison_review_required,
+                notes: masterCol ? masterCol.notes : null });
         });
         renderSelectedColumns();
         updateSelectedCount();
@@ -863,10 +919,15 @@ document.getElementById('templateForm').addEventListener('submit', async functio
         let method = 'POST';
         let payload = { template_name: name, selected_columns: selectedIds, rate_source: ledgerMode ? null : rateSourceSelect.value,
             has_subtotals_by_default: hasSubtotalsCheckbox.checked, data_purpose: ledgerPurposeSelect.value,
-            ledger_columns: ledgerMode ? ledgerColumnRoles : {} };
+            ledger_columns: ledgerMode ? ledgerColumnRoles : {},
+            column_roles: Object.fromEntries(selectedColumns.map(c => [c.id, c.reconciliation_role || null])),
+            column_comparisons: Object.fromEntries(selectedColumns.map(c => [c.id, templateColumnComparison(c)])) };
         if (ledgerSetupDraft) {
             url += '/ledger-setup';
-            payload = {template_name: name, has_subtotals_by_default: hasSubtotalsCheckbox.checked, ledger_columns: Object.fromEntries(Object.entries(ledgerColumnRoles).map(([role, id]) => [role, id > 0 ? id : null]))};
+            payload = {template_name: name, has_subtotals_by_default: hasSubtotalsCheckbox.checked,
+                ledger_columns: Object.fromEntries(Object.entries(ledgerColumnRoles).map(([role, id]) => [role, id > 0 ? id : null])),
+                column_comparisons: Object.fromEntries(ledgerRoleDefinitions.map(([role]) => [role,
+                    templateColumnComparison(selectedColumns.find(c => c.id === ledgerColumnRoles[role]))]))};
         }
 
         if (editingId) {
