@@ -1,5 +1,9 @@
 # Changelog Archive
 
+## Database policy clarification — 2026-11-05
+
+Updated CLAUDE.md's existing database rules and Cashflows guidance in place: replacement history and permanent wipe are distinct, legitimate line multiplicity survives, durable transaction copies remain prohibited, and reusable data/indexes stay protected. Added post-purge/re-upload checks and distinguished disk allocation from retained records. Existing backup/capacity safeguards remain. Older superseded decisions below are marked historical; live evidence remains under Data Bank local Excel library. Documentation only; no application or database changes.
+
 ## Template deletion and storage closure — 2026-11-04
 
 The agreed deletion/re-upload plan includes two accepted scope changes: administrator deletion works on local and Render, and Account Ledger workbook compatibility remains deferred. Data Bank's bin offers backup/delete or cancel, prepares all current rows on Data and prior rows on Changed-Deleted History, starts the XLSX download, then invokes protected-reference/fresh-preview-gated purge. Full database backups remain optional and separate. Browser initiation cannot certify that the user saved the download. Phases 1–2 were pushed as a6891e7f and 76f7b03d; scoped purge removes source/history, derived links, upload/validation/lifecycle metadata and matching deletion audit entries without creating another deletion receipt, while retaining reusable cross-module settings. The standard-template re-upload check matched all 8,013 Purchase Order rows/16 fields and numeric totals, with fresh upload/creation details and no imported history sheet. Existing attribution/date/history-indicator limitations are recorded in KNOWN_ISSUES.md.
@@ -886,6 +890,9 @@ Adjustment-detail hover previews now wait 250 ms on one link; leaving or moving 
 
 ## Locked upload and deletion contract - 2026-10-11
 
+**Historical:** This contract and the duplicate-gate entries below predate the current history and legitimate line-multiplicity policy. Follow CLAUDE.md, Database management and backup rules; the old results remain historical evidence.
+
+
 **Decision:** `client_data` is the only durable canonical transaction set. Raw values and report-required derived columns stay together; reports and analysis do not receive a second transaction copy. Upload validation must count exact duplicate lines, retain only the first copy, stop an unchanged previously imported file as a no-op, apply corrections in place, insert new/backdated rows once, and block conflicting identities before a write.
 
 **Deletion boundary:** The guarded administrator preview/apply flow is the only source-data deletion path. It permanently removes canonical rows, derived classifications, occurrence metadata, audit payloads, upload metadata, validation plans, and staged files. Soft-delete and restore are blocked. A successful logical purge may leave PostgreSQL table/index pages and bloat; that physical compaction is a separate approved maintenance operation, not retained client data.
@@ -959,7 +966,7 @@ The backup-export requirement is now explicitly deferred for development and mus
 
 ## Database management and backup policy - Phase 1 - 2026-10-09
 
-**Status:** Documentation complete. **Files:** `CLAUDE.md`, `CHANGELOG_ARCHIVE.md`.
+**Status:** Historical baseline; current rules, including scoped change history, are in CLAUDE.md, Database management and backup rules. **Files:** `CLAUDE.md`, `CHANGELOG_ARCHIVE.md`.
 
 **Decision:** Supabase is the production working store, not the permanent archive. Keep one active client dataset/import, retain only current operational rows, prevent duplicate re-imports through normalized source and row identity, and keep generated files outside Supabase.
 
@@ -1014,6 +1021,9 @@ Storage preview now includes Cash/Bank classifications, legacy Cashflows rollups
 **Checks:** New Phase 5 tests passed 3/3; storage-cleanup checks passed 10/10 excluding one legacy schema-bootstrap fixture; Cashflows regression suite passed 66/66. No live preview ran because `DATABASE_URL` was unavailable.
 
 ## Cashflows current-only prepared model - Phase 4 - 2026-10-09
+
+**Historical architecture:** Prepared transaction copies were superseded by Cashflows canonical Client Data report source (2026-10-12). Current rules are in CLAUDE.md; retain this entry as implementation history.
+
 
 **Status:** Complete. **Files:** `services/cashflow_preparation.py`, `services/ledger_report_source.py`, `services/cash_bank_classification.py`, and Cashflows regression tests.
 
