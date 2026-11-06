@@ -1,5 +1,9 @@
 # Changelog Archive
 
+## Vertical Footing validation — Phase 1 mini-phase — 2026-11-06
+
+An explicitly confirmed Excel control row is validated only through mapped Footing cells. Values in Document ID, Date, account or other neighboring columns no longer reject the selected row. Footing mappings and Numeric types remain required; every selected total still needs a saved numeric value and must match the exact sum of its detail column. The existing import flow excludes the selected row from details. No router or UI change, schema change or dependency change was required. Phase 2 unmapped-column behavior remains separate. No tests were added or run.
+
 ## Preview controls — Phase 4 — 2026-11-06
 
 The eight-file scope and approach were separately approved after Phase 3 acceptance/push (`a1da3e01`). Current Client Data eye previews now show compact Rows, Documents and individually configured Footing totals beside the title. Template roles remain authoritative; no new upload choices. Filters include client/template/dates, uploaded ledger account, search, amount, Sunday and data quality. Pagination, page size and displayed subtotal lines never change these source controls. History and Cashflows classification retain their presentation.

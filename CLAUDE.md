@@ -51,7 +51,7 @@ One line per file group: what it is now. Full build history for every entry live
 - services/cashflow_preparation.py + scripts/backfill_cashflow_prepared_read_model.py -> metadata-only preparation/job recovery boundary; prepared transaction copies and rollups are no longer rebuilt. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_xlsx.py, reconciliation_export_jobs.py → Selected-account workbooks, complete voucher context, streaming, bounded owner-scoped jobs and private temporary files. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_balance_source.py → Independent balances, scoped voucher completeness, adjustment membership, posting comparisons and coverage controls. See CHANGELOG_ARCHIVE.md.
-- services/upload_lifecycle.py + drive_archive.py + upload_observation_report.py + upload_reconciliation.py → Upload scope proofs, verified archives, reports and exact reconciliation controls. See CHANGELOG_ARCHIVE.md.
+- services/upload_lifecycle.py + upload_observation_report.py + upload_reconciliation.py → Upload scope proofs, reports, vertical Footing validation and source/SQL controls. See CHANGELOG_ARCHIVE.md.
 - routers/database_backup.py + services/database_backup.py + static/setup.* + scripts/rehearse_database_backup.py → Local backups, resumable Drive verification, processing feedback and isolated recovery rehearsals. See CHANGELOG_ARCHIVE.md.
 - tests/test_account_control_center*.py, test_trial_balance_account_flow_safety.py, test_trial_balance_ui.py, test_cashflows*.py, test_reconciliation*.py → Setup, accounting, account-flow safety, API/UI parity, and workbook evidence/export checks. See CHANGELOG_ARCHIVE.md.
 - tests/test_upload_lifecycle.py, test_data_deletion.py, test_import_duplicate_gates.py, test_upload_dialogs.py + experiments/upload_safety/ → Upload lifecycle, dialog accessibility, isolated experiments and duplicate safeguards. See CHANGELOG_ARCHIVE.md.
@@ -138,6 +138,7 @@ One line per file group: what it is now. Full build history for every entry live
 - Document ID/Footing roles belong to template-column mappings, never shared master columns. Unconfigured templates retain their first-column key. Preserve detail occurrences; block identity-changing edits on populated templates.
 - Comparison policy belongs to template mappings: default checked except configured Account Ledger Balance. Upload requests/header mappings cannot override it; conflicting legacy choices require template review/save.
 - Footing requires a confirmed Excel total row and exact full-detail sums. Approved-subset metrics remain separate; footer choices are file-specific and validation-bound.
+- A confirmed control row is validated vertically through mapped Footing cells; neighboring cell values do not disqualify it.
 - Post-import SQL controls share the import transaction/receipt; savepoints isolate verification errors. Receipts describe completion-time evidence; partial extracts never certify complete periods.
 - Preview controls share the page's complete filter and read snapshot; pagination/subtotals never affect totals. Reopening/focus refreshes scope; late responses cannot restore stale metrics.
 - `parse_date_flexible(value, delimiter, order)` in routers/import_export.py is the single source of truth for date-import parsing (text-string dates), used by validate_only(), validate_and_import(), and extract_columns_from_row() — do not reintroduce a hardcoded `datetime.strptime(value, "%d/%m/%Y")` or a per-function format list; extend/call this function instead. Paired with `classify_date_cell(value)` (same file), which classifies a raw cell as `'native'` (must NOT be passed to `parse_date_flexible()`), `'text'`, `'excel_serial'`, or `'empty'` — all three Date call sites dispatch on this classification rather than inline `isinstance()` checks. See "Flexible Date-Import Format" in CHANGELOG_ARCHIVE.md for the full phase-by-phase design.
@@ -264,6 +265,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-06: Footing control rows ignore neighboring values; selected totals remain validated. See CHANGELOG_ARCHIVE.md, Vertical Footing validation.
 - 2026-11-06: Added compact, filtered Data Bank preview controls and freshness guards; local acceptance pending. See CHANGELOG_ARCHIVE.md, Preview controls — Phase 4.
 - 2026-11-06: Added post-import SQL reconciliation, guarded no-op verification and receipt/report presentation; locally accepted. See CHANGELOG_ARCHIVE.md, Stored-data reconciliation — Phase 3.
 - 2026-11-06: Added mandatory source Footing controls and compact upload summaries; locally accepted. See CHANGELOG_ARCHIVE.md, Source control totals — Phase 2.

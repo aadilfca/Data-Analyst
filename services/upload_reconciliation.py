@@ -53,7 +53,7 @@ def amount(value, *, required=False):
 
 
 def selected_control_row(records, columns, mapping, row_number, confirmed):
-    """Accept an explicit source row only when it cannot conceal a document."""
+    """Validate the selected control row only through configured Footing cells."""
     footings = footing_columns(columns)
     if not footings:
         if row_number is not None or confirmed:
@@ -66,12 +66,6 @@ def selected_control_row(records, columns, mapping, row_number, confirmed):
     if not confirmed or type(row_number) is not int or not 2 <= row_number <= len(records) + 1:
         raise ValueError('Confirm a valid Excel control-total row number (header is row 1).')
     raw = records[row_number - 2]
-    protected = [key] + [c['column_name'] for c in columns
-                         if c['data_type'] == 'Date' or 'account' in c['column_name'].casefold()]
-    for name in protected:
-        value = raw.get(mapping.get(name))
-        if not blank(value) and not (isinstance(value, str) and TOTAL_LABEL.fullmatch(value.strip())):
-            raise ValueError(f'Excel row {row_number} contains document/date/account information. Choose the report total row.')
     for column in footings:
         name = column['column_name']
         if column['data_type'] != 'Numeric':
