@@ -104,6 +104,25 @@ def test_ignored_import_explains_that_unchanged_rows_were_not_imported(page):
     assert '0 new row' not in summary
 
 
+def test_result_dialog_has_accessible_keyboard_controls_and_restores_focus(page):
+    page.evaluate('''() => {
+        const trigger=document.createElement('button'); trigger.id='summaryTrigger';
+        trigger.textContent='Show result'; document.body.appendChild(trigger); trigger.focus();
+        showImportSummary({status:'success',ignored:true,total_rows:1,
+            reconciliation:{status:'matched',rows:[],message:'Controls match.'}});
+    }''')
+    dialog = page.get_by_role('dialog', name='No changes required')
+    expect(dialog).to_be_visible()
+    expect(page.locator('#importSummaryCloseBtn')).to_be_focused()
+    page.keyboard.press('Tab')
+    expect(dialog.get_by_role('link', name='View in Data Bank')).to_be_focused()
+    page.keyboard.press('Shift+Tab')
+    expect(page.locator('#importSummaryCloseBtn')).to_be_focused()
+    page.keyboard.press('Escape')
+    expect(dialog).to_have_count(0)
+    expect(page.locator('#summaryTrigger')).to_be_focused()
+
+
 def test_unavailable_backup_policy_keeps_backup_required(page):
     page.route('**/api/upload/backup-policy', lambda route: route.fulfill(status=503, body='unavailable'))
     page.evaluate('loadUploadBackupPolicy()')
@@ -540,8 +559,16 @@ def test_unchanged_validation_opens_verified_result_without_sending_import(page)
     page.on('request',lambda request:requests.append(request.url))
     result={'status':'validation_complete','has_errors':False,'errors':[],'rejected_rows':[],
             'total_rows':116,'can_import':False,'change_detection':{'unchanged_count':116},
-            'reconciliation':import_reconciliation()}
+            'reconciliation':import_reconciliation(),
+            'source_diagnostics':{'excluded_count':1,
+                'excluded_rows':[{'row_number':117,'kind':'total','label':'Grand Total'}],
+                'warnings':[{'row_number':117,'column':'Debit',
+                    'message':'Source total differs; source amount was not changed.'}]}}
     page.route('**/api/upload/validate',lambda route:route.fulfill(json=result))
     page.locator('#importBtn').click()
     expect(page.locator('#importSummaryOverlay h2')).to_have_text('No changes required')
+    assert page.locator('#validationErrorOverlay').count() == 0
+    notes = page.locator('#importSummaryOverlay .result-source-notes')
+    expect(notes).to_contain_text('1 blank or total source row skipped')
+    expect(notes).to_contain_text('Row 117 · Debit: Source total differs')
     assert not any(url.endswith('/api/upload/import') for url in requests)

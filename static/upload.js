@@ -2127,7 +2127,10 @@ function renderImportReconciliation(container, reconciliation) {
 }
 
 function showImportSummary(result, ledgerPresentation = null) {
-    document.getElementById('importSummaryOverlay')?.remove();
+    const priorOverlay = document.getElementById('importSummaryOverlay');
+    if (priorOverlay?._summaryKeydown) document.removeEventListener('keydown', priorOverlay._summaryKeydown);
+    priorOverlay?.remove();
+    const previousFocus = document.activeElement;
     // Create overlay
     const overlay = document.createElement('div');
     overlay.id = 'importSummaryOverlay';
@@ -2139,6 +2142,10 @@ function showImportSummary(result, ledgerPresentation = null) {
     
     // Create modal
     const modal = document.createElement('div');
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', 'importSummaryTitle');
+    modal.tabIndex = -1;
     modal.style.cssText = `
         background: white; border-radius: 12px; padding: 30px;
         max-width: 600px; width: calc(100% - 24px); box-sizing: border-box; box-shadow: 0 20px 60px rgba(0,0,0,0.3);
@@ -2283,7 +2290,7 @@ function showImportSummary(result, ledgerPresentation = null) {
     modal.innerHTML = `
         <div style="text-align:center; margin-bottom:20px;">
             <div style="font-size:40px; line-height:1;">${statusIcon}</div>
-            <h2 style="margin:10px 0 4px; color:#1a1a2e; font-size:20px;">${statusText}</h2>
+            <h2 id="importSummaryTitle" style="margin:10px 0 4px; color:#1a1a2e; font-size:20px;">${statusText}</h2>
             <p style="color:#64748b; font-size:14px; margin:0;">${detailMessage}</p>
         </div>
         <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px;">
@@ -2333,6 +2340,41 @@ function showImportSummary(result, ledgerPresentation = null) {
     document.body.appendChild(overlay);
     renderImportReconciliation(overlay.querySelector('#importReconciliation'), result.reconciliation);
 
+    // A verified no-op opens its final result during validation. Keep source-row
+    // notes in that same dialog instead of leaving a warning dialog underneath it.
+    const source = result.ignored ? result.source_diagnostics : null;
+    if (source && (source.excluded_count || source.warnings?.length)) {
+        const section = document.createElement('section');
+        section.className = 'result-source-notes';
+        const heading = document.createElement('strong');
+        heading.textContent = 'Source notes';
+        section.appendChild(heading);
+        if (source.excluded_count) {
+            const count = document.createElement('p');
+            count.textContent = `${source.excluded_count} blank or total source row${source.excluded_count === 1 ? '' : 's'} skipped.`;
+            section.appendChild(count);
+        }
+        const notes = [...(source.warnings || []), ...(source.excluded_rows || []).map(row => ({
+            row_number: row.row_number,
+            message: `Excluded ${row.kind || 'source'} row${row.label ? ': ' + row.label : ''}`
+        }))];
+        if (notes.length) {
+            const list = document.createElement('ul');
+            notes.slice(0, 50).forEach(note => {
+                const item = document.createElement('li');
+                item.textContent = `${note.row_number == null ? 'Source row' : `Row ${note.row_number}`}${note.column ? ` · ${note.column}` : ''}: ${note.message || ''}`;
+                list.appendChild(item);
+            });
+            if (notes.length > 50) {
+                const more = document.createElement('li');
+                more.textContent = `${notes.length - 50} more source notes are available in the upload review.`;
+                list.appendChild(more);
+            }
+            section.appendChild(list);
+        }
+        overlay.querySelector('#importReconciliation').after(section);
+    }
+
     const preparationWarningBox = overlay.querySelector('#importSummaryPreparationWarning');
     if (preparationWarningBox) {
         preparationWarningBox.textContent = result.cashflow_preparation_warning;
@@ -2370,18 +2412,36 @@ function showImportSummary(result, ledgerPresentation = null) {
         downloadReportBtn.addEventListener('click', () => downloadChangeReport(changeReport, uploadSummary, result.reconciliation));
     }
     
-    // Close on button click
-    overlay.querySelector('#importSummaryCloseBtn').addEventListener('click', function() {
-        document.body.removeChild(overlay);
+    // Keep keyboard users inside the result until it is closed, then return
+    // focus to the control that opened it.
+    const closeSummary = () => {
+        if (!overlay.isConnected) return;
+        document.removeEventListener('keydown', overlay._summaryKeydown);
+        overlay.remove();
         resetUpload();
-    });
+        if (previousFocus?.isConnected) previousFocus.focus({preventScroll: true});
+    };
+    overlay.querySelector('#importSummaryCloseBtn').addEventListener('click', closeSummary);
     // Close on overlay click (background)
     overlay.addEventListener('click', function(e) {
-        if (e.target === overlay) {
-            document.body.removeChild(overlay);
-            resetUpload();
-        }
+        if (e.target === overlay) closeSummary();
     });
+    overlay._summaryKeydown = event => {
+        if (!overlay.isConnected) return;
+        if (event.key === 'Escape') { event.preventDefault(); closeSummary(); return; }
+        if (event.key !== 'Tab') return;
+        const controls = [...modal.querySelectorAll('a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])')]
+            .filter(control => control.getClientRects().length);
+        const first = controls[0], last = controls[controls.length - 1];
+        if (!first) { event.preventDefault(); modal.focus(); }
+        else if (event.shiftKey && (document.activeElement === first || !modal.contains(document.activeElement))) {
+            event.preventDefault(); last.focus();
+        } else if (!event.shiftKey && (document.activeElement === last || !modal.contains(document.activeElement))) {
+            event.preventDefault(); first.focus();
+        }
+    };
+    document.addEventListener('keydown', overlay._summaryKeydown);
+    overlay.querySelector('#importSummaryCloseBtn').focus();
 }
 // ---------- SHOW VALIDATION ERRORS ----------
 // Reuse the existing issue dialog for every stage; page row details to keep
@@ -2891,12 +2951,14 @@ if (importBtn) {
                                     // Validation passed – clear any stale failed-row markers from a
             // prior attempt (Phase 4), then show simple success message
             setValidationFailedRows([]);
-            showSourceDiagnostics(result);
             // Pre-import Rate mode visibility (Phase D) -- reflects this Validate call's
             // resolved Auto/Forced Imported/Derived decision until the next mapping change.
             lastRateModeInfo = result.rate_mode || null;
             renderRateModeIndicator();
             const canImport = Boolean(result.can_import && result.validation_plan_id);
+            // A verified no-op shows source notes inside its result dialog. Import-ready
+            // results keep the existing source-review dialog before the user can upload.
+            if (canImport || !result.reconciliation) showSourceDiagnostics(result);
             if (typeof result.backup_enabled === 'boolean') {
                 ++uploadBackupPolicyGeneration;
                 uploadBackupRequired = result.backup_enabled;

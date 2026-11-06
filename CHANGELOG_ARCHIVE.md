@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Upload result dialogs — Phase 2 — 2026-11-06
+
+Verified no-change results now include source notes in one dialog, avoiding stacked windows. Import results expose dialog semantics, focus entry/restoration, Tab trapping and Escape close; reconciliation text and report download stay available. No backend or schema change.
+
+Verification: Upload dialog browser tests passed 47/47; focused source-control and reconciliation checks passed 4/4. No new known issue was found.
+
 ## Unmapped Standard fields — Phase 2 — 2026-11-06
 
 Complete reports no longer require a source mapping for every template column. Unmapped optional Standard fields are included as blank values in validation details and stored row data, including first uploads and compared updates. Existing template comparison policy applies, so a compared update can clear a previously stored value when the latest workbook omits that field. Document ID, critical Date/Amount, configured Footing and derived-Rate rules remain in force. No UI, schema or dependency change. No tests were added or run.
