@@ -25,7 +25,7 @@ from services.cashflow_preparation import (
 )
 from services.cashflow_voucher_occurrence_store import resolve_upload_occurrences_postgres
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictInt, StrictBool
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 from routers.auth import get_current_user
@@ -35,6 +35,9 @@ from services.upload_lifecycle import (
     get_receipt, prepare_lifecycle, guard_lifecycle, finish_lifecycle,
     SOURCE_ROW_HASH_SQL,
     unbacked_uploads_allowed, apply_upload_backup_policy,
+)
+from services.upload_reconciliation import (
+    footing_columns, selected_control_row, reconcile_source, summarize_rows,
 )
 
 # ⭐ MUST HAVE THIS LINE
@@ -274,6 +277,12 @@ def _prepare_source_rows(frame, request, template_cols, col_mapping):
     A total word alone is insufficient: document/date/account evidence always
     wins. Source positions remain separate from stored transaction values.
     """
+    records = frame.to_dict('records')
+    try:
+        control_row = selected_control_row(records, template_cols, col_mapping,
+                                          request.control_total_row, request.control_total_confirmed)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
     pattern = re.compile(r'(?:grand\s*)?(?:sub\s*)?total\s*:?$', re.I)
     def blank(value):
         return value is None or pd.isna(value) or str(value).strip() == ''
@@ -291,7 +300,12 @@ def _prepare_source_rows(frame, request, template_cols, col_mapping):
     protected.discard(None)
     rows, controls = [], []
     positions = _source_row_numbers.get()
-    for number, raw in enumerate(frame.to_dict('records'), 2):
+    for number, raw in enumerate(records, 2):
+        if number == control_row:
+            controls.append({'row_number': number, 'kind': 'confirmed_total', 'label': 'Excel control total',
+                             'amounts': {c['column_name']: str(raw[col_mapping[c['column_name']]])
+                                         for c in footing_columns(template_cols)}})
+            continue
         nonblank = [value for value in raw.values() if not blank(value)]
         summary = (any(marker(value) for value in nonblank)
                    and (blank(raw.get(key)) or marker(raw.get(key)))
@@ -325,7 +339,7 @@ def _prepare_source_rows(frame, request, template_cols, col_mapping):
     diagnostics = {'excluded_count': len(controls), 'excluded_rows': controls, 'warnings': []}
     # Compare only a single trailing report total, never subtotals or rates.
     totals = [c for c in controls if c['kind'] == 'total']
-    if len(totals) == 1 and not _ledger_context.get():
+    if len(totals) == 1 and not _ledger_context.get() and not footing_columns(template_cols):
         total = totals[0]
         last_transaction = max((positions or {}).values(), default=1)
         if total['row_number'] > last_transaction and 'sub' not in total['label'].casefold():
@@ -342,6 +356,42 @@ def _prepare_source_rows(frame, request, template_cols, col_mapping):
     return rows, diagnostics
 
 
+def _source_reconciliation(frame, rows, request, columns, mapping):
+    """Run once before user exclusions/edits; retain only compact controls."""
+    if footing_columns(columns) and request.edited_cells:
+        raise HTTPException(400, 'Correct Footing-controlled uploads in Excel, then select the revised file.')
+    try:
+        footer_values = frame.iloc[request.control_total_row - 2].to_dict() if footing_columns(columns) else {}
+        return reconcile_source(footer_values, rows, columns, mapping,
+                                request.control_total_row, _ledger_row_number)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+
+
+def _reconciliation_failure(controls, total_rows):
+    errors = [{'row_number': controls['control_total_row'], 'row_data': {}, 'errors': [
+        {'column': check['column'], 'error_type': 'footing_mismatch',
+         'message': f"Excel total {check['excel_total']} differs from detail total {check['detail_total']} by {check['difference']}. Correct the source workbook."}
+        for check in controls['checks'] if Decimal(check['difference']) != 0]}]
+    result = _source_input_failure(errors, total_rows)
+    result['source_reconciliation'] = controls
+    return result
+
+
+def _approved_reconciliation(controls, rows, columns, mapping, request, date_range):
+    """Approved detail can be a subset; its totals never replace the source footer."""
+    try:
+        controls['approved_detail'] = summarize_rows(rows, columns, mapping, _ledger_row_number)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    controls['scope'] = {'client_id': request.client_id, 'template_id': request.template_id,
+                         'comparison_mode': request.comparison_mode, 'date_range': date_range,
+                         'ledger_account_code': request.ledger_account_code,
+                         'complete_period': request.comparison_mode == 'replace_range'}
+    controls['omitted_detail_rows'] = controls['full_sheet']['row_count'] - len(rows)
+    return controls
+
+
 def _workbook_input_errors(file_path, request, template_cols, col_mapping, frame):
     """Inspect cell types before pandas can turn Excel errors/NaN text into blanks.
 
@@ -356,7 +406,8 @@ def _workbook_input_errors(file_path, request, template_cols, col_mapping, frame
             mapped.setdefault(headers.index(source), []).append(column)
     if not mapped:
         return []
-    excluded = set(request.excluded_rows or []) if request.comparison_mode != 'replace_range' else set()
+    controlled = bool(footing_columns(template_cols))
+    excluded = set(request.excluded_rows or []) if request.comparison_mode != 'replace_range' and not controlled else set()
 
     def inspect(number, cells):
         if number in excluded:
@@ -370,9 +421,16 @@ def _workbook_input_errors(file_path, request, template_cols, col_mapping, frame
                     safe = str(safe)
                 values[column['column_name']] = safe
                 message, kind = None, 'data_type'
+                if controlled and isinstance(value, str) and value.startswith('='):
+                    # pandas already supplies cached results. Inspect formula text
+                    # in this same metadata pass so a missing cache is not a zero.
+                    cached = frame.iloc[number - 2, position] if number - 2 < len(frame) else None
+                    if cached is None or pd.isna(cached) or str(cached).strip() == '':
+                        message, kind = 'Recalculate and save this formula in Excel, then upload again.', 'formula_result_missing'
+                    value = cached
                 if excel_error:
                     message, kind = 'Fix the Excel formula error.', 'excel_error'
-                elif column['data_type'] == 'Numeric' and value is not None and str(value).strip():
+                elif not message and column['data_type'] == 'Numeric' and value is not None and str(value).strip():
                     try:
                         if not math.isfinite(float(value)):
                             message = 'Enter a valid number.'
@@ -399,7 +457,7 @@ def _workbook_input_errors(file_path, request, template_cols, col_mapping, frame
         finally:
             book.release_resources()
     else:
-        book = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+        book = openpyxl.load_workbook(file_path, read_only=True, data_only=not controlled)
         try:
             sheet = book[request.sheet_name]
             for number, row in enumerate(sheet.iter_rows(min_row=2, max_col=max(mapped) + 1), 2):
@@ -2444,6 +2502,9 @@ class ImportRequest(BaseModel):
     # Server-issued, short-lived validation plan. Import must use the plan
     # produced by Validate rather than re-reading and re-comparing the workbook.
     validation_plan_id: Optional[str] = None
+    # Source control choice is file-specific and never a saved column default.
+    control_total_row: Optional[StrictInt] = None
+    control_total_confirmed: StrictBool = False
     unique_column_id: Optional[int] = None
     skip_validation: bool = False
     sheet_name: str = "Sheet1"
@@ -3530,9 +3591,12 @@ def validate_only(request: ImportRequest, perf: bool = False):
     rows, source_diagnostics = _prepare_source_rows(df, request, template_cols, col_mapping)
     # Apply any typed blank-cell values before exclusion filtering (see
     # apply_edited_cell_values()'s docstring for why the ordering matters).
+    rows = _prepare_ledger_rows(rows, request)
+    source_controls = _source_reconciliation(df, rows, request, template_cols, col_mapping)
+    if source_controls['status'] == 'mismatch':
+        return _reconciliation_failure(source_controls, len(rows))
     rows = apply_edited_cell_values(rows, request.edited_cells)
     # Drop user-excluded rows before anything else sees them (validation, counts).
-    rows = _prepare_ledger_rows(rows, request)
     if request.comparison_mode == 'replace_range':
         if request.force_include_rows or request.edited_cells:
             raise HTTPException(400, 'Correct complete-report errors in the source workbook; rejected rows cannot be overridden.')
@@ -3703,6 +3767,17 @@ def validate_only(request: ImportRequest, perf: bool = False):
         included_fields=included_fields,
     )
     change_detection['comparison_fields'] = sorted(included_fields)
+    source_controls = _approved_reconciliation(source_controls, unique_comparison_rows, template_cols,
+                                               col_mapping, request, change_detection.get('date_range'))
+    # Rate is the only numeric field this path rewrites. Avoid another full
+    # canonical-row materialization for ordinary amount-controlled uploads.
+    if rate_source and find_named_column(footing_columns(template_cols), 'Rate'):
+        stored_controls = summarize_rows([
+            _canonical_import_row_data(row, col_mapping, template_cols, rate_source, rate_precision)
+            for row in unique_comparison_rows], template_cols, {c['column_name']: c['column_name'] for c in template_cols})
+        if any(Decimal(value) != Decimal(source_controls['approved_detail']['footing_totals'][name])
+               for name, value in stored_controls['footing_totals'].items()):
+            raise HTTPException(400, 'Derived values change a Footing total. Supply the final values in Excel or review the template Footing settings.')
     change_detection.update({
         key: value
         for key, value in deduplication.items()
@@ -3759,6 +3834,7 @@ def validate_only(request: ImportRequest, perf: bool = False):
             effective_order,
         )
         plan_payload["source_diagnostics"] = source_diagnostics
+        plan_payload['source_reconciliation'] = source_controls
         plan_payload['archive_timestamp'] = datetime.now(ZoneInfo('Asia/Karachi')).isoformat()
         validation_plan_id = _create_validation_plan(
             request,
@@ -3791,6 +3867,7 @@ def validate_only(request: ImportRequest, perf: bool = False):
 
     return {
         "status": "validation_complete",
+        "source_reconciliation": source_controls,
         "backup_enabled": request.backup_enabled,
         "source_diagnostics": source_diagnostics,
         "has_errors": len(validation_errors) > 0,
@@ -3998,6 +4075,11 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
 
     included_fields = _comparison_column_names(template_cols, request.mappings, template[0])
     planned_comparison_fields = plan_payload.get("comparison_fields")
+    source_controls = plan_payload.get('source_reconciliation') or {}
+    configured_footings = sorted(c['column_name'] for c in footing_columns(template_cols))
+    planned_footings = sorted(c['column'] for c in source_controls.get('checks', []))
+    if configured_footings != planned_footings or (configured_footings and source_controls.get('status') != 'matched'):
+        raise HTTPException(409, 'Source Footing controls are missing or changed. Validate the file again.')
     # Validation plans created before comparison settings were recorded (or
     # assembled directly by older integrations) have no authoritative field
     # list to compare. New plans always include it, so retain the stale-setting
@@ -4598,6 +4680,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
     return {
         "status": "success",
         "source_diagnostics": plan_payload.get("source_diagnostics", {}),
+        "source_reconciliation": source_controls,
         "archive_verified": bool(prepared and prepared.get('archive')),
         "backup_mode": prepared.get('archive_mode', 'drive' if prepared.get('archive') else 'not_required') if prepared else 'not_required',
         "change_report": prepared.get('change_report') if prepared else None,
@@ -4672,6 +4755,9 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
     )
     if not template_cols:
         raise HTTPException(400, "Template has no columns")
+
+    if footing_columns(template_cols):
+        raise HTTPException(400, 'Validate the Excel control totals first, then import using the validation plan.')
 
     included_fields = _comparison_column_names(template_cols, request.mappings, template[0])
 

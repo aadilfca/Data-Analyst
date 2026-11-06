@@ -617,6 +617,18 @@
             font-size: 13px;
             color: #64748b;
         }
+        #sourceControlPanel { margin-top: 12px; padding: 10px 12px; border: 1px solid #dbe2ea; border-radius: 6px; font-size: 12px; color: #475569; }
+        #sourceControlPanel[hidden] { display: none; }
+        #sourceControlPanel .source-control-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+        #sourceControlPanel input[type="number"] { width: 78px; padding: 4px 6px; border: 1px solid #cbd5e1; border-radius: 4px; }
+        #sourceControlPanel p { margin: 6px 0 0; overflow-wrap: anywhere; }
+        #sourceControlPanel .source-control-table { overflow-x: auto; margin-top: 6px; }
+        #sourceControlPanel table { width: 100%; border-collapse: collapse; }
+        #sourceControlPanel th, #sourceControlPanel td { padding: 4px 6px; border-bottom: 1px solid #e2e8f0; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+        #sourceControlPanel th:first-child, #sourceControlPanel td:first-child { text-align: left; }
+        #sourceControlPanel [data-status="mismatch"] { color: #b42318; }
+        #sourceControlPanel [data-status="matched"] { color: #16803c; }
+        #rowExclusionContainer tr.source-control-row td { background: #eef2f6; color: #475569; }
         .mapping-status { color: #16803c; font-size: 12px; font-weight: 600; white-space: nowrap; }
         .mapping-status.is-unmapped { color: #b42318; }
 
@@ -1639,6 +1651,16 @@
                                 <tbody id="mappingBody"></tbody>
                             </table>
                         </div>
+                        <section id="sourceControlPanel" hidden aria-labelledby="sourceControlHeading">
+                            <div class="source-control-heading">
+                                <strong id="sourceControlHeading">Excel control totals</strong>
+                                <label for="sourceControlRow">Total row <input id="sourceControlRow" type="number" min="2" step="1" aria-describedby="sourceControlHelp sourceControlPreview"></label>
+                                <label><input id="sourceControlConfirmed" type="checkbox"> Confirm total row</label>
+                            </div>
+                            <p id="sourceControlHelp"></p>
+                            <p id="sourceControlPreview"></p>
+                            <div id="sourceControlResults" aria-live="polite"></div>
+                        </section>
                     </div>
 
                     <!-- Consolidated action bar: overwrite note + Upload/Reset (Download Template lives in the top bar) -->
@@ -1853,7 +1875,7 @@
             <button type="button" id="uploadReplacementConfirm">Import</button>
         </footer>
     </dialog>
-    <script src="/static/upload.js?v=28"></script>
+    <script src="/static/upload.js?v=29"></script>
 </body>
 
 </html>

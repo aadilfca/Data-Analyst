@@ -1209,3 +1209,98 @@ def test_google_drive_wrong_scope_or_archive_metadata_blocks_verification(monkey
     monkeypatch.setattr(client, '_open', lambda *a, **kw: pytest.fail('Mismatched metadata must stop before content access'))
     with pytest.raises(drive_archive.ArchiveError, match='metadata'):
         client.upload_and_verify('remote', path, 'operation', checksum)
+
+
+def controlled_source(state, details=None):
+    """Configure Footing on an isolated template, never on shared master columns."""
+    state['store'] = Store([])
+    for column in state['store'].columns:
+        if column['column_name'] == 'Voucher ID':
+            column['reconciliation_role'] = 'document_id'
+        elif column['column_name'] in ('Debit Amount', 'Credit Amount'):
+            column['reconciliation_role'] = 'footing'
+    details = details if details is not None else [row('V1'), row('V1'), row('V2', amount=15)]
+    state['incoming'] = details + [{'Voucher ID': None, 'Transaction Date': None, 'Account Detail': None,
+        'Voucher Detail': 'TOTAL', 'Debit Amount': sum(r['Debit Amount'] for r in details),
+        'Credit Amount': sum(r['Credit Amount'] for r in details)}]
+    return {'control_total_row': len(details) + 2, 'control_total_confirmed': True}
+
+
+def test_footing_plan_import_preserves_repeated_lines_and_compact_controls(pipeline):
+    choices = controlled_source(pipeline)
+    result, validation = validate_then_import(pipeline, **choices)
+    assert validation['total_rows'] == result['total_rows'] == 3
+    assert result['imported_count'] == 3
+    proof = result['source_reconciliation']
+    assert proof['status'] == 'matched'
+    assert proof['full_sheet']['document_count'] == 2
+    assert proof['approved_detail']['footing_totals']['Debit Amount'] == '35'
+    assert len(pipeline['store'].rows) == 3
+    assert sum(r['row_data']['Voucher ID'] == 'V1' for r in pipeline['store'].rows) == 2
+    writes = pipeline['store'].source_writes
+    retry = upload.validate_and_import(request(validation_plan_id=validation['validation_plan_id'], **choices))
+    assert retry['recovered_commit']
+    assert retry['imported_count'] == 3
+    assert pipeline['store'].source_writes == writes
+
+
+def test_mismatching_source_footing_cannot_create_plan_or_write_transactions(pipeline):
+    choices = controlled_source(pipeline)
+    pipeline['incoming'][-1]['Debit Amount'] += 1
+    validation = upload.validate_only(request(**choices))
+    assert validation['status'] == 'validation_failed'
+    assert validation['source_reconciliation']['status'] == 'mismatch'
+    assert not pipeline['store'].plans and pipeline['store'].source_writes == 0
+
+
+def test_partial_exclusions_compare_footer_with_full_sheet_and_retain_approved_subset(pipeline):
+    choices = controlled_source(pipeline)
+    result, validation = validate_then_import(pipeline, comparison_mode='correction', excluded_rows=[3], **choices)
+    proof = validation['source_reconciliation']
+    assert proof['full_sheet']['row_count'] == 3
+    assert proof['full_sheet']['footing_totals']['Debit Amount'] == '35'
+    assert proof['approved_detail']['row_count'] == 2
+    assert proof['approved_detail']['footing_totals']['Debit Amount'] == '25'
+    assert proof['scope']['complete_period'] is False
+    assert result['imported_count'] == 2
+
+
+@pytest.mark.parametrize('change', ['row', 'confirmation', 'selection', 'dates', 'template', 'missing_proof'])
+def test_footing_plan_rejects_stale_choices_or_missing_proof_before_writes(pipeline, change):
+    choices = controlled_source(pipeline)
+    validation = upload.validate_only(request(**choices))
+    assert validation['can_import']
+    options = {**choices, 'validation_plan_id': validation['validation_plan_id']}
+    if change == 'row': options['control_total_row'] -= 1
+    if change == 'confirmation': options['control_total_confirmed'] = False
+    if change == 'selection': options['excluded_rows'] = [2]
+    if change == 'dates': options['coverage_end'] = '2026-04-29'
+    if change == 'template': pipeline['store'].columns[-1]['reconciliation_role'] = None
+    if change == 'missing_proof': pipeline['store'].plans[validation['validation_plan_id']]['plan_json'].pop('source_reconciliation')
+    with pytest.raises(HTTPException) as error:
+        upload.validate_and_import(request(**options))
+    assert error.value.status_code == 409
+    assert pipeline['store'].source_writes == 0
+
+
+def test_direct_import_and_source_edits_cannot_bypass_footing_validation(pipeline):
+    choices = controlled_source(pipeline)
+    with pytest.raises(HTTPException, match='control totals first'):
+        upload.validate_and_import(request(comparison_mode='correction', skip_validation=True, **choices))
+    assert pipeline['store'].source_writes == 0
+
+
+def test_complete_footing_report_still_rejects_excluded_detail_or_out_of_period_rows(pipeline):
+    choices = controlled_source(pipeline)
+    for options in ({'excluded_rows': [2]}, {'coverage_start': '2026-04-16'}):
+        with pytest.raises(HTTPException):
+            upload.validate_only(request(**choices, **options))
+    assert pipeline['store'].source_writes == 0
+
+
+def test_empty_footing_report_requires_confirmed_zero_source_total(pipeline):
+    choices = controlled_source(pipeline, [])
+    pipeline['store'].add(1, row())
+    result, validation = validate_then_import(pipeline, confirm_empty_period=True, **choices)
+    assert result['deleted_count'] == 1 and not pipeline['store'].rows
+    assert validation['source_reconciliation']['approved_detail']['row_count'] == 0

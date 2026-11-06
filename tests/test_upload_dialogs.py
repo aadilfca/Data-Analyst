@@ -352,3 +352,101 @@ def test_dialogs_fit_narrow_screens(page,width):
     date_errors(page,6)
     assert page.locator('#validationErrorOverlay section').evaluate('(el)=>el.scrollWidth<=el.clientWidth')
     assert page.locator('#validationErrorOverlay').evaluate('(el)=>el.getBoundingClientRect().right<=window.innerWidth')
+
+
+def prepare_source_controls(page):
+    page.evaluate('''() => {
+        workbookData = new Uint8Array([1]);
+        selectedTemplateId = 1; fileId = 99; currentSheet = 'Vouchers';
+        currentMappings = [
+            {column_id:1,column_name:'Voucher ID',data_type:'Text',excel_column:'Voucher ID',is_matched:true,reconciliation_role:'document_id'},
+            {column_id:2,column_name:'Date',data_type:'Date',excel_column:'Date',is_matched:true},
+            {column_id:3,column_name:'Debit',data_type:'Numeric',excel_column:'Debit',is_matched:true,reconciliation_role:'footing'},
+            {column_id:4,column_name:'Credit',data_type:'Numeric',excel_column:'Credit',is_matched:true,reconciliation_role:'footing'}
+        ];
+        rowExclusionHeaders = ['Voucher ID','Date','Debit','Credit'];
+        excelHeaders = rowExclusionHeaders.slice();
+        rowExclusionAllRows = [['A','15/04/2026',10,0],['A','15/04/2026',10,0],['B','15/04/2026',0,20],['TOTAL','',20,20]];
+        excludedRowNumbers = new Set();
+        leftPanel.style.display='block'; mappingPanel.style.display='block'; modeActions.style.display='block';
+        document.getElementById('rowExclusionContainer').style.display='block';
+        renderMapping(currentMappings);
+        resetSourceControlChoice(true); renderRowExclusionPage();
+    }''')
+
+
+def test_footer_suggestion_requires_confirmation_and_is_not_a_transaction_checkbox(page):
+    prepare_source_controls(page)
+    assert page.locator('#sourceControlRow').input_value() == '5'
+    assert not page.locator('#sourceControlConfirmed').is_checked()
+    assert page.locator('#sourceControlPreview').inner_text() == 'Row 5: Debit: 20 · Credit: 20'
+    page.locator('#sourceControlConfirmed').check()
+    assert page.locator('[data-excel-row-number="5"] input').is_disabled()
+    assert not page.locator('[data-excel-row-number="5"] input').is_checked()
+    assert page.locator('#rowExclusionCounter').inner_text() == '3 of 3 rows selected · 1 control total excluded'
+    page.locator('#rowExclusionHeadRow input').uncheck()
+    assert page.locator('#rowExclusionCounter').inner_text() == '0 of 3 rows selected · 1 control total excluded'
+    page.locator('#rowExclusionHeadRow input').check()
+    assert page.evaluate('excludedRowNumbers.size') == 0
+    page.locator('#sourceControlRow').fill('4')
+    assert not page.locator('#sourceControlConfirmed').is_checked()
+    assert page.locator('[data-excel-row-number="5"] input').is_enabled()
+
+
+@pytest.mark.parametrize('change', ['footer', 'row', 'all_rows', 'mapping', 'date', 'override'])
+def test_source_control_inputs_and_selection_clear_validation_plan(page, change):
+    prepare_source_controls(page)
+    page.locator('#sourceControlConfirmed').check()
+    page.evaluate("validationStatus='valid'; validationPlanId='approved-plan';")
+    if change == 'footer': page.locator('#sourceControlRow').fill('4')
+    if change == 'row': page.locator('[data-excel-row-number="2"] input').uncheck()
+    if change == 'all_rows': page.locator('#rowExclusionHeadRow input').uncheck()
+    if change == 'mapping': page.locator('#mappingBody select').first.select_option('')
+    if change == 'date':
+        page.locator('#uploadCoverageStart').fill('2026-04-01')
+        page.locator('#uploadCoverageStart').dispatch_event('change')
+    if change == 'override':
+        page.evaluate("setRejectedRows([{row_number:3,reasons:[{column:'Date',message:'Blank date'}]}]);")
+        page.locator('#rowRejectionList input').check()
+    assert page.evaluate('validationPlanId') is None
+    assert page.evaluate('validationStatus') == 'idle'
+    if change == 'mapping': assert not page.locator('#sourceControlConfirmed').is_checked()
+
+
+def test_source_control_results_show_full_and_partial_scope_without_injecting_html(page):
+    prepare_source_controls(page)
+    page.evaluate('''() => renderSourceControls({status:'matched',control_total_row:5,
+        full_sheet:{row_count:3,document_count:2},approved_detail:{row_count:2,document_count:1},
+        scope:{complete_period:false},checks:[{column:'Debit <img src=x>',excel_total:'20',detail_total:'20',difference:'0'}]})''')
+    text = page.locator('#sourceControlResults').inner_text()
+    assert 'Full sheet detail: 3 rows · 2 unique documents' in text
+    assert 'Approved for import: 2 rows · 1 unique documents' in text
+    assert 'full-period database equality is not established' in text
+    assert page.locator('#sourceControlResults img').count() == 0
+    page.evaluate('resetSourceControlChoice(true)')
+    assert page.locator('#sourceControlResults').inner_text() == ''
+    assert not page.locator('#sourceControlConfirmed').is_checked()
+
+
+@pytest.mark.parametrize('width', [390, 768, 1280])
+def test_compact_source_controls_fit_mapping_area(page, width):
+    prepare_source_controls(page)
+    page.set_viewport_size({'width':width,'height':900})
+    assert page.locator('#sourceControlPanel').evaluate('(el) => el.scrollWidth <= el.clientWidth')
+    assert page.locator('#sourceControlPanel').is_visible()
+
+
+def test_no_footing_template_has_no_extra_upload_controls(page):
+    prepare_source_controls(page)
+    page.evaluate("currentMappings.forEach(m=>m.reconciliation_role=null); resetSourceControlChoice();")
+    assert page.locator('#sourceControlPanel').is_hidden()
+
+
+def test_source_control_validation_hint_clears_and_exact_amount_display_keeps_small_differences(page):
+    prepare_source_controls(page)
+    page.evaluate("showUploadFieldError(getElement('sourceControlRow'),getElement('sourceControlPreview'),'Confirm a total row');")
+    page.locator('#sourceControlRow').fill('4')
+    assert page.locator('#sourceControlRow').get_attribute('aria-invalid') is None
+    assert page.locator('#sourceControlPreview').is_visible()
+    assert page.evaluate("formatSourceControlAmount('77108960.00000001')") == '77,108,960.00000001'
+    assert page.evaluate("formatSourceControlAmount('-0.000000000000000001')") == '-0.000000000000000001'

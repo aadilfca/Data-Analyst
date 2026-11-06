@@ -1,0 +1,161 @@
+"""Exact, compact upload controls; transaction occurrences are never grouped away."""
+
+from datetime import date
+from decimal import Decimal, InvalidOperation, localcontext
+import math
+import re
+
+from database import resolve_document_column
+
+
+TOTAL_LABEL = re.compile(r'(?:grand\s*)?(?:sub\s*)?total\s*:?$', re.I)
+NUMBER_PATTERN = r'[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?'
+NUMBER = re.compile(NUMBER_PATTERN)
+
+
+def footing_columns(columns):
+    return [column for column in columns if column.get('reconciliation_role') == 'footing']
+
+
+def blank(value):
+    # pandas represents genuinely empty Excel cells as NaN. The workbook input
+    # boundary independently rejects literal nonfinite/error cells.
+    return value is None or (isinstance(value, float) and math.isnan(value)) or str(value).strip() == ''
+
+
+def amount(value, *, required=False):
+    # Native Excel numbers need no text-format regex or thousand-digit tuple.
+    # Keep this common path small: each detail amount participates in two sums.
+    if type(value) is int:
+        result = Decimal(value)
+        if result.adjusted() > 1000:
+            raise ValueError('Enter a finite amount within the supported numeric range.')
+        return result
+    if type(value) is float and math.isfinite(value):
+        return Decimal(str(value))
+    if blank(value):
+        if required:
+            raise ValueError('A numeric total is required. Recalculate and save Excel formulas before uploading.')
+        return Decimal(0)
+    text = str(value).strip()
+    if isinstance(value, bool) or not NUMBER.fullmatch(text):
+        raise ValueError('Enter a valid numeric amount in Excel.')
+    try:
+        result = Decimal(text)
+    except InvalidOperation as error:
+        raise ValueError('Enter a valid numeric amount in Excel.') from error
+    if not result.is_finite() or abs(result.adjusted()) > 1000 or len(result.as_tuple().digits) > 1000:
+        raise ValueError('Enter a finite amount within the supported numeric range.')
+    return result
+
+
+def selected_control_row(records, columns, mapping, row_number, confirmed):
+    """Accept an explicit source row only when it cannot conceal a document."""
+    footings = footing_columns(columns)
+    if not footings:
+        if row_number is not None or confirmed:
+            raise ValueError('Template Footing settings changed. Review the mapping and validate again.')
+        return None
+    key = resolve_document_column(columns)['column_name']
+    for column in [key] + [c['column_name'] for c in footings]:
+        if not mapping.get(column) or any(mapping[column] not in row for row in records):
+            raise ValueError(f'Map the reconciliation field "{column}" to an Excel column.')
+    if not confirmed or type(row_number) is not int or not 2 <= row_number <= len(records) + 1:
+        raise ValueError('Confirm a valid Excel control-total row number (header is row 1).')
+    raw = records[row_number - 2]
+    protected = [key] + [c['column_name'] for c in columns
+                         if c['data_type'] == 'Date' or 'account' in c['column_name'].casefold()]
+    for name in protected:
+        value = raw.get(mapping.get(name))
+        if not blank(value) and not (isinstance(value, str) and TOTAL_LABEL.fullmatch(value.strip())):
+            raise ValueError(f'Excel row {row_number} contains document/date/account information. Choose the report total row.')
+    for column in footings:
+        name = column['column_name']
+        if column['data_type'] != 'Numeric':
+            raise ValueError(f'Template Footing field "{name}" must be Numeric.')
+        try:
+            amount(raw.get(mapping[name]), required=True)
+        except ValueError as error:
+            raise ValueError(f'Excel row {row_number}, {name}: {error}') from error
+    return row_number
+
+
+def summarize_rows(rows, columns, mapping, row_number=lambda row, fallback: fallback):
+    """SUM/COUNT/DISTINCT over source occurrences, with decimal strings on the wire."""
+    key = resolve_document_column(columns)['column_name']
+    document_column = mapping.get(key)
+    names = [c['column_name'] for c in footing_columns(columns)]
+    totals = {name: Decimal(0) for name in names}
+    documents, missing, count = set(), 0, 0
+    with localcontext() as context:
+        context.prec = 2010 + len(str(len(rows)))
+        for fallback, row in enumerate(rows, 2):
+            count += 1
+            value = row.get(document_column)
+            if blank(value):
+                missing += 1
+            else:
+                documents.add(str(value).strip())
+            for name in names:
+                try:
+                    totals[name] += amount(row.get(mapping.get(name)))
+                except ValueError as error:
+                    raise ValueError(f'Excel row {row_number(row, fallback)}, {name}: {error}') from error
+    return {'row_count': count, 'document_count': len(documents), 'missing_document_rows': missing,
+            'footing_totals': {name: format(value, 'f') for name, value in totals.items()}}
+
+
+def reconcile_source(footer_values, detail_rows, columns, mapping, row_number, row_number_for):
+    """A report footer proves the full detail, never a user-selected subset."""
+    summary = summarize_rows(detail_rows, columns, mapping, row_number_for)
+    checks = []
+    with localcontext() as context:
+        context.prec = 2010 + len(str(len(detail_rows)))
+        for column in footing_columns(columns):
+            name = column['column_name']
+            reported = amount(footer_values.get(mapping[name]), required=True)
+            actual = Decimal(summary['footing_totals'][name])
+            checks.append({'column': name, 'excel_total': format(reported, 'f'),
+                           'detail_total': format(actual, 'f'), 'difference': format(actual - reported, 'f')})
+    return {'status': 'matched' if checks and all(Decimal(c['difference']) == 0 for c in checks)
+            else 'mismatch' if checks else 'not_configured',
+            'control_total_row': row_number, 'checks': checks, 'full_sheet': summary}
+
+
+def aggregate_stored_controls(query, columns, client_id, template_id, start, end, *, ledger_account_code=None):
+    """One scoped PostgreSQL aggregate, ready for post-import assurance.
+
+    Call with the existing transaction/snapshot query helper. Invalid stored
+    amounts fail visibly; this helper neither caches totals nor fetches rows.
+    All JSON keys and scope values are parameters, never SQL identifiers.
+    """
+    if date.fromisoformat(start) > date.fromisoformat(end):
+        raise ValueError('Start date must be on or before the end date.')
+    key = resolve_document_column(columns)['column_name']
+    names = [c['column_name'] for c in footing_columns(columns)]
+    projection = ["NULLIF(BTRIM(cd.row_data ->> %s), '') AS document_id"]
+    params = [key]
+    for index, name in enumerate(names):
+        projection.append(f"NULLIF(BTRIM(cd.row_data ->> %s), '') AS amount_{index}")
+        params.append(name)
+    params.extend([client_id, template_id, start, end])
+    account_scope = ''
+    if ledger_account_code is not None:
+        account_scope = ' AND EXISTS (SELECT 1 FROM uploaded_files u WHERE u.id = cd.upload_id AND u.ledger_account_code = %s)'
+        params.append(ledger_account_code)
+    aggregates = ['COUNT(*) AS row_count', 'COUNT(DISTINCT document_id) AS document_count',
+                  'COUNT(*) FILTER (WHERE document_id IS NULL) AS missing_document_rows']
+    for index in range(len(names)):
+        aggregates.extend([
+            f'COALESCE(SUM(CASE WHEN amount_{index} ~ %s THEN amount_{index}::numeric ELSE 0 END), 0) AS total_{index}',
+            f'COUNT(*) FILTER (WHERE amount_{index} IS NOT NULL AND amount_{index} !~ %s) AS invalid_{index}'])
+        params.extend(['^' + NUMBER_PATTERN + '$'] * 2)
+    result = query(f"""WITH source AS (SELECT {', '.join(projection)} FROM client_data cd
+        WHERE cd.client_id = %s AND cd.template_id = %s AND cd.is_deleted = FALSE
+        AND cd.change_detection_status != 'deleted' AND cd.extract_date BETWEEN %s::date AND %s::date
+        {account_scope}) SELECT {', '.join(aggregates)} FROM source""", tuple(params))[0]
+    if any(result[f'invalid_{index}'] for index in range(len(names))):
+        raise ValueError('Stored Footing values contain invalid amounts; reconciliation is unavailable.')
+    return {'row_count': int(result['row_count']), 'document_count': int(result['document_count']),
+            'missing_document_rows': int(result['missing_document_rows']),
+            'footing_totals': {name: format(Decimal(str(result[f'total_{index}'])), 'f') for index, name in enumerate(names)}}

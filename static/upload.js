@@ -74,6 +74,106 @@ let selectedDateOrder = 'DMY';
 let selectedFile = null;
 let fileId = null;
 let currentMappings = [];
+// File-specific footer confirmation is deliberately absent from saved mappings
+// and restored sessions. The backend alone calculates reconciliation amounts.
+let sourceControlResult = null;
+
+function sourceFootingMappings() {
+    return currentMappings.filter(mapping => mapping.reconciliation_role === 'footing');
+}
+
+function confirmedSourceControlRow() {
+    const row = Number(getElement('sourceControlRow')?.value);
+    return sourceFootingMappings().length && getElement('sourceControlConfirmed')?.checked
+        && Number.isInteger(row) && row >= 2 && row <= rowExclusionAllRows.length + 1 ? row : null;
+}
+
+function resetSourceControlChoice(suggest = false) {
+    sourceControlResult = null;
+    const input = getElement('sourceControlRow');
+    const confirmed = getElement('sourceControlConfirmed');
+    if (input) input.value = '';
+    clearUploadFieldError(input, getElement('sourceControlPreview'));
+    if (confirmed) confirmed.checked = false;
+    if (suggest && sourceFootingMappings().length) {
+        const keyIndex = getRowExclusionKeyColumnIndex();
+        const candidates = [];
+        rowExclusionAllRows.forEach((row, index) => {
+            const key = String(row[keyIndex] ?? '').trim();
+            if ((!key || /^(?:grand\s*)?total\s*:?$/i.test(key))
+                && row.some(value => /^(?:grand\s*)?total\s*:?$/i.test(String(value).trim()))) candidates.push(index + 2);
+        });
+        if (candidates.length === 1 && input) input.value = candidates[0];
+    }
+    renderSourceControls();
+}
+
+function renderSourceControls(result = sourceControlResult) {
+    sourceControlResult = result;
+    const panel = getElement('sourceControlPanel');
+    if (!panel) return;
+    const footings = sourceFootingMappings();
+    panel.hidden = !footings.length || !workbookData;
+    if (panel.hidden) return;
+    getElement('sourceControlHelp').textContent = `Footing: ${footings.map(m => m.column_name).join(' · ')}. Required: ERP total or an Excel SUM total. Header is row 1.`;
+    const rowNumber = Number(getElement('sourceControlRow').value);
+    const row = rowExclusionAllRows[rowNumber - 2];
+    const preview = getElement('sourceControlPreview');
+    preview.hidden = false;
+    preview.textContent = row
+        ? `Row ${rowNumber}: ${footings.map(m => `${m.column_name}: ${formatSourceControlAmount(row[rowExclusionHeaders.indexOf(m.excel_column)] ?? 'Blank')}`).join(' · ')}`
+        : 'Choose the Excel row containing the report totals, then confirm it.';
+    const results = getElement('sourceControlResults');
+    results.replaceChildren();
+    if (!result) return;
+    const message = document.createElement('p');
+    message.dataset.status = result.status;
+    message.textContent = result.status === 'matched' ? 'Source totals match the full sheet detail.'
+        : 'Source totals differ. Correct the Excel workbook before import.';
+    results.appendChild(message);
+    const container = document.createElement('div'); container.className = 'source-control-table';
+    const table = document.createElement('table');
+    const head = table.createTHead().insertRow();
+    ['Field', 'Excel total', 'Detail total', 'Difference'].forEach(label => {
+        const th = document.createElement('th'); th.textContent = label; head.appendChild(th);
+    });
+    const body = table.createTBody();
+    (result.checks || []).forEach(check => {
+        const tr = body.insertRow();
+        [check.column, check.excel_total, check.detail_total, check.difference].forEach((value, index) => {
+            tr.insertCell().textContent = index ? formatSourceControlAmount(value) : value;
+        });
+    });
+    container.appendChild(table); results.appendChild(container);
+    const summary = document.createElement('p');
+    summary.textContent = `Full sheet detail: ${result.full_sheet.row_count} rows · ${result.full_sheet.document_count} unique documents.`;
+    if (result.approved_detail) {
+        summary.textContent += ` Approved for import: ${result.approved_detail.row_count} rows · ${result.approved_detail.document_count} unique documents.`;
+        if (result.omitted_detail_rows) summary.textContent += ` Approved totals: ${Object.entries(result.approved_detail.footing_totals || {}).map(([name, value]) => `${name}: ${formatSourceControlAmount(value)}`).join(' · ')}.`;
+        if (!result.scope?.complete_period) summary.textContent += ' Partial extract: full-period database equality is not established.';
+    }
+    results.appendChild(summary);
+}
+
+function formatSourceControlAmount(value) {
+    // Group digits without floating-point conversion or presentation rounding.
+    const text = String(value);
+    if (!/^[+-]?\d+(?:\.\d+)?$/.test(text)) return text;
+    const [whole, fraction] = text.split('.');
+    return whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (fraction === undefined ? '' : `.${fraction}`);
+}
+
+getElement('sourceControlRow')?.addEventListener('input', () => {
+    clearUploadFieldError(getElement('sourceControlRow'), getElement('sourceControlPreview'));
+    getElement('sourceControlConfirmed').checked = false;
+    resetValidationState();
+    renderSourceControls(null); renderRowExclusionPage();
+});
+getElement('sourceControlConfirmed')?.addEventListener('change', () => {
+    clearUploadFieldError(getElement('sourceControlRow'), getElement('sourceControlPreview'));
+    resetValidationState();
+    renderSourceControls(null); renderRowExclusionPage();
+});
 let excelHeaders = [];
 let templateColumns = [];
 let sheetNames = [];
@@ -581,6 +681,7 @@ function resetValidationState() {
     uploadValidationGeneration++;
     validationStatus = 'idle';
     validationPlanId = null;
+    renderSourceControls(null);
     document.getElementById('ledgerEvidenceSummary').hidden = true;
     ledgerRecognisedControlRows = new Set();
     ledgerRecognisedNoteRows = new Map();
@@ -1305,6 +1406,7 @@ async function selectTemplate(id) {
     }
     updatePreviewButtonState();
     resetValidationState(); // New template means new data – reset validation
+    resetSourceControlChoice();
 }
 
 // ---------- FILE UPLOAD ----------
@@ -1344,6 +1446,7 @@ async function handleFile(file) {
     selectedFile = file;
     fileId = null;
     resetValidationState();
+    resetSourceControlChoice();
     if (importBtn) importBtn.disabled = true;
     if (fileName) fileName.textContent = file.name;
     if (fileSize) fileSize.textContent = formatFileSize(file.size);
@@ -1407,6 +1510,7 @@ function populateSheetSelector(sheets) {
 if (sheetSelector) {
     sheetSelector.addEventListener('change', function() {
         currentSheet = this.value;
+        resetSourceControlChoice();
                 if (currentSheet && selectedTemplateId && fileId) {
             autoMapColumns();
             showStatus('📄 Sheet changed to "' + currentSheet + '". Re‑mapping...', 'info');
@@ -1484,6 +1588,7 @@ function resetUpload() {
     sheetNames = [];
     workbookData = null;
     currentMappings = [];
+    resetSourceControlChoice();
     excelHeaders = [];
     templateColumns = [];
     if (footerMeta) footerMeta.style.display = 'none';
@@ -2552,6 +2657,8 @@ if (importBtn) {
             mappings: finalMappings,
             mode: 'create',
             comparison_mode: comparisonModeDropdown ? comparisonModeDropdown.value : 'correction',
+            control_total_row: sourceFootingMappings().length ? Number(getElement('sourceControlRow').value) || null : null,
+            control_total_confirmed: Boolean(sourceFootingMappings().length && getElement('sourceControlConfirmed').checked),
             coverage_start: comparisonModeDropdown?.value === 'replace_range' ? uploadCoverageStart?.value || null : null,
             coverage_end: comparisonModeDropdown?.value === 'replace_range' ? uploadCoverageEnd?.value || null : null,
             confirm_empty_period: Boolean(uploadConfirmEmpty?.checked),
@@ -2595,6 +2702,11 @@ if (importBtn) {
                 reversed ? 'Start date must be on or before the end date.' : 'Enter both report coverage dates.');
             return;
         }
+        if (sourceFootingMappings().length && !confirmedSourceControlRow()) {
+            showUploadFieldError(getElement('sourceControlRow'), getElement('sourceControlPreview'),
+                'Choose a valid Excel total row and confirm it before validation.');
+            return;
+        }
 
         // ---- NEW LOGIC: Validation Flow ----
         // If validation status is already 'valid', proceed with import
@@ -2631,6 +2743,7 @@ if (importBtn) {
                 resetValidationState();
                 throw new Error(uploadFailureMessage(result, 'Validation failed (' + res.status + ')'));
             }
+            renderSourceControls(result.source_reconciliation || null);
 
             // Rejected-rows exceptions list (Phase 3 of the row-level blank-field-rejection
             // requirement) -- populated regardless of has_errors, since a row can be rejected
@@ -3005,6 +3118,7 @@ function renderRowExclusionGrid() {
         rejectedRowOverrides = new Set();
         renderRejectedRowsList();
         rowExclusionCurrentPage = 1;
+        resetSourceControlChoice(true);
 
         // Re-apply a restored session's excluded rows (session-restore), bounds-checked against
         // this file's actual row count -- consumed once, then cleared.
@@ -3055,10 +3169,11 @@ function isRowExclusionFlagged(row, keyColIndex) {
 function updateRowExclusionCounter() {
     const counterEl = document.getElementById('rowExclusionCounter');
     if (!counterEl) return;
-    const total = rowExclusionAllRows.length;
-    const included = total - excludedRowNumbers.size;
+    const control = confirmedSourceControlRow();
+    const total = rowExclusionAllRows.length - (control ? 1 : 0);
+    const included = total - [...excludedRowNumbers].filter(number => number !== control).length;
     counterEl.textContent = isLedgerUpload() ? `${included} of ${total} source rows selected; balance controls are recorded separately`
-        : `${included} of ${total} rows will be imported`;
+        : `${included} of ${total} rows selected${control ? ' · 1 control total excluded' : ''}`;
 }
 
 // ---------- SELECT ALL / DESELECT ALL (Phase 3) ----------
@@ -3066,6 +3181,7 @@ function updateRowExclusionCounter() {
 // just the currently visible one; a single re-render refreshes the visible page + counter.
 function rowExclusionSelectAll() {
     excludedRowNumbers.clear();
+    resetValidationState();
     renderRowExclusionPage();
     saveUploadSessionState();
 }
@@ -3074,8 +3190,9 @@ function rowExclusionDeselectAll() {
     const total = rowExclusionAllRows.length;
     excludedRowNumbers = new Set();
     for (let i = 0; i < total; i++) {
-        excludedRowNumbers.add(i + 2); // Excel row numbers: first data row = 2
+        if (i + 2 !== confirmedSourceControlRow()) excludedRowNumbers.add(i + 2);
     }
+    resetValidationState();
     renderRowExclusionPage();
     saveUploadSessionState();
 }
@@ -3087,6 +3204,8 @@ function rowExclusionDeselectAll() {
 // auto-flag heuristic/validation -- so this is a lighter reset: clear selections/flags and
 // re-render, without re-reading the file.
 function resetRowExclusionSelections() {
+    resetValidationState();
+    resetSourceControlChoice(true);
     if (!rowExclusionAllRows.length) return; // grid not built yet, nothing to reset
     excludedRowNumbers = new Set();
     validationFailedRows = new Map(); // mapping changed -- any prior validation result is stale
@@ -3183,6 +3302,7 @@ function renderRejectedRowsList() {
             } else {
                 rejectedRowOverrides.delete(rowNum);
             }
+            resetValidationState();
         });
         const fieldNames = reasons.map(r => r.column).join(', ');
         const labelText = document.createElement('span');
@@ -3229,8 +3349,9 @@ function renderRowExclusionPage() {
     // rowExclusionSelectAll()/rowExclusionDeselectAll() which it now triggers.
     const masterCheckbox = document.createElement('input');
     masterCheckbox.type = 'checkbox';
-    const totalForMaster = rowExclusionAllRows.length;
-    const excludedCount = excludedRowNumbers.size;
+    const sourceControl = confirmedSourceControlRow();
+    const totalForMaster = rowExclusionAllRows.length - (sourceControl ? 1 : 0);
+    const excludedCount = [...excludedRowNumbers].filter(number => number !== sourceControl).length;
     masterCheckbox.checked = totalForMaster > 0 && excludedCount === 0;
     masterCheckbox.indeterminate = excludedCount > 0 && excludedCount < totalForMaster;
     masterCheckbox.title = 'Select all / deselect all rows';
@@ -3264,10 +3385,12 @@ function renderRowExclusionPage() {
 
         const tr = document.createElement('tr');
         tr.dataset.excelRowNumber = excelRowNumber;
-        if (excludedRowNumbers.has(excelRowNumber)) tr.classList.add('row-excluded');
+        const isSourceControl = excelRowNumber === sourceControl;
+        if (isSourceControl) tr.classList.add('source-control-row');
+        if (!isSourceControl && excludedRowNumbers.has(excelRowNumber)) tr.classList.add('row-excluded');
         const ledgerControl = isLedgerUpload() && ledgerRecognisedControlRows.has(excelRowNumber);
         const ledgerNote = isLedgerUpload() ? ledgerRecognisedNoteRows.get(excelRowNumber) : null;
-        const flagged = !ledgerControl && !ledgerNote && isRowExclusionFlagged(row, keyColIndex);
+        const flagged = !isSourceControl && !ledgerControl && !ledgerNote && isRowExclusionFlagged(row, keyColIndex);
         if (flagged) tr.classList.add('row-flagged');
         const failed = validationFailedRows.has(excelRowNumber);
         if (failed) tr.classList.add('row-validation-failed');
@@ -3276,7 +3399,9 @@ function renderRowExclusionPage() {
         tdCheck.className = 'row-exclusion-check-col';
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
-        checkbox.checked = !excludedRowNumbers.has(excelRowNumber);
+        checkbox.checked = !isSourceControl && !excludedRowNumbers.has(excelRowNumber);
+        checkbox.disabled = isSourceControl;
+        if (isSourceControl) checkbox.title = 'Excel control total — not a transaction';
         checkbox.addEventListener('change', function() {
             if (this.checked) {
                 excludedRowNumbers.delete(excelRowNumber);
@@ -3285,6 +3410,7 @@ function renderRowExclusionPage() {
                 excludedRowNumbers.add(excelRowNumber);
                 tr.classList.add('row-excluded');
             }
+            resetValidationState();
             updateRowExclusionCounter();
             saveUploadSessionState();
         });
@@ -3296,7 +3422,7 @@ function renderRowExclusionPage() {
         // Prefixes concatenate rather than overwrite -- a row can be both auto-flagged and
         // validation-failed at once, and both signals should stay visible (e.g. "⚠️❌ 5").
         let prefix = (ledgerControl || ledgerNote ? '•' : '') + (flagged ? '⚠️' : '') + (failed ? '❌' : '');
-        tdRowNum.textContent = (prefix ? prefix + ' ' : '') + excelRowNumber;
+        tdRowNum.textContent = (prefix ? prefix + ' ' : '') + excelRowNumber + (isSourceControl ? ' · Total' : '');
         const titleParts = [];
         if (ledgerControl) titleParts.push('Ledger balance control: recorded separately, not a transaction');
         if (ledgerNote) titleParts.push(`Ledger continuation note: attached to Excel row ${ledgerNote.parent_row_number}, voucher ${ledgerNote.voucher}; not a separate transaction`);
@@ -3361,7 +3487,8 @@ function showPreview() {
         // first data row=2). S.No is renumbered sequentially over the filtered set by
         // renderPreviewPage() (unchanged) since excluded rows are gone entirely, not
         // just hidden -- a clean list of what will be imported, not a gapped one.
-        previewAllRows = rawDataRows.filter((_, idx) => !excludedRowNumbers.has(idx + 2));
+        const controlRow = confirmedSourceControlRow();
+        previewAllRows = rawDataRows.filter((_, idx) => idx + 2 !== controlRow && !excludedRowNumbers.has(idx + 2));
         previewHiddenCount = rawDataRows.length - previewAllRows.length;
         previewCurrentPage = 1;
 

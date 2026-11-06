@@ -1,0 +1,215 @@
+"""Source controls and SQL aggregation, without application/live database writes."""
+
+from decimal import Decimal
+from io import BytesIO
+from xml.etree import ElementTree
+from zipfile import ZipFile
+import pandas as pd
+import pytest
+from openpyxl import Workbook
+
+from services import upload_reconciliation as controls
+from routers import import_export as upload
+
+
+COLUMNS = [
+    {'id': 1, 'column_name': 'PO reference', 'data_type': 'Text'},
+    {'id': 2, 'column_name': 'Document', 'data_type': 'Text', 'reconciliation_role': 'document_id'},
+    {'id': 3, 'column_name': 'Date', 'data_type': 'Date'},
+    {'id': 4, 'column_name': 'Debit', 'data_type': 'Numeric', 'reconciliation_role': 'footing'},
+    {'id': 5, 'column_name': 'Credit', 'data_type': 'Numeric', 'reconciliation_role': 'footing'},
+]
+MAPPING = {c['column_name']: c['column_name'] for c in COLUMNS}
+
+
+def rows():
+    return [
+        {'PO reference': 'PO1', 'Document': 'A', 'Date': '01/01/2026', 'Debit': '0.10', 'Credit': 0},
+        {'PO reference': 'PO1', 'Document': 'A', 'Date': '01/01/2026', 'Debit': '0.20', 'Credit': 0},
+        {'PO reference': 'PO1', 'Document': 'B', 'Date': '01/01/2026', 'Debit': 0, 'Credit': '0.30'},
+        {'PO reference': 'TOTAL', 'Document': None, 'Date': None, 'Debit': '0.30', 'Credit': '0.30'},
+    ]
+
+
+def request(**changes):
+    return upload.ImportRequest(client_id=1, template_id=1, file_id=1,
+        mappings=[upload.ColumnMapping(template_column_id=c['id'], template_column_name=c['column_name'],
+                                       excel_column_name=c['column_name']) for c in COLUMNS], **changes)
+
+
+def test_source_footer_excluded_and_configured_document_pivot_preserves_every_occurrence():
+    frame = pd.DataFrame(rows())
+    token = upload._source_row_numbers.set({})
+    try:
+        detail, diagnostics = upload._prepare_source_rows(frame, request(control_total_row=5, control_total_confirmed=True), COLUMNS, MAPPING)
+        proof = upload._source_reconciliation(frame, detail, request(control_total_row=5, control_total_confirmed=True), COLUMNS, MAPPING)
+        assert len(detail) == 3
+        assert [upload._ledger_row_number(row, 0) for row in detail] == [2, 3, 4]
+        assert diagnostics['excluded_rows'][0]['kind'] == 'confirmed_total'
+        assert proof['status'] == 'matched'
+        assert proof['full_sheet'] == {'row_count': 3, 'document_count': 2, 'missing_document_rows': 0,
+                                       'footing_totals': {'Debit': '0.30', 'Credit': '0.30'}}
+        # Two lines of A remain separate, and PO1 is not the document pivot.
+        partial = upload._approved_reconciliation(proof, detail[:2], COLUMNS, MAPPING, request(), None)
+        assert partial['approved_detail']['row_count'] == 2
+        assert partial['approved_detail']['document_count'] == 1
+        assert Decimal(partial['approved_detail']['footing_totals']['Credit']) == 0
+        assert partial['scope']['complete_period'] is False
+        assert partial['omitted_detail_rows'] == 1
+        assert partial['full_sheet']['row_count'] == 3
+    finally:
+        upload._source_row_numbers.reset(token)
+
+
+@pytest.mark.parametrize('row,confirmed', [(None, False), (5, False), (1, True), (6, True), (True, True)])
+def test_missing_or_invalid_footer_choice_blocks(row, confirmed):
+    with pytest.raises(ValueError, match='Confirm a valid'):
+        controls.selected_control_row(rows(), COLUMNS, MAPPING, row, confirmed)
+
+
+def test_transaction_cannot_be_designated_as_footer_even_when_its_amount_matches():
+    with pytest.raises(ValueError, match='contains document/date/account'):
+        controls.selected_control_row(rows(), COLUMNS, MAPPING, 2, True)
+
+
+def test_unlabelled_total_and_total_in_middle_are_explicit_choices_not_lost_transactions():
+    source = rows()
+    source[-1]['PO reference'] = ''
+    source.insert(1, source.pop())
+    assert controls.selected_control_row(source, COLUMNS, MAPPING, 3, True) == 3
+    detail, _ = upload._prepare_source_rows(pd.DataFrame(source), request(control_total_row=3, control_total_confirmed=True), COLUMNS, MAPPING)
+    assert len(detail) == 3
+
+
+@pytest.mark.parametrize('value', [None, '', '=SUM(D2:D4)', '#DIV/0!', True, 'NaN', 'Infinity'])
+def test_required_footer_must_have_real_saved_numeric_results(value):
+    source = rows()
+    source[-1]['Debit'] = value
+    with pytest.raises(ValueError):
+        controls.selected_control_row(source, COLUMNS, MAPPING, 5, True)
+
+
+def test_missing_footing_mapping_cannot_be_bypassed_with_partial_extract():
+    with pytest.raises(ValueError, match='Map the reconciliation field'):
+        controls.selected_control_row(rows(), COLUMNS, {**MAPPING, 'Credit': None}, 5, True)
+
+
+def test_mismatch_reports_each_footing_without_rounding_or_changing_amounts():
+    source = rows()
+    source[-1]['Debit'] = '0.300000000000000001'
+    proof = controls.reconcile_source(source[-1], source[:-1], COLUMNS, MAPPING, 5, lambda row, fallback: fallback)
+    assert proof['status'] == 'mismatch'
+    assert Decimal(proof['checks'][0]['difference']) == Decimal('-0.000000000000000001')
+    response = upload._reconciliation_failure(proof, 3)
+    assert response['can_import'] is False
+    assert response['errors'][0]['row_number'] == 5
+    assert len(response['errors'][0]['errors']) == 1
+
+
+def test_exact_decimal_sum_exceeds_default_decimal_context_without_rounding():
+    source = rows()[:2]
+    source[0]['Debit'], source[1]['Debit'] = '1000000000000000000000000000000.01', '0.02'
+    summary = controls.summarize_rows(source, COLUMNS, MAPPING)
+    assert summary['footing_totals']['Debit'] == '1000000000000000000000000000000.03'
+
+
+def test_no_footing_template_retains_optional_controls_and_counts_repeated_lines():
+    columns = [c for c in COLUMNS if c['data_type'] != 'Numeric']
+    assert controls.selected_control_row(rows(), columns, MAPPING, None, False) is None
+    summary = controls.summarize_rows(rows()[:3] * 2, columns, MAPPING)
+    assert summary['row_count'] == 6 and summary['document_count'] == 2
+    assert summary['footing_totals'] == {}
+    with pytest.raises(ValueError, match='settings changed'):
+        controls.selected_control_row(rows(), columns, MAPPING, 5, True)
+
+
+@pytest.mark.parametrize('field,value', [('control_total_row', True), ('control_total_row', 2.5),
+                                        ('control_total_row', '5'), ('control_total_confirmed', 'true')])
+def test_request_choice_types_are_strict(field, value):
+    with pytest.raises(ValueError):
+        request(**{field: value})
+
+
+def test_xlsx_missing_formula_cache_is_blocking_even_in_excluded_source_rows(tmp_path):
+    path = tmp_path / 'source.xlsx'
+    book = Workbook()
+    sheet = book.active
+    sheet.title = 'Sheet1'
+    sheet.append(list(MAPPING))
+    for row in rows():
+        sheet.append([row.get(name) for name in MAPPING])
+    sheet.cell(2, 4, '=1/10')
+    sheet.cell(5, 4, '=SUM(D2:D4)')
+    book.save(path)
+    frame = pd.read_excel(path)
+    errors = upload._workbook_input_errors(path, request(excluded_rows=[2]), COLUMNS, MAPPING, frame)
+    assert {e['row_number'] for e in errors} == {2, 5}
+    assert all(e['errors'][0]['error_type'] == 'formula_result_missing' for e in errors)
+
+
+def test_saved_excel_formula_result_reconciles_without_recalculating_or_modifying_source(tmp_path):
+    path = tmp_path / 'calculated.xlsx'
+    book = Workbook()
+    sheet = book.active
+    sheet.title = 'Sheet1'
+    sheet.append(list(MAPPING))
+    for row in rows():
+        sheet.append([row.get(name) for name in MAPPING])
+    sheet.cell(5, 4, '=SUM(D2:D4)')
+    buffer = BytesIO()
+    book.save(buffer)
+    # Simulate Excel's saved numeric cache; this is an isolated test workbook.
+    with ZipFile(buffer) as original, ZipFile(path, 'w') as calculated:
+        for info in original.infolist():
+            content = original.read(info.filename)
+            if info.filename == 'xl/worksheets/sheet1.xml':
+                root = ElementTree.fromstring(content)
+                ns = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+                root.find(".//x:c[@r='D5']/x:v", ns).text = '0.3'
+                content = ElementTree.tostring(root)
+            calculated.writestr(info, content)
+    before = path.read_bytes()
+    req = request(control_total_row=5, control_total_confirmed=True)
+    frame = pd.read_excel(path)
+    assert not upload._workbook_input_errors(path, req, COLUMNS, MAPPING, frame)
+    detail, _ = upload._prepare_source_rows(frame, req, COLUMNS, MAPPING)
+    assert upload._source_reconciliation(frame, detail, req, COLUMNS, MAPPING)['status'] == 'matched'
+    assert path.read_bytes() == before
+
+
+def test_app_cell_edits_cannot_change_footing_controlled_source():
+    req = request(control_total_row=5, control_total_confirmed=True,
+                  edited_cells=[{'row_number': 2, 'excel_column': 'Debit', 'value': '999'}])
+    frame = pd.DataFrame(rows())
+    detail, _ = upload._prepare_source_rows(frame, req, COLUMNS, MAPPING)
+    with pytest.raises(upload.HTTPException, match='Correct Footing-controlled uploads in Excel'):
+        upload._source_reconciliation(frame, detail, req, COLUMNS, MAPPING)
+
+
+def test_sql_controls_are_one_parameterized_scope_query_and_return_only_aggregates():
+    calls = []
+    columns = [dict(c, column_name="Document'); DROP TABLE client_data; --") if c['id'] == 2 else c for c in COLUMNS]
+    def query(sql, params):
+        calls.append((sql, params))
+        return [{'row_count': 116, 'document_count': 29, 'missing_document_rows': 0,
+                 'total_0': Decimal('77108960.00'), 'total_1': Decimal('77108960.00'), 'invalid_0': 0, 'invalid_1': 0}]
+    summary = controls.aggregate_stored_controls(query, columns, 5, 9, '2026-01-01', '2026-01-01', ledger_account_code='100-1')
+    assert summary['row_count'] == 116 and summary['document_count'] == 29
+    assert summary['footing_totals'] == {'Debit': '77108960.00', 'Credit': '77108960.00'}
+    sql, params = calls[0]
+    assert len(calls) == 1
+    assert 'DROP TABLE' not in sql and columns[1]['column_name'] in params
+    assert (5, 9, '2026-01-01', '2026-01-01', '100-1') == params[3:8]
+    assert 'cd.is_deleted = FALSE' in sql and "cd.change_detection_status != 'deleted'" in sql
+    assert 'ledger_account_code = %s' in sql and 'COUNT(DISTINCT document_id)' in sql
+    assert sql.count('%s') == len(params)
+
+
+def test_sql_invalid_values_or_reversed_dates_cannot_claim_reconciliation():
+    def query(*args):
+        return [{'row_count': 1, 'document_count': 1, 'missing_document_rows': 0,
+                 'total_0': 0, 'total_1': 0, 'invalid_0': 1, 'invalid_1': 0}]
+    with pytest.raises(ValueError, match='invalid amounts'):
+        controls.aggregate_stored_controls(query, COLUMNS, 1, 1, '2026-01-01', '2026-01-01')
+    with pytest.raises(ValueError, match='Start date'):
+        controls.aggregate_stored_controls(query, COLUMNS, 1, 1, '2026-02-01', '2026-01-01')
