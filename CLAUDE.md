@@ -18,7 +18,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, allocated database size and selected-client integrity status. See CHANGELOG_ARCHIVE.md.
 - routers/data.py, routers/data_integrity.py + static/databank.*, static/data_integrity.* → Scoped preview controls, fresh bounded caches, backups, history and safeguards. See CHANGELOG_ARCHIVE.md.
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
-- routers/import_export.py + static/upload.* → Template-controlled imports, source Footing checks, stored-data reconciliation, history, ledger coverage and reports. See CHANGELOG_ARCHIVE.md.
+- routers/import_export.py + static/upload.* → Template-controlled imports, blank optional fields, source Footing checks, stored-data reconciliation, history and reports. See CHANGELOG_ARCHIVE.md.
 - routers/settings.py + routers/google_drive_auth.py + static/settings.* → App settings, administrator upload-backup controls, firm-wide holidays and Drive reconnection. See CHANGELOG_ARCHIVE.md.
 - routers/templates.py + static/templates.*, static/columns.* → Reusable columns, template reconciliation/comparison settings, guarded configuration, ledger setup and backup/restore. See CHANGELOG_ARCHIVE.md.
 - static/client_settings.html, static/client_settings.js -> retired direct-bookmark information page; all Verification account routing is configured centrally in Account Control Centre. See CHANGELOG_ARCHIVE.md.
@@ -139,6 +139,7 @@ One line per file group: what it is now. Full build history for every entry live
 - Comparison policy belongs to template mappings: default checked except configured Account Ledger Balance. Upload requests/header mappings cannot override it; conflicting legacy choices require template review/save.
 - Footing requires a confirmed Excel total row and exact full-detail sums. Approved-subset metrics remain separate; footer choices are file-specific and validation-bound.
 - A confirmed control row is validated vertically through mapped Footing cells; neighboring cell values do not disqualify it.
+- Unmapped optional Standard fields import as blank; Document ID, critical and configured Footing mappings remain required.
 - Post-import SQL controls share the import transaction/receipt; savepoints isolate verification errors. Receipts describe completion-time evidence; partial extracts never certify complete periods.
 - Preview controls share the page's complete filter and read snapshot; pagination/subtotals never affect totals. Reopening/focus refreshes scope; late responses cannot restore stale metrics.
 - `parse_date_flexible(value, delimiter, order)` in routers/import_export.py is the single source of truth for date-import parsing (text-string dates), used by validate_only(), validate_and_import(), and extract_columns_from_row() — do not reintroduce a hardcoded `datetime.strptime(value, "%d/%m/%Y")` or a per-function format list; extend/call this function instead. Paired with `classify_date_cell(value)` (same file), which classifies a raw cell as `'native'` (must NOT be passed to `parse_date_flexible()`), `'text'`, `'excel_serial'`, or `'empty'` — all three Date call sites dispatch on this classification rather than inline `isinstance()` checks. See "Flexible Date-Import Format" in CHANGELOG_ARCHIVE.md for the full phase-by-phase design.
@@ -265,6 +266,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-06: Complete reports allow unmapped optional Standard fields and store them blank. See CHANGELOG_ARCHIVE.md, Unmapped Standard fields — Phase 2.
 - 2026-11-06: Footing control rows ignore neighboring values; selected totals remain validated. See CHANGELOG_ARCHIVE.md, Vertical Footing validation.
 - 2026-11-06: Added compact, filtered Data Bank preview controls and freshness guards; local acceptance pending. See CHANGELOG_ARCHIVE.md, Preview controls — Phase 4.
 - 2026-11-06: Added post-import SQL reconciliation, guarded no-op verification and receipt/report presentation; locally accepted. See CHANGELOG_ARCHIVE.md, Stored-data reconciliation — Phase 3.

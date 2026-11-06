@@ -1,5 +1,9 @@
 # Changelog Archive
 
+## Unmapped Standard fields — Phase 2 — 2026-11-06
+
+Complete reports no longer require a source mapping for every template column. Unmapped optional Standard fields are included as blank values in validation details and stored row data, including first uploads and compared updates. Existing template comparison policy applies, so a compared update can clear a previously stored value when the latest workbook omits that field. Document ID, critical Date/Amount, configured Footing and derived-Rate rules remain in force. No UI, schema or dependency change. No tests were added or run.
+
 ## Vertical Footing validation — Phase 1 mini-phase — 2026-11-06
 
 An explicitly confirmed Excel control row is validated only through mapped Footing cells. Values in Document ID, Date, account or other neighboring columns no longer reject the selected row. Footing mappings and Numeric types remain required; every selected total still needs a saved numeric value and must match the exact sum of its detail column. The existing import flow excludes the selected row from details. No router or UI change, schema change or dependency change was required. Phase 2 unmapped-column behavior remains separate. No tests were added or run.

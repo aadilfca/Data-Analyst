@@ -2725,13 +2725,14 @@ def _canonical_import_row_data(
     rate_precision: int,
 ) -> dict:
     """Build exactly the row payload that the import path stores in ``client_data``."""
-    row_data = {
-        template_column: json_safe_cell_value(
-            row[excel_column], preserve_native_dates=True
+    row_data = {}
+    for column in template_cols:
+        template_column = column['column_name']
+        excel_column = col_mapping.get(template_column)
+        row_data[template_column] = (
+            json_safe_cell_value(row[excel_column], preserve_native_dates=True)
+            if excel_column and excel_column in row else None
         )
-        for template_column, excel_column in col_mapping.items()
-        if excel_column in row
-    }
     apply_rate_derivation(row_data, template_cols, rate_source, rate_precision)
     ordered = reorder_row_data_by_template(row_data, template_cols)
     context = _ledger_context.get()
@@ -3644,10 +3645,20 @@ def validate_only(request: ImportRequest, perf: bool = False):
     if request.comparison_mode == 'replace_range':
         if request.force_include_rows or request.edited_cells:
             raise HTTPException(400, 'Correct complete-report errors in the source workbook; rejected rows cannot be overridden.')
-        missing_mappings = [c['column_name'] for c in template_cols if not col_mapping.get(c['column_name'])
-                            and not (c['column_name'].casefold() == 'rate' and rate_mode and rate_mode['effective_source'] == 'derived')]
-        if missing_mappings:
-            raise HTTPException(400, 'Map every complete-report column: ' + ', '.join(missing_mappings))
+        required_mapping_names = {column['column_name'] for column in get_critical_field_columns(template_cols).values()
+                                  if column}
+        document_column = resolve_document_column(template_cols)
+        if document_column:
+            required_mapping_names.add(document_column['column_name'])
+        required_mapping_names.update(column['column_name'] for column in footing_columns(template_cols))
+        missing_required_mappings = [
+            column['column_name'] for column in template_cols
+            if column['column_name'] in required_mapping_names and not col_mapping.get(column['column_name'])
+            and not (column['column_name'].casefold() == 'rate' and rate_mode
+                     and rate_mode['effective_source'] == 'derived')
+        ]
+        if missing_required_mappings:
+            raise HTTPException(400, 'Map the required complete-report columns: ' + ', '.join(missing_required_mappings))
         for number, row in enumerate(rows, 2):
             if _ledger_row_number(row, number) in set(request.excluded_rows or []):
                 raise HTTPException(400, f"Complete reports cannot exclude row {_ledger_row_number(row, number)}. Fix it or use a partial extract.")
@@ -3665,7 +3676,7 @@ def validate_only(request: ImportRequest, perf: bool = False):
         row_idx = _ledger_row_number(row, row_idx)
         row_errors = []
         row_reasons = []
-        row_data_full = {}
+        row_data_full = {column['column_name']: None for column in template_cols}
         try:
             # Build a full row data dict (template column names -> values)
             for t_col in template_cols:
@@ -5345,20 +5356,10 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
             first_upload_extract_dates = []
             first_upload_occurrences = {}
             for source_index, row in enumerate(rows, 2):
-                # Build JSON row_data
-                row_data = {}
-                for t_col_name, excel_col in col_mapping.items():
-                    if excel_col in row:
-                        row_data[t_col_name] = json_safe_cell_value(row[excel_col], preserve_native_dates=True)
-
-                # Rate derivation (Phase 7 of the Rate-derivation requirement) -- see
-                # apply_rate_derivation()'s docstring for why this must happen right
-                # here, at first assembly.
-                apply_rate_derivation(row_data, template_cols, rate_source, rate_precision)
-                # Restores the template's real column order -- apply_rate_derivation() may have
-                # just appended 'Rate' at the end of the dict (see reorder_row_data_by_template()'s
-                # docstring).
-                row_data = reorder_row_data_by_template(row_data, template_cols)
+                # Store every template field; an unmapped Standard field is blank.
+                row_data = _canonical_import_row_data(
+                    row, col_mapping, template_cols, rate_source, rate_precision
+                )
 
                 # Compute document_group_id from the first column value
                 doc_group_id = get_document_group_id(template_cols, row_data, request.template_id)
