@@ -310,6 +310,9 @@ def finish_lifecycle(prepared, result, write):
     if prepared:
         compact = {key: result[key] for key in ('status', 'message', 'total_rows', 'imported_count', 'updated_count', 'deleted_count', 'informational_updated_count')}
         compact.update({key: result[key] for key in ('backup_mode', 'archive_verified') if key in result})
+        if result.get('reconciliation'):
+            # Compact totals are an as-of-completion receipt, never a live cache.
+            compact['reconciliation'] = result['reconciliation']
         if result.get('change_report'):
             compact['change_report'] = result['change_report']
         write("UPDATE upload_lifecycle_runs SET status = 'applied', result_json = %s WHERE operation_id = %s",

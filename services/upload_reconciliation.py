@@ -1,6 +1,7 @@
 """Exact, compact upload controls; transaction occurrences are never grouped away."""
 
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from decimal import Decimal, InvalidOperation, localcontext
 import math
 import re
@@ -11,6 +12,8 @@ from database import resolve_document_column
 TOTAL_LABEL = re.compile(r'(?:grand\s*)?(?:sub\s*)?total\s*:?$', re.I)
 NUMBER_PATTERN = r'[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?'
 NUMBER = re.compile(NUMBER_PATTERN)
+# Match Python str.strip() for identifiers and numeric text, including ERP NBSP.
+SOURCE_WHITESPACE = ' \t\n\r\v\f\x1c\x1d\x1e\x1f\x85\xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000'
 
 
 def footing_columns(columns):
@@ -133,11 +136,11 @@ def aggregate_stored_controls(query, columns, client_id, template_id, start, end
         raise ValueError('Start date must be on or before the end date.')
     key = resolve_document_column(columns)['column_name']
     names = [c['column_name'] for c in footing_columns(columns)]
-    projection = ["NULLIF(BTRIM(cd.row_data ->> %s), '') AS document_id"]
-    params = [key]
+    projection = ["NULLIF(BTRIM(cd.row_data ->> %s, %s), '') AS document_id"]
+    params = [key, SOURCE_WHITESPACE]
     for index, name in enumerate(names):
-        projection.append(f"NULLIF(BTRIM(cd.row_data ->> %s), '') AS amount_{index}")
-        params.append(name)
+        projection.append(f"NULLIF(BTRIM(cd.row_data ->> %s, %s), '') AS amount_{index}")
+        params.extend([name, SOURCE_WHITESPACE])
     params.extend([client_id, template_id, start, end])
     account_scope = ''
     if ledger_account_code is not None:
@@ -159,3 +162,52 @@ def aggregate_stored_controls(query, columns, client_id, template_id, start, end
     return {'row_count': int(result['row_count']), 'document_count': int(result['document_count']),
             'missing_document_rows': int(result['missing_document_rows']),
             'footing_totals': {name: format(Decimal(str(result[f'total_{index}'])), 'f') for index, name in enumerate(names)}}
+
+
+def stored_reconciliation(source, columns, scope, stored=None, *, unavailable=False):
+    """Build a bounded receipt from independent approved-detail and SQL metrics."""
+    expected = (source or {}).get('approved_detail')
+    result = {'scope': scope, 'checked_at': datetime.now(ZoneInfo('Asia/Karachi')).isoformat(),
+              'document_column': resolve_document_column(columns)['column_name'],
+              'footing_configured': bool(footing_columns(columns)), 'rows': [],
+              'status': 'unavailable', 'message': 'Stored-data verification is unavailable. No reconciliation is certified.'}
+    metrics = [('row_count', 'Total rows'), ('document_count', 'Unique documents')]
+    for key, label in metrics:
+        result['rows'].append({'key': key, 'label': label, 'excel': (expected or {}).get(key),
+                               'stored': (stored or {}).get(key)})
+    for column in footing_columns(columns):
+        name = column['column_name']
+        result['rows'].append({'key': 'footing', 'label': f'Footing — {name}',
+            'excel': (expected or {}).get('footing_totals', {}).get(name),
+            'stored': (stored or {}).get('footing_totals', {}).get(name)})
+    comparable = bool(expected and stored and scope.get('complete_period') and not unavailable)
+    with localcontext() as context:
+        context.prec = 2020
+        for row in result['rows']:
+            row['difference'] = (format(Decimal(str(row['stored'])) - Decimal(str(row['excel'])), 'f')
+                if comparable and row['excel'] is not None and row['stored'] is not None else None)
+            row['matches'] = Decimal(row['difference']) == 0 if row['difference'] is not None else None
+    if expected and not scope.get('complete_period') and not unavailable:
+        result.update(status='not_comparable', message='Partial extract: Excel detail and the complete stored period have different scopes. Full-period reconciliation is not certified.')
+        return result
+    if unavailable or not expected or stored is None:
+        return result
+    if any(row['matches'] is not True for row in result['rows']):
+        result.update(status='mismatch', message='Reconciliation differences need review. Stored data does not match the approved Excel controls.')
+    elif expected.get('missing_document_rows') or stored.get('missing_document_rows'):
+        result.update(status='incomplete', message='Some detail rows have no Document ID. Document completeness is not certified.')
+    else:
+        result.update(status='matched', message='Approved Excel controls match stored data at completion.' if result['footing_configured']
+                      else 'Row and document counts match stored data. Footing is not configured.')
+    return result
+
+
+def verify_stored_controls(query, source, columns, scope):
+    """The caller supplies its current locked import transaction/read boundary."""
+    period = scope.get('date_range') or {}
+    if not (source or {}).get('approved_detail') or not period.get('start') or not period.get('end'):
+        return stored_reconciliation(source, columns, scope,
+            unavailable=bool(scope.get('complete_period') or not (source or {}).get('approved_detail')))
+    stored = aggregate_stored_controls(query, columns, scope['client_id'], scope['template_id'],
+                                      period['start'], period['end'], ledger_account_code=scope.get('ledger_account_code'))
+    return stored_reconciliation(source, columns, scope, stored)

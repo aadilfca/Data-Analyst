@@ -2005,7 +2005,7 @@ if (resetBtn) {
         showStatus('🔄 Reset complete. Select a template and upload a file.', 'info');
     });
 }
-function downloadChangeReport(report, summary = {}) {
+function downloadChangeReport(report, summary = {}, reconciliation = null) {
     const reportRows = Array.isArray(report) ? report : [];
     const dateRange = summary.date_range || {};
     const header = [
@@ -2049,6 +2049,26 @@ function downloadChangeReport(report, summary = {}) {
         Array.isArray(value) ? value.join('; ') : value && typeof value === 'object'
             ? JSON.stringify(value) : value ?? ''));
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(values), 'Upload review');
+    if (reconciliation) {
+        const scope = reconciliation.scope || {};
+        const period = scope.date_range || {};
+        const checks = [
+            ['Import reconciliation'],
+            ['Upload ID', scope.upload_id || summary.upload_id || 'Unavailable'],
+            ['Client', scope.client_name || scope.client_id || 'Unavailable'],
+            ['Template', scope.template_name || scope.template_id || 'Unavailable'],
+            ['Period', `${period.start || 'Unavailable'} – ${period.end || 'Unavailable'}`],
+            ['Checked at', reconciliation.checked_at || 'Unavailable'],
+            ['Status', reconciliation.status],
+            ['Result', reconciliation.message],
+            ['Document ID', reconciliation.document_column || 'Unavailable'],
+            ['Footing', reconciliation.footing_configured ? 'Configured' : 'Not configured'],
+            ['Metric', 'Excel detail', 'Stored data', 'Stored minus Excel'],
+            ...(reconciliation.rows || []).map(row => [row.label, row.excel ?? 'Unavailable',
+                row.stored ?? 'Unavailable', row.difference ?? 'Not comparable'])
+        ];
+        XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(checks), 'Reconciliation');
+    }
     XLSX.writeFile(workbook, `upload-change-report-${summary.upload_id || 'latest'}.xlsx`);
 }
 
@@ -2060,7 +2080,54 @@ function attachValidationReportDownload(report, summary) {
 }
 
 // ---------- IMPORT SUMMARY POPUP ----------
+function renderImportReconciliation(container, reconciliation) {
+    container.className = 'result-reconciliation';
+    const result = reconciliation || {status: 'unavailable', rows: [],
+        message: 'Stored-data verification is unavailable for this result. No reconciliation is certified.'};
+    const heading = document.createElement('strong'); heading.textContent = 'Import reconciliation';
+    container.appendChild(heading);
+    const scope = result.scope || {}, period = scope.date_range || {};
+    const context = document.createElement('p');
+    context.textContent = `${scope.client_name || `Client ${scope.client_id ?? 'unavailable'}`} · ${scope.template_name || `Template ${scope.template_id ?? 'unavailable'}`} · ${period.start || 'Period unavailable'}${period.end ? ` – ${period.end}` : ''}${scope.ledger_account_code ? ` · Account ${scope.ledger_account_code}` : ''}`;
+    container.appendChild(context);
+    const message = document.createElement('p'); message.dataset.status = result.status;
+    message.setAttribute('role', result.status === 'matched' ? 'status' : 'alert');
+    message.textContent = result.message;
+    container.appendChild(message);
+    const table = document.createElement('table');
+    const head = table.createTHead().insertRow();
+    ['Metric', 'Excel detail', 'Stored data'].forEach(label => {
+        const th = document.createElement('th'); th.scope = 'col'; th.textContent = label; head.appendChild(th);
+    });
+    const body = table.createTBody();
+    (result.rows || []).forEach(row => {
+        const tr = body.insertRow(); tr.dataset.matches = String(row.matches);
+        tr.insertCell().textContent = row.label;
+        tr.insertCell().textContent = row.excel == null ? 'Unavailable' : formatSourceControlAmount(row.excel);
+        tr.insertCell().textContent = row.stored == null ? 'Unavailable' : formatSourceControlAmount(row.stored);
+        if (row.matches === false) tr.title = `Stored minus Excel: ${formatSourceControlAmount(row.difference)}`;
+    });
+    const scroll = document.createElement('div'); scroll.className = 'reconciliation-table-scroll';
+    scroll.appendChild(table); container.appendChild(scroll);
+    const differences = (result.rows || []).filter(row => row.matches === false);
+    if (differences.length) {
+        const note = document.createElement('p');
+        note.dataset.status = 'mismatch';
+        note.textContent = `Stored minus Excel: ${differences.map(row => `${row.label}: ${formatSourceControlAmount(row.difference)}`).join(' · ')}.`;
+        container.appendChild(note);
+    }
+    const details = document.createElement('p');
+    details.textContent = `Document ID: ${result.document_column || 'Unavailable'}.${result.footing_configured ? '' : ' Footing not configured.'}${result.checked_at ? ` Checked: ${result.checked_at}.` : ''}`;
+    container.appendChild(details);
+    if (result.status === 'unavailable') {
+        const retry = document.createElement('p');
+        retry.textContent = 'Validate a fresh copy of the source to retry the check. Import is not repeated automatically.';
+        container.appendChild(retry);
+    }
+}
+
 function showImportSummary(result, ledgerPresentation = null) {
+    document.getElementById('importSummaryOverlay')?.remove();
     // Create overlay
     const overlay = document.createElement('div');
     overlay.id = 'importSummaryOverlay';
@@ -2074,7 +2141,7 @@ function showImportSummary(result, ledgerPresentation = null) {
     const modal = document.createElement('div');
     modal.style.cssText = `
         background: white; border-radius: 12px; padding: 30px;
-        max-width: 560px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        max-width: 600px; width: calc(100% - 24px); box-sizing: border-box; box-shadow: 0 20px 60px rgba(0,0,0,0.3);
         font-family: 'Segoe UI', sans-serif;
         max-height: 90vh;
         overflow-y: auto;
@@ -2097,11 +2164,20 @@ function showImportSummary(result, ledgerPresentation = null) {
         ? 'Deleted — not used in correction uploads'
         : 'Deleted — removed';
     const changeReport = cd.report || [];
-    const uploadSummary = result.upload_summary || {};
+    const uploadSummary = result.upload_summary || {
+        upload_id: result.reconciliation?.scope?.upload_id,
+        template_name: result.reconciliation?.scope?.template_name,
+        date_range: result.reconciliation?.scope?.date_range,
+        total_rows: result.total_rows, added_count: inserted, changed_count: updated, removed_count: deleted
+    };
     
     let statusIcon = '✅';
     let statusColor = '#16a34a';
-    let statusText = result.ignored ? 'Upload Ignored' : 'Import Successful';
+    let statusText = result.ignored ? (result.reconciliation?.status === 'matched' ? 'No changes required' : 'No rows imported') : 'Import Successful';
+    if (result.reconciliation && ['mismatch', 'unavailable', 'incomplete'].includes(result.reconciliation.status)) {
+        statusIcon = '⚠️'; statusColor = '#92400e';
+        if (!result.ignored) statusText = 'Import completed — review reconciliation';
+    }
     if (errorCount > 0) {
         statusIcon = '⚠️';
         statusColor = '#f59e0b';
@@ -2224,6 +2300,7 @@ function showImportSummary(result, ledgerPresentation = null) {
                 <div style="font-size:12px; color:#64748b;">Updated Rows</div>
             </div>
         </div>
+        <div id="importReconciliation"></div>
         ${changeSummary}
         ${rejectionSummary}
         ${preparationWarning}
@@ -2254,6 +2331,7 @@ function showImportSummary(result, ledgerPresentation = null) {
     }
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
+    renderImportReconciliation(overlay.querySelector('#importReconciliation'), result.reconciliation);
 
     const preparationWarningBox = overlay.querySelector('#importSummaryPreparationWarning');
     if (preparationWarningBox) {
@@ -2289,7 +2367,7 @@ function showImportSummary(result, ledgerPresentation = null) {
 
     const downloadReportBtn = overlay.querySelector('#downloadChangeReportBtn');
     if (downloadReportBtn) {
-        downloadReportBtn.addEventListener('click', () => downloadChangeReport(changeReport, uploadSummary));
+        downloadReportBtn.addEventListener('click', () => downloadChangeReport(changeReport, uploadSummary, result.reconciliation));
     }
     
     // Close on button click
@@ -2856,6 +2934,10 @@ if (importBtn) {
             // strip's final step represents (confirmed with the user: mapping-resolved alone
             // isn't distinct enough, since it fires at the same instant Import becomes enabled).
             updateStepIndicator(4);
+            if (!canImport && result.reconciliation) {
+                showImportSummary({...result, status: 'success', ignored: true,
+                    imported_count: 0, updated_count: 0, deleted_count: 0});
+            }
 
         } catch (error) {
             resetValidationState();

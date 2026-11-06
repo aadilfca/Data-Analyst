@@ -38,6 +38,7 @@ from services.upload_lifecycle import (
 )
 from services.upload_reconciliation import (
     footing_columns, selected_control_row, reconcile_source, summarize_rows,
+    verify_stored_controls, stored_reconciliation,
 )
 
 # ⭐ MUST HAVE THIS LINE
@@ -390,6 +391,49 @@ def _approved_reconciliation(controls, rows, columns, mapping, request, date_ran
                          'complete_period': request.comparison_mode == 'replace_range'}
     controls['omitted_detail_rows'] = controls['full_sheet']['row_count'] - len(rows)
     return controls
+
+
+def _verify_import_controls(request, source, columns, template, client, *, no_change_lifecycle=None):
+    """Keep a failed SELECT from aborting a valid import, without hiding differences.
+
+    The caller owns the transaction. A savepoint recovers ordinary query errors;
+    a lost connection still follows the existing uncertain-commit safeguards.
+    No-op verification also seals the source snapshot before certifying it.
+    """
+    scope = {**(source or {}).get('scope', {}), 'client_id': request.client_id,
+             'template_id': request.template_id, 'upload_id': request.file_id, 'client_name': client.get('client_name'),
+             'template_name': template.get('template_name'),
+             'comparison_mode': request.comparison_mode,
+             'complete_period': request.comparison_mode == 'replace_range',
+             'ledger_account_code': request.ledger_account_code}
+    if not (source or {}).get('approved_detail'):
+        return stored_reconciliation(source, columns, scope, unavailable=True)
+    if not scope.get('date_range'):
+        return verify_stored_controls(execute_query_pg, source, columns, scope)
+    opened = False
+    try:
+        execute_query_pg('SAVEPOINT upload_controls')
+        opened = True
+        if no_change_lifecycle:
+            # A no-op has no write guard. Keep writers out briefly and repeat
+            # the existing source proof so a concurrent correction cannot hide.
+            execute_query_pg('LOCK TABLE client_data IN SHARE MODE')
+            from services.upload_lifecycle import check_scope
+            rate = template.get('rate_source')
+            if rate == 'auto':
+                rate = resolve_upload_rate_source(columns, {m.template_column_name: m.excel_column_name for m in request.mappings})
+            _guard_plan_configuration(request, {'lifecycle': no_change_lifecycle,
+                'template_fingerprint': digest([columns, rate])})
+            check_scope(no_change_lifecycle, execute_query_pg)
+        result = verify_stored_controls(execute_query_pg, source, columns, scope)
+    except Exception:
+        if opened:
+            execute_query_pg('ROLLBACK TO SAVEPOINT upload_controls')
+        logger.warning('Stored upload controls unavailable for client %s/template %s', request.client_id, request.template_id)
+        result = stored_reconciliation(source, columns, scope, unavailable=True)
+    if opened:
+        execute_query_pg('RELEASE SAVEPOINT upload_controls')
+    return result
 
 
 def _workbook_input_errors(file_path, request, template_cols, col_mapping, frame):
@@ -3512,7 +3556,7 @@ def validate_only(request: ImportRequest, perf: bool = False):
         raise HTTPException(404, "File not found")
 
     # Validate client exists
-    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (request.client_id,))
+    client = execute_query_pg("SELECT id, client_name FROM clients WHERE id = %s AND is_active = TRUE", (request.client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive")
 
@@ -3818,6 +3862,7 @@ def validate_only(request: ImportRequest, perf: bool = False):
                                   "errors": [{"error_type": "ledger_incomplete", "message": "Correct rejected ledger rows before importing"}]}
                                  for item in rejected_rows)
     can_import = bool(actionable and not validation_errors)
+    reconciliation = None
     summary_status = None
     if duplicate_errors:
         summary_status = "Rejected"
@@ -3844,6 +3889,9 @@ def validate_only(request: ImportRequest, perf: bool = False):
         summary_status = "Validated"
     elif not validation_errors:
         summary_status = "Ignored"
+        with pg_transaction():
+            reconciliation = _verify_import_controls(request, source_controls, template_cols, template[0], client[0],
+                no_change_lifecycle=change_detection.get('lifecycle'))
 
     _persist_upload_summary(
         request,
@@ -3867,6 +3915,7 @@ def validate_only(request: ImportRequest, perf: bool = False):
 
     return {
         "status": "validation_complete",
+        "reconciliation": reconciliation,
         "source_reconciliation": source_controls,
         "backup_enabled": request.backup_enabled,
         "source_diagnostics": source_diagnostics,
@@ -4575,6 +4624,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
             len(new_rows), len(changed), len(missing),
             informational_updated_count, len(informational_updates),
         )
+        reconciliation = _verify_import_controls(request, source_controls, template_cols, template[0], client[0])
         execute_write_pg(
             """
             DELETE FROM upload_validation_plans
@@ -4591,6 +4641,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
             import_message += '. Original source row order restored; transaction values are unchanged.'
         finish_lifecycle(prepared, {
             'status': 'success', 'message': import_message,
+            'reconciliation': reconciliation,
             'total_rows': total_rows_attempted, 'imported_count': inserted_count,
             'updated_count': updated_count, 'deleted_count': deleted_count,
             'informational_updated_count': informational_updated_count,
@@ -4681,6 +4732,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
         "status": "success",
         "source_diagnostics": plan_payload.get("source_diagnostics", {}),
         "source_reconciliation": source_controls,
+        "reconciliation": reconciliation,
         "archive_verified": bool(prepared and prepared.get('archive')),
         "backup_mode": prepared.get('archive_mode', 'drive' if prepared.get('archive') else 'not_required') if prepared else 'not_required',
         "change_report": prepared.get('change_report') if prepared else None,
@@ -4723,7 +4775,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
     if not file_info:
         raise HTTPException(404, "File not found")
     # Validate client exists
-    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (request.client_id,))
+    client = execute_query_pg("SELECT id, client_name FROM clients WHERE id = %s AND is_active = TRUE", (request.client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive")
 
@@ -4781,6 +4833,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
     if input_errors:
         return _source_input_failure(input_errors, len(df))
     rows, source_diagnostics = _prepare_source_rows(df, request, template_cols, col_mapping)
+    source_controls = _source_reconciliation(df, rows, request, template_cols, col_mapping)
     # Apply any typed blank-cell values before exclusion filtering (see
     # apply_edited_cell_values()'s docstring for why the ordering matters).
     rows = apply_edited_cell_values(rows, request.edited_cells)
@@ -5034,9 +5087,13 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
         [item.get("client_data_id") for item in change_detection.get("changed", [])],
     )
 
+    source_controls = _approved_reconciliation(source_controls, rows, template_cols, col_mapping, request, change_detection.get('date_range'))
     public_changes = public_change_detection(change_detection, template_cols, request.template_id)
     if not (change_detection["new_count"] or change_detection["changed_count"] or change_detection["missing_count"]
             or change_detection.get('source_order_refresh_required')):
+        with pg_transaction():
+            reconciliation = _verify_import_controls(request, source_controls, template_cols, template[0], client[0],
+                no_change_lifecycle=change_detection.get('lifecycle'))
         _persist_upload_summary(request, change_detection, len(rows), status="Ignored")
         upload_summary = _build_upload_summary(
             file_info[0], template[0], request, change_detection, len(rows), status="Ignored"
@@ -5058,6 +5115,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
                 else "Upload ignored: all validated lines are unchanged."
             ),
             "ignored": True,
+            "reconciliation": reconciliation,
             "total_rows": len(rows),
             "imported_count": 0,
             "updated_count": 0,
@@ -5377,6 +5435,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
             upload_id=request.file_id,
             row_data=cashflow_occurrence_rows,
         )
+        reconciliation = _verify_import_controls(request, source_controls, template_cols, template[0], client[0])
     if replacement_cleanup["staged_paths"]:
         failures = _remove_staged_upload_files(replacement_cleanup["staged_paths"])
         if failures:
@@ -5454,6 +5513,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
     return {
         "status": "success",
         "source_diagnostics": source_diagnostics,
+        "reconciliation": reconciliation,
         "message": f"Successfully imported: {inserted_count} added, {updated_count} changed, {deleted_count} removed",
         "total_rows": total_rows_attempted,
         "imported_count": inserted_count,

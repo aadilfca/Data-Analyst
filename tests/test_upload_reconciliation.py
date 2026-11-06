@@ -199,7 +199,8 @@ def test_sql_controls_are_one_parameterized_scope_query_and_return_only_aggregat
     sql, params = calls[0]
     assert len(calls) == 1
     assert 'DROP TABLE' not in sql and columns[1]['column_name'] in params
-    assert (5, 9, '2026-01-01', '2026-01-01', '100-1') == params[3:8]
+    assert (5, 9, '2026-01-01', '2026-01-01', '100-1') == params[6:11]
+    assert params[1] == params[3] == params[5] == controls.SOURCE_WHITESPACE
     assert 'cd.is_deleted = FALSE' in sql and "cd.change_detection_status != 'deleted'" in sql
     assert 'ledger_account_code = %s' in sql and 'COUNT(DISTINCT document_id)' in sql
     assert sql.count('%s') == len(params)
@@ -213,3 +214,54 @@ def test_sql_invalid_values_or_reversed_dates_cannot_claim_reconciliation():
         controls.aggregate_stored_controls(query, COLUMNS, 1, 1, '2026-01-01', '2026-01-01')
     with pytest.raises(ValueError, match='Start date'):
         controls.aggregate_stored_controls(query, COLUMNS, 1, 1, '2026-02-01', '2026-01-01')
+
+
+def verification_inputs():
+    summary = {'row_count': 116, 'document_count': 29, 'missing_document_rows': 0,
+               'footing_totals': {'Debit': '77108960.01', 'Credit': '77108960.01'}}
+    source = {'approved_detail': summary}
+    scope = {'client_id': 5, 'template_id': 1, 'complete_period': True,
+             'date_range': {'start': '2026-01-01', 'end': '2026-01-01'}}
+    return source, scope, summary
+
+
+def test_stored_controls_compare_exact_counts_and_each_footing_independently():
+    source, scope, stored = verification_inputs()
+    result = controls.stored_reconciliation(source, COLUMNS, scope, stored)
+    assert result['status'] == 'matched'
+    assert result['document_column'] == 'Document'
+    altered = {**stored, 'footing_totals': {**stored['footing_totals'], 'Credit': '77108960.010000000001'}}
+    mismatch = controls.stored_reconciliation(source, COLUMNS, scope, altered)
+    assert mismatch['status'] == 'mismatch'
+    assert Decimal(mismatch['rows'][-1]['difference']) == Decimal('0.000000000001')
+    assert mismatch['rows'][-2]['matches'] is True
+
+
+@pytest.mark.parametrize('metric,value', [('row_count', 117), ('document_count', 28)])
+def test_matching_amounts_cannot_hide_different_row_or_document_counts(metric, value):
+    source, scope, stored = verification_inputs()
+    result = controls.stored_reconciliation(source, COLUMNS, scope, {**stored, metric: value})
+    assert result['status'] == 'mismatch'
+
+
+def test_missing_values_partial_scopes_and_absent_source_are_never_certified():
+    source, scope, stored = verification_inputs()
+    assert controls.stored_reconciliation(source, COLUMNS, {**scope, 'complete_period': False}, stored)['status'] == 'not_comparable'
+    assert controls.stored_reconciliation(source, COLUMNS, scope, {**stored, 'missing_document_rows': 1})['status'] == 'incomplete'
+    assert controls.stored_reconciliation(None, COLUMNS, scope, stored)['status'] == 'unavailable'
+    assert controls.stored_reconciliation(source, COLUMNS, scope, unavailable=True)['status'] == 'unavailable'
+
+
+def test_no_footing_configuration_reports_count_controls_without_inventing_zero_totals():
+    source, scope, stored = verification_inputs()
+    result = controls.stored_reconciliation(source, [c for c in COLUMNS if c['data_type'] != 'Numeric'], scope, stored)
+    assert result['status'] == 'matched' and not result['footing_configured']
+    assert len(result['rows']) == 2
+    assert 'not configured' in result['message']
+
+
+def test_missing_date_scope_never_runs_an_unbounded_database_aggregate():
+    source, scope, stored = verification_inputs()
+    def query(*args):
+        pytest.fail('Missing period must not query all current data')
+    assert controls.verify_stored_controls(query, source, COLUMNS, {**scope, 'date_range': None})['status'] == 'unavailable'

@@ -450,3 +450,98 @@ def test_source_control_validation_hint_clears_and_exact_amount_display_keeps_sm
     assert page.locator('#sourceControlPreview').is_visible()
     assert page.evaluate("formatSourceControlAmount('77108960.00000001')") == '77,108,960.00000001'
     assert page.evaluate("formatSourceControlAmount('-0.000000000000000001')") == '-0.000000000000000001'
+
+
+def import_reconciliation(status='matched'):
+    return {'status': status, 'message': {'matched':'Approved Excel controls match stored data at completion.',
+        'unavailable':'Stored-data verification is unavailable.', 'mismatch':'Reconciliation differences need review.',
+        'not_comparable':'Partial extract: full-period reconciliation is not certified.'}[status],
+        'scope': {'client_id':1,'client_name':'Leather Crop','template_id':1,'template_name':'Transaction Report',
+                  'complete_period':status!='not_comparable','date_range':{'start':'2026-01-01','end':'2026-01-01'}},
+        'checked_at':'2026-11-06T15:00:00+05:00','document_column':'Voucher ID','footing_configured':True,
+        'rows':[{'label':'Total rows','excel':116,'stored':116,'difference':'0','matches':True},
+                {'label':'Unique documents','excel':29,'stored':29,'difference':'0','matches':True},
+                {'label':'Footing — Debit Amount','excel':'77108960.01','stored':'77108960.01','difference':'0','matches':True},
+                {'label':'Footing — Credit Amount','excel':'77108960.01','stored':'77108960.01','difference':'0','matches':True}]}
+
+
+def test_import_result_has_one_three_column_reconciliation_table_after_processed_counts(page):
+    page.evaluate('data=>showImportSummary(data)', {'status':'success','total_rows':116,'imported_count':116,
+        'change_detection':{'new_count':116},'reconciliation':import_reconciliation()})
+    table=page.locator('#importReconciliation table')
+    assert table.locator('th').all_text_contents() == ['Metric','Excel detail','Stored data']
+    assert table.locator('tbody tr').count() == 4
+    assert '77,108,960.01' in table.inner_text()
+    assert 'Leather Crop · Transaction Report · 2026-01-01 – 2026-01-01' in page.locator('#importReconciliation').inner_text()
+    assert page.locator('#importSummaryOverlay h2').inner_text() == 'Import Successful'
+    assert page.locator('#uploadReplacementReview #importReconciliation').count() == 0
+
+
+@pytest.mark.parametrize('status,title', [('unavailable','Import completed — review reconciliation'),
+                                       ('mismatch','Import completed — review reconciliation'),
+                                       ('not_comparable','Import Successful')])
+def test_result_checks_never_disguise_a_committed_import_as_failed_or_partial_as_matched(page,status,title):
+    proof=import_reconciliation(status)
+    if status=='unavailable':
+        for row in proof['rows']: row.update(stored=None,matches=None,difference=None)
+    if status=='mismatch': proof['rows'][0].update(stored=117,matches=False,difference='1')
+    if status=='not_comparable':
+        for row in proof['rows']: row.update(matches=None,difference=None)
+    page.evaluate('proof=>showImportSummary({status:"success",total_rows:116,imported_count:116,reconciliation:proof})',proof)
+    assert page.locator('#importSummaryOverlay h2').inner_text() == title
+    assert page.locator('#importReconciliation [data-status]').first.get_attribute('data-status') == status
+    if status=='mismatch':
+        assert page.locator('#importReconciliation tr[data-matches="false"]').get_attribute('title') == 'Stored minus Excel: 1'
+        assert 'Stored minus Excel: Total rows: 1.' in page.locator('#importReconciliation').inner_text()
+    if status=='unavailable': assert 'Unavailable' in page.locator('#importReconciliation table').inner_text()
+
+
+def test_reconciliation_scope_and_labels_use_text_and_absent_footing_is_explicit(page):
+    proof=import_reconciliation()
+    proof['scope']['client_name']='<img src=x onerror=alert(1)>'
+    proof['footing_configured']=False
+    proof['rows']=proof['rows'][:2]
+    page.evaluate('proof=>showImportSummary({status:"success",reconciliation:proof})',proof)
+    assert page.locator('#importReconciliation img').count()==0
+    assert '<img src=x' in page.locator('#importReconciliation').inner_text()
+    assert 'Footing not configured' in page.locator('#importReconciliation').inner_text()
+
+
+@pytest.mark.parametrize('width',[390,768,1280])
+def test_reconciliation_result_fits_narrow_screens_without_losing_counts(page,width):
+    page.set_viewport_size({'width':width,'height':900})
+    page.evaluate('proof=>showImportSummary({status:"success",reconciliation:proof})',import_reconciliation())
+    assert page.locator('#importSummaryOverlay > div').evaluate('(el)=>el.scrollWidth<=el.clientWidth')
+    assert page.locator('#importReconciliation table').is_visible()
+
+
+def test_downloaded_upload_report_contains_exact_reconciliation_and_scope(page):
+    page.add_script_tag(path=str(ROOT/'static/vendor/xlsx.full.min.js'))
+    page.evaluate('''proof=>{
+        XLSX.writeFile=(book,name)=>window.reconciliationReport=XLSX.write(book,{type:'base64',bookType:'xlsx'});
+        downloadChangeReport([],{upload_id:99},proof);
+    }''',import_reconciliation())
+    import base64,io
+    from openpyxl import load_workbook
+    book=load_workbook(io.BytesIO(base64.b64decode(page.evaluate('window.reconciliationReport'))))
+    assert book.sheetnames==['Upload review','Reconciliation']
+    sheet=book['Reconciliation']
+    assert sheet.cell(3,2).value=='Leather Crop'
+    assert sheet.cell(11,1).value=='Metric'
+    assert sheet.cell(14,2).value==sheet.cell(14,3).value=='77108960.01'
+
+
+def test_unchanged_validation_opens_verified_result_without_sending_import(page):
+    page.add_script_tag(path=str(ROOT/'static/loading_ui.js'))
+    prepare_source_controls(page)
+    page.locator('#sourceControlConfirmed').check()
+    page.evaluate("localStorage.setItem('selectedClientId','1'); uploadCoverageStart.value='2026-04-01'; uploadCoverageEnd.value='2026-04-30';")
+    requests=[]
+    page.on('request',lambda request:requests.append(request.url))
+    result={'status':'validation_complete','has_errors':False,'errors':[],'rejected_rows':[],
+            'total_rows':116,'can_import':False,'change_detection':{'unchanged_count':116},
+            'reconciliation':import_reconciliation()}
+    page.route('**/api/upload/validate',lambda route:route.fulfill(json=result))
+    page.locator('#importBtn').click()
+    expect(page.locator('#importSummaryOverlay h2')).to_have_text('No changes required')
+    assert not any(url.endswith('/api/upload/import') for url in requests)

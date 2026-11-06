@@ -629,6 +629,16 @@
         #sourceControlPanel [data-status="mismatch"] { color: #b42318; }
         #sourceControlPanel [data-status="matched"] { color: #16803c; }
         #rowExclusionContainer tr.source-control-row td { background: #eef2f6; color: #475569; }
+        #importSummaryOverlay .result-reconciliation { margin-top: 16px; padding: 12px; border: 1px solid #dbe2ea; border-radius: 6px; color: #475569; font-size: 12px; }
+        #importSummaryOverlay .result-reconciliation p { margin: 5px 0; overflow-wrap: anywhere; }
+        #importSummaryOverlay .reconciliation-table-scroll { overflow-x: auto; }
+        #importSummaryOverlay .result-reconciliation table { width: 100%; min-width: 280px; border-collapse: collapse; margin: 8px 0; }
+        #importSummaryOverlay .result-reconciliation th, #importSummaryOverlay .result-reconciliation td { width: 32%; padding: 6px 4px; text-align: right; border-bottom: 1px solid #e2e8f0; white-space: nowrap; font-variant-numeric: tabular-nums; }
+        #importSummaryOverlay .result-reconciliation th:first-child, #importSummaryOverlay .result-reconciliation td:first-child { width: 36%; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+        #importSummaryOverlay .result-reconciliation tr[data-matches="false"] { color: #b42318; background: #fff5f5; }
+        #importSummaryOverlay .result-reconciliation [data-status="matched"] { color: #16803c; }
+        #importSummaryOverlay .result-reconciliation [data-status="mismatch"], #importSummaryOverlay .result-reconciliation [data-status="incomplete"] { color: #b42318; }
+        #importSummaryOverlay .result-reconciliation [data-status="unavailable"] { color: #92400e; }
         .mapping-status { color: #16803c; font-size: 12px; font-weight: 600; white-space: nowrap; }
         .mapping-status.is-unmapped { color: #b42318; }
 
@@ -1875,7 +1885,7 @@
             <button type="button" id="uploadReplacementConfirm">Import</button>
         </footer>
     </dialog>
-    <script src="/static/upload.js?v=29"></script>
+    <script src="/static/upload.js?v=30"></script>
 </body>
 
 </html>

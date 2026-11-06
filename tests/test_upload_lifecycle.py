@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation
 import hashlib
 import io
 import json
@@ -186,6 +187,32 @@ class Store:
 
     def query(self, sql, params=None, **kwargs):
         params = params or ()
+        if sql.startswith(('SAVEPOINT ', 'RELEASE SAVEPOINT ', 'ROLLBACK TO SAVEPOINT ')):
+            return []
+        if sql.startswith('WITH source AS (SELECT NULLIF(BTRIM(cd.row_data'):
+            self.aggregate_calls = getattr(self, 'aggregate_calls', 0) + 1
+            self.aggregate_after_writes = self.source_writes
+            if getattr(self, 'aggregate_error', False):
+                raise RuntimeError('Simulated aggregate failure')
+            footings = [c['column_name'] for c in self.columns if c.get('reconciliation_role') == 'footing']
+            key, *names = params[:2 * (len(footings) + 1):2]
+            position = 2 * (len(footings) + 1)
+            client_id, template_id, start, end = params[position:position + 4]
+            records = [r for r in self.rows if r['client_id'] == client_id and r['template_id'] == template_id
+                       and not r.get('is_deleted') and start <= r['extract_date'] <= end]
+            ids = [str(r['row_data'][key]).strip() if r['row_data'].get(key) is not None else '' for r in records]
+            aggregate = {'row_count': len(records), 'document_count': len(set(ids) - {''}),
+                         'missing_document_rows': ids.count('')}
+            for i, name in enumerate(names):
+                total, invalid = Decimal(0), 0
+                for record in records:
+                    try:
+                        total += Decimal(str(record['row_data'].get(name) or 0))
+                    except InvalidOperation:
+                        invalid += 1
+                aggregate.update({f'total_{i}': total, f'invalid_{i}': invalid})
+            aggregate.update(getattr(self, 'aggregate_override', {}))
+            return [aggregate]
         if 'to_regclass' in sql:
             return [{'table_name': None}]
         if 'LOCK TABLE' in sql or 'pg_advisory' in sql:
@@ -1304,3 +1331,80 @@ def test_empty_footing_report_requires_confirmed_zero_source_total(pipeline):
     result, validation = validate_then_import(pipeline, confirm_empty_period=True, **choices)
     assert result['deleted_count'] == 1 and not pipeline['store'].rows
     assert validation['source_reconciliation']['approved_detail']['row_count'] == 0
+
+
+def test_post_import_sql_totals_follow_writes_and_are_recovered_without_reimport(pipeline):
+    choices = controlled_source(pipeline)
+    pipeline['store'].add(91, row('OUTSIDE', '01/05/2026', amount=999))
+    pipeline['store'].add(92, row('OTHER-CLIENT', amount=888), client=6)
+    result, validation = validate_then_import(pipeline, **choices)
+    proof = result['reconciliation']
+    assert proof['status'] == 'matched'
+    assert [item['stored'] for item in proof['rows']] == [3, 2, '35', '0']
+    assert pipeline['store'].aggregate_calls == 1
+    assert pipeline['store'].aggregate_after_writes == 3
+    pipeline['store'].rows[0]['row_data']['Debit Amount'] = 1000
+    retry = upload.validate_and_import(request(validation_plan_id=validation['validation_plan_id'], **choices))
+    assert retry['reconciliation'] == proof and retry['recovered_commit']
+    assert pipeline['store'].aggregate_calls == 1
+    assert pipeline['store'].source_writes == 3
+
+
+@pytest.mark.parametrize('problem,status', [('query', 'unavailable'), ('difference', 'mismatch')])
+def test_post_import_query_failure_or_difference_is_not_reported_as_failed_commit(pipeline, problem, status):
+    choices = controlled_source(pipeline)
+    if problem == 'query': pipeline['store'].aggregate_error = True
+    else: pipeline['store'].aggregate_override = {'total_0': Decimal('36')}
+    result, validation = validate_then_import(pipeline, **choices)
+    assert result['status'] == 'success' and result['imported_count'] == 3
+    assert result['reconciliation']['status'] == status
+    assert json.loads(next(iter(pipeline['store'].jobs.values()))['result_json'])['reconciliation'] == result['reconciliation']
+    assert len(pipeline['store'].rows) == 3
+
+
+def test_unchanged_repeat_verifies_sql_without_creating_plan_or_writing_detail(pipeline):
+    choices = controlled_source(pipeline)
+    for i, detail in enumerate(pipeline['incoming'][:-1], 1):
+        pipeline['store'].add(i, detail)
+    before = deepcopy(pipeline['store'].rows)
+    result = upload.validate_only(request(**choices))
+    assert not result['can_import'] and not result['validation_plan_id']
+    assert result['reconciliation']['status'] == 'matched'
+    assert pipeline['store'].aggregate_calls == 1
+    assert pipeline['store'].rows == before and pipeline['store'].source_writes == 0
+
+
+def test_partial_import_never_certifies_whole_period_even_when_counts_match(pipeline):
+    choices = controlled_source(pipeline)
+    result, _ = validate_then_import(pipeline, comparison_mode='correction', **choices)
+    assert result['reconciliation']['status'] == 'not_comparable'
+    assert all(item['matches'] is None for item in result['reconciliation']['rows'])
+
+
+def test_concurrent_noop_change_with_identical_counts_and_totals_cannot_be_certified(pipeline, monkeypatch):
+    choices = controlled_source(pipeline)
+    for i, detail in enumerate(pipeline['incoming'][:-1], 1): pipeline['store'].add(i, detail)
+    verify = upload._verify_import_controls
+    def changed_before_check(*args, **kwargs):
+        pipeline['store'].rows[0]['row_data']['Voucher Detail'] = 'Concurrent correction'
+        return verify(*args, **kwargs)
+    monkeypatch.setattr(upload, '_verify_import_controls', changed_before_check)
+    result = upload.validate_only(request(**choices))
+    assert not result['can_import']
+    assert result['reconciliation']['status'] == 'unavailable'
+    assert pipeline['store'].source_writes == 0
+
+
+def test_failure_after_verification_rolls_back_both_rows_and_reconciliation_receipt(pipeline, monkeypatch):
+    choices = controlled_source(pipeline)
+    validation = upload.validate_only(request(**choices))
+    finish = upload.finish_lifecycle
+    def fail_before_commit(*args, **kwargs):
+        finish(*args, **kwargs)
+        raise RuntimeError('Simulated failure after receipt write')
+    monkeypatch.setattr(upload, 'finish_lifecycle', fail_before_commit)
+    with pytest.raises(RuntimeError, match='after receipt write'):
+        upload.validate_and_import(request(validation_plan_id=validation['validation_plan_id'], **choices))
+    assert pipeline['store'].aggregate_calls == 1
+    assert not pipeline['store'].rows and pipeline['store'].source_writes == 0
+    assert next(iter(pipeline['store'].jobs.values()))['status'] != 'applied'
