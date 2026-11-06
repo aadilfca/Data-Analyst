@@ -147,6 +147,7 @@
             padding: 8px 0;
             border-bottom: 1px solid #e2e8f0;
             margin-bottom: 12px;
+            flex-wrap: wrap;
         }
 
         .preview-modal .sunday-filter-row label {
@@ -651,6 +652,16 @@
             font-size: 22px;
             color: #1a1a2e;
         }
+        #previewModal .preview-title-row { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px; }
+        #previewModal .preview-title-block { display: flex; flex: 1 1 auto; min-width: 0; align-items: baseline; }
+        #previewModal .preview-title-block h2 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        #previewModal .preview-header-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 12px; }
+        #previewModal #previewMetrics { display: flex; max-width: 100%; flex-wrap: wrap; justify-content: flex-end; gap: 4px 12px; margin-left: auto; color: #64748b; font-size: 12px; }
+        #previewModal #previewMetrics[hidden] { display: none; }
+        #previewModal .preview-metric { display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; max-width: 100%; }
+        #previewModal .preview-metric-label { max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+        #previewModal .preview-metric-value { font-weight: 600; color: #334155; font-variant-numeric: tabular-nums; }
+        #previewModal .preview-metric-scope { font-size: 11px; color: #64748b; }
 
         /* Primary/secondary button pair, copied from #sessionPopup's own
            .btn-primary/.btn-secondary (static/verification.html) so Apply/
@@ -1153,19 +1164,23 @@
         <div class="modal-content">
             <!-- Modal Header -->
             <div class="modal-header">
-                <h2 id="previewTitle">Dataset Preview</h2>
-                <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
-                    <!-- Page Size Selector -->
-                    <div class="page-size-selector">
-                        <label for="pageSizeSelect">Rows per page:</label>
-                        <select id="pageSizeSelect">
-                            <option value="25">25</option>
-                            <option value="50" selected>50</option>
-                            <option value="100">100</option>
-                        </select>
+                <div class="preview-title-row">
+                    <div class="preview-title-block">
+                        <h2 id="previewTitle">Dataset Preview</h2>
                     </div>
-                    <button class="modal-close" id="closePreviewBtn"
-                        style="background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8;">&times;</button>
+                    <div class="preview-header-actions">
+                        <!-- Page Size Selector -->
+                        <div class="page-size-selector">
+                            <label for="pageSizeSelect">Rows per page:</label>
+                            <select id="pageSizeSelect">
+                                <option value="25">25</option>
+                                <option value="50" selected>50</option>
+                                <option value="100">100</option>
+                            </select>
+                        </div>
+                        <button class="modal-close" id="closePreviewBtn"
+                            style="background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8;">&times;</button>
+                    </div>
                 </div>
             </div>
 
@@ -1183,6 +1198,7 @@
                     <input type="checkbox" id="subtotalToggleCheckbox">
                     🧮 Show document subtotals
                 </label>
+                <div id="previewMetrics" aria-live="polite" hidden></div>
             </div>
 
             <!-- Search/Filter Toolbar -->
@@ -1411,7 +1427,7 @@
     <script src="/static/loading_ui.js?v=2"></script>
     <script src="/static/client_context.js?v=29"></script>
     <script src="/static/api_utils.js?v=1"></script>
-    <script src="/static/databank.js?v=11"></script>
+    <script src="/static/databank.js?v=13"></script>
 </body>
 
 </html>

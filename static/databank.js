@@ -135,6 +135,84 @@ let overdueUploadsData = [];
 
 // Preview modal elements
 const previewModal = document.getElementById('previewModal');
+const previewMetrics = document.getElementById('previewMetrics');
+
+function previewMetricScopeMatches(scope, spec) {
+    const params = spec.params;
+    if (!scope || Number(scope.client_id) !== Number(spec.clientId) || Number(scope.template_id) !== Number(spec.templateId)
+        || scope.date_start !== params.get('date_start') || scope.date_end !== params.get('date_end')) return false;
+    for (const key of ['search', 'ledger_account_code', 'data_quality']) {
+        if ((scope[key] || '') !== (params.get(key) || '')) return false;
+    }
+    for (const key of ['amount_min', 'amount_max']) {
+        if (params.has(key) ? scope[key] == null || Number(scope[key]) !== Number(params.get(key)) : scope[key] != null) return false;
+    }
+    return Boolean(scope.sunday_only) === (params.get('sunday_only') === 'true');
+}
+
+function setPreviewMetricsState(message = 'Loading totals…') {
+    if (!previewMetrics) return;
+    previewMetrics.replaceChildren();
+    previewMetrics.hidden = previewMode !== 'raw';
+    if (!previewMetrics.hidden) previewMetrics.textContent = message;
+}
+
+function renderPreviewMetrics(data, spec) {
+    setPreviewMetricsState('');
+    if (!previewMetrics || previewMetrics.hidden) return;
+    const metrics = data.preview_metrics;
+    const add = (label, value, title) => {
+        const item = document.createElement('span'); item.className = 'preview-metric';
+        item.title = title || label;
+        const name = document.createElement('span'); name.className = 'preview-metric-label'; name.textContent = label;
+        const number = document.createElement('span'); number.className = 'preview-metric-value';
+        // Preserve every decimal digit, without a floating-point conversion.
+        const [whole, fraction] = String(value).split('.');
+        number.textContent = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (fraction === undefined ? '' : `.${fraction}`);
+        item.append(name, number); previewMetrics.appendChild(item);
+    };
+    add('Rows', data.total_rows ?? '—', 'All matching source detail rows; pagination and subtotals are excluded.');
+    const totals = metrics?.footing_totals;
+    const validMetrics = metrics?.status === 'ok' && Number.isSafeInteger(metrics.row_count)
+        && metrics.row_count === data.total_rows && Number.isSafeInteger(metrics.document_count)
+        && metrics.document_count >= 0 && metrics.document_count <= metrics.row_count
+        && totals && typeof totals === 'object' && !Array.isArray(totals)
+        && Object.values(totals).every(value => /^[+-]?\d+(?:\.\d+)?$/.test(String(value)))
+        && Boolean(Object.keys(totals).length) === metrics.footing_configured;
+    if (!validMetrics || !previewMetricScopeMatches(metrics.scope, spec)) {
+        const unavailable = document.createElement('span'); unavailable.textContent = 'Document/Footing totals unavailable';
+        previewMetrics.appendChild(unavailable); return;
+    }
+    add('Documents', metrics.document_count, `Unique nonblank Document IDs: ${metrics.document_column}`);
+    for (const [column, total] of Object.entries(metrics.footing_totals || {})) add(column, total, `Footing total: ${column}`);
+    if (!metrics.footing_configured) {
+        const note = document.createElement('span'); note.textContent = 'Footing not configured'; previewMetrics.appendChild(note);
+    }
+    if (metrics.missing_document_rows) {
+        const note = document.createElement('span'); note.textContent = `${metrics.missing_document_rows} rows without Document ID`; previewMetrics.appendChild(note);
+    }
+    if (spec.params.has('search') || spec.params.has('amount_min') || spec.params.has('amount_max')
+        || spec.params.has('data_quality') || spec.params.has('sunday_only')) {
+        const note = document.createElement('span'); note.className = 'preview-metric-scope'; note.textContent = 'Filtered selection'; previewMetrics.appendChild(note);
+    }
+}
+
+let previewFocusRefreshQueued = false;
+function queuePreviewFocusRefresh() {
+    if (!isPreviewOpen || previewMode !== 'raw' || document.visibilityState === 'hidden' || previewFocusRefreshQueued) return;
+    previewFocusRefreshQueued = true;
+    // Focus/visibility can describe the same browser event; coalesce that frame.
+    requestAnimationFrame(() => {
+        previewFocusRefreshQueued = false;
+        if (!isPreviewOpen || previewMode !== 'raw' || document.visibilityState === 'hidden') return;
+        invalidateDataBankCaches({clientId: getSelectedClientId(), templateId: previewTemplateId});
+        previewPageInFlight.clear();
+        setPreviewMetricsState();
+        void fetchPreviewData();
+    });
+}
+window.addEventListener('focus', queuePreviewFocusRefresh);
+document.addEventListener('visibilitychange', queuePreviewFocusRefresh);
 const templateDeleteModal = document.getElementById('templateDeleteModal');
 const templateDeleteTitle = document.getElementById('templateDeleteTitle');
 const templateDeleteStatus = document.getElementById('templateDeleteStatus');
@@ -1456,6 +1534,7 @@ function clearPreviewForAccount(message) {
     // Immediately discard the previous account's rendered rows and any late
     // response, while retaining the bounded, fully scoped page cache.
     previewRequestSequence++;
+    setPreviewMetricsState();
     isPreviewLoading = false;
     previewTotalRows = 0; previewSundayCount = 0; previewCachedRows = [];
     currentPage = 1;
@@ -1602,6 +1681,10 @@ async function openPreview(templateId, templateName, mode = 'raw') {
     previewTemplateId = templateId;
     previewTemplateName = templateName;
     previewMode = mode === 'classification' ? 'classification' : 'raw';
+    if (previewMode === 'raw') {
+        invalidateDataBankCaches({clientId, templateId});
+        previewPageInFlight.clear();
+    }
     previewLimit = parseInt(pageSizeSelect.value) || 50;
     currentPage = 1;
     isPreviewOpen = true;
@@ -1919,6 +2002,10 @@ async function loadPreviewPage(endpoint, params, cacheKey, clientId, templateId)
             throw new Error(err.detail || 'Failed to fetch preview');
         }
         const data = await res.json();
+        if (endpoint === '/api/data/preview' && (Number(data.template_id) !== Number(templateId)
+            || (data.preview_metrics?.scope && !previewMetricScopeMatches(data.preview_metrics.scope, {clientId, templateId, params})))) {
+            throw new Error('Preview scope changed. Reopen the preview and retry.');
+        }
         if (cacheGeneration === previewCacheGeneration) {
             setCachedPreviewPage(cacheKey, data, clientId, templateId);
         }
@@ -1952,6 +2039,7 @@ function buildPreviewRequestSpec(page = currentPage) {
     if (previewMode === 'raw' && previewAccountState === 'ledger' && previewLedgerAccountCode) {
         params.append('ledger_account_code', previewLedgerAccountCode);
     }
+    if (previewMode === 'raw') params.append('include_metrics', 'true');
     if (previewMode === 'classification') {
         if (classificationTypeFilter.value) params.append('classification_type', classificationTypeFilter.value);
         if (classificationAccountFilter.value.trim()) params.append('account_code', classificationAccountFilter.value.trim());
@@ -2008,6 +2096,7 @@ async function fetchPreviewData() {
     }
 
     const requestId = ++previewRequestSequence;
+    setPreviewMetricsState();
     const requestWasCached = !!getCachedPreviewPage(requestSpec.cacheKey);
     isPreviewLoading = true;
     if (!requestWasCached) {
@@ -2028,12 +2117,18 @@ async function fetchPreviewData() {
             requestSpec.templateId
         );
         if (requestId !== previewRequestSequence || !isPreviewOpen) return;
+        if (previewMode === 'raw' && (Number(data.template_id) !== Number(requestSpec.templateId)
+            || (data.preview_metrics?.scope && !previewMetricScopeMatches(data.preview_metrics.scope, requestSpec)))) {
+            throw new Error('Preview scope changed. Reopen the preview and retry.');
+        }
         
         previewTotalRows = data.total_rows;
         previewSundayCount = data.sunday_count || 0;
         previewDocumentKeyColumn = data.document_key_column || null;
         previewDateColumn = data.date_column || null;
         previewAmountColumns = data.amount_columns || [];
+        if (previewMode === 'raw' && Array.isArray(data.column_order)) templateColumnsCache[previewTemplateId] = data.column_order;
+        renderPreviewMetrics(data, requestSpec);
         const rows = data.rows || [];
         
         // Update Sunday badge
@@ -2064,6 +2159,7 @@ async function fetchPreviewData() {
         
     } catch (error) {
         if (requestId !== previewRequestSequence || error.debounced) return;
+        setPreviewMetricsState('Totals unavailable');
         console.error('Preview fetch error:', error);
         showStatus('❌ Error loading preview: ' + error.message, 'error');
         previewTableBody.innerHTML = `<tr><td colspan="100" style="text-align:center; padding:40px; color:#dc2626;">Error loading data. Please try again.</td></tr>`;
@@ -2779,6 +2875,7 @@ let clientChangeTimeout;
 window.onClientChange = function(clientId) {
     clearTimeout(clientChangeTimeout);
     previewRequestSequence++; previewOpenSequence++;
+    setPreviewMetricsState();
     finishPreviewLedgerLoading(); closePreviewLedgerOptions();
     if (templateDeleteModal.style.display === 'flex') closeTemplateDeleteModal();
     clientChangeTimeout = setTimeout(() => {

@@ -1,5 +1,15 @@
 # Changelog Archive
 
+## Preview controls — Phase 4 — 2026-11-06
+
+The eight-file scope and approach were separately approved after Phase 3 acceptance/push (`a1da3e01`). Current Client Data eye previews now show compact Rows, Documents and individually configured Footing totals beside the title. Template roles remain authoritative; no new upload choices. Filters include client/template/dates, uploaded ledger account, search, amount, Sunday and data quality. Pagination, page size and displayed subtotal lines never change these source controls. History and Cashflows classification retain their presentation.
+
+The existing preview response optionally includes exact metrics and current column order. One shared parameterized aggregate replaces the ordinary count; page, configuration and controls use an enforced read-only snapshot. Other callers retain their contract. Invalid amounts, missing metrics and failed requests remain explicit; empty scopes show genuine zeros and absent Footing configuration is named. Decimal strings are formatted without floating-point conversion. Document-restricted callers receive no hidden Footing metadata.
+
+Bounded pages remain reusable within a view; reopening or returning focus clears that scope and fetches fresh data. Scope/request guards reject wrong-context responses before caching or presentation; old figures disappear while loading or after failure. No schema/dependency changes or live financial writes. Full performance acceptance remains Phase 5.
+
+Verification: 185 backend/browser checks pass across recorded runs, including delayed-response and HTTP-query coverage. One unchanged history-button assertion was excluded because it predates Phase 4 and conflicts with existing backup/delete presentation. Coverage includes exact totals, filters, ledger isolation, missing settings, failed checks, fresh reopening/focus, page independence, safe text and 390/768/1366px headings. Python/JavaScript syntax, scoped whitespace and documentation budgets pass. Desktop/mobile screenshots were visually reviewed. A live PostgreSQL preview ran in an enforced read-only snapshot with zero writes; the selected client/template/day was empty and returned genuine zero controls. This does not establish populated-scope performance. Aadil's local test and explicit Phase 4 commit/push approval remain pending; unrelated changes are preserved.
+
 ## Stored-data reconciliation — Phase 3 — 2026-11-06
 
 The ten-file scope and approach were separately approved after Phase 2 acceptance/push (`90773636`). Import Successful now compares approved Excel detail with actual scoped SQL row counts, distinct Document IDs and each Footing total in one three-column table. Scope, completion time, missing Footing configuration, exact differences and unavailable checks remain explicit. Matching unchanged uploads open No changes required after fresh guarded verification; no detail rows are rewritten. Partial extracts never certify a complete period; absent declared coverage never triggers an unbounded count.

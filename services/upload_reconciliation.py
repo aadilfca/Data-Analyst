@@ -134,6 +134,23 @@ def aggregate_stored_controls(query, columns, client_id, template_id, start, end
     """
     if date.fromisoformat(start) > date.fromisoformat(end):
         raise ValueError('Start date must be on or before the end date.')
+    where = """cd.client_id = %s AND cd.template_id = %s AND cd.is_deleted = FALSE
+        AND cd.change_detection_status != 'deleted' AND cd.extract_date BETWEEN %s::date AND %s::date"""
+    params = [client_id, template_id, start, end]
+    if ledger_account_code is not None:
+        where += ' AND EXISTS (SELECT 1 FROM uploaded_files u WHERE u.id = cd.upload_id AND u.ledger_account_code = %s)'
+        params.append(ledger_account_code)
+    return aggregate_filtered_controls(query, columns, where, params)
+
+
+def aggregate_filtered_controls(query, columns, where_sql, where_params):
+    """Reuse exact controls with a trusted backend-built, parameterized filter.
+
+    Preview counts and financial sums must share the page's complete WHERE
+    clause; LIMIT/OFFSET and rendered subtotal rows never participate.
+    """
+    if not columns:
+        raise ValueError('Template columns are unavailable for summary controls.')
     key = resolve_document_column(columns)['column_name']
     names = [c['column_name'] for c in footing_columns(columns)]
     projection = ["NULLIF(BTRIM(cd.row_data ->> %s, %s), '') AS document_id"]
@@ -141,11 +158,7 @@ def aggregate_stored_controls(query, columns, client_id, template_id, start, end
     for index, name in enumerate(names):
         projection.append(f"NULLIF(BTRIM(cd.row_data ->> %s, %s), '') AS amount_{index}")
         params.extend([name, SOURCE_WHITESPACE])
-    params.extend([client_id, template_id, start, end])
-    account_scope = ''
-    if ledger_account_code is not None:
-        account_scope = ' AND EXISTS (SELECT 1 FROM uploaded_files u WHERE u.id = cd.upload_id AND u.ledger_account_code = %s)'
-        params.append(ledger_account_code)
+    params.extend(where_params)
     aggregates = ['COUNT(*) AS row_count', 'COUNT(DISTINCT document_id) AS document_count',
                   'COUNT(*) FILTER (WHERE document_id IS NULL) AS missing_document_rows']
     for index in range(len(names)):
@@ -154,9 +167,7 @@ def aggregate_stored_controls(query, columns, client_id, template_id, start, end
             f'COUNT(*) FILTER (WHERE amount_{index} IS NOT NULL AND amount_{index} !~ %s) AS invalid_{index}'])
         params.extend(['^' + NUMBER_PATTERN + '$'] * 2)
     result = query(f"""WITH source AS (SELECT {', '.join(projection)} FROM client_data cd
-        WHERE cd.client_id = %s AND cd.template_id = %s AND cd.is_deleted = FALSE
-        AND cd.change_detection_status != 'deleted' AND cd.extract_date BETWEEN %s::date AND %s::date
-        {account_scope}) SELECT {', '.join(aggregates)} FROM source""", tuple(params))[0]
+        WHERE {where_sql}) SELECT {', '.join(aggregates)} FROM source""", tuple(params))[0]
     if any(result[f'invalid_{index}'] for index in range(len(names))):
         raise ValueError('Stored Footing values contain invalid amounts; reconciliation is unavailable.')
     return {'row_count': int(result['row_count']), 'document_count': int(result['document_count']),

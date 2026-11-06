@@ -10,6 +10,7 @@ from openpyxl import Workbook
 
 from services import upload_reconciliation as controls
 from routers import import_export as upload
+from routers import data as databank
 
 
 COLUMNS = [
@@ -265,3 +266,117 @@ def test_missing_date_scope_never_runs_an_unbounded_database_aggregate():
     def query(*args):
         pytest.fail('Missing period must not query all current data')
     assert controls.verify_stored_controls(query, source, COLUMNS, {**scope, 'date_range': None})['status'] == 'unavailable'
+
+
+@pytest.fixture
+def preview_metrics_backend(monkeypatch):
+    state = {'calls': [], 'snapshot': False, 'snapshots': 0, 'columns': COLUMNS,
+             'total': 116, 'invalid': False}
+    def snapshot(callback):
+        state['snapshots'] += 1
+        state['snapshot'] = True
+        try: return callback(object())
+        finally: state['snapshot'] = False
+    def query(sql, params=None, **kwargs):
+        state['calls'].append((sql, params, state['snapshot']))
+        if 'FROM clients' in sql: return [{'id': 5}]
+        if 'FROM templates' in sql: return [{'id': 9, 'template_name': 'Report', 'data_purpose': 'account_ledger'}]
+        if 'FROM template_column_mappings' in sql: return state['columns']
+        if 'FROM audit_rule_documents' in sql: return [{'id': 3, 'template_id': 9}]
+        if 'FROM uploaded_files' in sql and 'FROM client_data' not in sql: return [{'id': 99}]
+        if sql.startswith('WITH source AS'):
+            return [{'row_count': state['total'], 'document_count': 29 if state['total'] else 0,
+                     'missing_document_rows': 0, 'total_0': Decimal('77108960') if state['total'] else Decimal(0),
+                     'total_1': Decimal('77108960') if state['total'] else Decimal(0),
+                     'invalid_0': 1 if state['invalid'] else 0, 'invalid_1': 0}]
+        if 'COUNT(*) as total' in sql: return [{'total': state['total']}]
+        if 'sunday_count' in sql: return [{'sunday_count': 0}]
+        if 'LIMIT %s OFFSET %s' in sql:
+            return [{'id': 1, 'row_data': {'Document': 'A', 'Debit': 1}, 'extract_amount': 1,
+                     'extract_date': '2026-01-01', 'data_quality_flag': None, 'rate_source': None}]
+        raise AssertionError(sql)
+    monkeypatch.setattr(databank.database, 'run_read_snapshot_pg', snapshot)
+    monkeypatch.setattr(databank, 'execute_query_pg', query)
+    monkeypatch.setattr(databank, 'attach_history_flags', lambda rows: None)
+    monkeypatch.setattr(databank, 'attach_assignment_flags', lambda rows: None)
+    def read(**kwargs):
+        defaults = dict(client_id=5, template_id=9, date_start='2026-01-01', date_end='2026-01-31',
+            page=1, limit=25, search=None, amount_min=None, amount_max=None, sunday_only=False,
+            data_quality=None, document_id=None, ledger_account_code=None, include_metrics=True, perf=False)
+        return databank.get_preview_rows(**{**defaults, **kwargs})
+    state['read'] = read
+    return state
+
+
+def test_preview_metrics_cover_full_filtered_scope_in_same_snapshot_without_extra_count(preview_metrics_backend):
+    state = preview_metrics_backend
+    result = state['read'](search="O'Reilly", amount_min=1.5, amount_max=900, sunday_only=True,
+                           data_quality='complete', ledger_account_code='100-1', page=4, limit=25)
+    assert result['total_rows'] == result['preview_metrics']['row_count'] == 116
+    assert result['preview_metrics']['document_count'] == 29
+    assert result['preview_metrics']['footing_totals'] == {'Debit': '77108960', 'Credit': '77108960'}
+    aggregates = [(sql, params) for sql, params, _ in state['calls'] if sql.startswith('WITH source AS')]
+    assert len(aggregates) == 1
+    sql, params = aggregates[0]
+    assert 'LIMIT' not in sql and 'OFFSET' not in sql
+    assert "O'Reilly" not in sql and "%O'Reilly%" in params
+    for fragment in ('ledger_account_code = %s', 'cd.extract_amount >= %s', 'cd.extract_amount <= %s',
+                     'EXTRACT(DOW FROM cd.extract_date) = 0', 'cd.data_quality_flag IS NULL'):
+        assert fragment in sql
+    assert not any('COUNT(*) as total' in sql for sql, _, _ in state['calls'])
+    assert state['snapshots'] == 1 and all(in_snapshot for _, _, in_snapshot in state['calls'])
+    assert result['preview_metrics']['scope']['ledger_account_code'] == '100-1'
+
+
+def test_preview_zero_results_and_absent_footing_are_explicit(preview_metrics_backend):
+    state = preview_metrics_backend
+    state['total'] = 0
+    empty = state['read']()
+    assert empty['rows'] == [] and empty['preview_metrics']['document_count'] == 0
+    assert empty['preview_metrics']['footing_totals'] == {'Debit': '0', 'Credit': '0'}
+    state['columns'] = [c for c in COLUMNS if c['data_type'] != 'Numeric']
+    unconfigured = state['read']()
+    assert unconfigured['preview_metrics']['footing_totals'] == {}
+    assert unconfigured['preview_metrics']['footing_configured'] is False
+
+
+def test_invalid_stored_amount_keeps_rows_but_never_shows_a_false_zero_footing(preview_metrics_backend):
+    state = preview_metrics_backend
+    state['invalid'] = True
+    result = state['read']()
+    assert result['total_rows'] == 116 and len(result['rows']) == 1
+    assert result['preview_metrics']['status'] == 'unavailable'
+    assert 'footing_totals' not in result['preview_metrics']
+
+
+def test_metrics_opt_out_preserves_ordinary_preview_callers(preview_metrics_backend):
+    state = preview_metrics_backend
+    result = state['read'](include_metrics=False)
+    assert 'preview_metrics' not in result and 'column_order' not in result
+    assert state['snapshots'] == 0
+    assert not any(sql.startswith('WITH source AS') for sql, _, _ in state['calls'])
+
+
+def test_preview_http_query_enables_one_snapshot_and_exact_json_totals(preview_metrics_backend):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    app = FastAPI()
+    app.include_router(databank.router)
+    with TestClient(app) as client:
+        response = client.get('/api/data/preview', params={
+            'client_id': 5, 'template_id': 9, 'date_start': '2026-01-01',
+            'date_end': '2026-01-31', 'include_metrics': 'true', 'limit': 25})
+    assert response.status_code == 200
+    assert response.json()['preview_metrics']['footing_totals']['Debit'] == '77108960'
+    assert preview_metrics_backend['snapshots'] == 1
+
+
+def test_restricted_document_preview_does_not_expose_hidden_footing_metadata(preview_metrics_backend, monkeypatch):
+    monkeypatch.setattr(databank, 'build_verification_field_policy', lambda *args: {
+        'configured': True, 'core_fields': [{'available': True, 'column_name': 'Document'}], 'optional_fields': []})
+    state = preview_metrics_backend
+    result = state['read'](document_id=3)
+    assert result['preview_metrics']['status'] == 'unavailable'
+    assert result['column_order'] == ['Document']
+    assert 'footing_totals' not in result['preview_metrics']
+    assert not any(sql.startswith('WITH source AS') for sql, _, _ in state['calls'])

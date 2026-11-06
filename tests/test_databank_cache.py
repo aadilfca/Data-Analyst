@@ -76,6 +76,23 @@ def _preview_response(page_number, limit, search=None, account=None):
     }
 
 
+def _metrics_response(query, page_number=1, limit=25):
+    response = _preview_response(page_number, limit, query.get('search', [None])[0], query.get('ledger_account_code', [None])[0])
+    scope = {key: query.get(key, [None])[0] for key in ['date_start', 'date_end', 'search', 'data_quality', 'ledger_account_code']}
+    scope.update(client_id=int(query.get('client_id', ['1'])[0]), template_id=int(query.get('template_id', ['1'])[0]),
+                 sunday_only=query.get('sunday_only') == ['true'])
+    for key in ['amount_min', 'amount_max']:
+        scope[key] = float(query[key][0]) if key in query else None
+    empty = scope['sunday_only']
+    if empty: response.update(total_rows=0, rows=[])
+    response['preview_metrics'] = {'status':'ok', 'scope':scope, 'row_count':response['total_rows'],
+        'document_count':0 if empty else 1 if scope['search'] else 13, 'missing_document_rows':0,
+        'document_column':'Document No', 'footing_configured':True,
+        'footing_totals':{'Amount':'0' if empty else '100.25' if scope['search'] else '2600.25'}}
+    response['column_order'] = ['Document No', 'Date', 'Amount']
+    return response
+
+
 def open_databank(browser, static_server, *, ledger_accounts=None):
     page = browser.new_page()
     calls = []
@@ -178,7 +195,8 @@ def open_databank(browser, static_server, *, ledger_accounts=None):
             route.fulfill(
                 status=200,
                 content_type="application/json",
-                body=json.dumps(_preview_response(page_number, limit, search, account)),
+                body=json.dumps(_metrics_response(query, page_number, limit) if query.get('include_metrics') == ['true']
+                                else _preview_response(page_number, limit, search, account)),
             )
             return
 
@@ -257,7 +275,7 @@ def test_ledger_history_selector_filters_by_account(browser, static_server):
         page.close()
 
 
-def test_databank_loads_each_scope_once_and_reuses_preview_pages(browser, static_server):
+def test_databank_reuses_pages_within_view_and_refreshes_reopened_scope(browser, static_server):
     page, calls = open_databank(browser, static_server)
     try:
         availability_before = page.evaluate(
@@ -283,7 +301,7 @@ def test_databank_loads_each_scope_once_and_reuses_preview_pages(browser, static
 
         page.evaluate("() => { previewModal.style.display = 'none'; isPreviewOpen = false; return openPreview(1, 'Invoices'); }")
         page.wait_for_function("() => document.body.innerText.includes('INV-1')")
-        assert len(preview_calls(calls, 1)) == 1
+        assert len(preview_calls(calls, 1)) == 2, 'reopening must verify current data'
 
         page.evaluate("() => { searchInput.value = 'new search'; applyPreviewFilters(); }")
         page.wait_for_function("() => document.body.innerText.includes('INV-1')")
@@ -291,6 +309,155 @@ def test_databank_loads_each_scope_once_and_reuses_preview_pages(browser, static
         assert page.locator('#previewLedgerField').is_hidden()
     finally:
         page.close()
+
+
+def open_metrics_preview(page):
+    page.evaluate("() => { pageSizeSelect.value='25'; return openPreview(1,'Invoices'); }")
+    page.wait_for_function("previewMetrics.innerText.includes('2,600.25')")
+
+
+def metric_values(page):
+    return page.locator('#previewMetrics .preview-metric-value').all_text_contents()
+
+
+def test_headline_metrics_cover_all_matching_rows_independent_of_page_size_and_subtotals(browser, static_server):
+    page,calls=open_databank(browser,static_server)
+    try:
+        open_metrics_preview(page)
+        assert metric_values(page)==['26','13','2,600.25']
+        page.locator('#nextPageBtn').click()
+        page.wait_for_function("previewTableBody.innerText.includes('INV-2')")
+        assert metric_values(page)==['26','13','2,600.25']
+        before=len(calls)
+        page.locator('#subtotalToggleCheckbox').check()
+        assert metric_values(page)==['26','13','2,600.25'] and len(calls)==before
+        page.locator('#pageSizeSelect').select_option('100')
+        page.wait_for_function("previewLimit===100 && !isPreviewLoading")
+        assert metric_values(page)==['26','13','2,600.25']
+        assert all(call['params'].get('include_metrics')==['true'] for call in calls if call['kind']=='preview')
+    finally: page.close()
+
+
+def test_headline_metrics_follow_search_amount_quality_and_sunday_filters(browser,static_server):
+    page,calls=open_databank(browser,static_server)
+    try:
+        open_metrics_preview(page)
+        page.evaluate("() => { searchInput.value='needle'; amountMin.value='1.50'; dataQualityFilter.value='complete'; applyPreviewFilters(); }")
+        page.wait_for_function("previewMetrics.innerText.includes('100.25')")
+        assert metric_values(page)==['1','1','100.25']
+        assert 'Filtered selection' in page.locator('#previewMetrics').inner_text()
+        page.locator('#sundayOnlyCheckbox').check()
+        page.wait_for_function("!isPreviewLoading && previewTotalRows===0")
+        assert metric_values(page)==['0','0','0']
+        last=[c for c in calls if c['kind']=='preview'][-1]['params']
+        assert last['amount_min']==['1.50'] and last['data_quality']==['complete'] and last['sunday_only']==['true']
+    finally: page.close()
+
+
+def test_focus_refresh_clears_old_totals_and_obtains_fresh_scope(browser,static_server):
+    page,_=open_databank(browser,static_server)
+    waiting=[]
+    try:
+        open_metrics_preview(page)
+        page.wait_for_function('previewPageInFlight.size===0')
+        def refreshed(route):
+            query=parse_qs(urlparse(route.request.url).query)
+            if query.get('page')==['1']: waiting.append((route,query))
+            else: route.fallback()
+        page.route('**/api/data/preview?*',refreshed)
+        page.evaluate("window.dispatchEvent(new Event('focus'))")
+        page.wait_for_function("previewMetrics.innerText==='Loading totals…'")
+        assert '2,600.25' not in page.locator('#previewMetrics').inner_text()
+        page.wait_for_timeout(30)
+        route,query=waiting[0]
+        response=_metrics_response(query)
+        response['preview_metrics']['footing_totals']['Amount']='9000.01'
+        route.fulfill(json=response)
+        page.wait_for_function("previewMetrics.innerText.includes('9,000.01')")
+        assert metric_values(page)==['26','13','9,000.01']
+    finally: page.close()
+
+
+@pytest.mark.parametrize('failure',['scope','network','unavailable'])
+def test_wrong_scope_or_failed_summary_never_retains_previous_figures(browser,static_server,failure):
+    page,_=open_databank(browser,static_server)
+    try:
+        open_metrics_preview(page)
+        page.wait_for_function('previewPageInFlight.size===0')
+        def failed(route):
+            query=parse_qs(urlparse(route.request.url).query)
+            response=_metrics_response(query)
+            if failure=='network': route.fulfill(status=503,json={'detail':'Offline'}); return
+            if failure=='scope': response['preview_metrics']['scope']['client_id']=2
+            else: response['preview_metrics']={'status':'unavailable','scope':response['preview_metrics']['scope']}
+            route.fulfill(json=response)
+        page.route('**/api/data/preview?*',failed)
+        page.evaluate("window.dispatchEvent(new Event('focus'))")
+        page.wait_for_function("!isPreviewLoading && previewMetrics.innerText.toLowerCase().includes('unavailable')")
+        assert '2,600.25' not in page.locator('#previewMetrics').inner_text()
+        assert '13' not in metric_values(page)
+        if failure == 'scope':
+            assert not page.evaluate("[...previewPageCache.values()].some(e=>e.data.preview_metrics?.scope.client_id===2)")
+    finally: page.close()
+
+
+def test_late_metrics_cannot_overwrite_a_new_filtered_selection(browser,static_server):
+    page,_=open_databank(browser,static_server)
+    waiting=[]
+    try:
+        open_metrics_preview(page)
+        page.wait_for_function('previewPageInFlight.size===0')
+        def defer_old_scope(route):
+            query=parse_qs(urlparse(route.request.url).query)
+            if not query.get('search'): waiting.append((route,query))
+            else: route.fallback()
+        page.route('**/api/data/preview?*',defer_old_scope)
+        page.evaluate("window.dispatchEvent(new Event('focus'))")
+        page.wait_for_function("previewMetrics.innerText==='Loading totals…'")
+        page.evaluate("() => { searchInput.value='needle'; applyPreviewFilters(); }")
+        page.wait_for_function("previewMetrics.innerText.includes('100.25')")
+        assert waiting
+        route,query=waiting[0]
+        route.fulfill(json=_metrics_response(query))
+        page.wait_for_function('previewPageInFlight.size===0')
+        assert metric_values(page)==['1','1','100.25']
+        assert 'Filtered selection' in page.locator('#previewMetrics').inner_text()
+    finally: page.close()
+
+
+def test_footing_configuration_and_metric_labels_are_safe_and_explicit(browser,static_server):
+    page,_=open_databank(browser,static_server)
+    try:
+        open_metrics_preview(page)
+        def unconfigured(route):
+            query=parse_qs(urlparse(route.request.url).query); response=_metrics_response(query)
+            response['preview_metrics'].update(footing_configured=False,footing_totals={})
+            route.fulfill(json=response)
+        page.route('**/api/data/preview?*',unconfigured)
+        page.evaluate("window.dispatchEvent(new Event('focus'))")
+        page.wait_for_function("previewMetrics.innerText.includes('Footing not configured')")
+        assert metric_values(page)==['26','13']
+        page.evaluate("""() => {
+            const spec=buildPreviewRequestSpec();
+            renderPreviewMetrics({total_rows:1,preview_metrics:{status:'ok',scope:{client_id:spec.clientId,template_id:1,
+              date_start:spec.params.get('date_start'),date_end:spec.params.get('date_end'),sunday_only:false},
+              row_count:1,document_count:1,document_column:'<img src=x>',footing_configured:true,
+              footing_totals:{'<img src=x onerror=alert(1)>':'0.00000001'}}},spec);
+        }""")
+        assert page.locator('#previewMetrics img').count()==0
+        assert '0.00000001' in metric_values(page)
+    finally: page.close()
+
+
+@pytest.mark.parametrize('width',[390,768,1366])
+def test_compact_preview_metrics_fit_the_existing_heading(browser,static_server,width):
+    page,_=open_databank(browser,static_server)
+    try:
+        page.set_viewport_size({'width':width,'height':900})
+        open_metrics_preview(page)
+        assert page.locator('#previewMetrics').evaluate('(el)=>el.scrollWidth<=el.clientWidth')
+        assert page.locator('#previewMetrics').evaluate('(el)=>el.getBoundingClientRect().right<=document.querySelector("#previewModal .modal-content").getBoundingClientRect().right')
+    finally: page.close()
 
 
 ACCOUNTS = [{'account_code':'A-1','account_name':'Cash <Alpha>'},

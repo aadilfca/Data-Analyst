@@ -11,6 +11,7 @@ import asyncio
 import calendar
 import json
 import time
+import inspect
 from functools import wraps
 import database
 # Voucher Supporting-Document Linking (Phase 2 of 6): reuses verification.py's own
@@ -20,8 +21,20 @@ from routers.verification import get_assignment_status_map
 from routers.audit_rules import build_verification_field_policy
 from services.cash_bank_classification import load_cashflow_classification_preview, normalize_cashflow_account_selection
 from routers.auth import require_admin
+from services.upload_reconciliation import aggregate_filtered_controls, footing_columns
 
 router = APIRouter()
+
+
+def _preview_read_snapshot(fn):
+    """Opt-in summaries and their page share one read-only database snapshot."""
+    signature = inspect.signature(fn)
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        if signature.bind_partial(*args, **kwargs).arguments.get('include_metrics') is True:
+            return database.run_read_snapshot_pg(lambda connection: fn(*args, **kwargs))
+        return fn(*args, **kwargs)
+    return wrapped
 
 
 def _preview_perf_diagnostics(fn):
@@ -769,6 +782,7 @@ def get_template_backup_rows(
 
 @router.get("/api/data/preview")
 @_preview_perf_diagnostics
+@_preview_read_snapshot
 def get_preview_rows(
     client_id: int = Query(..., description="Client ID"),
     template_id: int = Query(..., description="Template ID"),
@@ -783,6 +797,7 @@ def get_preview_rows(
     data_quality: Optional[str] = Query(None, description="Filter by data_quality_flag: 'complete' (flag is null) or 'incomplete'"),
     document_id: Optional[int] = Query(None, description="Optional Audit Rules Document used to limit the returned fields"),
     ledger_account_code: Optional[str] = None,
+    include_metrics: bool = Query(False, description="Include full-selection reconciliation metrics"),
     perf: bool = Query(False, include_in_schema=False)
 ):
     """
@@ -925,13 +940,37 @@ def get_preview_rows(
 
     where_sql = " AND ".join(final_where)
 
-    # Get total count
-    count_sql = f"SELECT COUNT(*) as total FROM client_data cd WHERE {where_sql}"
-    total_result = execute_query_pg(count_sql, final_params)
-    total_count = total_result[0]['total'] if total_result else 0
+    # Current Data Bank opts in; existing Verification/export callers retain
+    # their count contract. Never expose hidden fields through a Document view.
+    metrics = None
+    total_count = None
+    if include_metrics is True:
+        scope = {'client_id': client_id, 'template_id': template_id, 'date_start': date_start,
+                 'date_end': date_end, 'search': search, 'amount_min': amount_min, 'amount_max': amount_max,
+                 'sunday_only': sunday_only, 'data_quality': data_quality, 'ledger_account_code': ledger_account_code}
+        metrics = {'status': 'unavailable', 'scope': scope}
+        if verification_column_names is None:
+            try:
+                metrics.update(aggregate_filtered_controls(execute_query_pg, template_cols, where_sql, final_params))
+                total_count = metrics['row_count']
+                metrics.update(status='ok', document_column=doc_key_column,
+                               footing_configured=bool(footing_columns(template_cols)))
+            except (ValueError, KeyError, TypeError):
+                # A malformed stored amount cannot masquerade as a zero total.
+                # The source rows and ordinary count remain available for review.
+                pass
+
+    if total_count is None:
+        count_sql = f"SELECT COUNT(*) as total FROM client_data cd WHERE {where_sql}"
+        total_result = execute_query_pg(count_sql, final_params)
+        total_count = total_result[0]['total'] if total_result else 0
+    metrics_response = ({'preview_metrics': metrics,
+                         'column_order': ([c['column_name'] for c in template_cols] if verification_column_names is None
+                                          else verification_column_names)} if metrics is not None else {})
 
     if total_count == 0:
         return {
+            **metrics_response,
             "template_id": template_id,
             "template_name": template[0]['template_name'],
             "total_rows": 0,
@@ -999,6 +1038,7 @@ def get_preview_rows(
     attach_assignment_flags(result_rows)
 
     response = {
+        **metrics_response,
         "template_id": template_id,
         "template_name": template[0]['template_name'],
         "total_rows": total_count,
