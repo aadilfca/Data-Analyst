@@ -15,6 +15,8 @@ Every finding from a review session is recorded here — never fixed silently, n
 
 | Date | Module | Finding | Severity |
 |------|--------|---------|----------|
+| 2026-11-06 | Upload / numeric comparison | RESOLVED in working copy: Numeric values compare by exact decimal meaning; blank differs from zero; new no-Line-ID rows distinguish blank and zero. Live acceptance pending server restart. | Fix |
+| 2026-11-06 | Upload / correction history | RESOLVED in working copy: Unique descriptive anchors pair safe numeric corrections; Data Bank derives legacy replacement pairs as changes without editing raw history. Live acceptance pending server restart. | Fix |
 | 2026-11-04 | Purchase Order / mapping | Receive date is configured Date but contains numeric received quantities in all 8,013 checked backup/source rows; Receive Quantity is blank. Re-upload preserves values. Review template/source mapping separately. | Fix |
 | 2026-11-04 | Data Bank / history indicator | Fresh rows show a history warning because attach_history_flags counts INSERT audit events. Changed/Deleted history is empty; distinguish fresh creation from prior revisions. | Fix |
 | 2026-11-04 | Upload / attribution | Checked upload metadata uses uploaded_by=app while fresh row INSERT audits use Analyst. Timestamps are fresh; authenticated-operator attribution needs a separate correction. | Fix |

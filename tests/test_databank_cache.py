@@ -93,7 +93,7 @@ def _metrics_response(query, page_number=1, limit=25):
     return response
 
 
-def open_databank(browser, static_server, *, ledger_accounts=None):
+def open_databank(browser, static_server, *, ledger_accounts=None, inferred_replacement=False):
     page = browser.new_page()
     calls = []
 
@@ -155,7 +155,20 @@ def open_databank(browser, static_server, *, ledger_accounts=None):
             history_page = int(query.get('page', ['1'])[0])
             calls.append({'kind':'history','page':history_page,'params':query})
             action = query.get('action', ['all'])[0]
-            row_action = 'deleted' if action == 'deleted' or (action == 'all' and history_page == 2) else 'changed'
+            paired_replacement = inferred_replacement and action != 'deleted' and history_page == 1
+            row_action = 'deleted' if paired_replacement or action == 'deleted' or (action == 'all' and history_page == 2) else 'changed'
+            total = 0 if inferred_replacement and action == 'deleted' else 1 if action != 'all' else 26
+            rows = [] if (action == 'changed' and history_page > 1) or (inferred_replacement and action == 'deleted') else [{
+                'id': history_page,
+                'client_data_id': 100 + history_page,
+                'action': row_action,
+                'display_action': 'changed' if paired_replacement else row_action,
+                'replacement_client_data_id': 200 + history_page if paired_replacement else None,
+                'changed_at': '2026-11-04T10:30:00+00:00',
+                'changed_by': 'Analyst',
+                'row_data': {'Document No': '<old-invoice>', 'Date':'2026-01-01', 'Amount': 100},
+                'changed_fields': {'Amount': {'old_value':100, 'new_value':125}} if row_action == 'changed' or paired_replacement else None,
+            }]
             route.fulfill(status=200, content_type='application/json', body=json.dumps({
                 'client_id': 1,
                 'template_id': 1,
@@ -169,17 +182,9 @@ def open_databank(browser, static_server, *, ledger_accounts=None):
                 ],
                 'page': history_page,
                 'limit': 25,
-                'total': 1 if action != 'all' else 26,
-                'total_pages': 1 if action != 'all' else 2,
-                'rows': [] if action == 'changed' and history_page > 1 else [{
-                    'id': history_page,
-                    'client_data_id': 100 + history_page,
-                    'action': row_action,
-                    'changed_at': '2026-11-04T10:30:00+00:00',
-                    'changed_by': 'Analyst',
-                    'row_data': {'Document No': '<old-invoice>', 'Date':'2026-01-01', 'Amount': 100},
-                    'changed_fields': {'Amount': {'old_value':100, 'new_value':125}} if row_action == 'changed' else None,
-                }],
+                'total': total,
+                'total_pages': max(1, (total + 24) // 25),
+                'rows': rows,
             }))
             return
         if path.endswith('/api/data/ledger-accounts'):
@@ -245,6 +250,27 @@ def test_changed_deleted_history_view_is_scoped_and_paginated(browser, static_se
         assert [call['page'] for call in calls if call['kind'] == 'history'] == [1, 1, 1, 1, 2]
         page.locator('#closeHistoryBtn').click()
         assert page.locator('#historyModal').is_hidden()
+    finally:
+        page.close()
+
+
+def test_replaced_deleted_line_is_shown_as_changed_without_rewriting_audit_action(browser, static_server):
+    page, calls = open_databank(browser, static_server, inferred_replacement=True)
+    try:
+        page.locator('button[title="Changed/Deleted data"]').click()
+        page.wait_for_selector('#historyModal', state='visible')
+        page.wait_for_function("() => document.querySelector('#historyTableBody').innerText.includes('Changed')")
+        body = page.locator('#historyTableBody').inner_text()
+        assert '100' in body and '125' in body
+
+        page.locator('#historyActionFilter').select_option('changed')
+        page.wait_for_function("() => document.querySelector('#historyTableBody').innerText.includes('Changed')")
+        assert [call['params']['action'][0] for call in calls if call['kind'] == 'history'][-1] == 'changed'
+
+        page.locator('#historyActionFilter').select_option('deleted')
+        page.wait_for_function("() => document.querySelector('#historyTableBody').innerText.includes('No changed or deleted')")
+        assert 'Deleted' not in page.locator('#historyTableBody').inner_text()
+        assert [call['params']['action'][0] for call in calls if call['kind'] == 'history'][-1] == 'deleted'
     finally:
         page.close()
 

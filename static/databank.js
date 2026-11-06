@@ -1782,7 +1782,8 @@ function renderUploadHistory(data) {
             const rowData = entry.row_data || {};
             const changes = entry.changed_fields || null;
             const tr = document.createElement('tr');
-            const isDeleted = entry.action === 'deleted';
+            const displayAction = entry.display_action || entry.action;
+            const isDeleted = displayAction === 'deleted';
             tr.className = isDeleted ? 'history-row-deleted' : 'history-row-changed';
             const actionCell = document.createElement('td');
             actionCell.textContent = isDeleted ? 'Deleted' : 'Changed';

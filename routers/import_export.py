@@ -1341,11 +1341,11 @@ def count_new_and_existing_rows(client_id: int, template_id: int, rows: list, te
 
 # ---------- CHANGE DETECTION (Phase 3: document-level grouping using document_group_id) ----------
 def _row_comparison_fingerprint(row_data: dict) -> tuple:
-    """Return the exact normalized values used by the legacy row comparison.
+    """Return the stable raw-value fingerprint used by identity guards.
 
-    Blank/missing values are omitted because the existing comparison treats both
-    as an empty string. Sorting the pairs makes row-order changes within one
-    document irrelevant while retaining exact value comparison.
+    Blank/missing values are omitted for backward-compatible identity and
+    stale-plan guards. Comparison-only numeric normalization stays separate so
+    it cannot invalidate those stored-row concurrency checks.
     """
     normalized = []
     for field, value in row_data.items():
@@ -1353,6 +1353,37 @@ def _row_comparison_fingerprint(row_data: dict) -> tuple:
         if value_text:
             normalized.append((field, value_text))
     return tuple(sorted(normalized))
+
+
+def _numeric_comparison_value(value):
+    """Parse one valid Numeric value without rounding, preserving blank as None."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    try:
+        if isinstance(value, bool):
+            raise InvalidOperation
+        number = Decimal(str(value).strip())
+        return number if number.is_finite() else ('invalid_numeric', str(value).strip())
+    except (InvalidOperation, TypeError, ValueError):
+        return ('invalid_numeric', str(value).strip())
+
+
+def _source_identity_fingerprint(row_data: dict, template_cols: list) -> tuple:
+    """Build a versioned identity view for new lines, distinguishing blank from zero."""
+    values = dict(_row_comparison_fingerprint(row_data or {}))
+    for column in template_cols:
+        if column.get('data_type') != 'Numeric':
+            continue
+        name = column['column_name']
+        number = _numeric_comparison_value((row_data or {}).get(name))
+        if number is None:
+            values[name] = ('numeric_blank',)
+        elif isinstance(number, Decimal):
+            canonical = Decimal(0) if number == 0 else number.normalize()
+            values[name] = ('numeric', str(canonical))
+        else:
+            values[name] = number
+    return tuple(sorted(values.items()))
 
 
 def _comparison_column_names(template_cols: list, request_mappings: list, template: dict) -> set:
@@ -1395,6 +1426,25 @@ def _formatting_comparison_values(row_data, template_cols, delimiter, order,
     values = dict(_row_comparison_fingerprint(row_data))
     if included_fields is not None:
         values = {name: value for name, value in values.items() if name in included_fields}
+    for column in template_cols:
+        if column.get('data_type') != 'Numeric':
+            continue
+        name = column['column_name']
+        if included_fields is not None and name not in included_fields:
+            continue
+        raw = row_data.get(name)
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            values.pop(name, None)
+            continue
+        numeric = _numeric_comparison_value(raw)
+        if numeric is None:
+            values.pop(name, None)
+        elif isinstance(numeric, Decimal):
+            values[name] = ('numeric', numeric)
+        else:
+            # Invalid legacy values remain comparable only to the same raw
+            # text; valid amounts must never be rounded to make a match.
+            values[name] = numeric
     date_columns = [c['column_name'] for c in template_cols if c.get('data_type') == 'Date']
     context = _ledger_context.get()
     primary_column = (context['roles']['date'] if context else
@@ -1691,12 +1741,19 @@ def _canonical_source_identity(
     """Return a compact identity for the one canonical client_data row.
 
     A configured line identifier gives a stable identity across corrections and
-    reordering. Templates without one fall back to the row fingerprint because
-    their document key alone cannot distinguish multiple lines in one document.
+    reordering. New rows without one use a versioned, type-aware fingerprint so
+    blank and zero remain distinct; stored identities are never recomputed here.
     """
     line_key = _comparison_line_key(template_cols, row_data, template_id)
     if not get_line_key_column(template_cols):
-        line_key = f"{line_key}|fingerprint:{_row_fingerprint_token(row_data)}"
+        identity_payload = json.dumps(
+            _source_identity_fingerprint(row_data, template_cols),
+            ensure_ascii=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        identity_fingerprint = hashlib.sha256(identity_payload.encode("utf-8")).hexdigest()
+        line_key = f"{line_key}|fingerprint:v2:{identity_fingerprint}"
         if occurrence_index > 1:
             line_key = f"{line_key}|occurrence:{occurrence_index}"
     return hashlib.sha256(line_key.encode("utf-8")).hexdigest()
@@ -1712,7 +1769,7 @@ def _canonical_source_identities(
     identities = []
     for row_data in row_datas:
         document_group_id = get_document_group_id(template_cols, row_data, template_id)
-        fingerprint = _row_fingerprint_token(row_data)
+        fingerprint = _source_identity_fingerprint(row_data, template_cols)
         occurrence_key = (document_group_id, fingerprint)
         occurrences[occurrence_key] = occurrences.get(occurrence_key, 0) + 1
         identities.append(
@@ -2196,7 +2253,7 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
             raise HTTPException(400, 'Every transaction must have a valid date inside the declared complete-report coverage.')
         if date_text:
             incoming_dates.append(date_text)
-        occurrence_fingerprint = _row_comparison_fingerprint(row_data)
+        occurrence_fingerprint = _source_identity_fingerprint(row_data, template_cols)
         if included_fields is not None:
             occurrence_fingerprint = tuple(item for item in occurrence_fingerprint if item[0] in included_fields)
         occurrence_key = (document_group_id, occurrence_fingerprint)
@@ -2342,8 +2399,8 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
             candidates = set().union(*(old_values[id(r)].keys() for r in current),
                                      *(new_values[id(r)].keys() for r in uploaded))
             fields = sorted(field for field in candidates if
-                Counter(str(old_values[id(r)].get(field, '')) for r in current) !=
-                Counter(str(new_values[id(r)].get(field, '')) for r in uploaded))
+                Counter(old_values[id(r)].get(field, '') for r in current) !=
+                Counter(new_values[id(r)].get(field, '') for r in uploaded))
             account_text = f", account '{str(account)[:80]}'" if account is not None else ''
             raise HTTPException(409,
                 f"Ambiguous transaction correction for voucher '{str(voucher)[:80]}'{account_text}: "
@@ -2359,7 +2416,23 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
             # Include the resolved date when known, avoiding equal text with
             # different DMY/MDY interpretations being accepted as unchanged.
             primary = record.get('comparison_date' if stored else 'date_text')
-            fingerprint = _row_comparison_fingerprint(raw)
+            fingerprint_values = dict(_row_comparison_fingerprint(raw))
+            # Keep the exact-match pass raw-format-sensitive, but do not let
+            # the legacy fingerprint's falsy-value handling equate Numeric 0
+            # with a blank cell. Numeric format equivalence belongs in the
+            # following comparison pass only.
+            for column in template_cols:
+                if column.get('data_type') != 'Numeric':
+                    continue
+                name = column['column_name']
+                if included_fields is not None and name not in included_fields:
+                    continue
+                value = raw.get(name)
+                if value is None or (isinstance(value, str) and not value.strip()):
+                    fingerprint_values.pop(name, None)
+                else:
+                    fingerprint_values[name] = str(value).strip()
+            fingerprint = tuple(sorted(fingerprint_values.items()))
             if included_fields is not None:
                 fingerprint = tuple(item for item in fingerprint if item[0] in included_fields)
             return fingerprint, primary
@@ -2415,6 +2488,42 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
             # Pair only where the document and available row anchors make a
             # correction safe. Ambiguous corrections block correction uploads;
             # complete reports retain unpaired lines as explicit add/remove.
+            # Exact and decimal-equivalent matches have already been removed,
+            # so a unique non-Numeric description can safely identify a line
+            # whose amount/rate changed. Repeated descriptions stay ambiguous.
+            numeric_columns = {
+                column['column_name'] for column in template_cols
+                if column.get('data_type') == 'Numeric'
+            }
+
+            def descriptive_anchor(record, stored):
+                values = (old_values if stored else new_values)[id(record)]
+                anchor = tuple(sorted(
+                    (field, value) for field, value in values.items()
+                    if field not in numeric_columns
+                ))
+                return anchor or None
+
+            old_anchors = {}
+            for record in unmatched_existing:
+                anchor = descriptive_anchor(record, True)
+                if anchor is not None:
+                    old_anchors.setdefault(anchor, []).append(record)
+            new_anchors = {}
+            for record in unmatched_incoming:
+                anchor = descriptive_anchor(record, False)
+                if anchor is not None:
+                    new_anchors.setdefault(anchor, []).append(record)
+            for new in list(unmatched_incoming):
+                anchor = descriptive_anchor(new, False)
+                old_matches = old_anchors.get(anchor, [])
+                new_matches = new_anchors.get(anchor, [])
+                if len(old_matches) == len(new_matches) == 1:
+                    old = old_matches[0]
+                    pairs.append((old, new))
+                    unmatched_existing.remove(old)
+                    unmatched_incoming.remove(new)
+
             account_column = next((column["column_name"] for column in template_cols
                                    if str(column["column_name"]).strip().casefold()
                                    in {"account code", "account_code", "account detail", "ledger code"}), None)
@@ -2439,7 +2548,7 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
                         ambiguous_correction(incoming_matches, existing_matches, new['row_data'].get(account_column))
             elif len(unmatched_incoming) == len(unmatched_existing) == 1:
                 pairs.append((unmatched_existing.pop(), unmatched_incoming.pop()))
-            elif not coverage:
+            elif not coverage and unmatched_incoming and unmatched_existing:
                 ambiguous_correction(unmatched_incoming, unmatched_existing)
         for old, new in pairs:
             result["changed"].append(changed_item(old, new))
@@ -2665,14 +2774,18 @@ def apply_rate_derivation(row_data: dict, template_cols: list, rate_source: Opti
     missing/blank/0 leaves Rate as None -- a normal "Rate unavailable" outcome,
     never an error/rejection (Rate is not one of the 3 critical fields
     document_id/amount/date checked by find_critical_blank_reasons()).
-    'imported': Rate is already whatever came from the mapped Excel "Rate"
-    column (or absent, if the file has no such column) -- just round it.
+    'imported': Rate remains exactly as supplied by the mapped Excel "Rate"
+    column (or absent, if the file has no such column). Precision settings apply
+    to derived Rates only.
     """
     if rate_source is None:
         return
     rate_col = find_named_column(template_cols, 'Rate')
     if not rate_col:
         return  # this template has no Rate column to populate
+
+    if rate_source == 'imported':
+        return
 
     if rate_source == 'derived':
         qty_col = find_named_column(template_cols, 'Quantity')
@@ -2694,14 +2807,6 @@ def apply_rate_derivation(row_data: dict, template_cols: list, rate_source: Opti
             row_data['Rate'] = None
             return
         row_data['Rate'] = round(amount / qty, rate_precision)
-    else:  # 'imported'
-        rate_raw = row_data.get('Rate')
-        if rate_raw in (None, ''):
-            return
-        try:
-            row_data['Rate'] = round(float(rate_raw), rate_precision)
-        except (TypeError, ValueError):
-            pass  # leave whatever non-numeric value was there -- not this function's concern
 
 
 def reorder_row_data_by_template(row_data: dict, template_cols: list) -> dict:
@@ -2772,7 +2877,7 @@ def _deduplicate_exact_rows(
         row_data = _canonical_import_row_data(
             row, col_mapping, template_cols, rate_source, rate_precision
         )
-        fingerprint = _row_fingerprint_token(row_data)
+        fingerprint = _source_identity_fingerprint(row_data, template_cols)
         occurrence = seen.get(fingerprint)
         if occurrence is None:
             seen[fingerprint] = {
@@ -5363,7 +5468,7 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
 
                 # Compute document_group_id from the first column value
                 doc_group_id = get_document_group_id(template_cols, row_data, request.template_id)
-                occurrence_key = (doc_group_id, _row_fingerprint_token(row_data))
+                occurrence_key = (doc_group_id, _source_identity_fingerprint(row_data, template_cols))
                 first_upload_occurrences[occurrence_key] = (
                     first_upload_occurrences.get(occurrence_key, 0) + 1
                 )

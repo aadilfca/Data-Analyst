@@ -9547,6 +9547,20 @@ Reports/nav versions are 63/25 across all 19 shared navigation consumers; other 
 **Verification:** Manual-edit UI tests pass (4); code-batch API tests pass (16); JavaScript/Python syntax checks and `git diff --check` pass. The full account-flow safety module reports one unrelated Income Statement note-role failure; local-server acceptance is pending.
 
 
+## Numeric comparison and Rate preservation — Phase 1 — 2026-11-06
+
+**Implementation:** Upload reconciliation compares configured Numeric fields by exact decimal value without rounding, keeps blank distinct from zero, and retains Text formatting such as leading zeros. New no-Line-ID source identities use a versioned typed fingerprint so a newly added zero line cannot collide with an existing blank line; stored identities and raw concurrency fingerprints remain unchanged. Imported ERP Rates are preserved exactly; derived Rates retain configured rounding. Updated footing regression expectations to match confirmed vertical-footing behavior. No schema, dependency or file-map changes.
+
+**Verification:** Seven focused comparison and footing regressions pass; `py_compile` and `git diff --check` pass. The broader two-file run encountered failures and was interrupted during slow cases, so those failures remain unattributed. Live acceptance is pending: the running app returned old rounded Rate behavior, so no accounting-row import was submitted. The source workbook is unchanged; staged upload file 733 remains in the app.
+
+
+## Unique line matching and history display — 2026-11-06
+
+**Implementation:** After exact and numeric-equivalent matches, upload comparison pairs remaining lines only when their non-Numeric row description is unique within the same document. This records safe Rate/Amount corrections as Changed for Purchase Order, Store Receiving and Transaction Report; repeated indistinguishable descriptions remain ambiguous. The Data Bank history API derives a Changed display for uniquely matched old-deleted/new-active pairs from the same replacement upload. The browser shows old-to-new values while the stored audit action remains untouched. No schema or dependency changes.
+
+**Verification:** Ten focused upload/history regressions pass (five subtests), including unique and ambiguous anchors, blank-plus-zero preservation, all three template shapes, history filtering and display. Python syntax, JavaScript syntax and `git diff --check` pass. The live server still returned the old history classification (3 deleted rows alongside the changed filter), so live acceptance awaits server restart; no data was edited.
+
+
 ## Trial Balance code-edit error popup — 2026-11-03
 
 **Implementation:** Replaced the validation sentence inside the narrow account-code cell with a compact fixed popup positioned beside that cell. The popup stays until dismissed or the editor is reopened, announces the error accessibly, follows the cell during scroll/resize, and does not change the table row or column size. Trial Balance script cache version is 55; code validation and API behavior are unchanged.

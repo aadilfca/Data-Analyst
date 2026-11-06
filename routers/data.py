@@ -654,6 +654,11 @@ def get_client_data_history(
     )
     if not template:
         raise HTTPException(404, "Template not found or inactive")
+    columns = get_template_columns_ordered(template_id)
+    numeric_fields = [
+        column["column_name"] for column in columns
+        if column.get("data_type") == "Numeric"
+    ]
 
     action = (action or "all").strip().lower()
     if action not in {"all", "changed", "deleted"}:
@@ -676,9 +681,44 @@ def get_client_data_history(
 
     where = ["h.client_id = %s", "h.template_id = %s"]
     params = [client_id, template_id]
-    if action != "all":
-        where.append("h.action = %s")
-        params.append(action)
+    # Old imports sometimes stored a rate-only replacement as a Deleted row
+    # plus a newly inserted active row. Present that pair as a change only
+    # when the non-Numeric row description is unique on both sides. This is a
+    # read-only view over the audit records; the underlying history is intact.
+    replacement_match_sql = None
+    if numeric_fields and template[0].get("data_purpose") != "account_ledger":
+        replacement_match_sql = """(
+            h.action = 'deleted' AND h.replacing_upload_id IS NOT NULL
+            AND (
+                SELECT COUNT(*) FROM client_data r
+                WHERE r.client_id = h.client_id AND r.template_id = h.template_id
+                  AND r.upload_id = h.replacing_upload_id AND r.is_deleted = FALSE
+                  AND r.row_data <> h.row_data
+                  AND (r.row_data - %s::text[]) = (h.row_data - %s::text[])
+            ) = 1
+            AND (
+                SELECT COUNT(*) FROM client_data_history h2
+                WHERE h2.client_id = h.client_id AND h2.template_id = h.template_id
+                  AND h2.action = 'deleted'
+                  AND h2.replacing_upload_id = h.replacing_upload_id
+                  AND (h2.row_data - %s::text[]) = (h.row_data - %s::text[])
+            ) = 1
+        )"""
+
+    if action == "changed":
+        if replacement_match_sql:
+            where.append(f"(h.action = %s OR {replacement_match_sql})")
+            params.extend(["changed", numeric_fields, numeric_fields, numeric_fields, numeric_fields])
+        else:
+            where.append("h.action = %s")
+            params.append("changed")
+    elif action == "deleted":
+        if replacement_match_sql:
+            where.append(f"(h.action = %s AND NOT {replacement_match_sql})")
+            params.extend(["deleted", numeric_fields, numeric_fields, numeric_fields, numeric_fields])
+        else:
+            where.append("h.action = %s")
+            params.append("deleted")
     if ledger_account_code is not None:
         where.append("COALESCE(h.ledger_account_code, uf.ledger_account_code) = %s")
         params.append(ledger_account_code)
@@ -702,6 +742,38 @@ def get_client_data_history(
            LIMIT %s OFFSET %s""",
         (*params, limit, offset),
     ) if total else []
+
+    replacement_rows_by_history_id = {}
+    deleted_ids = [row["id"] for row in rows if row.get("action") == "deleted"]
+    if deleted_ids and replacement_match_sql:
+        replacements = execute_query_pg("""
+            SELECT h.id AS history_id, r.id AS replacement_client_data_id,
+                   r.row_data AS replacement_row_data
+            FROM client_data_history h
+            JOIN client_data r
+              ON r.client_id = h.client_id AND r.template_id = h.template_id
+             AND r.upload_id = h.replacing_upload_id AND r.is_deleted = FALSE
+             AND r.row_data <> h.row_data
+             AND (r.row_data - %s::text[]) = (h.row_data - %s::text[])
+            WHERE h.id = ANY(%s) AND h.action = 'deleted'
+              AND h.replacing_upload_id IS NOT NULL
+              AND (
+                  SELECT COUNT(*) FROM client_data_history h2
+                  WHERE h2.client_id = h.client_id AND h2.template_id = h.template_id
+                    AND h2.action = 'deleted'
+                    AND h2.replacing_upload_id = h.replacing_upload_id
+                    AND (h2.row_data - %s::text[]) = (h.row_data - %s::text[])
+              ) = 1
+            """, (numeric_fields, numeric_fields, deleted_ids, numeric_fields, numeric_fields))
+        grouped_replacements = {}
+        for replacement in replacements:
+            grouped_replacements.setdefault(replacement["history_id"], []).append(replacement)
+        replacement_rows_by_history_id = {
+            history_id: candidates[0]
+            for history_id, candidates in grouped_replacements.items()
+            if len(candidates) == 1
+        }
+
     for row in rows:
         for json_field in ("row_data", "changed_fields"):
             value = row.get(json_field)
@@ -713,7 +785,30 @@ def get_client_data_history(
         changed_at = row.get("changed_at")
         if isinstance(changed_at, datetime):
             row["changed_at"] = changed_at.isoformat()
-    columns = get_template_columns_ordered(template_id)
+        row["display_action"] = row["action"]
+        replacement = replacement_rows_by_history_id.get(row["id"])
+        if replacement:
+            new_row_data = replacement["replacement_row_data"]
+            if isinstance(new_row_data, str):
+                try:
+                    new_row_data = json.loads(new_row_data)
+                except (TypeError, ValueError):
+                    new_row_data = None
+            if isinstance(new_row_data, dict):
+                old_row_data = row.get("row_data") or {}
+                changes = {
+                    column["column_name"]: {
+                        "old_value": old_row_data.get(column["column_name"]),
+                        "new_value": new_row_data.get(column["column_name"]),
+                    }
+                    for column in columns
+                    if old_row_data.get(column["column_name"])
+                    != new_row_data.get(column["column_name"])
+                }
+                if changes:
+                    row["display_action"] = "changed"
+                    row["changed_fields"] = changes
+                    row["replacement_client_data_id"] = replacement["replacement_client_data_id"]
     return {
         "client_id": client_id,
         "template_id": template_id,

@@ -1,3 +1,4 @@
+import hashlib
 import os
 import sqlite3
 import tempfile
@@ -16,8 +17,11 @@ from routers.import_export import (
     _canonical_source_identity,
     _canonical_source_identities,
     _is_duplicate_upload_noop,
+    _comparison_line_key,
+    _row_fingerprint_token,
     _strict_duplicate_row_errors,
     _validation_request_signature,
+    apply_rate_derivation,
     build_change_report,
     compare_transactions,
     count_new_and_existing_rows,
@@ -560,6 +564,317 @@ class UploadValidationCountTests(unittest.TestCase):
         self.assertEqual(result["missing_count"], 0)
         self.assertEqual(result["unchanged"], [10])
         self.assertEqual(result["changed"][0]["client_data_id"], 11)
+
+    def test_numeric_format_equivalence_keeps_the_stored_row_unchanged(self):
+        template_cols = [
+            {'id': 1, 'column_name': 'Voucher', 'data_type': 'Text'},
+            {'id': 2, 'column_name': 'Amount', 'data_type': 'Numeric'},
+        ]
+        old_row = {'Voucher': 'V-1', 'Amount': 70000}
+        self.assertEqual(
+            _canonical_source_identity(template_cols, old_row, 1),
+            _canonical_source_identity(template_cols, {'Voucher': 'V-1', 'Amount': 70000.0}, 1),
+        )
+        existing = [{
+            'id': 41, 'row_data': old_row, 'version': 3,
+            'extract_date': None, 'validation_status': 'Verified',
+            'verification_detail_id': 7, 'source_identity': 'stable-voucher-line',
+            'source_row_number': 2, 'source_order_upload_id': 90,
+        }]
+
+        with patch('routers.import_export.execute_query_pg', return_value=existing):
+            result = compare_transactions(
+                1, 1, template_cols,
+                [{'Voucher': 'V-1', 'Amount': 70000.0}],
+                {'Voucher': 'Voucher', 'Amount': 'Amount'}, {},
+            )
+
+        self.assertEqual(result['unchanged_count'], 1)
+        self.assertEqual(result['unchanged'], [41])
+        self.assertEqual(result['changed_count'], 0)
+        self.assertEqual(result['new_count'], 0)
+        self.assertEqual(result['missing_count'], 0)
+        self.assertEqual(existing[0]['row_data'], {'Voucher': 'V-1', 'Amount': 70000})
+        self.assertEqual(existing[0]['version'], 3)
+        self.assertEqual(existing[0]['source_identity'], 'stable-voucher-line')
+
+    def test_numeric_comparison_keeps_real_cent_changes_and_blank_distinct_from_zero(self):
+        template_cols = [
+            {'id': 1, 'column_name': 'Voucher', 'data_type': 'Text'},
+            {'id': 2, 'column_name': 'Amount', 'data_type': 'Numeric'},
+        ]
+
+        def compare(old_amount, new_amount):
+            existing = [{
+                'id': 42, 'row_data': {'Voucher': 'V-1', 'Amount': old_amount},
+                'version': 1, 'extract_date': None,
+                'validation_status': 'Pending', 'verification_detail_id': None,
+                'source_identity': 'stable-voucher-line',
+                'source_row_number': 2, 'source_order_upload_id': 90,
+            }]
+            with patch('routers.import_export.execute_query_pg', return_value=existing):
+                return compare_transactions(
+                    1, 1, template_cols,
+                    [{'Voucher': 'V-1', 'Amount': new_amount}],
+                    {'Voucher': 'Voucher', 'Amount': 'Amount'}, {},
+                )
+
+        cent_change = compare(70000, 70000.01)
+        self.assertEqual(cent_change['changed_count'], 1)
+        self.assertEqual(cent_change['changed'][0]['changed_fields'], ['Amount'])
+
+        for blank in (None, ''):
+            with self.subTest(blank=blank):
+                blank_to_zero = compare(blank, 0)
+                self.assertEqual(blank_to_zero['changed_count'], 1)
+                self.assertEqual(blank_to_zero['changed'][0]['changed_fields'], ['Amount'])
+
+    def test_text_leading_zero_changes_are_not_numeric_normalized(self):
+        template_cols = [
+            {'id': 1, 'column_name': 'Voucher', 'data_type': 'Text'},
+            {'id': 2, 'column_name': 'Reference', 'data_type': 'Text'},
+            {'id': 3, 'column_name': 'Amount', 'data_type': 'Numeric'},
+        ]
+        existing = [{
+            'id': 43, 'row_data': {'Voucher': 'V-1', 'Reference': '0007', 'Amount': 12},
+            'version': 1, 'extract_date': None,
+            'validation_status': 'Pending', 'verification_detail_id': None,
+            'source_row_number': 2, 'source_order_upload_id': 90,
+        }]
+
+        with patch('routers.import_export.execute_query_pg', return_value=existing):
+            result = compare_transactions(
+                1, 1, template_cols,
+                [{'Voucher': 'V-1', 'Reference': '7', 'Amount': 12.0}],
+                {'Voucher': 'Voucher', 'Reference': 'Reference', 'Amount': 'Amount'}, {},
+            )
+
+        self.assertEqual(result['changed_count'], 1)
+        self.assertEqual(result['changed'][0]['client_data_id'], 43)
+        self.assertEqual(result['changed'][0]['changed_fields'], ['Reference'])
+
+    def test_repeated_numeric_equivalent_lines_keep_each_existing_occurrence(self):
+        template_cols = [
+            {'id': 1, 'column_name': 'Voucher', 'data_type': 'Text'},
+            {'id': 2, 'column_name': 'Amount', 'data_type': 'Numeric'},
+        ]
+        old_row = {'Voucher': 'V-1', 'Amount': 70000}
+        existing = [{
+            'id': row_id, 'row_data': dict(old_row), 'version': 1,
+            'extract_date': None, 'validation_status': 'Pending',
+            'verification_detail_id': None, 'source_identity': f'line-{row_id}',
+            'source_row_number': row_id - 49, 'source_order_upload_id': 90,
+        } for row_id in (50, 51)]
+
+        with patch('routers.import_export.execute_query_pg', return_value=existing):
+            result = compare_transactions(
+                1, 1, template_cols,
+                [{'Voucher': 'V-1', 'Amount': 70000.0}, {'Voucher': 'V-1', 'Amount': 70000.00}],
+                {'Voucher': 'Voucher', 'Amount': 'Amount'}, {},
+            )
+
+        self.assertEqual(result['unchanged_count'], 2)
+        self.assertEqual(result['unchanged'], [50, 51])
+        self.assertEqual(result['changed_count'], 0)
+        self.assertEqual(result['new_count'], 0)
+        self.assertEqual(result['missing_count'], 0)
+        self.assertEqual([row['source_identity'] for row in existing], ['line-50', 'line-51'])
+
+    def test_unique_descriptive_anchors_pair_numeric_changes_across_upload_templates(self):
+        cases = [
+            (
+                'Purchase Order',
+                [
+                    {'id': 1, 'column_name': 'PO No', 'data_type': 'Text'},
+                    {'id': 2, 'column_name': 'Item Code', 'data_type': 'Text'},
+                    {'id': 3, 'column_name': 'Rate', 'data_type': 'Numeric'},
+                    {'id': 4, 'column_name': 'Amount', 'data_type': 'Numeric'},
+                ],
+                'PO No', 'Item Code', 'Rate',
+            ),
+            (
+                'Store Receiving',
+                [
+                    {'id': 1, 'column_name': 'GRN No', 'data_type': 'Text'},
+                    {'id': 2, 'column_name': 'Item Code', 'data_type': 'Text'},
+                    {'id': 3, 'column_name': 'Rate', 'data_type': 'Numeric'},
+                    {'id': 4, 'column_name': 'Amount', 'data_type': 'Numeric'},
+                ],
+                'GRN No', 'Item Code', 'Rate',
+            ),
+            (
+                'Transaction Report',
+                [
+                    {'id': 1, 'column_name': 'Voucher', 'data_type': 'Text'},
+                    {'id': 2, 'column_name': 'Account Code', 'data_type': 'Text'},
+                    {'id': 3, 'column_name': 'Narration', 'data_type': 'Text'},
+                    {'id': 4, 'column_name': 'Debit Amount', 'data_type': 'Numeric'},
+                    {'id': 5, 'column_name': 'Credit Amount', 'data_type': 'Numeric'},
+                ],
+                'Voucher', 'Account Code', 'Debit Amount',
+            ),
+        ]
+
+        for template_name, template_cols, document_field, anchor_field, amount_field in cases:
+            with self.subTest(template=template_name):
+                old_rows = [
+                    {document_field: 'DOC-1', anchor_field: f'LINE-{i}', amount_field: 10 + i}
+                    for i in range(3)
+                ]
+                new_rows = [
+                    {**old, amount_field: old[amount_field] + 0.25}
+                    for old in old_rows
+                ]
+                existing = [{
+                    'id': 70 + i, 'row_data': old, 'version': 1,
+                    'extract_date': None, 'validation_status': 'Pending',
+                    'verification_detail_id': None,
+                    'source_identity': f'{template_name}-{i}',
+                    'source_row_number': i + 2, 'source_order_upload_id': 90,
+                } for i, old in enumerate(old_rows)]
+                mappings = {field: field for row in new_rows for field in row}
+
+                with patch('routers.import_export.execute_query_pg', return_value=existing):
+                    result = compare_transactions(
+                        1, 1, template_cols, new_rows, mappings, {},
+                    )
+
+                self.assertEqual(result['changed_count'], 3)
+                self.assertEqual(result['new_count'], 0)
+                self.assertEqual(result['missing_count'], 0)
+                self.assertEqual(
+                    [item['changed_fields'] for item in result['changed']],
+                    [[amount_field], [amount_field], [amount_field]],
+                )
+
+    def test_duplicate_descriptive_anchors_are_not_guessed_as_line_changes(self):
+        template_cols = [
+            {'id': 1, 'column_name': 'PO No', 'data_type': 'Text'},
+            {'id': 2, 'column_name': 'Item Code', 'data_type': 'Text'},
+            {'id': 3, 'column_name': 'Rate', 'data_type': 'Numeric'},
+        ]
+        old_rows = [
+            {'PO No': 'PO-1', 'Item Code': 'SAME', 'Rate': 10},
+            {'PO No': 'PO-1', 'Item Code': 'SAME', 'Rate': 20},
+        ]
+        new_rows = [
+            {'PO No': 'PO-1', 'Item Code': 'SAME', 'Rate': 10.5},
+            {'PO No': 'PO-1', 'Item Code': 'SAME', 'Rate': 20.5},
+        ]
+        existing = [{
+            'id': row_id, 'row_data': old, 'version': 1,
+            'extract_date': None, 'validation_status': 'Pending',
+            'verification_detail_id': None, 'source_identity': f'line-{row_id}',
+            'source_row_number': row_id, 'source_order_upload_id': 90,
+        } for row_id, old in zip((80, 81), old_rows)]
+
+        from fastapi import HTTPException
+        with patch('routers.import_export.execute_query_pg', return_value=existing):
+            with self.assertRaises(HTTPException) as error:
+                compare_transactions(
+                    1, 1, template_cols, new_rows,
+                    {'PO No': 'PO No', 'Item Code': 'Item Code', 'Rate': 'Rate'}, {},
+                )
+
+        self.assertEqual(error.exception.status_code, 409)
+
+    def test_history_api_displays_unique_numeric_replacement_as_changed(self):
+        from routers import data as data_router
+
+        columns = [
+            {'column_name': 'PO No', 'data_type': 'Text'},
+            {'column_name': 'Item Code', 'data_type': 'Text'},
+            {'column_name': 'Rate', 'data_type': 'Numeric'},
+        ]
+        old_row = {'PO No': 'PO-1', 'Item Code': 'ITEM-1', 'Rate': 58}
+        replacement_row = {'PO No': 'PO-1', 'Item Code': 'ITEM-1', 'Rate': 58.4}
+        old_history = {
+            'id': 90, 'client_data_id': 40, 'action': 'deleted',
+            'changed_at': None, 'changed_by': 'Analyst',
+            'source_upload_id': 10, 'replacing_upload_id': 11,
+            'source_identity': 'old-identity', 'row_data': old_row,
+            'changed_fields': None, 'ledger_account_code': None,
+            'ledger_account_name': None,
+        }
+
+        def execute(sql, params=None, **_kwargs):
+            if 'FROM clients' in sql:
+                return [{'id': 1}]
+            if 'FROM templates' in sql:
+                return [{'id': 3, 'template_name': 'Purchase Order', 'data_purpose': 'standard'}]
+            if 'COUNT(*) AS total' in sql:
+                return [{'total': 1}]
+            if 'SELECT h.id AS history_id' in sql:
+                return [{
+                    'history_id': 90,
+                    'replacement_client_data_id': 41,
+                    'replacement_row_data': replacement_row,
+                }]
+            if 'SELECT h.id, h.client_data_id, h.action' in sql:
+                return [dict(old_history)]
+            raise AssertionError(f'Unexpected history query: {sql}')
+
+        with patch.object(data_router, 'get_template_columns_ordered', return_value=columns), \
+             patch.object(data_router, 'execute_query_pg', side_effect=execute):
+            result = data_router.get_client_data_history(
+                client_id=1, template_id=3, page=1, limit=25,
+                action='changed', ledger_account_code=None,
+            )
+
+        self.assertEqual(result['total'], 1)
+        self.assertEqual(result['rows'][0]['action'], 'deleted')
+        self.assertEqual(result['rows'][0]['display_action'], 'changed')
+        self.assertEqual(result['rows'][0]['replacement_client_data_id'], 41)
+        self.assertEqual(result['rows'][0]['changed_fields'], {
+            'Rate': {'old_value': 58, 'new_value': 58.4},
+        })
+
+    def test_new_zero_line_does_not_collide_with_existing_blank_line_identity(self):
+        template_cols = [
+            {'id': 1, 'column_name': 'Voucher', 'data_type': 'Text'},
+            {'id': 2, 'column_name': 'Amount', 'data_type': 'Numeric'},
+        ]
+        old_row = {'Voucher': 'V-1', 'Amount': None}
+        legacy_identity_input = (
+            f"{_comparison_line_key(template_cols, old_row, 1)}"
+            f"|fingerprint:{_row_fingerprint_token(old_row)}"
+        )
+        legacy_identity = hashlib.sha256(legacy_identity_input.encode('utf-8')).hexdigest()
+        existing = [{
+            'id': 60, 'row_data': old_row, 'version': 1, 'extract_date': None,
+            'validation_status': 'Pending', 'verification_detail_id': None,
+            'source_identity': legacy_identity, 'source_row_number': 2,
+            'source_order_upload_id': 90,
+        }]
+
+        with patch('routers.import_export.execute_query_pg', return_value=existing):
+            result = compare_transactions(
+                1, 1, template_cols,
+                [{'Voucher': 'V-1', 'Amount': 0}, {'Voucher': 'V-1', 'Amount': None}],
+                {'Voucher': 'Voucher', 'Amount': 'Amount'}, {},
+            )
+
+        self.assertEqual(result['unchanged'], [60])
+        self.assertEqual(result['unchanged_count'], 1)
+        self.assertEqual(result['new_count'], 1)
+        self.assertEqual(result['changed_count'], 0)
+        self.assertEqual(result['missing_count'], 0)
+        self.assertNotEqual(result['new_source_identities'][0], legacy_identity)
+        self.assertEqual(existing[0]['source_identity'], legacy_identity)
+
+    def test_imported_rates_stay_exact_while_derived_rates_use_configured_precision(self):
+        template_cols = [
+            {'id': 1, 'column_name': 'Rate', 'data_type': 'Numeric'},
+            {'id': 2, 'column_name': 'Quantity', 'data_type': 'Numeric'},
+            {'id': 3, 'column_name': 'Amount', 'data_type': 'Numeric'},
+        ]
+        imported = {'Rate': 732.5, 'Quantity': 1, 'Amount': 732.5}
+        apply_rate_derivation(imported, template_cols, 'imported', 0)
+        self.assertEqual(imported['Rate'], 732.5)
+
+        derived = {'Rate': None, 'Quantity': 3, 'Amount': 100}
+        apply_rate_derivation(derived, template_cols, 'derived', 2)
+        self.assertEqual(derived['Rate'], 33.33)
 
     def test_identical_reimport_is_idempotent_and_creates_no_actions(self):
         template_cols = [

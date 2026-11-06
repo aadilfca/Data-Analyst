@@ -68,9 +68,10 @@ def test_missing_or_invalid_footer_choice_blocks(row, confirmed):
         controls.selected_control_row(rows(), COLUMNS, MAPPING, row, confirmed)
 
 
-def test_transaction_cannot_be_designated_as_footer_even_when_its_amount_matches():
-    with pytest.raises(ValueError, match='contains document/date/account'):
-        controls.selected_control_row(rows(), COLUMNS, MAPPING, 2, True)
+def test_neighboring_transaction_fields_do_not_disqualify_confirmed_footer_row():
+    # The user-selected row is checked vertically through mapped Footing cells.
+    # Its document, date and reference cells do not decide whether it is a total.
+    assert controls.selected_control_row(rows(), COLUMNS, MAPPING, 2, True) == 2
 
 
 def test_unlabelled_total_and_total_in_middle_are_explicit_choices_not_lost_transactions():

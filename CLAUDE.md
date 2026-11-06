@@ -18,7 +18,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, allocated database size and selected-client integrity status. See CHANGELOG_ARCHIVE.md.
 - routers/data.py, routers/data_integrity.py + static/databank.*, static/data_integrity.* → Scoped preview controls, fresh bounded caches, backups, history and safeguards. See CHANGELOG_ARCHIVE.md.
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
-- routers/import_export.py + static/upload.* → Template-controlled imports, blank optional fields, source Footing checks, stored-data reconciliation, history and reports. See CHANGELOG_ARCHIVE.md.
+- routers/import_export.py + static/upload.* → Template-controlled imports, exact imported Rates, numeric-aware line matching, source Footing checks, history and reports. See CHANGELOG_ARCHIVE.md.
 - routers/settings.py + routers/google_drive_auth.py + static/settings.* → App settings, administrator upload-backup controls, firm-wide holidays and Drive reconnection. See CHANGELOG_ARCHIVE.md.
 - routers/templates.py + static/templates.*, static/columns.* → Reusable columns, template reconciliation/comparison settings, guarded configuration, ledger setup and backup/restore. See CHANGELOG_ARCHIVE.md.
 - static/client_settings.html, static/client_settings.js -> retired direct-bookmark information page; all Verification account routing is configured centrally in Account Control Centre. See CHANGELOG_ARCHIVE.md.
@@ -335,20 +335,15 @@ One line per file group: what it is now. Full build history for every entry live
 - 2026-10-21: Added independent Cashflow boundary, carry, role, source-correction and screen/export regression controls; accepted for commit/push. See CHANGELOG_ARCHIVE.md, Independent Cashflow controls.
 - 2026-10-21: Cashflows reconciles separate Treasury movements, aligns payment subtotal signs and exports complete deductions; locally accepted. See CHANGELOG_ARCHIVE.md.
 - 2026-10-21: Cashflows preserves signed customer/vendor reversals, adds period details and shared export totals; January–June combined reconciliation verified. See CHANGELOG_ARCHIVE.md.
-- 2026-10-20: Client Data preserves source order while Cashflows adds ledger balances and evidence checks; Data Bank and ledger uploads gain searchable account selection and safer mappings. See CHANGELOG_ARCHIVE.md.
+- 2026-10-20: Client Data preserves source order; Cashflows, Data Bank and ledger uploads gain scoped balances and account search. See CHANGELOG_ARCHIVE.md.
 - 2026-10-20: Uploads add raw-source totals, row-aware issue reports, and public privacy/terms pages. See CHANGELOG_ARCHIVE.md.
 - 2026-10-19: Uploads add ledger roles, expiring validation plans, coverage replacement, correction safeguards, Drive archives and readable issue reports; production branding remains pending. See CHANGELOG_ARCHIVE.md.
 - 2026-10-19: Cashflows moves to canonical Client Data with bounded source fetching, coverage diagnostics, browser caches, exports and isolated experiments. See CHANGELOG_ARCHIVE.md.
 - Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; performance findings reference the investigation documents.
-- 2026-10-12: Cashflows uses canonical `client_data`, bounded Data Bank previews and evidence-gated PostgreSQL index/storage review; unsafe maintenance remains blocked. See CHANGELOG_ARCHIVE.md.
-- 2026-10-11: Cashflows cleanup and Client Data import/deletion gained canonical-source, identity, validation, correction and reference safeguards; deferred gaps remain documented. See CHANGELOG_ARCHIVE.md.
-- 2026-10-10: Cashflows single-source processing and administrator period/XLSX settings shipped; Storage Cleanup became available for guarded development review. See CHANGELOG_ARCHIVE.md.
-- 2026-10-09: Upload validation uses expiring action plans; imports apply approved changes with stale-plan guards and compact reports. See CHANGELOG_ARCHIVE.md.
-- 2026-10-08: Cashflows preparation added schema, backfill, incremental refresh, recovery and revision-safe source selection. See CHANGELOG_ARCHIVE.md.
-- 2026-10-06/07: Cashflows canonical voucher selection, classification, labels, summary controls and freshness safeguards advanced. See CHANGELOG_ARCHIVE.md.
-- 2026-10-01/02: Cashflows historical rows and ACC Trial Balance sharing, account search and processing feedback improved. See CHANGELOG_ARCHIVE.md.
-- 2026-09-26/30: Cashflows setup, intake, period settings, balancing, exports and speed backlog progressed. See CHANGELOG_ARCHIVE.md.
-- 2026-09-01/25: Database sizing, Reconciliation, Rulebook, Account Sets, Verification, Forms, vendor/import and cleanup work progressed. See CHANGELOG_ARCHIVE.md.
+- 2026-10-06–12: Upload lifecycle, source coverage, cleanup safeguards and Cashflows preparation advanced. See CHANGELOG_ARCHIVE.md.
+- 2026-09-01–10-02: Database, Reconciliation, Rulebook, Account Sets, Verification, Forms and Cashflows foundations progressed. See CHANGELOG_ARCHIVE.md.
+- 2026-11-06: Upload comparison now respects numeric meaning, blank-versus-zero lines, and exact imported Rates. See CHANGELOG_ARCHIVE.md, Numeric comparison and Rate preservation.
+- 2026-11-06: Unique anchors pair numeric corrections; history shows legacy replacements as changes. See CHANGELOG_ARCHIVE.md, Unique line matching and history display.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
