@@ -281,6 +281,155 @@ def test_review_tables_preserve_all_counts_scope_and_safeguards(page):
     assert page.evaluate('JSON.stringify(lastChangePreview)===window.summaryBefore')
 
 
+def test_review_preview_uses_bounded_server_pages_and_returns_to_same_review(page):
+    page.evaluate("API_BASE=''; window.getSelectedClientId=()=>5")
+    requests = []
+    def preview(route):
+        requests.append(route.request.post_data_json)
+        route.fulfill(json={"action": "all", "page": 1, "page_size": 50, "total": 1, "pages": 1,
+            "counts": {"added": 0, "changed": 1, "deleted": 0},
+            "columns": [{"name": "PO no."}, {"name": "Rate"}],
+            "rows": [{"action": "Changed", "previous": {"PO no.": "PO-1", "Rate": 5},
+                "incoming": {"PO no.": "PO-1", "Rate": 6}, "changed_fields": ["Rate"]}]})
+    page.route('**/api/upload/change-preview*', preview)
+    review(page, dict(unchanged_count=0, new_count=0, changed_count=1, missing_count=0))
+    page.locator('#uploadReplacementPreview').click()
+    expect(page.locator('#previewSheet')).to_have_class(re.compile('active'))
+    expect(page.locator('#previewDataView')).to_have_value('all')
+    expect(page.locator('#previewInfo')).to_contain_text('1 changes')
+    expect(page.locator('#previewSheetBody')).to_contain_text('5 → 6')
+    assert len(requests) == 1
+    assert requests[0]['import_request']['coverage_start'] == '2026-10-01'
+    page.locator('#closePreviewBtn').click()
+    expect(page.locator('#uploadReplacementReview')).to_be_visible()
+    assert page.evaluate('window.reviewDecision') is None
+
+
+def test_review_preview_handles_null_response_without_stale_excel_headers_or_uncaught_error(page):
+    page.evaluate("API_BASE=''; window.getSelectedClientId=()=>5")
+    page.route('**/api/upload/change-preview*', lambda route: route.fulfill(
+        body='null', content_type='application/json'))
+    pageerror = []
+    page.on('pageerror', lambda error: pageerror.append(str(error)))
+    review(page, dict(unchanged_count=0, new_count=0, changed_count=1, missing_count=0))
+    page.locator('#uploadReplacementPreview').click()
+    expect(page.locator('#previewSheetBody')).to_contain_text('incomplete preview response')
+    expect(page.locator('#previewSheetHead')).to_be_empty()
+    expect(page.locator('#previewDataView')).to_have_value('all')
+    assert pageerror == []
+
+
+def test_shared_preview_uses_uploaded_data_as_default_and_exposes_change_views(page):
+    options = page.locator('#previewDataView option').all_text_contents()
+    assert options == ['Uploaded data', 'All changes', 'Added', 'Changed', 'Deleted']
+    assert page.locator('#previewDataView').input_value() == 'uploaded'
+
+
+def test_uploaded_source_view_separates_footing_and_unchecked_rows(page):
+    page.add_script_tag(path=str(ROOT/'static/vendor/xlsx.full.min.js'))
+    page.evaluate('''() => {
+        workbookData=new Uint8Array([1]); currentSheet='Sheet1';
+        XLSX.read=()=>({Workbook:{},SheetNames:['Sheet1'],Sheets:{Sheet1:{}}});
+        XLSX.utils.sheet_to_json=()=>[['Voucher','Amount'],['PO-1',10],['Footing total',10],['PO-2',0]];
+        currentMappings=[{column_name:'Amount',excel_column:'Amount',reconciliation_role:'footing'}];
+        sourceControlResult={approved_detail:{footing_totals:{Amount:'10'}}};
+        confirmedSourceControlRow=()=>3; excludedRowNumbers=new Set([4]);
+        showPreview();
+    }''')
+    expect(page.locator('#previewSheetBody')).to_contain_text('PO-1')
+    expect(page.locator('#previewSheetBody')).not_to_contain_text('Footing total')
+    expect(page.locator('#previewSheetBody')).not_to_contain_text('PO-2')
+    expect(page.locator('#previewSheetBody')).to_contain_text('Total')
+    expect(page.locator('#previewSheetBody')).to_contain_text('10')
+    expect(page.locator('#previewSourceNote')).to_contain_text('Footing control row 3')
+    expect(page.locator('#previewSourceNote')).to_contain_text('1 unchecked row')
+
+
+def test_import_result_opens_stored_rows_in_same_preview_and_returns_to_result(page):
+    page.evaluate("API_BASE=''; window.getSelectedClientId=()=>5")
+    calls = []
+    def endpoint(route):
+        calls.append(route.request.post_data_json)
+        route.fulfill(json={"view": "uploaded", "page": 1, "page_size": 50, "total": 1, "pages": 1,
+            "columns": [{"name": "Voucher"}, {"name": "Amount"}], "rows": [
+                {"action": "Stored", "incoming": {"Voucher": "PO-1", "Amount": 12}}]})
+    page.route('**/api/upload/database-preview*', endpoint)
+    page.evaluate('''showImportSummary({status:'success',total_rows:1,imported_count:1,
+        upload_summary:{upload_id:17,client_id:5,template_id:9,date_range:{start:'2026-02-11',end:'2026-02-14'},comparison_mode:'replace_range'},
+        reconciliation:{status:'matched',footing_configured:true,scope:{upload_id:17,client_id:5,template_id:9,date_range:{start:'2026-02-11',end:'2026-02-14'}}}})''')
+    page.locator('#viewImportedDataBtn').click()
+    expect(page.locator('#previewSheet')).to_have_class(re.compile('active'))
+    expect(page.locator('#previewSourceNote')).to_contain_text('footing controls matched')
+    expect(page.locator('#previewSheetBody')).to_contain_text('PO-1')
+    assert calls[0]['view'] == 'uploaded'
+    assert calls[0]['date_start'] == '2026-02-11'
+    page.locator('#closePreviewBtn').click()
+    expect(page.locator('#importSummaryOverlay')).to_be_visible()
+
+
+def test_imported_change_filter_uses_cached_page_and_shows_old_to_new_values(page):
+    page.evaluate("API_BASE=''; databasePreviewContext={client_id:5,template_id:9,file_id:17,date_start:'2026-02-11',date_end:'2026-02-14'}; databasePreviewMode=true; document.getElementById('previewSheet').classList.add('active'); document.getElementById('mainUploadPage').style.display='none'")
+    calls = []
+    def endpoint(route):
+        calls.append(route.request.post_data_json)
+        route.fulfill(json={"view":"changed","page":1,"page_size":50,"total":1,"pages":1,
+            "counts":{"added":0,"changed":1,"deleted":0},"columns":[{"name":"Rate"}],"rows":[
+                {"action":"Changed","previous":{"Rate":5},"incoming":{"Rate":6},"changed_fields":["Rate"]}]})
+    page.route('**/api/upload/database-preview*', endpoint)
+    page.evaluate("document.getElementById('previewDataView').value='changed'; setPreviewDataView('changed')")
+    expect(page.locator('#previewSheetBody')).to_contain_text('5 → 6')
+    page.evaluate("setPreviewDataView('changed')")
+    assert len(calls) == 1
+
+
+def test_change_preview_filter_and_pagination_request_only_selected_page(page):
+    page.evaluate("API_BASE=''; window.getSelectedClientId=()=>5")
+    requests = []
+    def preview(route):
+        from urllib.parse import parse_qs, urlparse
+        query = parse_qs(urlparse(route.request.url).query)
+        requests.append({key: values[0] for key, values in query.items()})
+        route.fulfill(json={"action": query['action'][0], "page": int(query['page'][0]), "page_size": 1,
+            "total": 2, "pages": 2, "counts": {"added": 2, "changed": 0, "deleted": 0},
+            "columns": [{"name": "Voucher"}], "rows": [{"action": "Added", "incoming": {"Voucher": query['page'][0]}}]})
+    page.route('**/api/upload/change-preview*', preview)
+    page.evaluate("comparisonPreviewRequest={validation_plan_id:'plan',client_id:5}; comparisonPreviewMode=true; document.getElementById('previewDataView').value='all'; document.getElementById('previewSheet').classList.add('active'); document.getElementById('mainUploadPage').style.display='none'; void fetchChangePreviewPage(1)")
+    expect(page.locator('#previewSheetBody')).to_contain_text('1')
+    page.evaluate("document.getElementById('previewDataView').value='added'; setPreviewDataView('added')")
+    expect(page.locator('#previewSheetBody')).to_contain_text('1')
+    page.evaluate('previewCurrentPage=2; fetchChangePreviewPage(2)')
+    expect(page.locator('#previewSheetBody')).to_contain_text('2')
+    assert len(requests) == 3
+
+
+def test_stale_change_preview_blocks_import_until_revalidation(page):
+    page.evaluate("API_BASE=''")
+    page.route('**/api/upload/change-preview*', lambda route: route.fulfill(
+        status=409, json={'detail': 'Validation plan expired. Validate the file again.'}))
+    review(page, dict(unchanged_count=0, new_count=0, changed_count=1, missing_count=0))
+    page.locator('#uploadReplacementPreview').click()
+    expect(page.locator('#previewSheetBody')).to_contain_text('Validation plan expired')
+    page.locator('#closePreviewBtn').click()
+    expect(page.locator('#uploadReplacementStalePlan')).to_be_visible()
+    expect(page.locator('#uploadReplacementConfirm')).to_be_disabled()
+
+
+def test_readable_change_report_download_is_requested_only_after_click(page):
+    page.evaluate("API_BASE=''; window.getSelectedClientId=()=>5; selectedTemplateId=9; fileId=17")
+    captured = []
+    def report(route):
+        captured.append(route.request.post_data_json)
+        route.fulfill(status=200, body=b'workbook', content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    page.route('**/api/upload/change-report', report)
+    page.evaluate("showImportSummary({status:'success',total_rows:1,imported_count:1,upload_summary:{upload_id:17,client_id:5,template_id:9},change_detection:{report:[]}})")
+    assert not captured
+    with page.expect_download():
+        page.locator('#downloadChangeReportBtn').click()
+    assert captured[0] == {"client_id": 5, "template_id": 9, "file_id": 17,
+        "date_range": {}, "comparison_mode": "replace_range", "reconciliation": None,
+        "informational_updates": []}
+
+
 def test_review_back_import_and_escape_resolve_existing_confirmation(page):
     for action, expected in [('back',False),('import',True),('escape',False),('import',True)]:
         review(page)

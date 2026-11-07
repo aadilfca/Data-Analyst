@@ -9567,6 +9567,13 @@ Reports/nav versions are 63/25 across all 19 shared navigation consumers; other 
 **Verification:** Ten focused upload/history regressions pass (five subtests), including unique and ambiguous anchors, blank-plus-zero preservation, all three template shapes, history filtering and display. Python syntax, JavaScript syntax and `git diff --check` pass. The live server still returned the old history classification (3 deleted rows alongside the changed filter), so live acceptance awaits server restart; no data was edited.
 
 
+## Validated upload change preview and stored-data view — Phase 3 — 2026-11-07
+
+**Implementation:** One paged viewer opens from the file Preview and replacement review. Uploaded data defaults to the Excel sheet; confirmed footing and unchecked rows are identified separately, and the included source rows show validated totals for template Footing columns. All changes/Added/Changed/Deleted use the validation plan before import. After import, a result action reads current rows from `client_data` for the date range and actions from current/history rows; up to 20 viewed pages are cached. Restored the missing change-preview page response that had made the API return `null`; malformed responses now show a clean error state. Reconciliation remains a row-count, document-count and footing control check, not row-by-row proof. No copy table, schema change or added validation payload.
+
+**Verification:** All 56 upload-dialog Playwright checks pass, including Footing totals, All changes selection, return-to-review and a `null` API response. The API paging/freshness test passes. Python compilation, JavaScript syntax and `git diff --check` pass. Local-server acceptance is pending.
+
+
 ## Trial Balance code-edit error popup — 2026-11-03
 
 **Implementation:** Replaced the validation sentence inside the narrow account-code cell with a compact fixed popup positioned beside that cell. The popup stays until dismissed or the editor is reopened, announces the error accessibly, follows the cell during scroll/resize, and does not change the table row or column size. Trial Balance script cache version is 55; code validation and API behavior are unchanged.

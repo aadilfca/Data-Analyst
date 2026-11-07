@@ -2962,3 +2962,150 @@ def test_inactive_mapping_uses_issue_popup_and_never_sends_partial_validation_or
     page.locator('#importBtn').click()
     page.wait_for_function("validationStatus === 'ignored'")
     assert len(requests) == 1
+
+
+def test_change_preview_returns_only_requested_plan_page_and_checks_old_row_freshness(monkeypatch):
+    from fastapi import HTTPException
+    from routers import import_export as uploads
+
+    request = ImportRequest(client_id=5, template_id=2, file_id=9, mappings=[], validation_plan_id='plan')
+    plan_payload = {
+        'new': [{'row_data': {'Voucher': 'V2'}, 'line_key': 'new-line'}],
+        'changed': [{'client_data_id': 11, 'new_row_data': {'Voucher': 'V1', 'Amount': 20},
+                     'line_key': 'changed-line', 'changed_fields': ['Amount'],
+                     'expected_old_version': 3, 'expected_old_fingerprint': 'old-fingerprint'}],
+        'missing': [{'client_data_id': 12, 'line_key': 'deleted-line',
+                     'expected_old_version': 1, 'expected_old_fingerprint': 'deleted-fingerprint'}],
+    }
+    monkeypatch.setattr(uploads, '_require_upload_client_scope', lambda *_: None)
+    monkeypatch.setattr(uploads, '_require_staged_upload', lambda path: path)
+    monkeypatch.setattr(uploads, '_load_validation_plan', lambda *_: {'plan_json': plan_payload})
+    monkeypatch.setattr(uploads, '_upload_preview_columns', lambda *_: [
+        {'column_name': 'Voucher', 'data_type': 'Text'}, {'column_name': 'Amount', 'data_type': 'Numeric'}])
+    monkeypatch.setattr(uploads, '_row_fingerprint_token', lambda row: 'old-fingerprint' if row.get('Amount') == 10 else 'deleted-fingerprint')
+    monkeypatch.setattr(uploads, 'execute_query_pg', lambda sql, params=None: (
+        [{'file_path': 'staged.xlsx', 'client_id': 5, 'template_id': 2}] if 'FROM uploaded_files' in sql else
+        [{'id': 11, 'row_data': {'Voucher': 'V1', 'Amount': 10}, 'version': 3},
+         {'id': 12, 'row_data': {'Voucher': 'V0'}, 'version': 1}] if 'FROM client_data' in sql else []))
+
+    result = uploads.upload_change_preview(
+        uploads.UploadChangePreviewRequest(import_request=request), action='all', page=2, page_size=1,
+        session={'selected_client_id': 5})
+    assert result['total'] == 3 and result['pages'] == 3
+    assert result['rows'][0]['action'] == 'Changed'
+    assert result['rows'][0]['previous']['Amount'] == 10
+    assert result['rows'][0]['incoming']['Amount'] == 20
+
+    monkeypatch.setattr(uploads, 'execute_query_pg', lambda sql, params=None: (
+        [{'file_path': 'staged.xlsx', 'client_id': 5, 'template_id': 2}] if 'FROM uploaded_files' in sql else
+        [{'id': 11, 'row_data': {'Voucher': 'V1', 'Amount': 99}, 'version': 3},
+         {'id': 12, 'row_data': {'Voucher': 'V0'}, 'version': 1}] if 'FROM client_data' in sql else []))
+    with pytest.raises(HTTPException) as error:
+        uploads.upload_change_preview(
+            uploads.UploadChangePreviewRequest(import_request=request), action='changed', page=1, page_size=50,
+            session={'selected_client_id': 5})
+    assert error.value.status_code == 409
+
+
+def test_download_report_route_builds_readable_previous_and_incoming_sheets(monkeypatch):
+    import asyncio
+    from io import BytesIO
+    from openpyxl import load_workbook
+    from routers import import_export as uploads
+
+    columns = [{'column_name': 'Voucher', 'data_type': 'Text'}, {'column_name': 'Amount', 'data_type': 'Numeric'}]
+    def query(sql, params=None):
+        if 'FROM templates' in sql:
+            return [{'template_name': 'Transaction Report'}]
+        if 'FROM uploaded_files' in sql:
+            return [{'id': 9, 'file_name': 'source.xlsx', 'upload_date': '2026-11-07',
+                     'client_id': 5, 'template_id': 2}]
+        if 'FROM clients' in sql:
+            return [{'client_name': 'Leather Crop'}]
+        if 'FROM client_data_history' in sql:
+            return [
+                {'client_data_id': 11, 'action': 'changed', 'row_data': {'Voucher': 'V1', 'Amount': 10}},
+                {'client_data_id': 12, 'action': 'deleted', 'row_data': {'Voucher': 'V0', 'Amount': 3}},
+            ]
+        if 'FROM client_data' in sql:
+            return [
+                {'id': 11, 'row_data': {'Voucher': 'V1', 'Amount': 20}},
+                {'id': 13, 'row_data': {'Voucher': 'V2', 'Amount': 5}},
+                {'id': 14, 'row_data': {'Voucher': 'V3', 'Amount': 7}},
+            ]
+        return []
+    monkeypatch.setattr(uploads, 'execute_query_pg', query)
+    monkeypatch.setattr(uploads, '_upload_preview_columns', lambda *_: columns)
+    response = uploads.upload_change_report(
+        uploads.UploadChangeReportRequest(client_id=5, template_id=2, file_id=9,
+            informational_updates=[{'client_data_id': 14, 'field_updates': {'Comment': 'new'},
+                                    'old_field_values': {'Comment': 'old'}}]),
+        session={'selected_client_id': 5})
+    async def collect():
+        return b''.join([chunk async for chunk in response.body_iterator])
+    content = asyncio.run(collect())
+    workbook = load_workbook(BytesIO(content), data_only=True)
+    assert workbook.sheetnames == ['Import summary', 'Incoming changes', 'Previous records', 'Informational refreshes']
+    incoming = list(workbook['Incoming changes'].values)
+    previous = list(workbook['Previous records'].values)
+    assert incoming[1] == ('Changed', 'V1', 20)
+    assert incoming[2] == ('Added', 'V2', 5)
+    assert len(incoming) == 3
+    assert previous[1] == ('Changed', 'V1', 10)
+    assert previous[2] == ('Removed', 'V0', 3)
+
+
+def test_imported_database_preview_reads_covered_period_and_returns_paged_rows(monkeypatch):
+    from routers import import_export as uploads
+
+    seen = []
+    def query(sql, params=None):
+        seen.append((sql, params))
+        if 'FROM uploaded_files WHERE id' in sql:
+            return [{'id': 9, 'status': 'Imported', 'client_id': 5, 'template_id': 2,
+                     'ledger_account_code': None}]
+        if 'COUNT(*) AS total FROM client_data' in sql:
+            return [{'total': 3}]
+        if 'LIMIT %s OFFSET %s' in sql:
+            return [{'id': 22, 'row_data': {'Voucher': 'V2', 'Amount': 20},
+                     'extract_date': '2026-02-12', 'source_row_number': 4}]
+        return []
+    monkeypatch.setattr(uploads, 'execute_query_pg', query)
+    monkeypatch.setattr(uploads, '_upload_preview_columns', lambda *_: [
+        {'column_name': 'Voucher', 'data_type': 'Text'}, {'column_name': 'Amount', 'data_type': 'Numeric'}])
+    result = uploads.upload_database_preview(
+        uploads.UploadDatabasePreviewRequest(client_id=5, template_id=2, file_id=9,
+            date_start='2026-02-11', date_end='2026-02-14'),
+        page=2, page_size=1, session={'selected_client_id': 5})
+    assert result['total'] == 3 and result['pages'] == 3 and result['page'] == 2
+    assert result['rows'][0]['incoming']['Voucher'] == 'V2'
+    assert any('extract_date BETWEEN %s::date AND %s::date' in sql for sql, _ in seen)
+
+
+def test_imported_database_change_preview_returns_stored_added_changed_and_deleted(monkeypatch):
+    from routers import import_export as uploads
+
+    def query(sql, params=None):
+        if 'FROM uploaded_files WHERE id' in sql:
+            return [{'id': 9, 'status': 'Imported', 'client_id': 5, 'template_id': 2,
+                     'ledger_account_code': None}]
+        if 'SELECT COUNT(*) AS total FROM (' in sql and 'UNION ALL' in sql:
+            return [{'total': 3}]
+        if 'FROM client_data_history h' in sql and 'ORDER BY action_order' in sql:
+            return [
+                {'action': 'Added', 'row_id': 31, 'incoming': {'Voucher': 'V3'}, 'previous': {}, 'changed_fields': []},
+                {'action': 'Changed', 'row_id': 32, 'incoming': {'Voucher': 'V2'}, 'previous': {'Voucher': 'V2 old'},
+                 'changed_fields': {'Voucher': {'old_value': 'V2 old', 'new_value': 'V2'}}},
+                {'action': 'Deleted', 'row_id': 33, 'incoming': {}, 'previous': {'Voucher': 'V1'}, 'changed_fields': []},
+            ]
+        if sql.startswith('SELECT COUNT(*) AS total FROM ('):
+            return [{'total': 1}]
+        return []
+    monkeypatch.setattr(uploads, 'execute_query_pg', query)
+    monkeypatch.setattr(uploads, '_upload_preview_columns', lambda *_: [{'column_name': 'Voucher', 'data_type': 'Text'}])
+    result = uploads.upload_database_preview(
+        uploads.UploadDatabasePreviewRequest(client_id=5, template_id=2, file_id=9,
+            date_start='2026-02-11', date_end='2026-02-14', view='all'),
+        page=1, page_size=50, session={'selected_client_id': 5})
+    assert [row['action'] for row in result['rows']] == ['Added', 'Changed', 'Deleted']
+    assert result['rows'][1]['changed_fields'] == ['Voucher']

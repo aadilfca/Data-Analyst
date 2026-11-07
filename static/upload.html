@@ -1813,6 +1813,15 @@
                 </div>
                 <div class="preview-header-controls">
                     <span class="preview-info" id="previewInfo">0 rows · 0 columns</span>
+                    <label id="previewDataViewWrap">Show
+                        <select id="previewDataView" aria-label="Choose upload preview data">
+                            <option value="uploaded" selected>Uploaded data</option>
+                            <option value="all">All changes</option>
+                            <option value="added">Added</option>
+                            <option value="changed">Changed</option>
+                            <option value="deleted">Deleted</option>
+                        </select>
+                    </label>
                     <span class="rate-mode-badge" id="rateModeBadgePreview" style="display:none;"></span>
                     <div class="preview-pagesize-container">
                         <label for="previewPageSize">Rows per page:</label>
@@ -1824,6 +1833,7 @@
                     </div>
                 </div>
             </div>
+            <p id="previewSourceNote" class="preview-info" role="status" hidden></p>
             <!-- Table Area (flex:1, scrollable) -->
             <div class="preview-table-wrapper">
                 <table class="preview-table">
@@ -1883,9 +1893,11 @@
                     <tbody id="uploadReplacementDateMoveRows"></tbody>
                 </table>
             </div>
+            <p id="uploadReplacementStalePlan" role="alert" hidden>This review is no longer current. Return to Upload and validate the file again before importing.</p>
         </div>
         <footer>
             <button type="button" id="uploadReplacementCancel">Back</button>
+            <button type="button" id="uploadReplacementPreview">👁 Preview changes</button>
             <button type="button" id="uploadReplacementConfirm">Import</button>
         </footer>
     </dialog>

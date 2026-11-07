@@ -74,6 +74,16 @@ let selectedDateOrder = 'DMY';
 let selectedFile = null;
 let fileId = null;
 let currentMappings = [];
+let comparisonPreviewMode = false;
+let comparisonPreviewRequest = null;
+let comparisonPreviewAction = 'all';
+let comparisonPreviewReturn = null;
+let comparisonPreviewRows = [];
+let comparisonPreviewColumns = [];
+let comparisonPreviewStale = false;
+let databasePreviewMode = false;
+let databasePreviewContext = null;
+let previewPageCache = new Map();
 // File-specific footer confirmation is deliberately absent from saved mappings
 // and restored sessions. The backend alone calculates reconciliation amounts.
 let sourceControlResult = null;
@@ -681,6 +691,14 @@ function resetValidationState() {
     uploadValidationGeneration++;
     validationStatus = 'idle';
     validationPlanId = null;
+    comparisonPreviewRequest = null;
+    previewPageCache.clear();
+    databasePreviewMode = false;
+    databasePreviewContext = null;
+    comparisonPreviewStale = false;
+    document.getElementById('uploadReplacementStalePlan')?.setAttribute('hidden', '');
+    const confirmButton = document.getElementById('uploadReplacementConfirm');
+    if (confirmButton) confirmButton.disabled = false;
     renderSourceControls(null);
     document.getElementById('ledgerEvidenceSummary').hidden = true;
     ledgerRecognisedControlRows = new Set();
@@ -1064,6 +1082,7 @@ function updateUploadCoverageVisibility() {
 
 function reviewUploadReplacement(payload) {
     const dialog = document.getElementById('uploadReplacementReview');
+    document.getElementById('uploadReplacementStalePlan').hidden = !comparisonPreviewStale;
     dialog.querySelector('h2').textContent = payload.comparison_mode === 'correction'
         ? 'Review matched corrections' : 'Review complete report';
     const summary = lastChangePreview || {};
@@ -1145,9 +1164,11 @@ function reviewUploadReplacement(payload) {
     return new Promise(resolve => {
         const confirm = document.getElementById('uploadReplacementConfirm');
         const cancel = document.getElementById('uploadReplacementCancel');
+        const preview = document.getElementById('uploadReplacementPreview');
         function finish(approved) {
             confirm.removeEventListener('click', accept);
             cancel.removeEventListener('click', reject);
+            preview.removeEventListener('click', openPreview);
             dialog.removeEventListener('cancel', escape);
             dialog.close();
             resolve(approved);
@@ -1155,11 +1176,274 @@ function reviewUploadReplacement(payload) {
         function accept() { finish(true); }
         function reject() { finish(false); }
         function escape(event) { event.preventDefault(); finish(false); }
+        function openPreview() {
+            comparisonPreviewRequest = payload;
+            comparisonPreviewAction = 'all';
+            comparisonPreviewReturn = () => dialog.showModal();
+            dialog.close();
+            showChangePreview();
+        }
+        confirm.disabled = comparisonPreviewStale;
         confirm.addEventListener('click', accept);
         cancel.addEventListener('click', reject);
+        preview.addEventListener('click', openPreview);
         dialog.addEventListener('cancel', escape);
         dialog.showModal();
     });
+}
+
+async function showChangePreview() {
+    comparisonPreviewMode = true;
+    databasePreviewMode = false;
+    comparisonPreviewAction = 'all';
+    previewCurrentPage = 1;
+    const selector = document.getElementById('previewDataView');
+    if (selector) selector.value = 'all';
+    enterPreviewSheet('← Back to report review', 'Validated changes from this upload plan.');
+    await fetchChangePreviewPage(1);
+}
+
+function enterPreviewSheet(backLabel, note) {
+    document.getElementById('previewSheet').classList.add('active');
+    document.getElementById('mainUploadPage').style.display = 'none';
+    document.getElementById('uploadContainer')?.classList.add('preview-active');
+    document.getElementById('closePreviewBtn').textContent = backLabel;
+    const noteElement = document.getElementById('previewSourceNote');
+    noteElement.textContent = note || '';
+    noteElement.hidden = !note;
+}
+
+async function showDatabasePreview(context, returnCallback = null) {
+    databasePreviewContext = context;
+    comparisonPreviewReturn = returnCallback;
+    databasePreviewMode = true;
+    comparisonPreviewMode = false;
+    previewCurrentPage = 1;
+    const selector = document.getElementById('previewDataView');
+    if (selector) selector.value = 'uploaded';
+    const matchText = context.reconciliationStatus === 'matched'
+        ? 'Database rows after import · Excel row count, document count and footing controls matched.'
+        : 'Database rows after import · review the reconciliation result shown in the import summary.';
+    enterPreviewSheet('← Back to import result', matchText);
+    await fetchDatabasePreviewPage('uploaded', 1);
+}
+
+async function fetchChangePreviewPage(page = previewCurrentPage) {
+    if (!comparisonPreviewRequest) return;
+    const body = document.getElementById('previewSheetBody');
+    body.replaceChildren();
+    const loading = document.createElement('tr');
+    const message = document.createElement('td'); message.colSpan = Math.max(1, comparisonPreviewColumns.length + 2);
+    message.textContent = 'Loading validated changes…'; loading.appendChild(message); body.appendChild(loading);
+    const size = Number(document.getElementById('previewPageSize').value) || 50;
+    const cacheKey = `plan:${comparisonPreviewRequest.validation_plan_id}:${comparisonPreviewAction}:${page}:${size}`;
+    if (previewPageCache.has(cacheKey)) {
+        const data = previewPageCache.get(cacheKey);
+        comparisonPreviewRows = data.rows || [];
+        comparisonPreviewColumns = (data.columns || []).map(column => column.name);
+        previewCurrentPage = data.page || 1;
+        previewPageSize = size;
+        previewTotalRows = data.total || 0;
+        comparisonPreviewPageCount = data.pages || 1;
+        renderChangePreviewPage(data);
+        return;
+    }
+    const query = new URLSearchParams({action: comparisonPreviewAction, page: String(page), page_size: String(size)});
+    try {
+        const response = await fetch(`${API_BASE}/api/upload/change-preview?${query}`, {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({import_request: comparisonPreviewRequest})
+        });
+        let data;
+        try { data = await response.json(); }
+        catch (_) { throw new Error('The server returned an unreadable preview response. Reload and validate the file again.'); }
+        if (!response.ok) throw new Error(data?.detail || 'Could not load the validated changes.');
+        if (!data || !Array.isArray(data.rows) || !Array.isArray(data.columns)) {
+            throw new Error('The server returned an incomplete preview response. Reload and validate the file again.');
+        }
+        cachePreviewPage(cacheKey, data);
+        comparisonPreviewRows = data.rows || [];
+        comparisonPreviewColumns = (data.columns || []).map(column => column.name);
+        previewCurrentPage = data.page || 1;
+        previewPageSize = size;
+        previewTotalRows = data.total || 0;
+        comparisonPreviewPageCount = data.pages || 1;
+        renderChangePreviewPage(data);
+    } catch (error) {
+        document.getElementById('previewSheetHead').replaceChildren();
+        body.replaceChildren();
+        const row = document.createElement('tr'); const cell = document.createElement('td');
+        cell.colSpan = 2;
+        cell.textContent = error.message; row.appendChild(cell); body.appendChild(row);
+        document.getElementById('previewInfo').textContent = 'Preview unavailable';
+        previewTotalRows = 0;
+        document.getElementById('previewRowRange').textContent = 'Showing 0-0 of 0 changes';
+        if (/validate the file again|validation plan|reviewed row changed/i.test(error.message)) {
+            comparisonPreviewStale = true;
+            previewPageCache.clear();
+            document.getElementById('uploadReplacementStalePlan').hidden = false;
+            document.getElementById('uploadReplacementConfirm').disabled = true;
+        }
+        setComparisonPreviewControls(1, 1);
+    }
+}
+
+function cachePreviewPage(key, value) {
+    previewPageCache.delete(key);
+    previewPageCache.set(key, value);
+    while (previewPageCache.size > 20) previewPageCache.delete(previewPageCache.keys().next().value);
+}
+
+async function fetchDatabasePreviewPage(view, page = previewCurrentPage) {
+    const context = databasePreviewContext;
+    if (!context) return;
+    const size = Number(document.getElementById('previewPageSize').value) || 50;
+    const cacheKey = `db:${context.file_id}:${view}:${page}:${size}:${context.date_start}:${context.date_end}`;
+    const render = data => {
+        previewCurrentPage = data.page || 1;
+        previewPageSize = size;
+        previewTotalRows = data.total || 0;
+        comparisonPreviewPageCount = data.pages || 1;
+        comparisonPreviewColumns = (data.columns || []).map(column => column.name);
+        comparisonPreviewRows = data.rows || [];
+        renderDatabasePreviewPage(data);
+    };
+    if (previewPageCache.has(cacheKey)) { render(previewPageCache.get(cacheKey)); return; }
+    const body = document.getElementById('previewSheetBody');
+    body.replaceChildren();
+    const loading = document.createElement('tr'); const cell = document.createElement('td');
+    cell.colSpan = Math.max(1, comparisonPreviewColumns.length + 2);
+    cell.textContent = 'Loading database rows…'; loading.appendChild(cell); body.appendChild(loading);
+    const query = new URLSearchParams({page: String(page), page_size: String(size)});
+    try {
+        const response = await fetch(`${API_BASE}/api/upload/database-preview?${query}`, {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({client_id: context.client_id, template_id: context.template_id,
+                file_id: context.file_id, view, date_start: context.date_start, date_end: context.date_end,
+                ledger_account_code: context.ledger_account_code || null,
+                informational_client_data_ids: context.informationalClientDataIds || []})
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || 'Could not load stored database rows.');
+        cachePreviewPage(cacheKey, data);
+        render(data);
+    } catch (error) {
+        body.replaceChildren(); const row = document.createElement('tr'); const message = document.createElement('td');
+        message.colSpan = Math.max(1, comparisonPreviewColumns.length + 2); message.textContent = error.message;
+        row.appendChild(message); body.appendChild(row);
+        document.getElementById('previewInfo').textContent = 'Database preview unavailable';
+        setComparisonPreviewControls(1, 1);
+    }
+}
+
+let comparisonPreviewPageCount = 1;
+function setPreviewDataView(view) {
+    if (!['uploaded', 'all', 'added', 'changed', 'deleted'].includes(view)) view = 'uploaded';
+    previewCurrentPage = 1;
+    if (view === 'uploaded') {
+        comparisonPreviewMode = false;
+        if (databasePreviewContext) {
+            databasePreviewMode = true;
+            document.getElementById('previewSourceNote').textContent = 'These rows are read from the current database for the upload period.';
+            document.getElementById('previewSourceNote').hidden = false;
+            void fetchDatabasePreviewPage('uploaded', 1);
+        } else {
+            databasePreviewMode = false;
+            try { preparePreviewWorkbookRows(); }
+            catch (error) { document.getElementById('previewInfo').textContent = error.message; return; }
+            renderPreviewPage();
+        }
+        return;
+    }
+    if (databasePreviewContext) {
+        comparisonPreviewMode = false;
+        databasePreviewMode = true;
+        document.getElementById('previewSourceNote').textContent = 'These changes are read from stored current and history rows for this upload.';
+        document.getElementById('previewSourceNote').hidden = false;
+        void fetchDatabasePreviewPage(view, 1);
+        return;
+    }
+    if (!comparisonPreviewRequest) {
+        document.getElementById('previewInfo').textContent = 'Validate this upload to review its changes.';
+        return;
+    }
+    comparisonPreviewMode = true;
+    databasePreviewMode = false;
+    comparisonPreviewAction = view;
+    document.getElementById('previewSourceNote').textContent = 'Validated changes from the current upload plan.';
+    document.getElementById('previewSourceNote').hidden = false;
+    void fetchChangePreviewPage(1);
+}
+function setComparisonPreviewControls(page, pages) {
+    document.getElementById('previewRowRange').textContent = `Showing ${previewTotalRows ? (page - 1) * previewPageSize + 1 : 0}-${Math.min(page * previewPageSize, previewTotalRows)} of ${previewTotalRows} changes`;
+    document.getElementById('previewPageInfo').textContent = `Page ${page} of ${pages}`;
+    document.getElementById('previewFirstPage').disabled = page <= 1;
+    document.getElementById('previewPrevPage').disabled = page <= 1;
+    document.getElementById('previewNextPage').disabled = page >= pages;
+    document.getElementById('previewLastPage').disabled = page >= pages;
+}
+
+function renderChangePreviewPage(data) {
+    const head = document.getElementById('previewSheetHead');
+    const body = document.getElementById('previewSheetBody');
+    head.replaceChildren(); body.replaceChildren();
+    const heading = document.createElement('tr');
+    for (const label of ['#', 'Action', ...comparisonPreviewColumns]) {
+        const cell = document.createElement('th'); cell.scope = 'col'; cell.textContent = label; heading.appendChild(cell);
+    }
+    head.appendChild(heading);
+    comparisonPreviewRows.forEach((item, index) => {
+        const row = document.createElement('tr');
+        const serial = document.createElement('td'); serial.textContent = String((data.page - 1) * data.page_size + index + 1); row.appendChild(serial);
+        const action = document.createElement('td'); action.textContent = item.action; row.appendChild(action);
+        comparisonPreviewColumns.forEach(name => {
+            const cell = document.createElement('td');
+            const oldValue = item.previous?.[name]; const newValue = item.incoming?.[name];
+            if (item.action === 'Changed' && (item.changed_fields || []).includes(name)) {
+                cell.textContent = `${oldValue ?? '—'} → ${newValue ?? '—'}`;
+            } else {
+                const value = item.action === 'Deleted' ? oldValue : newValue;
+                cell.textContent = value == null || value === '' ? '—' : String(value);
+            }
+            row.appendChild(cell);
+        });
+        body.appendChild(row);
+    });
+    const countLabel = data.counts || {};
+    document.getElementById('previewInfo').textContent = `${data.total} ${data.action === 'all' ? 'changes' : data.action} · ${countLabel.added || 0} added · ${countLabel.changed || 0} changed · ${countLabel.deleted || 0} deleted`;
+    setComparisonPreviewControls(data.page, data.pages);
+}
+
+function renderDatabasePreviewPage(data) {
+    const head = document.getElementById('previewSheetHead');
+    const body = document.getElementById('previewSheetBody');
+    head.replaceChildren(); body.replaceChildren();
+    const heading = document.createElement('tr');
+    for (const label of ['#', 'Action', ...comparisonPreviewColumns]) {
+        const cell = document.createElement('th'); cell.scope = 'col'; cell.textContent = label; heading.appendChild(cell);
+    }
+    head.appendChild(heading);
+    comparisonPreviewRows.forEach((item, index) => {
+        const row = document.createElement('tr');
+        const serial = document.createElement('td'); serial.textContent = String((data.page - 1) * data.page_size + index + 1); row.appendChild(serial);
+        const action = document.createElement('td'); action.textContent = item.action; row.appendChild(action);
+        comparisonPreviewColumns.forEach(name => {
+            const cell = document.createElement('td');
+            const oldValue = item.previous?.[name]; const newValue = item.incoming?.[name];
+            if (item.action === 'Changed' && (item.changed_fields || []).includes(name)) {
+                cell.textContent = `${oldValue ?? '—'} → ${newValue ?? '—'}`;
+            } else {
+                const value = item.action === 'Deleted' ? oldValue : newValue;
+                cell.textContent = value == null || value === '' ? '—' : String(value);
+            }
+            row.appendChild(cell);
+        });
+        body.appendChild(row);
+    });
+    document.getElementById('previewInfo').textContent = data.view === 'uploaded'
+        ? `${data.total} stored rows`
+        : `${data.total} ${data.view === 'all' ? 'changes' : data.view} · ${data.counts?.added ?? 0} added · ${data.counts?.changed ?? 0} changed · ${data.counts?.deleted ?? 0} deleted`;
+    setComparisonPreviewControls(data.page, data.pages);
 }
 
 // ---------- DATE FORMAT TRIGGER + POPOVER (Phase 3 of the Upload header reorg) ----------
@@ -2079,6 +2363,37 @@ function attachValidationReportDownload(report, summary) {
     }
 }
 
+async function downloadFullChangeReport(report, summary = {}, reconciliation = null) {
+    const scope = reconciliation?.scope || {};
+    const informational = (Array.isArray(report) ? report : []).filter(item => item.action === 'Informational update').map(item => ({
+        client_data_id: item.client_data_id,
+        field_updates: item.new_values || {},
+        old_field_values: item.old_values || {},
+    }));
+    const response = await fetch(`${API_BASE}/api/upload/change-report`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            client_id: Number(summary.client_id || window.getSelectedClientId?.()),
+            template_id: Number(summary.template_id || selectedTemplateId),
+            file_id: Number(summary.upload_id || fileId),
+            date_range: scope.date_range || summary.date_range || {},
+            comparison_mode: summary.comparison_mode || comparisonModeDropdown?.value,
+            reconciliation: reconciliation || null, informational_updates: informational,
+        })
+    });
+    if (!response.ok) {
+        let message = 'Could not prepare the upload report.';
+        try { message = (await response.json()).detail || message; } catch (_) {}
+        throw new Error(message);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `upload-change-report-${summary.upload_id || fileId || 'latest'}.xlsx`;
+    document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+}
+
 // ---------- IMPORT SUMMARY POPUP ----------
 function renderImportReconciliation(container, reconciliation) {
     container.className = 'result-reconciliation';
@@ -2177,6 +2492,20 @@ function showImportSummary(result, ledgerPresentation = null) {
         date_range: result.reconciliation?.scope?.date_range,
         total_rows: result.total_rows, added_count: inserted, changed_count: updated, removed_count: deleted
     };
+    const resultScope = result.reconciliation?.scope || {};
+    const storedPreviewContext = {
+        client_id: Number(uploadSummary.client_id ?? resultScope.client_id ?? window.getSelectedClientId?.()),
+        template_id: Number(uploadSummary.template_id ?? resultScope.template_id ?? selectedTemplateId),
+        file_id: Number(uploadSummary.upload_id ?? resultScope.upload_id ?? fileId),
+        date_start: uploadSummary.date_range?.start || resultScope.date_range?.start,
+        date_end: uploadSummary.date_range?.end || resultScope.date_range?.end,
+        ledger_account_code: resultScope.ledger_account_code || null,
+        reconciliationStatus: result.reconciliation?.status || 'unavailable',
+        informationalClientDataIds: changeReport.filter(item => item.action === 'Informational update')
+            .map(item => Number(item.client_data_id)).filter(Number.isFinite),
+    };
+    const canShowStoredPreview = storedPreviewContext.client_id && storedPreviewContext.template_id
+        && storedPreviewContext.file_id && storedPreviewContext.date_start && storedPreviewContext.date_end;
     
     let statusIcon = '✅';
     let statusColor = '#16a34a';
@@ -2326,6 +2655,7 @@ function showImportSummary(result, ledgerPresentation = null) {
         ` : ''}
         <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:20px; flex-wrap:wrap;">
             <a href="/static/databank.html" target="_blank" style="padding:8px 20px; background:#3b82f6; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer; text-decoration:none; display:inline-block; font-size:14px;">View in Data Bank</a>
+            ${canShowStoredPreview ? '<button id="viewImportedDataBtn" style="padding:8px 20px; background:#28446b; color:white; border:0; border-radius:6px; font-weight:600; cursor:pointer; font-size:14px;">👁 Preview stored data</button>' : ''}
             <button id="downloadChangeReportBtn" style="padding:8px 20px; background:#0f766e; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer; font-size:14px;">Download upload report</button>
             <button id="importSummaryCloseBtn" style="padding:8px 24px; background:#e2e8f0; color:#1a1a2e; border:none; border-radius:6px; font-weight:600; cursor:pointer; font-size:14px;">Close</button>
         </div>
@@ -2409,7 +2739,26 @@ function showImportSummary(result, ledgerPresentation = null) {
 
     const downloadReportBtn = overlay.querySelector('#downloadChangeReportBtn');
     if (downloadReportBtn) {
-        downloadReportBtn.addEventListener('click', () => downloadChangeReport(changeReport, uploadSummary, result.reconciliation));
+        downloadReportBtn.addEventListener('click', async () => {
+            downloadReportBtn.disabled = true;
+            const priorText = downloadReportBtn.textContent;
+            downloadReportBtn.textContent = 'Preparing report…';
+            try { await downloadFullChangeReport(changeReport, uploadSummary, result.reconciliation); }
+            catch (error) { showStatus(error.message, 'error'); }
+            finally { downloadReportBtn.disabled = false; downloadReportBtn.textContent = priorText; }
+        });
+    }
+    const storedPreviewBtn = overlay.querySelector('#viewImportedDataBtn');
+    if (storedPreviewBtn) {
+        storedPreviewBtn.addEventListener('click', () => {
+            document.removeEventListener('keydown', overlay._summaryKeydown);
+            overlay.style.display = 'none';
+            showDatabasePreview(storedPreviewContext, () => {
+                overlay.style.display = 'flex';
+                document.addEventListener('keydown', overlay._summaryKeydown);
+                storedPreviewBtn.focus({preventScroll: true});
+            });
+        });
     }
     
     // Keep keyboard users inside the result until it is closed, then return
@@ -2965,6 +3314,10 @@ if (importBtn) {
                 renderUploadBackupPolicy();
             }
             validationPlanId = canImport ? result.validation_plan_id : null;
+            comparisonPreviewRequest = canImport
+                ? {...payload, validation_plan_id: result.validation_plan_id}
+                : null;
+            comparisonPreviewStale = false;
             validationStatus = canImport ? 'valid' : 'ignored';
             importBtn.textContent = canImport ? (result.ledger_evidence_refresh ? 'Refresh balance evidence' : '🚀 Import selected changes') : 'No changes to import';
             importBtn.style.background = canImport ? '#16a34a' : '#94a3b8';
@@ -3130,6 +3483,16 @@ async function performImport(payload) {
 }
 
 function renderPreviewPage() {
+    if (comparisonPreviewMode) {
+        // Comparison pages come from the server's validated plan; fetch only the
+        // requested page rather than returning all compared rows in validation.
+        void fetchChangePreviewPage(previewCurrentPage);
+        return;
+    }
+    if (databasePreviewMode) {
+        void fetchDatabasePreviewPage(document.getElementById('previewDataView').value, previewCurrentPage);
+        return;
+    }
     const previewHead = document.getElementById('previewSheetHead');
     const previewBody = document.getElementById('previewSheetBody');
     const previewInfo = document.getElementById('previewInfo');
@@ -3202,6 +3565,26 @@ function renderPreviewPage() {
         });
         previewBody.appendChild(tr);
     });
+
+    const footingMappings = sourceFootingMappings();
+    const footingTotals = sourceControlResult?.approved_detail?.footing_totals;
+    if (footingMappings.length && footingTotals) {
+        const totalRow = document.createElement('tr');
+        totalRow.className = 'preview-footing-total';
+        const label = document.createElement('th');
+        label.scope = 'row'; label.textContent = 'Total'; label.style.fontWeight = '700';
+        totalRow.appendChild(label);
+        headers.forEach(header => {
+            const cell = document.createElement('td');
+            const mapping = footingMappings.find(item => item.excel_column === header);
+            if (mapping) {
+                cell.textContent = formatSourceControlAmount(footingTotals[mapping.column_name] ?? '0');
+                cell.style.fontWeight = '700';
+            }
+            totalRow.appendChild(cell);
+        });
+        previewBody.appendChild(totalRow);
+    }
 
     // Update displays
     if (previewInfo) {
@@ -3604,6 +3987,28 @@ function renderRowExclusionPage() {
     updateRowExclusionCounter();
 }
 
+function preparePreviewWorkbookRows() {
+    if (!workbookData) throw new Error('No file loaded to preview.');
+    const workbook = XLSX.read(workbookData, { type: 'array' });
+    uploadWorkbookDate1904 = !!workbook.Workbook?.WBProps?.date1904;
+    const sheetName = currentSheet || workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+    // Keep every cell position, including blanks, so preview values stay under their Excel headers.
+    const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+    previewHeaders = jsonData[0] || [];
+    const rawDataRows = jsonData.slice(1);
+    const controlRow = confirmedSourceControlRow();
+    previewAllRows = rawDataRows.filter((_, index) => index + 2 !== controlRow && !excludedRowNumbers.has(index + 2));
+    previewHiddenCount = rawDataRows.length - previewAllRows.length;
+    previewCurrentPage = 1;
+    const notes = ['Incoming transaction rows from the selected Excel sheet.'];
+    if (controlRow) notes.push(`Footing control row ${controlRow} is shown separately and is not a transaction.`);
+    if (excludedRowNumbers.size) notes.push(`${excludedRowNumbers.size} unchecked row(s) are not shown.`);
+    const note = document.getElementById('previewSourceNote');
+    note.textContent = notes.join(' ');
+    note.hidden = !notes.length;
+}
+
 function showPreview() {
     const previewSheet = document.getElementById('previewSheet');
     const mainUploadPage = document.getElementById('mainUploadPage');
@@ -3614,27 +4019,13 @@ function showPreview() {
     }
 
     try {
-        const workbook = XLSX.read(workbookData, { type: 'array' });
-        uploadWorkbookDate1904 = !!workbook.Workbook?.WBProps?.date1904;
-        const sheetName = currentSheet || workbook.SheetNames[0];
-        const sheet = workbook.Sheets[sheetName];
-        // defval: '' forces every column slot to exist even when a cell is blank --
-        // without it, SheetJS leaves a hole in the row array, which row.forEach() below
-        // silently skips, shifting every later value one column to the left.
-        const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-
-        previewHeaders = jsonData[0] || [];
-        const rawDataRows = jsonData.slice(1); // All rows, not limited
-        // Show only rows the user hasn't excluded in the Row Selection grid, so the
-        // preview reflects what will actually be imported. Same Excel row-number scheme
-        // as excludedRowNumbers / routers/import_export.py's excluded_rows (header=1,
-        // first data row=2). S.No is renumbered sequentially over the filtered set by
-        // renderPreviewPage() (unchanged) since excluded rows are gone entirely, not
-        // just hidden -- a clean list of what will be imported, not a gapped one.
-        const controlRow = confirmedSourceControlRow();
-        previewAllRows = rawDataRows.filter((_, idx) => idx + 2 !== controlRow && !excludedRowNumbers.has(idx + 2));
-        previewHiddenCount = rawDataRows.length - previewAllRows.length;
-        previewCurrentPage = 1;
+        comparisonPreviewMode = false;
+        databasePreviewMode = false;
+        databasePreviewContext = null;
+        comparisonPreviewAction = 'all';
+        const dataView = document.getElementById('previewDataView');
+        if (dataView) dataView.value = 'uploaded';
+        preparePreviewWorkbookRows();
 
         // Render current page
         renderPreviewPage();
@@ -3674,6 +4065,19 @@ if (closePreviewBtn) {
         // Remove fixed height from container
         const container = document.getElementById('uploadContainer');
         if (container) container.classList.remove('preview-active');
+        if (comparisonPreviewMode || databasePreviewMode) {
+            comparisonPreviewMode = false;
+            databasePreviewMode = false;
+            document.getElementById('closePreviewBtn').textContent = '← Back to Upload';
+            const returnToReview = comparisonPreviewReturn;
+            comparisonPreviewReturn = null;
+            if (comparisonPreviewStale) {
+                document.getElementById('uploadReplacementStalePlan').hidden = false;
+                document.getElementById('uploadReplacementConfirm').disabled = true;
+            }
+            returnToReview?.();
+            return;
+        }
         // Re-enable preview button after closing (state already managed)
         updatePreviewButtonState();
     });
@@ -3708,6 +4112,9 @@ if (previewBtn) {
         showPreview();
     });
 }
+
+const previewDataView = document.getElementById('previewDataView');
+if (previewDataView) previewDataView.addEventListener('change', () => setPreviewDataView(previewDataView.value));
 
 // ---------- INIT ----------
 let uploadBackupPolicyGeneration = 0;
@@ -3799,17 +4206,17 @@ window.onload = async function() {
         previewPageSizeDropdown.addEventListener('change', function() {
             previewPageSize = parseInt(this.value) || 50;
             previewCurrentPage = 1;
-            renderPreviewPage();
+            if (comparisonPreviewMode) void fetchChangePreviewPage(1);
+            else renderPreviewPage();
         });
     }
-
     const previewFirstPageBtn = document.getElementById('previewFirstPage');
     if (previewFirstPageBtn) {
         previewFirstPageBtn.addEventListener('click', function(e) {
             e.preventDefault();
             if (previewCurrentPage > 1) {
                 previewCurrentPage = 1;
-                renderPreviewPage();
+                if (comparisonPreviewMode) void fetchChangePreviewPage(1); else renderPreviewPage();
             }
         });
     }
@@ -3820,7 +4227,7 @@ window.onload = async function() {
             e.preventDefault();
             if (previewCurrentPage > 1) {
                 previewCurrentPage--;
-                renderPreviewPage();
+                if (comparisonPreviewMode) void fetchChangePreviewPage(previewCurrentPage); else renderPreviewPage();
             }
         });
     }
@@ -3829,10 +4236,10 @@ window.onload = async function() {
     if (previewNextPageBtn) {
         previewNextPageBtn.addEventListener('click', function(e) {
             e.preventDefault();
-            const totalPages = Math.ceil(previewTotalRows / previewPageSize) || 1;
+            const totalPages = comparisonPreviewMode ? comparisonPreviewPageCount : (Math.ceil(previewTotalRows / previewPageSize) || 1);
             if (previewCurrentPage < totalPages) {
                 previewCurrentPage++;
-                renderPreviewPage();
+                if (comparisonPreviewMode) void fetchChangePreviewPage(previewCurrentPage); else renderPreviewPage();
             }
         });
     }
@@ -3841,10 +4248,10 @@ window.onload = async function() {
     if (previewLastPageBtn) {
         previewLastPageBtn.addEventListener('click', function(e) {
             e.preventDefault();
-            const totalPages = Math.ceil(previewTotalRows / previewPageSize) || 1;
+            const totalPages = comparisonPreviewMode ? comparisonPreviewPageCount : (Math.ceil(previewTotalRows / previewPageSize) || 1);
             if (previewCurrentPage < totalPages) {
                 previewCurrentPage = totalPages;
-                renderPreviewPage();
+                if (comparisonPreviewMode) void fetchChangePreviewPage(previewCurrentPage); else renderPreviewPage();
             }
         });
     }

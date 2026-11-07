@@ -26,7 +26,7 @@ from services.cashflow_preparation import (
 from services.cashflow_voucher_occurrence_store import resolve_upload_occurrences_postgres
 from typing import List, Optional
 from pydantic import BaseModel, StrictInt, StrictBool
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 from routers.auth import get_current_user
 from services.storage_cleanup import purge_replaced_transaction_rows, DataPurgeProtectedError, _remove_staged_upload_files
@@ -2679,6 +2679,364 @@ class ImportRequest(BaseModel):
     # None/absent means "force-include nothing" -- identical to today's behavior
     # (every rejected row stays excluded).
     force_include_rows: Optional[List[int]] = None
+
+
+class UploadChangePreviewRequest(BaseModel):
+    import_request: ImportRequest
+
+
+class UploadChangeReportRequest(BaseModel):
+    client_id: int
+    template_id: int
+    file_id: int
+    date_range: Optional[dict] = None
+    comparison_mode: Optional[str] = None
+    reconciliation: Optional[dict] = None
+    informational_updates: Optional[List[dict]] = None
+
+
+class UploadDatabasePreviewRequest(BaseModel):
+    client_id: int
+    template_id: int
+    file_id: int
+    view: str = "uploaded"
+    date_start: str
+    date_end: str
+    ledger_account_code: Optional[str] = None
+    informational_client_data_ids: Optional[List[int]] = None
+
+
+def _upload_preview_columns(template_id: int) -> list:
+    return execute_query_pg(
+        """SELECT m.id, m.column_name, m.data_type, p.reconciliation_role,
+                  p.compare_for_changes, p.comparison_review_required
+           FROM template_column_mappings p
+           JOIN master_columns m ON p.column_id = m.id
+           WHERE p.template_id = %s AND m.is_active = TRUE
+           ORDER BY p.sort_order ASC""",
+        (template_id,),
+    )
+
+
+def _require_upload_client_scope(session: dict, client_id: int) -> None:
+    if session.get("selected_client_id") != client_id:
+        raise HTTPException(403, "Select this client before viewing upload details.")
+
+
+@router.post("/api/upload/change-preview")
+def upload_change_preview(
+    payload: UploadChangePreviewRequest,
+    action: str = "all",
+    page: int = 1,
+    page_size: int = 50,
+    session=Depends(get_current_user),
+):
+    """Read one bounded page from the still-valid, validated upload plan."""
+    request = payload.import_request
+    _require_upload_client_scope(session, request.client_id)
+    if action not in {"all", "added", "changed", "deleted"}:
+        raise HTTPException(400, "Choose All changes, Added, Changed or Deleted.")
+    page_size = min(max(page_size, 1), 100)
+    page = max(page, 1)
+    files = execute_query_pg(
+        "SELECT file_path, client_id, template_id FROM uploaded_files WHERE id = %s",
+        (request.file_id,),
+    )
+    if not files or files[0]["client_id"] != request.client_id or files[0]["template_id"] != request.template_id:
+        raise HTTPException(404, "Upload file not found in this client and template.")
+    file_path = _require_staged_upload(files[0]["file_path"])
+    plan = _load_validation_plan(request, file_path)
+    plan_data = plan["plan_json"]
+    columns = _upload_preview_columns(request.template_id)
+    if not columns:
+        raise HTTPException(409, "Template columns changed. Validate the file again.")
+
+    groups = {
+        "added": [{"action": "Added", "incoming": item.get("row_data") or {},
+                   "previous": {}, "line_key": item.get("line_key"),
+                   "source_row_number": item.get("source_row_number"), "changed_fields": []}
+                  for item in plan_data.get("new", [])],
+        "changed": [{"action": "Changed", "incoming": item.get("new_row_data") or {},
+                     "previous": None, "client_data_id": item.get("client_data_id"),
+                     "line_key": item.get("line_key"),
+                     "source_row_number": item.get("source_row_number"),
+                     "changed_fields": item.get("changed_fields") or []}
+                    for item in plan_data.get("changed", [])],
+        "deleted": [{"action": "Deleted", "incoming": {}, "previous": None,
+                     "client_data_id": item.get("client_data_id"),
+                     "line_key": item.get("line_key"), "changed_fields": []}
+                    for item in plan_data.get("missing", [])],
+    }
+
+    names = ("added", "changed", "deleted")
+    selected = [row for group in names if action == "all" or action == group for row in groups[group]]
+    total = len(selected)
+    pages = max(1, (total + page_size - 1) // page_size)
+    page = min(page, pages)
+    visible = selected[(page - 1) * page_size:page * page_size]
+    guarded = [row for row in visible if row.get("client_data_id")]
+    if guarded:
+        ids = [row["client_data_id"] for row in guarded]
+        fetched = execute_query_pg(
+            """SELECT id, row_data, version FROM client_data
+               WHERE id = ANY(%s) AND client_id = %s AND template_id = %s
+                 AND is_deleted = FALSE AND change_detection_status <> 'deleted'""",
+            (ids, request.client_id, request.template_id),
+        )
+        current = {row["id"]: row for row in fetched}
+        planned_rows = plan_data.get("changed", []) + plan_data.get("missing", [])
+        planned_by_id = {item.get("client_data_id"): item for item in planned_rows}
+        for item in guarded:
+            old = current.get(item["client_data_id"])
+            planned = planned_by_id.get(item["client_data_id"], {})
+            if not old:
+                raise HTTPException(409, "A reviewed row changed after validation. Validate the file again.")
+            row_data = old["row_data"]
+            if isinstance(row_data, str):
+                row_data = json.loads(row_data)
+            if (old.get("version", 1) != planned.get("expected_old_version", 1)
+                    or _row_fingerprint_token(row_data) != planned.get("expected_old_fingerprint")):
+                raise HTTPException(409, "A reviewed row changed after validation. Validate the file again.")
+            item["previous"] = row_data
+
+    return {
+        "action": action, "page": page, "page_size": page_size,
+        "total": total, "pages": pages,
+        "counts": {key: len(value) for key, value in groups.items()},
+        "columns": [{"name": col["column_name"], "type": col.get("data_type")} for col in columns],
+        "rows": visible,
+    }
+
+
+@router.post("/api/upload/database-preview")
+def upload_database_preview(
+    payload: UploadDatabasePreviewRequest,
+    page: int = 1,
+    page_size: int = 50,
+    session=Depends(get_current_user),
+):
+    """Read current stored rows or this upload's actions, only when Preview is opened."""
+    _require_upload_client_scope(session, payload.client_id)
+    if payload.view not in {"uploaded", "all", "added", "changed", "deleted"}:
+        raise HTTPException(400, "Choose Uploaded data, All changes, Added, Changed or Deleted.")
+    try:
+        start = date.fromisoformat(payload.date_start)
+        end = date.fromisoformat(payload.date_end)
+    except (TypeError, ValueError) as error:
+        raise HTTPException(400, "A valid start and end date are required for this preview.") from error
+    if start > end:
+        raise HTTPException(400, "The preview start date must be on or before its end date.")
+    page_size = min(max(page_size, 1), 100)
+    page = max(page, 1)
+    files = execute_query_pg(
+        """SELECT id, status, client_id, template_id, ledger_account_code
+           FROM uploaded_files WHERE id = %s""",
+        (payload.file_id,),
+    )
+    if (not files or files[0]["client_id"] != payload.client_id
+            or files[0]["template_id"] != payload.template_id
+            or files[0]["status"] not in {"Imported", "Ignored"}):
+        raise HTTPException(409, "This upload has not been imported. Review the validated preview instead.")
+    if payload.ledger_account_code != files[0].get("ledger_account_code"):
+        raise HTTPException(409, "The selected upload scope changed. Reopen the preview from its result.")
+    columns = _upload_preview_columns(payload.template_id)
+    if not columns:
+        raise HTTPException(404, "Template columns are no longer available.")
+    offset = (page - 1) * page_size
+
+    if payload.view == "uploaded":
+        scope_sql = """client_id = %s AND template_id = %s AND is_deleted = FALSE
+            AND change_detection_status <> 'deleted' AND extract_date BETWEEN %s::date AND %s::date"""
+        scope_params = [payload.client_id, payload.template_id, start.isoformat(), end.isoformat()]
+        if payload.ledger_account_code:
+            scope_sql += """ AND EXISTS (SELECT 1 FROM uploaded_files u WHERE u.id = client_data.upload_id
+                AND u.ledger_account_code = %s)"""
+            scope_params.append(payload.ledger_account_code)
+        total_rows = execute_query_pg(
+            f"SELECT COUNT(*) AS total FROM client_data WHERE {scope_sql}", tuple(scope_params)
+        )
+        total = int(total_rows[0]["total"] if total_rows else 0)
+        pages = max(1, (total + page_size - 1) // page_size)
+        page = min(page, pages)
+        rows = execute_query_pg(
+            f"""SELECT id, row_data, extract_date, source_row_number FROM client_data
+                WHERE {scope_sql}
+                ORDER BY extract_date, source_row_number NULLS LAST, id
+                LIMIT %s OFFSET %s""",
+            tuple(scope_params + [page_size, (page - 1) * page_size]),
+        )
+        return {
+            "view": payload.view, "page": page, "page_size": page_size,
+            "total": total, "pages": pages,
+            "columns": [{"name": col["column_name"], "type": col.get("data_type")} for col in columns],
+            "rows": [{"action": "Stored", "incoming": row.get("row_data") or {},
+                      "extract_date": row.get("extract_date"),
+                      "source_row_number": row.get("source_row_number"), "client_data_id": row.get("id")}
+                     for row in rows],
+            "reconciliation_status": None,
+        }
+
+    info_ids = payload.informational_client_data_ids or []
+    action_sql = {
+        "added": """SELECT 'Added' AS action, cd.id AS row_id, cd.row_data AS incoming,
+                    '{}'::jsonb AS previous, '[]'::jsonb AS changed_fields, 1 AS action_order
+             FROM client_data cd
+             WHERE cd.client_id = %s AND cd.template_id = %s AND cd.upload_id = %s
+               AND cd.is_deleted = FALSE AND cd.change_detection_status <> 'deleted'
+               AND NOT (cd.id = ANY(%s))
+               AND NOT EXISTS (SELECT 1 FROM client_data_history h WHERE h.client_data_id = cd.id
+                   AND h.replacing_upload_id = %s AND h.action = 'changed')""",
+        "changed": """SELECT 'Changed' AS action, h.client_data_id AS row_id,
+                    cd.row_data AS incoming, h.row_data AS previous,
+                    COALESCE(h.changed_fields, '{}'::jsonb) AS changed_fields, 2 AS action_order
+             FROM client_data_history h
+             JOIN client_data cd ON cd.id = h.client_data_id AND cd.upload_id = %s
+             WHERE h.client_id = %s AND h.template_id = %s AND h.replacing_upload_id = %s
+               AND h.action = 'changed' AND cd.is_deleted = FALSE""",
+        "deleted": """SELECT 'Deleted' AS action, h.client_data_id AS row_id,
+                    '{}'::jsonb AS incoming, h.row_data AS previous,
+                    '[]'::jsonb AS changed_fields, 3 AS action_order
+             FROM client_data_history h
+             WHERE h.client_id = %s AND h.template_id = %s AND h.replacing_upload_id = %s
+               AND h.action = 'deleted'""",
+    }
+    if payload.view == "all":
+        selected_actions = ["added", "changed", "deleted"]
+    else:
+        selected_actions = [payload.view]
+    sql_parts = []
+    params = []
+    for key in selected_actions:
+        if key == "added":
+            sql_parts.append(action_sql[key])
+            params.extend([payload.client_id, payload.template_id, payload.file_id, info_ids, payload.file_id])
+        elif key == "changed":
+            sql_parts.append(action_sql[key])
+            params.extend([payload.file_id, payload.client_id, payload.template_id, payload.file_id])
+        else:
+            sql_parts.append(action_sql[key])
+            params.extend([payload.client_id, payload.template_id, payload.file_id])
+    union_sql = " UNION ALL ".join(sql_parts)
+    count = execute_query_pg(f"SELECT COUNT(*) AS total FROM ({union_sql}) actions", tuple(params))
+    total = int(count[0]["total"] if count else 0)
+    pages = max(1, (total + page_size - 1) // page_size)
+    page = min(page, pages)
+    action_rows = execute_query_pg(
+        f"""SELECT action, row_id, incoming, previous, changed_fields FROM ({union_sql}) actions
+            ORDER BY action_order, row_id LIMIT %s OFFSET %s""",
+        tuple(params + [page_size, (page - 1) * page_size]),
+    )
+    counts = {}
+    for key in ("added", "changed", "deleted"):
+        if payload.view == "all" or payload.view == key:
+            count_rows = execute_query_pg(f"SELECT COUNT(*) AS total FROM ({action_sql[key]}) actions", tuple(
+                [payload.client_id, payload.template_id, payload.file_id, info_ids, payload.file_id]
+                if key == "added" else
+                [payload.file_id, payload.client_id, payload.template_id, payload.file_id]
+                if key == "changed" else
+                [payload.client_id, payload.template_id, payload.file_id]
+            ))
+            counts[key] = int(count_rows[0]["total"] if count_rows else 0)
+        else:
+            counts[key] = 0
+    result_rows = []
+    for row in action_rows:
+        incoming = row.get("incoming") or {}
+        previous = row.get("previous") or {}
+        fields = row.get("changed_fields") or {}
+        if isinstance(fields, dict):
+            fields = sorted(fields)
+        result_rows.append({"action": row["action"], "incoming": incoming, "previous": previous,
+                            "changed_fields": fields, "client_data_id": row.get("row_id")})
+    return {
+        "view": payload.view, "page": page, "page_size": page_size,
+        "total": total, "pages": pages, "counts": counts,
+        "columns": [{"name": col["column_name"], "type": col.get("data_type")} for col in columns],
+        "rows": result_rows, "reconciliation_status": None,
+    }
+@router.post("/api/upload/change-report")
+def upload_change_report(payload: UploadChangeReportRequest, session=Depends(get_current_user)):
+    """Build the full readable workbook only when the user explicitly downloads it."""
+    _require_upload_client_scope(session, payload.client_id)
+    template = execute_query_pg(
+        "SELECT template_name FROM templates WHERE id = %s AND is_active = TRUE", (payload.template_id,)
+    )
+    file_rows = execute_query_pg(
+        """SELECT id, file_name, client_id, template_id, upload_date
+           FROM uploaded_files WHERE id = %s AND client_id = %s AND template_id = %s""",
+        (payload.file_id, payload.client_id, payload.template_id),
+    )
+    client = execute_query_pg("SELECT client_name FROM clients WHERE id = %s", (payload.client_id,))
+    columns = _upload_preview_columns(payload.template_id)
+    if not template or not file_rows or not client or not columns:
+        raise HTTPException(404, "The uploaded report details are no longer available.")
+
+    history_rows = execute_query_pg(
+        """SELECT client_data_id, action, row_data FROM client_data_history
+           WHERE client_id = %s AND template_id = %s AND replacing_upload_id = %s
+             AND action IN ('changed', 'deleted') ORDER BY id""",
+        (payload.client_id, payload.template_id, payload.file_id),
+    )
+    active = execute_query_pg(
+        """SELECT id, row_data FROM client_data
+           WHERE client_id = %s AND template_id = %s AND upload_id = %s
+             AND is_deleted = FALSE AND change_detection_status <> 'deleted' ORDER BY id""",
+        (payload.client_id, payload.template_id, payload.file_id),
+    )
+    active_by_id = {}
+    for row in active:
+        data = row.get("row_data") or {}
+        active_by_id[row["id"]] = json.loads(data) if isinstance(data, str) else data
+    changed, deleted, seen = [], [], set()
+    for prior in history_rows:
+        old_data = prior.get("row_data") or {}
+        if isinstance(old_data, str):
+            old_data = json.loads(old_data)
+        data_id = prior["client_data_id"]
+        if prior["action"] == "changed" and data_id in active_by_id:
+            changed.append({"old_row_data": old_data, "new_row_data": active_by_id[data_id]})
+            seen.add(data_id)
+        elif prior["action"] == "deleted":
+            deleted.append({"old_row_data": old_data})
+    informational_ids = {
+        update.get("client_data_id") for update in payload.informational_updates or []
+        if isinstance(update, dict) and update.get("client_data_id") is not None
+    }
+    added = [row for row in active if row["id"] not in seen and row["id"] not in informational_ids]
+    for row in added:
+        data = row.get("row_data") or {}
+        if isinstance(data, str):
+            row["row_data"] = json.loads(data)
+    info_updates = []
+    for update in payload.informational_updates or []:
+        if isinstance(update, dict):
+            info_updates.append({"client_data_id": update.get("client_data_id"),
+                                 "field_updates": update.get("field_updates") or {},
+                                 "old_field_values": update.get("old_field_values") or {}})
+    report_data = {"changed": changed, "missing": deleted, "new": added,
+                   "informational_updates": info_updates}
+    from services.upload_observation_report import build_change_report as build_upload_workbook
+    scope = {"client_id": payload.client_id, "template_id": payload.template_id,
+             "start": (payload.date_range or {}).get("start"),
+             "end": (payload.date_range or {}).get("end")}
+    workbook_bytes = build_upload_workbook(
+        report_data, columns, scope,
+        labels={"client": client[0]["client_name"], "template": template[0]["template_name"],
+                "source": file_rows[0].get("file_name", "")},
+        imported_at=str(file_rows[0].get("upload_date") or ""),
+    )
+    if payload.reconciliation:
+        workbook = openpyxl.load_workbook(BytesIO(workbook_bytes))
+        sheet = workbook.create_sheet("Reconciliation")
+        sheet.append(["Metric", "Excel detail", "Stored data"])
+        for metric in payload.reconciliation.get("rows", []):
+            sheet.append([metric.get("label"), metric.get("excel"), metric.get("stored")])
+        output = BytesIO()
+        workbook.save(output)
+        workbook_bytes = output.getvalue()
+    filename = f"upload-change-report-{payload.file_id}.xlsx"
+    return StreamingResponse(BytesIO(workbook_bytes), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                             headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 class AutoMapRequest(BaseModel):
     file_id: int
