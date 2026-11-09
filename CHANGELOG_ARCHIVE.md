@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Upload performance review — 2026-11-09
+
+`routers/import_export.py` now maps headers without loading detail rows, bounds pure text-date interpretation caches, reuses strict fingerprints within a document comparison, and streams unconfirmed XLSX format samples where Footing gates coverage. Confirmed ranges retain full-sheet scans; sparse samples, native dates, ambiguity, legacy XLS, source precision and import safeguards remain protected. `test_upload_performance.py` covers these boundaries; the reconciliation test now reflects the previously approved sub-cent tolerance without rounding source values.
+
+Folders 1–6 were exercised with copied originals, fresh guarded local PostgreSQL/app services, Playwright, API and independent SQL controls. All 33 original hashes match; test services are stopped. Source-based import/repeat, mutation, coverage, concurrency and browser checks pass. Separately approved fixture alignment covers backup settings, configuration locks/history reads, actual staged workbooks, template roles, confirmed display-format dates and current upload/Data Bank messages; no-write, scope, multiplicity and rollback assertions remain. Final selection: 625 tests plus five subtests pass, with one existing Starlette/httpx deprecation warning. Working-app Data Bank access was read-only apart from authentication; no working transactions/configuration changed. No packages were installed. Timings, test-only template adjustments and limitations are in `experiments/upload_safety/PERFORMANCE_REVIEW.md`; private source/evidence remains ignored. Local acceptance and Git authorization are pending.
+
 ## Template-first upload toolbar — 2026-11-09
 
 Upload starts with Template only. Selecting it reveals Download and Upload File; mapped workbooks reveal file details, Sheet, Date format and Data Bank in one desktop row, with 32px controls and narrow-screen wrapping. Data Bank sits at the panel's right edge with centered contents. Long filenames shorten visually with the full name in a tooltip. Removing a file retains Template; Reset clears the workflow. Replacement uploads hide stale tables while loading. Script version 34; no backend, schema or dependency changes.

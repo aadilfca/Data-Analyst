@@ -282,7 +282,8 @@ def test_history_action_remains_available_when_template_has_no_active_rows(brows
             const cell = buildDatasetActionButtons({template_id: 88, template_name: 'Empty ledger', total_row_count: 0});
             return Array.from(cell.querySelectorAll('button')).map(button => button.title);
         }""")
-        assert actions == ['Changed/Deleted data']
+        # An empty active set can still have history/metadata eligible for purge.
+        assert actions == ['Back up and delete this template’s data', 'Changed/Deleted data']
     finally:
         page.close()
 

@@ -633,6 +633,39 @@ def test_changed_voucher_archives_unchanged_sibling_lines_and_keeps_their_ids(pi
         assert report['Previous vouchers'].max_row == report['Incoming vouchers'].max_row == 8
 
 
+def test_amount_correction_does_not_reclassify_other_voucher_with_equivalent_numeric_encodings(pipeline, monkeypatch):
+    import sys
+
+    columns = deepcopy(COLUMNS)
+    columns.insert(2, {'id': 7, 'column_name': 'Receive Date', 'data_type': 'Date'})
+    monkeypatch.setattr(sys.modules[__name__], 'COLUMNS', columns)
+    state = pipeline
+    changed = {**row(voucher='PO-CHANGE', amount=2825), 'Receive Date': '11/02/2026'}
+    unchanged = {**row(voucher='PO-UNCHANGED', amount=120), 'Receive Date': '11/02/2026'}
+    state['store'] = Store([changed, unchanged])
+    unchanged_id = next(item['id'] for item in state['store'].rows
+                        if item['row_data']['Voucher ID'] == 'PO-UNCHANGED')
+    state['incoming'] = [
+        {**changed, 'Debit Amount': 2825.5},
+        {**unchanged, 'Debit Amount': 120.0, 'Credit Amount': 0.0},
+    ]
+
+    result, validation = validate_then_import(state)
+
+    changes = validation['change_detection']
+    assert changes['changed_count'] == 1
+    assert changes['unchanged_count'] == 1
+    assert changes['new_count'] == changes['missing_count'] == 0
+    assert result['updated_count'] == 1
+    unchanged_after = [item for item in state['store'].rows
+                       if item['row_data']['Voucher ID'] == 'PO-UNCHANGED']
+    assert len(unchanged_after) == 1
+    assert unchanged_after[0]['id'] == unchanged_id
+    assert unchanged_after[0]['row_data']['Debit Amount'] == 120
+    assert len(state['store'].history) == 1
+    assert state['store'].history[0]['row_data']['Voucher ID'] == 'PO-CHANGE'
+
+
 def test_changed_and_removed_rows_are_saved_to_independent_history(pipeline):
     state = pipeline
     state['store'] = Store([row(description='Old detail')])

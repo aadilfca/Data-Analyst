@@ -18,7 +18,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, allocated database size and selected-client integrity status. See CHANGELOG_ARCHIVE.md.
 - routers/data.py, routers/data_integrity.py + static/databank.*, static/data_integrity.* → Scoped preview controls, fresh bounded caches, backups, history and safeguards. See CHANGELOG_ARCHIVE.md.
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
-- routers/import_export.py + static/upload.* → Template-first uploads, responsive dates, full-period coverage, footing variance safeguards, stored reconciliation and paged previews. See CHANGELOG_ARCHIVE.md.
+- routers/import_export.py + static/upload.* → Template-first uploads, bounded date reads, full-period coverage, exact Footing controls, stored reconciliation and paged previews. See CHANGELOG_ARCHIVE.md.
 - routers/settings.py + routers/google_drive_auth.py + static/settings.* → App settings, administrator upload-backup controls, firm-wide holidays and Drive reconnection. See CHANGELOG_ARCHIVE.md.
 - routers/templates.py + static/templates.*, static/columns.* → Reusable columns, template reconciliation/comparison settings, guarded configuration, ledger setup and backup/restore. See CHANGELOG_ARCHIVE.md.
 - static/client_settings.html, static/client_settings.js -> retired direct-bookmark information page; all Verification account routing is configured centrally in Account Control Centre. See CHANGELOG_ARCHIVE.md.
@@ -54,7 +54,7 @@ One line per file group: what it is now. Full build history for every entry live
 - services/upload_lifecycle.py + upload_observation_report.py + upload_reconciliation.py → Upload scope proofs, reports, vertical Footing validation and source/SQL controls. See CHANGELOG_ARCHIVE.md.
 - routers/database_backup.py + services/database_backup.py + static/setup.* + scripts/rehearse_database_backup.py → Local backups, resumable Drive verification, processing feedback and isolated recovery rehearsals. See CHANGELOG_ARCHIVE.md.
 - tests/test_account_control_center*.py, test_trial_balance_account_flow_safety.py, test_trial_balance_ui.py, test_cashflows*.py, test_reconciliation*.py → Setup, accounting, account-flow safety, API/UI parity, and workbook evidence/export checks. See CHANGELOG_ARCHIVE.md.
-- tests/test_upload_lifecycle.py, test_data_deletion.py, test_import_duplicate_gates.py, test_upload_dialogs.py + experiments/upload_safety/ → Upload lifecycle, dialog accessibility, isolated experiments and duplicate safeguards. See CHANGELOG_ARCHIVE.md.
+- tests/test_upload*.py, test_data_deletion.py, test_import_duplicate_gates.py + experiments/upload_safety/ → Upload safeguards, browser checks and isolated performance experiments. See CHANGELOG_ARCHIVE.md.
 - experiments/cashflow_fetch/*.py + tests/test_cashflow_fetch_benchmark.py → Standalone read-only transport benchmarks with exact source/report/export comparisons; never loaded by the app. See CHANGELOG_ARCHIVE.md.
 
 
@@ -136,6 +136,7 @@ One line per file group: what it is now. Full build history for every entry live
  - Add every future proven data, database, fetching, caching, performance, or integrity technique here and follow it in every later development.
 
 - Document ID/Date/Footing roles belong to template mappings. Complete reports require Document Date mapping and full-period coverage; confirmation locks dates. Stored-date source changes need migration review.
+- Header mapping reads no detail rows. Unconfirmed date samples never define coverage; confirmed suggestions scan all rows. Bound pure-parser caches by complete interpretation and size.
 - Comparison policy belongs to template mappings: default checked except configured Account Ledger Balance. Upload requests/header mappings cannot override it; conflicting legacy choices require template review/save.
 - Footing requires a confirmed Excel total row; differences below 0.01 pass, up to 1.00 need acknowledgement, and larger differences block. Preserve exact amounts.
 - A confirmed control row is validated vertically through mapped Footing cells; neighboring cell values do not disqualify it.
@@ -266,7 +267,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
-- 2026-11-09: Uploads use a template-first compact toolbar; dates, no-change results and exact Footing safeguards remain protected. See CHANGELOG_ARCHIVE.md.
+- 2026-11-09: Optimized upload reads/comparisons and aligned regression fixtures; local acceptance pending. See CHANGELOG_ARCHIVE.md, Upload performance review.
 - 2026-11-06: Combined no-change source notes with accessible upload results. See CHANGELOG_ARCHIVE.md, Upload result dialogs — Phase 2.
 - 2026-11-06: Complete reports allow unmapped optional Standard fields and store them blank. See CHANGELOG_ARCHIVE.md, Unmapped Standard fields — Phase 2.
 - 2026-11-06: Footing control rows ignore neighboring values; selected totals remain validated. See CHANGELOG_ARCHIVE.md, Vertical Footing validation.

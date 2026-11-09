@@ -96,16 +96,24 @@ def test_missing_footing_mapping_cannot_be_bypassed_with_partial_extract():
         controls.selected_control_row(rows(), COLUMNS, {**MAPPING, 'Credit': None}, 5, True)
 
 
-def test_mismatch_reports_each_footing_without_rounding_or_changing_amounts():
+@pytest.mark.parametrize('excel_total,status,difference', [
+    ('0.300000000000000001', 'rounding_tolerated', '-0.000000000000000001'),
+    ('1.31', 'mismatch', '-1.01'),
+])
+def test_footing_variance_preserves_exact_values_and_only_blocks_over_limit(excel_total,status,difference):
     source = rows()
-    source[-1]['Debit'] = '0.300000000000000001'
+    source[-1]['Debit'] = excel_total
+    original = [dict(row) for row in source]
     proof = controls.reconcile_source(source[-1], source[:-1], COLUMNS, MAPPING, 5, lambda row, fallback: fallback)
-    assert proof['status'] == 'mismatch'
-    assert Decimal(proof['checks'][0]['difference']) == Decimal('-0.000000000000000001')
-    response = upload._reconciliation_failure(proof, 3)
-    assert response['can_import'] is False
-    assert response['errors'][0]['row_number'] == 5
-    assert len(response['errors'][0]['errors']) == 1
+    assert proof['status'] == status
+    assert Decimal(proof['checks'][0]['difference']) == Decimal(difference)
+    assert proof['checks'][1]['status'] == 'matched'
+    assert source == original
+    if status == 'mismatch':
+        response = upload._reconciliation_failure(proof, 3)
+        assert response['can_import'] is False
+        assert response['errors'][0]['row_number'] == 5
+        assert len(response['errors'][0]['errors']) == 1
 
 
 def test_exact_decimal_sum_exceeds_default_decimal_context_without_rounding():
@@ -113,6 +121,23 @@ def test_exact_decimal_sum_exceeds_default_decimal_context_without_rounding():
     source[0]['Debit'], source[1]['Debit'] = '1000000000000000000000000000000.01', '0.02'
     summary = controls.summarize_rows(source, COLUMNS, MAPPING)
     assert summary['footing_totals']['Debit'] == '1000000000000000000000000000000.03'
+
+
+def test_exact_comparison_fingerprint_normalizes_numeric_encodings_without_rounding():
+    columns = [{'column_name': 'Amount', 'data_type': 'Numeric'}]
+    assert upload._exact_comparison_fingerprint({'Amount': 120}, columns) == \
+        upload._exact_comparison_fingerprint({'Amount': 120.0}, columns) == \
+        upload._exact_comparison_fingerprint({'Amount': '120.000'}, columns)
+    assert upload._exact_comparison_fingerprint({'Amount': ''}, columns) != \
+        upload._exact_comparison_fingerprint({'Amount': 0}, columns)
+    assert upload._exact_comparison_fingerprint({'Amount': 'not-a-number'}, columns) == \
+        upload._exact_comparison_fingerprint({'Amount': 'not-a-number'}, columns)
+    assert upload._exact_comparison_fingerprint({'Amount': 'not-a-number'}, columns) != \
+        upload._exact_comparison_fingerprint({'Amount': 'another-value'}, columns)
+    assert upload._exact_comparison_fingerprint({'Amount': '120.0000001'}, columns) != \
+        upload._exact_comparison_fingerprint({'Amount': '120'}, columns)
+    assert upload._exact_comparison_fingerprint({'Amount': '1.00000000000000000000000000001'}, columns) != \
+        upload._exact_comparison_fingerprint({'Amount': '1'}, columns)
 
 
 def test_no_footing_template_retains_optional_controls_and_counts_repeated_lines():

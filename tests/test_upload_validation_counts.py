@@ -282,6 +282,8 @@ def upload_formatting_page():
                 request.fulfill(path=str(root / path.lstrip('/')))
             elif path == '/api/templates':
                 request.fulfill(json=[])
+            elif path == '/api/upload/backup-policy':
+                request.fulfill(json={'allow_without_backup': False})
             elif path in ['/api/upload/validate', '/api/upload/import']:
                 request.fulfill(status=409, json={'detail': "Voucher '<b>V1</b>', account 'A': ambiguous repeated lines"})
             else:
@@ -344,12 +346,22 @@ def test_validation_conflict_is_visible_as_text_and_discards_stale_plan(upload_f
     assert page.evaluate('validationPlanId') is None
     assert page.locator('#importBtn').inner_text() == 'Validate'
     # The Import handler must surface the same ordinary FastAPI detail safely.
-    page.evaluate("async () => { validationPlanId = 'stale-plan'; await performImport({file_id: 99}); }")
-    assert "Import error: Voucher '<b>V1</b>'" in page.locator('#statusMessage').inner_text()
+    with page.expect_request('**/api/upload/import'):
+        page.evaluate("async () => { validationPlanId = 'stale-plan'; await performImport({file_id: 99, backup_enabled: true}); }")
+    assert "Voucher '<b>V1</b>'" in page.locator('#statusMessage').inner_text()
+    assert page.locator('#validationErrorOverlay .upload-issue-stage').inner_text() == 'Import'
     assert page.locator('#statusMessage b').count() == 0
     assert page.evaluate('validationPlanId') is None
     assert page.evaluate("uploadFailureMessage({error: {http_detail: 'Legacy conflict'}}, 'Fallback')") == 'Legacy conflict'
     assert page.evaluate("uploadFailureMessage({detail: [{msg: 'Required mapping'}]}, 'Fallback')") == 'Required mapping'
+
+
+def _set_upload_period(page, start, end):
+    """Enter display-format dates and explicitly confirm the arranged ERP period."""
+    for selector, value in [('#uploadCoverageStart', start), ('#uploadCoverageEnd', end)]:
+        page.locator(selector).fill(page.evaluate('iso => formatCoverageInputDate(iso)', value))
+    if page.locator('#uploadConfirmCoverage').is_visible():
+        page.locator('#uploadConfirmCoverage').check()
 
 
 def test_complete_report_requires_coverage_and_sends_exact_dates(upload_formatting_page):
@@ -369,19 +381,23 @@ def test_complete_report_requires_coverage_and_sends_exact_dates(upload_formatti
         modeActions.style.display = 'block'; importBtn.disabled = false;
     }''')
     page.locator('#importBtn').click()
-    assert 'coverage start/end' in page.locator('#statusMessage').inner_text()
+    assert 'Enter both report coverage dates.' in page.locator('#uploadCoverageHelp').inner_text()
+    assert page.locator('#uploadCoverageStart').get_attribute('aria-invalid') == 'true'
     assert sent == []
-    page.locator('#validationErrorCloseBtn').click()
-    page.locator('#uploadCoverageStart').fill('2026-01-01')
-    page.locator('#uploadCoverageEnd').fill('2026-10-25')
+    _set_upload_period(page, '2026-01-01', '2026-10-25')
     page.locator('#uploadConfirmEmpty').check()
+    assert not page.locator('#uploadConfirmCoverage').is_checked()
+    page.locator('#uploadConfirmCoverage').check()
     page.locator('#importBtn').click()
     page.wait_for_function("validationStatus === 'valid'")
     assert len(sent) == 1
     assert {k: sent[0][k] for k in ['comparison_mode', 'coverage_start', 'coverage_end', 'confirm_empty_period']} == {
         'comparison_mode': 'replace_range', 'coverage_start': '2026-01-01', 'coverage_end': '2026-10-25', 'confirm_empty_period': True,
     }
-    page.locator('#uploadCoverageEnd').fill('2026-10-26')
+    assert sent[0]['confirm_report_coverage'] is True
+    assert page.locator('#uploadCoverageEnd').is_disabled()
+    page.locator('#uploadConfirmCoverage').uncheck()
+    page.locator('#uploadCoverageEnd').fill(page.evaluate("formatCoverageInputDate('2026-10-26')"))
     page.locator('#uploadCoverageEnd').dispatch_event('change')
     assert page.evaluate('validationPlanId') is None
     page.locator('#comparisonModeDropdown').select_option('correction')
@@ -402,11 +418,11 @@ def test_replacement_popup_cancel_escape_and_confirm_only_send_on_approval(uploa
             lastChangePreview = {unchanged_count: 10, new_count: 2, changed_count: 0, missing_count: 3};
             validationPlanId = 'ready-plan'; validationStatus = 'valid';
             window.reviewFinished = false;
-            performImport({file_id: 99, comparison_mode: 'replace_range', coverage_start: '2026-04-01',
+            performImport({file_id: 99, backup_enabled: true, comparison_mode: 'replace_range', coverage_start: '2026-04-01',
                 coverage_end: '2026-04-30', validation_plan_id: 'ready-plan'}).then(() => window.reviewFinished = true);
         }''')
-        assert page.locator('#uploadReplacementReview').is_visible()
-        assert '2026-04-01 through 2026-04-30' in page.locator('#uploadReplacementScope').inner_text()
+        page.locator('#uploadReplacementReview').wait_for(state='visible')
+        assert page.locator('#uploadReplacementPeriod').inner_text() == '01 Apr 2026 – 30 Apr 2026'
         assert 'Deleted — absent from this complete report' in page.locator('#uploadReplacementCounts').inner_text()
         assert '3' in page.locator('#uploadReplacementCounts').inner_text()
         assert imports == []
@@ -1408,7 +1424,7 @@ def test_postgres_classification_updates_only_canonical_rows_with_typed_dates():
 
 @pytest.mark.parametrize("import_path", ["direct", "validation_plan"])
 @pytest.mark.parametrize("failure_stage", ["classification", "occurrence"])
-def test_import_failure_after_source_writes_rolls_back_whole_upload(import_path, failure_stage):
+def test_import_failure_after_source_writes_rolls_back_whole_upload(import_path, failure_stage, tmp_path):
     """Both route branches must retain the outer transaction after raw-row batches."""
     from contextlib import ExitStack
     from copy import deepcopy
@@ -1420,6 +1436,8 @@ def test_import_failure_after_source_writes_rolls_back_whole_upload(import_path,
     columns = [{"id": i, "column_name": name, "data_type": kind} for i, (name, kind) in enumerate(
         [("Voucher", "Text"), ("Line ID", "Text"), ("Amount", "Numeric")], 1)]
     rows = [{"Voucher": "V1", "Line ID": line, "Amount": 100} for line in ("A", "B")]
+    path = tmp_path / 'isolated.xlsx'
+    pd.DataFrame(rows).to_excel(path, index=False)
     identities = _canonical_source_identities(columns, rows, 1)
     changes = {"new": rows, "new_source_identities": identities, "changed": [], "missing": [],
                "unchanged": [], "new_count": 2, "changed_count": 0, "missing_count": 0,
@@ -1443,7 +1461,7 @@ def test_import_failure_after_source_writes_rolls_back_whole_upload(import_path,
         if "FROM templates" in sql:
             return [{"id": 1, "template_name": "Transactions", "rate_source": None}]
         if "FROM uploaded_files" in sql:
-            return [{"file_path": "isolated.xlsx", "file_name": "isolated.xlsx", "status": "Pending"}]
+            return [{"file_path": str(path), "file_name": path.name, "status": "Pending"}]
         if "FROM clients" in sql:
             return [{"id": 5}]
         if "FROM template_column_mappings" in sql:
@@ -1466,6 +1484,9 @@ def test_import_failure_after_source_writes_rolls_back_whole_upload(import_path,
         "execute_query_pg": read, "_ensure_uploaded_file_hash": lambda *a: "hash",
         "_find_prior_import_with_same_hash": lambda *a: None, "get_rate_precision": lambda: 0,
         "_load_validation_plan": lambda *a: {"plan_json": plan},
+        # Archive transport has dedicated lifecycle tests; isolate this failure
+        # injection to the real outer database transaction and row batches.
+        "prepare_lifecycle": MagicMock(return_value=None),
         "compare_transactions": lambda **kw: deepcopy(changes),
         "_check_upload_storage_budget": MagicMock(),
         "load_treasury_mapping_postgres": lambda *a: {},
@@ -1494,7 +1515,7 @@ def test_import_failure_after_source_writes_rolls_back_whole_upload(import_path,
 
 
 @pytest.mark.parametrize("endpoint", ["validate_only", "validate_and_import"])
-def test_failed_comparison_cannot_create_a_plan_or_write_transactions(endpoint):
+def test_failed_comparison_cannot_create_a_plan_or_write_transactions(endpoint, tmp_path):
     from contextlib import ExitStack
     from unittest.mock import MagicMock
     import pandas as pd
@@ -1503,6 +1524,8 @@ def test_failed_comparison_cannot_create_a_plan_or_write_transactions(endpoint):
 
     columns = [{"id": 1, "column_name": "Voucher", "data_type": "Text"},
                {"id": 2, "column_name": "Amount", "data_type": "Numeric"}]
+    path = tmp_path / 'isolated.xlsx'
+    pd.DataFrame([{'Voucher':'V1','Amount':100}]).to_excel(path,index=False)
     request = ImportRequest(client_id=5, template_id=1, file_id=99, mappings=[
         ColumnMapping(template_column_id=c['id'], template_column_name=c['column_name'],
                       excel_column_name=c['column_name']) for c in columns])
@@ -1511,7 +1534,7 @@ def test_failed_comparison_cannot_create_a_plan_or_write_transactions(endpoint):
         if "FROM templates" in sql:
             return [{"id": 1, "template_name": "Transactions", "rate_source": None}]
         if "FROM uploaded_files" in sql:
-            return [{"file_path": "isolated.xlsx", "file_name": "isolated.xlsx", "status": "Pending"}]
+            return [{"file_path": str(path), "file_name": path.name, "status": "Pending"}]
         if "FROM clients" in sql:
             return [{"id": 5}]
         if "FROM template_column_mappings" in sql:
@@ -2163,10 +2186,12 @@ def source_upload_metadata():
         ('Account Name', 'Text'), ('Voucher Detail', 'Text'),
         ('Debit Amount', 'Numeric'), ('Credit Amount', 'Numeric'),
     ], 1)]
+    columns[0]['reconciliation_role'] = 'document_id'
+    columns[1]['reconciliation_role'] = 'document_date'
     mapping = dict(zip([c['column_name'] for c in columns],
                        ['Voucher ID', 'Date', 'Account Code', 'Account Name', 'Voucher Detail', 'Debit', 'Credit']))
     request = ImportRequest(client_id=5, template_id=1, file_id=99, sheet_name='Vouchers',
-        comparison_mode='replace_range', coverage_start='2026-01-01', coverage_end='2026-10-31',
+        comparison_mode='replace_range', coverage_start='2026-01-01', coverage_end='2026-10-31', confirm_report_coverage=True,
         date_delimiter='-', date_order='DMY', mappings=[
             ColumnMapping(template_column_id=c['id'], template_column_name=c['column_name'],
                           excel_column_name=mapping[c['column_name']]) for c in columns])
@@ -2212,7 +2237,7 @@ def test_total_word_never_hides_transaction_evidence(source_upload_metadata, cha
 
 @pytest.mark.parametrize('endpoint', ['validate_only', 'validate_and_import'])
 @pytest.mark.parametrize('invalid', [False, True])
-def test_source_controls_shared_by_validation_and_direct_import(source_upload_metadata, endpoint, invalid):
+def test_source_controls_shared_by_validation_and_direct_import(source_upload_metadata, endpoint, invalid, tmp_path):
     from contextlib import ExitStack
     from unittest.mock import MagicMock
     import pandas as pd
@@ -2221,11 +2246,13 @@ def test_source_controls_shared_by_validation_and_direct_import(source_upload_me
         request.comparison_mode = 'correction'
     source = [row, {}, {**row, 'Debit': 'bad' if invalid else 10.01},
               {'Cheque Date': 'TOTAL', 'Debit': 20.02, 'Credit': 0}]
+    path = tmp_path / 'isolated.xlsx'
+    pd.DataFrame(source).to_excel(path,index=False,sheet_name=request.sheet_name)
     def read(sql, params=None):
         if 'FROM templates' in sql:
             return [{'id': 1, 'template_name': 'Transactions', 'rate_source': None}]
         if 'FROM uploaded_files' in sql:
-            return [{'file_path': 'isolated.xlsx', 'file_name': 'isolated.xlsx', 'status': 'Pending'}]
+            return [{'file_path': str(path), 'file_name': path.name, 'status': 'Pending'}]
         if 'FROM clients' in sql:
             return [{'id': 5}]
         if 'FROM template_column_mappings' in sql:
@@ -2257,15 +2284,17 @@ def test_source_controls_shared_by_validation_and_direct_import(source_upload_me
     assert uploads._source_row_numbers.get() is None
 
 
-def test_complete_missing_voucher_is_rejected_with_exact_row_and_no_plan(source_upload_metadata):
+def test_complete_missing_voucher_is_rejected_with_exact_row_and_no_plan(source_upload_metadata, tmp_path):
     from contextlib import ExitStack
     from unittest.mock import MagicMock
     import pandas as pd
     uploads, columns, mapping, request, row = source_upload_metadata
     source = pd.DataFrame([row, {}, {**row, 'Voucher ID': ''}, {'Cheque Date': 'TOTAL', 'Debit': 20.02}])
+    path = tmp_path / 'isolated.xlsx'
+    source.to_excel(path,index=False,sheet_name=request.sheet_name)
     def read(sql, params=None):
         if 'FROM templates' in sql: return [{'id': 1, 'rate_source': None}]
-        if 'FROM uploaded_files' in sql: return [{'file_path': 'isolated.xlsx', 'status': 'Pending'}]
+        if 'FROM uploaded_files' in sql: return [{'file_path': str(path), 'status': 'Pending'}]
         if 'FROM clients' in sql: return [{'id': 5}]
         if 'FROM template_column_mappings' in sql: return columns
         return []
@@ -2314,13 +2343,13 @@ def test_import_failures_explain_stage_and_preserve_safe_retry(upload_formatting
             {'row_number': 64881, 'reasons': [{'column': 'Voucher ID', 'message': 'Missing voucher'}]}]}})
     page.route('**/api/upload/import', respond)
     page.evaluate("""async () => { validationPlanId = 'ready-plan'; validationStatus = 'valid';
-        await performImport({file_id: 99, validation_plan_id: 'ready-plan'}); }""")
+        await performImport({file_id: 99, backup_enabled: true, validation_plan_id: 'ready-plan'}); }""")
     overlay = page.locator('#validationErrorOverlay')
-    assert 'Stage: Import' in overlay.inner_text()
+    assert overlay.locator('.upload-issue-stage').inner_text() == 'Import'
     assert page.evaluate('validationPlanId') == 'ready-plan'
     if kind in ['network', 'html', 'incomplete']:
         assert 'Import outcome unconfirmed' in overlay.inner_text()
-        assert 'receipt' in overlay.inner_text()
+        assert 'without changing the file or settings' in overlay.inner_text()
         assert 'No data was changed' not in overlay.inner_text()
     elif kind == 'expired':
         assert 'Sign in again' in overlay.inner_text()
@@ -2335,7 +2364,8 @@ def test_source_warning_separates_controls_and_discrepancy(upload_formatting_pag
     page.evaluate("""() => showSourceDiagnostics({source_diagnostics: {excluded_count: 1,
         excluded_rows: [{row_number: 64881, kind: 'total', label: 'TOTAL'}],
         warnings: [{row_number: 64881, column: 'Debit Amount', message: 'Difference 0.01. Amounts were not altered.'}]}})""")
-    assert page.locator('#validationErrorOverlay [data-severity="warning"]').count() == 1
+    assert page.locator('#validationErrorOverlay .upload-issue-label').all_text_contents() == ['Debit Amount']
+    assert page.locator('#validationErrorOverlay .upload-issue-field').count() == 0
     assert '64881' in page.locator('#validationErrorOverlay').inner_text()
     assert 'Amounts were not altered' in page.locator('#validationErrorOverlay').inner_text()
 
@@ -2364,7 +2394,7 @@ def test_each_setup_stage_surfaces_server_detail(upload_formatting_page, stage):
 def test_corrupt_local_workbook_uses_file_reading_popup_and_clears_old_plan(upload_formatting_page):
     page = upload_formatting_page
     page.evaluate("""async () => {
-        fileId = 88; validationPlanId = 'old-plan'; validationStatus = 'valid';
+        selectedTemplateId = 1; fileId = 88; validationPlanId = 'old-plan'; validationStatus = 'valid';
         await handleFile(new File([new Uint8Array([0x50, 0x4b, 3, 4, 0])], 'damaged.xlsx',
             {type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
     }""")
@@ -2380,9 +2410,9 @@ def test_progress_failure_is_advisory_once_and_does_not_cancel_import(upload_for
     page.evaluate('() => pollImportProgress(99)')
     overlay = page.locator('#validationErrorOverlay')
     overlay.wait_for()
-    assert 'Stage: Import progress' in overlay.inner_text()
+    assert overlay.locator('.upload-issue-stage').inner_text() == 'Import progress'
     assert 'still running' in overlay.inner_text()
-    page.locator('#validationErrorCloseBtn').click()
+    overlay.get_by_role('button', name='Close', exact=True).click()
     # Let two more real polling cycles run; the advisory dialog must stay closed.
     page.wait_for_timeout(2200)
     assert overlay.count() == 0
@@ -2439,17 +2469,16 @@ def _arrange_staged_ledger_mapping(page, columns):
     }""",columns)
 
 
-def test_ledger_balance_compare_setting_defaults_off_and_can_be_enabled(upload_formatting_page):
+def test_ledger_balance_comparison_is_controlled_by_template_without_upload_override(upload_formatting_page):
     page = upload_formatting_page
     columns = _arrange_ledger_upload_page(page)
     _arrange_staged_ledger_mapping(page, columns)
-    balance = page.locator('.mapping-table tbody tr').filter(has_text='Balance')
-    balance_checkbox = balance.locator('input[data-compare-column]')
-    assert not balance_checkbox.is_checked()
-    assert page.locator('.mapping-table tbody tr input[data-compare-column]').count() == 6
-    assert page.locator('.mapping-table tbody tr input[data-compare-column]').nth(0).is_checked()
-    balance_checkbox.check()
-    assert page.evaluate("() => currentMappings.find(item => item.column_name === 'Balance').compare_for_changes")
+    assert page.locator('.mapping-table tbody tr').count() == 6
+    assert page.locator('.mapping-table tbody tr input[data-compare-column]').count() == 0
+    ledger = {'data_purpose':'account_ledger', 'ledger_columns':dict(zip(
+        ['voucher','date','description','debit','credit','balance'], range(1,7)))}
+    assert database.resolve_column_comparison(columns[-1],ledger) is False
+    assert database.resolve_column_comparison({**columns[-1],'compare_for_changes':True},ledger) is True
 
 
 def _select_upload_ledger_account(page, code):
@@ -2466,8 +2495,7 @@ def test_ledger_account_and_existing_coverage_fields_reach_validate_and_invalida
     assert page.locator('#ledgerUploadContext a, #ledgerUploadContext img').count()==0
     _select_upload_ledger_account(page, 'A-1')
     _arrange_staged_ledger_mapping(page,columns)
-    page.locator('#uploadCoverageStart').fill('2026-01-01')
-    page.locator('#uploadCoverageEnd').fill('2026-01-31')
+    _set_upload_period(page, '2026-01-01', '2026-01-31')
     sent=[]
     page.route('**/api/upload/validate',lambda route:(sent.append(route.request.post_data_json),route.fulfill(json={
         'can_import':True,'validation_plan_id':'ledger-plan','total_rows':1,'has_errors':False,
@@ -2502,10 +2530,12 @@ def test_missing_or_unselected_ledger_account_blocks_validate_and_offers_action(
     sent=[]
     page.route('**/api/upload/validate',lambda route:(sent.append(True),route.fulfill(json={})))
     page.locator('#importBtn').click()
-    assert 'Select a current Trial Balance posting account' in page.locator('#validationErrorOverlay').inner_text()
+    assert 'posting account' in page.locator('#ledgerAccountHelp').inner_text().lower()
+    assert page.locator('#ledgerAccountSelect').get_attribute('aria-invalid') == 'true'
     assert sent==[]
     if accounts==[]:
-        assert 'No posting accounts found' in page.locator('#ledgerAccountHelp').inner_text()
+        assert 'No posting accounts.' in page.locator('#ledgerAccountHelp').inner_text()
+        assert 'Upload a Trial Balance' in page.locator('#ledgerAccountHelp').inner_text()
         assert page.locator('#ledgerAccountSelect').is_disabled()
 
 
@@ -2514,7 +2544,7 @@ def test_ledger_context_is_in_review_and_summary_and_rejected_rows_cannot_be_ove
     _arrange_ledger_upload_page(page)
     _select_upload_ledger_account(page, 'A-1')
     page.evaluate("""() => {
-        uploadCoverageStart.value='2026-01-01';uploadCoverageEnd.value='2026-01-31';
+        uploadCoverageStart.value=formatCoverageInputDate('2026-01-01');uploadCoverageEnd.value=formatCoverageInputDate('2026-01-31');
         setRejectedRows([{row_number:3,reasons:[{column:'Transaction Date',message:'Date is blank'}]}]);
         reviewUploadReplacement({ledger_account_code:'A-1',coverage_start:'2026-01-01',coverage_end:'2026-01-31'});
     }""")
@@ -2533,7 +2563,8 @@ def test_client_mismatch_blocks_ledger_validation_and_session_restore(upload_for
     _arrange_staged_ledger_mapping(page,columns)
     page.evaluate('() => { window.getSelectedClientId=()=>6; }')
     page.locator('#importBtn').click()
-    assert 'Select a current Trial Balance posting account' in page.locator('#validationErrorOverlay').inner_text()
+    assert 'posting account' in page.locator('#ledgerAccountHelp').inner_text().lower()
+    assert page.locator('#ledgerAccountSelect').get_attribute('aria-invalid') == 'true'
     result=page.evaluate("""async () => {
         sessionStorage.setItem(UPLOAD_SESSION_STORAGE_KEY,JSON.stringify({clientId:5,templateId:7,ledgerAccountCode:'A-1'}));
         await restoreUploadSessionState(); return sessionStorage.getItem(UPLOAD_SESSION_STORAGE_KEY);
@@ -2568,8 +2599,7 @@ def test_validation_response_for_previous_account_is_discarded(upload_formatting
     columns=_arrange_ledger_upload_page(page)
     _select_upload_ledger_account(page, 'A-1')
     _arrange_staged_ledger_mapping(page,columns)
-    page.locator('#uploadCoverageStart').fill('2026-01-01')
-    page.locator('#uploadCoverageEnd').fill('2026-01-31')
+    _set_upload_period(page, '2026-01-01', '2026-01-31')
     waiting=[]
     page.route('**/api/upload/validate',lambda route:waiting.append(route))
     page.locator('#importBtn').click()
@@ -2589,9 +2619,10 @@ def test_import_summary_uses_submitted_account_even_if_selection_changes(upload_
     _select_upload_ledger_account(page, 'A-1')
     requests=[]
     page.route('**/api/upload/import',lambda route:requests.append(route))
-    page.evaluate("""() => {
-        performImport({file_id:99,ledger_account_code:'A-1',ledger_period_start:'2026-01-01',ledger_period_end:'2026-01-31'});
-    }""")
+    with page.expect_request('**/api/upload/import'):
+        page.evaluate("""() => {
+            performImport({file_id:99,backup_enabled:true,ledger_account_code:'A-1',ledger_period_start:'2026-01-01',ledger_period_end:'2026-01-31'});
+        }""")
     _select_upload_ledger_account(page, 'B-2')
     assert requests
     requests[0].fulfill(json={'status':'success','total_rows':1,'imported_count':1})
@@ -2612,8 +2643,7 @@ def test_validated_ledger_controls_are_labelled_separately_from_junk_rows(upload
             ['','','Closing Balance',0,0,'90 DR']]),'Ledger');
         workbookData=XLSX.write(workbook,{type:'array',bookType:'xlsx'});renderRowExclusionGrid();
     }""")
-    page.locator('#uploadCoverageStart').fill('2026-01-01')
-    page.locator('#uploadCoverageEnd').fill('2026-01-31')
+    _set_upload_period(page, '2026-01-01', '2026-01-31')
     page.route('**/api/upload/validate',lambda route:route.fulfill(json={'has_errors':False,'can_import':True,
         'validation_plan_id':'control-plan','ledger_evidence':{'opening':'100','closing':'90','control_rows':[{'row_number':2},{'row_number':4}]}}))
     page.locator('#importBtn').click()
@@ -2645,8 +2675,7 @@ def test_non_cash_bank_account_reaches_upload_validation(upload_formatting_page)
     columns = _arrange_ledger_upload_page(page)
     _arrange_staged_ledger_mapping(page, columns)
     _select_upload_ledger_account(page, 'EXP-1')
-    page.locator('#uploadCoverageStart').fill('2026-01-01')
-    page.locator('#uploadCoverageEnd').fill('2026-01-31')
+    _set_upload_period(page, '2026-01-01', '2026-01-31')
     sent = []
     page.route('**/api/upload/validate', lambda route: (
         sent.append(route.request.post_data_json), route.fulfill(json={'has_errors':False, 'can_import':False})))
@@ -2698,7 +2727,8 @@ def test_editing_ledger_search_invalidates_plan_and_unmatched_text_never_reaches
     page.route('**/api/upload/validate', lambda route: (sent.append(True), route.fulfill(json={})))
     page.locator('#importBtn').click()
     assert sent == []
-    assert 'Select a current Trial Balance posting account' in page.locator('#validationErrorOverlay').inner_text()
+    assert 'posting account' in page.locator('#ledgerAccountHelp').inner_text().lower()
+    assert page.locator('#ledgerAccountSelect').get_attribute('aria-invalid') == 'true'
 
 
 def test_large_upload_account_list_is_bounded_and_duplicate_names_remain_distinct(upload_formatting_page):
@@ -2775,8 +2805,11 @@ def test_account_loading_feedback_finishes_on_success_or_failure(upload_formatti
         assert page.locator('#ledgerAccountHelp').is_hidden()
     else:
         assert page.locator('#ledgerAccountSelect').is_disabled()
-        assert 'Select the template again to retry' in page.locator('#ledgerAccountHelp').inner_text()
-        assert page.locator('#validationErrorOverlay').is_visible()
+        expected = {'server_error':'Trial Balance unavailable',
+                    'malformed':'Account response is incomplete', 'network':'Connection lost'}[outcome]
+        assert expected in page.locator('#ledgerAccountHelp').inner_text()
+        assert page.locator('#ledgerAccountHelp').get_attribute('role') == 'alert'
+        assert page.locator('#ledgerAccountSelect').get_attribute('aria-invalid') == 'true'
 
 
 def test_template_switch_clears_busy_state_and_discards_delayed_accounts(upload_formatting_page):
@@ -2799,10 +2832,10 @@ def test_template_switch_clears_busy_state_and_discards_delayed_accounts(upload_
 
 
 @pytest.mark.parametrize('contents,reason', [
-    (b'<html><frameset><frame src="ledger_files/sheet001.htm"></frameset></html>', 'separate linked files'),
-    ('<html><frameset><frame src="sheet.htm"></frameset></html>'.encode('utf-16'), 'separate linked files'),
-    (b'<html><table><tr><td>Balance</td></tr></table></html>', 'HTML web-page export'),
-    (b'', 'empty'), (b'not an excel workbook', 'could not be read'),
+    (b'<html><frameset><frame src="ledger_files/sheet001.htm"></frameset></html>', 'worksheets stored elsewhere'),
+    ('<html><frameset><frame src="sheet.htm"></frameset></html>'.encode('utf-16'), 'worksheets stored elsewhere'),
+    (b'<html><table><tr><td>Balance</td></tr></table></html>', 'HTML exports are not Excel workbooks'),
+    (b'', 'empty'), (b'not an excel workbook', 'Excel cannot read this workbook'),
 ])
 def test_invalid_workbook_uploads_are_actionable_and_never_staged(contents, reason):
     import asyncio
@@ -2863,8 +2896,7 @@ def test_validation_explains_calculated_balance_provenance_without_inventing_zer
     columns = _arrange_ledger_upload_page(page)
     _arrange_staged_ledger_mapping(page, columns)
     _select_upload_ledger_account(page, 'EXP-1')
-    page.locator('#uploadCoverageStart').fill('2026-01-01')
-    page.locator('#uploadCoverageEnd').fill('2026-01-31')
+    _set_upload_period(page, '2026-01-01', '2026-01-31')
     page.route('**/api/upload/validate', lambda route: route.fulfill(json={
         'has_errors':False,'can_import':True,'validation_plan_id':'balance-plan',
         'ledger_evidence_refresh':opening == '150',
@@ -2898,8 +2930,7 @@ def test_ledger_continuation_review_keeps_raw_notes_and_shows_parent_without_jun
         workbookData = XLSX.write(book,{type:'array',bookType:'xlsx'});
         renderRowExclusionGrid();
     }""")
-    page.locator('#uploadCoverageStart').fill('2026-01-01')
-    page.locator('#uploadCoverageEnd').fill('2026-01-31')
+    _set_upload_period(page, '2026-01-01', '2026-01-31')
     page.route('**/api/upload/validate', lambda route: route.fulfill(json={
         'has_errors':False, 'can_import':True, 'validation_plan_id':'notes-plan',
         'ledger_evidence':{'opening':None, 'closing':None, 'control_rows':[],
@@ -2921,8 +2952,7 @@ def test_ledger_coverage_popup_shows_specific_row_voucher_and_both_ranges(upload
     columns = _arrange_ledger_upload_page(page)
     _arrange_staged_ledger_mapping(page, columns)
     _select_upload_ledger_account(page, 'A-1')
-    page.locator('#uploadCoverageStart').fill('2026-01-01')
-    page.locator('#uploadCoverageEnd').fill('2026-10-19')
+    _set_upload_period(page, '2026-01-01', '2026-10-19')
     message = "Ledger transaction at Excel row 2, voucher 'JV-1225-100', dated 2025-12-31 is outside the declared coverage period 2026-01-01 to 2026-10-19."
     page.route('**/api/upload/validate', lambda route: route.fulfill(status=400, json={'detail':message}))
     page.locator('#importBtn').click()
@@ -2956,8 +2986,7 @@ def test_inactive_mapping_uses_issue_popup_and_never_sends_partial_validation_or
     # The same action works once a real interactive mapping replaces the preview.
     _arrange_staged_ledger_mapping(page, columns)
     page.evaluate('clearRestorePreview();resetValidationState()')
-    page.locator('#uploadCoverageStart').fill('2026-01-01')
-    page.locator('#uploadCoverageEnd').fill('2026-01-31')
+    _set_upload_period(page, '2026-01-01', '2026-01-31')
     page.route('**/api/upload/validate', lambda route: route.fulfill(json={'has_errors':False,'can_import':False}))
     page.locator('#importBtn').click()
     page.wait_for_function("validationStatus === 'ignored'")
@@ -3061,6 +3090,8 @@ def test_imported_database_preview_reads_covered_period_and_returns_paged_rows(m
     seen = []
     def query(sql, params=None):
         seen.append((sql, params))
+        if sql.lstrip().startswith('WITH source AS'):
+            return [{'row_count':3,'document_count':3,'missing_document_rows':0}]
         if 'FROM uploaded_files WHERE id' in sql:
             return [{'id': 9, 'status': 'Imported', 'client_id': 5, 'template_id': 2,
                      'ledger_account_code': None}]

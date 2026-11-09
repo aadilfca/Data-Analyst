@@ -2,7 +2,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, UploadFile, HTTPE
 from fastapi.responses import StreamingResponse
 import hashlib, os, json, logging, openpyxl, pandas as pd
 from io import BytesIO
-from functools import wraps
+from functools import wraps, lru_cache
 from contextvars import ContextVar
 from decimal import Decimal, InvalidOperation
 import re
@@ -1087,6 +1087,25 @@ IMPORT_PROGRESS: dict = {}
 DEFAULT_DATE_DELIMITER = "/"
 DEFAULT_DATE_ORDER = "DMY"  # one of DMY, MDY, YMD
 
+
+def _parse_date_text(text, delimiter, order):
+    formats = {"DMY": f"%d{delimiter}%m{delimiter}%Y", "MDY": f"%m{delimiter}%d{delimiter}%Y",
+               "YMD": f"%Y{delimiter}%m{delimiter}%d"}
+    return datetime.strptime(text, formats[order])
+
+
+@lru_cache(maxsize=4096)
+def _cached_date_text(text, delimiter, order):
+    # Pure calendar interpretation only: no workbook, client or database state.
+    return _parse_date_text(text, delimiter, order)
+
+
+def _cacheable_date_text(text, delimiter, order):
+    # Bound key sizes as well as entry count; unusually long source values still
+    # use the same parser but cannot fill the cache with large Excel cell text.
+    return len(text) <= 64 and isinstance(delimiter, str) and len(delimiter) <= 3 and isinstance(order, str) and len(order) <= 3
+
+
 def parse_date_flexible(value, delimiter: str = DEFAULT_DATE_DELIMITER, order: str = DEFAULT_DATE_ORDER) -> datetime:
     """
     Parse a date string using an explicit delimiter + component order
@@ -1095,15 +1114,11 @@ def parse_date_flexible(value, delimiter: str = DEFAULT_DATE_DELIMITER, order: s
     out-of-range date (e.g. day=45) -- strptime itself enforces range checks.
     """
     order = order.upper()
-    format_map = {
-        "DMY": f"%d{delimiter}%m{delimiter}%Y",
-        "MDY": f"%m{delimiter}%d{delimiter}%Y",
-        "YMD": f"%Y{delimiter}%m{delimiter}%d",
-    }
-    if order not in format_map:
+    if order not in {"DMY", "MDY", "YMD"}:
         raise ValueError(f"Unsupported date order '{order}'")
     try:
-        return datetime.strptime(str(value).strip(), format_map[order])
+        text = str(value).strip()
+        return (_cached_date_text if _cacheable_date_text(text, delimiter, order) else _parse_date_text)(text, delimiter, order)
     except ValueError:
         raise ValueError(f"'{value}' is not a valid date for format {order} (delimiter '{delimiter}')")
 
@@ -1379,6 +1394,35 @@ def _numeric_comparison_value(value):
         return ('invalid_numeric', str(value).strip())
 
 
+def _exact_comparison_fingerprint(row_data: dict, template_cols: list,
+                                  included_fields=None) -> tuple:
+    """Fingerprint exact lines while treating equivalent numeric encodings alike.
+
+    Source identities and concurrency guards continue using the raw-value
+    fingerprint. This view is only for matching an uploaded transaction to its
+    stored counterpart; it preserves blank-versus-zero and never rounds.
+    """
+    values = dict(_row_comparison_fingerprint(row_data or {}))
+    for column in template_cols:
+        if column.get('data_type') != 'Numeric':
+            continue
+        name = column['column_name']
+        if included_fields is not None and name not in included_fields:
+            continue
+        numeric = _numeric_comparison_value((row_data or {}).get(name))
+        if numeric is None:
+            values.pop(name, None)
+        elif isinstance(numeric, Decimal):
+            # Decimal equality/hash already ignore insignificant trailing
+            # zeros; avoid normalize(), which can round under the active context.
+            values[name] = ('numeric', numeric)
+        else:
+            values[name] = numeric
+    if included_fields is not None:
+        values = {name: value for name, value in values.items() if name in included_fields}
+    return tuple(sorted(values.items()))
+
+
 def _source_identity_fingerprint(row_data: dict, template_cols: list) -> tuple:
     """Build a versioned identity view for new lines, distinguishing blank from zero."""
     values = dict(_row_comparison_fingerprint(row_data or {}))
@@ -1405,6 +1449,25 @@ def _comparison_column_names(template_cols: list, request_mappings: list, templa
     return {c['column_name'] for c in template_cols if database.resolve_column_comparison(c, template)}
 
 
+def _comparison_text_calendar_date(value, delimiter, order, stored):
+    if not stored:
+        return parse_date_flexible(value, delimiter, order).strftime('%Y-%m-%d')
+    # Cache an ambiguous result as None too; it must never become a guessed date.
+    candidates = set()
+    for separator in ('/', '-', ''):
+        for component_order in ('DMY', 'MDY', 'YMD'):
+            try:
+                candidates.add(parse_date_flexible(value, separator, component_order).strftime('%Y-%m-%d'))
+            except (ValueError, TypeError):
+                pass
+    return next(iter(candidates)) if len(candidates) == 1 else None
+
+
+@lru_cache(maxsize=4096)
+def _cached_comparison_text_date(value, delimiter, order, stored):
+    return _comparison_text_calendar_date(value, delimiter, order, stored)
+
+
 def _comparison_calendar_date(value, delimiter, order, *, stored=False):
     """Resolve comparison-only dates; never guess an old ambiguous text order."""
     try:
@@ -1415,18 +1478,9 @@ def _comparison_calendar_date(value, delimiter, order, *, stored=False):
             return excel_serial_to_datetime(value).strftime('%Y-%m-%d')
         if kind != 'text':
             return None
-        if not stored:
-            return parse_date_flexible(value, delimiter, order).strftime('%Y-%m-%d')
-        # Old uploads need not use today's picker settings. The primary Date
-        # uses its stored extract_date; other dates require an unambiguous parse.
-        candidates = set()
-        for separator in ('/', '-', ''):
-            for component_order in ('DMY', 'MDY', 'YMD'):
-                try:
-                    candidates.add(parse_date_flexible(value, separator, component_order).strftime('%Y-%m-%d'))
-                except (ValueError, TypeError):
-                    pass
-        return next(iter(candidates)) if len(candidates) == 1 else None
+        text = str(value).strip()
+        parser = _cached_comparison_text_date if _cacheable_date_text(text, delimiter, order) else _comparison_text_calendar_date
+        return parser(text, delimiter, order, stored)
     except (ValueError, TypeError, OverflowError):
         return None
 
@@ -2422,31 +2476,21 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
         def equivalent(record, stored):
             return tuple(sorted((old_values if stored else new_values)[id(record)].items()))
 
+        exact_fingerprints = {}
+
         def exact(record, stored):
+            # Matching and source-order checks revisit the same immutable records.
+            # Reuse their strict fingerprints only within this document comparison.
+            cache_key = (id(record), stored)
+            if cache_key in exact_fingerprints:
+                return exact_fingerprints[cache_key]
             raw = record['old_row_data' if stored else 'row_data']
             # Include the resolved date when known, avoiding equal text with
             # different DMY/MDY interpretations being accepted as unchanged.
             primary = record.get('comparison_date' if stored else 'date_text')
-            fingerprint_values = dict(_row_comparison_fingerprint(raw))
-            # Keep the exact-match pass raw-format-sensitive, but do not let
-            # the legacy fingerprint's falsy-value handling equate Numeric 0
-            # with a blank cell. Numeric format equivalence belongs in the
-            # following comparison pass only.
-            for column in template_cols:
-                if column.get('data_type') != 'Numeric':
-                    continue
-                name = column['column_name']
-                if included_fields is not None and name not in included_fields:
-                    continue
-                value = raw.get(name)
-                if value is None or (isinstance(value, str) and not value.strip()):
-                    fingerprint_values.pop(name, None)
-                else:
-                    fingerprint_values[name] = str(value).strip()
-            fingerprint = tuple(sorted(fingerprint_values.items()))
-            if included_fields is not None:
-                fingerprint = tuple(item for item in fingerprint if item[0] in included_fields)
-            return fingerprint, primary
+            fingerprint = _exact_comparison_fingerprint(raw, template_cols, included_fields)
+            exact_fingerprints[cache_key] = (fingerprint, primary)
+            return exact_fingerprints[cache_key]
 
         matched, unmatched_incoming, unmatched_existing = match_unchanged(incoming, existing, exact, equivalent)
         matched_existing = [old for _new, old in matched]
@@ -3762,12 +3806,12 @@ def auto_map_headers(request: AutoMapRequest):
         raise HTTPException(404, "File not found")
 
     try:
-        df = pd.read_excel(file_info[0]['file_path'], sheet_name=sheet_name)
+        df = pd.read_excel(file_info[0]['file_path'], sheet_name=sheet_name, nrows=0)
         excel_headers = df.columns.tolist()
     except Exception as e:
         # Fallback to first sheet if specified sheet doesn't exist
         try:
-            df = pd.read_excel(file_info[0]['file_path'])
+            df = pd.read_excel(file_info[0]['file_path'], nrows=0)
             excel_headers = df.columns.tolist()
         except Exception as e2:
             raise HTTPException(400, "Could not read the selected Excel sheet. Check the file and sheet, then retry.")
@@ -4029,6 +4073,32 @@ def check_duplicates(request: ImportRequest):
         "count": len(duplicates)
     }
 # ---------- DATE FORMAT LIVE PREVIEW (Phase 5 of the date-format requirement) ----------
+def _unconfirmed_date_samples(file_path, sheet_name, mappings):
+    """Stream display samples only; these rows must never define ERP coverage."""
+    book = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+    try:
+        rows = iter(book[sheet_name].iter_rows(values_only=True))
+        headers = list(next(rows, ()))
+        names = {mapping.excel_column_name for mapping in mappings}
+        # Pandas handles duplicate/missing header names on the full-read path.
+        if any(headers.count(name) != 1 for name in names):
+            return None
+        indexes = {name: headers.index(name) for name in names}
+        values = {name: [] for name in names}
+        for row in rows:
+            for name, index in indexes.items():
+                if len(values[name]) >= 3:
+                    continue
+                value = row[index] if index < len(row) else None
+                if value is not None and not (isinstance(value, float) and pd.isna(value)):
+                    values[name].append(value)
+            if all(len(items) >= 3 for items in values.values()):
+                break
+        return headers, values
+    finally:
+        book.close()
+
+
 @router.post("/api/upload/date-preview")
 def preview_date_format(request: DatePreviewRequest):
     """
@@ -4049,18 +4119,43 @@ def preview_date_format(request: DatePreviewRequest):
     effective_delimiter = request.date_delimiter if request.date_delimiter is not None else DEFAULT_DATE_DELIMITER
     effective_order = request.date_order if request.date_order else DEFAULT_DATE_ORDER
 
+    template_cols = []
+    date_column = None
+    if request.template_id is not None:
+        template_cols = execute_query_pg(
+            """SELECT m.id, m.column_name, m.data_type, p.reconciliation_role
+               FROM template_column_mappings p JOIN master_columns m ON p.column_id = m.id
+               WHERE p.template_id = %s AND m.is_active = TRUE ORDER BY p.sort_order""",
+            (request.template_id,),
+        )
+        try:
+            date_column = resolve_document_date_column(template_cols)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+    waiting_for_footing = bool(footing_columns(template_cols) and not request.control_total_confirmed)
+
     try:
-        df = pd.read_excel(file_info[0]['file_path'], sheet_name=request.sheet_name)
+        sampled = (_unconfirmed_date_samples(file_info[0]['file_path'], request.sheet_name, request.date_mappings)
+                   if waiting_for_footing and str(file_info[0]['file_path']).lower().endswith('.xlsx') else None)
+        if sampled is not None:
+            headers, sample_values = sampled
+            df = None
+        else:
+            df = pd.read_excel(file_info[0]['file_path'], sheet_name=request.sheet_name)
+            headers = df.columns
+            sample_values = {m.excel_column_name: [v for v in df[m.excel_column_name].tolist()
+                if not (isinstance(v, float) and pd.isna(v)) and v is not None][:3]
+                for m in request.date_mappings if m.excel_column_name in df.columns}
     except Exception as e:
         raise HTTPException(400, "Could not read the selected Excel sheet. Check the file and sheet, then retry.")
 
     samples = []
     for mapping in request.date_mappings:
         excel_col = mapping.excel_column_name
-        if excel_col not in df.columns:
+        if excel_col not in headers:
             continue
         # First 3 non-empty values in this column.
-        col_values = [v for v in df[excel_col].tolist() if not (isinstance(v, float) and pd.isna(v)) and v is not None][:3]
+        col_values = sample_values[excel_col]
         for value in col_values:
             kind = classify_date_cell(value)
             if kind == 'native':
@@ -4108,22 +4203,12 @@ def preview_date_format(request: DatePreviewRequest):
 
     response = {"samples": samples, "date_suggestion": None}
     if request.template_id is not None:
-        template_cols = execute_query_pg(
-            """SELECT m.id, m.column_name, m.data_type, p.reconciliation_role
-               FROM template_column_mappings p JOIN master_columns m ON p.column_id = m.id
-               WHERE p.template_id = %s AND m.is_active = TRUE ORDER BY p.sort_order""",
-            (request.template_id,),
-        )
-        try:
-            date_column = resolve_document_date_column(template_cols)
-        except ValueError as exc:
-            raise HTTPException(400, str(exc)) from exc
         if date_column:
             mapped = {item.template_column_name: item.excel_column_name for item in request.column_mappings}
             excel_column = mapped.get(date_column['column_name'])
-            if excel_column and excel_column in df.columns:
-                col_mapping = {name: header for name, header in mapped.items() if header in df.columns}
-                if footing_columns(template_cols) and not request.control_total_confirmed:
+            if excel_column and excel_column in headers:
+                col_mapping = {name: header for name, header in mapped.items() if header in headers}
+                if waiting_for_footing:
                     response['date_suggestion'] = {
                         'start': None, 'end': None, 'transaction_dates': 0,
                         'column': date_column['column_name'], 'status': 'confirm_footing'

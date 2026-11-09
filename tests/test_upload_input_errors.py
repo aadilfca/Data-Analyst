@@ -104,6 +104,9 @@ def test_reusing_a_source_column_does_not_hide_its_numeric_validation(tmp_path):
 def test_http_validation_and_direct_import_block_bad_cells_before_comparison_or_writes(tmp_path, monkeypatch, endpoint, value, column):
     path = workbook(tmp_path, value, column)
     def query(sql, params=None, **kwargs):
+        if 'FROM app_settings' in sql:
+            assert params == ('development_allow_unbacked_uploads',)
+            return [dict(value='true')]
         if 'FROM templates' in sql:
             return [dict(id=1,template_name='Test',data_purpose='standard',rate_source=None)]
         if 'FROM template_column_mappings' in sql:

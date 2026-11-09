@@ -118,12 +118,19 @@ def test_wrong_shared_column_type_is_rejected():
 def test_existing_template_editor_preserves_ledger_configuration_when_fields_are_omitted():
     existing = {"id": 7, "data_purpose": "account_ledger", "ledger_columns": json.dumps(ROLES)}
     update = templates.TemplateUpdate(template_name="Renamed ledger", selected_columns=list(ROLES.values()))
+    def query(sql, params=None):
+        if 'pg_advisory_xact_lock' in sql: return []
+        if 'FROM templates' in sql:
+            return [] if 'template_name = %s' in sql else [existing]
+        if 'FROM master_columns' in sql or 'FROM template_column_mappings' in sql:
+            return copy.deepcopy(COLUMNS)
+        raise AssertionError(sql)
     with patch.object(templates, "pg_transaction", side_effect=lambda: nullcontext()), \
-            patch.object(templates, "execute_query_pg", side_effect=[[existing], [], COLUMNS]), \
+            patch.object(templates, "execute_query_pg", side_effect=query), \
             patch.object(templates, "execute_write_pg") as write, patch.object(templates, "log_audit"), \
             patch.object(templates, "invalidate_template_cache"):
         templates.update_template(7, update)
-    first = write.call_args_list[0].args
+    first = next(call.args for call in write.call_args_list if call.args[0].startswith('UPDATE templates'))
     assert "data_purpose = %s" in first[0]
     assert first[1][3] == "account_ledger" and json.loads(first[1][4]) == ROLES
 
@@ -133,8 +140,15 @@ def test_imported_transactions_or_balance_only_evidence_prevent_purpose_changes(
     existing = {"id": 7, "data_purpose": "account_ledger", "ledger_columns": json.dumps(ROLES)}
     update = templates.TemplateUpdate(template_name="Ledger", selected_columns=list(ROLES.values()),
                                       data_purpose="standard", ledger_columns={})
+    def query(sql, params=None):
+        if 'pg_advisory_xact_lock' in sql: return []
+        if 'FROM templates' in sql:
+            return [] if 'template_name = %s' in sql else [existing]
+        if 'FROM client_data' in sql: return transaction_rows
+        if 'FROM uploaded_files' in sql: return control_uploads
+        raise AssertionError(sql)
     with patch.object(templates, "pg_transaction", side_effect=lambda: nullcontext()), \
-            patch.object(templates, "execute_query_pg", side_effect=[[existing], [], transaction_rows, control_uploads]), \
+            patch.object(templates, "execute_query_pg", side_effect=query), \
             patch.object(templates, "execute_write_pg") as write, pytest.raises(HTTPException) as error:
         templates.update_template(7, update)
     assert error.value.status_code == 409
@@ -447,7 +461,12 @@ def test_guard_rejects_changed_scope_before_metadata_writes():
 
 def test_ledger_import_requires_validated_plan_and_context_is_reset():
     context = resolve()
-    with patch.object(upload, "execute_query_pg", side_effect=[[TEMPLATE], [{"status": "Pending"}]]), \
+    def query(sql, params=None):
+        if 'FROM app_settings' in sql: return []
+        if 'FROM templates' in sql: return [TEMPLATE]
+        if 'FROM uploaded_files' in sql: return [{'status':'Pending'}]
+        raise AssertionError(sql)
+    with patch.object(upload, "execute_query_pg", side_effect=query), \
             patch.object(upload, "_resolve_ledger_context", return_value=context), \
             patch.object(upload, "get_database_storage_budget_pg", return_value={"warning": False}), \
             pytest.raises(HTTPException):
@@ -478,6 +497,7 @@ def test_validate_and_import_extract_controls_and_never_classify_ledger_as_vouch
             "uploaded_by": "Tester", "file_sha256": "hash", "client_id": 3, "template_id": 7}
 
     def query(sql, params=None, **kwargs):
+        if 'FROM app_settings' in sql: return []
         if sql.startswith('LOCK TABLE'):
             # Exercise the real DB helper: PostgreSQL lock commands have no
             # result description and fetching them raises ProgrammingError.
@@ -645,8 +665,12 @@ class LedgerSetupStore:
         self.columns = [dict(id=i + 1, column_name=name, data_type=kind, is_active=True)
                         for i, (name, kind) in enumerate(templates.LEDGER_SETUP_COLUMNS.values())][:existing]
         self.templates, self.mappings, self.writes = [], [], []
+        self.configuration_locks = []
         self.fail_template = False
     def read(self, sql, params=None):
+        if 'pg_advisory_xact_lock' in sql:
+            self.configuration_locks.append(sql)
+            return []
         if 'FROM master_columns ORDER BY' in sql: return copy.deepcopy(self.columns)
         if 'FROM master_columns WHERE id = ANY' in sql:
             return [c for c in self.columns if c['id'] in params[0] and c['is_active']]
@@ -693,6 +717,7 @@ def test_ledger_preparation_preview_is_read_only_and_save_reuses_columns_idempot
         second = templates.save_ledger_setup(setup)
         assert first['template_id'] == second['template_id'] == 10 and second['reused']
         assert len(store.columns) == 6 and len(store.templates) == 1 and len(store.mappings) == 6
+        assert store.configuration_locks, 'Configuration changes must retain their transaction lock'
         assert store.writes[0][0].startswith('LOCK TABLE')
         assert [c['column_name'] for c in store.columns][:5] == [v[0] for v in list(templates.LEDGER_SETUP_COLUMNS.values())[:5]]
 
@@ -915,6 +940,8 @@ def ledger_preview_client(monkeypatch):
             row_data TEXT, extract_amount REAL, extract_date TEXT, data_quality_flag TEXT, rate_source TEXT,
             document_group_id TEXT, is_deleted BOOLEAN, change_detection_status TEXT,
             source_row_number INTEGER, source_order_upload_id INTEGER);
+        CREATE TABLE client_data_history (client_id INTEGER, template_id INTEGER,
+            source_upload_id INTEGER, ledger_account_code TEXT, ledger_account_name TEXT);
         INSERT INTO clients VALUES (3, TRUE), (4, TRUE);
         INSERT INTO templates VALUES (7, 'Universal ledger', 'account_ledger', TRUE),
             (8, 'Invoices', 'standard', TRUE), (9, 'Another ledger', 'account_ledger', TRUE);
