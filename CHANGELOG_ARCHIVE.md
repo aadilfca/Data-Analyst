@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Template-first upload toolbar — 2026-11-09
+
+Upload starts with Template only. Selecting it reveals Download and Upload File; mapped workbooks reveal file details, Sheet, Date format and Data Bank in one desktop row, with 32px controls and narrow-screen wrapping. Data Bank sits at the panel's right edge with centered contents. Long filenames shorten visually with the full name in a tooltip. Removing a file retains Template; Reset clears the workflow. Replacement uploads hide stale tables while loading. Script version 34; no backend, schema or dependency changes.
+
+Verification: the full 67-test upload-dialog suite passed; three focused checks passed after visibility changes. Two focused Chromium toolbar checks at 1366px/390px pass after the right-edge/centering correction, measuring panel and text positions. Syntax/whitespace checks pass. Live Playwright checked initial/template/file states, removal, reupload and Reset using both PO workbooks, desktop/narrow layouts, and slash/dash/slash date suggestions. No validation/import was performed. Aadil confirmed local acceptance and authorized commit/push; performance review follows this layout phase.
+
 ## Upload coverage date-format responsiveness — 2026-11-09
 
 From/To follow the selected date order and detected delimiter, preserving calendar dates and ISO requests/session values. Native Excel dates have no textual delimiter and use a stable slash display; mixed or undetectable text retains the existing choice. Source changes clear coverage/confirmations, footing confirmation gates new suggestions, and obsolete mapping/date-preview responses cannot restore earlier source state. Validate stays disabled during source remapping. The upload script version advances to 33.

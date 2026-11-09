@@ -237,6 +237,74 @@ def page():
         browser.close()
 
 
+@pytest.mark.parametrize('width', [1366, 390])
+def test_template_first_toolbar_file_removal_and_reset(page, width):
+    page.set_viewport_size({'width':width,'height':900})
+    page.add_script_tag(path=str(ROOT/'static/vendor/xlsx.full.min.js'))
+    mappings=[{'column_id':1,'column_name':'Voucher','excel_column':'Voucher','data_type':'Text','is_matched':True},
+              {'column_id':2,'column_name':'Date','excel_column':'Date','data_type':'Date','is_matched':True,
+               'reconciliation_role':'document_date'}]
+    page.route('**/templates/1/upload-columns',lambda route:route.fulfill(json={
+        'columns':mappings,'total_columns':2,'data_purpose':'standard'}))
+    page.route('**/api/import-excel',lambda route:route.fulfill(json={'file_id':99,'record_count':1}))
+    page.route('**/api/upload/auto-map',lambda route:route.fulfill(json={
+        'mappings':mappings,'excel_headers':['Voucher','Date'],'total_columns':2}))
+    page.route('**/api/upload/saved-mapping*',lambda route:route.fulfill(json={'has_saved_mapping':False}))
+    expect(page.locator('#templateDropdown')).to_be_visible()
+    for selector in ['#uploadFileBtn','#downloadBtn','#goToDataBankBtn','#mappingPanel','#sheetSelector']:
+        expect(page.locator(selector)).to_be_hidden()
+    page.evaluate('''async () => {
+        templateDropdown.replaceChildren(new Option('-- Select Template --',''),new Option('Purchase Order','1',true,true));
+        await selectTemplate(1);
+        window.stageToolbarFile=()=>{
+            const book=XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(book,XLSX.utils.aoa_to_sheet([['Voucher','Date'],['PO-1','11/02/2026']]),'PO Date Slash');
+            handleFile(new File([XLSX.write(book,{type:'array',bookType:'xlsx'})],
+                'Purchase Order with a deliberately very long workbook filename.xlsx',
+                {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+        };
+    }''')
+    expect(page.get_by_role('button',name='Upload File',exact=True)).to_be_visible()
+    expect(page.locator('#downloadBtn')).to_be_visible()
+    expect(page.locator('#goToDataBankBtn')).to_be_hidden()
+    expect(page.locator('#mappingPanel')).to_be_hidden()
+    page.evaluate('stageToolbarFile()')
+    expect(page.locator('#mappingPanel')).to_be_visible()
+    for selector in ['#fileInfo','#sheetSelector','#dateFormatTriggerBtn','#goToDataBankBtn']:
+        expect(page.locator(selector)).to_be_visible()
+    assert page.locator('#fileName').get_attribute('title').endswith('filename.xlsx')
+    boxes=page.locator('.top-bar').evaluate('''bar=>({width:innerWidth,
+        controls:[...bar.querySelectorAll('#templateDropdown,#downloadBtn,#uploadFileBtn,#fileInfo,#sheetSelector,#dateFormatTriggerBtn,#goToDataBankBtn')]
+            .map(el=>{const r=el.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,height:r.height};})})''')
+    assert all(box['left']>=0 and box['right']<=width for box in boxes['controls'])
+    if width==1366:
+        assert max(box['top'] for box in boxes['controls'])-min(box['top'] for box in boxes['controls'])<=1
+        assert all(box['height']==32 for box in boxes['controls'])
+    alignment=page.locator('#goToDataBankBtn').evaluate('''button=>{
+        const panel=button.closest('.top-bar'), panelRect=panel.getBoundingClientRect(), style=getComputedStyle(panel);
+        const rect=button.getBoundingClientRect(), text=document.createRange(); text.selectNodeContents(button);
+        const content=text.getBoundingClientRect();
+        return {rightGap:panelRect.right-parseFloat(style.paddingRight)-parseFloat(style.borderRightWidth)-rect.right,
+            horizontalOffset:(content.left+content.right-rect.left-rect.right)/2,
+            verticalOffset:(content.top+content.bottom-rect.top-rect.bottom)/2};
+    }''')
+    assert abs(alignment['rightGap'])<=1
+    assert abs(alignment['horizontalOffset'])<=2
+    assert abs(alignment['verticalOffset'])<=2
+    page.locator('#clearBtn').click()
+    expect(page.locator('#templateDropdown')).to_have_value('1')
+    expect(page.locator('#uploadFileBtn')).to_be_visible()
+    expect(page.locator('#fileInfo')).to_be_hidden()
+    expect(page.locator('#mappingPanel')).to_be_hidden()
+    expect(page.locator('#goToDataBankBtn')).to_be_hidden()
+    page.evaluate('stageToolbarFile()')
+    expect(page.locator('#mappingPanel')).to_be_visible()
+    page.locator('#resetBtn').click()
+    expect(page.locator('#templateDropdown')).to_have_value('')
+    for selector in ['#uploadFileBtn','#downloadBtn','#goToDataBankBtn','#mappingPanel','#sheetSelector']:
+        expect(page.locator(selector)).to_be_hidden()
+
+
 @pytest.mark.parametrize(('date_values','notes','initial_delimiter','expected_delimiter','expected_label'), [
     (['', 46000, 'not a date', '18/11/2026'], ['2026-11-18'] * 4, '-', '/', 'MM/DD/YYYY'),
     (['', 46000, 'not a date', '2026-11-18'], ['18/11/2026'] * 4, '/', '-', 'MM-DD-YYYY'),

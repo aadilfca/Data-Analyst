@@ -474,19 +474,22 @@ let pendingRestoreSheetName = null;
 let pendingExcludedRowNumbersToRestore = null;
 
 // ---------- STEP INDICATOR / SHEET-DOWNLOAD REVEAL (Phase 2 of the Upload header reorg) ----------
-// Download Template + Sheet selector are gated together behind Template selection instead of
-// Download always being visible (see #sheetDownloadGroup in upload.html). Single place both
-// reveal and hide go through.
+// Template selection reveals the download and file picker; sheet/date controls
+// follow only when the workbook and its mapping are available.
 function setSheetDownloadGroupVisible(visible) {
     const group = document.getElementById('sheetDownloadGroup');
     if (group) group.style.display = visible ? 'flex' : 'none';
+    const uploadGroup = document.getElementById('uploadFileGroup');
+    if (uploadGroup) uploadGroup.style.display = visible ? 'flex' : 'none';
 }
 
-// Go to Data Bank (Phase 4) -- stays visually inert until Template -> Sheet -> mapping all
-// resolve; navigation behavior in the click handler (window.onload, further down) is unchanged.
+// Reveal the Data Bank shortcut only after the source mapping is ready.
 function updateGoToDataBankState(enabled) {
     const btn = document.getElementById('goToDataBankBtn');
-    if (btn) btn.disabled = !enabled;
+    if (btn) {
+        btn.disabled = !enabled;
+        btn.style.display = enabled ? 'inline-flex' : 'none';
+    }
 }
 
 // Moves the step-indicator strip's .active class between step-items (data-step attribute,
@@ -1942,6 +1945,7 @@ if (templateDropdown) {
             if (leftPanel) leftPanel.style.display = 'none';
             if (modeActions) modeActions.style.display = 'none';
             if (sheetField) sheetField.style.display = 'none';
+            getElement('rowExclusionContainer').style.display = 'none';
             if (importBtn) importBtn.disabled = true;
             setBadge('⏳ Select a template');
             showStatus('Select a template and upload an Excel file to begin.', 'info');
@@ -2030,6 +2034,7 @@ async function selectTemplate(id) {
 // existing fileInput/handleFile() flow the drag-and-drop area used to call.
 if (uploadFileBtn) {
     uploadFileBtn.addEventListener('click', function() {
+        if (!selectedTemplateId) return;
         if (fileInput) {
             fileInput.click();
         } else {
@@ -2073,7 +2078,21 @@ async function handleFile(file) {
     resetValidationState();
     resetSourceControlChoice();
     if (importBtn) importBtn.disabled = true;
-    if (fileName) fileName.textContent = file.name;
+    // Replacing a workbook must not leave the previous workbook's tables visible
+    // under the new filename while its file reading/upload/mapping is in flight.
+    if (mappingPanel) mappingPanel.style.display = 'none';
+    if (leftPanel) leftPanel.style.display = 'none';
+    if (modeActions) modeActions.style.display = 'none';
+    if (sheetField) sheetField.style.display = 'none';
+    getElement('rowExclusionContainer').style.display = 'none';
+    setDateFormatGroupVisible(false);
+    closeDateFormatPopover();
+    updateGoToDataBankState(false);
+    if (fileName) {
+        fileName.textContent = file.name;
+        fileName.title = file.name;
+    }
+    document.getElementById('uploadFileGroup')?.classList.add('has-file');
     if (fileSize) fileSize.textContent = formatFileSize(file.size);
     if (fileInfo) fileInfo.style.display = 'flex';
     if (footerMeta) footerMeta.style.display = 'flex';
@@ -2188,7 +2207,20 @@ async function uploadFileToServer(file) {
 
 // ---------- CLEAR FILE ----------
 if (clearBtn) {
-    clearBtn.addEventListener('click', resetUpload);
+    clearBtn.addEventListener('click', removeUploadFile);
+}
+
+async function removeUploadFile() {
+    const templateId = selectedTemplateId;
+    resetUpload();
+    if (!templateId) return;
+    // Reuse template loading so ledger choices and download metadata also return
+    // to their normal template-selected state after the source file is removed.
+    if (templateDropdown) templateDropdown.value = String(templateId);
+    await selectTemplate(templateId);
+    if (selectedTemplateId === templateId && !selectedFile) {
+        showStatus('File removed. Upload another file for the selected template.', 'info');
+    }
 }
 
 function resetUpload() {
@@ -2199,6 +2231,7 @@ function resetUpload() {
     if (isLedgerUpload()) renderLedgerUploadAccounts();
     else clearLedgerUploadContext();
     selectedFile = null;
+    document.getElementById('uploadFileGroup')?.classList.remove('has-file');
     fileId = null;
     if (comparisonModeDropdown) comparisonModeDropdown.value = 'replace_range';
     updateUploadCoverageVisibility();
@@ -2274,6 +2307,12 @@ function resetUpload() {
     // still showing.
     clearUploadSessionState();
     clearRestorePreview();
+    if (templateDropdown) templateDropdown.value = '';
+    selectedTemplateId = null;
+    uploadTemplatePurpose = 'standard';
+    uploadLedgerColumnRoles = {};
+    clearLedgerUploadContext();
+    updateUploadCoverageVisibility();
 }
 
 // ---------- SAVE COLUMN MAPPING (Phase A2 of 3) ----------
@@ -2637,14 +2676,7 @@ if (downloadBtn) {
 
 // ---------- RESET ----------
 if (resetBtn) {
-    resetBtn.addEventListener('click', function() {
-        resetUpload();
-        if (templateDropdown) templateDropdown.value = '';
-        selectedTemplateId = null;
-        uploadTemplatePurpose = 'standard'; uploadLedgerColumnRoles = {}; clearLedgerUploadContext(); updateUploadCoverageVisibility();
-        setBadge('⏳ Select a template');
-        showStatus('🔄 Reset complete. Select a template and upload a file.', 'info');
-    });
+    resetBtn.addEventListener('click', resetUpload);
 }
 function sourceFootingReportRows(sourceReconciliation) {
     if (!sourceReconciliation?.checks?.length) return [];
