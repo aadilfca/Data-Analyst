@@ -18,7 +18,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, allocated database size and selected-client integrity status. See CHANGELOG_ARCHIVE.md.
 - routers/data.py, routers/data_integrity.py + static/databank.*, static/data_integrity.* → Scoped preview controls, fresh bounded caches, backups, history and safeguards. See CHANGELOG_ARCHIVE.md.
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
-- routers/import_export.py + static/upload.* → Template-checked imports, confirmed full-period coverage, exact source/stored footing reconciliation, paged previews and resumable no-change results. See CHANGELOG_ARCHIVE.md.
+- routers/import_export.py + static/upload.* → Template-checked imports, full-period coverage, source-footing variance safeguards, stored reconciliation and paged previews. See CHANGELOG_ARCHIVE.md.
 - routers/settings.py + routers/google_drive_auth.py + static/settings.* → App settings, administrator upload-backup controls, firm-wide holidays and Drive reconnection. See CHANGELOG_ARCHIVE.md.
 - routers/templates.py + static/templates.*, static/columns.* → Reusable columns, template reconciliation/comparison settings, guarded configuration, ledger setup and backup/restore. See CHANGELOG_ARCHIVE.md.
 - static/client_settings.html, static/client_settings.js -> retired direct-bookmark information page; all Verification account routing is configured centrally in Account Control Centre. See CHANGELOG_ARCHIVE.md.
@@ -137,7 +137,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 - Document ID/Date/Footing roles belong to template mappings. Complete reports require Document Date mapping and full-period coverage; confirmation locks dates. Stored-date source changes need migration review.
 - Comparison policy belongs to template mappings: default checked except configured Account Ledger Balance. Upload requests/header mappings cannot override it; conflicting legacy choices require template review/save.
-- Footing requires a confirmed Excel total row and exact full-detail sums. Approved-subset metrics remain separate; footer choices are file-specific and validation-bound.
+- Footing requires a confirmed Excel total row; differences below 0.01 pass, up to 1.00 need acknowledgement, and larger differences block. Preserve exact amounts.
 - A confirmed control row is validated vertically through mapped Footing cells; neighboring cell values do not disqualify it.
 - Unmapped optional Standard fields import as blank; Document ID, critical and configured Footing mappings remain required.
 - Post-import SQL controls share the import transaction/receipt; savepoints isolate verification errors. Receipts describe completion-time evidence; partial extracts never certify complete periods.
@@ -266,7 +266,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
-- 2026-11-09: Upload review retains no-change results and shows scoped stored Footing totals; date suggestions and full-period confirmation remain active. See CHANGELOG_ARCHIVE.md.
+- 2026-11-09: Uploads retain no-change evidence, scoped totals, full-period confirmation and precision-aware Footing tolerance; exact transaction amounts remain unchanged. See CHANGELOG_ARCHIVE.md.
 - 2026-11-06: Combined no-change source notes with accessible upload results. See CHANGELOG_ARCHIVE.md, Upload result dialogs — Phase 2.
 - 2026-11-06: Complete reports allow unmapped optional Standard fields and store them blank. See CHANGELOG_ARCHIVE.md, Unmapped Standard fields — Phase 2.
 - 2026-11-06: Footing control rows ignore neighboring values; selected totals remain validated. See CHANGELOG_ARCHIVE.md, Vertical Footing validation.

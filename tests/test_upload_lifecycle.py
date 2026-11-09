@@ -1314,9 +1314,73 @@ def test_footing_plan_import_preserves_repeated_lines_and_compact_controls(pipel
     assert pipeline['store'].source_writes == writes
 
 
+def test_subcent_footing_difference_is_auto_accepted_without_rounding(pipeline):
+    choices = controlled_source(pipeline)
+    pipeline['incoming'][-1]['Debit Amount'] = Decimal('35.0000000064')
+    result, validation = validate_then_import(pipeline, **choices)
+    control = result['source_reconciliation']
+    debit = next(item for item in control['checks'] if item['column'] == 'Debit Amount')
+    assert validation['can_import']
+    assert control['status'] == 'rounding_tolerated'
+    assert debit['difference'] == '-0.0000000064'
+    assert debit['excel_total'] == '35.0000000064'
+    assert debit['detail_total'] == '35'
+    assert control['approved_detail']['footing_totals']['Debit Amount'] == '35'
+    assert result['imported_count'] == 3 and pipeline['store'].source_writes == 3
+
+
+@pytest.mark.parametrize(('difference', 'expected_status'), [
+    ('0.009999999', 'rounding_tolerated'),
+    ('0.01', 'confirmation_required'),
+    ('-0.01', 'confirmation_required'),
+    ('1', 'confirmation_required'),
+    ('-1', 'confirmation_required'),
+    ('1.0000001', 'mismatch'),
+])
+def test_footing_variance_policy_boundaries(pipeline, difference, expected_status):
+    choices = controlled_source(pipeline)
+    pipeline['incoming'][-1]['Debit Amount'] = Decimal('35') - Decimal(difference)
+    validation = upload.validate_only(request(**choices))
+    if expected_status == 'confirmation_required':
+        assert validation['status'] == 'footing_confirmation_required'
+        assert validation['footing_variance_confirmation_required']
+        assert not validation['has_errors'] and not validation['can_import']
+        assert validation['source_reconciliation']['status'] == expected_status
+        assert not pipeline['store'].plans and pipeline['store'].source_writes == 0
+    elif expected_status == 'mismatch':
+        assert validation['status'] == 'validation_failed'
+        assert validation['source_reconciliation']['status'] == expected_status
+        assert not pipeline['store'].plans and pipeline['store'].source_writes == 0
+    else:
+        assert validation['can_import']
+        assert validation['source_reconciliation']['status'] == expected_status
+
+
+def test_footing_variance_requires_acknowledgement_and_binds_it_to_import_plan(pipeline):
+    choices = controlled_source(pipeline)
+    pipeline['incoming'][-1]['Debit Amount'] = Decimal('34')
+    pending = upload.validate_only(request(**choices))
+    assert pending['status'] == 'footing_confirmation_required'
+    assert not pipeline['store'].plans and pipeline['store'].source_writes == 0
+
+    confirmed = upload.validate_only(request(**choices, confirm_footing_variance=True))
+    assert confirmed['can_import'] and confirmed['source_reconciliation']['status'] == 'confirmed_variance'
+    assert confirmed['source_reconciliation']['tolerance_policy']['variance_confirmed']
+    with pytest.raises(HTTPException) as error:
+        upload.validate_and_import(request(validation_plan_id=confirmed['validation_plan_id'], **choices))
+    assert error.value.status_code == 409
+    assert pipeline['store'].source_writes == 0
+
+    result = upload.validate_and_import(request(validation_plan_id=confirmed['validation_plan_id'],
+                                                confirm_footing_variance=True, **choices))
+    assert result['imported_count'] == 3
+    assert result['source_reconciliation']['checks'][0]['difference'] == '1'
+    assert result['source_reconciliation']['status'] == 'confirmed_variance'
+
+
 def test_mismatching_source_footing_cannot_create_plan_or_write_transactions(pipeline):
     choices = controlled_source(pipeline)
-    pipeline['incoming'][-1]['Debit Amount'] += 1
+    pipeline['incoming'][-1]['Debit Amount'] += Decimal('1.01')
     validation = upload.validate_only(request(**choices))
     assert validation['status'] == 'validation_failed'
     assert validation['source_reconciliation']['status'] == 'mismatch'

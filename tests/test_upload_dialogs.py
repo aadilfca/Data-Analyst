@@ -229,6 +229,7 @@ def page():
         current = browser.new_page(viewport={'width':1366,'height':900})
         current.route('**/*', lambda route: route.fulfill(status=200, content_type='text/html', body=html)
                       if route.request.resource_type=='document' else route.abort())
+        current.route('**/api/upload/date-preview', lambda route: route.fulfill(json={'samples': []}))
         current.goto('http://upload-dialog-tests.invalid/')
         current.add_script_tag(content='var API_BASE="/api"; function getSelectedClientId(){return 1;} function getSelectedClientName(){return "Leather Crop";}\n'+
                                (ROOT/'static/upload.js').read_text(encoding='utf-8'))
@@ -511,6 +512,30 @@ def test_source_warnings_keep_their_details_without_error_red(page):
     assert 'Source total differs.' in page.get_by_role('dialog').inner_text()
 
 
+def test_footing_variance_confirmation_shows_exact_values_and_returns_acknowledgement(page):
+    result={'source_reconciliation':{'control_total_row':169,'status':'confirmation_required',
+        'checks':[{'column':'Amount','excel_total':'5432125.6086457',
+                   'detail_total':'5432125.6086456936','difference':'-0.0000000064'}]}}
+    page.evaluate("result => { window.__varianceDecision=null; showFootingVarianceConfirmation(result).then(value => window.__varianceDecision=value); }", result)
+    expect(page.get_by_role('dialog')).to_contain_text('0.01–1.00 currency units')
+    expect(page.locator('.upload-issue-summary')).to_contain_text('Excel footing totals differ')
+    assert '5,432,125.6086457' in page.get_by_role('dialog').inner_text()
+    assert '5,432,125.6086456936' in page.get_by_role('dialog').inner_text()
+    assert '-0.0000000064' in page.get_by_role('dialog').inner_text()
+    page.get_by_role('button',name='Confirm variance and revalidate').click()
+    assert page.evaluate('window.__varianceDecision') is True
+    assert page.locator('#validationErrorOverlay').count()==0
+
+
+def test_footing_variance_confirmation_can_be_cancelled_without_acknowledging(page):
+    result={'source_reconciliation':{'control_total_row':9,'status':'confirmation_required',
+        'checks':[{'column':'Total','excel_total':'101','detail_total':'100','difference':'-1'}]}}
+    page.evaluate("result => { window.__varianceDecision=null; showFootingVarianceConfirmation(result).then(value => window.__varianceDecision=value); }", result)
+    page.keyboard.press('Escape')
+    assert page.evaluate('window.__varianceDecision') is False
+    assert page.locator('#validationErrorOverlay').count()==0
+
+
 @pytest.mark.parametrize('width',[360,768])
 def test_dialogs_fit_narrow_screens(page,width):
     page.set_viewport_size({'width':width,'height':900})
@@ -704,6 +729,7 @@ def test_unchanged_validation_opens_verified_result_without_sending_import(page)
     prepare_source_controls(page)
     page.locator('#sourceControlConfirmed').check()
     page.evaluate("localStorage.setItem('selectedClientId','1'); uploadCoverageStart.value='2026-04-01'; uploadCoverageEnd.value='2026-04-30';")
+    page.locator('#uploadConfirmCoverage').check()
     requests=[]
     page.on('request',lambda request:requests.append(request.url))
     result={'status':'validation_complete','has_errors':False,'errors':[],'rejected_rows':[],

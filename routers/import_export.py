@@ -365,7 +365,8 @@ def _source_reconciliation(frame, rows, request, columns, mapping):
     try:
         footer_values = frame.iloc[request.control_total_row - 2].to_dict() if footing_columns(columns) else {}
         return reconcile_source(footer_values, rows, columns, mapping,
-                                request.control_total_row, _ledger_row_number)
+                                request.control_total_row, _ledger_row_number,
+                                confirm_variance=request.confirm_footing_variance)
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
 
@@ -373,11 +374,20 @@ def _source_reconciliation(frame, rows, request, columns, mapping):
 def _reconciliation_failure(controls, total_rows):
     errors = [{'row_number': controls['control_total_row'], 'row_data': {}, 'errors': [
         {'column': check['column'], 'error_type': 'footing_mismatch',
-         'message': f"Excel total {check['excel_total']} differs from detail total {check['detail_total']} by {check['difference']}. Correct the source workbook."}
-        for check in controls['checks'] if Decimal(check['difference']) != 0]}]
+         'message': f"Excel total {check['excel_total']} differs from detail total {check['detail_total']} by {check['difference']}, exceeding the 1.00 currency-unit confirmation limit. Correct the source workbook with client management."}
+        for check in controls['checks'] if check['status'] == 'mismatch']}]
     result = _source_input_failure(errors, total_rows)
     result['source_reconciliation'] = controls
     return result
+
+
+def _reconciliation_confirmation_required(controls, total_rows):
+    return {'status': 'footing_confirmation_required', 'has_errors': False, 'can_import': False,
+            'error_count': 0, 'errors': [], 'total_rows': total_rows,
+            'has_rejections': False, 'rejected_count': 0, 'rejected_rows': [],
+            'footing_variance_confirmation_required': True,
+            'message': 'Review the source/detail variance and confirm to validate again. No data was changed.',
+            'source_reconciliation': controls}
 
 
 def _approved_reconciliation(controls, rows, columns, mapping, request, date_range):
@@ -2660,6 +2670,9 @@ class ImportRequest(BaseModel):
     # Source control choice is file-specific and never a saved column default.
     control_total_row: Optional[StrictInt] = None
     control_total_confirmed: StrictBool = False
+    # A per-upload acknowledgement for source footing differences up to one
+    # currency unit. It is included in the validation-plan request signature.
+    confirm_footing_variance: StrictBool = False
     unique_column_id: Optional[int] = None
     skip_validation: bool = False
     sheet_name: str = "Sheet1"
@@ -4247,6 +4260,8 @@ def validate_only(request: ImportRequest, perf: bool = False):
     source_controls = _source_reconciliation(df, rows, request, template_cols, col_mapping)
     if source_controls['status'] == 'mismatch':
         return _reconciliation_failure(source_controls, len(rows))
+    if source_controls['status'] == 'confirmation_required':
+        return _reconciliation_confirmation_required(source_controls, len(rows))
     rows = apply_edited_cell_values(rows, request.edited_cells)
     # Drop user-excluded rows before anything else sees them (validation, counts).
     if request.comparison_mode == 'replace_range':
@@ -4766,7 +4781,12 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
     source_controls = plan_payload.get('source_reconciliation') or {}
     configured_footings = sorted(c['column_name'] for c in footing_columns(template_cols))
     planned_footings = sorted(c['column'] for c in source_controls.get('checks', []))
-    if configured_footings != planned_footings or (configured_footings and source_controls.get('status') != 'matched'):
+    accepted_footing_statuses = {'matched', 'rounding_tolerated', 'confirmed_variance'}
+    source_status = source_controls.get('status')
+    if (configured_footings != planned_footings
+            or (configured_footings and source_status not in accepted_footing_statuses)
+            or (source_status == 'confirmed_variance' and not request.confirm_footing_variance)
+            or (request.confirm_footing_variance and source_status != 'confirmed_variance')):
         raise HTTPException(409, 'Source Footing controls are missing or changed. Validate the file again.')
     # Validation plans created before comparison settings were recorded (or
     # assembled directly by older integrations) have no authoritative field
@@ -5281,6 +5301,7 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
         finish_lifecycle(prepared, {
             'status': 'success', 'message': import_message,
             'reconciliation': reconciliation,
+            'source_reconciliation': source_controls,
             'total_rows': total_rows_attempted, 'imported_count': inserted_count,
             'updated_count': updated_count, 'deleted_count': deleted_count,
             'informational_updated_count': informational_updated_count,

@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Footing variance safeguards — 2026-11-09
+
+Source Footing differences below 0.01 currency units pass as precision noise. Differences from 0.01 through 1.00 require an explicit per-upload acknowledgement, bound to validation and import; larger differences block. Validation and import results/reports retain exact Excel totals, detail totals and variance. Stored transaction values are never rounded or rewritten.
+
+Verification: both focused upload modules pass (164 tests), covering positive and negative 0.01/1.00 boundaries, sub-cent tolerance, over-limit rejection, signed-plan acknowledgement, exact variance display and cancellation. Python/JavaScript syntax and scoped whitespace checks pass. A validation-only browser run on GRN 04-11.xlsx reached the old rejection because the running server had not loaded the backend change; restart and local acceptance remain pending. No import was performed.
+
 ## Upload report date auto-fill and confirmation lock — 2026-11-08
 
 After a file is mapped, the existing Document Date preview now fills From/To with the earliest/latest valid transaction dates. Manual date edits remain intact across preview refreshes. The adjacent Confirm checkbox locks both dates until unchecked. Full-period guidance remains visible, and confirmation is still required for Complete reports. Footing confirmation remains a prerequisite where configured; no backend or schema changes.

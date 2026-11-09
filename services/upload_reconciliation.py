@@ -12,6 +12,10 @@ from database import resolve_document_column
 TOTAL_LABEL = re.compile(r'(?:grand\s*)?(?:sub\s*)?total\s*:?$', re.I)
 NUMBER_PATTERN = r'[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?'
 NUMBER = re.compile(NUMBER_PATTERN)
+# Compare at full Decimal precision. These are decision thresholds only; no
+# source or transaction amount is rounded or rewritten.
+FOOTING_AUTO_ACCEPT_BELOW = Decimal('0.01')
+FOOTING_CONFIRMATION_LIMIT = Decimal('1.00')
 # Match Python str.strip() for identifiers and numeric text, including ERP NBSP.
 SOURCE_WHITESPACE = ' \t\n\r\v\f\x1c\x1d\x1e\x1f\x85\xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000'
 
@@ -102,21 +106,50 @@ def summarize_rows(rows, columns, mapping, row_number=lambda row, fallback: fall
             'footing_totals': {name: format(value, 'f') for name, value in totals.items()}}
 
 
-def reconcile_source(footer_values, detail_rows, columns, mapping, row_number, row_number_for):
+def reconcile_source(footer_values, detail_rows, columns, mapping, row_number, row_number_for,
+                     confirm_variance=False):
     """A report footer proves the full detail, never a user-selected subset."""
     summary = summarize_rows(detail_rows, columns, mapping, row_number_for)
     checks = []
+    confirmable_variance = False
     with localcontext() as context:
         context.prec = 2010 + len(str(len(detail_rows)))
         for column in footing_columns(columns):
             name = column['column_name']
             reported = amount(footer_values.get(mapping[name]), required=True)
             actual = Decimal(summary['footing_totals'][name])
+            difference = actual - reported
+            magnitude = abs(difference)
+            if difference == 0:
+                status = 'matched'
+            elif magnitude < FOOTING_AUTO_ACCEPT_BELOW:
+                status = 'rounding_tolerated'
+            elif magnitude <= FOOTING_CONFIRMATION_LIMIT:
+                confirmable_variance = True
+                status = 'confirmed_variance' if confirm_variance else 'confirmation_required'
+            else:
+                status = 'mismatch'
             checks.append({'column': name, 'excel_total': format(reported, 'f'),
-                           'detail_total': format(actual, 'f'), 'difference': format(actual - reported, 'f')})
-    return {'status': 'matched' if checks and all(Decimal(c['difference']) == 0 for c in checks)
-            else 'mismatch' if checks else 'not_configured',
-            'control_total_row': row_number, 'checks': checks, 'full_sheet': summary}
+                           'detail_total': format(actual, 'f'), 'difference': format(difference, 'f'),
+                           'status': status})
+    if confirm_variance and not confirmable_variance:
+        raise ValueError('No Footing variance is within the confirmation range. Validate again without variance confirmation.')
+    if not checks:
+        status = 'not_configured'
+    elif any(check['status'] == 'mismatch' for check in checks):
+        status = 'mismatch'
+    elif any(check['status'] == 'confirmation_required' for check in checks):
+        status = 'confirmation_required'
+    elif any(check['status'] == 'confirmed_variance' for check in checks):
+        status = 'confirmed_variance'
+    elif any(check['status'] == 'rounding_tolerated' for check in checks):
+        status = 'rounding_tolerated'
+    else:
+        status = 'matched'
+    return {'status': status, 'control_total_row': row_number, 'checks': checks, 'full_sheet': summary,
+            'tolerance_policy': {'auto_accept_below': format(FOOTING_AUTO_ACCEPT_BELOW, 'f'),
+                                 'confirmation_limit': format(FOOTING_CONFIRMATION_LIMIT, 'f'),
+                                 'variance_confirmed': bool(confirm_variance)}}
 
 
 def aggregate_stored_controls(query, columns, client_id, template_id, start, end, *, ledger_account_code=None):

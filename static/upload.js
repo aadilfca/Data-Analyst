@@ -145,8 +145,14 @@ function renderSourceControls(result = sourceControlResult) {
     if (!result) return;
     const message = document.createElement('p');
     message.dataset.status = result.status;
-    message.textContent = result.status === 'matched' ? 'Source totals match the full sheet detail.'
-        : 'Source totals differ. Correct the Excel workbook before import.';
+    const statusMessages = {
+        matched: 'Source totals exactly match the full sheet detail.',
+        rounding_tolerated: 'A difference below 0.01 was accepted as rounding noise; the exact amounts are preserved.',
+        confirmation_required: 'The difference is within 1.00 currency unit and needs explicit confirmation before import.',
+        confirmed_variance: 'The variance was confirmed. Exact source and detail amounts are preserved in the upload record.',
+        mismatch: 'The difference exceeds 1.00 currency unit. Correct the Excel workbook with client management before import.'
+    };
+    message.textContent = statusMessages[result.status] || 'Source totals could not be reconciled.';
     results.appendChild(message);
     const container = document.createElement('div'); container.className = 'source-control-table';
     const table = document.createElement('table');
@@ -205,6 +211,7 @@ let isProcessing = false;
 let uploadActionInFlight = false;
 let validationStatus = 'idle'; // 'idle' | 'validating' | 'valid' | 'invalid'
 let validationPlanId = null;
+let footingVarianceConfirmed = false;
 let uploadValidationGeneration = 0;
 let lastChangePreview = null;
 let lastUploadSummary = null;
@@ -703,6 +710,7 @@ function resetValidationState() {
     clearIgnoredResult();
     validationStatus = 'idle';
     validationPlanId = null;
+    footingVarianceConfirmed = false;
     comparisonPreviewRequest = null;
     previewPageCache.clear();
     databasePreviewMode = false;
@@ -2080,6 +2088,7 @@ function resetUpload() {
 
     // Reset validation status
     validationStatus = 'idle';
+    footingVarianceConfirmed = false;
     if (importBtn) {
         importBtn.innerHTML = 'Validate';
         importBtn.style.background = '';
@@ -2453,7 +2462,25 @@ if (resetBtn) {
         showStatus('🔄 Reset complete. Select a template and upload a file.', 'info');
     });
 }
-function downloadChangeReport(report, summary = {}, reconciliation = null) {
+function sourceFootingReportRows(sourceReconciliation) {
+    if (!sourceReconciliation?.checks?.length) return [];
+    const policy = sourceReconciliation.tolerance_policy || {};
+    return [
+        ['Source footing controls'],
+        ['Control-total row', sourceReconciliation.control_total_row ?? 'Unavailable'],
+        ['Decision', sourceReconciliation.status || 'Unavailable'],
+        ['Auto-accept below', policy.auto_accept_below ?? '0.01'],
+        ['Confirmation limit', policy.confirmation_limit ?? '1.00'],
+        ['Variance confirmed', policy.variance_confirmed ? 'Yes' : 'No'],
+        ['Full-sheet rows', sourceReconciliation.full_sheet?.row_count ?? 'Unavailable'],
+        ['Unique documents', sourceReconciliation.full_sheet?.document_count ?? 'Unavailable'],
+        ['Footing', 'Excel total', 'Detail total', 'Detail minus Excel', 'Decision'],
+        ...sourceReconciliation.checks.map(check => [check.column, check.excel_total,
+            check.detail_total, check.difference, check.status || sourceReconciliation.status])
+    ];
+}
+
+function downloadChangeReport(report, summary = {}, reconciliation = null, sourceReconciliation = null) {
     const reportRows = Array.isArray(report) ? report : [];
     const dateRange = summary.date_range || {};
     const header = [
@@ -2517,17 +2544,21 @@ function downloadChangeReport(report, summary = {}, reconciliation = null) {
         ];
         XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(checks), 'Reconciliation');
     }
+    const sourceChecks = sourceFootingReportRows(sourceReconciliation);
+    if (sourceChecks.length) {
+        XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(sourceChecks), 'Source footing');
+    }
     XLSX.writeFile(workbook, `upload-change-report-${summary.upload_id || 'latest'}.xlsx`);
 }
 
-function attachValidationReportDownload(report, summary) {
+function attachValidationReportDownload(report, summary, sourceReconciliation = null) {
     const button = document.getElementById('downloadValidationReportBtn');
     if (button) {
-        button.addEventListener('click', () => downloadChangeReport(report, summary));
+        button.addEventListener('click', () => downloadChangeReport(report, summary, null, sourceReconciliation));
     }
 }
 
-async function downloadFullChangeReport(report, summary = {}, reconciliation = null) {
+async function downloadFullChangeReport(report, summary = {}, reconciliation = null, sourceReconciliation = null) {
     const scope = reconciliation?.scope || {};
     const informational = (Array.isArray(report) ? report : []).filter(item => item.action === 'Informational update').map(item => ({
         client_data_id: item.client_data_id,
@@ -2550,7 +2581,16 @@ async function downloadFullChangeReport(report, summary = {}, reconciliation = n
         try { message = (await response.json()).detail || message; } catch (_) {}
         throw new Error(message);
     }
-    const blob = await response.blob();
+    let blob = await response.blob();
+    const sourceChecks = sourceFootingReportRows(sourceReconciliation);
+    if (sourceChecks.length) {
+        const workbook = XLSX.read(await blob.arrayBuffer(), {type: 'array'});
+        if (!workbook.SheetNames.includes('Source footing')) {
+            XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(sourceChecks), 'Source footing');
+            blob = new Blob([XLSX.write(workbook, {bookType: 'xlsx', type: 'array'})],
+                {type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+        }
+    }
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
@@ -2603,6 +2643,42 @@ function renderImportReconciliation(container, reconciliation) {
         retry.textContent = 'Validate a fresh copy of the source to retry the check. Import is not repeated automatically.';
         container.appendChild(retry);
     }
+}
+
+function renderSourceFootingReconciliation(container, sourceReconciliation) {
+    if (!sourceReconciliation?.checks?.length) return;
+    container.className = 'result-reconciliation';
+    container.dataset.sourceFooting = 'true';
+    const heading = document.createElement('strong');
+    heading.textContent = 'Source footing controls';
+    container.appendChild(heading);
+    const statusText = {
+        matched: 'Excel controls match the detail totals exactly.',
+        rounding_tolerated: 'A difference below 0.01 was accepted as rounding noise; amounts were not changed.',
+        confirmed_variance: 'Variance confirmed by the user; exact source and detail totals are retained below.'
+    }[sourceReconciliation.status] || 'Source footing variance requires review.';
+    const status = document.createElement('p');
+    status.dataset.status = sourceReconciliation.status || 'unavailable';
+    status.textContent = statusText;
+    container.appendChild(status);
+    const table = document.createElement('table');
+    const header = table.createTHead().insertRow();
+    ['Footing', 'Excel total', 'Detail total', 'Difference', 'Decision'].forEach(label => {
+        const cell = document.createElement('th'); cell.scope = 'col'; cell.textContent = label; header.appendChild(cell);
+    });
+    const body = table.createTBody();
+    sourceReconciliation.checks.forEach(check => {
+        const row = body.insertRow();
+        [check.column, check.excel_total, check.detail_total, check.difference, check.status || sourceReconciliation.status]
+            .forEach((value, index) => row.insertCell().textContent = index ? formatSourceControlAmount(value) : String(value ?? 'Unavailable'));
+    });
+    const scroll = document.createElement('div');
+    scroll.className = 'reconciliation-table-scroll';
+    scroll.appendChild(table);
+    container.appendChild(scroll);
+    const row = document.createElement('p');
+    row.textContent = `Excel control row ${sourceReconciliation.control_total_row ?? 'unavailable'} · ${sourceReconciliation.full_sheet?.row_count ?? 'Unavailable'} detail rows · ${sourceReconciliation.full_sheet?.document_count ?? 'Unavailable'} unique documents.`;
+    container.appendChild(row);
 }
 
 function showImportSummary(result, ledgerPresentation = null) {
@@ -2833,6 +2909,9 @@ function showImportSummary(result, ledgerPresentation = null) {
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
     renderImportReconciliation(overlay.querySelector('#importReconciliation'), result.reconciliation);
+    const sourceReconciliationBox = document.createElement('div');
+    renderSourceFootingReconciliation(sourceReconciliationBox, result.source_reconciliation);
+    if (sourceReconciliationBox.hasChildNodes()) overlay.querySelector('#importReconciliation').after(sourceReconciliationBox);
 
     // A verified no-op opens its final result during validation. Keep source-row
     // notes in that same dialog instead of leaving a warning dialog underneath it.
@@ -2907,7 +2986,7 @@ function showImportSummary(result, ledgerPresentation = null) {
             downloadReportBtn.disabled = true;
             const priorText = downloadReportBtn.textContent;
             downloadReportBtn.textContent = 'Preparing report…';
-            try { await downloadFullChangeReport(changeReport, uploadSummary, result.reconciliation); }
+            try { await downloadFullChangeReport(changeReport, uploadSummary, result.reconciliation, result.source_reconciliation); }
             catch (error) { showStatus(error.message, 'error'); }
             finally { downloadReportBtn.disabled = false; downloadReportBtn.textContent = priorText; }
         });
@@ -2961,7 +3040,7 @@ function showImportSummary(result, ledgerPresentation = null) {
 // ---------- SHOW VALIDATION ERRORS ----------
 // Reuse the existing issue dialog for every stage; page row details to keep
 // even a large rejected workbook responsive. All source text uses textContent.
-function showUploadIssue({stage = 'Validation', severity = 'error', message, action, focusTarget, result, rows = []}) {
+function showUploadIssue({stage = 'Validation', severity = 'error', message, action, focusTarget, result, rows = [], confirmLabel = null}) {
     document.getElementById('validationErrorOverlay')?.remove();
     const previousFocus = document.activeElement;
     const overlay = document.createElement('div');
@@ -3043,16 +3122,48 @@ function showUploadIssue({stage = 'Validation', severity = 'error', message, act
         render();
     }
     const footer = add('footer', ''); footer.className = 'upload-issue-footer';
-    const close = add('button', 'Close', footer); close.id = 'validationErrorCloseBtn';
+    const close = add('button', confirmLabel ? 'Cancel' : 'Close', footer); close.id = 'validationErrorCloseBtn';
+    let resolveConfirmation = null;
+    const confirmation = confirmLabel ? new Promise(resolve => { resolveConfirmation = resolve; }) : null;
     const dismiss = () => {
         overlay.remove();
         const target = focusTarget && !focusTarget.disabled ? focusTarget : previousFocus;
         target?.scrollIntoView?.({block: 'center'});
         target?.focus?.({preventScroll: true});
+        resolveConfirmation?.(false);
     };
     close.addEventListener('click', dismiss);
+    if (confirmLabel) {
+        const confirm = add('button', confirmLabel, footer);
+        confirm.id = 'footingVarianceConfirmBtn';
+        confirm.type = 'button';
+        confirm.style.cssText = 'background:#b45309;color:white;border:0;border-radius:6px;padding:8px 14px;font-weight:600;cursor:pointer;';
+        confirm.addEventListener('click', () => {
+            overlay.remove();
+            previousFocus?.focus?.({preventScroll: true});
+            resolveConfirmation?.(true);
+        });
+    }
     overlay.addEventListener('click', event => { if (event.target === overlay) dismiss(); });
     overlay.appendChild(modal); document.body.appendChild(overlay); close.focus();
+    return confirmation;
+}
+
+function showFootingVarianceConfirmation(result) {
+    const controls = result?.source_reconciliation || {};
+    const rows = (controls.checks || []).map(check => ({
+        row_number: controls.control_total_row,
+        voucher: `Footing: ${check.column}`,
+        reasons: [
+            {column: 'Excel total', message: formatSourceControlAmount(check.excel_total)},
+            {column: 'Detail total', message: formatSourceControlAmount(check.detail_total)},
+            {column: 'Difference', message: formatSourceControlAmount(check.difference)}
+        ]
+    }));
+    return showUploadIssue({stage: 'Validation', severity: 'warning',
+        message: 'Excel footing totals differ from the detail total by 0.01–1.00 currency units.',
+        action: 'Review each exact difference. Continue only after checking it with client management. No transaction amount will be changed.',
+        rows, confirmLabel: 'Confirm variance and revalidate'});
 }
 
 // Document-level handling also covers focus lost when a paging button becomes
@@ -3312,6 +3423,7 @@ if (importBtn) {
             comparison_mode: comparisonModeDropdown ? comparisonModeDropdown.value : 'correction',
             control_total_row: sourceFootingMappings().length ? Number(getElement('sourceControlRow').value) || null : null,
             control_total_confirmed: Boolean(sourceFootingMappings().length && getElement('sourceControlConfirmed').checked),
+            confirm_footing_variance: footingVarianceConfirmed,
             coverage_start: comparisonModeDropdown?.value === 'replace_range' ? uploadCoverageStart?.value || null : null,
             coverage_end: comparisonModeDropdown?.value === 'replace_range' ? uploadCoverageEnd?.value || null : null,
             confirm_report_coverage: Boolean(uploadConfirmCoverage?.checked),
@@ -3389,12 +3501,12 @@ if (importBtn) {
             showStatus('⏳ Validating data...', 'loading');
             setBadge('⏳ Validating...', 'loading');
 
-            const res = await fetchUpload(API_BASE + '/api/upload/validate', {
+            let res = await fetchUpload(API_BASE + '/api/upload/validate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
-            const result = await res.json();
+            let result = await res.json();
             if (requestGeneration !== uploadValidationGeneration) {
                 showUploadFailure('Upload settings changed during validation. Validate the current selections again.', 'Validation'); return;
             }
@@ -3403,6 +3515,40 @@ if (importBtn) {
                 throw new Error(uploadFailureMessage(result, 'Validation failed (' + res.status + ')'));
             }
             renderSourceControls(result.source_reconciliation || null);
+            if (result.footing_variance_confirmation_required) {
+                const accepted = await showFootingVarianceConfirmation(result);
+                if (!accepted) {
+                    validationStatus = 'idle';
+                    validationPlanId = null;
+                    importBtn.textContent = 'Validate';
+                    importBtn.disabled = false;
+                    showStatus('Variance confirmation cancelled. No data was changed.', 'info');
+                    setBadge('Variance not confirmed');
+                    return;
+                }
+                if (requestGeneration !== uploadValidationGeneration) {
+                    showUploadFailure('Upload settings changed during variance review. Validate the current selections again.', 'Validation'); return;
+                }
+                footingVarianceConfirmed = true;
+                payload.confirm_footing_variance = true;
+                importBtn.textContent = 'Revalidating confirmed variance...';
+                importBtn.disabled = true;
+                showStatus('⏳ Rechecking the confirmed footing variance...', 'loading');
+                res = await fetchUpload(API_BASE + '/api/upload/validate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                result = await res.json();
+                if (requestGeneration !== uploadValidationGeneration) {
+                    showUploadFailure('Upload settings changed during revalidation. Validate the current selections again.', 'Validation'); return;
+                }
+                if (!res.ok) {
+                    resetValidationState();
+                    throw new Error(uploadFailureMessage(result, 'Validation failed (' + res.status + ')'));
+                }
+                renderSourceControls(result.source_reconciliation || null);
+            }
 
             // Rejected-rows exceptions list (Phase 3 of the row-level blank-field-rejection
             // requirement) -- populated regardless of has_errors, since a row can be rejected
@@ -3513,7 +3659,8 @@ if (importBtn) {
                 );
                 attachValidationReportDownload(
                     lastChangePreview ? lastChangePreview.report : [],
-                    lastUploadSummary
+                    lastUploadSummary,
+                    result.source_reconciliation
                 );
             }
             updatePreviewButtonState();
