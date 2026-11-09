@@ -50,6 +50,8 @@ const uploadConfirmEmpty = getElement('uploadConfirmEmpty');
 let lastAutoSuggestedCoverage = null;
 let coverageManuallyEdited = false;
 let datePreviewRequestGeneration = 0;
+let uploadMappingGeneration = 0;
+let rowExclusionNativeDateColumns = new Set();
 
 const downloadBtn = getElement('downloadBtn');
 const importBtn = getElement('importBtn');
@@ -516,8 +518,8 @@ function saveUploadSessionState() {
         dateDelimiter: selectedDateDelimiter,
         dateOrder: selectedDateOrder,
         comparisonMode: comparisonModeDropdown ? comparisonModeDropdown.value : 'correction',
-        coverageStart: uploadCoverageStart?.value || '',
-        coverageEnd: uploadCoverageEnd?.value || '',
+        coverageStart: coverageInputSessionValue(uploadCoverageStart),
+        coverageEnd: coverageInputSessionValue(uploadCoverageEnd),
         excludedRowNumbers: Array.from(excludedRowNumbers),
         // Lightweight snapshot for the read-only "locked preview" a restored session shows
         // before the file is re-selected (renderRestorePreview()) -- just the column-name/type/
@@ -586,8 +588,9 @@ async function restoreUploadSessionState() {
     if (comparisonModeDropdown && (state.comparisonMode === 'correction' || state.comparisonMode === 'replace_range')) {
         comparisonModeDropdown.value = state.comparisonMode;
     }
-    if (uploadCoverageStart) uploadCoverageStart.value = state.coverageStart || '';
-    if (uploadCoverageEnd) uploadCoverageEnd.value = state.coverageEnd || '';
+    updateCoverageDateInputHints();
+    if (uploadCoverageStart) uploadCoverageStart.value = restoreCoverageInputDate(state.coverageStart);
+    if (uploadCoverageEnd) uploadCoverageEnd.value = restoreCoverageInputDate(state.coverageEnd);
     coverageManuallyEdited = Boolean(state.coverageStart || state.coverageEnd);
     updateUploadCoverageVisibility();
 
@@ -1076,12 +1079,157 @@ function populateDateOrderDropdown(delimiter) {
     dateOrderDropdown.value = selectedDateOrder;
 }
 
+function selectedCoverageDateFormat(delimiter = selectedDateDelimiter, order = selectedDateOrder) {
+    return DATE_ORDER_OPTIONS[delimiter]?.find(([code]) => code === order)?.[1] || 'DD/MM/YYYY';
+}
+
+function formatCoverageInputDate(isoDate, delimiter = selectedDateDelimiter, order = selectedDateOrder) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(isoDate || ''));
+    if (!match) return '';
+    const [, year, month, day] = match;
+    const parts = {D: day, M: month, Y: year};
+    const orderParts = {DMY: ['D', 'M', 'Y'], MDY: ['M', 'D', 'Y'], YMD: ['Y', 'M', 'D']}[order];
+    if (!orderParts) return '';
+    return orderParts.map(part => parts[part]).join(delimiter);
+}
+
+function parseCoverageInputDate(value, delimiter = selectedDateDelimiter, order = selectedDateOrder) {
+    const raw = String(value ?? '').trim();
+    if (!raw) return {valid: true, iso: ''};
+    const orderParts = {DMY: ['D', 'M', 'Y'], MDY: ['M', 'D', 'Y'], YMD: ['Y', 'M', 'D']}[order];
+    if (!orderParts) return {valid: false, iso: ''};
+    let parts;
+    if (delimiter) {
+        const separator = delimiter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const match = raw.match(new RegExp(`^(\\d{${order === 'YMD' ? '4' : '1,2'}})${separator}(\\d{${order === 'YMD' ? '1,2' : '1,2'}})${separator}(\\d{${order === 'YMD' ? '1,2' : '4'}})$`));
+        if (!match) return {valid: false, iso: ''};
+        parts = match.slice(1).map(Number);
+    } else {
+        const match = /^(\d{8})$/.exec(raw);
+        if (!match) return {valid: false, iso: ''};
+        const digits = match[1];
+        parts = order === 'YMD'
+            ? [Number(digits.slice(0, 4)), Number(digits.slice(4, 6)), Number(digits.slice(6, 8))]
+            : [Number(digits.slice(0, 2)), Number(digits.slice(2, 4)), Number(digits.slice(4, 8))];
+    }
+    const components = Object.fromEntries(orderParts.map((part, index) => [
+        {D: 'day', M: 'month', Y: 'year'}[part], parts[index]
+    ]));
+    if (components.year < 1 || components.month < 1 || components.month > 12 || components.day < 1 || components.day > 31) {
+        return {valid: false, iso: ''};
+    }
+    const check = new Date(0);
+    check.setUTCHours(0, 0, 0, 0);
+    check.setUTCFullYear(components.year, components.month - 1, components.day);
+    if (check.getUTCFullYear() !== components.year || check.getUTCMonth() !== components.month - 1
+        || check.getUTCDate() !== components.day) return {valid: false, iso: ''};
+    const iso = `${String(components.year).padStart(4, '0')}-${String(components.month).padStart(2, '0')}-${String(components.day).padStart(2, '0')}`;
+    return {valid: true, iso};
+}
+
+function captureCoverageDateInputs() {
+    return [uploadCoverageStart, uploadCoverageEnd].map(control => {
+        const raw = control?.value || '';
+        const parsed = parseCoverageInputDate(raw);
+        return {control, raw, iso: parsed.valid ? parsed.iso : ''};
+    });
+}
+
+function reformatCoverageDateInputs(snapshot) {
+    (snapshot || []).forEach(({control, raw, iso}) => {
+        if (!control) return;
+        control.value = iso ? formatCoverageInputDate(iso) : raw;
+    });
+    updateCoverageDateInputHints();
+}
+
+function updateCoverageDateInputHints() {
+    const format = selectedCoverageDateFormat();
+    [uploadCoverageStart, uploadCoverageEnd].forEach((control, index) => {
+        if (!control) return;
+        control.placeholder = format;
+        control.maxLength = selectedDateDelimiter ? 10 : 8;
+        control.setAttribute('aria-label', `${index === 0 ? 'From' : 'To'} date (${format})`);
+    });
+}
+
+function restoreCoverageInputDate(value) {
+    const raw = String(value || '');
+    const isoMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+    const parsed = isoMatch ? parseCoverageISODate(raw) : parseCoverageInputDate(raw);
+    return parsed?.valid && parsed.iso ? formatCoverageInputDate(parsed.iso) : raw;
+}
+
+function parseCoverageISODate(value) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ''));
+    if (!match) return {valid: false, iso: ''};
+    const [year, month, day] = match.slice(1).map(Number);
+    const check = new Date(0);
+    check.setUTCHours(0, 0, 0, 0);
+    check.setUTCFullYear(year, month - 1, day);
+    return check.getUTCFullYear() === year && check.getUTCMonth() === month - 1 && check.getUTCDate() === day
+        ? {valid: true, iso: value} : {valid: false, iso: ''};
+}
+
+function coverageInputSessionValue(control) {
+    const raw = control?.value || '';
+    const parsed = parseCoverageInputDate(raw);
+    return parsed.valid && parsed.iso ? parsed.iso : raw;
+}
+
+function autoSelectDateDelimiterFromMappedRows() {
+    if (!dateDelimiterDropdown || !rowExclusionHeaders.length || !rowExclusionAllRows.length) return false;
+    const dateIndexes = [...new Set(currentMappings
+        .filter(mapping => mapping.data_type === 'Date' && mapping.excel_column)
+        .map(mapping => rowExclusionHeaders.indexOf(mapping.excel_column))
+        .filter(index => index >= 0))];
+    if (!dateIndexes.length) return false;
+
+    // Inspect the entire mapped date column set, not just the sample rows shown in the preview.
+    // Native Excel date cells arrive as numbers; only date-shaped text indicates a delimiter.
+    const delimiters = new Set();
+    const dateText = /^\s*\d{1,4}\s*([/-])\s*\d{1,2}\s*\1\s*\d{1,4}(?=$|[\sTt])/;
+    rowExclusionAllRows.forEach(row => {
+        dateIndexes.forEach(index => {
+            const value = row[index];
+            if (typeof value !== 'string' || !value.trim()) return;
+            const match = value.match(dateText);
+            if (match) delimiters.add(match[1]);
+        });
+    });
+    // Native Excel dates have no textual separator. Give them a stable slash
+    // display instead of inheriting the preceding sheet's automatic dash choice.
+    const detectedDelimiter = delimiters.size === 1 ? [...delimiters][0]
+        : delimiters.size === 0 && dateIndexes.some(index => rowExclusionNativeDateColumns.has(index)) ? '/' : null;
+    if (detectedDelimiter === null) return false;
+    if (detectedDelimiter === selectedDateDelimiter) return false;
+
+    // Infer only the separator. DMY/MDY/YMD remains the user's choice.
+    const coverageSnapshot = captureCoverageDateInputs();
+    const preservedOrder = selectedDateOrder;
+    selectedDateDelimiter = detectedDelimiter;
+    dateDelimiterDropdown.value = detectedDelimiter;
+    populateDateOrderDropdown(detectedDelimiter);
+    if (DATE_ORDER_OPTIONS[detectedDelimiter].some(([order]) => order === preservedOrder)) {
+        selectedDateOrder = preservedOrder;
+        dateOrderDropdown.value = preservedOrder;
+    }
+    reformatCoverageDateInputs(coverageSnapshot);
+    clearCoverageConfirmation();
+    resetValidationState();
+    updateDateFormatTriggerLabel();
+    saveUploadSessionState();
+    return true;
+}
+
 if (dateDelimiterDropdown) {
     dateDelimiterDropdown.addEventListener('change', function() {
+        const coverageSnapshot = captureCoverageDateInputs();
         selectedDateDelimiter = this.value;
         clearCoverageConfirmation();
         resetValidationState();
         populateDateOrderDropdown(selectedDateDelimiter);
+        reformatCoverageDateInputs(coverageSnapshot);
         refreshDateFormatPreview();
         updateDateFormatTriggerLabel();
         saveUploadSessionState();
@@ -1090,7 +1238,9 @@ if (dateDelimiterDropdown) {
 
 if (dateOrderDropdown) {
     dateOrderDropdown.addEventListener('change', function() {
+        const coverageSnapshot = captureCoverageDateInputs();
         selectedDateOrder = this.value;
+        reformatCoverageDateInputs(coverageSnapshot);
         clearCoverageConfirmation();
         resetValidationState();
         refreshDateFormatPreview();
@@ -1131,6 +1281,21 @@ function clearCoverageConfirmation() {
     if (uploadConfirmCoverage) uploadConfirmCoverage.checked = false;
     updateUploadCoverageVisibility();
 }
+
+function clearSourceCoverageDates() {
+    ++datePreviewRequestGeneration;
+    lastAutoSuggestedCoverage = null;
+    coverageManuallyEdited = false;
+    if (uploadCoverageStart) uploadCoverageStart.value = '';
+    if (uploadCoverageEnd) uploadCoverageEnd.value = '';
+    if (uploadConfirmEmpty) uploadConfirmEmpty.checked = false;
+    clearCoverageConfirmation();
+    clearUploadCoverageError();
+    if (documentDateSuggestion) documentDateSuggestion.textContent = 'Map a Document Date role to see date suggestions.';
+    updateCoverageDateInputHints();
+}
+
+updateCoverageDateInputHints();
 
 [uploadCoverageStart, uploadCoverageEnd, uploadConfirmEmpty].forEach(control => {
     if (control) control.addEventListener('change', () => {
@@ -1661,8 +1826,9 @@ function renderDocumentDateSuggestion(suggestion) {
     if (!documentDateSuggestion) return;
     const clearUnconfirmedSuggestion = () => {
         if (!lastAutoSuggestedCoverage || uploadConfirmCoverage?.checked) return;
-        if (!coverageManuallyEdited && uploadCoverageStart?.value === lastAutoSuggestedCoverage.start
-            && uploadCoverageEnd?.value === lastAutoSuggestedCoverage.end) {
+        if (!coverageManuallyEdited
+            && parseCoverageInputDate(uploadCoverageStart?.value).iso === lastAutoSuggestedCoverage.start
+            && parseCoverageInputDate(uploadCoverageEnd?.value).iso === lastAutoSuggestedCoverage.end) {
             uploadCoverageStart.value = '';
             uploadCoverageEnd.value = '';
             clearUploadCoverageError();
@@ -1684,9 +1850,10 @@ function renderDocumentDateSuggestion(suggestion) {
     } else if (suggestion.start && suggestion.end) {
         documentDateSuggestion.textContent = `Transaction-date suggestion: ${formatCoverageDate(suggestion.start)} – ${formatCoverageDate(suggestion.end)} (${suggestion.transaction_dates} valid dates). The full ERP period may be wider.`;
         if (!coverageManuallyEdited && !uploadConfirmCoverage?.checked
-            && (uploadCoverageStart?.value !== suggestion.start || uploadCoverageEnd?.value !== suggestion.end)) {
-            uploadCoverageStart.value = suggestion.start;
-            uploadCoverageEnd.value = suggestion.end;
+            && (parseCoverageInputDate(uploadCoverageStart?.value).iso !== suggestion.start
+                || parseCoverageInputDate(uploadCoverageEnd?.value).iso !== suggestion.end)) {
+            uploadCoverageStart.value = formatCoverageInputDate(suggestion.start);
+            uploadCoverageEnd.value = formatCoverageInputDate(suggestion.end);
             lastAutoSuggestedCoverage = {start: suggestion.start, end: suggestion.end};
             clearUploadCoverageError();
             resetValidationState();
@@ -1768,6 +1935,7 @@ if (templateDropdown) {
         }
                 const id = this.value;
         if (!id) {
+            clearSourceCoverageDates();
             ++uploadTemplateGeneration; uploadTemplatePurpose = 'standard'; uploadLedgerColumnRoles = {}; clearLedgerUploadContext();
             selectedTemplateId = null;
             if (mappingPanel) mappingPanel.style.display = 'none';
@@ -1801,6 +1969,9 @@ if (templateDropdown) {
 // "resuming session" status message race ahead of (and get overwritten by) this function's own
 // later status updates. No behavior change for the normal dropdown-click path.
 async function selectTemplate(id) {
+    if (fileId && workbookData) clearSourceCoverageDates();
+    resetValidationState();
+    if (importBtn) importBtn.disabled = true;
     selectedTemplateId = parseInt(id);
     const generation = ++uploadTemplateGeneration;
     uploadTemplatePurpose = 'standard'; uploadLedgerColumnRoles = {}; clearLedgerUploadContext();
@@ -1841,10 +2012,13 @@ async function selectTemplate(id) {
             showStatus('✅ Template loaded. Upload an Excel file to begin mapping.', 'success');
         }
     } catch (error) {
+        if (generation !== uploadTemplateGeneration) return;
         console.error('Error loading template columns:', error);
         setBadge('❌ Failed to load columns', 'error');
         showUploadFailure('Failed to load template columns: ' + error.message, 'Template columns', error);
+        return;
     }
+    if (generation !== uploadTemplateGeneration) return;
     updatePreviewButtonState();
     resetValidationState(); // New template means new data – reset validation
     resetSourceControlChoice();
@@ -1885,15 +2059,15 @@ async function handleFile(file) {
     }
 
     const restoringCoverage = Boolean(pendingRestoreSheetName);
+    ++uploadMappingGeneration;
     datePreviewRequestGeneration++;
     selectedFile = file;
+    rowExclusionNativeDateColumns = new Set();
     fileId = null;
     lastAutoSuggestedCoverage = null;
     coverageManuallyEdited = restoringCoverage && Boolean(uploadCoverageStart?.value || uploadCoverageEnd?.value);
     if (!restoringCoverage) {
-        if (uploadCoverageStart) uploadCoverageStart.value = '';
-        if (uploadCoverageEnd) uploadCoverageEnd.value = '';
-        clearCoverageConfirmation();
+        clearSourceCoverageDates();
     }
     updateUploadCoverageVisibility();
     resetValidationState();
@@ -1960,10 +2134,13 @@ function populateSheetSelector(sheets) {
 
 if (sheetSelector) {
     sheetSelector.addEventListener('change', function() {
-        datePreviewRequestGeneration++;
+        ++uploadMappingGeneration;
+        clearSourceCoverageDates();
         currentSheet = this.value;
+        resetValidationState();
+        if (importBtn) importBtn.disabled = true;
         resetSourceControlChoice();
-                if (currentSheet && selectedTemplateId && fileId) {
+        if (currentSheet && selectedTemplateId && fileId) {
             autoMapColumns();
             showStatus('📄 Sheet changed to "' + currentSheet + '". Re‑mapping...', 'info');
         } else if (currentSheet && selectedTemplateId && !fileId) {
@@ -1971,7 +2148,6 @@ if (sheetSelector) {
                 uploadFileToServer(selectedFile);
             }
         }
-        resetValidationState(); // Reset validation on sheet change
         updatePreviewButtonState();
         saveUploadSessionState(); // Sheet changed -- remember the new selection
     });
@@ -2016,20 +2192,15 @@ if (clearBtn) {
 }
 
 function resetUpload() {
+    ++uploadMappingGeneration;
     ++uploadTemplateGeneration;
-    datePreviewRequestGeneration++;
+    clearSourceCoverageDates();
     ledgerSelectedAccountCode = ''; pendingLedgerRestoreCode = '';
     if (isLedgerUpload()) renderLedgerUploadAccounts();
     else clearLedgerUploadContext();
     selectedFile = null;
     fileId = null;
-    lastAutoSuggestedCoverage = null;
-    coverageManuallyEdited = false;
     if (comparisonModeDropdown) comparisonModeDropdown.value = 'replace_range';
-    if (uploadCoverageStart) uploadCoverageStart.value = '';
-    if (uploadCoverageEnd) uploadCoverageEnd.value = '';
-    clearCoverageConfirmation();
-    if (uploadConfirmEmpty) uploadConfirmEmpty.checked = false;
     updateUploadCoverageVisibility();
     if (fileInfo) fileInfo.style.display = 'none';
     if (fileInput) fileInput.value = '';
@@ -2075,6 +2246,7 @@ function resetUpload() {
     validationFailedRows = new Map();
     rowExclusionAllRows = [];
     rowExclusionHeaders = [];
+    rowExclusionNativeDateColumns = new Set();
     rowExclusionCurrentPage = 1;
 
     // Hide/clear the exceptions list (Phase 3 of the row-level blank-field-rejection
@@ -2211,7 +2383,7 @@ if (clearMappingBtn) {
 // the current sheet (excelHeaders) -- so a saved mapping can never force a mismatch onto a sheet
 // with different headers; anything that doesn't match keeps auto-mapping's own result untouched.
 // Returns the number of columns actually applied (0 if none/no saved mapping/lookup failed).
-async function applySavedMapping() {
+async function applySavedMapping(isCurrent = () => true) {
     const clientId = getCurrentClientId();
     if (!clientId || !selectedTemplateId) return 0;
 
@@ -2221,13 +2393,14 @@ async function applySavedMapping() {
         if (!res.ok) return 0;
         data = await res.json();
     } catch (error) {
+        if (!isCurrent()) return 0;
         console.warn('⚠️ Could not check for a saved column mapping:', error);
         showUploadIssue({stage: 'Saved mapping', severity: 'warning', message: error.message,
             action: 'Auto-mapping is available. Check every selected column before validation; retry the saved mapping after reconnecting.'});
         return 0;
     }
 
-    if (!data || !data.has_saved_mapping || !Array.isArray(data.mappings) || data.mappings.length === 0) {
+    if (!isCurrent() || !data || !data.has_saved_mapping || !Array.isArray(data.mappings) || data.mappings.length === 0) {
         return 0;
     }
 
@@ -2250,6 +2423,11 @@ async function autoMapColumns() {
         return;
     }
 
+    const generation = ++uploadMappingGeneration;
+    const scope = {fileId, templateId: selectedTemplateId, sheet: currentSheet, templateGeneration: uploadTemplateGeneration};
+    const isCurrent = () => generation === uploadMappingGeneration && scope.fileId === fileId
+        && scope.templateId === selectedTemplateId && scope.sheet === currentSheet
+        && scope.templateGeneration === uploadTemplateGeneration;
     try {
         showStatus('⏳ Auto‑mapping columns...', 'loading');
         setBadge('⏳ Mapping...', 'loading');
@@ -2270,6 +2448,7 @@ async function autoMapColumns() {
         }
 
         const data = await res.json();
+        if (!isCurrent()) return;
         currentMappings = data.mappings;
         excelHeaders = data.excel_headers;
 
@@ -2278,7 +2457,8 @@ async function autoMapColumns() {
         // Auto-apply a previously saved mapping (Phase A2) on top of the backend's own auto-map
         // guess -- only overrides columns whose saved Excel header still exists on this sheet, so
         // it can never force a mismatch; anything else keeps auto-mapping's own result untouched.
-        const savedMappingAppliedCount = await applySavedMapping();
+        const savedMappingAppliedCount = await applySavedMapping(isCurrent);
+        if (!isCurrent()) return;
 
         renderMapping(currentMappings);
         // populateUniqueIdDropdown() removed – no longer needed
@@ -2299,13 +2479,14 @@ async function autoMapColumns() {
 
         updatePreviewButtonState();
 
-        // Date columns are now known via the mapping – reveal the Date format trigger/popover
-        // and show the live sample-date preview inside it.
+        // Date columns are now known via the mapping. Build the complete row set first so
+        // delimiter detection can inspect every mapped date value before refreshing the preview.
         setDateFormatGroupVisible(true);
-        refreshDateFormatPreview();
 
         // Mapping is complete – show the row selection grid (Phase 2 of row-exclusion).
         renderRowExclusionGrid();
+        autoSelectDateDelimiterFromMappedRows();
+        refreshDateFormatPreview();
 
         // Mapping resolved (Phase 4) -- enable Go to Data Bank and advance the step strip to
         // "Map columns". Preview's own visibility/enabled-state is driven by
@@ -2315,6 +2496,8 @@ async function autoMapColumns() {
         saveUploadSessionState(); // Mapping resolved -- checkpoint the full session state
 
     } catch (error) {
+        if (!isCurrent()) return;
+        if (importBtn) importBtn.disabled = true;
         console.error('Auto-map error:', error);
         setBadge('❌ Mapping failed', 'error');
         showUploadFailure('Auto-mapping failed: ' + error.message, 'Column mapping', error);
@@ -2397,6 +2580,7 @@ function renderMapping(mappings) {
             if (status) setMappingStatus(status, m.is_matched);
             const compare = tr.querySelector('input[data-compare-column]');
             if (compare) compare.disabled = !m.is_matched;
+            if (m.data_type === 'Date') autoSelectDateDelimiterFromMappedRows();
             // Column mapping changed -- reset row selection grid checkboxes/flags (Phase 4
             // of the row-exclusion requirement), since the key column basis may have shifted.
             resetRowExclusionSelections();
@@ -3413,6 +3597,22 @@ if (importBtn) {
             }
         });
 
+        const coverageStartDate = parseCoverageInputDate(uploadCoverageStart?.value);
+        const coverageEndDate = parseCoverageInputDate(uploadCoverageEnd?.value);
+        const needsCoverageDates = isLedgerUpload() || comparisonModeDropdown?.value === 'replace_range';
+        if (needsCoverageDates && ((!coverageStartDate.valid || !coverageStartDate.iso)
+            && Boolean(uploadCoverageStart?.value))) {
+            showUploadFieldError(uploadCoverageStart, document.getElementById('uploadCoverageHelp'),
+                `Enter a valid start date in ${selectedCoverageDateFormat()}.`);
+            return;
+        }
+        if (needsCoverageDates && ((!coverageEndDate.valid || !coverageEndDate.iso)
+            && Boolean(uploadCoverageEnd?.value))) {
+            showUploadFieldError(uploadCoverageEnd, document.getElementById('uploadCoverageHelp'),
+                `Enter a valid end date in ${selectedCoverageDateFormat()}.`);
+            return;
+        }
+
         const payload = {
             backup_enabled: uploadBackupRequired,
             template_id: selectedTemplateId,
@@ -3424,14 +3624,14 @@ if (importBtn) {
             control_total_row: sourceFootingMappings().length ? Number(getElement('sourceControlRow').value) || null : null,
             control_total_confirmed: Boolean(sourceFootingMappings().length && getElement('sourceControlConfirmed').checked),
             confirm_footing_variance: footingVarianceConfirmed,
-            coverage_start: comparisonModeDropdown?.value === 'replace_range' ? uploadCoverageStart?.value || null : null,
-            coverage_end: comparisonModeDropdown?.value === 'replace_range' ? uploadCoverageEnd?.value || null : null,
+            coverage_start: comparisonModeDropdown?.value === 'replace_range' ? coverageStartDate.iso || null : null,
+            coverage_end: comparisonModeDropdown?.value === 'replace_range' ? coverageEndDate.iso || null : null,
             confirm_report_coverage: Boolean(uploadConfirmCoverage?.checked),
             confirm_empty_period: Boolean(uploadConfirmEmpty?.checked),
             validation_plan_id: validationPlanId,
             ledger_account_code: isLedgerUpload() ? ledgerSelectedAccountCode || null : null,
-            ledger_period_start: isLedgerUpload() ? uploadCoverageStart?.value || null : null,
-            ledger_period_end: isLedgerUpload() ? uploadCoverageEnd?.value || null : null,
+            ledger_period_start: isLedgerUpload() ? coverageStartDate.iso || null : null,
+            ledger_period_end: isLedgerUpload() ? coverageEndDate.iso || null : null,
             unique_column_id: null,
             sheet_name: currentSheet || 'Sheet1',
             // Selected date format (Phase 3 dropdowns) – drives Date validation/import parsing on the backend.
@@ -3949,7 +4149,7 @@ function renderRowExclusionGrid() {
     if (!container || !workbookData) return;
 
     try {
-        const workbook = XLSX.read(workbookData, { type: 'array' });
+        const workbook = XLSX.read(workbookData, { type: 'array', cellNF: true });
         uploadWorkbookDate1904 = !!workbook.Workbook?.WBProps?.date1904;
         const sheetName = currentSheet || workbook.SheetNames[0];
         const sheet = workbook.Sheets[sheetName];
@@ -3960,6 +4160,16 @@ function renderRowExclusionGrid() {
 
         rowExclusionHeaders = jsonData[0] || [];
         rowExclusionAllRows = jsonData.slice(1);
+        rowExclusionNativeDateColumns = new Set();
+        // Keep source types for every column so a later Date-column remap can
+        // detect native dates without inheriting the old mapping's separator.
+        const dateFormats = new Map();
+        for (const address in sheet) {
+            const cell = sheet[address];
+            if (cell?.t !== 'n' || !cell.z) continue;
+            if (!dateFormats.has(cell.z)) dateFormats.set(cell.z, XLSX.SSF.is_date(cell.z));
+            if (dateFormats.get(cell.z)) rowExclusionNativeDateColumns.add(XLSX.utils.decode_cell(address).c);
+        }
         excludedRowNumbers = new Set();
         validationFailedRows = new Map(); // new sheet/mapping -- any prior validation result is stale
         rejectedRowsData = new Map(); // new sheet/mapping -- any prior rejected-rows result is stale

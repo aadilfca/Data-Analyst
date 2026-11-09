@@ -1,5 +1,17 @@
 # Changelog Archive
 
+## Upload coverage date-format responsiveness — 2026-11-09
+
+From/To follow the selected date order and detected delimiter, preserving calendar dates and ISO requests/session values. Native Excel dates have no textual delimiter and use a stable slash display; mixed or undetectable text retains the existing choice. Source changes clear coverage/confirmations, footing confirmation gates new suggestions, and obsolete mapping/date-preview responses cannot restore earlier source state. Validate stays disabled during source remapping. The upload script version advances to 33.
+
+Verification: all 65 upload-dialog Chromium tests pass after the final changes; syntax and scoped whitespace checks pass. Playwright with PO 11 - Test.xlsx completed slash/dash/slash/dash/slash, clearing dates on each switch and repopulating after footing confirmation. Reset/reupload passed with that file and PO 11.xlsx; date locking, report-type toggles and manual order changes passed. No validation/import was run. Aadil confirmed positive local testing and authorized commit/push.
+
+## Upload date delimiter auto-selection — 2026-11-09
+
+After mapping, the Upload page scans all values in mapped Date columns and selects `/` or `-` when one date-shaped delimiter is consistent across the sheet. Blank/native date values are ignored; mixed or undetectable values leave the current selection unchanged. The existing date order stays user-controlled, and the format label and sample preview refresh. No backend, parsing, coverage, or storage changes.
+
+Verification: upload-dialog tests pass (62); JavaScript syntax and scoped whitespace checks pass. Playwright on GRN 04-11.xlsx selected `-`, retained DMY and previewed 04 November 2026; validation/import were not run. Local acceptance remains pending.
+
 ## Footing variance safeguards — 2026-11-09
 
 Source Footing differences below 0.01 currency units pass as precision noise. Differences from 0.01 through 1.00 require an explicit per-upload acknowledgement, bound to validation and import; larger differences block. Validation and import results/reports retain exact Excel totals, detail totals and variance. Stored transaction values are never rounded or rewritten.

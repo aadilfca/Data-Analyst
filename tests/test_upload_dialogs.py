@@ -237,6 +237,107 @@ def page():
         browser.close()
 
 
+@pytest.mark.parametrize(('date_values','notes','initial_delimiter','expected_delimiter','expected_label'), [
+    (['', 46000, 'not a date', '18/11/2026'], ['2026-11-18'] * 4, '-', '/', 'MM/DD/YYYY'),
+    (['', 46000, 'not a date', '2026-11-18'], ['18/11/2026'] * 4, '/', '-', 'MM-DD-YYYY'),
+])
+def test_mapped_date_values_auto_select_consistent_delimiter_and_preserve_order(
+        page, date_values, notes, initial_delimiter, expected_delimiter, expected_label):
+    result = page.evaluate('''input => {
+        rowExclusionHeaders = ['Document Date', 'Notes'];
+        rowExclusionAllRows = input.dateValues.map((value, index) => [value, input.notes[index]]);
+        currentMappings = [
+            {column_name:'Document Date', data_type:'Date', excel_column:'Document Date'},
+            {column_name:'Notes', data_type:'Text', excel_column:'Notes'}
+        ];
+        selectedDateDelimiter = input.initialDelimiter;
+        dateDelimiterDropdown.value = input.initialDelimiter;
+        populateDateOrderDropdown(input.initialDelimiter);
+        selectedDateOrder = 'MDY';
+        dateOrderDropdown.value = 'MDY';
+        const changed = autoSelectDateDelimiterFromMappedRows();
+        return {changed, delimiter:selectedDateDelimiter, order:selectedDateOrder,
+            label:document.getElementById('dateFormatTriggerLabel').textContent};
+    }''', {'dateValues':date_values, 'notes':notes,
+          'initialDelimiter':initial_delimiter})
+    assert result == {'changed':True, 'delimiter':expected_delimiter,
+        'order':'MDY', 'label':expected_label}
+
+
+@pytest.mark.parametrize('date_values', [
+    ['11/18/2026', '2026-11-18'],
+    ['', 46000, 'not a date'],
+])
+def test_mapped_date_delimiter_is_unchanged_for_mixed_or_undetectable_values(page, date_values):
+    result = page.evaluate('''values => {
+        rowExclusionHeaders = ['Document Date'];
+        rowExclusionAllRows = values.map(value => [value]);
+        currentMappings = [{column_name:'Document Date', data_type:'Date', excel_column:'Document Date'}];
+        selectedDateDelimiter = '-';
+        dateDelimiterDropdown.value = '-';
+        populateDateOrderDropdown('-');
+        selectedDateOrder = 'MDY';
+        dateOrderDropdown.value = 'MDY';
+        const changed = autoSelectDateDelimiterFromMappedRows();
+        return {changed, delimiter:selectedDateDelimiter, order:selectedDateOrder};
+    }''', date_values)
+    assert result == {'changed':False, 'delimiter':'-', 'order':'MDY'}
+
+
+def test_native_and_text_excel_dates_switch_repeatedly_and_reset_cleanly(page):
+    page.add_script_tag(path=str(ROOT/'static/vendor/xlsx.full.min.js'))
+    result = page.evaluate('''() => {
+        const book=XLSX.utils.book_new();
+        const native=XLSX.utils.aoa_to_sheet([['Date'],[46064]]);
+        native.A2.z='mm-dd-yy';
+        XLSX.utils.book_append_sheet(book,native,'Native');
+        XLSX.utils.book_append_sheet(book,XLSX.utils.aoa_to_sheet([['Date'],['11-02-2026']]),'Dash');
+        const bytes=new Uint8Array(XLSX.write(book,{type:'array',bookType:'xlsx'}));
+        workbookData=bytes;
+        currentMappings=[{column_id:1,column_name:'Date',excel_column:'Date',data_type:'Date'}];
+        const formats=[];
+        for (const sheet of ['Native','Dash','Native','Dash','Native']) {
+            currentSheet=sheet;
+            renderRowExclusionGrid();
+            autoSelectDateDelimiterFromMappedRows();
+            formats.push(uploadCoverageStart.placeholder);
+        }
+        uploadCoverageStart.value='11/02/2026'; uploadCoverageEnd.value='11/02/2026';
+        uploadConfirmCoverage.checked=true; updateUploadCoverageVisibility();
+        coverageManuallyEdited=true;
+        resetUpload();
+        const cleared={start:uploadCoverageStart.value,locked:uploadCoverageStart.disabled,
+            confirmed:uploadConfirmCoverage.checked,manual:coverageManuallyEdited};
+        workbookData=bytes; currentSheet='Native';
+        currentMappings=[{column_id:1,column_name:'Date',excel_column:'Date',data_type:'Date'}];
+        renderRowExclusionGrid(); autoSelectDateDelimiterFromMappedRows();
+        return {formats,cleared,reupload:uploadCoverageStart.placeholder};
+    }''')
+    assert result == {'formats':['DD/MM/YYYY','DD-MM-YYYY','DD/MM/YYYY','DD-MM-YYYY','DD/MM/YYYY'],
+                      'cleared':{'start':'','locked':False,'confirmed':False,'manual':False},
+                      'reupload':'DD/MM/YYYY'}
+
+
+def test_late_mapping_response_cannot_restore_previous_sheet(page):
+    result = page.evaluate('''async () => {
+        API_BASE=''; selectedTemplateId=1; fileId=99; currentSheet='Old';
+        const pending=[];
+        fetchUpload=async url => {
+            if (url.endsWith('/auto-map')) return await new Promise(resolve => pending.push(resolve));
+            return {ok:true,json:async()=>({has_saved_mapping:false})};
+        };
+        const old=autoMapColumns();
+        currentSheet='New';
+        const latest=autoMapColumns();
+        const response=name=>({ok:true,json:async()=>({total_columns:1,excel_headers:[name],
+            mappings:[{column_id:1,column_name:name,excel_column:name,data_type:'Text',is_matched:true}]})});
+        pending[1](response('New')); await latest;
+        pending[0](response('Old')); await old;
+        return {sheet:currentSheet,column:currentMappings[0].column_name,headers:excelHeaders};
+    }''')
+    assert result == {'sheet':'New','column':'New','headers':['New']}
+
+
 def review(page, summary=None, moves=None):
     values = summary if summary is not None else dict(unchanged_count=2250,new_count=7470,
         changed_count=0,missing_count=2436,changed_voucher_count=842,removed_voucher_count=1)
@@ -596,7 +697,7 @@ def test_source_control_inputs_and_selection_clear_validation_plan(page, change)
     if change == 'all_rows': page.locator('#rowExclusionHeadRow input').uncheck()
     if change == 'mapping': page.locator('#mappingBody select').first.select_option('')
     if change == 'date':
-        page.locator('#uploadCoverageStart').fill('2026-04-01')
+        page.locator('#uploadCoverageStart').fill('01/04/2026')
         page.locator('#uploadCoverageStart').dispatch_event('change')
     if change == 'override':
         page.evaluate("setRejectedRows([{row_number:3,reasons:[{column:'Date',message:'Blank date'}]}]);")
@@ -604,6 +705,37 @@ def test_source_control_inputs_and_selection_clear_validation_plan(page, change)
     assert page.evaluate('validationPlanId') is None
     assert page.evaluate('validationStatus') == 'idle'
     if change == 'mapping': assert not page.locator('#sourceControlConfirmed').is_checked()
+
+
+def test_coverage_fields_follow_selected_date_format_and_keep_iso_semantics(page):
+    assert page.locator('#uploadCoverageStart').get_attribute('type') == 'text'
+    page.evaluate("uploadCoverageStart.value='11/02/2026'; uploadCoverageEnd.value='12/02/2026';")
+    state = page.evaluate('''() => {
+        const snapshot=captureCoverageDateInputs();
+        selectedDateDelimiter='-'; dateDelimiterDropdown.value='-';
+        populateDateOrderDropdown('-');
+        reformatCoverageDateInputs(snapshot);
+        const dashDMY={start:uploadCoverageStart.value,iso:parseCoverageInputDate(uploadCoverageStart.value).iso,
+            placeholder:uploadCoverageStart.placeholder};
+        const dashSnapshot=captureCoverageDateInputs();
+        selectedDateOrder='MDY'; dateOrderDropdown.value='MDY';
+        reformatCoverageDateInputs(dashSnapshot);
+        return {dashDMY, dashMDY:uploadCoverageStart.value,
+            parsedMDY:parseCoverageInputDate(uploadCoverageStart.value).iso,
+            sessionDate:coverageInputSessionValue(uploadCoverageStart),
+            ymdRoundTrip:parseCoverageInputDate(formatCoverageInputDate('2026-02-11','-','YMD'),'-','YMD').iso,
+            compactRoundTrip:parseCoverageInputDate(formatCoverageInputDate('2026-02-11','','DMY'),'','DMY').iso,
+            invalid:parseCoverageInputDate('31-02-2026').valid};
+    }''')
+    assert state == {
+        'dashDMY': {'start': '11-02-2026', 'iso': '2026-02-11', 'placeholder': 'DD-MM-YYYY'},
+        'dashMDY': '02-11-2026',
+        'parsedMDY': '2026-02-11',
+        'sessionDate': '2026-02-11',
+        'ymdRoundTrip': '2026-02-11',
+        'compactRoundTrip': '2026-02-11',
+        'invalid': False,
+    }
 
 
 def test_source_control_results_show_full_and_partial_scope_without_injecting_html(page):
@@ -728,7 +860,7 @@ def test_unchanged_validation_opens_verified_result_without_sending_import(page)
     page.add_script_tag(path=str(ROOT/'static/loading_ui.js'))
     prepare_source_controls(page)
     page.locator('#sourceControlConfirmed').check()
-    page.evaluate("localStorage.setItem('selectedClientId','1'); uploadCoverageStart.value='2026-04-01'; uploadCoverageEnd.value='2026-04-30';")
+    page.evaluate("localStorage.setItem('selectedClientId','1'); uploadCoverageStart.value='01/04/2026'; uploadCoverageEnd.value='30/04/2026';")
     page.locator('#uploadConfirmCoverage').check()
     requests=[]
     page.on('request',lambda request:requests.append(request.url))

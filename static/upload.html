@@ -1686,8 +1686,8 @@
                                 <option value="correction">Partial extract — matched corrections</option>
                             </select>
                             <div id="uploadCoverageFields" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
-                                <label>From <input type="date" id="uploadCoverageStart" aria-describedby="uploadCoverageHelp uploadCoverageHint"></label>
-                                <label>To <input type="date" id="uploadCoverageEnd" aria-describedby="uploadCoverageHelp uploadCoverageHint"></label>
+                                <label>From <input type="text" id="uploadCoverageStart" inputmode="numeric" autocomplete="off" placeholder="DD/MM/YYYY" aria-describedby="uploadCoverageHelp uploadCoverageHint"></label>
+                                <label>To <input type="text" id="uploadCoverageEnd" inputmode="numeric" autocomplete="off" placeholder="DD/MM/YYYY" aria-describedby="uploadCoverageHelp uploadCoverageHint"></label>
                                 <label id="uploadCoverageConfirmLabel" style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap;">
                                     <input type="checkbox" id="uploadConfirmCoverage" aria-describedby="uploadCoverageHint" title="Confirm and lock these dates until unchecked"> Confirm
                                 </label>
@@ -1907,7 +1907,7 @@
             <button type="button" id="uploadReplacementConfirm">Import</button>
         </footer>
     </dialog>
-    <script src="/static/upload.js?v=32"></script>
+    <script src="/static/upload.js?v=33"></script>
 </body>
 
 </html>
