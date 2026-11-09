@@ -267,7 +267,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
-- 2026-11-09: Optimized upload reads/comparisons and aligned regression fixtures; local acceptance pending. See CHANGELOG_ARCHIVE.md, Upload performance review.
+- 2026-11-09: Optimized upload reads/comparisons, aligned regression fixtures and fixed Gate Pass/Vendor Bill ERP header aliases; local acceptance pending. See CHANGELOG_ARCHIVE.md, Gate Pass and Vendor Bill ERP mappings.
 - 2026-11-06: Combined no-change source notes with accessible upload results. See CHANGELOG_ARCHIVE.md, Upload result dialogs — Phase 2.
 - 2026-11-06: Complete reports allow unmapped optional Standard fields and store them blank. See CHANGELOG_ARCHIVE.md, Unmapped Standard fields — Phase 2.
 - 2026-11-06: Footing control rows ignore neighboring values; selected totals remain validated. See CHANGELOG_ARCHIVE.md, Vertical Footing validation.

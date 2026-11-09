@@ -106,6 +106,77 @@ def test_mapping_reads_headers_only_with_the_same_header_names_and_fallback(monk
     assert len(calls)==(1 if selected_sheet=='Data' else 2)
 
 
+@pytest.mark.parametrize(('template_key','source_key'), [('GP no','GP #'),('Bill no','Bill #')])
+def test_document_id_number_sign_headers_auto_map_without_positional_fallback(
+    monkeypatch, tmp_path, template_key, source_key
+):
+    book=Workbook();sheet=book.active;sheet.title='Data'
+    sheet.append([source_key,'Date']);sheet.append(['DOC-001','11/02/2026'])
+    path=tmp_path/'document-key.xlsx';book.save(path);book.close()
+    columns=[
+        dict(column_id=1,column_name=template_key,data_type='Text',reconciliation_role='document_id',sort_order=0),
+        dict(column_id=2,column_name='Date',data_type='Date',reconciliation_role='document_date',sort_order=1),
+    ]
+    def query(sql,params=None):
+        if 'FROM template_column_mappings' in sql:return columns
+        if 'FROM uploaded_files' in sql:return [dict(file_path=str(path))]
+        raise AssertionError(sql)
+    monkeypatch.setattr(upload,'execute_query_pg',query)
+
+    result=upload.auto_map_headers(upload.AutoMapRequest(file_id=99,template_id=1,sheet_name='Data'))
+
+    mapped={item['column_name']:item['excel_column'] for item in result['mappings']}
+    assert mapped=={template_key:source_key,'Date':'Date'}
+    assert result['auto_mapped_count']==result['total_columns']==2
+
+
+@pytest.mark.parametrize(('headers','columns','expected'), [
+    (
+        ['GP #', 'Date', 'Unit', 'Qty'],
+        [
+            ('GP no', 'document_id'), ('Transaction Date', 'document_date'),
+            ('Factory Unit', None), ('Unit of measurement', None), ('Quantity', None),
+        ],
+        {'GP no': 'GP #', 'Transaction Date': 'Date', 'Factory Unit': None,
+         'Unit of measurement': 'Unit', 'Quantity': 'Qty'},
+    ),
+    (
+        ['Bill #', 'Date', 'Supplier', 'Sup Bill #', 'GRN #', 'PO #', 'Qty', 'Price', 'Sales Tax', 'Total'],
+        [
+            ('Bill no', 'document_id'), ('Transaction Date', 'document_date'), ('Vendor', None),
+            ('vendor Bill no', None), ('GRN no', None), ('PO no', None),
+            ('Receive Quantity', None), ('Rate', None), ('Tax Amount', None), ('Amount', 'footing'),
+        ],
+        {'Bill no': 'Bill #', 'Transaction Date': 'Date', 'Vendor': 'Supplier',
+         'vendor Bill no': 'Sup Bill #', 'GRN no': 'GRN #', 'PO no': 'PO #',
+         'Receive Quantity': 'Qty', 'Rate': 'Price', 'Tax Amount': 'Sales Tax', 'Amount': 'Total'},
+    ),
+])
+def test_gate_pass_and_vendor_bill_aliases_are_specific_and_one_to_one(
+    monkeypatch, tmp_path, headers, columns, expected
+):
+    book=Workbook();sheet=book.active;sheet.title='Data'
+    sheet.append(headers);sheet.append(['DOC-001']*len(headers))
+    path=tmp_path/'erp-aliases.xlsx';book.save(path);book.close()
+    template_columns=[
+        dict(column_id=index+1,column_name=name,data_type='Numeric' if name in {'Amount','Rate','Receive Quantity','Quantity'} else 'Text',
+             reconciliation_role=role,sort_order=index)
+        for index,(name,role) in enumerate(columns)
+    ]
+    def query(sql,params=None):
+        if 'FROM template_column_mappings' in sql:return template_columns
+        if 'FROM uploaded_files' in sql:return [dict(file_path=str(path))]
+        raise AssertionError(sql)
+    monkeypatch.setattr(upload,'execute_query_pg',query)
+
+    result=upload.auto_map_headers(upload.AutoMapRequest(file_id=99,template_id=1,sheet_name='Data'))
+
+    mapped={item['column_name']:item['excel_column'] for item in result['mappings']}
+    assert mapped==expected
+    assigned=[source for source in mapped.values() if source is not None]
+    assert len(assigned)==len(set(assigned))
+
+
 def test_fingerprint_reuse_preserves_repeated_occurrences_and_blank_versus_zero(monkeypatch):
     columns=[dict(id=1,column_name='Voucher',data_type='Text',reconciliation_role='document_id'),
              dict(id=2,column_name='Date',data_type='Date',reconciliation_role='document_date'),

@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Gate Pass and Vendor Bill ERP mappings — 2026-11-09
+
+`routers/import_export.py` now prioritizes exact headers, then applies a small one-to-one alias set for common ERP labels. Gate Pass/Vendor Bill document IDs accept `#`/`no`; `Qty`, Supplier and purchase references map to their matching template fields; Price, Sales Tax and the verified Vendor Bill `Total` map to Rate, Tax Amount and footing Amount. Gate Pass `Unit` maps to Unit of measurement, leaving Factory Unit unmapped when the workbook has no such header. Saved mappings, positional fallback, dates and import controls are unchanged.
+
+`tests/test_upload_performance.py` covers the aliases, one-to-one assignment and the Unit safeguard. The focused upload/reconciliation/lifecycle selection passes (172 tests). Isolated Playwright checks against GP 03-11.xlsx and Supplier billing 03 Nov.xlsx confirm 10/14 and 15/18 mappings; Vendor Bill `Total` reconciles exactly to the 54 detail rows (986,654.06). Source workbooks were unchanged, no import was performed, and the isolated test app/PostgreSQL services are stopped. Aadil's local acceptance remains pending.
+
 ## Upload performance review — 2026-11-09
 
 `routers/import_export.py` now maps headers without loading detail rows, bounds pure text-date interpretation caches, reuses strict fingerprints within a document comparison, and streams unconfirmed XLSX format samples where Footing gates coverage. Confirmed ranges retain full-sheet scans; sparse samples, native dates, ambiguity, legacy XLS, source precision and import safeguards remain protected. `test_upload_performance.py` covers these boundaries; the reconciliation test now reflects the previously approved sub-cent tolerance without rounding source values.

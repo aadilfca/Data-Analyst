@@ -3816,30 +3816,80 @@ def auto_map_headers(request: AutoMapRequest):
         except Exception as e2:
             raise HTTPException(400, "Could not read the selected Excel sheet. Check the file and sheet, then retry.")
 
-    mappings = []
+    def normalized_header(value):
+        return re.sub(r'[^a-z0-9]+', '', str(value).casefold())
+
+    # Explicit ERP aliases are limited to well-understood accounting labels. Assign
+    # exact matches first, then aliases, so an early fuzzy match cannot consume a
+    # source header that belongs to a later template column.
+    aliases_by_template_name = {
+        'quantity': {'qty'},
+        'receivequantity': {'qty'},
+        'vendor': {'supplier'},
+        'vendorbillno': {'supbill'},
+        'grnno': {'grn'},
+        'pono': {'po'},
+        'rate': {'price'},
+        'taxamount': {'salestax'},
+        'unitofmeasurement': {'unit'},
+    }
+    assigned = {}
     used = set()
-    for t_col in template_cols:
-        t_name_clean = t_col['column_name'].strip().lower().replace(" ", "")
-        best_match = None
-        best_score = 0
-        for h in excel_headers:
-            if h in used:
+
+    def assign_exact_or_alias(allow_alias):
+        for index, t_col in enumerate(template_cols):
+            if index in assigned:
                 continue
-            h_clean = str(h).strip().lower().replace(" ", "")
-            if h_clean == t_name_clean:
-                best_match = h
-                best_score = 1.0
-                break
-            if t_name_clean in h_clean or h_clean in t_name_clean:
-                score = min(len(t_name_clean), len(h_clean)) / max(len(t_name_clean), len(h_clean))
-                if score > best_score:
-                    best_score = score
-                    best_match = h
-        if best_match is None and len(excel_headers) > len(template_cols):
-            pos = template_cols.index(t_col)
-            if pos < len(excel_headers) and excel_headers[pos] not in used:
-                best_match = excel_headers[pos]
-                best_score = 0.3
+            target_key = normalized_header(t_col['column_name'])
+            is_document_id = t_col.get('reconciliation_role') == 'document_id'
+            target_doc_key = normalized_header(re.sub(r'#', ' no ', t_col['column_name'])) if is_document_id else None
+            alias_keys = set(aliases_by_template_name.get(target_key, set()))
+            if t_col['column_name'].strip().casefold() == 'amount' and t_col.get('reconciliation_role') == 'footing':
+                alias_keys.add('total')
+            for header in excel_headers:
+                if header in used:
+                    continue
+                source_key = normalized_header(header)
+                source_doc_key = normalized_header(re.sub(r'#', ' no ', str(header))) if is_document_id else None
+                if is_document_id and source_doc_key == target_doc_key:
+                    assigned[index] = (header, 1.0)
+                    used.add(header)
+                    break
+                if source_key == target_key:
+                    assigned[index] = (header, 1.0)
+                    used.add(header)
+                    break
+                if allow_alias and source_key in alias_keys:
+                    assigned[index] = (header, 0.95)
+                    used.add(header)
+                    break
+
+    assign_exact_or_alias(allow_alias=False)
+    assign_exact_or_alias(allow_alias=True)
+
+    mappings = []
+    for index, t_col in enumerate(template_cols):
+        best_match, best_score = assigned.get(index, (None, 0))
+        t_name_clean = t_col['column_name'].strip().lower().replace(" ", "")
+        if best_match is None:
+            for h in excel_headers:
+                if h in used:
+                    continue
+                h_clean = str(h).strip().lower().replace(" ", "")
+                # A generic source header must not satisfy a more specific field
+                # by substring alone (for example Unit -> Factory Unit).
+                if t_name_clean == 'factoryunit' and h_clean == 'unit':
+                    continue
+                if t_name_clean in h_clean or h_clean in t_name_clean:
+                    score = min(len(t_name_clean), len(h_clean)) / max(len(t_name_clean), len(h_clean))
+                    if score > best_score:
+                        best_score = score
+                        best_match = h
+            if best_match is None and len(excel_headers) > len(template_cols):
+                pos = index
+                if pos < len(excel_headers) and excel_headers[pos] not in used:
+                    best_match = excel_headers[pos]
+                    best_score = 0.3
 
         mappings.append({
             "column_id": t_col['column_id'],
