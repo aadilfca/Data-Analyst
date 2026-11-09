@@ -38,7 +38,7 @@ from services.upload_lifecycle import (
 )
 from services.upload_reconciliation import (
     footing_columns, selected_control_row, reconcile_source, summarize_rows,
-    verify_stored_controls, stored_reconciliation,
+    aggregate_stored_controls, verify_stored_controls, stored_reconciliation,
 )
 
 # ⭐ MUST HAVE THIS LINE
@@ -2852,10 +2852,27 @@ def upload_database_preview(
             scope_sql += """ AND EXISTS (SELECT 1 FROM uploaded_files u WHERE u.id = client_data.upload_id
                 AND u.ledger_account_code = %s)"""
             scope_params.append(payload.ledger_account_code)
-        total_rows = execute_query_pg(
-            f"SELECT COUNT(*) AS total FROM client_data WHERE {scope_sql}", tuple(scope_params)
-        )
-        total = int(total_rows[0]["total"] if total_rows else 0)
+        # Use the same complete WHERE scope for row count and exact Decimal footing
+        # totals; LIMIT/OFFSET below applies only to the displayed page.
+        stored_controls = None
+        try:
+            stored_controls = aggregate_stored_controls(
+                execute_query_pg, columns, payload.client_id, payload.template_id,
+                start.isoformat(), end.isoformat(),
+                ledger_account_code=payload.ledger_account_code or None,
+            )
+            total = stored_controls['row_count']
+        except ValueError as error:
+            # Preserve access to stored rows when legacy numeric data prevents a
+            # trustworthy footing; the preview will label its total unavailable.
+            logger.warning(
+                "Stored upload preview footing unavailable for client=%s template=%s file=%s: %s",
+                payload.client_id, payload.template_id, payload.file_id, error,
+            )
+            total_rows = execute_query_pg(
+                f"SELECT COUNT(*) AS total FROM client_data WHERE {scope_sql}", tuple(scope_params)
+            )
+            total = int(total_rows[0]["total"] if total_rows else 0)
         pages = max(1, (total + page_size - 1) // page_size)
         page = min(page, pages)
         rows = execute_query_pg(
@@ -2869,6 +2886,9 @@ def upload_database_preview(
             "view": payload.view, "page": page, "page_size": page_size,
             "total": total, "pages": pages,
             "columns": [{"name": col["column_name"], "type": col.get("data_type")} for col in columns],
+            "footing_columns": [column['column_name'] for column in footing_columns(columns)],
+            "footing_totals": stored_controls['footing_totals'] if stored_controls else None,
+            "footing_totals_available": stored_controls is not None,
             "rows": [{"action": "Stored", "incoming": row.get("row_data") or {},
                       "extract_date": row.get("extract_date"),
                       "source_row_number": row.get("source_row_number"), "client_data_id": row.get("id")}

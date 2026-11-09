@@ -9579,3 +9579,10 @@ Reports/nav versions are 63/25 across all 19 shared navigation consumers; other 
 **Implementation:** Replaced the validation sentence inside the narrow account-code cell with a compact fixed popup positioned beside that cell. The popup stays until dismissed or the editor is reopened, announces the error accessibly, follows the cell during scroll/resize, and does not change the table row or column size. Trial Balance script cache version is 55; code validation and API behavior are unchanged.
 
 **Verification:** The Playwright inline-edit regression passes, including popup text/role, cell-size stability, and clearing when editing resumes. JavaScript syntax and `git diff --check` pass. Local-server acceptance is pending.
+
+
+## Upload preview totals and no-change return — Phase 4 — 2026-11-09
+
+**Implementation:** Stored-data preview now returns exact Decimal totals for configured Footing columns over the same full client/template/date/account scope as its row count. The paged viewer labels this as the stored total; invalid legacy amounts leave rows viewable and mark totals unavailable. Closing a verified no-change result preserves the upload page and offers a neutral **View result** action. Import remains disabled; changing upload inputs or Reset clears the saved result. No schema or dependency changes.
+
+**Verification:** The upload-reconciliation suite passes (40 tests). The upload-dialog suite reports 51 passed and 5 failures: each is blocked by a Date preview error overlay intercepting pointer events before the changed flow is exercised. A local Playwright review with a mocked result/preview response confirms close-and-reopen behavior, retained file selection, disabled import, and a `95,495.00` stored footer. `py_compile` and `git diff --check` pass. The live aggregate endpoint was not exercised in the browser; local-server acceptance is pending. No transaction data was imported.

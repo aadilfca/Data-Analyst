@@ -199,6 +199,7 @@ let validationPlanId = null;
 let uploadValidationGeneration = 0;
 let lastChangePreview = null;
 let lastUploadSummary = null;
+let lastIgnoredResult = null;
 // Pre-import Rate mode visibility (Phase D of the Rate-derivation requirement) --
 // the validate response's rate_mode field ({template_setting, effective_source, label}),
 // or null for a non-eligible template. Only ever trustworthy alongside a 'valid'
@@ -689,6 +690,7 @@ function clearRestorePreview() {
 // ---------- RESET VALIDATION STATE ----------
 function resetValidationState() {
     uploadValidationGeneration++;
+    clearIgnoredResult();
     validationStatus = 'idle';
     validationPlanId = null;
     comparisonPreviewRequest = null;
@@ -795,13 +797,40 @@ function showStatus(msg, type = 'info', extra = '') {
     if (!statusBar || !statusMessage) {
         return;
     }
+    const ignoredAction = lastIgnoredResult
+        ? statusMessage.querySelector('#reopenIgnoredResult')?.parentElement : null;
     statusMessage.innerHTML = msg;
     if (extra) {
         statusMessage.innerHTML += '<div style="font-size:12px; opacity:0.9; margin-top:2px;">' + extra + '</div>';
     }
+    if (ignoredAction && lastIgnoredResult) statusMessage.appendChild(ignoredAction);
     if (statusExtra) statusExtra.textContent = '';
     statusBar.className = 'status-bar ' + type;
     statusBar.style.display = 'flex';
+}
+
+function clearIgnoredResult() {
+    lastIgnoredResult = null;
+    document.getElementById('reopenIgnoredResult')?.parentElement?.remove();
+}
+
+function showIgnoredResultAction(result) {
+    clearIgnoredResult();
+    if (!statusMessage) return;
+    lastIgnoredResult = result;
+    const actions = document.createElement('div');
+    actions.style.cssText = 'font-size:12px; margin-top:6px;';
+    const button = document.createElement('button');
+    button.id = 'reopenIgnoredResult';
+    button.type = 'button';
+    button.textContent = 'View result';
+    button.setAttribute('aria-label', 'View no-change upload result');
+    button.style.cssText = 'padding:4px 10px; background:#475569; color:white; border:0; border-radius:5px; font-weight:600; cursor:pointer; font-size:11px;';
+    button.addEventListener('click', () => {
+        if (lastIgnoredResult) showImportSummary(lastIgnoredResult);
+    });
+    actions.appendChild(button);
+    statusMessage.appendChild(actions);
 }
 
 // All upload API failures carry a stage and a safe explanation, including
@@ -1440,8 +1469,31 @@ function renderDatabasePreviewPage(data) {
         });
         body.appendChild(row);
     });
+    if (data.view === 'uploaded' && (data.footing_columns || []).length) {
+        const totalRow = document.createElement('tr');
+        totalRow.className = 'preview-footing-total';
+        const label = document.createElement('th');
+        label.scope = 'row';
+        label.colSpan = 2;
+        label.textContent = data.footing_totals_available
+            ? 'Stored total · full selected scope' : 'Stored total unavailable';
+        label.style.fontWeight = '700';
+        totalRow.appendChild(label);
+        const totals = data.footing_totals || {};
+        const footingNames = new Set(data.footing_columns);
+        comparisonPreviewColumns.forEach(name => {
+            const cell = document.createElement('td');
+            if (footingNames.has(name)) {
+                const value = data.footing_totals_available ? totals[name] : null;
+                cell.textContent = value == null ? 'Unavailable' : formatSourceControlAmount(value);
+                cell.style.fontWeight = '700';
+            }
+            totalRow.appendChild(cell);
+        });
+        body.appendChild(totalRow);
+    }
     document.getElementById('previewInfo').textContent = data.view === 'uploaded'
-        ? `${data.total} stored rows`
+        ? `${data.total} stored rows${(data.footing_columns || []).length ? ' · footing totals cover the full selected scope' : ''}`
         : `${data.total} ${data.view === 'all' ? 'changes' : data.view} · ${data.counts?.added ?? 0} added · ${data.counts?.changed ?? 0} changed · ${data.counts?.deleted ?? 0} deleted`;
     setComparisonPreviewControls(data.page, data.pages);
 }
@@ -2767,8 +2819,10 @@ function showImportSummary(result, ledgerPresentation = null) {
         if (!overlay.isConnected) return;
         document.removeEventListener('keydown', overlay._summaryKeydown);
         overlay.remove();
-        resetUpload();
-        if (previousFocus?.isConnected) previousFocus.focus({preventScroll: true});
+        if (!result.ignored) resetUpload();
+        const reopenButton = result.ignored ? document.getElementById('reopenIgnoredResult') : null;
+        if (reopenButton?.isConnected) reopenButton.focus({preventScroll: true});
+        else if (previousFocus?.isConnected) previousFocus.focus({preventScroll: true});
     };
     overlay.querySelector('#importSummaryCloseBtn').addEventListener('click', closeSummary);
     // Close on overlay click (background)
@@ -3350,8 +3404,10 @@ if (importBtn) {
             // isn't distinct enough, since it fires at the same instant Import becomes enabled).
             updateStepIndicator(4);
             if (!canImport && result.reconciliation) {
-                showImportSummary({...result, status: 'success', ignored: true,
-                    imported_count: 0, updated_count: 0, deleted_count: 0});
+                lastIgnoredResult = {...result, status: 'success', ignored: true,
+                    imported_count: 0, updated_count: 0, deleted_count: 0};
+                showIgnoredResultAction(lastIgnoredResult);
+                showImportSummary(lastIgnoredResult);
             }
 
         } catch (error) {
