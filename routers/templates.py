@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Body, Query, Response
-from database import execute_query_pg, execute_write_pg, log_audit, get_raw_conn_pg, release_raw_conn_pg, pg_transaction, resolve_column_type, resolve_document_column, resolve_column_comparison
+from database import execute_query_pg, execute_write_pg, log_audit, get_raw_conn_pg, release_raw_conn_pg, pg_transaction, resolve_column_type, resolve_document_column, resolve_document_date_column, resolve_column_comparison
 from psycopg2.extras import Json
 import json
 from typing import List, Optional
@@ -93,7 +93,7 @@ def _column_type(data_type, role):
 
 def _master_column_type(data_type, role):
     if role is not None:
-        raise HTTPException(400, 'Select Document ID or Footing in Edit Template; shared columns keep their base type.')
+        raise HTTPException(400, 'Select Document ID, Document Date or Footing in Edit Template; shared columns keep their base type.')
     return _column_type(data_type, None)[0]
 
 
@@ -115,7 +115,13 @@ def _guard_document_configuration(template_id, columns, old_columns=None):
         for column in columns:
             resolve_column_type(column['data_type'], column.get('reconciliation_role'))
         key = resolve_document_column(columns)
+        resolve_document_date_column(columns)
         old_key = resolve_document_column(old_columns) if old_columns is not None else key
+        old_date = (resolve_document_date_column(old_columns)
+                    or next((c for c in old_columns if c.get('data_type') == 'Date'), None)) if old_columns is not None else None
+        new_date = resolve_document_date_column(columns) or next(
+            (c for c in columns if c.get('data_type') == 'Date'), None
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     template = execute_query_pg('SELECT data_purpose, ledger_columns FROM templates WHERE id = %s FOR UPDATE', (template_id,))
@@ -135,6 +141,14 @@ def _guard_document_configuration(template_id, columns, old_columns=None):
             (template_id, old_name, new_name, new_name))
         if changed:
             raise HTTPException(409, 'This changes document identities in existing data. Keep the current Document ID; changing it requires a reviewed migration. No rows were changed.')
+    old_date_name = old_date['column_name'] if old_date else None
+    new_date_name = new_date['column_name'] if new_date else None
+    if old_columns is not None and old_date_name != new_date_name:
+        existing_rows = execute_query_pg(
+            'SELECT id FROM client_data WHERE template_id = %s LIMIT 1', (template_id,)
+        )
+        if existing_rows:
+            raise HTTPException(409, 'Changing the Document Date would change stored report dates. Keep the current date column or review a separate data migration. No rows were changed.')
 
 
 def _guard_column_role_change(column_id, replacement):
@@ -190,6 +204,7 @@ def _assign_template_roles(selected_columns, by_id, before=(), column_roles=None
         for column in ordered:
             resolve_column_type(column['data_type'], column.get('reconciliation_role'))
         resolve_document_column(ordered)
+        resolve_document_date_column(ordered)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return ordered

@@ -1686,12 +1686,18 @@
                                 <option value="correction">Partial extract — matched corrections</option>
                             </select>
                             <div id="uploadCoverageFields" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
-                                <label>From <input type="date" id="uploadCoverageStart" aria-describedby="uploadCoverageHelp"></label>
-                                <label>To <input type="date" id="uploadCoverageEnd" aria-describedby="uploadCoverageHelp"></label>
+                                <label>From <input type="date" id="uploadCoverageStart" aria-describedby="uploadCoverageHelp uploadCoverageHint"></label>
+                                <label>To <input type="date" id="uploadCoverageEnd" aria-describedby="uploadCoverageHelp uploadCoverageHint"></label>
+                                <label id="uploadCoverageConfirmLabel" style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap;">
+                                    <input type="checkbox" id="uploadConfirmCoverage" aria-describedby="uploadCoverageHint" title="Confirm and lock these dates until unchecked"> Confirm
+                                </label>
+                                <div style="flex-basis:100%;" aria-live="polite">
+                                    <span id="documentDateSuggestion">Map a Document Date role to see date suggestions.</span>
+                                </div>
                                 <label id="uploadEmptyConfirmLabel" style="flex-basis:100%;"><input type="checkbox" id="uploadConfirmEmpty"> Empty report — clear this period</label>
                                 <p id="uploadCoverageHelp" class="upload-inline-error" role="alert" hidden></p>
                             </div>
-                            <div id="uploadCoverageHint" style="margin-top:4px;">Use full ERP dates, including days with deleted vouchers. Leave unchecked when the report has transactions.</div>
+                            <div id="uploadCoverageHint" style="margin-top:4px;">Suggested dates cover transaction details only. Confirm the full ERP report period, including days with deleted vouchers; widen the dates first if needed.</div>
                         </div>
                         <div class="action-note">
                             <p id="uploadBackupHelp" role="status">Checking the app backup setting…</p>
@@ -1901,7 +1907,7 @@
             <button type="button" id="uploadReplacementConfirm">Import</button>
         </footer>
     </dialog>
-    <script src="/static/upload.js?v=30"></script>
+    <script src="/static/upload.js?v=32"></script>
 </body>
 
 </html>

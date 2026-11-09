@@ -21,7 +21,9 @@ from routers.auth import require_admin
 from services import upload_lifecycle as lifecycle, storage_cleanup, drive_archive
 
 
-COLUMNS = [{'id': i, 'column_name': name, 'data_type': kind} for i, (name, kind) in enumerate([
+COLUMNS = [{'id': i, 'column_name': name, 'data_type': kind,
+            'reconciliation_role': 'document_date' if name == 'Transaction Date' else None}
+           for i, (name, kind) in enumerate([
     ('Voucher ID', 'Text'), ('Transaction Date', 'Date'), ('Account Detail', 'Text'),
     ('Voucher Detail', 'Text'), ('Debit Amount', 'Numeric'), ('Credit Amount', 'Numeric'),
 ], 1)]
@@ -419,8 +421,49 @@ def pipeline(monkeypatch, tmp_path):
 def request(**changes):
     return upload.ImportRequest(client_id=5, template_id=1, file_id=99, comparison_mode=changes.pop('comparison_mode', 'replace_range'),
         coverage_start=changes.pop('coverage_start', '2026-04-01'), coverage_end=changes.pop('coverage_end', '2026-04-30'),
+        confirm_report_coverage=changes.pop('confirm_report_coverage', True),
         mappings=[upload.ColumnMapping(template_column_id=c['id'], template_column_name=c['column_name'],
                                        excel_column_name=c['column_name']) for c in COLUMNS], **changes)
+
+
+def test_complete_report_requires_explicit_full_coverage_confirmation():
+    columns = deepcopy(COLUMNS)
+    mapping = {column['column_name']: column['column_name'] for column in columns}
+    with pytest.raises(HTTPException, match='Confirm that the coverage dates'):
+        upload._validate_complete_report_inputs(request(confirm_report_coverage=False), columns, mapping)
+    assert upload._validate_complete_report_inputs(request(), columns, mapping)[2]['column_name'] == 'Transaction Date'
+
+
+def test_document_date_suggestions_use_only_transaction_rows_and_shared_date_parser():
+    rows = [
+        {'Transaction Date': '03/04/2026'},
+        {'Transaction Date': datetime(2026, 4, 8)},
+        {'Transaction Date': 'not a date'},
+    ]
+    suggestion = upload._suggest_document_date_range(rows, 'Transaction Date', 'Transaction Date', '/', 'DMY')
+    assert suggestion == {'start': '2026-04-03', 'end': '2026-04-08',
+                          'transaction_dates': 2, 'column': 'Transaction Date'}
+
+
+def test_date_preview_suggests_transaction_dates_and_skips_report_total(pipeline):
+    state = pipeline
+    state['store'] = Store([])
+    state['incoming'] = [row('V1', '08/04/2026'), row('V2', '03/04/2026'),
+        {'Voucher ID': 'TOTAL', 'Transaction Date': None, 'Account Detail': None,
+         'Voucher Detail': 'TOTAL', 'Debit Amount': 20, 'Credit Amount': 0}]
+    request = upload.DatePreviewRequest(
+        file_id=99, template_id=1,
+        date_mappings=[upload.DatePreviewMapping(template_column_name='Transaction Date',
+                                                 excel_column_name='Transaction Date')],
+        column_mappings=[upload.DatePreviewMapping(template_column_name=c['column_name'],
+                                                   excel_column_name=c['column_name']) for c in COLUMNS],
+        date_delimiter='/', date_order='DMY',
+    )
+    result = upload.preview_date_format(request)
+    assert result['date_suggestion'] == {
+        'start': '2026-04-03', 'end': '2026-04-08', 'transaction_dates': 2,
+        'column': 'Transaction Date', 'status': 'ready'
+    }
 
 
 def validate_then_import(state, **options):

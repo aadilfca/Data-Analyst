@@ -1,5 +1,19 @@
 # Changelog Archive
 
+## Upload report date auto-fill and confirmation lock — 2026-11-08
+
+After a file is mapped, the existing Document Date preview now fills From/To with the earliest/latest valid transaction dates. Manual date edits remain intact across preview refreshes. The adjacent Confirm checkbox locks both dates until unchecked. Full-period guidance remains visible, and confirmation is still required for Complete reports. Footing confirmation remains a prerequisite where configured; no backend or schema changes.
+
+Verification: focused template and upload date checks pass (6 tests); scoped `git diff --check` passes. Aadil confirmed the date flow works with the selected headline format. Automatic delimiter interpretation and format-status feedback remain separate follow-up work.
+
+## Upload report dates — Phase 4 — 2026-11-07
+
+Template setup now supports one Date-typed Document Date role. The role uses existing template-mapping storage; no schema change or automatic legacy assignment. Changing the effective report-date source on a populated template is blocked for migration review.
+
+The read-only date preview suggests the earliest/latest parseable dates from transaction rows after blank, recognized-total and confirmed-Footing controls are removed. Suggestions never confirm coverage. Complete reports require a mapped Document Date, an explicit full-ERP-period confirmation and valid ordered coverage dates; coverage may be wider than surviving transaction dates, but must contain every valid incoming detail date. Date edits clear confirmation and invalidate validation. Partial extracts retain their existing behavior.
+
+Verification: focused template and upload checks pass (130 tests); Python compilation and JavaScript syntax checks pass. Aadil confirmed the date flow works with the selected headline format. No schema migration or live data write.
+
 ## Upload result dialogs — Phase 2 — 2026-11-06
 
 Verified no-change results now include source notes in one dialog, avoiding stacked windows. Import results expose dialog semantics, focus entry/restoration, Tab trapping and Escape close; reconciliation text and report download stay available. No backend or schema change.

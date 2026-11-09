@@ -43,7 +43,13 @@ const modeActions = getElement('modeActions');
 const comparisonModeDropdown = getElement('comparisonModeDropdown');
 const uploadCoverageStart = getElement('uploadCoverageStart');
 const uploadCoverageEnd = getElement('uploadCoverageEnd');
+const uploadConfirmCoverage = getElement('uploadConfirmCoverage');
+const documentDateSuggestion = getElement('documentDateSuggestion');
 const uploadConfirmEmpty = getElement('uploadConfirmEmpty');
+// Keep system-filled dates separate from manual choices so a preview refresh never overwrites a widened ERP period.
+let lastAutoSuggestedCoverage = null;
+let coverageManuallyEdited = false;
+let datePreviewRequestGeneration = 0;
 
 const downloadBtn = getElement('downloadBtn');
 const importBtn = getElement('importBtn');
@@ -100,6 +106,7 @@ function confirmedSourceControlRow() {
 
 function resetSourceControlChoice(suggest = false) {
     sourceControlResult = null;
+    clearCoverageConfirmation();
     const input = getElement('sourceControlRow');
     const confirmed = getElement('sourceControlConfirmed');
     if (input) input.value = '';
@@ -176,13 +183,15 @@ function formatSourceControlAmount(value) {
 getElement('sourceControlRow')?.addEventListener('input', () => {
     clearUploadFieldError(getElement('sourceControlRow'), getElement('sourceControlPreview'));
     getElement('sourceControlConfirmed').checked = false;
+    clearCoverageConfirmation();
     resetValidationState();
-    renderSourceControls(null); renderRowExclusionPage();
+    renderSourceControls(null); renderRowExclusionPage(); refreshDateFormatPreview();
 });
 getElement('sourceControlConfirmed')?.addEventListener('change', () => {
     clearUploadFieldError(getElement('sourceControlRow'), getElement('sourceControlPreview'));
+    clearCoverageConfirmation();
     resetValidationState();
-    renderSourceControls(null); renderRowExclusionPage();
+    renderSourceControls(null); renderRowExclusionPage(); refreshDateFormatPreview();
 });
 let excelHeaders = [];
 let templateColumns = [];
@@ -572,6 +581,7 @@ async function restoreUploadSessionState() {
     }
     if (uploadCoverageStart) uploadCoverageStart.value = state.coverageStart || '';
     if (uploadCoverageEnd) uploadCoverageEnd.value = state.coverageEnd || '';
+    coverageManuallyEdited = Boolean(state.coverageStart || state.coverageEnd);
     updateUploadCoverageVisibility();
 
     // Stash Sheet/row-exclusion targets for when the user re-selects a file.
@@ -1061,6 +1071,7 @@ function populateDateOrderDropdown(delimiter) {
 if (dateDelimiterDropdown) {
     dateDelimiterDropdown.addEventListener('change', function() {
         selectedDateDelimiter = this.value;
+        clearCoverageConfirmation();
         resetValidationState();
         populateDateOrderDropdown(selectedDateDelimiter);
         refreshDateFormatPreview();
@@ -1072,6 +1083,7 @@ if (dateDelimiterDropdown) {
 if (dateOrderDropdown) {
     dateOrderDropdown.addEventListener('change', function() {
         selectedDateOrder = this.value;
+        clearCoverageConfirmation();
         resetValidationState();
         refreshDateFormatPreview();
         updateDateFormatTriggerLabel();
@@ -1082,6 +1094,7 @@ if (dateOrderDropdown) {
 if (comparisonModeDropdown) {
     comparisonModeDropdown.addEventListener('change', function() {
         clearUploadCoverageError();
+        clearCoverageConfirmation();
         updateUploadCoverageVisibility();
         resetValidationState();
         saveUploadSessionState();
@@ -1092,6 +1105,7 @@ function clearUploadCoverageError() {
     const help = document.getElementById('uploadCoverageHelp');
     clearUploadFieldError(uploadCoverageStart, help);
     clearUploadFieldError(uploadCoverageEnd, help);
+    clearUploadFieldError(uploadConfirmCoverage, help);
 }
 
 function updateUploadCoverageVisibility() {
@@ -1099,14 +1113,31 @@ function updateUploadCoverageVisibility() {
     const complete = comparisonModeDropdown?.value === 'replace_range';
     if (container) container.style.display = complete || isLedgerUpload() ? 'flex' : 'none';
     document.getElementById('uploadEmptyConfirmLabel').hidden = !complete;
+    document.getElementById('uploadCoverageConfirmLabel').hidden = !complete;
+    const datesLocked = complete && Boolean(uploadConfirmCoverage?.checked);
+    if (uploadCoverageStart) uploadCoverageStart.disabled = datesLocked;
+    if (uploadCoverageEnd) uploadCoverageEnd.disabled = datesLocked;
+}
+
+function clearCoverageConfirmation() {
+    if (uploadConfirmCoverage) uploadConfirmCoverage.checked = false;
+    updateUploadCoverageVisibility();
 }
 
 [uploadCoverageStart, uploadCoverageEnd, uploadConfirmEmpty].forEach(control => {
     if (control) control.addEventListener('change', () => {
         clearUploadCoverageError();
+        if (control === uploadCoverageStart || control === uploadCoverageEnd) coverageManuallyEdited = true;
+        clearCoverageConfirmation();
         resetValidationState();
         saveUploadSessionState();
     });
+});
+
+uploadConfirmCoverage?.addEventListener('change', () => {
+    clearUploadCoverageError();
+    updateUploadCoverageVisibility();
+    resetValidationState();
 });
 
 function reviewUploadReplacement(payload) {
@@ -1557,6 +1588,7 @@ updateDateFormatTriggerLabel(); // Set the initial trigger label to match the de
 // choice is caught before running full validation/import. No-op until a
 // file is uploaded and template mapping is known (Date columns identified).
 async function refreshDateFormatPreview() {
+    const requestGeneration = ++datePreviewRequestGeneration;
     const container = getElement('dateFormatPreview');
     if (!container) return;
 
@@ -1570,9 +1602,17 @@ async function refreshDateFormatPreview() {
         .filter(m => m.data_type === 'Date' && m.excel_column)
         .map(m => ({ template_column_name: m.column_name, excel_column_name: m.excel_column }));
 
+    const role = currentMappings.find(m => m.reconciliation_role === 'document_date');
+    if (documentDateSuggestion) {
+        documentDateSuggestion.textContent = !role
+            ? 'Configure a Document Date role in Manage Templates to calculate suggestions.'
+            : !role.excel_column ? 'Map the configured Document Date column to calculate suggestions.'
+                : 'Calculating suggested dates…';
+    }
     if (dateMappings.length === 0) {
         container.style.display = 'none';
         container.innerHTML = '';
+        renderDocumentDateSuggestion(null);
         return;
     }
 
@@ -1582,21 +1622,78 @@ async function refreshDateFormatPreview() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 file_id: fileId,
+                template_id: selectedTemplateId,
                 sheet_name: currentSheet || 'Sheet1',
                 date_mappings: dateMappings,
+                column_mappings: currentMappings.filter(m => m.excel_column).map(m => ({
+                    template_column_name: m.column_name,
+                    excel_column_name: m.excel_column
+                })),
+                control_total_row: sourceFootingMappings().length ? Number(getElement('sourceControlRow')?.value) || null : null,
+                control_total_confirmed: Boolean(sourceFootingMappings().length && getElement('sourceControlConfirmed')?.checked),
                 date_delimiter: selectedDateDelimiter,
                 date_order: selectedDateOrder
             })
         });
         if (!res.ok) throw new Error('Preview request failed');
         const data = await res.json();
+        if (requestGeneration !== datePreviewRequestGeneration) return;
         renderDateFormatPreview(data.samples || []);
+        renderDocumentDateSuggestion(data.date_suggestion);
     } catch (error) {
+        if (requestGeneration !== datePreviewRequestGeneration) return;
         console.error('Date preview error:', error);
         showUploadFailure('Date preview failed: ' + error.message, 'Date preview', error);
         container.style.display = 'none';
         container.innerHTML = '';
     }
+}
+
+function renderDocumentDateSuggestion(suggestion) {
+    if (!documentDateSuggestion) return;
+    const clearUnconfirmedSuggestion = () => {
+        if (!lastAutoSuggestedCoverage || uploadConfirmCoverage?.checked) return;
+        if (!coverageManuallyEdited && uploadCoverageStart?.value === lastAutoSuggestedCoverage.start
+            && uploadCoverageEnd?.value === lastAutoSuggestedCoverage.end) {
+            uploadCoverageStart.value = '';
+            uploadCoverageEnd.value = '';
+            clearUploadCoverageError();
+            resetValidationState();
+            saveUploadSessionState();
+        }
+        lastAutoSuggestedCoverage = null;
+    };
+    if (!suggestion) {
+        clearUnconfirmedSuggestion();
+        return;
+    }
+    if (suggestion.status === 'configure_document_date') {
+        clearUnconfirmedSuggestion();
+        documentDateSuggestion.textContent = 'Configure a Document Date role in Manage Templates to calculate suggestions.';
+    } else if (suggestion.status === 'confirm_footing') {
+        clearUnconfirmedSuggestion();
+        documentDateSuggestion.textContent = 'Confirm the Excel Footing row to calculate suggestions from transaction details.';
+    } else if (suggestion.start && suggestion.end) {
+        documentDateSuggestion.textContent = `Transaction-date suggestion: ${formatCoverageDate(suggestion.start)} – ${formatCoverageDate(suggestion.end)} (${suggestion.transaction_dates} valid dates). The full ERP period may be wider.`;
+        if (!coverageManuallyEdited && !uploadConfirmCoverage?.checked
+            && (uploadCoverageStart?.value !== suggestion.start || uploadCoverageEnd?.value !== suggestion.end)) {
+            uploadCoverageStart.value = suggestion.start;
+            uploadCoverageEnd.value = suggestion.end;
+            lastAutoSuggestedCoverage = {start: suggestion.start, end: suggestion.end};
+            clearUploadCoverageError();
+            resetValidationState();
+            saveUploadSessionState();
+        }
+    } else {
+        clearUnconfirmedSuggestion();
+        documentDateSuggestion.textContent = 'No valid Document Date values were found in the transaction rows.';
+    }
+}
+
+function formatCoverageDate(value) {
+    const day = new Date(value + 'T00:00:00');
+    return Number.isNaN(day.getTime()) ? value
+        : day.toLocaleDateString('en-GB', {day: '2-digit', month: 'short', year: 'numeric'});
 }
 
 // Renders up to 3 sample lines as small text (not a table) -- a sanity check,
@@ -1779,8 +1876,18 @@ async function handleFile(file) {
         return;
     }
 
+    const restoringCoverage = Boolean(pendingRestoreSheetName);
+    datePreviewRequestGeneration++;
     selectedFile = file;
     fileId = null;
+    lastAutoSuggestedCoverage = null;
+    coverageManuallyEdited = restoringCoverage && Boolean(uploadCoverageStart?.value || uploadCoverageEnd?.value);
+    if (!restoringCoverage) {
+        if (uploadCoverageStart) uploadCoverageStart.value = '';
+        if (uploadCoverageEnd) uploadCoverageEnd.value = '';
+        clearCoverageConfirmation();
+    }
+    updateUploadCoverageVisibility();
     resetValidationState();
     resetSourceControlChoice();
     if (importBtn) importBtn.disabled = true;
@@ -1845,6 +1952,7 @@ function populateSheetSelector(sheets) {
 
 if (sheetSelector) {
     sheetSelector.addEventListener('change', function() {
+        datePreviewRequestGeneration++;
         currentSheet = this.value;
         resetSourceControlChoice();
                 if (currentSheet && selectedTemplateId && fileId) {
@@ -1901,14 +2009,18 @@ if (clearBtn) {
 
 function resetUpload() {
     ++uploadTemplateGeneration;
+    datePreviewRequestGeneration++;
     ledgerSelectedAccountCode = ''; pendingLedgerRestoreCode = '';
     if (isLedgerUpload()) renderLedgerUploadAccounts();
     else clearLedgerUploadContext();
     selectedFile = null;
     fileId = null;
+    lastAutoSuggestedCoverage = null;
+    coverageManuallyEdited = false;
     if (comparisonModeDropdown) comparisonModeDropdown.value = 'replace_range';
     if (uploadCoverageStart) uploadCoverageStart.value = '';
     if (uploadCoverageEnd) uploadCoverageEnd.value = '';
+    clearCoverageConfirmation();
     if (uploadConfirmEmpty) uploadConfirmEmpty.checked = false;
     updateUploadCoverageVisibility();
     if (fileInfo) fileInfo.style.display = 'none';
@@ -3202,6 +3314,7 @@ if (importBtn) {
             control_total_confirmed: Boolean(sourceFootingMappings().length && getElement('sourceControlConfirmed').checked),
             coverage_start: comparisonModeDropdown?.value === 'replace_range' ? uploadCoverageStart?.value || null : null,
             coverage_end: comparisonModeDropdown?.value === 'replace_range' ? uploadCoverageEnd?.value || null : null,
+            confirm_report_coverage: Boolean(uploadConfirmCoverage?.checked),
             confirm_empty_period: Boolean(uploadConfirmEmpty?.checked),
             validation_plan_id: validationPlanId,
             ledger_account_code: isLedgerUpload() ? ledgerSelectedAccountCode || null : null,
@@ -3241,6 +3354,11 @@ if (importBtn) {
             const coverageField = reversed || !payload.coverage_start ? uploadCoverageStart : uploadCoverageEnd;
             showUploadFieldError(coverageField, document.getElementById('uploadCoverageHelp'),
                 reversed ? 'Start date must be on or before the end date.' : 'Enter both report coverage dates.');
+            return;
+        }
+        if (payload.comparison_mode === 'replace_range' && !payload.confirm_report_coverage) {
+            showUploadFieldError(uploadConfirmCoverage, document.getElementById('uploadCoverageHelp'),
+                'Confirm that these dates cover the full ERP report period before validation.');
             return;
         }
         if (sourceFootingMappings().length && !confirmedSourceControlRow()) {
@@ -3788,7 +3906,9 @@ function rowExclusionDeselectAll() {
 // re-render, without re-reading the file.
 function resetRowExclusionSelections() {
     resetValidationState();
+    clearCoverageConfirmation();
     resetSourceControlChoice(true);
+    refreshDateFormatPreview();
     if (!rowExclusionAllRows.length) return; // grid not built yet, nothing to reset
     excludedRowNumbers = new Set();
     validationFailedRows = new Map(); // mapping changed -- any prior validation result is stale

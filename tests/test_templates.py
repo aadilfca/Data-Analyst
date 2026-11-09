@@ -11,6 +11,7 @@ TEMPLATES_JS = Path(__file__).resolve().parents[1] / "static" / "templates.js"
 @pytest.mark.parametrize('choice,base,role', [
     ('Text', 'Text', 'document_id'), ('Numeric', 'Numeric', 'footing'),
     ('Text', 'Text', None), ('Numeric', 'Numeric', None), ('Date', 'Date', None),
+    ('Date', 'Date', 'document_date'),
 ])
 def test_reconciliation_column_types_preserve_base_types(choice, base, role):
     from database import resolve_column_type
@@ -23,6 +24,8 @@ def test_invalid_role_base_combinations_are_rejected():
         resolve_column_type('Numeric', 'document_id')
     with pytest.raises(ValueError):
         resolve_column_type('Text', 'footing')
+    with pytest.raises(ValueError):
+        resolve_column_type('Text', 'document_date')
 
 
 def test_reactivating_shared_id_column_cannot_introduce_two_document_keys(monkeypatch):
@@ -80,6 +83,49 @@ def test_template_roles_keep_shared_po_column_independent():
         _assign_template_roles([1,3], masters, column_roles={2:'document_id'})
     with pytest.raises(HTTPException):
         _assign_template_roles([1,2], masters, column_roles={1:'document_id',2:'document_id'})
+
+
+def test_template_allows_one_document_date_and_rejects_multiple():
+    from routers.templates import _assign_template_roles
+    from fastapi import HTTPException
+    masters = {1: dict(id=1, column_name='Invoice Date', data_type='Date'),
+               2: dict(id=2, column_name='Receipt Date', data_type='Date')}
+    configured = _assign_template_roles([1, 2], masters, column_roles={1: 'document_date', 2: None})
+    assert configured[0]['reconciliation_role'] == 'document_date'
+    with pytest.raises(HTTPException, match='one Document Date'):
+        _assign_template_roles([1, 2], masters,
+                               column_roles={1: 'document_date', 2: 'document_date'})
+
+
+def test_document_date_role_controls_stored_extract_date():
+    from routers.import_export import extract_columns_from_row
+    columns = [
+        {'id': 1, 'column_name': 'Posted Date', 'data_type': 'Date'},
+        {'id': 2, 'column_name': 'Invoice Date', 'data_type': 'Date', 'reconciliation_role': 'document_date'},
+        {'id': 3, 'column_name': 'Amount', 'data_type': 'Numeric'},
+    ]
+    assert extract_columns_from_row(
+        {'Posted Date': '01/03/2026', 'Invoice Date': '17/04/2026', 'Amount': 25}, columns
+    ) == (25.0, '2026-04-17')
+
+
+def test_changing_document_date_on_populated_template_requires_reviewed_migration(monkeypatch):
+    from fastapi import HTTPException
+    from routers import templates
+    before = [
+        {'id': 1, 'column_name': 'Posted Date', 'data_type': 'Date'},
+        {'id': 2, 'column_name': 'Invoice Date', 'data_type': 'Date'},
+    ]
+    after = [before[0], dict(before[1], reconciliation_role='document_date')]
+    def query(sql, params=None):
+        if 'FROM templates' in sql:
+            return [{'data_purpose': 'standard'}]
+        if 'FROM client_data' in sql:
+            return [{'id': 8}]
+        return []
+    monkeypatch.setattr(templates, 'execute_query_pg', query)
+    with pytest.raises(HTTPException, match='Changing the Document Date'):
+        templates._guard_document_configuration(7, after, before)
 
 
 def test_column_roles_sqlite_upgrade_is_idempotent(tmp_path, monkeypatch):
@@ -318,7 +364,8 @@ def test_template_role_editor_keeps_po_reference_independent_and_cancel_discards
             var API_BASE=''; window.LoadingUI={showSpinner(){},hideSpinner(){}};
             window.__requests=[];
             window.__masters=[{id:1,column_name:'PO No',data_type:'Text'},
-                {id:2,column_name:'GRN No',data_type:'Text'}, {id:3,column_name:'Amount',data_type:'Numeric'}];
+                {id:2,column_name:'GRN No',data_type:'Text'}, {id:3,column_name:'Amount',data_type:'Numeric'},
+                {id:4,column_name:'Invoice Date',data_type:'Date'}];
             window.fetch=async(url,options={})=>{
                 if(options.method) window.__requests.push(JSON.parse(options.body));
                 const value=url==='/api/columns'?window.__masters:options.method?{message:'Saved'}:[];
@@ -328,7 +375,8 @@ def test_template_role_editor_keeps_po_reference_independent_and_cancel_discards
                 {...window.__masters[0],reconciliation_role:'document_id'},
                 {...window.__masters[2],reconciliation_role:'footing'}]};
             window.__grn={id:20,template_name:'GRN',columns:[
-                {...window.__masters[1],reconciliation_role:'document_id'},window.__masters[0],window.__masters[2]]};
+                {...window.__masters[1],reconciliation_role:'document_id'},window.__masters[0],
+                window.__masters[2],window.__masters[3]]};
         """)
         page.add_script_tag(path=str(TEMPLATES_JS))
         try:
@@ -345,9 +393,10 @@ def test_template_role_editor_keeps_po_reference_independent_and_cancel_discards
             assert page.get_by_label('Reconciliation role for PO No',exact=True).input_value() == ''
             assert page.get_by_label('Reconciliation role for GRN No',exact=True).input_value() == 'document_id'
             page.get_by_label('Reconciliation role for Amount',exact=True).select_option('footing')
+            page.get_by_label('Reconciliation role for Invoice Date',exact=True).select_option('document_date')
             page.locator('#saveTemplateBtn').click()
             page.wait_for_function('window.__requests.length===1')
-            assert page.evaluate('window.__requests[0].column_roles') == {'1':None,'2':'document_id','3':'footing'}
+            assert page.evaluate('window.__requests[0].column_roles') == {'1':None,'2':'document_id','3':'footing','4':'document_date'}
             assert page.evaluate("window.__masters.every(c=>!('reconciliation_role' in c))")
         finally:
             browser.close()

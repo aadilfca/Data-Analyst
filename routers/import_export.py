@@ -15,6 +15,7 @@ from database import (
     log_data_audit_pg, execute_batch_pg, execute_batch_insert_with_ids_pg,
     start_db_metrics, get_db_metrics, get_db_query_details, stop_db_metrics, log_error,
     compact_audit_payloads, get_database_storage_budget_pg, resolve_document_column,
+    resolve_document_date_column,
 )
 from psycopg2.extras import Json
 from services.cash_bank_classification import load_treasury_mapping_postgres, upsert_classification_rows_postgres
@@ -2651,6 +2652,7 @@ class ImportRequest(BaseModel):
     comparison_mode: str = "correction"
     coverage_start: Optional[str] = None
     coverage_end: Optional[str] = None
+    confirm_report_coverage: StrictBool = False
     confirm_empty_period: bool = False
     # Server-issued, short-lived validation plan. Import must use the plan
     # produced by Validate rather than re-reading and re-comparing the workbook.
@@ -3081,8 +3083,12 @@ class DatePreviewMapping(BaseModel):
 
 class DatePreviewRequest(BaseModel):
     file_id: int
+    template_id: Optional[int] = None
     sheet_name: str = "Sheet1"
     date_mappings: List[DatePreviewMapping]  # only the Date-typed columns currently mapped
+    column_mappings: List[DatePreviewMapping] = []
+    control_total_row: Optional[StrictInt] = None
+    control_total_confirmed: StrictBool = False
     date_delimiter: Optional[str] = None
     date_order: Optional[str] = None
 
@@ -3462,6 +3468,11 @@ def extract_columns_from_row(row_data: dict, template_cols: list,
             except:
                 pass
 
+    date_role = resolve_document_date_column(template_cols)
+    ordered_date_columns = ([date_role] if date_role else []) + [
+        col for col in template_cols
+        if col['data_type'] == 'Date' and (not date_role or col['id'] != date_role['id'])
+    ]
     for col in template_cols:
         if amount_found and date_found:
             break
@@ -3477,7 +3488,11 @@ def extract_columns_from_row(row_data: dict, template_cols: list,
                     amount_found = True  # take first non-zero numeric
             except:
                 pass
-        elif col['data_type'] == 'Date' and not date_found:
+    if not date_found:
+        for col in ordered_date_columns:
+            value = row_data.get(col['column_name'])
+            if value is None or value == '':
+                continue
             try:
                 kind = classify_date_cell(value)
                 if kind == 'native':
@@ -3494,7 +3509,8 @@ def extract_columns_from_row(row_data: dict, template_cols: list,
                         date_str = dt.strftime('%Y-%m-%d')
                     except:
                         pass
-                date_found = True  # take first date
+                date_found = True
+                break
             except:
                 pass
     return amount, date_str
@@ -3509,8 +3525,8 @@ def get_critical_field_columns(template_cols: list) -> dict:
       - document_id = configured Document ID (first column for legacy templates)
       - amount      = the first Numeric-typed column (matches
         extract_columns_from_row()'s "take first numeric" rule)
-      - date        = the first Date-typed column (matches
-        extract_columns_from_row()'s "take first date" rule)
+      - date        = configured Document Date, falling back to the first Date-typed
+        column for templates that have not configured the new role
     A role is None if this template has no column filling it (e.g. no Date column).
     """
     context = _ledger_context.get()
@@ -3521,8 +3537,81 @@ def get_critical_field_columns(template_cols: list) -> dict:
     return {
         'document_id': resolve_document_column(template_cols),
         'amount': next((c for c in template_cols if c['data_type'] == 'Numeric'), None),
-        'date': next((c for c in template_cols if c['data_type'] == 'Date'), None),
+        'date': resolve_document_date_column(template_cols) or next((c for c in template_cols if c['data_type'] == 'Date'), None),
     }
+
+
+def _parse_date_cell(value, delimiter, order):
+    """Return a calendar date using the same native/text/serial rules as imports."""
+    kind = classify_date_cell(value)
+    if kind == 'native':
+        return value.date() if isinstance(value, datetime) else value
+    if kind == 'excel_serial':
+        return excel_serial_to_datetime(value).date()
+    if kind == 'text':
+        return parse_date_flexible(value, delimiter, order).date()
+    return None
+
+
+def _validate_complete_report_inputs(request, template_cols, col_mapping):
+    """Protect complete replacement scope before comparison or plan creation."""
+    if request.comparison_mode != 'replace_range' or _ledger_context.get():
+        return None
+    if not request.confirm_report_coverage:
+        raise HTTPException(400, 'Confirm that the coverage dates represent the full ERP report period before validating.')
+    if not request.coverage_start or not request.coverage_end:
+        raise HTTPException(400, 'Enter both complete-report coverage dates.')
+    try:
+        start = date.fromisoformat(request.coverage_start)
+        end = date.fromisoformat(request.coverage_end)
+    except (TypeError, ValueError):
+        raise HTTPException(400, 'Enter valid complete-report coverage dates.')
+    if start > end:
+        raise HTTPException(400, 'Coverage start date must be on or before the end date.')
+    try:
+        date_column = resolve_document_date_column(template_cols)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not date_column:
+        raise HTTPException(400, 'Configure one Document Date role in Edit Template before importing a Complete report.')
+    if not col_mapping.get(date_column['column_name']):
+        raise HTTPException(400, f"Map the Document Date column: {date_column['column_name']}.")
+    return start, end, date_column
+
+
+def _suggest_document_date_range(rows, column_name, excel_column, delimiter, order):
+    """Summarize parseable Document Date values from transaction rows only."""
+    days = []
+    for row in rows:
+        value = row.get(excel_column)
+        if value is None or (not isinstance(value, str) and pd.isna(value)) or (isinstance(value, str) and not value.strip()):
+            continue
+        try:
+            parsed = _parse_date_cell(value, delimiter, order)
+        except (ValueError, TypeError, OverflowError):
+            continue
+        if parsed:
+            days.append(parsed)
+    if not days:
+        return {'start': None, 'end': None, 'transaction_dates': 0, 'column': column_name}
+    return {'start': min(days).isoformat(), 'end': max(days).isoformat(),
+            'transaction_dates': len(days), 'column': column_name}
+
+
+def _assert_incoming_dates_within_coverage(rows, complete_report_inputs, col_mapping, delimiter, order):
+    """A declared Complete report period must contain every parseable detail date."""
+    if not complete_report_inputs:
+        return
+    start, end, date_column = complete_report_inputs
+    for row in rows:
+        excel_column = col_mapping.get(date_column['column_name'])
+        value = row.get(excel_column) if excel_column else None
+        try:
+            day = _parse_date_cell(value, delimiter, order)
+        except (ValueError, TypeError, OverflowError):
+            continue  # Ordinary date validation reports malformed values with row context.
+        if day is not None and not start <= day <= end:
+            raise HTTPException(400, 'The declared coverage excludes a valid transaction date. Widen the period to include every valid detail date.')
 
 
 CRITICAL_FIELD_LABELS = {
@@ -4004,7 +4093,40 @@ def preview_date_format(request: DatePreviewRequest):
                     })
             # 'empty' cells produce no sample -- nothing meaningful to preview.
 
-    return {"samples": samples}
+    response = {"samples": samples, "date_suggestion": None}
+    if request.template_id is not None:
+        template_cols = execute_query_pg(
+            """SELECT m.id, m.column_name, m.data_type, p.reconciliation_role
+               FROM template_column_mappings p JOIN master_columns m ON p.column_id = m.id
+               WHERE p.template_id = %s AND m.is_active = TRUE ORDER BY p.sort_order""",
+            (request.template_id,),
+        )
+        try:
+            date_column = resolve_document_date_column(template_cols)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if date_column:
+            mapped = {item.template_column_name: item.excel_column_name for item in request.column_mappings}
+            excel_column = mapped.get(date_column['column_name'])
+            if excel_column and excel_column in df.columns:
+                col_mapping = {name: header for name, header in mapped.items() if header in df.columns}
+                if footing_columns(template_cols) and not request.control_total_confirmed:
+                    response['date_suggestion'] = {
+                        'start': None, 'end': None, 'transaction_dates': 0,
+                        'column': date_column['column_name'], 'status': 'confirm_footing'
+                    }
+                else:
+                    transaction_rows, _ = _prepare_source_rows(df, request, template_cols, col_mapping)
+                    response['date_suggestion'] = {
+                        **_suggest_document_date_range(transaction_rows, date_column['column_name'],
+                                                       excel_column, effective_delimiter, effective_order),
+                        'status': 'ready'
+                    }
+        elif request.template_id:
+            response['date_suggestion'] = {'start': None, 'end': None,
+                'transaction_dates': 0, 'status': 'configure_document_date'}
+
+    return response
 
 
 # ---------- VALIDATE ONLY (NO IMPORT) ----------
@@ -4084,6 +4206,8 @@ def validate_only(request: ImportRequest, perf: bool = False):
         if mapping and mapping.excel_column_name:
             col_mapping[t_col['column_name']] = mapping.excel_column_name
 
+    complete_report_inputs = _validate_complete_report_inputs(request, template_cols, col_mapping)
+
     # Pre-import Rate mode visibility (Phase D of the Rate-derivation requirement) --
     # resolves the same 'auto' -> 'imported'/'derived' decision validate_and_import()
     # makes at commit time, via the same resolve_upload_rate_source() helper, so the
@@ -4130,6 +4254,8 @@ def validate_only(request: ImportRequest, perf: bool = False):
             raise HTTPException(400, 'Correct complete-report errors in the source workbook; rejected rows cannot be overridden.')
         required_mapping_names = {column['column_name'] for column in get_critical_field_columns(template_cols).values()
                                   if column}
+        if complete_report_inputs:
+            required_mapping_names.add(complete_report_inputs[2]['column_name'])
         document_column = resolve_document_column(template_cols)
         if document_column:
             required_mapping_names.add(document_column['column_name'])
@@ -4146,6 +4272,8 @@ def validate_only(request: ImportRequest, perf: bool = False):
             if _ledger_row_number(row, number) in set(request.excluded_rows or []):
                 raise HTTPException(400, f"Complete reports cannot exclude row {_ledger_row_number(row, number)}. Fix it or use a partial extract.")
     rows = filter_excluded_rows(rows, request.excluded_rows)
+    _assert_incoming_dates_within_coverage(rows, complete_report_inputs, col_mapping,
+                                           effective_delimiter, effective_order)
 
     # Which columns fill the 3 "critical" roles (Document ID/Amount/Date) for this
     # template -- computed once, reused for every row (Phase 2 of the
@@ -4205,19 +4333,31 @@ def validate_only(request: ImportRequest, perf: bool = False):
                 elif t_col['data_type'] == "Date":
                     kind = classify_date_cell(value)
                     if kind == 'native':
-                        pass  # genuine Excel date cell -- already correct, nothing to validate
+                        parsed_day = _parse_date_cell(value, effective_delimiter, effective_order)
                     elif kind == 'excel_serial':
-                        pass  # Excel serial date – will be handled on import, skip validation here
+                        parsed_day = _parse_date_cell(value, effective_delimiter, effective_order)
                     elif kind == 'text':
                         try:
-                            parse_date_flexible(value, effective_delimiter, effective_order)
+                            parsed_day = _parse_date_cell(value, effective_delimiter, effective_order)
                         except (ValueError, TypeError):
+                            parsed_day = None
                             row_errors.append({
                                 "column": t_col['column_name'],
                                 "excel_column": excel_col,
                                 "error_type": "data_type",
                                 "message": "Enter a valid date in the selected format."
                             })
+                    else:
+                        parsed_day = None
+                    if (complete_report_inputs and t_col['id'] == complete_report_inputs[2]['id']
+                            and parsed_day is not None
+                            and not complete_report_inputs[0] <= parsed_day <= complete_report_inputs[1]):
+                        row_errors.append({
+                            "column": t_col['column_name'],
+                            "excel_column": excel_col,
+                            "error_type": "coverage",
+                            "message": "This transaction date falls outside the confirmed report coverage. Widen the period or correct the source workbook."
+                        })
 
             # Row-level rejection: blank Document ID/Amount/Date (Phase 2 of the
             # blank-field-rejection requirement) -- distinct from the generic
@@ -4615,6 +4755,11 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
     )
     if not template_cols:
         raise HTTPException(400, "Template has no columns")
+
+    _validate_complete_report_inputs(
+        request, template_cols,
+        {m.template_column_name: m.excel_column_name for m in request.mappings if m.excel_column_name},
+    )
 
     included_fields = _comparison_column_names(template_cols, request.mappings, template[0])
     planned_comparison_fields = plan_payload.get("comparison_fields")
@@ -5316,6 +5461,8 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
         if mapping and mapping.excel_column_name:
             col_mapping[t_col['column_name']] = mapping.excel_column_name
 
+    complete_report_inputs = _validate_complete_report_inputs(request, template_cols, col_mapping)
+
     # Read Excel data
     try:
         df = pd.read_excel(file_info[0]['file_path'], sheet_name=request.sheet_name)
@@ -5334,6 +5481,8 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
     # Drop user-excluded rows before validation, import, and document_group_id
     # grouping (compare_transactions) ever see them.
     rows = filter_excluded_rows(rows, request.excluded_rows)
+    _assert_incoming_dates_within_coverage(rows, complete_report_inputs, col_mapping,
+                                           effective_delimiter, effective_order)
 
     # Which columns fill the 3 "critical" roles (Document ID/Amount/Date) for this
     # template -- computed once, reused for every row (Phase 2 of the
@@ -5390,19 +5539,31 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
                 elif t_col['data_type'] == "Date":
                     kind = classify_date_cell(value)
                     if kind == 'native':
-                        pass  # genuine Excel date cell -- already correct, nothing to validate
+                        parsed_day = _parse_date_cell(value, effective_delimiter, effective_order)
                     elif kind == 'excel_serial':
-                        pass  # Excel serial date – will be handled on import, skip validation here
+                        parsed_day = _parse_date_cell(value, effective_delimiter, effective_order)
                     elif kind == 'text':
                         try:
-                            parse_date_flexible(value, effective_delimiter, effective_order)
+                            parsed_day = _parse_date_cell(value, effective_delimiter, effective_order)
                         except (ValueError, TypeError):
+                            parsed_day = None
                             row_errors.append({
                                 "column": t_col['column_name'],
                                 "excel_column": excel_col,
                                 "error_type": "data_type",
                                 "message": "Enter a valid date in the selected format."
                             })
+                    else:
+                        parsed_day = None
+                    if (complete_report_inputs and t_col['id'] == complete_report_inputs[2]['id']
+                            and parsed_day is not None
+                            and not complete_report_inputs[0] <= parsed_day <= complete_report_inputs[1]):
+                        row_errors.append({
+                            "column": t_col['column_name'],
+                            "excel_column": excel_col,
+                            "error_type": "coverage",
+                            "message": "This transaction date falls outside the confirmed report coverage. Widen the period or correct the source workbook."
+                        })
 
             # Row-level rejection: blank Document ID/Amount/Date (Phase 2 of the
             # blank-field-rejection requirement) -- distinct from the generic

@@ -5493,12 +5493,13 @@ def resolve_column_comparison(column, template):
 def resolve_column_type(data_type, reconciliation_role=None):
     """Keep reconciliation meaning separate from Text/Numeric validation."""
     if data_type not in ('Text', 'Numeric', 'Date'):
-        raise ValueError('Choose Text, Numeric or Date. Document ID and Footing are selected in Edit Template.')
-    if reconciliation_role not in (None, 'document_id', 'footing'):
+        raise ValueError('Choose Text, Numeric or Date. Document ID, Document Date and Footing are selected in Edit Template.')
+    if reconciliation_role not in (None, 'document_id', 'document_date', 'footing'):
         raise ValueError('Unknown reconciliation role.')
     if (reconciliation_role == 'document_id' and data_type != 'Text'
-            or reconciliation_role == 'footing' and data_type != 'Numeric'):
-        raise ValueError('Document ID requires Text; Footing requires Numeric.')
+            or reconciliation_role == 'footing' and data_type != 'Numeric'
+            or reconciliation_role == 'document_date' and data_type != 'Date'):
+        raise ValueError('Document ID requires Text, Document Date requires Date, and Footing requires Numeric.')
     return data_type, reconciliation_role
 
 
@@ -5513,6 +5514,16 @@ def resolve_document_column(columns):
     if selected and selected[0].get('data_type') != 'Text':
         raise ValueError('The Document ID column must have the Text base type.')
     return selected[0] if selected else (columns[0] if columns else None)
+
+
+def resolve_document_date_column(columns):
+    """Resolve the explicitly configured report date without guessing among Date fields."""
+    selected = [c for c in columns if c.get('reconciliation_role') == 'document_date']
+    if len(selected) > 1:
+        raise ValueError('Use one Document Date column per template.')
+    if selected and selected[0].get('data_type') != 'Date':
+        raise ValueError('Document Date requires a Date column.')
+    return selected[0] if selected else None
 
 
 def init_db_postgres(conn):

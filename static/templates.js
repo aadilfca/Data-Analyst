@@ -698,6 +698,7 @@ function renderSelectedColumns() {
             roleSelect.setAttribute('aria-label', 'Reconciliation role for ' + col.name);
             const options = [['', 'Standard']];
             if (col.type === 'Text') options.push(['document_id', 'Document ID']);
+            if (col.type === 'Date') options.push(['document_date', 'Document Date']);
             if (col.type === 'Numeric') options.push(['footing', 'Footing']);
             options.forEach(([value, label]) => {
                 const option = document.createElement('option');
@@ -706,9 +707,9 @@ function renderSelectedColumns() {
             roleSelect.value = col.reconciliation_role || '';
             roleSelect.disabled = options.length === 1;
             roleSelect.addEventListener('change', () => {
-                if (roleSelect.value === 'document_id') {
+                if (['document_id', 'document_date'].includes(roleSelect.value)) {
                     selectedColumns.forEach(other => {
-                        if (other.id !== col.id && other.reconciliation_role === 'document_id') other.reconciliation_role = null;
+                        if (other.id !== col.id && other.reconciliation_role === roleSelect.value) other.reconciliation_role = null;
                     });
                 }
                 col.reconciliation_role = roleSelect.value || null;
