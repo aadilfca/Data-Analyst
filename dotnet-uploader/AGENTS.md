@@ -2,9 +2,9 @@
 
 ## Purpose and status
 
-Migrate the complete Python application backend to ASP.NET Core/C#, retaining Python for financial report calculations and report generation. ASP.NET Core hosts the existing HTML/CSS/JavaScript and supplies report data to Python. The folder name remains `dotnet-uploader/`; no C# project exists yet.
+Migrate the complete Python application backend to ASP.NET Core/C#, retaining Python for financial report calculations and report generation. The folder remains `dotnet-uploader/`; `AuditPlatform.Api` now provides the service foundation. Existing browser assets move to ASP.NET Core in later phases; .NET supplies report data to Python.
 
-Plan dated 2026-11-10. P01 and P02 are accepted; see [MIGRATION_BASELINE.md](MIGRATION_BASELINE.md), [migration-baseline.json](migration-baseline.json), and [MIGRATION_CONTRACTS.md](MIGRATION_CONTRACTS.md). P03 scope preparation is next; P04–P63 remain pending. Each implementation phase still requires file/approach approval. The previous upload-only scope is superseded. Preserve the working Python app throughout staged replacement.
+Plan dated 2026-11-10. P01–P03 are accepted; see [MIGRATION_BASELINE.md](MIGRATION_BASELINE.md), [migration-baseline.json](migration-baseline.json), and [MIGRATION_CONTRACTS.md](MIGRATION_CONTRACTS.md). P04 scope preparation is next; P05–P63 remain pending. Each implementation phase requires file/approach approval. Preserve the working Python app throughout staged replacement.
 
 ## Agreed technology direction
 
@@ -39,7 +39,7 @@ Numbers describe the default sequence. P02 records dependencies; subsequent file
 |---|---|
 | P01 — Baseline | Accepted by Aadil; static inventory, ownership proposals, and limits are in [MIGRATION_BASELINE.md](MIGRATION_BASELINE.md). |
 | P02 — Contracts | Accepted by Aadil; [contracts](MIGRATION_CONTRACTS.md) define ownership, financial/API/report rules, dependencies, rollback, fixtures, and the 500 MB ceiling. |
-| P03 — Service foundation | Create the .NET solution, configuration, secret handling, and health endpoints; run locally without live database writes. |
+| P03 — Service foundation | Accepted by Aadil: .NET solution, validated settings, structured console logs, and health endpoints; Release build and nine smoke/configuration checks pass. |
 | P04 — PostgreSQL foundation | Add connection pooling, explicit transactions, consistent reads, and reviewed migration ownership; prove isolation and rollback on a test database. |
 | P05 — Audit and errors | Replace SQLite-dependent audit/error storage with the agreed persistence and attribution; reconcile existing records and protect sensitive inputs. |
 | P06 — Coexistence | Establish same-origin route switching and a private report-service client contract; demonstrate routing, authorization, and fallback with stubbed responses. |
@@ -116,6 +116,27 @@ Numbers describe the default sequence. P02 records dependencies; subsequent file
 - Preserve existing user changes and working behavior. Do not expand a confirmed file list without approval.
 - Explain decisions in plain language. Obtain approval before adding packages, changing production dependencies, or incurring hosting/storage costs.
 - Verify each approved phase in proportion to its risk, summarize changes and remaining checks, and wait for local acceptance and explicit Git approval before staging, committing, or pushing.
+
+## Local foundation commands
+
+Run PowerShell from this folder. The verified Windows x64 SDK 10.0.404 and its runtime 10.0.15 are installed in ignored `.dotnet/`; `.tools/` contains downloads, isolated CLI/NuGet caches, and local check results. No external NuGet packages are referenced. SDKs and caches are not committed.
+
+```powershell
+$env:DOTNET_CLI_HOME = "$PWD\.tools\cli-home"
+$env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
+$env:DOTNET_GENERATE_ASPNET_CERTIFICATE = 'false'
+$env:NUGET_PACKAGES = "$PWD\.tools\packages"
+& .\.dotnet\dotnet.exe restore .\AuditPlatform.slnx --configfile .\.tools\NuGet.Config --source .\.tools\empty-feed --packages $env:NUGET_PACKAGES
+& .\.dotnet\dotnet.exe build .\AuditPlatform.slnx --configuration Release --no-restore
+& .\.dotnet\dotnet.exe run --project .\src\AuditPlatform.Api --configuration Release --no-build --no-restore
+```
+
+- Launch settings bind `http://127.0.0.1:5080`; stop an existing foundation instance before starting another. Ctrl+C stops a foreground run.
+- `/healthz` returns 200 and service identity. `/health/ready` intentionally returns 503/database_not_configured until P04 supplies a real dependency check.
+- `Platform__ApplicationName` and `Platform__DatabaseCapacityLimitBytes` override non-secret defaults. Invalid settings exit with code 1 before listening; the 500,000,000-byte setting is configuration only until capacity enforcement is ported.
+- Supply future secrets through approved environment/secret-store configuration, never appsettings.json, launch settings, or logs. Private settings files, SDKs, caches, and build outputs are ignored.
+- Windows 10 Pro 22H2 is outside the current .NET 10 supported-OS list. Aadil approved local development with this limitation; a local pass does not certify supported production hosting. P62 validates deployment separately.
+- Local P03 check evidence is in ignored `.tools/p03-verification.json`; these checks do not certify database connectivity or migrated application workflows.
 
 ## Reference links
 

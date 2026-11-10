@@ -1,0 +1,15 @@
+# Local SDK/downloads and CLI caches are development tooling, never source.
+/.dotnet/
+/.tools/
+**/bin/
+**/obj/
+/.vs/
+*.user
+
+# Private overrides and environment files must not enter Git.
+**/appsettings.Development.json
+**/appsettings.Local.json
+**/appsettings.*.local.json
+.env
+.env.*
+!.env.example
