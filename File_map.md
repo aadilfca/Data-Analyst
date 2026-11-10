@@ -19,6 +19,7 @@ This document lists all source files in the project, grouped by directory, with 
 | `backfill_rate.py` | Standalone, manually-run script (Rate-derivation requirement, Phase 9 of 9, FINAL) — backfills a derived Rate value for historical Purchase Order/Store Receiving/Vendor Bill `client_data` rows that predate the Rate-derivation feature and still have Rate blank. Defaults to a dry-run report (counts per template: scanned/already-had-Rate/qty-zero-or-blank/no-Amount/would-backfill); `--run` performs the actual writes (`row_data`'s Rate + `rate_source='derived'`), reusing `get_rate_precision()`/`find_named_column()` from `routers/import_export.py` and mirroring `apply_rate_derivation()`'s derivation rule exactly. Not wired into any API endpoint. |
 | `backfill_extract_amount.py` | SQLite amount backfill, PostgreSQL assessment, portable repair plans and isolated local repair rehearsals; live apply is disabled. |
 | `render.yaml` | Render Blueprint (Supabase/Render migration, Phase 7 of 8) — defines the single Python web service (free plan), `pip install -r requirements.txt` build, `uvicorn main:app --host 0.0.0.0 --port $PORT` start, and env vars (`DATABASE_URL` as `sync: false` so Render prompts for the secret rather than storing it, `PYTHON_VERSION` pinned to 3.13.0). Connect the repo on Render as a Blueprint to auto-provision from this file. |
+| `dotnet-uploader/AGENTS.md`, `dotnet-uploader/MIGRATION_BASELINE.md`, `dotnet-uploader/migration-baseline.json`, `dotnet-uploader/MIGRATION_CONTRACTS.md` | .NET migration phases, accepted source inventory, and accepted API/data/report contracts. |
 | `migrate_to_supabase.py` | One-time SQLite→Supabase data migration script — **all 4 phases complete, real migration run live 2026-08-23** (409,336/409,362 rows migrated, ids preserved). `--run` performs a full wipe-and-replace across all 42 tables (`OVERRIDING SYSTEM VALUE` + `setval()`, type conversion via `convert_row()`, column lists filtered to what Postgres actually has, rows filtered against live Postgres FK constraints since SQLite never enforces its own — a dangling reference is skipped and reported, not a hard failure). `--verify` (read-only) reruns a row-count diff adjusted for known dangling-reference skips (distinguishing a genuine `SHORTFALL` from Postgres simply `GREW`-ing via real live-app usage since the migration) plus FK spot-checks sampled across every relationship in the schema, confirming id preservation held. Not wired into any API endpoint. |
 | `audit_postgres_indexes.py` | Standalone, manually-run script (Fast-data-handling requirement, Phase 2 of 13) — dry-run/`--run` audit of `init_db_postgres()`'s indexes against real query patterns. `CANDIDATE_INDEXES` holds one confirmed gap: `client_data (client_id, template_id, is_deleted)`, hit by the upload/validate/import hot path. `--run` creates any missing index found there (idempotent, `CREATE INDEX IF NOT EXISTS`). Not wired into any API endpoint or startup path. |
 | `PERFORMANCE_INVESTIGATION.md`, `experiments/cashflow_fetch/{benchmark,variants}.py`, `experiments/upload_safety/` | Standalone Cashflows benchmarks; guarded Folders 1–6 upload runner (`performance_review.py`) and `PERFORMANCE_REVIEW.md`; private evidence excluded from Git. |
@@ -36,7 +37,6 @@ This document lists all source files in the project, grouped by directory, with 
 | `services/reconciliation_xlsx.py`, `services/reconciliation_export_jobs.py` | Existing Bank/Cash/Cashflow exports plus streamed reconciliation workbooks and bounded, owner-scoped background jobs with temporary-file cleanup. |
 | `services/storage_cleanup.py`, `services/upload_lifecycle.py`, `services/drive_archive.py`, `services/upload_observation_report.py`, `services/upload_reconciliation.py`, `services/database_backup.py` | Protected cleanup, upload archives, exact reconciliation controls, observations, native database ZIPs, verified Drive copies and compact receipts. |
 | `services/cash_bank_classification.py` | Versioned Cash/Bank derived transaction-line builder, affected-account reporting, and controlled SQLite/PostgreSQL backfill service; never mutates raw Client Data. |
-
 ## Operations Scripts (`scripts/`)
 | `scripts/backfill_cash_bank_transaction_classifications.py`, `scripts/backfill_cashflow_voucher_occurrences.py`, `scripts/backfill_cashflow_prepared_read_model.py`, `scripts/rehearse_database_backup.py` | Explicit backfills and guarded local recovery rehearsals; default preview, separate write/run flags, no live recovery target. |
 ## Routers (`routers/`)
@@ -82,9 +82,7 @@ This document lists all source files in the project, grouped by directory, with 
 | `template-viewer.html` | Shared, reusable template-data viewer, parameterised by `?template=N` — date range + search toolbar over one template's Data Bank rows, reached from Verification's Client Data Links card strip. |
 | `audit_workbook.html` | Audit Workbook (5-phase requirement, complete) — read-only voucher-level list view of a session's verification results (Voucher No./Date/Description/Amount/Status), distinct from the existing Cashbook selection screen, parameterised by `?session=<id>` (same pattern as `template-viewer.html`'s `?template=N`). Fetch/render/filter logic lives in `audit_workbook.js`; status filter chips (All/Cleared/Query/Pending) are functional and the running-total footer reflects whatever's currently filtered/visible; a row click jumps straight to that voucher inside Verification. Peer nav bar (`#awVerificationBtn` + a static "you are here" Audit Workbook indicator) mirrors Verification's own `#cashbookBar` button pair. |
 | `reconciliation.html`, `reconciliation.js` | Cashflows and selected-TB financial statements, ACC outline display, profit reconciliation and closing confirmation. |
-
 ### Static Vendor Assets
-
 | File | Purpose |
 |------|---------|
 | `vendor/xlsx.full.min.js` | Local SheetJS 0.18.5 browser bundle used by `upload.html` so Excel parsing works when external CDN access is blocked. |
@@ -116,15 +114,11 @@ This document lists all source files in the project, grouped by directory, with 
 | `sortable.min.js` | Third-party library (SortableJS) used for drag-to-reorder column lists in Templates. |
 | `loading_ui.js` | Shared loading UI utility (Phase 1 of 6) — `window.LoadingUI.showSkeleton`/`hideSkeleton`, `showSpinner`/`hideSpinner` (button/action, message escalates to "still working…" after 3s), `showFieldLoading`/`hideFieldLoading` (inline dropdown/field spinner). Consumers: `login.html`/`login.js` (Phase 2, spinner), `databank.html`/`databank.js` (Phase 3, skeleton on the preview table). Remaining page-by-page rollout is later phases. |
 | `api_utils.js` | Shared `apiFetch()` utility (Fast Data Handling, all 13 phases done) — `window.ApiUtils.apiFetch(url, options, config)`, same call contract as native `fetch()`. Optional `config.debounce`/`debounceKey` (default 400ms, supersedes prior pending call with a `debounced: true` rejection); single automatic retry after a flat 1.5s on a GET whose first attempt threw or returned 5xx (never on 4xx or non-GET methods), showing a self-injected "Retrying..." toast (`#apiRetryToast`) for the wait. Self-installing like `loading_ui.js`/`procedure_modal.js`. Wired into every GET call site in `databank.js`/`script.js`/`audit_rules.js`/`verification.js`. |
-
 ### CSS
-
 | File | Purpose |
 |------|---------|
 | `style.css`, `public_info.css` | Shared application styling and independently scoped public-page/login-link styling. |
-
 ## Tests (`tests/`)
-
 | File | Purpose |
 |------|---------|
 | `test_app_smoke.py` | Boots the real app via FastAPI's `TestClient` against a temp SQLite DB and proves routers respond (dashboard page + `/api/clients`). |
@@ -146,7 +140,6 @@ This document lists all source files in the project, grouped by directory, with 
 | `test_reconciliation.py`, `test_reconciliation_balance_source.py`, `test_reconciliation_reports.py`, `test_trial_balance_account_flow_safety.py`, `test_balance_sheet.py`, `test_income_statement.py` | Report controls, exact statement amounts, profit-link safeguards, source scope, ACC formulas and Trial Balance data-flow safety. |
 | `test_reconciliation_xlsx.py`, `test_reconciliation_export_jobs.py` | Workbook accounting/style/completeness, large-volume streaming, export ownership, queue bounds, cancellation, expiry, restart recovery and temporary-file cleanup. |
 | `test_pg_pool_retry.py` | Unit tests for `database.py`'s stale-pooled-connection recovery — fake pool/connection/cursor (no live Postgres): `_run_pooled_pg` retries once and succeeds, propagates a non-stale error untouched, gives up after one retry; `_is_stale_pg_connection_error` type+message match; `_getconn_pg_checked` skips a closed connection; the recovery log line fires. |
-
 ## Notes
 - **Static files** are served under `/static/` and rely on `client_context.js` for global client selection and navbar behavior on every page.
 - **Routers** are mounted in `main.py`; each handles one domain (clients, verification, data, audit_rules, trial_balance, etc.).
@@ -154,5 +147,4 @@ This document lists all source files in the project, grouped by directory, with 
 - **Uploads** are stored in the `uploads/` directory (created at runtime).
 - **Change detection** uses `document_group_id`/`change_detection_status`; template-specific Document ID roles govern uploads/counts, while unconfigured templates retain the first-column key. Detail rows remain separate.
 - **Verification routing** uses Account Control Centre account assignments for every workstream. Voucher-prefix rows remain historical compatibility data only; Cash/Bank Payment vs Receipt uses the selected Treasury account leg.
-
 *This file map is maintained alongside the project — updated whenever a file is added, removed, or repurposed. Full build history and verification detail live in `CHANGELOG_ARCHIVE.md`, not here.*
