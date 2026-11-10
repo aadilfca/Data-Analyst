@@ -1,6 +1,7 @@
 """Hermetic browser coverage for the Data Bank session cache."""
 
 import functools
+import asyncio
 import json
 import os
 import threading
@@ -12,6 +13,7 @@ import pytest
 pytest.importorskip("playwright.sync_api")
 
 from playwright.sync_api import sync_playwright  # noqa: E402
+from routers import data as data_routes  # noqa: E402
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -93,7 +95,64 @@ def _metrics_response(query, page_number=1, limit=25):
     return response
 
 
-def open_databank(browser, static_server, *, ledger_accounts=None, inferred_replacement=False):
+def test_availability_fast_mode_skips_expensive_metrics_and_default_shape_is_preserved(monkeypatch):
+    def fake_query(query, params=None):
+        if "FROM clients" in query:
+            return [{"id": 1}]
+        if "filtered_row_count" in query:
+            return [{"template_id": 1, "template_name": "Invoices", "filtered_row_count": 2,
+                     "filtered_sunday_count": 0}]
+        if "total_row_count" in query:
+            return [{"template_id": 1, "total_row_count": 3, "date_min": "2026-01-01", "date_max": "2026-01-03"}]
+        if "template_id, frequency" in query:
+            return []
+        raise AssertionError("Unexpected query: {}".format(query))
+
+    async def fake_metrics(client_id, template_ids, fallback_rows, size_template_id=None):
+        return (
+            {1: {"row_count": 3, "total_bytes": 1024, "formatted": "1 KB"}},
+            {1: {"document_count": 2, "estimated_size_bytes": 1024, "estimated_size_formatted": "1 KB"}},
+        )
+
+    monkeypatch.setattr(data_routes, "execute_query_pg", fake_query)
+    monkeypatch.setattr(data_routes, "_load_availability_metrics", fake_metrics)
+
+    fast = asyncio.run(data_routes.get_availability(
+        client_id=1, template_id=None, date_start="2026-01-01", date_end="2026-01-31", include_metrics=False
+    ))
+    complete = asyncio.run(data_routes.get_availability(
+        client_id=1, template_id=None, date_start="2026-01-01", date_end="2026-01-31", include_metrics=True
+    ))
+
+    assert fast[0]["total_row_count"] == 3
+    assert fast[0]["document_count"] is None
+    assert fast[0]["estimated_size_formatted"] is None
+    assert complete[0]["document_count"] == 2
+    assert complete[0]["estimated_size_formatted"] == "1 KB"
+
+
+def test_client_size_estimate_groups_rows_in_one_query_and_keeps_existing_formula(monkeypatch):
+    queries = []
+
+    def fake_query(query, params=None):
+        queries.append((query, params))
+        return [
+            {"template_id": 1, "data_bytes": 500, "row_count": 2},
+            {"template_id": 2, "data_bytes": 200, "row_count": 1},
+        ]
+
+    monkeypatch.setattr(data_routes, "execute_query_pg", fake_query)
+    sizes = data_routes._get_client_data_size_by_template_pg(5)
+
+    assert len(queries) == 1
+    assert "GROUP BY template_id" in queries[0][0]
+    assert queries[0][1] == [5]
+    assert sizes[1]["total_bytes"] == 500 + 2 * 256
+    assert sizes[2]["total_bytes"] == 200 + 256
+
+
+def open_databank(browser, static_server, *, ledger_accounts=None, inferred_replacement=False,
+                  metrics_behavior='success', metrics_waiting=None):
     page = browser.new_page()
     calls = []
 
@@ -113,22 +172,46 @@ def open_databank(browser, static_server, *, ledger_accounts=None, inferred_repl
             route.fulfill(status=200, content_type="application/json", body=json.dumps({}))
             return
         if path.endswith("/api/data/availability"):
-            route.fulfill(status=200, content_type="application/json", body=json.dumps([{
+            calls.append({"kind": "availability", "params": query})
+            row = {
                 "template_id": 1,
                 "template_name": "Invoices",
                 "filtered_row_count": 3,
                 "total_row_count": 3,
-                "document_count": 3,
+                "document_count": None,
                 "date_min": "2026-01-01",
                 "date_max": "2026-01-03",
                 "filtered_sunday_count": 0,
                 "status": "complete",
                 "filtered_status": "complete",
-                "estimated_size_formatted": "1 KB",
+                "estimated_size_formatted": None,
                 "upload_frequency": "Daily",
-            }]))
+            }
+            route.fulfill(status=200, content_type="application/json", body=json.dumps([row]))
+            return
+        if path.endswith("/api/data/availability/metrics"):
+            calls.append({"kind": "availability_metrics", "params": query})
+            if metrics_behavior == 'stall':
+                if metrics_waiting is not None:
+                    metrics_waiting.append(route)
+                return
+            if metrics_behavior == 'fail':
+                route.fulfill(status=503, json={"detail": "Metrics are temporarily unavailable"})
+                return
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({
+                "client_id": 1,
+                "templates": [{
+                    "template_id": 1,
+                    "document_count": 3,
+                    "estimated_size_bytes": 1024,
+                    "estimated_size_formatted": "1 KB",
+                }],
+                "client_size_bytes": 1024,
+                "client_size_formatted": "1 KB",
+            }))
             return
         if path.endswith("/api/data/db-size"):
+            calls.append({"kind": "db_size", "params": query})
             route.fulfill(status=200, content_type="application/json", body=json.dumps({"formatted": "1 KB"}))
             return
         if path.endswith("/api/data/overdue-uploads"):
@@ -214,7 +297,8 @@ def open_databank(browser, static_server, *, ledger_accounts=None, inferred_repl
 
 
 def preview_calls(calls, page_number, search=None):
-    return [call for call in calls if call["page"] == page_number and call["search"] == search]
+    return [call for call in calls if call.get("kind") == "preview"
+            and call["page"] == page_number and call["search"] == search]
 
 
 def test_changed_deleted_history_view_is_scoped_and_paginated(browser, static_server):
@@ -306,11 +390,11 @@ def test_databank_reuses_pages_within_view_and_refreshes_reopened_scope(browser,
     page, calls = open_databank(browser, static_server)
     try:
         availability_before = page.evaluate(
-            "() => performance.getEntriesByType('resource').filter(entry => entry.name.includes('/api/data/availability')).length"
+            "() => performance.getEntriesByType('resource').filter(entry => entry.name.includes('/api/data/availability?')).length"
         )
         page.evaluate("() => fetchAvailability()")
         availability_after = page.evaluate(
-            "() => performance.getEntriesByType('resource').filter(entry => entry.name.includes('/api/data/availability')).length"
+            "() => performance.getEntriesByType('resource').filter(entry => entry.name.includes('/api/data/availability?')).length"
         )
         assert availability_after == availability_before
 
@@ -334,6 +418,53 @@ def test_databank_reuses_pages_within_view_and_refreshes_reopened_scope(browser,
         page.wait_for_function("() => document.body.innerText.includes('INV-1')")
         assert len(preview_calls(calls, 1, "new search")) == 1
         assert page.locator('#previewLedgerField').is_hidden()
+    finally:
+        page.close()
+
+
+def test_dataset_list_renders_before_all_time_metrics_finish(browser, static_server):
+    waiting_metrics = []
+    page, calls = open_databank(
+        browser, static_server, metrics_behavior='stall', metrics_waiting=waiting_metrics
+    )
+    try:
+        page.wait_for_function("availabilityMetricsInFlight.size === 1")
+        assert page.locator('#yourDatasetsBody').inner_text().find('Invoices') >= 0
+        assert page.locator('#yourDatasetsBody').inner_text().find('Calculating…') >= 0
+        assert waiting_metrics
+        availability_call = next(call for call in calls if call['kind'] == 'availability')
+        assert availability_call['params']['include_metrics'] == ['false']
+        assert not [call for call in calls if call['kind'] == 'db_size']
+
+        waiting_metrics[0].fulfill(json={
+            'client_id': 1,
+            'templates': [{
+                'template_id': 1,
+                'document_count': 3,
+                'estimated_size_bytes': 1024,
+                'estimated_size_formatted': '1 KB',
+            }],
+            'client_size_bytes': 1024,
+            'client_size_formatted': '1 KB',
+        })
+        page.wait_for_function("document.querySelector('#yourDatasetsBody').innerText.includes('1 KB')")
+        assert page.locator('#yourDatasetsBody').inner_text().find('Invoices') >= 0
+        assert page.locator('#clientDbSize').inner_text() == '1 KB'
+    finally:
+        page.close()
+
+
+def test_metrics_failure_keeps_the_dataset_list_usable(browser, static_server):
+    page, _calls = open_databank(browser, static_server, metrics_behavior='fail')
+    try:
+        page.wait_for_function(
+            "Array.from(document.querySelectorAll('[data-availability-metric]'))"
+            ".every(cell => cell.textContent === 'Unavailable')"
+        )
+        assert page.locator('#yourDatasetsBody').inner_text().find('Invoices') >= 0
+        assert page.locator('#totalRecords').inner_text() == '3'
+        assert page.locator('#clientDbSize').inner_text() == 'Unavailable'
+        assert page.locator('#statusMessage').inner_text().find('Found 1 template') >= 0
     finally:
         page.close()
 
@@ -558,7 +689,8 @@ def test_ledger_search_and_dropdown_scope_pages_and_cache_by_account(browser, st
         page.wait_for_function("previewTableBody.innerText.includes('B-2-INV-1')")
         assert page.evaluate('currentPage')==1
         assert len([c for c in calls if c['kind']=='preview' and c['account']=='B-2' and c['page']==1])==previous
-        assert all(c['params']['client_id']==['1'] and c['params']['template_id']==['1'] for c in calls)
+        assert all(c['params']['client_id']==['1'] and c['params']['template_id']==['1']
+                   for c in calls if c['kind']=='preview')
         assert not errors
     finally: page.close()
 

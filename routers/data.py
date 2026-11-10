@@ -1383,9 +1383,8 @@ def get_template_document_key_column(template_id: int) -> Optional[str]:
     return column['column_name'] if column else None
 
 
-# Caps how many of get_availability()'s per-template DB calls run at once -
-# without this, a client with many templates fires 2 connections per template
-# fully in parallel and exhausts the Postgres pool (PG_POOL_MAX, database.py).
+# Caps how many per-template document-count reads run at once, protecting the
+# Postgres pool when a client has many active templates.
 _AVAILABILITY_DB_SEMAPHORE = asyncio.Semaphore(5)
 
 
@@ -1395,14 +1394,12 @@ async def _compute_document_count(client_id: int, tid: int, fallback_row_count: 
     below) - runs get_template_document_key_column() + the doc-count query
     off the event loop via asyncio.to_thread().
     """
-    key_column = await asyncio.to_thread(get_template_document_key_column, tid)
-    if not key_column:
-        # Template has no configured columns - fall back to the raw row count
-        return fallback_row_count
-    # json_extract(row_data, '$."col"') -> the JSONB ->> text-extraction
-    # operator. key_column comes from master_columns (not raw user input),
-    # same trust model as the SQLite version's f-string embed.
     async with _AVAILABILITY_DB_SEMAPHORE:
+        key_column = await asyncio.to_thread(get_template_document_key_column, tid)
+        if not key_column:
+            # Template has no configured columns - fall back to the raw row count.
+            return fallback_row_count
+        # The key comes from the active template mapping, not request input.
         doc_count_result = await asyncio.to_thread(
             execute_query_pg,
             """
@@ -1416,10 +1413,60 @@ async def _compute_document_count(client_id: int, tid: int, fallback_row_count: 
     return doc_count_result[0]["doc_count"] if doc_count_result else 0
 
 
-async def _compute_size_estimate(client_id: int, tid: int) -> dict:
-    """Threaded worker for one template's estimated storage footprint."""
-    async with _AVAILABILITY_DB_SEMAPHORE:
-        return await asyncio.to_thread(estimate_client_data_size_pg, client_id=client_id, template_id=tid)
+def _get_client_data_size_by_template_pg(client_id: int, template_id: Optional[int] = None) -> dict:
+    """Read estimated row payload sizes for all of a client's templates in one scan."""
+    params = [client_id]
+    template_filter = ""
+    if template_id is not None:
+        template_filter = " AND template_id = %s"
+        params.append(template_id)
+    rows = execute_query_pg(
+        f"""
+        SELECT template_id,
+               COALESCE(SUM(LENGTH(row_data::text)), 0) AS data_bytes,
+               COUNT(*) AS row_count
+        FROM client_data
+        WHERE client_id = %s
+          AND is_deleted = FALSE
+          AND change_detection_status != 'deleted'
+          {template_filter}
+        GROUP BY template_id
+        """,
+        params,
+    )
+    result = {}
+    for row in rows:
+        row_count = int(row.get("row_count") or 0)
+        data_bytes = int(row.get("data_bytes") or 0)
+        total_bytes = data_bytes + row_count * database.ROW_OVERHEAD_BYTES
+        result[row["template_id"]] = {
+            "row_count": row_count,
+            "total_bytes": total_bytes,
+            "formatted": database.format_bytes(total_bytes),
+        }
+    return result
+
+
+async def _load_availability_metrics(
+    client_id: int, template_ids: list, fallback_rows: dict, size_template_id: Optional[int] = None
+) -> tuple:
+    """Load exact document counts and estimated sizes separately from page basics."""
+    size_lookup, document_counts = await asyncio.gather(
+        asyncio.to_thread(_get_client_data_size_by_template_pg, client_id, size_template_id),
+        asyncio.gather(*[
+            _compute_document_count(client_id, tid, fallback_rows.get(tid, 0))
+            for tid in template_ids
+        ]),
+    )
+    result = {}
+    for tid, document_count in zip(template_ids, document_counts):
+        size = size_lookup.get(tid, {"row_count": 0, "total_bytes": 0, "formatted": "0 B"})
+        result[tid] = {
+            "document_count": document_count,
+            "estimated_size_bytes": size["total_bytes"],
+            "estimated_size_formatted": size["formatted"],
+        }
+    return size_lookup, result
 
 
 @router.get("/api/data/availability")
@@ -1427,7 +1474,8 @@ async def get_availability(
     client_id: int = Query(..., description="Client ID"),
     template_id: Optional[int] = Query(None, description="Filter by template ID"),
     date_start: str = Query(..., description="Start date (YYYY-MM-DD)"),
-    date_end: str = Query(..., description="End date (YYYY-MM-DD)")
+    date_end: str = Query(..., description="End date (YYYY-MM-DD)"),
+    include_metrics: bool = Query(True, description="Include slower all-time document and size metrics"),
 ):
     """
     Get aggregated availability data for templates for a given client and date range.
@@ -1446,14 +1494,12 @@ async def get_availability(
     - sunday_count: Sunday rows matching the filter (for preview context)
     - status: 'complete' if any data exists (unfiltered), else 'missing'
     - filtered_status: 'complete' if filtered rows > 0, else 'missing'
+    - document_count and estimated_size_*: all-time values, null when
+      include_metrics=false for the Data Bank's fast first render
 
-    Fast Data Handling / concurrency: the independent queries below (filtered
-    rows, total rows, upload frequency, and the per-template document-count/
-    size-estimate lookups) run concurrently via asyncio.to_thread() +
-    asyncio.gather() instead of sequentially, cutting the number of serial
-    round-trips to Postgres for this one request. execute_query_pg()/
-    estimate_client_data_size_pg() themselves stay synchronous (psycopg2) -
-    only the call sites here are threaded.
+    Fast Data Handling / concurrency: the independent basic queries run
+    concurrently. The Data Bank can omit all-time document/size metrics for
+    its first render; default callers retain the complete response contract.
     """
     # Validate client exists
     client = await asyncio.to_thread(execute_query_pg, "SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
@@ -1535,26 +1581,23 @@ async def get_availability(
     frequency_lookup = {r["template_id"]: r["frequency"] for r in frequency_rows}
 
     # ------------------------------------------------------------
-    # 2b/2c. Per-template document counts (for "No of Documents") and
-    # estimated storage size - both depend on the template id list from
-    # total_rows (step 2 above), but are independent of each other and across
-    # templates, so every template's pair of lookups runs concurrently.
+    # 2b. Initial Data Bank loads can skip expensive all-time metrics. When
+    # requested, size estimates are grouped in one client-wide scan and exact
+    # document counts remain separately bounded per template.
     # ------------------------------------------------------------
     total_lookup = {row["template_id"]: row for row in total_rows}
     template_ids = list(total_lookup.keys())
-
-    per_template_results = await asyncio.gather(*[
-        asyncio.gather(
-            _compute_document_count(client_id, tid, total_lookup[tid]["total_row_count"]),
-            _compute_size_estimate(client_id, tid),
-        )
-        for tid in template_ids
-    ])
     document_count_lookup = {}
     size_estimate_lookup = {}
-    for tid, (doc_count, size_estimate) in zip(template_ids, per_template_results):
-        document_count_lookup[tid] = doc_count
-        size_estimate_lookup[tid] = size_estimate
+    if include_metrics:
+        size_estimate_lookup, metric_lookup = await _load_availability_metrics(
+            client_id, template_ids,
+            {tid: row["total_row_count"] for tid, row in total_lookup.items()},
+            template_id,
+        )
+        document_count_lookup = {
+            tid: metrics["document_count"] for tid, metrics in metric_lookup.items()
+        }
 
     # ------------------------------------------------------------
     # 3. Merge results
@@ -1576,17 +1619,16 @@ async def get_availability(
         # Filtered status: if filtered_row_count > 0, the filter matches some data
         filtered_status = "complete" if filtered["filtered_row_count"] > 0 else "missing"
 
-        # Database size visibility: per-template estimated storage footprint
-        # (unfiltered, all-time - same scope as total_row_count), reusing
-        # estimate_client_data_size_pg() rather than a separate endpoint.
-        size_estimate = size_estimate_lookup.get(tid) or estimate_client_data_size_pg(client_id=client_id, template_id=tid)
+        # These fields are null during Data Bank's fast initial load and filled
+        # by the separate all-time metrics request afterward.
+        size_estimate = size_estimate_lookup.get(tid, {"total_bytes": None, "formatted": None})
 
         result.append({
             "template_id": tid,
             "template_name": filtered["template_name"] if filtered["template_name"] != "Unknown" else total.get("template_name", f"Template {tid}"),
             "filtered_row_count": filtered["filtered_row_count"],
             "total_row_count": total["total_row_count"],
-            "document_count": document_count_lookup.get(tid, total["total_row_count"]),
+            "document_count": document_count_lookup.get(tid),
             "date_min": total["date_min"],           # FULL date range (unfiltered)
             "date_max": total["date_max"],           # FULL date range (unfiltered)
             "filtered_sunday_count": filtered["filtered_sunday_count"],
@@ -1598,6 +1640,51 @@ async def get_availability(
         })
 
     return result
+
+
+@router.get("/api/data/availability/metrics")
+async def get_availability_metrics(client_id: int = Query(..., description="Client ID")):
+    """Load all-time document counts and size estimates after page basics render."""
+    client = await asyncio.to_thread(
+        execute_query_pg,
+        "SELECT id FROM clients WHERE id = %s AND is_active = TRUE",
+        (client_id,),
+    )
+    if not client:
+        raise HTTPException(404, "Client not found or inactive")
+
+    template_rows, size_lookup = await asyncio.gather(
+        asyncio.to_thread(
+            execute_query_pg,
+            "SELECT id FROM templates WHERE is_active = TRUE ORDER BY template_name",
+        ),
+        asyncio.to_thread(_get_client_data_size_by_template_pg, client_id),
+    )
+    template_ids = [row["id"] for row in template_rows]
+    fallback_rows = {tid: size_lookup.get(tid, {}).get("row_count", 0) for tid in template_ids}
+    document_counts = await asyncio.gather(*[
+        _compute_document_count(client_id, tid, fallback_rows[tid])
+        for tid in template_ids
+    ])
+
+    templates = []
+    for tid, document_count in zip(template_ids, document_counts):
+        size = size_lookup.get(tid, {"row_count": 0, "total_bytes": 0, "formatted": "0 B"})
+        templates.append({
+            "template_id": tid,
+            "document_count": document_count,
+            "estimated_size_bytes": size["total_bytes"],
+            "estimated_size_formatted": size["formatted"],
+        })
+
+    total_client_bytes = sum(item["total_bytes"] for item in size_lookup.values())
+    return {
+        "client_id": client_id,
+        "templates": templates,
+        "client_size_bytes": total_client_bytes,
+        "client_size_formatted": database.format_bytes(total_client_bytes),
+    }
+
 
 # ==============================================
 # 📊 AVAILABILITY CALENDAR ENDPOINT (Phase 3 of 6:

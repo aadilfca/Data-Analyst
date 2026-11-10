@@ -69,6 +69,9 @@ let previewLedgerLoading = null;
 // entry/date-range requests while keeping the cache limited to this page tab.
 const availabilityCache = new Map();
 const availabilityInFlight = new Map();
+const availabilityMetricsCache = new Map();
+const availabilityMetricsInFlight = new Map();
+let availabilityRequestSequence = 0;
 // Phase 3B: delete is scoped per template, so one confirmed destructive action blocks only its
 // own repeated request while other datasets and unrelated controls remain available.
 const deleteTemplateInFlight = new Set();
@@ -826,12 +829,14 @@ function resetDatasetTables(message) {
 
 // ---------- FETCH AVAILABILITY DATA ----------
 const AVAILABILITY_REQUEST_TIMEOUT_MS = 15000;
+const AVAILABILITY_METRICS_TIMEOUT_MS = 60000;
 
-async function fetchAvailabilityEndpoint(url) {
+async function fetchAvailabilityEndpoint(url, timeoutMs = AVAILABILITY_REQUEST_TIMEOUT_MS) {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), AVAILABILITY_REQUEST_TIMEOUT_MS);
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
-        return await fetch(url, { signal: controller.signal });
+        const fetcher = window.ApiUtils ? window.ApiUtils.apiFetch : fetch;
+        return await fetcher(url, { signal: controller.signal });
     } finally {
         clearTimeout(timeoutId);
     }
@@ -854,19 +859,16 @@ async function loadAvailabilityPayload(clientId, dateRange) {
         const params = new URLSearchParams({
             client_id: clientId,
             date_start: dateRange.start,
-            date_end: dateRange.end
+            date_end: dateRange.end,
+            include_metrics: 'false'
         });
-        const [res, dbSizeRes] = await Promise.all([
-            fetchAvailabilityEndpoint(`${API_BASE}/api/data/availability?${params.toString()}`),
-            fetchAvailabilityEndpoint(`${API_BASE}/api/data/db-size?client_id=${clientId}`)
-        ]);
+        const res = await fetchAvailabilityEndpoint(`${API_BASE}/api/data/availability?${params.toString()}`);
         if (!res.ok) {
             const err = await res.json();
             throw new Error(err.detail || 'Failed to fetch availability');
         }
         const data = await res.json();
-        const dbSizeData = dbSizeRes.ok ? await dbSizeRes.json() : null;
-        const payload = { data, dbSizeData, clientId };
+        const payload = { data, clientId };
         if (cacheGeneration === previewCacheGeneration) {
             availabilityCache.set(cacheKey, payload);
         }
@@ -883,8 +885,119 @@ async function loadAvailabilityPayload(clientId, dateRange) {
     }
 }
 
+async function loadAvailabilityMetrics(clientId, cacheGeneration = previewCacheGeneration) {
+    const cacheKey = `${clientId}|${cacheGeneration}`;
+    const cached = availabilityMetricsCache.get(cacheKey);
+    if (cached) return cached.payload;
+
+    const pending = availabilityMetricsInFlight.get(cacheKey);
+    if (pending) return pending;
+
+    const request = (async () => {
+        const res = await fetchAvailabilityEndpoint(
+            `${API_BASE}/api/data/availability/metrics?client_id=${encodeURIComponent(clientId)}`,
+            AVAILABILITY_METRICS_TIMEOUT_MS,
+        );
+        if (!res.ok) {
+            let detail = 'Could not load document counts and size estimates.';
+            try {
+                const err = await res.json();
+                detail = err.detail || detail;
+            } catch (_) { /* Keep the safe fallback message for non-JSON errors. */ }
+            throw new Error(detail);
+        }
+        const payload = await res.json();
+        if (Number(payload.client_id) !== Number(clientId) || !Array.isArray(payload.templates)) {
+            throw new Error('The data service returned metrics for an unexpected client.');
+        }
+        if (cacheGeneration === previewCacheGeneration) {
+            availabilityMetricsCache.set(cacheKey, { clientId: Number(clientId), payload });
+        }
+        return payload;
+    })();
+
+    availabilityMetricsInFlight.set(cacheKey, request);
+    try {
+        return await request;
+    } finally {
+        if (availabilityMetricsInFlight.get(cacheKey) === request) {
+            availabilityMetricsInFlight.delete(cacheKey);
+        }
+    }
+}
+
+function mergeAvailabilityMetrics(data, metricsPayload) {
+    const metricLookup = new Map((metricsPayload.templates || []).map(item => [Number(item.template_id), item]));
+    return data.map(item => {
+        const metrics = metricLookup.get(Number(item.template_id));
+        return metrics ? { ...item, ...metrics, metrics_unavailable: false } : {
+            ...item,
+            document_count: null,
+            estimated_size_bytes: null,
+            estimated_size_formatted: null,
+            metrics_unavailable: true,
+        };
+    });
+}
+
+function isCurrentAvailabilityRequest(requestSequence, clientId, cacheGeneration) {
+    return requestSequence === availabilityRequestSequence
+        && cacheGeneration === previewCacheGeneration
+        && Number(getSelectedClientId()) === Number(clientId);
+}
+
+function updateRenderedAvailabilityMetrics(metricsByTemplate) {
+    for (const row of yourDatasetsBody.querySelectorAll('tr[data-template-id]')) {
+        const metrics = metricsByTemplate.get(Number(row.dataset.templateId));
+        const documentCell = row.querySelector('[data-availability-metric="documents"]');
+        const sizeCell = row.querySelector('[data-availability-metric="size"]');
+        if (documentCell) {
+            documentCell.textContent = metrics?.document_count ?? 'Unavailable';
+            documentCell.title = metrics ? '' : 'This metric was not returned by the data service.';
+        }
+        if (sizeCell) {
+            sizeCell.textContent = metrics?.estimated_size_formatted || 'Unavailable';
+            sizeCell.title = metrics ? 'Estimated storage size (row count × average row size)' : 'This metric was not returned by the data service.';
+        }
+    }
+}
+
+async function loadAndApplyAvailabilityMetrics(clientId, requestSequence, cacheGeneration) {
+    try {
+        const payload = await loadAvailabilityMetrics(clientId, cacheGeneration);
+        if (!isCurrentAvailabilityRequest(requestSequence, clientId, cacheGeneration)) return;
+
+        const metricsByTemplate = new Map(payload.templates.map(item => [Number(item.template_id), item]));
+        availabilityData = mergeAvailabilityMetrics(availabilityData, payload);
+        statsClientDbSize.textContent = payload.client_size_formatted || '—';
+        updateRenderedAvailabilityMetrics(metricsByTemplate);
+    } catch (error) {
+        if (!isCurrentAvailabilityRequest(requestSequence, clientId, cacheGeneration)) return;
+        console.warn('Data Bank metrics unavailable:', error);
+        availabilityData = availabilityData.map(item => ({
+            ...item,
+            document_count: null,
+            estimated_size_bytes: null,
+            estimated_size_formatted: null,
+            metrics_unavailable: true,
+        }));
+        statsClientDbSize.textContent = 'Unavailable';
+        for (const cell of yourDatasetsBody.querySelectorAll('[data-availability-metric]')) {
+            cell.textContent = 'Unavailable';
+            cell.title = 'This metric could not be loaded. Refresh the Data Bank to retry.';
+        }
+    }
+}
+
 function invalidateDataBankCaches({ clientId = null, templateId = null } = {}) {
     previewCacheGeneration += 1;
+    availabilityRequestSequence += 1;
+
+    for (const key of availabilityInFlight.keys()) {
+        if (clientId === null || key.startsWith(`${clientId}|`)) {
+            availabilityInFlight.delete(key);
+        }
+    }
 
     for (const [key, entry] of previewPageCache.entries()) {
         if ((clientId === null || entry.clientId === clientId) &&
@@ -898,9 +1011,16 @@ function invalidateDataBankCaches({ clientId = null, templateId = null } = {}) {
             availabilityCache.delete(key);
         }
     }
+
+    for (const [key, entry] of availabilityMetricsCache.entries()) {
+        if (clientId === null || entry.clientId === Number(clientId)) {
+            availabilityMetricsCache.delete(key);
+        }
+    }
 }
 
 async function fetchAvailability() {
+    const requestSequence = ++availabilityRequestSequence;
     const clientId = getSelectedClientId();
     if (!clientId) {
         showStatus('⚠️ Please select a client from the Dashboard first.', 'error');
@@ -918,25 +1038,31 @@ async function fetchAvailability() {
     // always lists every template, matching the removed old filter bar's
     // "All Templates" default behavior with no way to narrow it further.
     showClientDataLoading();
+    const cacheGeneration = previewCacheGeneration;
     
     try {
-        const { data, dbSizeData } = await loadAvailabilityPayload(clientId, dateRange);
-        availabilityData = data;
+        const { data } = await loadAvailabilityPayload(clientId, dateRange);
+        if (!isCurrentAvailabilityRequest(requestSequence, clientId, cacheGeneration)) return;
 
-                // Update stats - use total_row_count (unfiltered) for Total Records
+        const cachedMetrics = availabilityMetricsCache.get(`${clientId}|${cacheGeneration}`);
+        availabilityData = cachedMetrics
+            ? mergeAvailabilityMetrics(data, cachedMetrics.payload)
+            : data.map(item => ({
+                ...item,
+                document_count: null,
+                estimated_size_bytes: null,
+                estimated_size_formatted: null,
+                metrics_unavailable: false,
+            }));
+
+        // Update stats - use total_row_count (unfiltered) for Total Records.
         const totalRows = data.reduce((sum, item) => sum + (item.total_row_count || 0), 0);
         const totalTemplates = data.length;
 
         statsTotalRecords.textContent = totalRows;
         statsTotalTemplates.textContent = totalTemplates;
 
-        // Database Size Visibility (Phase A2): client-level aggregate, separate
-        // fetch from availability since it's not scoped to the date range.
-        if (dbSizeData) {
-            statsClientDbSize.textContent = dbSizeData.formatted || '—';
-        } else {
-            statsClientDbSize.textContent = '—';
-        }
+        statsClientDbSize.textContent = cachedMetrics?.payload.client_size_formatted || 'Calculating…';
 
         // Overdue Uploads (Phase D2, FINAL): not date-range-scoped (it's a
         // MAX(extract_date) freshness check), so fetched once per client
@@ -963,6 +1089,12 @@ async function fetchAvailability() {
             showStatus(`✅ Found ${totalTemplates} template(s) with ${totalRows} total rows.`, 'success');
         }
 
+        if (!cachedMetrics) {
+            // Slow all-time metrics must never hold the dataset list behind its
+            // loading state. Their failures update only the metric cells.
+            void loadAndApplyAvailabilityMetrics(clientId, requestSequence, cacheGeneration);
+        }
+
         // Phase 2 (Unified date range): the shared range may have just changed
         // (this is the main-sheet side of the two-way sync) — keep an open
         // preview in step with it immediately, rather than only on next open.
@@ -972,7 +1104,9 @@ async function fetchAvailability() {
         }
 
     } catch (error) {
+        if (!isCurrentAvailabilityRequest(requestSequence, clientId, cacheGeneration)) return;
         await hideClientDataLoading();
+        if (!isCurrentAvailabilityRequest(requestSequence, clientId, cacheGeneration)) return;
         console.error('Fetch availability error:', error);
         const reason = error.name === 'AbortError'
             ? 'The data service did not respond within 15 seconds.'
@@ -1236,6 +1370,7 @@ async function renderYourDatasetsTable(data, emptyMessage = 'No templates found 
     for (let index = 0; index < data.length; index++) {
         const item = data[index];
         const tr = document.createElement('tr');
+        tr.dataset.templateId = item.template_id;
 
         // Template Name
         const tdName = document.createElement('td');
@@ -1263,9 +1398,10 @@ async function renderYourDatasetsTable(data, emptyMessage = 'No templates found 
         // API's document_count field (total_row_count itself is untouched,
         // still used by the metric tile/Preview-gate/delete-count elsewhere).
         const tdDocCount = document.createElement('td');
-        tdDocCount.textContent = item.document_count || 0;
+        tdDocCount.textContent = item.metrics_unavailable ? 'Unavailable' : (item.document_count ?? 'Calculating…');
         tdDocCount.style.textAlign = 'center';
         tdDocCount.style.fontWeight = '600';
+        tdDocCount.dataset.availabilityMetric = 'documents';
         tdDocCount.setAttribute('data-tooltip', 'Unique documents across all dates for this template');
         tr.appendChild(tdDocCount);
 
@@ -1273,8 +1409,9 @@ async function renderYourDatasetsTable(data, emptyMessage = 'No templates found 
         // footprint for this template (all data, unfiltered), sourced from
         // the API's estimated_size_formatted field.
         const tdSize = document.createElement('td');
-        tdSize.textContent = item.estimated_size_formatted || '0 B';
+        tdSize.textContent = item.metrics_unavailable ? 'Unavailable' : (item.estimated_size_formatted || 'Calculating…');
         tdSize.style.textAlign = 'center';
+        tdSize.dataset.availabilityMetric = 'size';
         tdSize.setAttribute('data-tooltip', 'Estimated storage size (row count × avg row size)');
         tr.appendChild(tdSize);
 

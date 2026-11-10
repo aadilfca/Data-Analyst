@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Data Bank first-render performance — 2026-11-10
+
+Data Bank now renders the paged availability summary before loading all-time document and size metrics. Its initial request skips those metrics; the existing availability response still includes them by default. A separate metrics endpoint bounds document-count reads and groups client row-size estimates in one scan, removing the separate client-size request while preserving the existing estimate formula. Metric failures leave the dataset list usable and show unavailable values. The page cache remains client-scoped and rejects stale responses; `databank.js` advances to v14.
+
+Verification: the focused Data Bank suite passes 37 tests, including delayed/failed metric requests, route compatibility, and grouped-size formula checks. Python compilation, JavaScript syntax, and `git diff --check` pass. No live database timing or data writes were performed; Leather Crop latency still needs Aadil's local-server check.
+
 ## Gate Pass and Vendor Bill ERP mappings — 2026-11-09
 
 `routers/import_export.py` now prioritizes exact headers, then applies a small one-to-one alias set for common ERP labels. Gate Pass/Vendor Bill document IDs accept `#`/`no`; `Qty`, Supplier and purchase references map to their matching template fields; Price, Sales Tax and the verified Vendor Bill `Total` map to Rate, Tax Amount and footing Amount. Gate Pass `Unit` maps to Unit of measurement, leaving Factory Unit unmapped when the workbook has no such header. Saved mappings, positional fallback, dates and import controls are unchanged.

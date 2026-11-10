@@ -16,7 +16,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 - routers/clients.py + static/clients.* → firm-level client management; admin-only except the paginated `GET /api/clients`. See CHANGELOG_ARCHIVE.md.
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, allocated database size and selected-client integrity status. See CHANGELOG_ARCHIVE.md.
-- routers/data.py, routers/data_integrity.py + static/databank.*, static/data_integrity.* → Scoped preview controls, fresh bounded caches, backups, history and safeguards. See CHANGELOG_ARCHIVE.md.
+- routers/data.py, data_integrity.py + static/databank.*, data_integrity.* → Data Bank paged previews with separate metrics; Data Integrity safeguards. See CHANGELOG_ARCHIVE.md.
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
 - routers/import_export.py + static/upload.* → Template-first uploads, bounded date reads, full-period coverage, exact Footing controls, stored reconciliation and paged previews. See CHANGELOG_ARCHIVE.md.
 - routers/settings.py + routers/google_drive_auth.py + static/settings.* → App settings, administrator upload-backup controls, firm-wide holidays and Drive reconnection. See CHANGELOG_ARCHIVE.md.
@@ -267,6 +267,8 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-10: Data Bank renders datasets before all-time metrics and derives client size from grouped estimates; local acceptance pending. See CHANGELOG_ARCHIVE.md, Data Bank first-render performance.
+- 2026-11-10: Compressed older Status entries into concise archive pointers, restoring the log budget.
 - 2026-11-09: Optimized upload reads/comparisons, aligned regression fixtures and fixed Gate Pass/Vendor Bill ERP header aliases; local acceptance pending. See CHANGELOG_ARCHIVE.md, Gate Pass and Vendor Bill ERP mappings.
 - 2026-11-06: Combined no-change source notes with accessible upload results. See CHANGELOG_ARCHIVE.md, Upload result dialogs — Phase 2.
 - 2026-11-06: Complete reports allow unmapped optional Standard fields and store them blank. See CHANGELOG_ARCHIVE.md, Unmapped Standard fields — Phase 2.
@@ -290,30 +292,10 @@ One line per file group: what it is now. Full build history for every entry live
 - 2026-11-02: Financial Statement Notes distinguish nested subtotals from category totals with separate row styles. See CHANGELOG_ARCHIVE.md.
 - 2026-11-02: Trial Balance page and workspace notices use a fixed, dismissible top-right toast; loading and validation remain inline. See CHANGELOG_ARCHIVE.md.
 - 2026-11-03: Trial Balance defaults assignment-free; code edits are strict with field notices. See CHANGELOG_ARCHIVE.md.
-- 2026-11-01: Trial Balance toolbar now groups Period and upload actions above Workflow and assignment filters.
-- 2026-11-01: Trial Balance FS Category and Note filters use grouped row-style popups with search and multi-select. See CHANGELOG_ARCHIVE.md.
-- 2026-11-01: Trial Balance upload choices wait for client context, retry transient failures and ignore stale requests. See CHANGELOG_ARCHIVE.md.
-- 2026-11-01: Trial Balance selections load account rows automatically; source changes clear stale rows and cancel older requests. See CHANGELOG_ARCHIVE.md.
-- 2026-11-01: Notes keep numbered headings uniform and show direct assignments on separate numbered rows. See CHANGELOG_ARCHIVE.md.
-- 2026-11-01: Financial Statement notes show Unassigned balances and direct note assignments on the note row. See CHANGELOG_ARCHIVE.md.
-- 2026-11-01: Profit closing status defaults to “not yet included” without saving until confirmed. See CHANGELOG_ARCHIVE.md.
-- 2026-11-01: Balance Sheet and Income Statement pages offer direct shortcuts while retaining the selected Trial Balance. See CHANGELOG_ARCHIVE.md.
-- 2026-11-01: Balance Sheet review dialog presents source checks and review messages in separate tables. See CHANGELOG_ARCHIVE.md.
-- 2026-11-01: Statement Trial Balance choices in reconciliation.js now display entered period ranges instead of upload filenames. See CHANGELOG_ARCHIVE.md.
-- 2026-11-01: Trial Balance category/note filters in trial_balance.js/html add exact multi-select and retain contains search. See CHANGELOG_ARCHIVE.md.
-- 2026-11-01: Income Statement Notes use category-selected normal balances; main statement presentation remains unchanged. See CHANGELOG_ARCHIVE.md.
-- 2026-11-01: Financial Statement Notes show uncovered balances last within each category while retaining note-coverage warnings. See CHANGELOG_ARCHIVE.md.
-- 2026-10-31: Balance Sheet uses a two-row header with the period in its Trial Balance dropdown and popup icons for status and review. See CHANGELOG_ARCHIVE.md.
-- 2026-10-31: ACC-linked Financial Statement Notes use phased loading, compact period headers, footed subtotals and spaced note groups. See CHANGELOG_ARCHIVE.md.
-- 2026-10-30: Balance Sheet adds opening comparatives, separate reconciliations and opening I/S review without duplicating current profit. See CHANGELOG_ARCHIVE.md.
-- 2026-10-30: Added isolated Trial Balance-to-ACC, Verification, and Financial Statement data-flow safety tests; application source remains unchanged. See CHANGELOG_ARCHIVE.md.
-- 2026-10-30: ACC loads upload options first and opens account details on each tab's Load action. See CHANGELOG_ARCHIVE.md.
-- 2026-10-30: ACC indexes Trial Balance hierarchy, batches statement-calculation reads, and adds opt-in timings while preserving assignment results. See CHANGELOG_ARCHIVE.md.
-- 2026-10-30: Trial Balance and ACC Financial Statement/Notes views now link directly while preserving the selected upload. See CHANGELOG_ARCHIVE.md.
+- 2026-11-01: Trial Balance and ACC added selected-period navigation, assignment filters, statement review, closing confirmation and toolbar workflows. See CHANGELOG_ARCHIVE.md.
+- 2026-10-30–31: Added opening comparatives, statement Notes layout, lazy account details, hierarchy indexes and review controls. See CHANGELOG_ARCHIVE.md.
+- 2026-10-29–30: Trial Balance import/review preserves source data and supports mapped validation, inline corrections and wide-table navigation. See CHANGELOG_ARCHIVE.md.
 - 2026-11-01: Trial Balance workspace Phases 1–6 accepted; ACC cutover complete, with Cashflow latency retained as an accepted limitation. See CHANGELOG_ARCHIVE.md.
-- 2026-10-30: Trial Balance validation adds a floating horizontal scrollbar synchronized with table and sticky headings. See CHANGELOG_ARCHIVE.md.
-- 2026-10-29: Trial Balance import reuses client mappings, validates mapped columns and preserves the full source preview. See CHANGELOG_ARCHIVE.md.
-- 2026-10-29: Trial Balance review preserves corrections, issue navigation, inline edits and wide-table scroll state. See CHANGELOG_ARCHIVE.md.
 - 2026-10-28: Trial Balance flags date-formatted codes, retains imported codes, and supports selected-upload corrections with hierarchy and mapping checks. See CHANGELOG_ARCHIVE.md.
 - 2026-10-28: ACC places each page's searches, filters, actions, and selected Trial Balance in a shared toolbar below the four tabs. See CHANGELOG_ARCHIVE.md.
 - 2026-10-28: ACC totals chain earlier lines, block overlapping source roll-ups, and protect referenced lines. See CHANGELOG_ARCHIVE.md.
