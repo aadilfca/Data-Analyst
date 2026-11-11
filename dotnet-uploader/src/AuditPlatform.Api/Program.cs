@@ -1,4 +1,5 @@
 using AuditPlatform.Api.Configuration;
+using AuditPlatform.Api.Coexistence;
 using AuditPlatform.Api.Data;
 using AuditPlatform.Api.Health;
 using AuditPlatform.Api.Logging;
@@ -13,6 +14,15 @@ builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole();
 
 builder.Services.AddControllers();
+builder.Services.AddOptions<CoexistenceOptions>()
+    .Bind(builder.Configuration.GetSection(CoexistenceOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+builder.Services.AddSingleton(provider => new CoexistenceRouteTable(provider.GetServices<CoexistenceRoute>()));
+builder.Services.AddSingleton<ICoexistenceAccessGate, PendingCoexistenceAccessGate>();
+builder.Services.AddSingleton(provider => new LegacyForwarder(
+    provider.GetRequiredService<IOptions<CoexistenceOptions>>(),
+    provider.GetRequiredService<ILogger<LegacyForwarder>>()));
 
 // Default configuration supports appsettings and Platform__... environment
 // overrides. Validate at startup so invalid settings cannot reach a request.
@@ -38,8 +48,13 @@ builder.Services.AddSingleton<PostgresAuditWriter>();
 builder.Services.AddSingleton<DiagnosticErrorLogger>();
 
 var app = builder.Build();
+// Invalid/duplicate registrations fail before listening. Production currently
+// registers no bridge routes and retains P07's default access block.
+_ = app.Services.GetRequiredService<CoexistenceRouteTable>();
 
 app.UseMiddleware<ExceptionLoggingMiddleware>();
+app.UseRouting();
+app.UseMiddleware<CoexistenceMiddleware>();
 app.MapControllers();
 
 try
