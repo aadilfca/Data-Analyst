@@ -33,7 +33,7 @@ High-risk request fixtures must cover login/current-client; ImportRequest; multi
 
 - A business or CA firm can be a tenant. Business users can include directors/CEO; firm users can include administrators, managers and internees. A firm can serve multiple businesses and engagements.
 - An authorized business–firm relationship permits controlled collaboration on a defined engagement. Assigned audit staff and permitted business users see only the scope approved for them; membership or client selection alone grants no engagement access.
-- P07A maps the real workflow and decides ownership, existing-data mapping, consent/revocation, assignments, CEO visibility and when data is called verified. No automatic publication or sharing rule is assumed.
+- P07A records the foundational workflow and confirmed decisions. Detailed ownership enforcement, consent/revocation, verified evidence and CEO presentation are decided in their relevant phases; no automatic publication or sharing rule is assumed.
 - P07B/P07C follow separately approved scopes. Preserve canonical transaction/history contracts, legacy compatibility and one active writer; rehearse migrations/rollback in isolated databases before any shared-schema execution.
 - Every migrated operation, report, cache, job, export and download must enforce and carry the applicable authorized tenant/engagement context; prevent stale access after revocation. Reconcile safeguards across Python/.NET before switching routes.
 
@@ -45,9 +45,18 @@ High-risk request fixtures must cover login/current-client; ImportRequest; multi
 - Agreement alone does not resolve an uncorrected issue: reports continue to show it as outstanding. The assigned audit team verifies corrections with manager review before resolution. Historical report/evidence access after sharing ends is determined by the specific arrangement; preserve audit history and apply the approved access policy.
 - Platform administrator Aadil configures control of access/sharing and CEO visibility/timing separately for each business and engagement. The CA firm's administrator or an authorized manager assigns/removes engagement managers and internees; platform and tenant administration are distinct.
 - Business-record ownership is determined by the specific arrangement. For CEO financial summaries, verified means audit checks were completed and reviewed by a manager, limited to the specific checked data and period; outstanding observations remain visible. If a later upload changes verified data, mark the affected data as needing audit review again. Detailed evidence and change-scope rules remain to be agreed.
+- Existing app data starts under Aadil's CA-firm tenant; connect businesses as their arrangements are established. This starting association does not decide legal ownership; inventory, mapping, rehearsal and rollback require separately approved migration work.
+- A CA firm may work for a business before that business has a tenant or users and connect it later. When multiple firms serve one business, each sees only information authorized for its own engagement.
 - Policy configuration, delegation and defaults require explicit decisions. Configuration alone must not silently grant access outside its approved tenant, engagement, role and object scope; record who changed access and preserve audit history.
-- Open: how arrangements record/enforce ownership and map existing data; verification evidence/change scope and how observations connect to CEO reports; who may invite/revoke and how arrangement-based historical access is enforced; CEO-visible timing and policy controls; assignment limits and exceptions; sharing across firms and revocation effects.
-- P07A remains in progress until these rules and workflow are agreed. P07B/P07C implementation, schema changes, deployed access and activation remain separately approved.
+- Deferred to relevant phases: ownership enforcement and existing-data mapping; verification evidence/change scope and report presentation; invitations, revocation and historical access; visibility controls; assignment exceptions; and consent. Do not enable an operation before its necessary rules are agreed and enforced.
+- P07A foundational direction is accepted; P07B local implementation is approved. P07C, shared-schema execution, deployed access and activation retain separate approval.
+
+### P07B isolated tenant foundation
+
+- Candidate SQL defines tenant identities, active user memberships and one home-workspace association per existing client record; this association is neither legal ownership nor an access grant. It seeds no users, tenants, clients or permissions.
+- Internal membership lookup revalidates the shared session, active user, tenant and membership. It is not a public endpoint and proves no permission to access clients, engagements, reports or other tenants; future operations must revalidate their own authorization.
+- Isolated fixtures rehearse the candidate against synthetic legacy-shaped records; repeated SQL execution fails rather than silently accepting an unknown schema. Existing global username/client-code uniqueness remains unchanged for later review.
+- Runtime startup runs no SQL. A real data inventory, approved firm-tenant/user/client mapping, capacity, schema compatibility, rollback and explicit execution approval are required before applying any change to a shared database.
 
 ## 3. PostgreSQL and financial values
 
@@ -126,7 +135,7 @@ Proposed job states are queued, preparing_inputs, running, succeeded, failed, ca
 | Phase band | Entry condition and compatibility bridge |
 |---|---|
 | P03–P06 | Retain accepted foundations. Shared-schema execution still needs catalog/capacity evidence, ownership and rollback proof. P06 proves explicit legacy/.NET routing with stubs; no Python report-service client. |
-| P07A–P07C, before P08 | Agree collaboration rules first; separately approve and rehearse tenant and sharing foundations. Preserve P07 acceptance and existing data; no public switch before proven cross-application authorization. |
+| P07A–P07C, before P08 | Agree foundational direction, then separately approve and rehearse tenant and sharing foundations; resolve detailed policies in relevant phases before enabling operations. Preserve P07 acceptance and existing data; no public switch before proven cross-application authorization. |
 | P08–P15 | Tenant membership, engagement assignment, sharing and session/client/role behavior must be consistent across both applications before route switches. Capture response fixtures and verify configuration guards. |
 | P16–P29 | Valid client/template/mapping inputs and shared transactions are prerequisites. Settle capacity implementation, hash vectors, coverage/Footing policy, and source revision invalidation before enabling imports. |
 | P30–P40 | Preserve existing Verification/evidence references during purge and both consumers during setup changes. P37 brings forward minimum statement/context calculation for profit confirmation; P38 preserves classification/preparation/revision effects; P39 retains vendor workstream assignments read by Cashflows. |

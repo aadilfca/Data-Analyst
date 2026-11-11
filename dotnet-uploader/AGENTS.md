@@ -33,7 +33,7 @@ Plan dated 2026-11-10; Aadil approved full C# reporting and reports-before-audit
 
 ## Phased implementation plan
 
-Execution order: P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 (reports) → P41–P52 (audit modules) → P57–P63. Existing IDs remain stable; P02 records dependencies. P07A settles business rules before later foundation scope is approved.
+Execution order: P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 (reports) → P41–P52 (audit modules) → P57–P63. Existing IDs remain stable; P02 records dependencies. P07A sets foundational direction; detailed policies follow the relevant approved phases.
 
 | Phase / area | Bounded work and acceptance condition |
 |---|---|
@@ -47,8 +47,8 @@ Execution order: P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 (repor
 | P05C — Historical logs | Accepted by Aadil: guarded synthetic reconciliation, source/target checkpoints, ID/time mappings and recovery; 112 local tests pass. Actual data transfer/handoff retain separate approval. |
 | P06 — Coexistence | Accepted by Aadil: [routing contract](COEXISTENCE_CONTRACT.md), explicit ownership, default access block and bounded local forwarding; 175 serial tests pass (63 new). Public switching waits for P07; uncertain writes are never replayed. |
 | P07 — Authentication | Locally accepted behind disabled settings. See CHANGELOG_ARCHIVE.md, .NET authentication P07. |
-| P07A — Collaboration contract | Initial decisions documented; ownership enforcement, delegation, verification evidence and revocation details remain open. See MIGRATION_CONTRACTS.md, P07A workflow and confirmed decisions. |
-| P07B — Tenant foundation | After P07A, separately approve scope/files for tenant identity, isolation and safe legacy-data mapping; rehearse migration and rollback in isolation. |
+| P07A — Collaboration contract | Foundational direction accepted; detailed sharing, verification and presentation policies follow relevant phases. See MIGRATION_CONTRACTS.md. |
+| P07B — Tenant foundation | Candidate schema and membership lookup locally accepted; shared-schema execution and module access remain separate gates. |
 | P07C — Engagement/sharing foundation | After P07A, separately approve scope/files for engagement relationships, team assignment and sharing authorization; dependent features follow their module phases. |
 | P08 — User management | Port tenant-aware users, roles, activation, password reset and session invalidation; verify membership and administrator boundaries. |
 | P09 — Clients | Port business/client records, selection and pagination with tenant, assignment and shared-engagement scope; reject unauthorized access. |
@@ -156,6 +156,7 @@ $env:NUGET_PACKAGES = "$PWD\.tools\packages"
 - `tools/AuditPlatform.LogRehearsal` uses the installed ASP.NET shared runtime and existing packages, but starts no web host. Tests generate owned PostgreSQL clusters and synthetic JSON; the CLI requires `--input`/`--owner-dir` plus secret environment variable `AUDIT_REHEARSAL_CONNECTION`. Input stays in that owned run directory; it does not read SQLite or Python settings. See [reconciliation gates](AUDIT_ERROR_CONTRACT.md#historical-reconciliation-and-delivery-gates).
 - `Coexistence` ships disabled with an empty route table. P07 authentication is disabled by default; the [bridge contract](COEXISTENCE_CONTRACT.md) defines access, exact registrations, loopback limits and rollback.
 - P07 requires `Authentication__Enabled=true` and a canonical `Authentication__PublicOrigin`; HTTP is limited to localhost. Shared audit schema verification and separate approval precede deployment.
+- P07B's candidate `database/migrations/0003_tenant_foundation.sql` runs only in owned isolated fixtures; startup never applies it. It seeds no records, and repeat application fails safely. Membership lookup grants no client or engagement access.
 - `Platform__ApplicationName` and `Platform__DatabaseCapacityLimitBytes` override non-secret defaults. Invalid settings exit with code 1 before listening; the 500,000,000-byte setting is configuration only until capacity enforcement is ported.
 - Supply future secrets through approved environment/secret-store configuration, never appsettings.json, launch settings, or logs. Private settings files, SDKs, caches, and build outputs are ignored.
 - Windows 10 Pro 22H2 is outside the current .NET 10 supported-OS list. Aadil approved local development with this limitation; a local pass does not certify supported production hosting. P62 validates deployment separately.

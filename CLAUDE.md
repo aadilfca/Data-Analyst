@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- dotnet-uploader/ → .NET migration foundation, guarded authentication, audit persistence and disabled coexistence routing. See CHANGELOG_ARCHIVE.md.
+- dotnet-uploader/ → .NET migration foundation, guarded authentication, tenant membership rehearsal, audit persistence and disabled coexistence routing. See CHANGELOG_ARCHIVE.md.
 
 - routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, statements, category-role notes with unallocated rows, profit links, reconciliations, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
 
@@ -269,7 +269,8 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
-- 2026-11-11: Documented initial tenant collaboration decisions; detailed workflow and permissions remain open. See CHANGELOG_ARCHIVE.md, Collaboration contract P07A.
+- 2026-11-11: Added isolated .NET tenant foundation and guarded membership lookup; locally accepted. See CHANGELOG_ARCHIVE.md, Tenant foundation P07B.
+- 2026-11-11: Documented tenant collaboration foundations; detailed policies follow their development phases. See CHANGELOG_ARCHIVE.md, Collaboration contract P07A.
 - 2026-11-11: Planned tenant and audit-firm collaboration foundations before P08; detailed workflow decisions pending. See CHANGELOG_ARCHIVE.md, Tenant collaboration plan.
 - 2026-11-11: Added disabled .NET authentication and guarded session checks; locally accepted. See CHANGELOG_ARCHIVE.md, .NET authentication P07.
 - 2026-11-10: Data Bank renders datasets before all-time metrics and derives client size from grouped estimates; local acceptance pending. See CHANGELOG_ARCHIVE.md, Data Bank first-render performance.

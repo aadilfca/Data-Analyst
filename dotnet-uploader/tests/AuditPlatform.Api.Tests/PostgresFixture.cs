@@ -176,6 +176,21 @@ public sealed class PostgresFixture : IAsyncLifetime
     public static Task<string> ReadAuditSchemaAsync(CancellationToken cancellationToken) =>
         File.ReadAllTextAsync(Path.Combine(FindSolutionDirectory(), "database", "migrations", "0001_audit_error.sql"), cancellationToken);
 
+    public async Task ApplyTenantFoundationAsync(CancellationToken cancellationToken)
+    {
+        RequireOwnedDirectory();
+        await using var connection = await OpenControlConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var sql = await ReadTenantFoundationAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(sql, connection, transaction);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public static Task<string> ReadTenantFoundationAsync(CancellationToken cancellationToken) =>
+        File.ReadAllTextAsync(Path.Combine(FindSolutionDirectory(), "database", "migrations",
+            "0003_tenant_foundation.sql"), cancellationToken);
+
     public string OwnedRunDirectory => runDirectory;
 
     public async Task ApplyReconciliationSchemaAsync(CancellationToken cancellationToken)

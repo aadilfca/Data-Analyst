@@ -5,6 +5,7 @@ using AuditPlatform.Api.Data;
 using AuditPlatform.Api.Health;
 using AuditPlatform.Api.Logging;
 using AuditPlatform.Api.Middleware;
+using AuditPlatform.Api.Tenancy;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -52,6 +53,8 @@ builder.Services.AddOptions<AuthenticationOptions>()
     .ValidateDataAnnotations().ValidateOnStart();
 builder.Services.AddSingleton<PostgresSessionStore>();
 builder.Services.AddSingleton<AuthenticationService>();
+// Internal foundation only; no public route or database migration is enabled.
+builder.Services.AddSingleton<TenantContextResolver>();
 
 var app = builder.Build();
 // Invalid/duplicate registrations fail before listening. Production currently
