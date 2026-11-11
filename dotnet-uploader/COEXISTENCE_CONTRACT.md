@@ -9,6 +9,7 @@ P06 rehearses route ownership with synthetic HTTP responses. The target remains 
 - Duplicate IDs/normalized method-path pairs, reserved health paths, templates, ambiguous paths and unsupported methods fail registration. Case/slash variants of a registered path are rejected before ASP.NET's permissive matching can bypass its gate. Unknown paths never forward; unowned methods on registered paths return 405.
 - The access gate runs before either backend receives a registered operation. Unavailable/unauthenticated/forbidden decisions return 503/401/403. Test gates/controllers exist only in the test assembly. Stub decisions prove dispatch behavior, not real session, client/object authorization or CSRF enforcement.
 - P07 validates shared active sessions, roles and configured-origin mutation checks. P07C's internal team eligibility is not an action permission. Client routes remain blocked until tenant membership, engagement assignment, configured sharing/visibility and object scope are proven for each route. Both backends must enforce equivalent access before public switching; forwarded identity headers are never trusted.
+- P08's native user API is disabled by default. Do not route or enable it for live use until reviewed schema, administrator mapping, tenant selection, legacy parity and cross-backend enforcement are accepted.
 
 ## Local transport and limits
 

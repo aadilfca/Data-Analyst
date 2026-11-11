@@ -6,6 +6,7 @@ using AuditPlatform.Api.Health;
 using AuditPlatform.Api.Logging;
 using AuditPlatform.Api.Middleware;
 using AuditPlatform.Api.Tenancy;
+using AuditPlatform.Api.Users;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -51,11 +52,14 @@ builder.Services.AddSingleton<DiagnosticErrorLogger>();
 builder.Services.AddOptions<AuthenticationOptions>()
     .Bind(builder.Configuration.GetSection(AuthenticationOptions.SectionName))
     .ValidateDataAnnotations().ValidateOnStart();
+builder.Services.AddOptions<UserManagementOptions>()
+    .Bind(builder.Configuration.GetSection(UserManagementOptions.SectionName)).ValidateOnStart();
 builder.Services.AddSingleton<PostgresSessionStore>();
 builder.Services.AddSingleton<AuthenticationService>();
 // Internal foundation only; no public route or database migration is enabled.
 builder.Services.AddSingleton<TenantContextResolver>();
 builder.Services.AddSingleton<EngagementAccessResolver>();
+builder.Services.AddSingleton<TenantUserService>();
 
 var app = builder.Build();
 // Invalid/duplicate registrations fail before listening. Production currently
@@ -67,6 +71,7 @@ app.UseRouting();
 app.UseMiddleware<SessionAuthenticationHandler>();
 app.UseWhen(context => context.RequestServices.GetRequiredService<IOptions<AuthenticationOptions>>().Value.Enabled
     && (context.Request.Path.StartsWithSegments("/api/auth")
+    || context.Request.Path.StartsWithSegments("/api/users")
     || (context.RequestServices.GetRequiredService<IOptions<CoexistenceOptions>>().Value.Enabled
         && context.RequestServices.GetRequiredService<CoexistenceRouteTable>()
             .Find(context.Request.Method, context.Request.Path.Value ?? "") is not null)),

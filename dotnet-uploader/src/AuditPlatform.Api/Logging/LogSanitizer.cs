@@ -23,7 +23,7 @@ public sealed class LogSanitizer(IOptions<LogPersistenceOptions> options)
         TimeSpan.FromMilliseconds(50));
     private static readonly HashSet<string> NumberKeys = new(StringComparer.Ordinal)
     {
-        "record_id", "target_user_id", "upload_id", "template_id", "client_data_id",
+        "record_id", "tenant_id", "target_user_id", "upload_id", "template_id", "client_data_id",
         "row_count", "added", "updated", "deleted", "retry_count"
     };
     private static readonly HashSet<string> Outcomes = new(StringComparer.Ordinal)

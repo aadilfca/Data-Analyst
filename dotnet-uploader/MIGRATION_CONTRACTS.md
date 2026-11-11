@@ -33,7 +33,7 @@ High-risk request fixtures must cover login/current-client; ImportRequest; multi
 
 - A business or CA firm can be a tenant. Business users can include directors/CEO; firm users can include administrators, managers and internees. A firm can serve multiple businesses and engagements.
 - An authorized business–firm relationship permits controlled collaboration on a defined engagement. Assigned audit staff and permitted business users see only the scope approved for them; membership or client selection alone grants no engagement access.
-- P07A records the foundational workflow and confirmed decisions. Detailed ownership enforcement, consent/revocation, verified evidence and CEO presentation are decided in their relevant phases; no automatic publication or sharing rule is assumed.
+- P07A records the foundational workflow and user-reviewed Q&A below. Items explicitly deferred remain open; no automatic publication or sharing rule is assumed.
 - P07B/P07C follow separately approved scopes. Preserve canonical transaction/history contracts, legacy compatibility and one active writer; rehearse migrations/rollback in isolated databases before any shared-schema execution.
 - Every migrated operation, report, cache, job, export and download must enforce and carry the applicable authorized tenant/engagement context; prevent stale access after revocation. Reconcile safeguards across Python/.NET before switching routes.
 
@@ -49,7 +49,32 @@ High-risk request fixtures must cover login/current-client; ImportRequest; multi
 - A CA firm may work for a business before that business has a tenant or users and connect it later. When multiple firms serve one business, each sees only information authorized for its own engagement.
 - Policy configuration, delegation and defaults require explicit decisions. Configuration alone must not silently grant access outside its approved tenant, engagement, role and object scope; record who changed access and preserve audit history.
 - Deferred to relevant phases: ownership enforcement and existing-data mapping; verification evidence/change scope and report presentation; invitations, revocation and historical access; visibility controls; assignment exceptions; and consent. Do not enable an operation before its necessary rules are agreed and enforced.
-- P07A foundational direction and P07B are accepted; P07C local implementation is approved. Shared-schema execution, deployed access and activation retain separate approval.
+- P07A–P07C and the disabled P08 backend are locally accepted; shared-schema execution, deployed access and activation retain separate approval.
+
+### P07A reviewable questions and answers
+
+These concise paraphrases preserve Aadil's intent for later review; “open” means no policy was selected.
+
+| Question | Aadil's response / status |
+|---|---|
+| Who are the tenant types and users? | Direct businesses are tenants with directors/CEOs; CA firms are tenants with administrators, managers and internees, and their customers/audit engagements are the firms' clients. |
+| Should a business and its auditor collaborate in one app? | Yes; controlled sharing is expected to be common, with audit firms primarily checking business data and CEOs accessing cleaned, verified information. |
+| Who configures engagement sharing and CEO visibility, and who assigns staff? | Platform administrator Aadil configures access and CEO visibility per business/engagement; the CA firm's administrator or authorized manager assigns/removes managers and internees. |
+| Who owns uploaded business records, and what exactly does “verified” mean? | Decide ownership by arrangement; agree the precise meaning and review process together. Ownership enforcement remains open. |
+| What data source does the audit team use now, and what is planned? | The audit team uploads ERP Excel files now; future ERP database fetching is a separate later integration. |
+| What happens in review, and what should the CEO receive? | Manager reaches final agreement with management and captures management's stance; CEO receives reports. |
+| Where is management's response recorded, and what report layout is wanted? | Record it against each observation and show it alongside the auditor's observation; financial summaries should have a show/hide observations-and-responses column. |
+| Which financial reports should start the CEO view, and who records the response? | Start with existing Balance Sheet, Income Statement and Cashflows; the audit team records management's response. |
+| Does an agreed but uncorrected issue remain outstanding, and what happens to prior access after sharing ends? | Yes, it stays outstanding; historical report/evidence access is decided separately for each arrangement. |
+| Who confirms a claimed correction, and how should observations link to summaries? | Assigned audit team verifies with manager review; summary linkage/presentation is for later joint decision. |
+| What does “verified” mean to the CEO, and what period does it cover? | Checks completed and manager-reviewed; status applies only to the checked data and period. |
+| Are sharing and CEO-visibility settings global or configurable per engagement? | Configure separately for each business and engagement. |
+| If later uploads change verified data, what should happen? | Mark affected data as needing audit review again. |
+| Where should existing app data start, and how should mixed verified/unverified summary status display? | Start under Aadil's CA-firm tenant; decide mixed-status presentation later. |
+| Can a firm work before the business has a tenant, and can firms see one another's work? | Yes, allow the firm to work first; keep each firm's engagement separate. |
+| Must a business approve connection to its own tenant before data can be shared? | No final rule selected: Aadil deferred the detailed consent/sharing workflow to later development and asked us to focus now on hard-to-retrofit foundations. |
+
+This list records discussion, not blanket authorization to activate policies. Revisit open answers and confirm policy before implementing dependent workflows.
 
 ### P07B isolated tenant foundation
 
@@ -64,6 +89,14 @@ High-risk request fixtures must cover login/current-client; ImportRequest; multi
 - Internal eligibility rechecks the active session, user, firm, membership, client, engagement and assignment in one query. It has no public endpoint and grants no client-data or action permission; callers must revalidate applicable authorization in their own operation.
 - Isolated fixtures rehearse rollback, repeat failure, firm separation, multiple engagements, invalid assignments, revocations and preservation of synthetic legacy records. No existing verification session is linked or changed.
 - Existing client routes remain blocked; business sharing/consent, tenant administration, action permissions and audit trails for assignment changes require their own approved phases. Never infer legal ownership from a workspace association.
+
+### P08 isolated tenant users
+
+- Candidate SQL adds per-tenant admin/member roles without granting existing members admin automatically; global legacy roles remain separate. Runtime startup performs no DDL.
+- The default-off user API requires a live session and exactly one active tenant membership, then rechecks tenant-admin access for every action. Multiple memberships require a future trusted tenant picker; headers cannot choose the tenant.
+- Create/edit and membership activation are tenant-scoped. Shared identities and legacy global administrators cannot have global names/passwords changed through tenant administration; legacy global administrators are not modified. Password resets for eligible accounts revoke their sessions atomically; membership deactivation is rechecked for that tenant without ending other tenants' sessions.
+- Writes and tenant-attributed audits share a transaction. Existing Python last-admin behavior remains unchanged; the absence of a last-admin safeguard is a known limitation. Invalid request details redact bodies that may contain passwords.
+- Current validation caps usernames at 256 UTF-16 units and passwords at 72 UTF-8 bytes; legacy compatibility and historical values require review. Invalid-request details redact raw input. Shared schema/catalog and explicit administrator mapping, complete legacy response parity, multi-tenant selection, cross-backend session enforcement, UI acceptance and separate activation approval precede cutover. Python remains the active user-management implementation.
 
 ## 3. PostgreSQL and financial values
 
