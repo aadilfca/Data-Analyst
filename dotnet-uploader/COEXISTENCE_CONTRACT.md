@@ -14,6 +14,7 @@ P06 rehearses route ownership with synthetic HTTP responses. The target remains 
 - P10's shell defaults off. Its selected-tenant session cannot use protected bridge routes under legacy global roles; prove equivalent selected-context enforcement before permitting forwarding. Packaged pages do not transfer ownership of their later-module APIs.
 - P11 settings default off and require selected-context checks; never classify settings as public. Native tenant settings/policy cannot replace legacy global reads until upload/report consumers agree on scope, policy freshness and permissions. No route registration or shared-store cutover occurs here.
 - P12 columns default off. Native labels differ from fixed storage keys; do not switch column/template writers until all consumers use the approved ID/key bindings, ownership, configuration locking and freshness rules. Legacy global APIs cannot safely consume native labels/keys unchanged; shared-schema execution and live routing remain gated.
+- P13 templates default off. Native responses carry labels and fixed ID/key bindings with revision checks; legacy consumers cannot interpret these unchanged. Candidate schema, verified legacy ownership/bindings, consumer parity and single-writer activation remain separately gated.
 
 ## Local transport and limits
 

@@ -9,6 +9,9 @@
     if (tag.dataset.columnsEnabled === 'true') window.AppTenantColumns = {
         enabled: true, canEdit: tag.dataset.settingsAdmin === 'true'
     };
+    if (tag.dataset.templatesEnabled === 'true') window.AppTenantTemplates = {
+        enabled: true, canEdit: tag.dataset.settingsAdmin === 'true'
+    };
     const marker = key + '/' + tenant;
     let changed = true;
     try {
@@ -43,6 +46,7 @@
         const bound = url.origin === location.origin && (path.startsWith('/api/users')
             || path.startsWith('/api/settings')
             || path.startsWith('/api/columns')
+            || path.startsWith('/api/templates')
             || path.startsWith('/api/clients')
             || ['/api/auth/current-client', '/api/auth/select-client'].includes(path));
         const headers = new Headers(request.headers);

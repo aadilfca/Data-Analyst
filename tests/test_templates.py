@@ -8,6 +8,153 @@ TEMPLATES_HTML = Path(__file__).resolve().parents[1] / "static" / "templates.htm
 TEMPLATES_JS = Path(__file__).resolve().parents[1] / "static" / "templates.js"
 
 
+@pytest.fixture
+def isolated_template_cache(monkeypatch):
+    """Use fresh process caches and no database or Audit Rules dependencies."""
+    import sys
+    from types import SimpleNamespace
+    from routers import templates
+
+    audit_invalidations = []
+    monkeypatch.setitem(sys.modules, 'routers.audit_rules', SimpleNamespace(
+        invalidate_audit_rules_cache=lambda: audit_invalidations.append(True)))
+    monkeypatch.setattr(templates, '_template_response_cache', {})
+    monkeypatch.setattr(templates, '_template_columns_cache', {})
+    monkeypatch.setattr(templates, 'execute_query_pg', lambda *args: pytest.fail('Unexpected database read'))
+    monkeypatch.setattr(templates, 'execute_write_pg', lambda *args: pytest.fail('Unexpected database write'))
+    return templates, audit_invalidations
+
+
+def test_targeted_template_invalidation_preserves_other_details_and_expires_all_lists(isolated_template_cache):
+    import time
+    templates, audit_invalidations = isolated_template_cache
+    for key in ('templates:list:None:0', 'templates:list:1:0', 'templates:list:1:1',
+                'template:1', 'upload-columns:1', 'template:2', 'upload-columns:2'):
+        templates._set_cached_template_response(key, {'cached': key})
+    expiry = time.monotonic() + templates.TEMPLATE_CACHE_TTL_SECONDS
+    templates._template_columns_cache.update({1: (expiry, ['changed']), 2: (expiry, ['unchanged'])})
+
+    templates.invalidate_template_cache(1)
+
+    assert templates._get_cached_template_response('templates:list:None:0') is None
+    assert templates._get_cached_template_response('templates:list:1:0') is None
+    assert templates._get_cached_template_response('templates:list:1:1') is None
+    assert templates._get_cached_template_response('template:1') is None
+    assert templates._get_cached_template_response('upload-columns:1') is None
+    assert templates._get_cached_template_response('template:2') == {'cached': 'template:2'}
+    assert templates._get_cached_template_response('upload-columns:2') == {'cached': 'upload-columns:2'}
+    assert templates._template_columns_cache == {2: (expiry, ['unchanged'])}
+    assert len(audit_invalidations) == 1
+    templates.invalidate_template_cache()
+    assert templates._template_response_cache == templates._template_columns_cache == {}
+    assert len(audit_invalidations) == 2
+
+
+def test_template_lists_refresh_created_renamed_and_deleted_records_with_pagination(isolated_template_cache, monkeypatch):
+    from copy import deepcopy
+    from fastapi import Response
+    templates, _ = isolated_template_cache
+    rows = {1: {'id': 1, 'template_name': 'Existing fixture', 'ledger_columns': {}}}
+    reads = []
+
+    def query(sql, params=None):
+        reads.append(sql)
+        if 'COUNT(*)' in sql:
+            return [{'cnt': len(rows)}]
+        if 'FROM templates' in sql:
+            result = sorted(deepcopy(list(rows.values())), key=lambda row: row['template_name'])
+            return result[params[1]:params[1] + params[0]] if 'LIMIT' in sql else result
+        if 'FROM template_column_mappings' in sql:
+            return [{'id': 7, 'column_name': 'Fixture key', 'data_type': 'Text', 'sort_order': 0}]
+        pytest.fail('Unexpected query: ' + sql)
+
+    monkeypatch.setattr(templates, 'execute_query_pg', query)
+
+    def check_lists():
+        names = sorted(row['template_name'] for row in rows.values())
+        for limit, offset in ((None, 0), (1, 0), (1, 1)):
+            response = Response()
+            result = templates.get_templates(response, limit=limit, offset=offset)
+            expected = names if limit is None else names[offset:offset + limit]
+            assert [row['template_name'] for row in result] == expected
+            assert response.headers.get('X-Total-Count') == (None if limit is None else str(len(rows)))
+
+    check_lists()  # Prime the caches before any mutation, as a real open page does.
+    count = len(reads)
+    check_lists()
+    assert len(reads) == count  # Unchanged metadata still benefits from the cache.
+    for identity, name in ((2, 'Disposable templates'), (3, 'Disposable template test')):
+        rows[identity] = {'id': identity, 'template_name': name, 'ledger_columns': {}}
+        templates.invalidate_template_cache(identity)
+        check_lists()
+    rows[2]['template_name'] = 'Renamed disposable fixture'
+    templates.invalidate_template_cache(2)
+    check_lists()
+    del rows[3]
+    templates.invalidate_template_cache(3)
+    check_lists()
+
+    # Run the real editor against these actual cached GET handlers. The small
+    # in-memory mutation adapter replaces persistence, never a live database.
+    def editor_api(url, method, payload):
+        if url == '/api/templates' and method == 'GET':
+            return templates.get_templates(Response(), limit=None, offset=0)
+        if url == '/api/columns':
+            return query('SELECT * FROM template_column_mappings')
+        if url.startswith('/api/templates') and method in ('POST', 'PUT', 'DELETE'):
+            identity = max(rows) + 1 if method == 'POST' else int(url.rsplit('/', 1)[-1])
+            if method == 'DELETE':
+                del rows[identity]
+            else:
+                rows[identity] = dict(id=identity, template_name=payload['template_name'],
+                    ledger_columns={}, is_active=True, created_by='Fixture', created_date='2026-11-11')
+            templates.invalidate_template_cache(identity)
+            return {'template_id': identity, 'message': 'Saved'}
+        return []
+
+    from playwright.sync_api import expect
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            page.on('dialog', lambda dialog: dialog.accept())
+            page.set_content(TEMPLATES_HTML.read_text(encoding='utf-8'))
+            page.expose_function('fixtureTemplateApi', editor_api)
+            page.add_script_tag(content="""
+                var API_BASE=''; window.formatDate=value=>value||'';
+                window.clientContextReady=Promise.resolve();
+                window.LoadingUI={showSpinner(){},hideSpinner(){}};
+                window.fetch=async(url,options={})=>new Response(JSON.stringify(await window.fixtureTemplateApi(
+                    String(url),options.method||'GET',options.body?JSON.parse(options.body):null)),
+                    {status:200,headers:{'Content-Type':'application/json'}});
+            """)
+            page.add_script_tag(content=TEMPLATES_JS.read_text(encoding='utf-8'))
+            page.evaluate('window.onload()')
+            for name in ('Disposable templates', 'Disposable template test'):
+                page.locator('#addTemplateBtn').click()
+                page.locator('#templateName').fill(name)
+                page.locator('#columnSearchInput').fill('Fixture key')
+                page.locator('#searchResults').get_by_role('button', name='Select', exact=True).click()
+                page.locator('#saveTemplateBtn').click()
+                expect(page.locator('#templateModal')).to_be_hidden()
+                expect(page.get_by_role('cell', name=name, exact=True)).to_be_visible()
+            page.evaluate('async()=>{templatesCache=null;await loadTemplates(true);}')
+            for name in ('Disposable templates', 'Disposable template test'):
+                expect(page.get_by_role('cell', name=name, exact=True)).to_be_visible()
+            row = page.locator('#templatesBody tr').filter(has=page.get_by_role('cell', name='Disposable templates', exact=True))
+            row.get_by_title('Edit template', exact=True).click()
+            page.locator('#templateName').fill('Edited in browser fixture')
+            page.locator('#saveTemplateBtn').click()
+            expect(page.get_by_role('cell', name='Edited in browser fixture', exact=True)).to_be_visible()
+            expect(page.get_by_role('cell', name='Disposable templates', exact=True)).to_have_count(0)
+            row = page.locator('#templatesBody tr').filter(has=page.get_by_role('cell', name='Disposable template test', exact=True))
+            row.get_by_title('Delete template', exact=True).click()
+            expect(page.get_by_role('cell', name='Disposable template test', exact=True)).to_have_count(0)
+            check_lists()
+        finally:
+            browser.close()
+
+
 @pytest.mark.parametrize('choice,base,role', [
     ('Text', 'Text', 'document_id'), ('Numeric', 'Numeric', 'footing'),
     ('Text', 'Text', None), ('Numeric', 'Numeric', None), ('Date', 'Date', None),

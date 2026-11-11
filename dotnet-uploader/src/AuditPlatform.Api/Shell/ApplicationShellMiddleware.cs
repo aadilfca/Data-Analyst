@@ -17,7 +17,7 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
 
     public async Task InvokeAsync(HttpContext context, IOptions<ApplicationShellOptions> options,
         TenantSessionService tenants, AuditPlatform.Api.Clients.TenantClientService clients,
-        IOptions<SettingsManagementOptions> settings,IOptions<ColumnManagementOptions> columns)
+        IOptions<SettingsManagementOptions> settings,IOptions<ColumnManagementOptions> columns,IOptions<TemplateManagementOptions> templates)
     {
         if (!options.Value.Enabled) { await next(context); return; }
         var path=context.Request.Path.Value ?? "/";
@@ -31,6 +31,7 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
             || context.Request.Path.StartsWithSegments("/api/clients")
             || context.Request.Path.StartsWithSegments("/api/settings")
             || context.Request.Path.StartsWithSegments("/api/columns")
+            || context.Request.Path.StartsWithSegments("/api/templates")
             || canonicalApi is "/api/auth/current-client" or "/api/auth/select-client";
         if (boundApi && session is not null && (session.TenantId is null
             || context.Request.Headers["X-App-Context"].Count!=1
@@ -98,9 +99,10 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
         var settingsEnabled=settings.Value.Enabled ? "true" : "false";
         var settingsAdmin=tenantContext?.Tenants.SingleOrDefault(t=>t.Id==selectedTenant)?.Role=="admin" ? "true" : "false";
         var columnsEnabled=columns.Value.Enabled ? "true" : "false";
+        var templatesEnabled=templates.Value.Enabled ? "true" : "false";
         // Numeric/hash-only attributes need no user-controlled HTML. This runs
         // before retained scripts, clearing old browser state before they read it.
-        var script=$"<script src=\"/shell/context.js\" data-context=\"{key}\" data-tenant=\"{selectedTenant}\" data-settings-enabled=\"{settingsEnabled}\" data-settings-admin=\"{settingsAdmin}\" data-columns-enabled=\"{columnsEnabled}\"></script>";
+        var script=$"<script src=\"/shell/context.js\" data-context=\"{key}\" data-tenant=\"{selectedTenant}\" data-settings-enabled=\"{settingsEnabled}\" data-settings-admin=\"{settingsAdmin}\" data-columns-enabled=\"{columnsEnabled}\" data-templates-enabled=\"{templatesEnabled}\"></script>";
         content=content.Replace("<head>","<head>"+script,StringComparison.Ordinal);
         await context.Response.WriteAsync(content,context.RequestAborted);
     }

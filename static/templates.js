@@ -3,6 +3,10 @@
 // ==============================================
 
 // API_BASE is defined globally in client_context.js
+const nativeTenantTemplates = window.AppTenantTemplates?.enabled === true;
+const canEditTenantTemplates = !nativeTenantTemplates || window.AppTenantTemplates.canEdit === true;
+let templateConfigurationKey = null;
+let nativeTemplateKind = null;
 
 // DOM refs
 const templatesBody = document.getElementById('templatesBody');
@@ -49,7 +53,9 @@ const quickAddSaveAndNewBtn = document.getElementById('quickAddSaveAndNewBtn');
 const RATE_SOURCE_ELIGIBLE_TEMPLATES = new Set(['purchase order', 'store receiving', 'vendor bill']);
 
 function updateRateSourceVisibility() {
-    const eligible = ledgerPurposeSelect?.value !== 'account_ledger' && RATE_SOURCE_ELIGIBLE_TEMPLATES.has(templateName.value.trim().toLowerCase());
+    const eligibleKind = nativeTenantTemplates && nativeTemplateKind !== null
+        ? nativeTemplateKind !== 'standard' : RATE_SOURCE_ELIGIBLE_TEMPLATES.has(templateName.value.trim().toLowerCase());
+    const eligible = ledgerPurposeSelect?.value !== 'account_ledger' && eligibleKind;
     rateSourceField.style.display = eligible ? 'block' : 'none';
 }
 
@@ -63,6 +69,7 @@ let closeMatchDebounceTimer = null;
 let masterColumnsLoaded = false;
 let masterColumnsInFlight = null;
 let templatesCache = null;
+let templateLoadRevision = 0;
 const templateActionsInFlight = new Set();
 
 function startTemplateLoading(target) {
@@ -96,7 +103,8 @@ function syncPreparedLedgerColumns() {
     selectedColumns = ledgerRoleDefinitions.map(([role, label, name, kind], index) => {
         const id = ledgerColumnRoles[role];
         const existing = allMasterColumns.find(col => col.id === id);
-        const column = existing ? {id, name: existing.column_name, type: existing.data_type}
+        const column = existing ? {id, name: existing.column_name, type: existing.data_type,
+            storage_key: existing.storage_key, definition_version: existing.definition_version}
             : {id: -(index + 1), name: name + ' (create on Save)', type: kind};
         if (typeof previous.get(column.id) === 'boolean') column.compare_for_changes = previous.get(column.id);
         return column;
@@ -146,6 +154,7 @@ ledgerPurposeSelect.addEventListener('change', () => {
     renderSelectedColumns();
 });
 document.getElementById('prepareLedgerBtn').addEventListener('click', async function() {
+    if (!canEditTenantTemplates) return;
     if (templateActionsInFlight.has('ledger-prepare')) return;
     templateActionsInFlight.add('ledger-prepare');
     const token = startTemplateLoading(this);
@@ -171,19 +180,23 @@ document.getElementById('prepareLedgerBtn').addEventListener('click', async func
 // state (Fast Data Handling, Phase 8) -- the initial load leaves the cache empty so it
 // fetches normally.
 async function loadTemplates(forceRefresh = false, target = null) {
-    if (templatesCache && !forceRefresh) {
+    if (templatesCache && !forceRefresh && !nativeTenantTemplates) {
         renderTemplates(templatesCache);
         totalCountSpan.textContent = templatesCache.length;
         return;
     }
+    const requestRevision = ++templateLoadRevision;
     const loadingToken = startTemplateLoading(target);
     try {
         const res = await fetch(API_BASE + '/api/templates');
         if (!res.ok) throw new Error('Failed to fetch templates');
-        templatesCache = await res.json();
+        const rows = await res.json();
+        if (requestRevision !== templateLoadRevision) return;
+        templatesCache = rows;
         renderTemplates(templatesCache);
         totalCountSpan.textContent = templatesCache.length;
     } catch (error) {
+        if (requestRevision !== templateLoadRevision) return;
         showStatus('❌ Error loading templates: ' + error.message, 'error');
         templatesBody.innerHTML = '';
         noTemplatesMsg.style.display = 'block';
@@ -272,6 +285,7 @@ function renderTemplates(templates) {
         editBtn.style.fontSize = '18px';
         editBtn.style.marginLeft = '8px';
         editBtn.title = 'Edit template';
+        editBtn.disabled = !canEditTenantTemplates;
         editBtn.addEventListener('click', () => openEditModal(tpl, editBtn));
         tdActions.appendChild(editBtn);
 
@@ -285,6 +299,7 @@ function renderTemplates(templates) {
             delBtn.style.fontSize = '18px';
             delBtn.style.marginLeft = '8px';
             delBtn.title = 'Delete template';
+            delBtn.disabled = !canEditTenantTemplates;
             delBtn.addEventListener('click', () => confirmDelete(tpl.id, tpl.template_name, delBtn));
             tdActions.appendChild(delBtn);
         } else {
@@ -313,7 +328,7 @@ function renderTemplates(templates) {
 // Add/Edit modal open and every Preview open. No invalidation needed: Quick Add already
 // patches allMasterColumns directly (see saveQuickAddColumn()), so the cache stays correct.
 async function loadMasterColumns(target = null) {
-    if (masterColumnsLoaded) return allMasterColumns;
+    if (masterColumnsLoaded && !nativeTenantTemplates) return allMasterColumns;
     if (masterColumnsInFlight) return masterColumnsInFlight;
 
     const loadingToken = startTemplateLoading(target);
@@ -550,6 +565,7 @@ function closeQuickAddColumnModal() {
 // Creates the column in the master table and appends it to the template's
 // selected-columns list in the same step. keepModalOpen === true is "Save and New".
 async function saveQuickAddColumn(keepModalOpen, triggerBtn) {
+    if (!canEditTenantTemplates) return;
     const name = quickAddColName.value.trim();
     const type = quickAddColType.value;
     const category = quickAddColCategory.value.trim();
@@ -583,8 +599,10 @@ async function saveQuickAddColumn(keepModalOpen, triggerBtn) {
 
         // New column now exists in the master table -- reflect it locally so
         // search/exact-match logic sees it immediately, then add it to the template.
-        const newCol = { id: result.column_id, column_name: name, data_type: type, category: category || 'General', notes: notes || null };
-        allMasterColumns.push(newCol);
+        const newCol = nativeTenantTemplates ? (await loadMasterColumns()).find(c => c.id === result.column_id)
+            : { id: result.column_id, column_name: name, data_type: type, category: category || 'General', notes: notes || null };
+        if (!newCol) throw new Error('Column created. Reload the editor to obtain its permanent binding.');
+        if (!nativeTenantTemplates) allMasterColumns.push(newCol);
         window.allMasterColumns = allMasterColumns;
         addToSelected(newCol);
 
@@ -636,7 +654,8 @@ quickAddSaveAndNewBtn.addEventListener('click', function(e) {
 // ---------- ADD / REMOVE SELECTED ----------
 function addToSelected(col) {
     if (selectedColumns.some(c => c.id === col.id)) return;
-    selectedColumns.push({ id: col.id, name: col.column_name, type: col.data_type, notes: col.notes || null });
+    selectedColumns.push({ id: col.id, name: col.column_name, type: col.data_type, notes: col.notes || null,
+        storage_key: col.storage_key, definition_version: col.definition_version });
     renderSelectedColumns();
     renderSearchResults(searchInput.value);
     updateSelectedCount();
@@ -773,6 +792,18 @@ function updateSelectedCount() {
 
 // ---------- MODAL OPEN / CLOSE ----------
 async function openModal(title, templateData = null, triggerBtn = null) {
+    if (!canEditTenantTemplates) return;
+    // A table may have been rendered before another administrator's save.
+    // Start edits with a fresh server snapshot, then submit its revision.
+    if (nativeTenantTemplates && templateData) {
+        try {
+            const response = await fetch(API_BASE + '/api/templates/' + templateData.id);
+            if (!response.ok) throw new Error('Template is no longer available. Reload the list.');
+            templateData = await response.json();
+        } catch (error) { showStatus(error.message, 'error'); return; }
+    }
+    templateConfigurationKey = templateData?.configuration_key || null;
+    nativeTemplateKind = templateData?.template_kind ?? null;
     ledgerSetupDraft = null;
     ledgerColumnRoles = {};
     ledgerPurposeSelect.value = templateData?.data_purpose || 'standard';
@@ -814,6 +845,7 @@ async function openModal(title, templateData = null, triggerBtn = null) {
         cols.forEach(col => {
             const masterCol = columns.find(c => c.id === col.id);
             selectedColumns.push({ id: col.id, name: col.column_name, type: col.data_type,
+                storage_key: col.storage_key, definition_version: col.definition_version,
                 reconciliation_role: col.reconciliation_role || null,
                 compare_for_changes: col.compare_for_changes, comparison_review_required: col.comparison_review_required,
                 notes: masterCol ? masterCol.notes : null });
@@ -889,6 +921,7 @@ closeModalBtn.addEventListener('click', closeModal);
 // ---------- FORM SUBMIT ----------
 document.getElementById('templateForm').addEventListener('submit', async function(e) {
     e.preventDefault();
+    if (!canEditTenantTemplates) return;
 
     const name = templateName.value.trim();
     if (!name) {
@@ -936,9 +969,15 @@ document.getElementById('templateForm').addEventListener('submit', async functio
             method = 'PUT';
         }
 
+        if (nativeTenantTemplates && !ledgerSetupDraft) {
+            payload.column_versions = Object.fromEntries(selectedColumns.map(c => [c.id, c.definition_version]));
+        }
+        const headers = { 'Content-Type': 'application/json' };
+        if (nativeTenantTemplates && editingId) headers['X-Template-Revision'] = templateConfigurationKey;
+
         const res = await fetch(url, {
             method: method,
-            headers: { 'Content-Type': 'application/json' },
+            headers,
             body: JSON.stringify(payload)
         });
 
@@ -967,6 +1006,7 @@ document.getElementById('templateForm').addEventListener('submit', async functio
 
 // ---------- CONFIRM DELETE ----------
 async function confirmDelete(id, name, triggerBtn = null) {
+    if (!canEditTenantTemplates) return;
     if (!confirm(`Are you sure you want to delete template "${name}"? This will soft-delete it.`)) {
         return;
     }
@@ -977,7 +1017,9 @@ async function confirmDelete(id, name, triggerBtn = null) {
     const previousDisabled = triggerBtn ? triggerBtn.disabled : false;
     if (triggerBtn) triggerBtn.disabled = true;
     try {
-        const res = await fetch(API_BASE + '/api/templates/' + id, { method: 'DELETE' });
+        const headers = {};
+        if (nativeTenantTemplates) headers['X-Template-Revision'] = templatesCache?.find(t => t.id === id)?.configuration_key || '';
+        const res = await fetch(API_BASE + '/api/templates/' + id, { method: 'DELETE', headers });
         const result = await res.json();
         if (!res.ok) throw new Error(result.message || result.detail || 'Failed to delete template');
         showStatus('✅ ' + result.message, 'success');
@@ -996,6 +1038,11 @@ async function confirmDelete(id, name, triggerBtn = null) {
 // ==============================================
 
 async function openPreviewModal(tpl, triggerBtn = null) {
+    if (nativeTenantTemplates) {
+        const response = await fetch(API_BASE + '/api/templates/' + tpl.id);
+        if (!response.ok) { showStatus('Template is no longer available. Reload the list.', 'error'); return; }
+        tpl = await response.json();
+    }
     // Use tpl.columns (from pivot table) instead of selected_columns.
     // GET /api/templates doesn't select master_columns.notes, so refresh
     // allMasterColumns (GET /api/columns, which does) and look notes up by
@@ -1038,8 +1085,8 @@ async function openPreviewModal(tpl, triggerBtn = null) {
     modal.innerHTML = `
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; border-bottom:2px solid #f0f2f5; padding-bottom:15px;">
             <div>
-                <h2 style="margin:0; font-size:22px; color:#1a1a2e;">📋 ${tpl.template_name}</h2>
-                <p style="margin:4px 0 0 0; color:#64748b; font-size:14px;">Created by: ${tpl.created_by || 'Admin'} | Date: ${window.formatDate(tpl.created_date)} | <strong>${columnData.length}</strong> columns</p>
+                <h2 style="margin:0; font-size:22px; color:#1a1a2e;">📋 ${escapeHtml(tpl.template_name)}</h2>
+                <p style="margin:4px 0 0 0; color:#64748b; font-size:14px;">Created by: ${escapeHtml(tpl.created_by || 'Admin')} | Date: ${window.formatDate(tpl.created_date)} | <strong>${columnData.length}</strong> columns</p>
             </div>
             <button id="closePreviewBtn" style="background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8;">×</button>
         </div>
@@ -1087,6 +1134,14 @@ document.addEventListener('keydown', function(e) {
 });
 
 // ---------- INIT ----------
-window.onload = function() {
-    loadTemplates();
+window.onload = async function() {
+    if (window.clientContextReady) await window.clientContextReady;
+    document.getElementById('templatesReadOnlyNotice').hidden = canEditTenantTemplates;
+    document.getElementById('addTemplateBtn').disabled = !canEditTenantTemplates;
+    document.getElementById('prepareLedgerBtn').disabled = !canEditTenantTemplates;
+    await loadTemplates();
 };
+if (nativeTenantTemplates) window.addEventListener('focus', () => {
+    // Never replace an unsaved form. Its revision check rejects stale writes.
+    if (modal.style.display !== 'block') loadTemplates(true);
+});

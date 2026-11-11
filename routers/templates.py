@@ -47,7 +47,10 @@ def invalidate_template_cache(template_id: int | None = None):
             _template_response_cache.clear()
         else:
             for key in list(_template_response_cache):
-                if key == f"template:{template_id}" or key == f"upload-columns:{template_id}":
+                # Every list includes shared template metadata/counts. A
+                # targeted save must expire all pagination variants as well.
+                if (key.startswith("templates:list:")
+                        or key == f"template:{template_id}" or key == f"upload-columns:{template_id}"):
                     _template_response_cache.pop(key, None)
         if template_id is None:
             _template_columns_cache.clear()

@@ -51,7 +51,7 @@ public sealed class ColumnsController(TenantColumnService columns,IOptions<Colum
     {
         if(Guard() is {} error) return error;
         var result=await columns.UsageAsync(Session,id,ct);
-        return result.Status==ColumnStatus.Success ? Ok(new {documents_count=0,cross_checks_count=0,templates_count=0}) : Error(result);
+        return result.Status==ColumnStatus.Success ? Ok(new {documents_count=0,cross_checks_count=0,templates_count=result.TemplatesCount}) : Error(result);
     }
     [HttpPost]
     public Task<IActionResult> Create([FromBody]Input? input,CancellationToken ct)=>Save(null,input,ct);

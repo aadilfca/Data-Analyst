@@ -1,7 +1,9 @@
 using System.Text.Json;
 using AuditPlatform.Api.Authentication;
 using AuditPlatform.Api.Data;
+using AuditPlatform.Api.Configuration;
 using AuditPlatform.Api.Logging;
+using Microsoft.Extensions.Options;
 using Npgsql;
 using NpgsqlTypes;
 
@@ -12,11 +14,11 @@ public sealed record ColumnInput(string Name,string Type,string Category="Genera
     bool Active=true,string? ReconciliationRole=null);
 public sealed record TenantColumn(int Id,string Name,string StorageKey,string Type,string Category,
     string? Notes,bool Active,string Origin,long Version);
-public sealed record ColumnResult(ColumnStatus Status,IReadOnlyList<TenantColumn>? Columns=null,int? ColumnId=null,string? Detail=null);
+public sealed record ColumnResult(ColumnStatus Status,IReadOnlyList<TenantColumn>? Columns=null,int? ColumnId=null,string? Detail=null,int TemplatesCount=0);
 
 // The master row carries the permanent ID/storage key/base type. Tenant-facing
 // labels and annotations are separate, so label edits never rename stored JSON.
-public sealed class TenantColumnService(PostgresTransactions transactions,PostgresAuditWriter audit)
+public sealed class TenantColumnService(PostgresTransactions transactions,PostgresAuditWriter audit,IOptions<TemplateManagementOptions>? templates=null)
 {
     private sealed record Actor(int TenantId,int UserId,string Name);
     private const string Fields="m.id,c.display_name,m.column_name,m.data_type,c.category,c.notes,m.is_active,c.binding_origin,c.definition_version";
@@ -78,10 +80,9 @@ public sealed class TenantColumnService(PostgresTransactions transactions,Postgr
 
                 bool label=existing.Name!=input.Name;
                 bool structural=existing.Type!=input.Type || existing.Active!=input.Active;
-                // Legacy bindings have not yet been reconciled per dataset.
-                // Native linked consumers also need scoped ownership and ID/key
-                // lookup verification in their own phases before label changes.
-                if((label||structural) && (existing.Origin!="native" || await HasDependenciesAsync(db,existing,token)))
+                // P13 verifies native template ID/key consumers. Every other
+                // dependency, and every structural change, remains guarded.
+                if((label||structural) && (existing.Origin!="native" || await HasDependenciesAsync(db,existing,token,!structural,actor.TenantId)))
                     return new(ColumnStatus.DependencyReview,Detail:ReviewError);
                 if(structural && await HasStoredDataAsync(db,existing.StorageKey,token))
                     return new(ColumnStatus.DependencyReview,Detail:ReviewError);
@@ -102,6 +103,14 @@ public sealed class TenantColumnService(PostgresTransactions transactions,Postgr
                     update.Parameters.AddWithValue(NpgsqlDbType.Text,(object?)input.Notes??DBNull.Value);
                     update.Parameters.AddWithValue(actor.TenantId); update.Parameters.AddWithValue(existing.Id);
                     await update.ExecuteNonQueryAsync(token);
+                }
+                if(templates?.Value.Enabled==true)
+                {
+                    await using var plans=db.CreateCommand("""
+                        UPDATE public.upload_validation_plans SET status='superseded' WHERE status='ready'
+                        AND template_id IN(SELECT template_id FROM public.template_column_mappings WHERE tenant_id=$1 AND column_id=$2)
+                        """);
+                    plans.Parameters.AddWithValue(actor.TenantId); plans.Parameters.AddWithValue(existing.Id); await plans.ExecuteNonQueryAsync(token);
                 }
                 await AuditAsync(db,actor,existing.Id,"Update",token);
                 return new(ColumnStatus.Success,ColumnId:existing.Id);
@@ -133,10 +142,19 @@ public sealed class TenantColumnService(PostgresTransactions transactions,Postgr
             // Until dependent modules have verified tenant ownership, positive
             // global counts would disclose unscoped information. Never report
             // zero merely because a consumer has not been ported.
-            if(column.Origin!="native" || await HasDependenciesAsync(db,column,token)
+            if(column.Origin!="native" || await HasDependenciesAsync(db,column,token,true,actor.TenantId)
                 || await HasStoredDataAsync(db,column.StorageKey,token))
                 return new(ColumnStatus.DependencyReview,Detail:ReviewError);
-            return new(ColumnStatus.Success);
+            int count=0;
+            if(templates?.Value.Enabled==true)
+            {
+                await using var usage=db.CreateCommand("""
+                    SELECT count(*)::integer FROM public.template_column_mappings p JOIN public.templates t ON t.id=p.template_id
+                    WHERE p.column_id=$1 AND p.tenant_id=$2 AND t.is_active IS TRUE
+                    """);
+                usage.Parameters.AddWithValue(id); usage.Parameters.AddWithValue(actor.TenantId); count=(int)(await usage.ExecuteScalarAsync(token))!;
+            }
+            return new(ColumnStatus.Success,TemplatesCount:count);
         },ct);
 
     private Task<ColumnResult> RunAsync(VerifiedSession? session,bool admin,
@@ -185,12 +203,17 @@ public sealed class TenantColumnService(PostgresTransactions transactions,Postgr
     private static TenantColumn Read(NpgsqlDataReader r) => new(r.GetInt32(0),r.GetString(1),r.GetString(2),r.GetString(3),
         r.GetString(4),r.IsDBNull(5)?null:r.GetString(5),!r.IsDBNull(6)&&r.GetBoolean(6),r.GetString(7),r.GetInt64(8));
 
-    private static async Task<bool> HasDependenciesAsync(PostgresTransactionContext db,TenantColumn column,CancellationToken ct)
+    private async Task<bool> HasDependenciesAsync(PostgresTransactionContext db,TenantColumn column,CancellationToken ct,bool allowTemplates=false,int tenant=0)
     {
         // Missing/unreviewed dependent schemas fail the operation instead of
         // treating missing tables as proof that a column is unused.
-        await using var command=db.CreateCommand("""
-            SELECT EXISTS(SELECT 1 FROM public.template_column_mappings WHERE column_id=$1)
+        var templateDependency=allowTemplates&&templates?.Value.Enabled==true ? """
+            EXISTS(SELECT 1 FROM public.template_column_mappings p WHERE p.column_id=$1 AND NOT EXISTS(
+                SELECT 1 FROM public.platform_tenant_templates d WHERE d.template_id=p.template_id
+                AND d.tenant_id=p.tenant_id AND d.binding_origin='native' AND p.tenant_id=$3 AND p.storage_key=$2))
+            """ : "EXISTS(SELECT 1 FROM public.template_column_mappings WHERE column_id=$1)";
+        await using var command=db.CreateCommand($"""
+            SELECT {templateDependency}
                 OR EXISTS(SELECT 1 FROM public.audit_rule_document_fields WHERE master_column_id=$1
                     OR lower(btrim(field_name))=lower(btrim($2)))
                 OR EXISTS(SELECT 1 FROM public.audit_rule_cross_checks
@@ -198,6 +221,7 @@ public sealed class TenantColumnService(PostgresTransactions transactions,Postgr
                 OR EXISTS(SELECT 1 FROM public.saved_column_mappings WHERE template_column_id=$1)
             """);
         command.Parameters.AddWithValue(column.Id); command.Parameters.AddWithValue(column.StorageKey);
+        if(allowTemplates&&templates?.Value.Enabled==true) command.Parameters.AddWithValue(tenant);
         return (bool)(await command.ExecuteScalarAsync(ct))!;
     }
     private Task<int> AuditAsync(PostgresTransactionContext db,Actor actor,int id,string action,CancellationToken ct) =>

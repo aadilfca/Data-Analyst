@@ -55,7 +55,7 @@ Execution order: P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 (repor
 | P10 — Application shell | Disabled packaged-asset hosting, tenant picker and session context locally accepted. Sharing and live cutover remain gated. |
 | P11 — Global settings | Disabled tenant settings/holidays and guarded existing UI locally accepted. Mapping, consumer enforcement and activation remain gated. |
 | P12 — Reusable columns | Disabled tenant catalogue and permanent ID/key versus editable-label foundation locally accepted. Legacy bindings and consumer activation remain gated. |
-| P13 — Templates | Port templates, ordered mappings, purposes, comparison settings, and configuration locks; verify current template behavior. |
+| P13 — Templates | Disabled tenant templates, fixed-key mappings, guarded editor/ledger preparation and Python cache correction locally accepted. Live activation remains gated. |
 | P14 — Saved mappings | Port client/template mapping persistence and reuse; verify ownership, stale configurations, and clear/reset behavior. |
 | P15 — Setup backup | Port configuration backup/restore endpoints; verify scope, replacement warnings, validation, and rollback on invalid input. |
 | P16 — Upload staging | Port file receipt, owner-bound staging, hashing, sheet/header discovery, and expiry; verify invalid files and missing-source recovery. |
@@ -163,6 +163,7 @@ $env:NUGET_PACKAGES = "$PWD\.tools\packages"
 - P10's `ApplicationShell__Enabled` defaults false and requires authentication/user/client flags. Candidate `0006_session_tenant_context.sql` is fixture-only; packaged frontend hosting grants no later-module API or sharing access. P10 browser tests use existing `venv`/Chromium.
 - P11's `SettingsManagement__Enabled` defaults false and requires the shell. Candidate `0007_tenant_settings.sql` is fixture-only; tenant policy writes cannot activate before upload/report consumers enforce the same scope. See MIGRATION_CONTRACTS.md, P11 isolated tenant settings.
 - P12's `ColumnManagement__Enabled` defaults false and requires the shell. Candidate `0008_tenant_columns.sql` adds tenant definitions and identity guards without seeding/copying/rekeying legacy data. See MIGRATION_CONTRACTS.md, P12 column identity and labels, before porting any column consumer.
+- P13's `TemplateManagement__Enabled` defaults false and requires shell/columns. Candidate `0009_tenant_templates.sql` is fixture-only; see MIGRATION_CONTRACTS.md, P13 tenant templates and bindings, before enabling consumers.
 - `Platform__ApplicationName` and `Platform__DatabaseCapacityLimitBytes` override non-secret defaults. Invalid settings exit with code 1 before listening; the 500,000,000-byte setting is configuration only until capacity enforcement is ported.
 - Supply future secrets through approved environment/secret-store configuration, never appsettings.json, launch settings, or logs. Private settings files, SDKs, caches, and build outputs are ignored.
 - Windows 10 Pro 22H2 is outside the current .NET 10 supported-OS list. Aadil approved local development with this limitation; a local pass does not certify supported production hosting. P62 validates deployment separately.

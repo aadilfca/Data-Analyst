@@ -11,6 +11,7 @@ using AuditPlatform.Api.Clients;
 using AuditPlatform.Api.Shell;
 using AuditPlatform.Api.Settings;
 using AuditPlatform.Api.Columns;
+using AuditPlatform.Api.Templates;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -76,8 +77,16 @@ builder.Services.AddSingleton<TenantSettingsService>();
 builder.Services.AddOptions<ColumnManagementOptions>()
     .Bind(builder.Configuration.GetSection(ColumnManagementOptions.SectionName)).ValidateOnStart();
 builder.Services.AddSingleton<TenantColumnService>();
+builder.Services.AddOptions<TemplateManagementOptions>()
+    .Bind(builder.Configuration.GetSection(TemplateManagementOptions.SectionName)).ValidateOnStart();
+builder.Services.AddSingleton<TenantTemplateService>();
 
 var app = builder.Build();
+if (app.Services.GetRequiredService<IOptions<TemplateManagementOptions>>().Value.Enabled
+    && (!app.Services.GetRequiredService<IOptions<ApplicationShellOptions>>().Value.Enabled
+        || !app.Services.GetRequiredService<IOptions<ColumnManagementOptions>>().Value.Enabled))
+    throw new OptionsValidationException(TemplateManagementOptions.SectionName,typeof(TemplateManagementOptions),
+        ["Tenant templates require the application shell and tenant columns."]);
 if (app.Services.GetRequiredService<IOptions<ColumnManagementOptions>>().Value.Enabled
     && !app.Services.GetRequiredService<IOptions<ApplicationShellOptions>>().Value.Enabled)
     throw new OptionsValidationException(ColumnManagementOptions.SectionName,typeof(ColumnManagementOptions),
@@ -105,6 +114,7 @@ app.UseWhen(context => context.RequestServices.GetRequiredService<IOptions<Authe
     || context.Request.Path.StartsWithSegments("/api/clients")
     || context.Request.Path.StartsWithSegments("/api/settings")
     || context.Request.Path.StartsWithSegments("/api/columns")
+    || context.Request.Path.StartsWithSegments("/api/templates")
     || (context.RequestServices.GetRequiredService<IOptions<CoexistenceOptions>>().Value.Enabled
         && context.RequestServices.GetRequiredService<CoexistenceRouteTable>()
             .Find(context.Request.Method, context.Request.Path.Value ?? "") is not null)),
