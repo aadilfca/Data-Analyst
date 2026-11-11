@@ -4,7 +4,7 @@
 
 Migrate the complete Python application backend to ASP.NET Core/C#, retaining Python for financial report calculations and report generation. The folder remains `dotnet-uploader/`; `AuditPlatform.Api` now provides the service foundation. Existing browser assets move to ASP.NET Core in later phases; .NET supplies report data to Python.
 
-Plan dated 2026-11-10. P01–P05A are accepted; see [MIGRATION_BASELINE.md](MIGRATION_BASELINE.md), [migration-baseline.json](migration-baseline.json), and [MIGRATION_CONTRACTS.md](MIGRATION_CONTRACTS.md). P05B file confirmation is next; P05C–P63 remain pending. Each implementation phase requires file/approach approval. Preserve the working Python app throughout staged replacement.
+Plan dated 2026-11-10. P01–P05B are accepted; see [MIGRATION_BASELINE.md](MIGRATION_BASELINE.md), [migration-baseline.json](migration-baseline.json), and [MIGRATION_CONTRACTS.md](MIGRATION_CONTRACTS.md). P05C file confirmation is next; P06–P63 remain pending. Each implementation phase requires file/approach approval. Preserve the working Python app throughout staged replacement.
 
 ## Agreed technology direction
 
@@ -43,7 +43,7 @@ Numbers describe the default sequence. P02 records dependencies; subsequent file
 | P04A — PostgreSQL connections | Accepted by Aadil: disabled-by-default settings, bounded singleton pool and readiness; Release build and 32 isolated PostgreSQL tests pass. |
 | P04B — Transactions and schema | Accepted by Aadil: atomic writes, read-only snapshots and [schema ownership](POSTGRES_SCHEMA_OWNERSHIP.md); 54 isolated tests pass. Deployed catalog/metering remain prerequisites for shared-schema changes. |
 | P05A — Audit/error contract | Accepted by Aadil: [record, attribution, privacy and failure contract](AUDIT_ERROR_CONTRACT.md). Existing source reviewed; deployed records remain unverified. |
-| P05B — Audit/error persistence | Pending: PostgreSQL stores, sanitization and failure handling; prove atomic required audits and bounded diagnostic fallback on isolated fixtures. |
+| P05B — Audit/error persistence | Accepted by Aadil: required audit writes, bounded diagnostic logging and safe middleware; 90 isolated tests pass. Candidate SQL remains gated from shared-schema execution. |
 | P05C — Historical logs | Pending: rehearse source-aware registry/log reconciliation, ID/time mappings and repeat-safe recovery; actual data transfer and writer handoff retain separate approval. |
 | P06 — Coexistence | Establish same-origin route switching and a private report-service client contract; demonstrate routing, authorization, and fallback with stubbed responses. |
 | P07 — Authentication | Port login/logout, bcrypt compatibility, expiry, cookie/CSRF behavior, and inactive-user checks; verify session compatibility and rejection cases. |
@@ -133,7 +133,7 @@ $env:TESTINGPLATFORM_TELEMETRY_OPTOUT = '1'
 $env:NUGET_PACKAGES = "$PWD\.tools\packages"
 & .\.dotnet\dotnet.exe restore .\AuditPlatform.slnx --source https://api.nuget.org/v3/index.json --packages $env:NUGET_PACKAGES
 & .\.dotnet\dotnet.exe build .\AuditPlatform.slnx --configuration Release --no-restore
-& .\.dotnet\dotnet.exe run --project .\tests\AuditPlatform.Api.Tests --configuration Release --no-build --no-restore -- -noColor -result-trx "$PWD\.tools\p04b-results\p04b.trx"
+& .\.dotnet\dotnet.exe run --project .\tests\AuditPlatform.Api.Tests --configuration Release --no-build --no-restore -- -noColor -result-trx "$PWD\.tools\p05b-results\p05b.trx"
 & .\.dotnet\dotnet.exe run --project .\src\AuditPlatform.Api --configuration Release --no-build --no-restore
 ```
 
@@ -144,10 +144,12 @@ $env:NUGET_PACKAGES = "$PWD\.tools\packages"
 - Tests use [EDB's portable PostgreSQL 17.11 archive](https://www.enterprisedb.com/download-postgresql-binaries), extracted to `.tools/postgresql-17.11/pgsql/`; `AUDITPLATFORM_TEST_POSTGRES_BIN` may select another approved binary folder inside `.tools/`. Each run creates a random SCRAM-protected loopback cluster/database and stops it; fixture logs/data remain ignored. No existing connection URL is accepted.
 - Run xUnit through the executable command above; the .NET 10 default `dotnet test` VSTest mode rejects this package's MTP integration. Windows sandbox restriction may require normal local execution for `initdb`; no Windows service is installed.
 - Transaction/snapshot callers must follow the [runtime service contract](POSTGRES_SCHEMA_OWNERSHIP.md#runtime-service-contract). Tests create synthetic tables and use a local relay to prove lost-commit acknowledgement without production fault hooks.
+- `PostgresAuditWriter` requires the supplied write context and trusted server inputs; module ports integrate it with their mutations. Diagnostic capture uses safe symbols and route templates. `LogPersistence__...` limits are defined in [the audit/error contract](AUDIT_ERROR_CONTRACT.md); diagnostics never read request bodies, queries or cookies.
+- Candidate `database/migrations/0001_audit_error.sql` is executed only by owned test fixtures here. Runtime startup performs no DDL. Deployed catalog/capacity evidence and explicit execution approval remain required; P05C handles historical reconciliation and P07/P57 authentication/dashboard integration.
 - `Platform__ApplicationName` and `Platform__DatabaseCapacityLimitBytes` override non-secret defaults. Invalid settings exit with code 1 before listening; the 500,000,000-byte setting is configuration only until capacity enforcement is ported.
 - Supply future secrets through approved environment/secret-store configuration, never appsettings.json, launch settings, or logs. Private settings files, SDKs, caches, and build outputs are ignored.
 - Windows 10 Pro 22H2 is outside the current .NET 10 supported-OS list. Aadil approved local development with this limitation; a local pass does not certify supported production hosting. P62 validates deployment separately.
-- Evidence: ignored `.tools/p03-verification.json`, `.tools/p04a-verification.json`, `.tools/p04b-verification.json` and `.tools/p04b-results/p04b.trx`. Local connection/transaction checks do not certify deployed Supabase/TLS/catalog/metering or migrated workflows.
+- Evidence: ignored `.tools/p03-verification.json`, `.tools/p04a-verification.json`, `.tools/p04b-verification.json`, `.tools/p05b-verification.json` and `.tools/p05b-results/p05b.trx`. Local checks do not certify deployed Supabase/TLS/catalog/metering or migrated workflows.
 
 ## Reference links
 

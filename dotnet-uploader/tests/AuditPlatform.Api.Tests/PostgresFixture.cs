@@ -154,6 +154,52 @@ public sealed class PostgresFixture : IAsyncLifetime
         return new(Port);
     }
 
+    public async Task ApplyAuditSchemaAsync(CancellationToken cancellationToken)
+    {
+        RequireOwnedDirectory();
+        await using var connection = await OpenControlConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        // Isolated fixture prerequisite only; the migration itself never builds
+        // or replaces the application's canonical source schema.
+        await using (var prerequisite = new NpgsqlCommand("""
+            CREATE TABLE IF NOT EXISTS public.client_data (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                client_id INTEGER NOT NULL, row_data JSONB NOT NULL DEFAULT '{}'::jsonb)
+            """, connection, transaction))
+            await prerequisite.ExecuteNonQueryAsync(cancellationToken);
+        var sql = await ReadAuditSchemaAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(sql, connection, transaction);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public static Task<string> ReadAuditSchemaAsync(CancellationToken cancellationToken) =>
+        File.ReadAllTextAsync(Path.Combine(FindSolutionDirectory(), "database", "migrations", "0001_audit_error.sql"), cancellationToken);
+
+    public async Task<NpgsqlConnection> OpenEmptyOwnedDatabaseAsync(CancellationToken cancellationToken)
+    {
+        RequireOwnedDirectory();
+        var name = "auditplatform_foundation_" + Guid.NewGuid().ToString("N");
+        await using (var owner = await OpenControlConnectionAsync(cancellationToken))
+        {
+            await using var create = new NpgsqlCommand($"CREATE DATABASE \"{name}\"", owner);
+            await create.ExecuteNonQueryAsync(cancellationToken);
+        }
+        var settings = new NpgsqlConnectionStringBuilder(ConnectionString) { Database = name };
+        RequireSafeTarget(settings.ConnectionString, Port);
+        var connection = new NpgsqlConnection(settings.ConnectionString);
+        try { await connection.OpenAsync(cancellationToken); return connection; }
+        catch { await connection.DisposeAsync(); throw; }
+    }
+
+    public async Task<int> CreateSourceRowAsync(int clientId, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenControlConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand("INSERT INTO public.client_data(client_id) VALUES ($1) RETURNING id", connection);
+        command.Parameters.AddWithValue(clientId);
+        return (int)(await command.ExecuteScalarAsync(cancellationToken))!;
+    }
+
     // Test-only transport fault: forward a single connection to this fixture,
     // then drop the server's actual COMMIT completion before the client sees it.
     public sealed class CommitAcknowledgementProxy : IAsyncDisposable

@@ -1,6 +1,8 @@
 using AuditPlatform.Api.Configuration;
 using AuditPlatform.Api.Data;
 using AuditPlatform.Api.Health;
+using AuditPlatform.Api.Logging;
+using AuditPlatform.Api.Middleware;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -27,9 +29,17 @@ builder.Services.AddSingleton<PostgresDataSourceFactory>();
 builder.Services.AddSingleton<PostgresTransactions>();
 builder.Services.AddSingleton<PostgresReadSnapshot>();
 builder.Services.AddSingleton<PostgresReadinessCheck>();
+builder.Services.AddOptions<LogPersistenceOptions>()
+    .Bind(builder.Configuration.GetSection(LogPersistenceOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+builder.Services.AddSingleton<LogSanitizer>();
+builder.Services.AddSingleton<PostgresAuditWriter>();
+builder.Services.AddSingleton<DiagnosticErrorLogger>();
 
 var app = builder.Build();
 
+app.UseMiddleware<ExceptionLoggingMiddleware>();
 app.MapControllers();
 
 try
