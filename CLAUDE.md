@@ -269,6 +269,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-11: Planned tenant and audit-firm collaboration foundations before P08; detailed workflow decisions pending. See CHANGELOG_ARCHIVE.md, Tenant collaboration plan.
 - 2026-11-11: Added disabled .NET authentication and guarded session checks; locally accepted. See CHANGELOG_ARCHIVE.md, .NET authentication P07.
 - 2026-11-10: Data Bank renders datasets before all-time metrics and derives client size from grouped estimates; local acceptance pending. See CHANGELOG_ARCHIVE.md, Data Bank first-render performance.
 - 2026-11-10: Compressed older Status entries into concise archive pointers, restoring the log budget.

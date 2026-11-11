@@ -1,6 +1,6 @@
 # P02 Migration Contracts
 
-Version 2: Aadil approved full C# reporting and reports-before-audit sequencing on 2026-11-11, revising the version-1 targets accepted on 2026-11-10. The [P01 inventory](MIGRATION_BASELINE.md) and [source hashes](migration-baseline.json) remain historical evidence. Implementation retains phase-specific approval and runtime parity checks.
+Version 3: P07A–P07C precede P08 to address tenant and audit-firm collaboration; detailed business rules remain open. The [P01 inventory](MIGRATION_BASELINE.md) and [source hashes](migration-baseline.json) remain historical evidence. Phase-specific approvals and runtime parity checks still apply.
 
 ## 1. Status and scope
 
@@ -22,12 +22,20 @@ The inventory contains 325 HTTP declarations, 324 unique method/path pairs, and 
 | Failures | Distinguish HTTP failure from HTTP 200 business rejection. Preserve detail strings/objects, row/column errors, conflict/revalidate guidance, download headers, and safe user messages. |
 | Reads/writes | Current api_utils.js retries eligible GET failures once; mutations are not retried. Preserve safe-read behavior; reconcile uncertain write outcomes instead of replaying writes blindly. |
 | Identity | Initially share session_token, existing users/sessions, bcrypt hashes, the 10-hour expiry, and session-selected client. No forced ID/hash rewrite. |
-| Authorization | Enforce active authenticated users, roles, client context, and object ownership on protected operations. Selected client is context, not a new per-user client-membership permission model. |
+| Authorization | Enforce active user, tenant membership, role, engagement assignment, approved sharing and object scope as applicable. Client selection is context, never proof of permission. |
 | Firm administration | Keep administrator-only user/client mutations, setup, backups, and protected settings. Explicit firm-level routes need no selected client; client-scoped operations need validated scope. Verify administrator report-route exceptions individually. |
 | Security changes | Secure production cookies, CSRF protection, inactive-user rejection on protected requests, and consistent guards are target hardening. Current login rejects inactive users, but get_current_user does not recheck is_active; coordinate browser changes in P07 rather than claim existing parity. |
 | Public surfaces | Login and intended health/public-information pages remain explicitly public. Missing static authorization evidence is not permission to expose an endpoint; review indirect guards before cutover. |
 
 High-risk request fixtures must cover login/current-client; ImportRequest; multipart Trial Balance validation/import; the embedded Verification save-and-verify bundle; and CashflowExportRequest's expected_fingerprint/expected_identity. Sources: [auth](../routers/auth.py), [uploads](../routers/import_export.py), [Trial Balance](../routers/trial_balance.py), [Verification](../routers/verification.py), [reports](../routers/reconciliation.py), [fetch utility](../static/api_utils.js).
+
+### Tenant and collaboration direction
+
+- A business or CA firm can be a tenant. Business users can include directors/CEO; firm users can include administrators, managers and internees. A firm can serve multiple businesses and engagements.
+- An authorized business–firm relationship permits controlled collaboration on a defined engagement. Assigned audit staff and permitted business users see only the scope approved for them; membership or client selection alone grants no engagement access.
+- P07A maps the real workflow and decides ownership, existing-data mapping, consent/revocation, assignments, CEO visibility and when data is called verified. No automatic publication or sharing rule is assumed.
+- P07B/P07C follow separately approved scopes. Preserve canonical transaction/history contracts, legacy compatibility and one active writer; rehearse migrations/rollback in isolated databases before any shared-schema execution.
+- Every migrated operation, report, cache, job, export and download must enforce and carry the applicable authorized tenant/engagement context; prevent stale access after revocation. Reconcile safeguards across Python/.NET before switching routes.
 
 ## 3. PostgreSQL and financial values
 
@@ -106,7 +114,8 @@ Proposed job states are queued, preparing_inputs, running, succeeded, failed, ca
 | Phase band | Entry condition and compatibility bridge |
 |---|---|
 | P03–P06 | Retain accepted foundations. Shared-schema execution still needs catalog/capacity evidence, ownership and rollback proof. P06 proves explicit legacy/.NET routing with stubs; no Python report-service client. |
-| P07–P15 | Session/client/role behavior must be consistent across both applications before public route switches. Capture current request/response fixtures and verify configuration guards. |
+| P07A–P07C, before P08 | Agree collaboration rules first; separately approve and rehearse tenant and sharing foundations. Preserve P07 acceptance and existing data; no public switch before proven cross-application authorization. |
+| P08–P15 | Tenant membership, engagement assignment, sharing and session/client/role behavior must be consistent across both applications before route switches. Capture response fixtures and verify configuration guards. |
 | P16–P29 | Valid client/template/mapping inputs and shared transactions are prerequisites. Settle capacity implementation, hash vectors, coverage/Footing policy, and source revision invalidation before enabling imports. |
 | P30–P40 | Preserve existing Verification/evidence references during purge and both consumers during setup changes. P37 brings forward minimum statement/context calculation for profit confirmation; P38 preserves classification/preparation/revision effects; P39 retains vendor workstream assignments read by Cashflows. |
 | P53A–P56, after P40 | Execute eight report steps in the plan: inputs/precision, statements, Notes, Cashflows, reconciliation/evidence, APIs/screens, workbooks and jobs/acceptance. Reuse P37's proven helper; compare source controls, legacy results and exported evidence before switching each operation. |
@@ -114,7 +123,7 @@ Proposed job states are queued, preparing_inputs, running, succeeded, failed, ca
 | P46–P52 | Rulebook/assignment contracts and evidence IDs must already match. Test frozen histories, concurrent edits, and shared-modal behavior before switching writes. |
 | P57–P63 | Reconcile audit/Drive/backup dependencies, full acceptance evidence, deployment/storage limits, and rollback rehearsal before retiring old modules. |
 
-IDs remain stable; execution is P06 → P07–P40 → P53A–P56 → P41–P52 → P57–P63. During coexistence, legacy endpoints retain their existing Python execution/database path until accepted replacements take ownership. P06 is a migration bridge, not a permanent reporting dependency. Pull forward a bounded prerequisite or retain the whole legacy operation when a later dependency blocks safe switching; never introduce an unapproved Python helper service.
+IDs remain stable; execution is P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 → P41–P52 → P57–P63. During coexistence, legacy endpoints retain their existing Python execution/database path until accepted replacements take ownership. P06 is a migration bridge, not a permanent reporting dependency. Pull forward a bounded prerequisite or retain the whole legacy operation when a later dependency blocks safe switching; never introduce an unapproved Python helper service.
 
 Each operation/scope has one active writer. Shadow comparisons use isolated data, not duplicate production imports. Keep shared schemas backward-compatible; reconcile uncertain commits before routing back, never fail over by replaying a write. Rollback never deletes history, drops required columns or overwrites newer unrelated work. Destructive retirement needs protected backups and explicit acceptance/authorization.
 
@@ -124,7 +133,7 @@ Expected results come from independent source controls plus the captured existin
 
 | Set | Required comparisons |
 |---|---|
-| G01 — API/access | Exact route fields/types/status/error/download shapes; expired/inactive sessions, admin boundaries, selected-client mismatch, and foreign object IDs. |
+| G01 — API/access | Exact API shapes; expired/inactive sessions, both tenant types, membership, assigned/unassigned staff, sharing and revocation, tenant/client mismatch and foreign object IDs. |
 | G02 — Cells/amounts | XLS/XLSX native/text/serial dates, formulas/errors, Unicode, leading-zero codes, exact rates, trailing-zero equivalence, blank versus zero, nonfinite input, and row order. |
 | G03 — Source controls | Footing differences below/at/above 0.01 and 1.00, confirmed control rows, full coverage, optional fields, rejected exclusions, and empty-period confirmation. |
 | G04 — Identity/history | Original/repeated/renamed/reordered inputs; explicit IDs, identical repeated lines, unique corrections, ambiguity, full/partial removal, exact history and receipt counts. |
@@ -132,7 +141,7 @@ Expected results come from independent source controls plus the captured existin
 | G06 — Trial Balance/setup | Hierarchy and code corrections, period overwrite, mappings, independent report/Verification classifications, profit context, and missing balance evidence. |
 | G07 — Rules/Verification | Rule compilation/versioning, all status gates, evidence/Forms/procedures/observations, save/verify concurrency, session ranges, and historical result protection. |
 | G08 — Financial reports | C# versus independent source controls and legacy Cashflows/Treasury views, selections, periods, gross sides/adjustments, statements/Notes, evidence and workbook cells; include numeric bounds, rounding/overflow, large amounts and repeated fractions. |
-| G09 — Jobs/freshness | Source/config changes, mixed/missing inputs, corrupt artifacts, worker restart, cancellation, expiry, concurrent users, and cold/warm cache behavior. |
+| G09 — Jobs/freshness | Authorized tenant/engagement scope and revocation across caches/jobs/downloads; source/config changes, corrupt artifacts, restart, cancellation, expiry and concurrency. |
 | G10 — Operations | Current/history exports, guarded purge, restored schema/data/security/sequence checks, credential expiry/reconnect, and legacy URL compatibility. |
 
 P03 establishes the isolated .NET harness; each port phase adds its relevant fixtures, with P61 cross-module acceptance. Existing Python test functions and archived pass counts identify coverage, not a current executable baseline. Performance targets require source-backed timings in comparable environments.

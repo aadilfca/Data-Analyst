@@ -33,7 +33,7 @@ Plan dated 2026-11-10; Aadil approved full C# reporting and reports-before-audit
 
 ## Phased implementation plan
 
-Execution order: P06 → P07–P40 → P53A–P56 (reports) → P41–P52 (audit modules) → P57–P63. Existing IDs remain stable for cross-references; table order is execution order. P02 records dependencies; each file list must identify callers/prerequisites. Split work before approval when necessary; each row supplements the shared completion gate.
+Execution order: P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 (reports) → P41–P52 (audit modules) → P57–P63. Existing IDs remain stable; P02 records dependencies. P07A settles business rules before later foundation scope is approved.
 
 | Phase / area | Bounded work and acceptance condition |
 |---|---|
@@ -47,9 +47,12 @@ Execution order: P06 → P07–P40 → P53A–P56 (reports) → P41–P52 (audit
 | P05C — Historical logs | Accepted by Aadil: guarded synthetic reconciliation, source/target checkpoints, ID/time mappings and recovery; 112 local tests pass. Actual data transfer/handoff retain separate approval. |
 | P06 — Coexistence | Accepted by Aadil: [routing contract](COEXISTENCE_CONTRACT.md), explicit ownership, default access block and bounded local forwarding; 175 serial tests pass (63 new). Public switching waits for P07; uncertain writes are never replayed. |
 | P07 — Authentication | Locally accepted behind disabled settings. See CHANGELOG_ARCHIVE.md, .NET authentication P07. |
-| P08 — User management | Port users, roles, activation, password reset, and session invalidation; verify administrator controls against the agreed account policy. |
-| P09 — Clients | Port client CRUD, selection, pagination, and scope enforcement; verify permitted workflows and cross-client rejection. |
-| P10 — Application shell | Host existing assets and navigation through ASP.NET Core; verify login redirects, client context, bookmarks, and cache behavior. |
+| P07A — Collaboration contract | Map business–firm workflow; agree ownership, tenant membership, engagement assignments, sharing, CEO visibility, verified meaning, consent and revocation before implementation. |
+| P07B — Tenant foundation | After P07A, separately approve scope/files for tenant identity, isolation and safe legacy-data mapping; rehearse migration and rollback in isolation. |
+| P07C — Engagement/sharing foundation | After P07A, separately approve scope/files for engagement relationships, team assignment and sharing authorization; dependent features follow their module phases. |
+| P08 — User management | Port tenant-aware users, roles, activation, password reset and session invalidation; verify membership and administrator boundaries. |
+| P09 — Clients | Port business/client records, selection and pagination with tenant, assignment and shared-engagement scope; reject unauthorized access. |
+| P10 — Application shell | Host existing assets; verify login, tenant/client context, approved sharing, navigation, bookmarks and caches. |
 | P11 — Global settings | Port settings, holidays, date/amount formats, and administrator controls; verify existing pages use the saved values. |
 | P12 — Reusable columns | Port master-column CRUD, roles, and dependency checks; verify references survive supported edits and deletions remain guarded. |
 | P13 — Templates | Port templates, ordered mappings, purposes, comparison settings, and configuration locks; verify current template behavior. |
@@ -112,7 +115,7 @@ Execution order: P06 → P07–P40 → P53A–P56 (reports) → P41–P52 (audit
 
 - Start each phase by confirming exact files and approach under the root workflow; a table row is a planning candidate, not permission to edit.
 - Establish baseline failures and known issues before comparisons. Use isolated PostgreSQL, synthetic clients, and controlled workbook copies; preserve originals and existing user changes.
-- Verify API/UI compatibility, accounting totals, client isolation, no-write rejection, concurrency, recovery, and report parity where relevant. Acceptance evidence must identify environmental limits.
+- Verify API/UI compatibility, accounting totals, tenant/engagement isolation and authorized sharing, no-write rejection, concurrency, recovery and report parity where relevant. Acceptance evidence identifies environmental limits.
 - Finish with `Change Required` / `Developed As`, pending items including `This phase`, and 4–5 practical test points; identify backend-only checks Aadil can review without repeating.
 - Wait for Aadil's local acceptance and explicit authorization before staging, committing, or pushing; use the approved commit message.
 - Keep this plan current by rewriting phase status in place. Put detailed evidence/history in the approved project history location; record code-health findings in `KNOWN_ISSUES.md` only with confirmed scope.

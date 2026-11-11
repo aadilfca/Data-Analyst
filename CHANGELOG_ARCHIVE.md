@@ -9646,3 +9646,7 @@ Reports/nav versions are 63/25 across all 19 shared navigation consumers; other 
 
 Added disabled-by-default shared-session login/logout, active-user checks, bcrypt compatibility, origin validation and a conservative coexistence gate. Login/logout audit writes share their PostgreSQL transaction; approved BCrypt.Net-Next 4.2.0 supplies password verification. Client-scoped bridge routes remain blocked pending operation-specific authorization. Python and the uncommitted import/export change are preserved. Locally accepted; deployed schema, public routing and browser workflow remain separate gates.
 Release build passed; an earlier serial regression run passed 185 tests, and the final authentication-focused run passed 11 tests against owned local PostgreSQL fixtures. Final additions after the full run were verified by the focused run.
+
+## Tenant collaboration plan — 2026-11-11
+
+Inserted P07A–P07C before P08 for business/CA-firm tenancy, engagement teams and controlled collaboration. Detailed ownership, sharing, visibility and verification rules await P07A; later implementation and schema changes retain separate approvals and isolated rehearsals. Preserved P07 acceptance, legacy rollback, transaction/history contracts and the unresolved 400/500 MB policy alignment. Documentation-only; no application or database change.
