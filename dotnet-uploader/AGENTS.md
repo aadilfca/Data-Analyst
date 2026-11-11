@@ -51,7 +51,7 @@ Execution order: P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 (repor
 | P07B — Tenant foundation | Candidate schema and membership lookup locally accepted; shared-schema execution and module access remain separate gates. |
 | P07C — Engagement/sharing foundation | Candidate firm engagements and team eligibility locally accepted. Sharing, action permissions and shared-schema execution remain separately gated. |
 | P08 — User management | Tenant-scoped backend and disabled API locally accepted. Shared schema, tenant selection and cutover remain gated. |
-| P09 — Clients | Port business/client records, selection and pagination with tenant, assignment and shared-engagement scope; reject unauthorized access. |
+| P09 — Clients | Disabled home-workspace CRUD, pagination and guarded selection locally accepted. Sharing, tenant selection and cutover remain gated. |
 | P10 — Application shell | Host existing assets; verify login, tenant/client context, approved sharing, navigation, bookmarks and caches. |
 | P11 — Global settings | Port settings, holidays, date/amount formats, and administrator controls; verify existing pages use the saved values. |
 | P12 — Reusable columns | Port master-column CRUD, roles, and dependency checks; verify references survive supported edits and deletions remain guarded. |
@@ -159,6 +159,7 @@ $env:NUGET_PACKAGES = "$PWD\.tools\packages"
 - P07B's candidate `database/migrations/0003_tenant_foundation.sql` runs only in owned isolated fixtures; startup never applies it. It seeds no records, and repeat application fails safely. Membership lookup grants no client or engagement access.
 - P07C's candidate `database/migrations/0004_engagement_foundation.sql` is isolated-fixture only; startup never applies it. Team eligibility grants no client access or action permission.
 - P08's `database/migrations/0005_tenant_user_roles.sql` is fixture-only and grants no admin automatically. `UserManagement__Enabled` defaults false; tenant mapping, multi-tenant selection and Python parity precede any activation.
+- P09's `ClientManagement__Enabled` defaults false; it changes no schema. See MIGRATION_CONTRACTS.md, P09 isolated tenant clients, for record/selection permissions and activation gates.
 - `Platform__ApplicationName` and `Platform__DatabaseCapacityLimitBytes` override non-secret defaults. Invalid settings exit with code 1 before listening; the 500,000,000-byte setting is configuration only until capacity enforcement is ported.
 - Supply future secrets through approved environment/secret-store configuration, never appsettings.json, launch settings, or logs. Private settings files, SDKs, caches, and build outputs are ignored.
 - Windows 10 Pro 22H2 is outside the current .NET 10 supported-OS list. Aadil approved local development with this limitation; a local pass does not certify supported production hosting. P62 validates deployment separately.

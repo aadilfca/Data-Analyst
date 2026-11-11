@@ -7,6 +7,7 @@ using AuditPlatform.Api.Logging;
 using AuditPlatform.Api.Middleware;
 using AuditPlatform.Api.Tenancy;
 using AuditPlatform.Api.Users;
+using AuditPlatform.Api.Clients;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -60,6 +61,9 @@ builder.Services.AddSingleton<AuthenticationService>();
 builder.Services.AddSingleton<TenantContextResolver>();
 builder.Services.AddSingleton<EngagementAccessResolver>();
 builder.Services.AddSingleton<TenantUserService>();
+builder.Services.AddOptions<ClientManagementOptions>()
+    .Bind(builder.Configuration.GetSection(ClientManagementOptions.SectionName)).ValidateOnStart();
+builder.Services.AddSingleton<TenantClientService>();
 
 var app = builder.Build();
 // Invalid/duplicate registrations fail before listening. Production currently
@@ -72,6 +76,7 @@ app.UseMiddleware<SessionAuthenticationHandler>();
 app.UseWhen(context => context.RequestServices.GetRequiredService<IOptions<AuthenticationOptions>>().Value.Enabled
     && (context.Request.Path.StartsWithSegments("/api/auth")
     || context.Request.Path.StartsWithSegments("/api/users")
+    || context.Request.Path.StartsWithSegments("/api/clients")
     || (context.RequestServices.GetRequiredService<IOptions<CoexistenceOptions>>().Value.Enabled
         && context.RequestServices.GetRequiredService<CoexistenceRouteTable>()
             .Find(context.Request.Method, context.Request.Path.Value ?? "") is not null)),

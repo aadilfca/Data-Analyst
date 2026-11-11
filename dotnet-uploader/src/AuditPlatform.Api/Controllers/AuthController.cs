@@ -1,5 +1,6 @@
 using AuditPlatform.Api.Authentication;
 using AuditPlatform.Api.Configuration;
+using AuditPlatform.Api.Clients;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 
@@ -7,7 +8,8 @@ namespace AuditPlatform.Api.Controllers;
 
 [ApiController]
 [Route("api/auth")]
-public sealed class AuthController(PostgresSessionStore sessions, IOptions<AuthenticationOptions> options) : ControllerBase
+public sealed class AuthController(PostgresSessionStore sessions, IOptions<AuthenticationOptions> options,
+    TenantClientService clients, IOptions<ClientManagementOptions> clientOptions) : ControllerBase
 {
     public sealed record LoginRequest(string Username, string Password);
 
@@ -41,14 +43,39 @@ public sealed class AuthController(PostgresSessionStore sessions, IOptions<Authe
     }
 
     [HttpGet("current-client")]
-    public IActionResult CurrentClient()
+    public async Task<IActionResult> CurrentClient(CancellationToken cancellationToken)
     {
         if (!options.Value.Enabled) return StatusCode(503);
         if (HttpContext.Items[typeof(VerifiedSession)] is not VerifiedSession session)
             return Unauthorized(new { detail = HttpContext.Items.ContainsKey("expired-session")
                 ? "Session expired" : "Not authenticated" });
         Response.Headers.CacheControl = "no-store";
+        if (clientOptions.Value.Enabled)
+        {
+            var result = await clients.SelectionAsync(session, null, cancellationToken);
+            if (result.Status != ClientStatus.Success)
+                return StatusCode(ClientsController.Status(result.Status), new { detail = ClientsController.Message(result.Status) });
+            var client = result.Clients!.FirstOrDefault();
+            return Ok(new { client_id = (int?)client?.Id, client_name = client?.Profile.Name,
+                client_code = client?.Profile.Code, username = result.Username });
+        }
         return Ok(new { client_id = session.ClientId, client_name = session.ClientName,
             client_code = session.ClientCode, username = session.Username });
+    }
+
+    public sealed record SelectClientInput([property: System.Text.Json.Serialization.JsonPropertyName("client_id")] int ClientId);
+
+    [HttpPut("select-client")]
+    public async Task<IActionResult> SelectClient([FromBody] SelectClientInput input, CancellationToken cancellationToken)
+    {
+        if (!options.Value.Enabled || !clientOptions.Value.Enabled) return StatusCode(503);
+        if (HttpContext.Items[typeof(VerifiedSession)] is not VerifiedSession session)
+            return Unauthorized(new { detail = "Not authenticated" });
+        Response.Headers.CacheControl = "no-store";
+        var result = await clients.SelectionAsync(session, input.ClientId, cancellationToken);
+        if (result.Status != ClientStatus.Success)
+            return StatusCode(ClientsController.Status(result.Status), new { detail = ClientsController.Message(result.Status) });
+        var client = result.Clients![0];
+        return Ok(new { success = true, client_id = client.Id, client_name = client.Profile.Name, client_code = client.Profile.Code });
     }
 }

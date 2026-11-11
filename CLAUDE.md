@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- dotnet-uploader/ → .NET migration foundation, guarded authentication, disabled tenant user management, tenant/engagement rehearsals and audit persistence. See CHANGELOG_ARCHIVE.md.
+- dotnet-uploader/ → .NET foundation, guarded authentication, disabled tenant user/client management, engagement rehearsals and audit persistence. See CHANGELOG_ARCHIVE.md.
 
 - routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, statements, category-role notes with unallocated rows, profit links, reconciliations, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
 
@@ -269,6 +269,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-11: Added disabled tenant-scoped .NET client management and guarded selection; locally accepted. See CHANGELOG_ARCHIVE.md, Tenant clients P09.
 - 2026-11-11: Added disabled tenant-scoped .NET user management; locally accepted. See CHANGELOG_ARCHIVE.md, Tenant users P08.
 - 2026-11-11: Added isolated engagement and audit-team eligibility foundation; locally accepted. See CHANGELOG_ARCHIVE.md, Engagement foundation P07C.
 - 2026-11-11: Added isolated .NET tenant foundation and guarded membership lookup; locally accepted. See CHANGELOG_ARCHIVE.md, Tenant foundation P07B.

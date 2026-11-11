@@ -9676,3 +9676,11 @@ Added a default-off tenant user API/service with a fixture-only tenant-role migr
 Release build and full serial suite passed (189 tests). The final expanded isolated P08 test also passed, covering API/CSRF, tenant boundaries, shared identities, audit rollback, password redaction, session invalidation and candidate SQL rollback. Python fixture checks confirmed legacy missing-field 422 responses; .NET redacts request bodies, and full error/validation parity remains a cutover gate. No deployed schema or live tenant authorization was verified.
 
 Aadil tested the P08 workflow locally and accepted it. Added a reviewable P07A Q&A record to MIGRATION_CONTRACTS.md so the original answers and deferred decisions can be revisited before policy-dependent work.
+
+## Tenant clients P09 — 2026-11-11
+
+Added disabled client CRUD, search/pagination and session client selection. Tenant administrators manage only home-workspace records; active assigned audit staff may list/select eligible clients. These permissions grant no transaction/report access or business–firm sharing. Count/page share one SQL snapshot; legacy global client-code uniqueness remains with non-disclosing conflict messages. Client/home writes, soft deletion/restoration, selection and mandatory audit are atomic; current-client rechecks live access and clears revoked selections. No schema, live rows, legacy UI or uncommitted upload code changed; permanent purge stays P33.
+
+Activation still requires catalog/mapping, tenant selection, cross-backend enforcement, complete validation/error/timestamp parity and browser acceptance. Aadil confirmed the old app works and locally accepted P09.
+
+Release build passed without warnings/errors; the full serial suite passed 190 tests. P09 fixtures cover both tenant types, staff assignment/engagement revocation, forged tenant headers, expired/inactive sessions, scoped pagination including empty pages, global-code concurrency, API CRUD/CSRF, stale selection and mandatory-audit rollback. The initial sandbox run could not start pg_ctl; permitted local execution passed using owned synthetic loopback databases. No deployed schema, data or live authorization was verified.

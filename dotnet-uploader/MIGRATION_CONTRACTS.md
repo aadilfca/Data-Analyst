@@ -98,6 +98,14 @@ This list records discussion, not blanket authorization to activate policies. Re
 - Writes and tenant-attributed audits share a transaction. Existing Python last-admin behavior remains unchanged; the absence of a last-admin safeguard is a known limitation. Invalid request details redact bodies that may contain passwords.
 - Current validation caps usernames at 256 UTF-16 units and passwords at 72 UTF-8 bytes; legacy compatibility and historical values require review. Invalid-request details redact raw input. Shared schema/catalog and explicit administrator mapping, complete legacy response parity, multi-tenant selection, cross-backend session enforcement, UI acceptance and separate activation approval precede cutover. Python remains the active user-management implementation.
 
+### P09 isolated tenant clients
+
+- Default-off native client CRUD/search/pagination and selection use exactly one active tenant membership; ambiguous memberships require P10's trusted picker. Tenant headers, global roles and cached selected-client claims grant no access.
+- Tenant administrators manage only home-workspace client records. Assigned active audit staff may list/select active clients through an active engagement; this specific permission grants no report/data access. Business members and cross-tenant sharing await explicit policies; business administrators manage their home records.
+- Preserve global client-code uniqueness, optional profile fields, list shape, unpaged legacy calls and paged X-Total-Count. Count/page share one SQL snapshot. Duplicate-code errors omit other-tenant details; full validation/error/timestamp parity remains an activation gate.
+- Client creation/home association, edits, soft deletion/restoration, session selection and tenant-attributed audit writes are atomic. Inactive clients clear saved selections; current-client rechecks access and clears revoked selections. No permanent deletion, shared-data access or automatic engagement/assignment creation is implemented.
+- No schema/data migration is executed. Catalog/mapping, cross-backend authorization, client-card/admin UI acceptance, sharing policies where needed and explicit activation approval precede live routing. P09 is locally accepted behind disabled settings; Python stays active.
+
 ## 3. PostgreSQL and financial values
 
 | Contract | Required behavior |
