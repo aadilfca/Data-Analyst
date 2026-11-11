@@ -2,9 +2,9 @@
 
 ## Purpose and status
 
-Migrate the complete Python application backend to ASP.NET Core/C#, retaining Python for financial report calculations and report generation. The folder remains `dotnet-uploader/`; `AuditPlatform.Api` now provides the service foundation. Existing browser assets move to ASP.NET Core in later phases; .NET supplies report data to Python.
+Migrate the complete application backend, financial calculations, reports, Excel exports and jobs to ASP.NET Core/C#. The folder remains `dotnet-uploader/`; `AuditPlatform.Api` provides the service foundation. Retain existing HTML/CSS/JavaScript. Python remains the working comparison/rollback application until each replacement is accepted; no separate Python report service is planned.
 
-Plan dated 2026-11-10. P01–P05C are accepted; see [MIGRATION_BASELINE.md](MIGRATION_BASELINE.md), [migration-baseline.json](migration-baseline.json), and [MIGRATION_CONTRACTS.md](MIGRATION_CONTRACTS.md). P06–P63 remain pending. Each implementation phase requires file/approach approval. Preserve the working Python app throughout staged replacement.
+Plan dated 2026-11-10; Aadil approved full C# reporting and reports-before-audit sequencing on 2026-11-11. P01–P05C are accepted; see [MIGRATION_BASELINE.md](MIGRATION_BASELINE.md), [migration-baseline.json](migration-baseline.json), and [current contracts](MIGRATION_CONTRACTS.md). The current ownership decision supersedes P01's historical ownership proposals. P06 onward remains pending; each implementation phase requires file/approach approval.
 
 ## Agreed technology direction
 
@@ -14,6 +14,7 @@ Plan dated 2026-11-10. P01–P05C are accepted; see [MIGRATION_BASELINE.md](MIGR
 - **Data contract:** `client_data` remains the only current transaction store; keep raw values and report-required derived fields together. `client_data_history` retains prior changed/deleted row snapshots. Do not add durable full-row transaction copies.
 - **Capacity:** Aadil selected the 500 MB Free-plan ceiling; [P02 C01](MIGRATION_CONTRACTS.md) defines projected-total checks. Existing Python/root-guide 400 MB rules await separately approved alignment.
 - **Excel:** evaluate ExcelDataReader's row reader for `.xls` and `.xlsx`. Confirm current date, formula-result, Excel-error, source-order, mapping, and Footing behavior against representative workbooks before locking the library.
+- **Reports:** use scoped PostgreSQL queries and typed C# calculation services. Approve monetary range/scale and rounding before numeric ports; Python statements currently calculate at 50-digit precision. Evaluate .NET workbook writers against existing large exports before package approval.
 - **Schema:** use reviewed, versioned PostgreSQL SQL migrations for approved additive changes. Keep one schema owner for each change; the new service must not run unreviewed schema changes at startup.
 - **Long uploads:** use durable PostgreSQL job state with a .NET worker. Persist owner, stage, progress, attempts, and recovery state; make every import step safe to retry. An in-memory queue alone is not durable.
 - **Staged workbooks:** if jobs must survive a restart or deploy, use private, short-retention object storage. Never put client workbooks or database backups in Git. Render's service filesystem is ephemeral by default.
@@ -23,17 +24,16 @@ Plan dated 2026-11-10. P01–P05C are accepted; see [MIGRATION_BASELINE.md](MIGR
 
 ## Ownership and report boundary
 
-- .NET owns authentication, users, clients, settings, uploads, database retrieval/writes, Trial Balance, assignments, Audit Rules, Verification, Data Bank, backups, and public API/job/download coordination.
-- Python retains Cashflows, Financial Statements, Notes, reconciliation calculations, report-specific transformations, and financial workbook generation. Confirm the exact function boundary in P02; files currently mix these responsibilities.
-- Report-related configuration and database queries move to .NET. Python reporting must eventually receive explicit inputs without importing application routers or database helpers. Preserve proven SQL selection/aggregation semantics during extraction.
-- Report requests flow from browser to .NET, then to a private Python report service. .NET supplies authorized inputs containing client, period, accounts, configuration, source revision, and contract version; Python returns results or artifacts.
-- Read all report inputs from a consistent snapshot. Stream large inputs or use private expiring artifacts with completeness/hash checks; preserve decimal precision, dates, nulls, ordering, and line multiplicity. No durable transaction mirrors.
-- .NET owns report job access and public progress/download APIs; Python owns calculation/rendering execution. Existing Python export jobs use local files and OS locks, so cross-host coordination requires an explicit replacement design.
+- .NET owns all backend behavior, including Cashflows, statements, Notes, reconciliations, report transformations, financial workbooks and job/download coordination.
+- Vendor/customer, expense and sales quantitative reports also belong in C# when separately specified; this migration does not authorize new reports. Future AI/statistical features need their own evidence and integration decision.
+- Report requests stay within .NET: authorized query/snapshot services supply typed inputs to calculation and export services. Preserve existing SQL selection/aggregation semantics, accounting controls and public responses; no Python HTTP client or report protocol is required.
+- Capture related inputs in one consistent snapshot; close it before long calculations or exports. Bound memory and temporary private artifacts; preserve precision, dates, nulls, ordering and repeated lines. No durable transaction mirrors.
+- Replace Python's local-file/OS-lock export coordination with durable .NET job ownership, bounded concurrency, recovery and expiry. Keep legacy exports active until their replacements pass acceptance.
 - Give each production operation/scope one active writer during coexistence. Use isolated databases for comparison imports; route a module only after acceptance and preserve rollback compatibility.
 
 ## Phased implementation plan
 
-Numbers describe the default sequence. P02 records dependencies; subsequent file lists must identify affected callers and prerequisites. Split a phase before implementation if it cannot be reviewed and tested as one bounded change. Each acceptance condition supplements the shared completion gate below.
+Execution order: P06 → P07–P40 → P53A–P56 (reports) → P41–P52 (audit modules) → P57–P63. Existing IDs remain stable for cross-references; table order is execution order. P02 records dependencies; each file list must identify callers/prerequisites. Split work before approval when necessary; each row supplements the shared completion gate.
 
 | Phase / area | Bounded work and acceptance condition |
 |---|---|
@@ -45,7 +45,7 @@ Numbers describe the default sequence. P02 records dependencies; subsequent file
 | P05A — Audit/error contract | Accepted by Aadil: [record, attribution, privacy and failure contract](AUDIT_ERROR_CONTRACT.md). Existing source reviewed; deployed records remain unverified. |
 | P05B — Audit/error persistence | Accepted by Aadil: required audit writes, bounded diagnostic logging and safe middleware; 90 isolated tests pass. Candidate SQL remains gated from shared-schema execution. |
 | P05C — Historical logs | Accepted by Aadil: guarded synthetic reconciliation, source/target checkpoints, ID/time mappings and recovery; 112 local tests pass. Actual data transfer/handoff retain separate approval. |
-| P06 — Coexistence | Establish same-origin route switching and a private report-service client contract; demonstrate routing, authorization, and fallback with stubbed responses. |
+| P06 — Coexistence | Prove explicit same-origin legacy/.NET route ownership and controlled rollback with stubs; no Python report-service client. Public switching waits for P07 access/session parity; uncertain writes are reconciled, never replayed to another backend. |
 | P07 — Authentication | Port login/logout, bcrypt compatibility, expiry, cookie/CSRF behavior, and inactive-user checks; verify session compatibility and rejection cases. |
 | P08 — User management | Port users, roles, activation, password reset, and session invalidation; verify administrator controls against the agreed account policy. |
 | P09 — Clients | Port client CRUD, selection, pagination, and scope enforcement; verify permitted workflows and cross-client rejection. |
@@ -76,10 +76,18 @@ Numbers describe the default sequence. P02 records dependencies; subsequent file
 | P34 — Trial Balance parsing | Port workbook mappings, source validation, totals, and review issues; compare golden Trial Balance inputs and rejected rows. |
 | P35 — Trial Balance storage | Port period conflicts, confirmed replacement, hierarchy, uploads, and deletion dependencies; verify atomic replacement and historical scope. |
 | P36 — Trial Balance review | Port strict code corrections, classifications, summaries, and assignment reads; verify existing review screens and safeguards. |
-| P37 — Statement setup | Port FS/Note categories, outlines, calculations, account mappings, profit linking, and source-bound confirmations; verify configuration and accounting controls. |
-| P38 — Cashflow setup | Port Treasury accounts, category assignments, source/column roles, and report settings; verify revision changes and account-specific scope. |
-| P39 — Verification setup | Port workstream assignments and account-set draft/preview/publication; verify version and account-code boundaries. |
+| P37 — Statement setup | Port FS/Note configuration, mappings and profit links; bring forward the minimum statement/context calculation needed for source-bound profit confirmation. Verify it against the legacy engine before switching that operation. |
+| P38 — Cashflow setup | Port Treasury accounts, assignments, roles and settings; preserve classification/preparation, revision and invalidation effects for both active consumers before switching writes. |
+| P39 — Verification setup | Port workstream assignments and account-set draft/preview/publication; preserve vendor-account identification used by Cashflows. This metadata precedes reports; Verification execution follows them. |
 | P40 — Reconciliation setup | Port account groups, monthly balance inputs, report category sets, and assignments; verify scoped replacement, missing evidence, and independent classifications. |
+| P53A — Report inputs/precision | Port scoped canonical queries, typed inputs, source/configuration identity and snapshot completeness; prove amount/rate range, scale, rounding and lossless overflow handling against source controls. |
+| P53B — Financial statements | Port Balance Sheet/Income Statement engines, hierarchy, comparatives, signs, subtotals, profit and transfer controls; reuse P37's proven prerequisite and compare golden results. |
+| P53C — Statement Notes | Port nested Notes, category roles, unallocated balances and statement reconciliation; verify current/comparative totals and presentation. |
+| P54A — Cashflows | Port periods, Treasury/account selections, classifications, signed reversals, transfers and net/gross presentation; compare amounts, line multiplicity and allocation controls. |
+| P54B — Reconciliation/evidence | Port independent balances, posting differences, adjustments, drilldowns and voucher completeness; preserve missing evidence and selected-account boundaries. |
+| P55A — Report APIs/screens | Connect C# engines to existing public report APIs/screens; verify response shapes, scope, freshness, cache invalidation and interactive performance. Heavy exports retain legacy ownership until P56. |
+| P55B — Financial workbooks | Port financial XLSX layouts, exact values, literal-text safety, complete evidence and bounded writing; compare cells/control totals and measure memory on large workbooks before activation. |
+| P56 — Report jobs/acceptance | Run C# generation through durable owner-scoped jobs/progress/download APIs; prove concurrency, cancellation, expiry, restart recovery and end-to-end screen/workbook parity before switching exports. |
 | P41 — Rule documents | Port Audit Rule Documents, fields, authorization roles, Forms definitions, and specimens; verify references and soft-delete behavior. |
 | P42 — Cross-check authoring | Port matrix rows, document/field cells, ordering, and validation; compare saved definitions with the Python baseline. |
 | P43 — Rule categories | Port Categories, Assertions, Voucher Checks, memberships, and flags; verify dependencies and inactive-configuration handling. |
@@ -92,10 +100,6 @@ Numbers describe the default sequence. P02 records dependencies; subsequent file
 | P50 — Procedures | Port procedure checks and observation synchronization; verify per-line completion, voucher rollups, and freshness after edits. |
 | P51 — Verification engine | Port status gates, cross-check evaluation, and atomic Save/Verify; compare baseline decisions, historical hashes, and concurrent edits. |
 | P52 — Audit Workbook | Port Workbook reads, filters, badges, print data, and operational exports; verify shared-modal behavior and Verification parity. |
-| P53 — Report data provider | Execute scoped report queries in .NET and supply consistent versioned inputs; verify totals, configuration, completeness, and transfer size. |
-| P54 — Python isolation | Extract report helpers from router/database dependencies and accept explicit inputs; prove unchanged calculations on golden datasets. |
-| P55 — Report integration | Connect .NET report requests to Python Cashflows, statements, Notes, reconciliations, previews, drilldowns, and exports; verify all outputs. |
-| P56 — Report jobs | Coordinate Python generation through .NET job/progress/download APIs; verify source changes, ownership, cancellation, expiry, and worker restarts. |
 | P57 — Dashboard/admin | Port dashboard statistics and error-management UI APIs; verify values against authoritative records and administrator permissions. |
 | P58 — Google Drive | Port OAuth reconnect, encrypted credential handling, and supported Drive operations; verify authorization, retry, and checksum behavior. |
 | P59 — Database backups | Port backup coordination and verified recovery tooling; rehearse isolated restoration and document external-service/file limitations. |
