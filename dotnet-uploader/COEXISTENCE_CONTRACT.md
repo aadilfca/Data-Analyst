@@ -15,6 +15,7 @@ P06 rehearses route ownership with synthetic HTTP responses. The target remains 
 - P11 settings default off and require selected-context checks; never classify settings as public. Native tenant settings/policy cannot replace legacy global reads until upload/report consumers agree on scope, policy freshness and permissions. No route registration or shared-store cutover occurs here.
 - P12 columns default off. Native labels differ from fixed storage keys; do not switch column/template writers until all consumers use the approved ID/key bindings, ownership, configuration locking and freshness rules. Legacy global APIs cannot safely consume native labels/keys unchanged; shared-schema execution and live routing remain gated.
 - P13 templates default off. Native responses carry labels and fixed ID/key bindings with revision checks; legacy consumers cannot interpret these unchanged. Candidate schema, verified legacy ownership/bindings, consumer parity and single-writer activation remain separately gated.
+- P14 saved mappings default off and protect only save/load/clear header choices. Their action grant, selected-client checks and native revisions do not activate staging/import/report routes. Retain one writer and verify legacy bindings/consumers before live switching.
 
 ## Local transport and limits
 

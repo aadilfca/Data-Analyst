@@ -18,7 +18,7 @@ public sealed record ColumnResult(ColumnStatus Status,IReadOnlyList<TenantColumn
 
 // The master row carries the permanent ID/storage key/base type. Tenant-facing
 // labels and annotations are separate, so label edits never rename stored JSON.
-public sealed class TenantColumnService(PostgresTransactions transactions,PostgresAuditWriter audit,IOptions<TemplateManagementOptions>? templates=null)
+public sealed class TenantColumnService(PostgresTransactions transactions,PostgresAuditWriter audit,IOptions<TemplateManagementOptions>? templates=null,IOptions<SavedMappingOptions>? savedMappings=null)
 {
     private sealed record Actor(int TenantId,int UserId,string Name);
     private const string Fields="m.id,c.display_name,m.column_name,m.data_type,c.category,c.notes,m.is_active,c.binding_origin,c.definition_version";
@@ -212,6 +212,11 @@ public sealed class TenantColumnService(PostgresTransactions transactions,Postgr
                 SELECT 1 FROM public.platform_tenant_templates d WHERE d.template_id=p.template_id
                 AND d.tenant_id=p.tenant_id AND d.binding_origin='native' AND p.tenant_id=$3 AND p.storage_key=$2))
             """ : "EXISTS(SELECT 1 FROM public.template_column_mappings WHERE column_id=$1)";
+        bool savedStore=savedMappings?.Value.Enabled==true || await AuditPlatform.Api.Mappings.TenantMappingService.StoreExistsAsync(db,ct);
+        var savedDependency=savedStore ? (allowTemplates ? """
+            OR EXISTS(SELECT 1 FROM public.platform_tenant_saved_mappings s WHERE s.column_id=$1
+                AND (s.tenant_id<>$3 OR s.storage_key<>$2))
+            """:"OR EXISTS(SELECT 1 FROM public.platform_tenant_saved_mappings WHERE column_id=$1)") : "";
         await using var command=db.CreateCommand($"""
             SELECT {templateDependency}
                 OR EXISTS(SELECT 1 FROM public.audit_rule_document_fields WHERE master_column_id=$1
@@ -219,9 +224,10 @@ public sealed class TenantColumnService(PostgresTransactions transactions,Postgr
                 OR EXISTS(SELECT 1 FROM public.audit_rule_cross_checks
                     WHERE lower(btrim(compare_field))=lower(btrim($2)))
                 OR EXISTS(SELECT 1 FROM public.saved_column_mappings WHERE template_column_id=$1)
+                {savedDependency}
             """);
         command.Parameters.AddWithValue(column.Id); command.Parameters.AddWithValue(column.StorageKey);
-        if(allowTemplates&&templates?.Value.Enabled==true) command.Parameters.AddWithValue(tenant);
+        if(allowTemplates&&(templates?.Value.Enabled==true||savedStore)) command.Parameters.AddWithValue(tenant);
         return (bool)(await command.ExecuteScalarAsync(ct))!;
     }
     private Task<int> AuditAsync(PostgresTransactionContext db,Actor actor,int id,string action,CancellationToken ct) =>

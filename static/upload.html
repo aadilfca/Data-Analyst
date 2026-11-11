@@ -1545,10 +1545,11 @@
                             🔗 Column Mapping
                             <span class="count" id="mappingCount">0 / 0 matched</span>
                             <button class="btn-save-mapping" id="saveMappingBtn" type="button"
-                                    title="Save the column choices and comparison checkboxes for future uploads of this template/client">💾 Save Mapping</button>
+                                    title="Save Excel header choices for future uploads of this template/client; comparison rules belong to the template">💾 Save Mapping</button>
                             <button class="btn-clear-mapping" id="clearMappingBtn" type="button"
                                     title="Remove the saved mapping for this template/client">🗑️ Clear Saved Mapping</button>
                         </div>
+                        <p id="savedMappingReviewNotice" hidden>The template changed since this mapping was saved. Review the current column choices and save them again; the old mapping was not applied.</p>
                         <div style="overflow-x:auto;">
                             <table class="mapping-table">
                                 <thead>
@@ -1804,7 +1805,7 @@
             <button type="button" id="uploadReplacementConfirm">Import</button>
         </footer>
     </dialog>
-    <script src="/static/upload.js?v=34"></script>
+    <script src="/static/upload.js?v=35"></script>
 </body>
 
 </html>

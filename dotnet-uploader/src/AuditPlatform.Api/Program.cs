@@ -12,6 +12,7 @@ using AuditPlatform.Api.Shell;
 using AuditPlatform.Api.Settings;
 using AuditPlatform.Api.Columns;
 using AuditPlatform.Api.Templates;
+using AuditPlatform.Api.Mappings;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -80,8 +81,15 @@ builder.Services.AddSingleton<TenantColumnService>();
 builder.Services.AddOptions<TemplateManagementOptions>()
     .Bind(builder.Configuration.GetSection(TemplateManagementOptions.SectionName)).ValidateOnStart();
 builder.Services.AddSingleton<TenantTemplateService>();
+builder.Services.AddOptions<SavedMappingOptions>()
+    .Bind(builder.Configuration.GetSection(SavedMappingOptions.SectionName)).ValidateOnStart();
+builder.Services.AddSingleton<TenantMappingService>();
 
 var app = builder.Build();
+if (app.Services.GetRequiredService<IOptions<SavedMappingOptions>>().Value.Enabled
+    && !app.Services.GetRequiredService<IOptions<TemplateManagementOptions>>().Value.Enabled)
+    throw new OptionsValidationException(SavedMappingOptions.SectionName,typeof(SavedMappingOptions),
+        ["Saved mappings require native templates and their tenant context."]);
 if (app.Services.GetRequiredService<IOptions<TemplateManagementOptions>>().Value.Enabled
     && (!app.Services.GetRequiredService<IOptions<ApplicationShellOptions>>().Value.Enabled
         || !app.Services.GetRequiredService<IOptions<ColumnManagementOptions>>().Value.Enabled))
@@ -115,6 +123,8 @@ app.UseWhen(context => context.RequestServices.GetRequiredService<IOptions<Authe
     || context.Request.Path.StartsWithSegments("/api/settings")
     || context.Request.Path.StartsWithSegments("/api/columns")
     || context.Request.Path.StartsWithSegments("/api/templates")
+    || context.Request.Path.StartsWithSegments("/api/upload/save-mapping")
+    || context.Request.Path.StartsWithSegments("/api/upload/saved-mapping")
     || (context.RequestServices.GetRequiredService<IOptions<CoexistenceOptions>>().Value.Enabled
         && context.RequestServices.GetRequiredService<CoexistenceRouteTable>()
             .Find(context.Request.Method, context.Request.Path.Value ?? "") is not null)),

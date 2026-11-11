@@ -3,6 +3,72 @@
 // ================================================================
 
 // API_BASE is defined globally in client_context.js
+const nativeSavedMappings = window.AppTenantMappings?.enabled === true;
+let nativeMappingSnapshot = null;
+let nativeTemplateConfigurationKey = null;
+let nativeMappingBusy = false;
+let nativeMappingDeniedScope = null;
+
+// Keep browser snapshots bound to the full working selection, including an
+// in-flight auto-map generation. An old reply cannot restore another scope.
+function savedMappingScope() {
+    const scope = {client: String(getCurrentClientId() || ''), template: selectedTemplateId,
+        file: fileId, sheet: currentSheet, templateGeneration: uploadTemplateGeneration,
+        mappingGeneration: uploadMappingGeneration, mappings: currentMappings};
+    scope.isCurrent = () => scope.client === String(getCurrentClientId() || '') && scope.template === selectedTemplateId
+        && scope.file === fileId && scope.sheet === currentSheet && scope.templateGeneration === uploadTemplateGeneration
+        && scope.mappingGeneration === uploadMappingGeneration && scope.mappings === currentMappings;
+    return scope;
+}
+function savedMappingScopeKey() { return String(getCurrentClientId() || '') + '/' + selectedTemplateId; }
+function setNativeMappingBusy(value) {
+    if (!nativeSavedMappings) return;
+    nativeMappingBusy = value;
+    const disabled = value || nativeMappingDeniedScope === savedMappingScopeKey();
+    if (saveMappingBtn) saveMappingBtn.disabled = disabled;
+    if (clearMappingBtn) clearMappingBtn.disabled = disabled;
+}
+function resetNativeMappingSnapshot() {
+    nativeMappingSnapshot = null;
+    nativeTemplateConfigurationKey = null;
+    nativeMappingDeniedScope = null;
+    const notice = document.getElementById('savedMappingReviewNotice');
+    if (notice) notice.hidden = true;
+    setNativeMappingBusy(nativeMappingBusy);
+}
+function validateNativeMappingResponse(data) {
+    if (!Number.isSafeInteger(data.mapping_revision) || data.mapping_revision < 0
+        || typeof data.has_saved_mapping !== 'boolean' || typeof data.configuration_key !== 'string'
+        || typeof data.binding_key !== 'string' || typeof data.needs_review !== 'boolean'
+        || !Array.isArray(data.mappings) || data.mappings.some(m => !m || !Number.isSafeInteger(m.template_column_id)
+            || typeof m.excel_column !== 'string' || typeof m.storage_key !== 'string')) {
+        throw new Error('Could not confirm saved mapping metadata. Reload before trying again.');
+    }
+}
+async function readNativeMappingSnapshot(scope, isCurrent = () => true) {
+    try {
+        const response = await fetchUpload(API_BASE + `/api/upload/saved-mapping?client_id=${scope.client}&template_id=${scope.template}`);
+        const data = await response.json();
+        if (!scope.isCurrent() || !isCurrent()) return null;
+        validateNativeMappingResponse(data);
+        if (!nativeTemplateConfigurationKey || data.configuration_key !== nativeTemplateConfigurationKey) {
+            throw new Error('The template changed. Reload its columns and review the mapping.');
+        }
+        nativeMappingSnapshot = {scope, data};
+        nativeMappingDeniedScope = null;
+        setNativeMappingBusy(nativeMappingBusy);
+        const notice = document.getElementById('savedMappingReviewNotice');
+        if (notice) notice.hidden = !data.needs_review;
+        return data;
+    } catch (error) {
+        if (scope.isCurrent() && isCurrent()) {
+            nativeMappingSnapshot = null;
+            if ([401, 403].includes(error.httpStatus)) nativeMappingDeniedScope = savedMappingScopeKey();
+            setNativeMappingBusy(nativeMappingBusy);
+        }
+        throw error;
+    }
+}
 
 // ---------- DOM REFS ----------
 function getElement(id) {
@@ -1973,6 +2039,7 @@ if (templateDropdown) {
 // "resuming session" status message race ahead of (and get overwritten by) this function's own
 // later status updates. No behavior change for the normal dropdown-click path.
 async function selectTemplate(id) {
+    resetNativeMappingSnapshot();
     if (fileId && workbookData) clearSourceCoverageDates();
     resetValidationState();
     if (importBtn) importBtn.disabled = true;
@@ -1992,6 +2059,8 @@ async function selectTemplate(id) {
         if (!res.ok) throw new Error('Failed to fetch template columns');
         const data = await res.json();
         if (generation !== uploadTemplateGeneration || Number(id) !== selectedTemplateId) return;
+        if (nativeSavedMappings && typeof data.configuration_key !== 'string') throw new Error('Template bindings are unavailable. Reload the page.');
+        nativeTemplateConfigurationKey = data.configuration_key || null;
         templateColumns = data.columns;
         uploadTemplatePurpose = data.data_purpose || 'standard';
         uploadLedgerColumnRoles = data.ledger_columns || {};
@@ -2224,6 +2293,7 @@ async function removeUploadFile() {
 }
 
 function resetUpload() {
+    resetNativeMappingSnapshot();
     ++uploadMappingGeneration;
     ++uploadTemplateGeneration;
     clearSourceCoverageDates();
@@ -2321,6 +2391,7 @@ function resetUpload() {
 // reinsert) -- there's no separate edit/delete UI this phase (Phase A3).
 if (saveMappingBtn) {
     saveMappingBtn.addEventListener('click', async function() {
+        if (nativeSavedMappings && nativeMappingBusy) return;
         const clientId = getCurrentClientId();
         if (!clientId) {
             showUploadFailure('⚠️ Please select a client first from the Dashboard.');
@@ -2343,28 +2414,54 @@ if (saveMappingBtn) {
             return;
         }
 
+        const scope = savedMappingScope();
+        const choices = JSON.stringify(mappingsToSave);
         saveMappingBtn.disabled = true;
+        setNativeMappingBusy(true);
         const globalLoadingToken = window.LoadingUI
             ? window.LoadingUI.startGlobalLoading(this)
             : null;
         try {
+            let snapshot = null;
+            if (nativeSavedMappings) {
+                snapshot = nativeMappingSnapshot?.scope.isCurrent() ? nativeMappingSnapshot.data : await readNativeMappingSnapshot(scope);
+                if (!scope.isCurrent() || !snapshot) return;
+                const currentChoices = currentMappings.filter(m => m.excel_column)
+                    .map(m => ({template_column_id: m.column_id, excel_column: m.excel_column}));
+                if (JSON.stringify(currentChoices) !== choices) throw new Error('Mapping choices changed. Review and save again.');
+            }
             const res = await fetchUpload(API_BASE + '/api/upload/save-mapping', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     client_id: parseInt(clientId),
                     template_id: selectedTemplateId,
-                    mappings: mappingsToSave
+                    mappings: mappingsToSave,
+                    ...(nativeSavedMappings ? {mapping_revision: snapshot.mapping_revision,
+                        configuration_key: snapshot.configuration_key} : {})
                 })
             });
             const result = await res.json();
+            if (!scope.isCurrent()) return;
             if (!res.ok) throw new Error(result.detail || result.message || 'Save failed');
-            showStatus(`💾 Mapping and comparison choices saved (${result.saved_count} column${result.saved_count === 1 ? '' : 's'}) — they will be reused for this client and template.`, 'success');
+            if (nativeSavedMappings) {
+                validateNativeMappingResponse(result);
+                nativeMappingSnapshot = {scope, data: result};
+                const notice = document.getElementById('savedMappingReviewNotice');
+                if (notice) notice.hidden = !result.needs_review;
+            }
+            showStatus(`💾 Column mapping saved (${result.saved_count} column${result.saved_count === 1 ? '' : 's'}) — it will be reused for this client and template. Comparison rules remain in the template.`, 'success');
         } catch (error) {
+            if (!scope.isCurrent()) return;
+            if (nativeSavedMappings) {
+                nativeMappingSnapshot = null;
+                if ([401, 403].includes(error.httpStatus)) nativeMappingDeniedScope = savedMappingScopeKey();
+            }
             console.error('Save mapping error:', error);
             showUploadFailure('Failed to save mapping: ' + error.message, 'Save mapping', error);
         } finally {
             saveMappingBtn.disabled = false;
+            setNativeMappingBusy(false);
             if (globalLoadingToken) window.LoadingUI.stopGlobalLoading(globalLoadingToken);
         }
     });
@@ -2378,6 +2475,7 @@ if (saveMappingBtn) {
 // so a later reload/re-select for this client+template no longer auto-applies anything.
 if (clearMappingBtn) {
     clearMappingBtn.addEventListener('click', async function() {
+        if (nativeSavedMappings && nativeMappingBusy) return;
         const clientId = getCurrentClientId();
         if (!clientId) {
             showUploadFailure('⚠️ Please select a client first from the Dashboard.');
@@ -2391,26 +2489,48 @@ if (clearMappingBtn) {
         const confirmed = window.confirm('Remove the saved column mapping for this client + template? Future uploads will fall back to auto-mapping until you save a new one.');
         if (!confirmed) return;
 
+        const scope = savedMappingScope();
         clearMappingBtn.disabled = true;
+        setNativeMappingBusy(true);
         const globalLoadingToken = window.LoadingUI
             ? window.LoadingUI.startGlobalLoading(this)
             : null;
         try {
+            const headers = {};
+            if (nativeSavedMappings) {
+                const snapshot = nativeMappingSnapshot?.scope.isCurrent() ? nativeMappingSnapshot.data : await readNativeMappingSnapshot(scope);
+                if (!scope.isCurrent() || !snapshot) return;
+                headers['X-Mapping-Revision'] = String(snapshot.mapping_revision);
+                headers['X-Template-Revision'] = snapshot.configuration_key;
+            }
             const res = await fetchUpload(API_BASE + `/api/upload/saved-mapping?client_id=${clientId}&template_id=${selectedTemplateId}`, {
-                method: 'DELETE'
+                method: 'DELETE', headers
             });
             const result = await res.json();
+            if (!scope.isCurrent()) return;
             if (!res.ok) throw new Error(result.detail || result.message || 'Clear failed');
+            if (nativeSavedMappings) {
+                validateNativeMappingResponse(result);
+                nativeMappingSnapshot = {scope, data: result};
+                const notice = document.getElementById('savedMappingReviewNotice');
+                if (notice) notice.hidden = true;
+            }
             if (result.deleted_count > 0) {
                 showStatus(`🗑️ Saved mapping cleared (${result.deleted_count} column${result.deleted_count === 1 ? '' : 's'}). Future uploads will auto-map instead.`, 'success');
             } else {
                 showStatus('ℹ️ No saved mapping existed for this client/template.', 'info');
             }
         } catch (error) {
+            if (!scope.isCurrent()) return;
+            if (nativeSavedMappings) {
+                nativeMappingSnapshot = null;
+                if ([401, 403].includes(error.httpStatus)) nativeMappingDeniedScope = savedMappingScopeKey();
+            }
             console.error('Clear saved mapping error:', error);
             showUploadFailure('Failed to clear saved mapping: ' + error.message, 'Clear mapping', error);
         } finally {
             clearMappingBtn.disabled = false;
+            setNativeMappingBusy(false);
             if (globalLoadingToken) window.LoadingUI.stopGlobalLoading(globalLoadingToken);
         }
     });
@@ -2425,21 +2545,26 @@ if (clearMappingBtn) {
 async function applySavedMapping(isCurrent = () => true) {
     const clientId = getCurrentClientId();
     if (!clientId || !selectedTemplateId) return 0;
+    const scope = savedMappingScope();
 
     let data;
     try {
-        const res = await fetchUpload(API_BASE + `/api/upload/saved-mapping?client_id=${clientId}&template_id=${selectedTemplateId}`);
-        if (!res.ok) return 0;
-        data = await res.json();
+        if (nativeSavedMappings) data = await readNativeMappingSnapshot(scope, isCurrent);
+        else {
+            const res = await fetchUpload(API_BASE + `/api/upload/saved-mapping?client_id=${clientId}&template_id=${selectedTemplateId}`);
+            if (!res.ok) return 0;
+            data = await res.json();
+        }
     } catch (error) {
-        if (!isCurrent()) return 0;
+        if (!isCurrent() || !scope.isCurrent()) return 0;
         console.warn('⚠️ Could not check for a saved column mapping:', error);
         showUploadIssue({stage: 'Saved mapping', severity: 'warning', message: error.message,
             action: 'Auto-mapping is available. Check every selected column before validation; retry the saved mapping after reconnecting.'});
         return 0;
     }
 
-    if (!isCurrent() || !data || !data.has_saved_mapping || !Array.isArray(data.mappings) || data.mappings.length === 0) {
+    if (!isCurrent() || !scope.isCurrent() || !data || !data.has_saved_mapping || data.needs_review
+        || !Array.isArray(data.mappings) || data.mappings.length === 0) {
         return 0;
     }
 
@@ -2447,6 +2572,8 @@ async function applySavedMapping(isCurrent = () => true) {
     data.mappings.forEach(saved => {
         const target = currentMappings.find(m => m.column_id === saved.template_column_id);
         if (!target) return;
+        if (nativeSavedMappings && (!saved.storage_key || saved.storage_key !== templateColumns.find(c => c.id === saved.template_column_id)?.storage_key
+            || target.storage_key !== saved.storage_key)) return;
         if (!saved.excel_column || !excelHeaders.includes(saved.excel_column)) return; // header no longer present -- fall back to auto-mapping
         target.excel_column = saved.excel_column;
         target.is_matched = true;
@@ -2463,10 +2590,11 @@ async function autoMapColumns() {
     }
 
     const generation = ++uploadMappingGeneration;
-    const scope = {fileId, templateId: selectedTemplateId, sheet: currentSheet, templateGeneration: uploadTemplateGeneration};
+    const scope = {fileId, templateId: selectedTemplateId, sheet: currentSheet, templateGeneration: uploadTemplateGeneration,
+        clientId: String(getCurrentClientId() || '')};
     const isCurrent = () => generation === uploadMappingGeneration && scope.fileId === fileId
         && scope.templateId === selectedTemplateId && scope.sheet === currentSheet
-        && scope.templateGeneration === uploadTemplateGeneration;
+        && scope.templateGeneration === uploadTemplateGeneration && scope.clientId === String(getCurrentClientId() || '');
     try {
         showStatus('⏳ Auto‑mapping columns...', 'loading');
         setBadge('⏳ Mapping...', 'loading');
@@ -2604,7 +2732,7 @@ function renderMapping(mappings) {
                 updateCounts();
             } else {
                 if (m.excel_column) {
-                    const opt = select.querySelector(`option[value="${m.excel_column}"]`);
+                    const opt = [...select.options].find(option => option.value === m.excel_column);
                     if (opt) opt.selected = true;
                 }
             }

@@ -2,12 +2,14 @@ using System.Text.Json;
 using AuditPlatform.Api.Authentication;
 using AuditPlatform.Api.Data;
 using AuditPlatform.Api.Logging;
+using AuditPlatform.Api.Configuration;
+using Microsoft.Extensions.Options;
 using Npgsql;
 using NpgsqlTypes;
 
 namespace AuditPlatform.Api.Templates;
 
-public sealed class TenantTemplateService(PostgresTransactions transactions,PostgresAuditWriter audit)
+public sealed class TenantTemplateService(PostgresTransactions transactions,PostgresAuditWriter audit,IOptions<SavedMappingOptions>? savedMappings=null)
 {
     public const string ReviewMessage="This configuration has existing data or unverified dependencies. Review a separate migration; no source rows were changed.";
     private sealed record Actor(int Tenant,int User,string Name);
@@ -140,7 +142,9 @@ public sealed class TenantTemplateService(PostgresTransactions transactions,Post
             if(target.System) return new(TemplateStatus.Forbidden,Detail:"Cannot delete a system template. It is required for the application to function.");
             if(target.Origin!="native") return Review();
             if(revision!=target.ConfigurationKey) return Stale();
-            if(await HasDataAsync(db,id,token)||await HasUploadsAsync(db,id,token)||await HasExternalReferencesAsync(db,id,token)) return Review();
+            if(await HasDataAsync(db,id,token)||await HasUploadsAsync(db,id,token)||await HasExternalReferencesAsync(db,id,token)
+                || ((savedMappings?.Value.Enabled==true || await AuditPlatform.Api.Mappings.TenantMappingService.StoreExistsAsync(db,token))
+                    && await ExistsAsync(db,"SELECT EXISTS(SELECT 1 FROM public.platform_tenant_saved_mappings WHERE template_id=$1)",id,token))) return Review();
             await using var command=db.CreateCommand("UPDATE public.templates SET is_active=FALSE WHERE id=$1");
             command.Parameters.AddWithValue(id); await command.ExecuteNonQueryAsync(token);
             // Retain mappings and permanent bindings on soft deletion.
@@ -290,7 +294,7 @@ public sealed class TenantTemplateService(PostgresTransactions transactions,Post
         },ct);
     }
 
-    private static async Task<List<TemplateDefinition>> LoadAsync(PostgresTransactionContext db,int tenant,int? id,CancellationToken ct)
+    internal static async Task<List<TemplateDefinition>> LoadAsync(PostgresTransactionContext db,int tenant,int? id,CancellationToken ct)
     {
         var rows=new List<TemplateDefinition>();
         await using(var command=db.CreateCommand("""

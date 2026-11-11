@@ -142,6 +142,15 @@ This list records discussion, not blanket authorization to activate policies. Re
 - Current/history data protects field removal, date changes and ledger meaning; a Document ID change requires equivalent nonblank values in both stores. Upload/evidence/saved-mapping dependencies guard affected changes and deletion; missing schemas fail closed. Soft deletion retains bindings and reserves names. Unverified legacy definitions require migration review.
 - Shared editor preserves Python behavior, carries native bindings/revisions, refreshes before edits/previews and disables member mutations. Only verified native template dependencies permit label changes; other consumers, legacy binding review, deployed schema and explicit activation remain separate gates. Imports/Rate-field detection follow later phases.
 
+### P14 saved headers
+
+- Save/load/clear remain scoped to tenant + selected active home client + native template. P14 explicitly grants these actions to tenant administrators and active assigned managers/internees; membership, session/revision, client selection and assignment are rechecked/pinned per operation. This grants no upload, report or cross-tenant sharing access.
+- Separate native set/entry tables retain permanent column IDs/keys and literal ERP headers; legacy saved mappings are not adopted or rewritten. Database guards enforce scope/key bindings. Blank choices are omitted; foreign/duplicate column IDs and invalid text are rejected. Comparison policy stays in templates.
+- Mutations require current mapping_revision and full configuration_key. Saved-binding signatures exclude labels/annotations but include ordered IDs/keys/types/roles, effective comparison/review policy and template purpose/ledger/rate/subtotal settings. Structural changes flag needs_review and prevent auto-application; label-only changes retain bindings. Clearing retains the set revision to reject stale resurrection.
+- Full replacement/clear, scoped validation-plan invalidation and required audit share one transaction. Client attribution uses the audit client field; metadata contains safe tenant/template IDs only. Clearing changes the saved copy, preserving the current grid. Native saved references protect column meaning/deactivation and template deletion even when their HTTP flag is off.
+- Shared Upload controls send native revisions only when enabled, reuse exact present headers with verified keys, and discard old client/template/file/sheet/generation replies. Stale or incomplete metadata cannot authorize saves; expired/denied access disables actions. Quoted headers use value equality rather than interpolated selectors. Legacy payloads remain unchanged.
+- P14 verifies saved-header behavior with owned PostgreSQL and synthetic staging/auto-map output; workbook reading, complete imports, deployed ownership/bindings, measured schema capacity and live activation remain later gates. No source values, history or financial fingerprints change here.
+
 ## 3. PostgreSQL and financial values
 
 | Contract | Required behavior |

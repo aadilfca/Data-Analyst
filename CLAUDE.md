@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- dotnet-uploader/ → .NET foundation, disabled shell/tenant administration/settings/columns/templates, guarded sessions, engagement rehearsals and audit persistence. See CHANGELOG_ARCHIVE.md.
+- dotnet-uploader/ → .NET foundation, disabled shell/tenant administration/settings/columns/templates/saved mappings, guarded sessions, engagement rehearsals and audit persistence. See CHANGELOG_ARCHIVE.md.
 
 - routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, statements, category-role notes with unallocated rows, profit links, reconciliations, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
 
@@ -20,7 +20,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, allocated database size and selected-client integrity status. See CHANGELOG_ARCHIVE.md.
 - routers/data.py, data_integrity.py + static/databank.*, data_integrity.* → Data Bank paged previews with separate metrics; Data Integrity safeguards. See CHANGELOG_ARCHIVE.md.
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
-- routers/import_export.py + static/upload.* → Template-first uploads, bounded date reads, full-period coverage, exact Footing controls, stored reconciliation and paged previews. See CHANGELOG_ARCHIVE.md.
+- routers/import_export.py + static/upload.* → Template-first uploads, guarded saved-mapping controls, bounded dates, coverage, Footing, stored reconciliation and paged previews. See CHANGELOG_ARCHIVE.md.
 - routers/settings.py + routers/google_drive_auth.py + static/settings.* → Settings, holidays and Drive controls; safe rendering and optional tenant read-only UI. See CHANGELOG_ARCHIVE.md.
 - routers/templates.py + static/templates.*, static/columns.* → Templates, reusable columns, cache invalidation, tenant controls, ledger/setup and backup/restore. See CHANGELOG_ARCHIVE.md.
 - static/client_settings.html, static/client_settings.js -> retired direct-bookmark information page; all Verification account routing is configured centrally in Account Control Centre. See CHANGELOG_ARCHIVE.md.
@@ -269,6 +269,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-11: Added disabled tenant/client saved mappings with stable bindings, revision checks and guarded Upload controls; locally accepted. See CHANGELOG_ARCHIVE.md, Saved mappings P14.
 - 2026-11-11: Added disabled tenant templates and corrected Python list invalidation; locally accepted. See CHANGELOG_ARCHIVE.md, Tenant templates P13.
 - 2026-11-11: Added disabled tenant columns with immutable keys and editable labels; locally accepted. See CHANGELOG_ARCHIVE.md, Tenant columns P12.
 - 2026-11-11: Added disabled tenant settings/holidays and safe Settings UI; locally accepted. See CHANGELOG_ARCHIVE.md, Tenant settings P11.
