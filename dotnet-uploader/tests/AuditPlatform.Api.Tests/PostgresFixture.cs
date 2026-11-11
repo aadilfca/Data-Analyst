@@ -1,0 +1,172 @@
+using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
+using Npgsql;
+using Xunit;
+
+namespace AuditPlatform.Api.Tests;
+
+// Every test run creates its own cluster. This fixture accepts a binary folder,
+// never a database URL, and never reads the Python app's settings or .env file.
+public sealed class PostgresFixture : IAsyncLifetime
+{
+    private readonly string marker = Guid.NewGuid().ToString("N");
+    private string runDirectory = "";
+    private string binaryDirectory = "";
+    private bool initialized;
+    public string ConnectionString { get; private set; } = "";
+    public int Port { get; private set; }
+
+    public async ValueTask InitializeAsync()
+    {
+        var root = FindSolutionDirectory();
+        var tools = Path.Combine(root, ".tools");
+        binaryDirectory = Path.GetFullPath(Environment.GetEnvironmentVariable(
+            "AUDITPLATFORM_TEST_POSTGRES_BIN")
+            ?? Path.Combine(tools, "postgresql-17.11", "pgsql", "bin"));
+        if (!binaryDirectory.StartsWith(tools + Path.DirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase)
+            || !File.Exists(Path.Combine(binaryDirectory, Executable("initdb"))))
+            throw new InvalidOperationException("Install approved portable PostgreSQL under .tools before testing.");
+
+        runDirectory = Path.Combine(tools, "postgres-tests", "run-" + marker);
+        Directory.CreateDirectory(runDirectory);
+        await File.WriteAllTextAsync(Path.Combine(runDirectory, "fixture-owner"), marker);
+        var passwordFile = Path.Combine(runDirectory, "password.txt");
+        var password = Guid.NewGuid().ToString("N");
+        await File.WriteAllTextAsync(passwordFile, password);
+        Port = ReservePort();
+
+        try
+        {
+            await RunToolAsync("initdb", "-D", DataDirectory, "-U", "auditplatform_test",
+                "--auth=scram-sha-256", "--pwfile=" + passwordFile, "--encoding=UTF8", "--locale=C");
+            if (!File.Exists(Path.Combine(DataDirectory, "PG_VERSION")))
+                throw new InvalidOperationException("Local initdb did not initialize a cluster; inspect ignored fixture logs.");
+            initialized = true;
+            await File.AppendAllTextAsync(Path.Combine(DataDirectory, "postgresql.conf"),
+                $"\nlisten_addresses = '127.0.0.1'\nport = {Port}\nmax_connections = 12\nshared_buffers = '16MB'\nssl = off\n");
+            await RunToolAsync("pg_ctl", "-D", DataDirectory, "-l",
+                Path.Combine(runDirectory, "postgres.log"), "-w", "-t", "20", "start");
+
+            var database = "auditplatform_foundation_" + marker;
+            var settings = new NpgsqlConnectionStringBuilder
+            {
+                Host = "127.0.0.1", Port = Port, Database = "postgres",
+                Username = "auditplatform_test", Password = password,
+                SslMode = SslMode.Disable, Pooling = false, Timeout = 3,
+                CommandTimeout = 5, IncludeErrorDetail = false
+            };
+            await using var admin = new NpgsqlConnection(settings.ConnectionString);
+            await admin.OpenAsync();
+            // Check the server's actual directory before the fixture's only DDL.
+            await using (var verify = new NpgsqlCommand("SHOW data_directory", admin))
+            {
+                var actual = Path.GetFullPath((string)(await verify.ExecuteScalarAsync())!);
+                if (!actual.Equals(Path.GetFullPath(DataDirectory), StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Test cluster ownership check failed.");
+            }
+            // The identifier contains a fixed prefix and generated hex only.
+            await using (var create = new NpgsqlCommand($"CREATE DATABASE \"{database}\"", admin))
+                await create.ExecuteNonQueryAsync();
+            settings.Database = database;
+            ConnectionString = settings.ConnectionString;
+            RequireSafeTarget(ConnectionString, Port);
+        }
+        catch
+        {
+            await DisposeAsync();
+            throw;
+        }
+        finally
+        {
+            File.Delete(passwordFile);
+        }
+    }
+
+    public static void RequireSafeTarget(string connectionString, int ownedPort)
+    {
+        var settings = new NpgsqlConnectionStringBuilder(connectionString);
+        var database = settings.Database ?? "";
+        if (settings.Host != "127.0.0.1" || settings.Port != ownedPort
+            || settings.Username != "auditplatform_test"
+            || !database.StartsWith("auditplatform_foundation_", StringComparison.Ordinal)
+            || !Guid.TryParseExact(database["auditplatform_foundation_".Length..], "N", out _))
+            throw new InvalidOperationException("Tests require their own loopback fixture database.");
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (!initialized)
+            return;
+        RequireOwnedDirectory();
+        // Only stop the cluster created by this fixture. Keep ignored artifacts
+        // for diagnosis; no recursive deletion or existing-database cleanup.
+        if (File.Exists(Path.Combine(DataDirectory, "postmaster.pid")))
+            await RunToolAsync("pg_ctl", "-D", DataDirectory, "-m", "immediate", "-w", "-t", "20", "stop");
+        initialized = false;
+    }
+
+    private string DataDirectory => Path.Combine(runDirectory, "data");
+
+    private void RequireOwnedDirectory()
+    {
+        var expected = Path.Combine(FindSolutionDirectory(), ".tools", "postgres-tests", "run-" + marker);
+        if (Path.GetFullPath(runDirectory) != expected
+            || File.ReadAllText(Path.Combine(runDirectory, "fixture-owner")) != marker)
+            throw new InvalidOperationException("Refusing to operate on an unowned test cluster.");
+    }
+
+    private async Task RunToolAsync(string name, params string[] arguments)
+    {
+        RequireOwnedDirectory();
+        // On Windows the detached server can inherit redirected pg_ctl pipe
+        // handles. Capture initdb only; pg_ctl's server output goes to -l.
+        var capture = name == "initdb";
+        var start = new ProcessStartInfo(Path.Combine(binaryDirectory, Executable(name)))
+        {
+            WorkingDirectory = runDirectory, UseShellExecute = false,
+            CreateNoWindow = true, RedirectStandardOutput = capture, RedirectStandardError = capture
+        };
+        foreach (var argument in arguments)
+            start.ArgumentList.Add(argument);
+        // Ignore inherited libpq settings; only our explicit local cluster counts.
+        foreach (var key in start.Environment.Keys.Where(key => key.StartsWith("PG", StringComparison.Ordinal)).ToArray())
+            start.Environment.Remove(key);
+        using var process = Process.Start(start)
+            ?? throw new InvalidOperationException("Could not start local PostgreSQL test tool.");
+        var output = capture ? process.StandardOutput.ReadToEndAsync() : Task.FromResult("");
+        var error = capture ? process.StandardError.ReadToEndAsync() : Task.FromResult("");
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(35));
+        try
+        {
+            await process.WaitForExitAsync(deadline.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            process.Kill(entireProcessTree: true);
+            throw new TimeoutException("Local PostgreSQL test tool exceeded its time limit.");
+        }
+        var text = await output + await error;
+        await File.WriteAllTextAsync(Path.Combine(runDirectory, name + "-last.log"), text);
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"Local {name} failed; inspect ignored fixture logs.");
+    }
+
+    private static int ReservePort()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        return ((IPEndPoint)listener.LocalEndpoint).Port;
+    }
+
+    private static string Executable(string name) => OperatingSystem.IsWindows() ? name + ".exe" : name;
+
+    private static string FindSolutionDirectory()
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+            if (File.Exists(Path.Combine(directory.FullName, "AuditPlatform.slnx")))
+                return directory.FullName;
+        throw new InvalidOperationException("Cannot locate the isolated migration solution.");
+    }
+}

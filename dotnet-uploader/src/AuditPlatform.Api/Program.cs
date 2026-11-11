@@ -1,4 +1,6 @@
 using AuditPlatform.Api.Configuration;
+using AuditPlatform.Api.Data;
+using AuditPlatform.Api.Health;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -17,6 +19,13 @@ builder.Services.AddOptions<PlatformOptions>()
     .ValidateDataAnnotations()
     .ValidateOnStart();
 
+builder.Services.AddOptions<PostgresOptions>()
+    .Bind(builder.Configuration.GetSection(PostgresOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+builder.Services.AddSingleton<PostgresDataSourceFactory>();
+builder.Services.AddSingleton<PostgresReadinessCheck>();
+
 var app = builder.Build();
 
 app.MapControllers();
@@ -32,3 +41,6 @@ catch (OptionsValidationException)
     // instead of leaving startup failure to the operating-system crash handler.
     return 1;
 }
+
+// Expose the entry point to the in-process ASP.NET Core integration tests.
+public partial class Program { }

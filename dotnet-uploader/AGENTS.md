@@ -4,7 +4,7 @@
 
 Migrate the complete Python application backend to ASP.NET Core/C#, retaining Python for financial report calculations and report generation. The folder remains `dotnet-uploader/`; `AuditPlatform.Api` now provides the service foundation. Existing browser assets move to ASP.NET Core in later phases; .NET supplies report data to Python.
 
-Plan dated 2026-11-10. P01–P03 are accepted; see [MIGRATION_BASELINE.md](MIGRATION_BASELINE.md), [migration-baseline.json](migration-baseline.json), and [MIGRATION_CONTRACTS.md](MIGRATION_CONTRACTS.md). P04 scope preparation is next; P05–P63 remain pending. Each implementation phase requires file/approach approval. Preserve the working Python app throughout staged replacement.
+Plan dated 2026-11-10. P01–P04A are accepted; see [MIGRATION_BASELINE.md](MIGRATION_BASELINE.md), [migration-baseline.json](migration-baseline.json), and [MIGRATION_CONTRACTS.md](MIGRATION_CONTRACTS.md). P04B file confirmation is next; P05–P63 remain pending. Each implementation phase requires file/approach approval. Preserve the working Python app throughout staged replacement.
 
 ## Agreed technology direction
 
@@ -40,7 +40,8 @@ Numbers describe the default sequence. P02 records dependencies; subsequent file
 | P01 — Baseline | Accepted by Aadil; static inventory, ownership proposals, and limits are in [MIGRATION_BASELINE.md](MIGRATION_BASELINE.md). |
 | P02 — Contracts | Accepted by Aadil; [contracts](MIGRATION_CONTRACTS.md) define ownership, financial/API/report rules, dependencies, rollback, fixtures, and the 500 MB ceiling. |
 | P03 — Service foundation | Accepted by Aadil: .NET solution, validated settings, structured console logs, and health endpoints; Release build and nine smoke/configuration checks pass. |
-| P04 — PostgreSQL foundation | Add connection pooling, explicit transactions, consistent reads, and reviewed migration ownership; prove isolation and rollback on a test database. |
+| P04A — PostgreSQL connections | Accepted by Aadil: disabled-by-default settings, bounded singleton pool and readiness; Release build and 32 isolated PostgreSQL tests pass. |
+| P04B — Transactions and schema | Pending: explicit transactions, consistent read snapshots, schema inventory and reviewed migration ownership; prove isolation and rollback on a test database. |
 | P05 — Audit and errors | Replace SQLite-dependent audit/error storage with the agreed persistence and attribution; reconcile existing records and protect sensitive inputs. |
 | P06 — Coexistence | Establish same-origin route switching and a private report-service client contract; demonstrate routing, authorization, and fallback with stubbed responses. |
 | P07 — Authentication | Port login/logout, bcrypt compatibility, expiry, cookie/CSRF behavior, and inactive-user checks; verify session compatibility and rejection cases. |
@@ -119,24 +120,31 @@ Numbers describe the default sequence. P02 records dependencies; subsequent file
 
 ## Local foundation commands
 
-Run PowerShell from this folder. The verified Windows x64 SDK 10.0.404 and its runtime 10.0.15 are installed in ignored `.dotnet/`; `.tools/` contains downloads, isolated CLI/NuGet caches, and local check results. No external NuGet packages are referenced. SDKs and caches are not committed.
+Run PowerShell from this folder. SDK 10.0.404/runtime 10.0.15 live in ignored `.dotnet/`; `.tools/` holds portable PostgreSQL 17.11, package caches and evidence. Exact package versions are pinned in the project files.
 
 ```powershell
 $env:DOTNET_CLI_HOME = "$PWD\.tools\cli-home"
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $env:DOTNET_GENERATE_ASPNET_CERTIFICATE = 'false'
+$env:DOTNET_ADD_GLOBAL_TOOLS_TO_PATH = 'false'
+$env:TESTINGPLATFORM_TELEMETRY_OPTOUT = '1'
 $env:NUGET_PACKAGES = "$PWD\.tools\packages"
-& .\.dotnet\dotnet.exe restore .\AuditPlatform.slnx --configfile .\.tools\NuGet.Config --source .\.tools\empty-feed --packages $env:NUGET_PACKAGES
+& .\.dotnet\dotnet.exe restore .\AuditPlatform.slnx --source https://api.nuget.org/v3/index.json --packages $env:NUGET_PACKAGES
 & .\.dotnet\dotnet.exe build .\AuditPlatform.slnx --configuration Release --no-restore
+& .\.dotnet\dotnet.exe run --project .\tests\AuditPlatform.Api.Tests --configuration Release --no-build --no-restore -- -noColor -result-trx "$PWD\.tools\p04a-results\p04a.trx"
 & .\.dotnet\dotnet.exe run --project .\src\AuditPlatform.Api --configuration Release --no-build --no-restore
 ```
 
 - Launch settings bind `http://127.0.0.1:5080`; stop an existing foundation instance before starting another. Ctrl+C stops a foreground run.
-- `/healthz` returns 200 and service identity. `/health/ready` intentionally returns 503/database_not_configured until P04 supplies a real dependency check.
+- `/healthz` returns 200 independently of connectivity. `/health/ready` returns 503 when disabled/unavailable/timed out, or 200 after bounded `SELECT 1`; readiness proves connectivity only.
+- PostgreSQL defaults off. Explicit `Postgres__Enabled=true` and secret `Postgres__ConnectionString` enable it; host/database/username are required. Python settings and `.env` are not loaded. Remote connections require `SSL Mode=VerifyFull`.
+- `Postgres__MaximumPoolSize` defaults to 10 (range 1–100); connection/command/readiness timeouts default to 5/30/3 seconds (ranges 1–30/1–300/1–15). These settings override connection-string pool/time limits; pooling and state reset stay on, sensitive driver detail/parameter logs stay off.
+- Tests use [EDB's portable PostgreSQL 17.11 archive](https://www.enterprisedb.com/download-postgresql-binaries), extracted to `.tools/postgresql-17.11/pgsql/`; `AUDITPLATFORM_TEST_POSTGRES_BIN` may select another approved binary folder inside `.tools/`. Each run creates a random SCRAM-protected loopback cluster/database and stops it; fixture logs/data remain ignored. No existing connection URL is accepted.
+- Run xUnit through the executable command above; the .NET 10 default `dotnet test` VSTest mode rejects this package's MTP integration. Windows sandbox restriction may require normal local execution for `initdb`; no Windows service is installed.
 - `Platform__ApplicationName` and `Platform__DatabaseCapacityLimitBytes` override non-secret defaults. Invalid settings exit with code 1 before listening; the 500,000,000-byte setting is configuration only until capacity enforcement is ported.
 - Supply future secrets through approved environment/secret-store configuration, never appsettings.json, launch settings, or logs. Private settings files, SDKs, caches, and build outputs are ignored.
 - Windows 10 Pro 22H2 is outside the current .NET 10 supported-OS list. Aadil approved local development with this limitation; a local pass does not certify supported production hosting. P62 validates deployment separately.
-- Local P03 check evidence is in ignored `.tools/p03-verification.json`; these checks do not certify database connectivity or migrated application workflows.
+- Evidence: ignored `.tools/p03-verification.json`, `.tools/p04a-verification.json` and `.tools/p04a-results/p04a.trx`. Local checks do not certify deployed Supabase/TLS, migrated workflows, transactions or snapshots; remaining work follows its approved phases.
 
 ## Reference links
 

@@ -3,6 +3,8 @@
 /.tools/
 **/bin/
 **/obj/
+**/TestResults/
+**/coverage/
 /.vs/
 *.user
 

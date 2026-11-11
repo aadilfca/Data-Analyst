@@ -2,4 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/AuditPlatform.Api/AuditPlatform.Api.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AuditPlatform.Api.Tests/AuditPlatform.Api.Tests.csproj" />
+  </Folder>
 </Solution>
