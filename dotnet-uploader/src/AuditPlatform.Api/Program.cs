@@ -55,6 +55,7 @@ builder.Services.AddSingleton<PostgresSessionStore>();
 builder.Services.AddSingleton<AuthenticationService>();
 // Internal foundation only; no public route or database migration is enabled.
 builder.Services.AddSingleton<TenantContextResolver>();
+builder.Services.AddSingleton<EngagementAccessResolver>();
 
 var app = builder.Build();
 // Invalid/duplicate registrations fail before listening. Production currently

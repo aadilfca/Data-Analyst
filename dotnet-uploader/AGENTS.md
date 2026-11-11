@@ -49,7 +49,7 @@ Execution order: P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 (repor
 | P07 — Authentication | Locally accepted behind disabled settings. See CHANGELOG_ARCHIVE.md, .NET authentication P07. |
 | P07A — Collaboration contract | Foundational direction accepted; detailed sharing, verification and presentation policies follow relevant phases. See MIGRATION_CONTRACTS.md. |
 | P07B — Tenant foundation | Candidate schema and membership lookup locally accepted; shared-schema execution and module access remain separate gates. |
-| P07C — Engagement/sharing foundation | After P07A, separately approve scope/files for engagement relationships, team assignment and sharing authorization; dependent features follow their module phases. |
+| P07C — Engagement/sharing foundation | Candidate firm engagements and team eligibility locally accepted. Sharing, action permissions and shared-schema execution remain separately gated. |
 | P08 — User management | Port tenant-aware users, roles, activation, password reset and session invalidation; verify membership and administrator boundaries. |
 | P09 — Clients | Port business/client records, selection and pagination with tenant, assignment and shared-engagement scope; reject unauthorized access. |
 | P10 — Application shell | Host existing assets; verify login, tenant/client context, approved sharing, navigation, bookmarks and caches. |
@@ -157,6 +157,7 @@ $env:NUGET_PACKAGES = "$PWD\.tools\packages"
 - `Coexistence` ships disabled with an empty route table. P07 authentication is disabled by default; the [bridge contract](COEXISTENCE_CONTRACT.md) defines access, exact registrations, loopback limits and rollback.
 - P07 requires `Authentication__Enabled=true` and a canonical `Authentication__PublicOrigin`; HTTP is limited to localhost. Shared audit schema verification and separate approval precede deployment.
 - P07B's candidate `database/migrations/0003_tenant_foundation.sql` runs only in owned isolated fixtures; startup never applies it. It seeds no records, and repeat application fails safely. Membership lookup grants no client or engagement access.
+- P07C's candidate `database/migrations/0004_engagement_foundation.sql` is isolated-fixture only; startup never applies it. Team eligibility grants no client access or action permission.
 - `Platform__ApplicationName` and `Platform__DatabaseCapacityLimitBytes` override non-secret defaults. Invalid settings exit with code 1 before listening; the 500,000,000-byte setting is configuration only until capacity enforcement is ported.
 - Supply future secrets through approved environment/secret-store configuration, never appsettings.json, launch settings, or logs. Private settings files, SDKs, caches, and build outputs are ignored.
 - Windows 10 Pro 22H2 is outside the current .NET 10 supported-OS list. Aadil approved local development with this limitation; a local pass does not certify supported production hosting. P62 validates deployment separately.

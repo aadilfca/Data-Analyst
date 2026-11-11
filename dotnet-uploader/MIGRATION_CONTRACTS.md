@@ -49,7 +49,7 @@ High-risk request fixtures must cover login/current-client; ImportRequest; multi
 - A CA firm may work for a business before that business has a tenant or users and connect it later. When multiple firms serve one business, each sees only information authorized for its own engagement.
 - Policy configuration, delegation and defaults require explicit decisions. Configuration alone must not silently grant access outside its approved tenant, engagement, role and object scope; record who changed access and preserve audit history.
 - Deferred to relevant phases: ownership enforcement and existing-data mapping; verification evidence/change scope and report presentation; invitations, revocation and historical access; visibility controls; assignment exceptions; and consent. Do not enable an operation before its necessary rules are agreed and enforced.
-- P07A foundational direction is accepted; P07B local implementation is approved. P07C, shared-schema execution, deployed access and activation retain separate approval.
+- P07A foundational direction and P07B are accepted; P07C local implementation is approved. Shared-schema execution, deployed access and activation retain separate approval.
 
 ### P07B isolated tenant foundation
 
@@ -57,6 +57,13 @@ High-risk request fixtures must cover login/current-client; ImportRequest; multi
 - Internal membership lookup revalidates the shared session, active user, tenant and membership. It is not a public endpoint and proves no permission to access clients, engagements, reports or other tenants; future operations must revalidate their own authorization.
 - Isolated fixtures rehearse the candidate against synthetic legacy-shaped records; repeated SQL execution fails rather than silently accepting an unknown schema. Existing global username/client-code uniqueness remains unchanged for later review.
 - Runtime startup runs no SQL. A real data inventory, approved firm-tenant/user/client mapping, capacity, schema compatibility, rollback and explicit execution approval are required before applying any change to a shared database.
+
+### P07C isolated engagement foundation
+
+- Candidate SQL defines firm-held client engagements and manager/internee assignments, with database-enforced firm, client-home and membership relationships. A business can be recorded before it joins; no business-tenant connection or sharing grant is created.
+- Internal eligibility rechecks the active session, user, firm, membership, client, engagement and assignment in one query. It has no public endpoint and grants no client-data or action permission; callers must revalidate applicable authorization in their own operation.
+- Isolated fixtures rehearse rollback, repeat failure, firm separation, multiple engagements, invalid assignments, revocations and preservation of synthetic legacy records. No existing verification session is linked or changed.
+- Existing client routes remain blocked; business sharing/consent, tenant administration, action permissions and audit trails for assignment changes require their own approved phases. Never infer legal ownership from a workspace association.
 
 ## 3. PostgreSQL and financial values
 
