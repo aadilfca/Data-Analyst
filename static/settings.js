@@ -69,6 +69,33 @@ const SETTINGS_DEF = {
 let currentSettings = {};
 let currentCashflowDefaults = {};
 
+// The .NET shell supplies this capability for its own page only. Python's
+// existing flow is retained; the backend remains the authority on every write.
+function canEditTenantSettings() {
+    return !window.AppTenantSettings?.enabled || window.AppTenantSettings.canEdit === true;
+}
+
+function escapeSettingsHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, character => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[character]));
+}
+
+function applySettingsReadOnly() {
+    if (canEditTenantSettings()) return;
+    document.getElementById('settingsReadOnlyNotice').hidden = false;
+    document.querySelectorAll('#settingsContainer input, #settingsContainer select, #settingsContainer button, '
+        + '#cashflowDefaultsContainer input, #cashflowDefaultsContainer select, #cashflowDefaultsContainer button, '
+        + '#holidayDateInput, #holidayLabelInput, #holidayRepeatsYearly, #addHolidayBtn, .delete-holiday-btn')
+        .forEach(control => control.disabled = true);
+}
+
+function uploadPolicyMessage(required, saved = false) {
+    if (window.AppTenantSettings?.enabled) return `${saved ? 'Saved choice' : 'Current choice'}: backups ${required ? 'ON' : 'OFF'} for this workspace.`;
+    return saved ? (required ? 'Saved. Backups are ON for all users.' : 'Saved. Backups are OFF for all users during development.')
+        : (required ? 'Backups are ON for all users.' : 'Backups are OFF for all users during development.');
+}
+
 async function loadUploadBackupSetting() {
     const panel = document.getElementById('uploadBackupsPanel');
     const toggle = document.getElementById('uploadBackupRequired');
@@ -84,11 +111,12 @@ async function loadUploadBackupSetting() {
         const policy = await response.json();
         toggle.checked = policy.allow_without_backup !== true;
         toggle.disabled = save.disabled = false;
-        status.textContent = toggle.checked ? 'Backups are ON for all users.' : 'Backups are OFF for all users during development.';
+        status.textContent = uploadPolicyMessage(toggle.checked);
     } catch (error) { panel.hidden = false; status.textContent = error.message; }
 }
 
 async function saveUploadBackupSetting() {
+    if (!canEditTenantSettings()) return;
     const toggle = document.getElementById('uploadBackupRequired');
     const save = document.getElementById('saveUploadBackupsBtn');
     const status = document.getElementById('uploadBackupsStatus');
@@ -103,7 +131,7 @@ async function saveUploadBackupSetting() {
         if (!response.ok) throw new Error('Save was not confirmed. Reload Settings to check the saved choice.');
         const policy = await response.json();
         if (policy.allow_without_backup !== !selected) throw new Error('Save was not confirmed. Reload Settings to check the saved choice.');
-        status.textContent = selected ? 'Saved. Backups are ON for all users.' : 'Saved. Backups are OFF for all users during development.';
+        status.textContent = uploadPolicyMessage(selected, true);
     } catch (error) { status.textContent = error.message; }
     finally { toggle.disabled = save.disabled = false; }
 }
@@ -183,11 +211,11 @@ function renderCashflowDefaults() {
             </div>
             <div class="setting-row">
                 <label for="cashflowCustomStart">Custom start date</label>
-                <input type="date" id="cashflowCustomStart" value="${currentCashflowDefaults.custom_start || ''}" ${custom ? '' : 'disabled'}>
+                <input type="date" id="cashflowCustomStart" value="${escapeSettingsHtml(currentCashflowDefaults.custom_start)}" ${custom ? '' : 'disabled'}>
             </div>
             <div class="setting-row">
                 <label for="cashflowCustomEnd">Custom end date</label>
-                <input type="date" id="cashflowCustomEnd" value="${currentCashflowDefaults.custom_end || ''}" ${custom ? '' : 'disabled'}>
+                <input type="date" id="cashflowCustomEnd" value="${escapeSettingsHtml(currentCashflowDefaults.custom_end)}" ${custom ? '' : 'disabled'}>
             </div>
             <div style="text-align:right; margin-top:12px;">
                 <button class="save-btn" id="saveCashflowDefaultsBtn">Save Report Defaults</button>
@@ -196,9 +224,11 @@ function renderCashflowDefaults() {
     `;
     document.getElementById('cashflowDefaultPeriod')?.addEventListener('change', toggleCashflowCustomDates);
     document.getElementById('saveCashflowDefaultsBtn')?.addEventListener('click', saveCashflowDefaults);
+    applySettingsReadOnly();
 }
 
 function toggleCashflowCustomDates() {
+    if (!canEditTenantSettings()) return;
     const enabled = document.getElementById('cashflowDefaultPeriod')?.value === 'custom';
     ['cashflowCustomStart', 'cashflowCustomEnd'].forEach(id => {
         const input = document.getElementById(id);
@@ -234,7 +264,7 @@ function renderSettings() {
                             ${def.options.map(opt => `<option value="${opt.value}" ${opt.value === value ? 'selected' : ''}>${opt.label}</option>`).join('')}
                         </select>
                     ` : `
-                        <input type="${def.inputType || 'text'}" id="setting_${key}" value="${value}" />
+                        <input type="${def.inputType || 'text'}" id="setting_${key}" value="${escapeSettingsHtml(value)}" />
                     `}
                     <span class="hint">${def.hint}</span>
                 </div>
@@ -248,9 +278,11 @@ function renderSettings() {
     `;
     container.innerHTML = html;
     document.getElementById('saveSettingsBtn')?.addEventListener('click', saveSettings);
+    applySettingsReadOnly();
 }
 
 async function saveSettings() {
+    if (!canEditTenantSettings()) return;
     const updates = [];
     for (const key of Object.keys(SETTINGS_DEF)) {
         const el = document.getElementById(`setting_${key}`);
@@ -291,6 +323,7 @@ function showStatus(msg, type) {
 }
 
 async function saveCashflowDefaults() {
+    if (!canEditTenantSettings()) return;
     const period = document.getElementById('cashflowDefaultPeriod')?.value || 'ytd';
     const customStart = document.getElementById('cashflowCustomStart')?.value || '';
     const customEnd = document.getElementById('cashflowCustomEnd')?.value || '';
@@ -354,15 +387,17 @@ function renderHolidayList() {
 
     container.innerHTML = currentHolidays.map(h => `
         <div class="holiday-row">
-            <span class="holiday-date">${h.date}</span>
-            <span class="holiday-label">${h.label}</span>
+            <span class="holiday-date">${escapeSettingsHtml(h.date)}</span>
+            <span class="holiday-label">${escapeSettingsHtml(h.label)}</span>
             ${h.repeats_yearly ? '<span class="holiday-yearly-badge">🔁 Yearly</span>' : ''}
-            <button class="delete-holiday-btn" data-id="${h.id}" title="Delete holiday">🗑️</button>
+            <button class="delete-holiday-btn" data-id="${escapeSettingsHtml(h.id)}" title="Delete holiday">🗑️</button>
         </div>
     `).join('');
+    applySettingsReadOnly();
 }
 
 async function addHoliday() {
+    if (!canEditTenantSettings()) return;
     const dateInput = document.getElementById('holidayDateInput');
     const labelInput = document.getElementById('holidayLabelInput');
     const repeatsYearlyInput = document.getElementById('holidayRepeatsYearly');
@@ -398,6 +433,7 @@ async function addHoliday() {
 }
 
 async function deleteHoliday(id) {
+    if (!canEditTenantSettings()) return;
     if (!confirm('Delete this holiday?')) return;
     try {
         const res = await fetch(`${API_BASE}/api/settings/holidays/${id}`, { method: 'DELETE' });
@@ -412,10 +448,16 @@ async function deleteHoliday(id) {
 
 window.onload = async function() {
     if (window.clientContextReady) await window.clientContextReady;
-    document.getElementById('connectGoogleDriveBtn')?.addEventListener('click', beginGoogleDriveReconnect);
-    const driveOAuthResult = showDriveOAuthResult();
-    await loadGoogleDriveStatus();
-    if (driveOAuthResult) document.getElementById('googleDriveStatus').textContent = driveOAuthResult;
+    if (window.AppTenantSettings?.enabled) {
+        // Drive connection is a later migration phase, not an active P11 control.
+        document.getElementById('googleDrivePanel').hidden = true;
+    } else {
+        document.getElementById('connectGoogleDriveBtn')?.addEventListener('click', beginGoogleDriveReconnect);
+        const driveOAuthResult = showDriveOAuthResult();
+        await loadGoogleDriveStatus();
+        if (driveOAuthResult) document.getElementById('googleDriveStatus').textContent = driveOAuthResult;
+    }
+    applySettingsReadOnly();
     loadUploadBackupSetting();
     document.getElementById('saveUploadBackupsBtn')?.addEventListener('click', saveUploadBackupSetting);
     loadSettings();

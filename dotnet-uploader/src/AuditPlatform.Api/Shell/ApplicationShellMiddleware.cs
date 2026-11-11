@@ -16,7 +16,8 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
     private static readonly HashSet<string> NoClientPages = [..AdminPages,"settings.html","client_settings.html","client_select.html"];
 
     public async Task InvokeAsync(HttpContext context, IOptions<ApplicationShellOptions> options,
-        TenantSessionService tenants, AuditPlatform.Api.Clients.TenantClientService clients)
+        TenantSessionService tenants, AuditPlatform.Api.Clients.TenantClientService clients,
+        IOptions<SettingsManagementOptions> settings)
     {
         if (!options.Value.Enabled) { await next(context); return; }
         var path=context.Request.Path.Value ?? "/";
@@ -28,6 +29,7 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
         var canonicalApi=path.TrimEnd('/').ToLowerInvariant();
         var boundApi=context.Request.Path.StartsWithSegments("/api/users")
             || context.Request.Path.StartsWithSegments("/api/clients")
+            || context.Request.Path.StartsWithSegments("/api/settings")
             || canonicalApi is "/api/auth/current-client" or "/api/auth/select-client";
         if (boundApi && session is not null && (session.TenantId is null
             || context.Request.Headers["X-App-Context"].Count!=1
@@ -92,9 +94,11 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
         var content=await File.ReadAllTextAsync(fullPath,context.RequestAborted);
         var key=session is null ? "" : TenantSessionService.ContextKey(session);
         var selectedTenant=tenantContext is null ? session?.TenantId : tenantContext.SelectedTenantId;
+        var settingsEnabled=settings.Value.Enabled ? "true" : "false";
+        var settingsAdmin=tenantContext?.Tenants.SingleOrDefault(t=>t.Id==selectedTenant)?.Role=="admin" ? "true" : "false";
         // Numeric/hash-only attributes need no user-controlled HTML. This runs
         // before retained scripts, clearing old browser state before they read it.
-        var script=$"<script src=\"/shell/context.js\" data-context=\"{key}\" data-tenant=\"{selectedTenant}\"></script>";
+        var script=$"<script src=\"/shell/context.js\" data-context=\"{key}\" data-tenant=\"{selectedTenant}\" data-settings-enabled=\"{settingsEnabled}\" data-settings-admin=\"{settingsAdmin}\"></script>";
         content=content.Replace("<head>","<head>"+script,StringComparison.Ordinal);
         await context.Response.WriteAsync(content,context.RequestAborted);
     }

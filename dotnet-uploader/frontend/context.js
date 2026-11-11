@@ -3,6 +3,9 @@
     const tag = document.currentScript;
     const key = tag.dataset.context || '';
     const tenant = tag.dataset.tenant || '';
+    if (tag.dataset.settingsEnabled === 'true') window.AppTenantSettings = {
+        enabled: true, canEdit: tag.dataset.settingsAdmin === 'true'
+    };
     const marker = key + '/' + tenant;
     let changed = true;
     try {
@@ -35,6 +38,7 @@
         const url = new URL(request.url);
         const path = url.pathname.replace(/\/+$/, '').toLowerCase();
         const bound = url.origin === location.origin && (path.startsWith('/api/users')
+            || path.startsWith('/api/settings')
             || path.startsWith('/api/clients')
             || ['/api/auth/current-client', '/api/auth/select-client'].includes(path));
         const headers = new Headers(request.headers);

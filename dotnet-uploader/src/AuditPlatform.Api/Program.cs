@@ -9,6 +9,7 @@ using AuditPlatform.Api.Tenancy;
 using AuditPlatform.Api.Users;
 using AuditPlatform.Api.Clients;
 using AuditPlatform.Api.Shell;
+using AuditPlatform.Api.Settings;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -68,8 +69,15 @@ builder.Services.AddSingleton<TenantClientService>();
 builder.Services.AddOptions<ApplicationShellOptions>()
     .Bind(builder.Configuration.GetSection(ApplicationShellOptions.SectionName)).ValidateOnStart();
 builder.Services.AddSingleton<TenantSessionService>();
+builder.Services.AddOptions<SettingsManagementOptions>()
+    .Bind(builder.Configuration.GetSection(SettingsManagementOptions.SectionName)).ValidateOnStart();
+builder.Services.AddSingleton<TenantSettingsService>();
 
 var app = builder.Build();
+if (app.Services.GetRequiredService<IOptions<SettingsManagementOptions>>().Value.Enabled
+    && !app.Services.GetRequiredService<IOptions<ApplicationShellOptions>>().Value.Enabled)
+    throw new OptionsValidationException(SettingsManagementOptions.SectionName,typeof(SettingsManagementOptions),
+        ["Tenant settings require the application shell and its session tenant context."]);
 if (app.Services.GetRequiredService<IOptions<ApplicationShellOptions>>().Value.Enabled
     && (!app.Services.GetRequiredService<IOptions<AuthenticationOptions>>().Value.Enabled
         || !app.Services.GetRequiredService<IOptions<ClientManagementOptions>>().Value.Enabled
@@ -87,6 +95,7 @@ app.UseWhen(context => context.RequestServices.GetRequiredService<IOptions<Authe
     && (context.Request.Path.StartsWithSegments("/api/auth")
     || context.Request.Path.StartsWithSegments("/api/users")
     || context.Request.Path.StartsWithSegments("/api/clients")
+    || context.Request.Path.StartsWithSegments("/api/settings")
     || (context.RequestServices.GetRequiredService<IOptions<CoexistenceOptions>>().Value.Enabled
         && context.RequestServices.GetRequiredService<CoexistenceRouteTable>()
             .Find(context.Request.Method, context.Request.Path.Value ?? "") is not null)),

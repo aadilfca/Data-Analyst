@@ -114,6 +114,15 @@ This list records discussion, not blanket authorization to activate policies. Re
 - The .NET-only external bootstrap runs before retained scripts, clearing application sessionStorage/history and obsolete selected-client localStorage keys on session/workspace change. Cross-tab notifications, visibility/focus and restored-page checks invalidate stale documents; browser state grants no access. It adds workspace selection to NAV_MANIFEST and a visible switch link without modifying Python assets.
 - Client-card intents remain allowlisted; shared-data access and later-module APIs stay unavailable. Schema/mapping/backup/execution, full parity and cross-backend enforcement retain separate activation gates. Shell/browser rehearsal is not deployment acceptance; remaining modules keep their planned phases.
 
+### P11 isolated tenant settings
+
+- Default-off settings APIs require the shell's selected tenant and revision. Active members read ordinary settings, holidays and report defaults; tenant administrators change them and read/change backup policy. These native permission changes are approved; legacy Python permissions remain unchanged.
+- Candidate tables separate tenant settings/holidays without copying legacy SQLite/PostgreSQL rows or running startup DDL. Unstored keys use existing seed defaults in memory. Only known ordinary/report keys are exposed; generic writes cannot bypass dedicated Cashflows/backup routes or expose unknown/private keys.
+- Preserve ordinary string values and precision, holiday date/label/yearly fields, API paths/envelopes, and legacy local-server-day report-default resolution. Dedicated endpoints validate dates/ranges and strict backup booleans; full malformed-request/error/timestamp parity and historical-value mapping remain activation gates.
+- Each change and its tenant-attributed audit commit together; all four Cashflows defaults save atomically. The existing Save All form still sends separate per-key requests, not one batch transaction. Audit metadata excludes raw settings/labels; holiday reference deletion is scoped and audited.
+- Shared Settings UI escapes saved values and shows native non-admin controls read-only using shell capability metadata; server checks remain authoritative. Python's existing UI flow remains editable as before. Native Drive controls stay hidden until their phase; no OAuth/backup execution is added.
+- Backup policy is a stored tenant choice only until upload consumers enforce it and invalidate/recheck affected validation plans. Legacy writers still read their original stores. Do not activate settings/policy routing before catalog/mapping, compatible consumers across both backends, browser acceptance and explicit activation approval.
+
 ## 3. PostgreSQL and financial values
 
 | Contract | Required behavior |

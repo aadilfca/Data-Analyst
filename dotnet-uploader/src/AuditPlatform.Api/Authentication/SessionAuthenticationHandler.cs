@@ -16,6 +16,7 @@ public sealed class SessionAuthenticationHandler(RequestDelegate next)
         var isProtectedSurface = context.Request.Path.StartsWithSegments("/api/auth")
             || context.Request.Path.StartsWithSegments("/api/users")
             || context.Request.Path.StartsWithSegments("/api/clients")
+            || context.Request.Path.StartsWithSegments("/api/settings")
             || (shell && (context.Request.Path=="/" || context.Request.Path.Value?.EndsWith(".html",StringComparison.Ordinal)==true))
             || routes.Find(context.Request.Method, context.Request.Path.Value ?? "") is not null;
         if (options.Value.Enabled && isProtectedSurface && context.Request.Cookies.ContainsKey("session_token"))
