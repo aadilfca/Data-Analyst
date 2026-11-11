@@ -47,7 +47,7 @@ Execution order: P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 (repor
 | P05C — Historical logs | Accepted by Aadil: guarded synthetic reconciliation, source/target checkpoints, ID/time mappings and recovery; 112 local tests pass. Actual data transfer/handoff retain separate approval. |
 | P06 — Coexistence | Accepted by Aadil: [routing contract](COEXISTENCE_CONTRACT.md), explicit ownership, default access block and bounded local forwarding; 175 serial tests pass (63 new). Public switching waits for P07; uncertain writes are never replayed. |
 | P07 — Authentication | Locally accepted behind disabled settings. See CHANGELOG_ARCHIVE.md, .NET authentication P07. |
-| P07A — Collaboration contract | Map business–firm workflow; agree ownership, tenant membership, engagement assignments, sharing, CEO visibility, verified meaning, consent and revocation before implementation. |
+| P07A — Collaboration contract | Initial decisions documented; ownership enforcement, delegation, verification evidence and revocation details remain open. See MIGRATION_CONTRACTS.md, P07A workflow and confirmed decisions. |
 | P07B — Tenant foundation | After P07A, separately approve scope/files for tenant identity, isolation and safe legacy-data mapping; rehearse migration and rollback in isolation. |
 | P07C — Engagement/sharing foundation | After P07A, separately approve scope/files for engagement relationships, team assignment and sharing authorization; dependent features follow their module phases. |
 | P08 — User management | Port tenant-aware users, roles, activation, password reset and session invalidation; verify membership and administrator boundaries. |

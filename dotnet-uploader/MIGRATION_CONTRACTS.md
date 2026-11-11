@@ -37,6 +37,18 @@ High-risk request fixtures must cover login/current-client; ImportRequest; multi
 - P07B/P07C follow separately approved scopes. Preserve canonical transaction/history contracts, legacy compatibility and one active writer; rehearse migrations/rollback in isolated databases before any shared-schema execution.
 - Every migrated operation, report, cache, job, export and download must enforce and carry the applicable authorized tenant/engagement context; prevent stale access after revocation. Reconcile safeguards across Python/.NET before switching routes.
 
+### P07A workflow and confirmed decisions
+
+- Current app: users select a client; uploads pass mapping/validation and controls; auditors record procedures, evidence and observations; Audit Workbook shows voucher-level Cleared, Query or Pending. These statuses do not by themselves define CEO access or final audit approval.
+- Current firm practice: the audit team uploads ERP Excel files. Future ERP-database integration should support automatic data fetching; its scope, access, safeguards and implementation require a separate brief and approval.
+- Intended engagement outcome: the manager reaches final agreement with management; the audit team records management's stance/response against each observation. CEO financial summaries start with the existing Balance Sheet, Income Statement and Cashflows reports, with a show/hide column for observations and responses. Report detail, timing, visibility, agreement process and authorization remain to be specified.
+- Agreement alone does not resolve an uncorrected issue: reports continue to show it as outstanding. The assigned audit team verifies corrections with manager review before resolution. Historical report/evidence access after sharing ends is determined by the specific arrangement; preserve audit history and apply the approved access policy.
+- Platform administrator Aadil configures control of access/sharing and CEO visibility/timing separately for each business and engagement. The CA firm's administrator or an authorized manager assigns/removes engagement managers and internees; platform and tenant administration are distinct.
+- Business-record ownership is determined by the specific arrangement. For CEO financial summaries, verified means audit checks were completed and reviewed by a manager, limited to the specific checked data and period; outstanding observations remain visible. If a later upload changes verified data, mark the affected data as needing audit review again. Detailed evidence and change-scope rules remain to be agreed.
+- Policy configuration, delegation and defaults require explicit decisions. Configuration alone must not silently grant access outside its approved tenant, engagement, role and object scope; record who changed access and preserve audit history.
+- Open: how arrangements record/enforce ownership and map existing data; verification evidence/change scope and how observations connect to CEO reports; who may invite/revoke and how arrangement-based historical access is enforced; CEO-visible timing and policy controls; assignment limits and exceptions; sharing across firms and revocation effects.
+- P07A remains in progress until these rules and workflow are agreed. P07B/P07C implementation, schema changes, deployed access and activation remain separately approved.
+
 ## 3. PostgreSQL and financial values
 
 | Contract | Required behavior |
@@ -133,7 +145,7 @@ Expected results come from independent source controls plus the captured existin
 
 | Set | Required comparisons |
 |---|---|
-| G01 — API/access | Exact API shapes; expired/inactive sessions, both tenant types, membership, assigned/unassigned staff, sharing and revocation, tenant/client mismatch and foreign object IDs. |
+| G01 — API/access | Exact API shapes; expired/inactive sessions, both tenant types, membership, assigned/unassigned staff, configurable sharing/CEO visibility, policy changes, revocation and foreign object IDs. |
 | G02 — Cells/amounts | XLS/XLSX native/text/serial dates, formulas/errors, Unicode, leading-zero codes, exact rates, trailing-zero equivalence, blank versus zero, nonfinite input, and row order. |
 | G03 — Source controls | Footing differences below/at/above 0.01 and 1.00, confirmed control rows, full coverage, optional fields, rejected exclusions, and empty-period confirmation. |
 | G04 — Identity/history | Original/repeated/renamed/reordered inputs; explicit IDs, identical repeated lines, unique corrections, ambiguity, full/partial removal, exact history and receipt counts. |

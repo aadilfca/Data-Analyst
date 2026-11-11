@@ -9650,3 +9650,7 @@ Release build passed; an earlier serial regression run passed 185 tests, and the
 ## Tenant collaboration plan — 2026-11-11
 
 Inserted P07A–P07C before P08 for business/CA-firm tenancy, engagement teams and controlled collaboration. Detailed ownership, sharing, visibility and verification rules await P07A; later implementation and schema changes retain separate approvals and isolated rehearsals. Preserved P07 acceptance, legacy rollback, transaction/history contracts and the unresolved 400/500 MB policy alignment. Documentation-only; no application or database change.
+
+## Collaboration contract P07A — 2026-11-11
+
+Documented audit-team ERP Excel upload, future ERP-database fetching, manager agreement and audit-team entry of per-observation management responses. CEO reports start with existing Balance Sheet, Income Statement and Cashflows, adding a show/hide observations/responses column; uncorrected issues stay outstanding until audit-team verification with manager review. Verified means completed, manager-reviewed checks only for the checked data and period; later changes require renewed review of affected data. Confirmed per-business/engagement configurable platform-admin sharing and CEO visibility, firm-admin/authorized-manager team assignment and arrangement-based ownership/historical access. Enforcement, report presentation, delegation, verification evidence and visibility details remain open; P07A is not complete. Documentation-only; no application, database or uncommitted upload change.
