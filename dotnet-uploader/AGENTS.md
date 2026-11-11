@@ -4,7 +4,7 @@
 
 Migrate the complete Python application backend to ASP.NET Core/C#, retaining Python for financial report calculations and report generation. The folder remains `dotnet-uploader/`; `AuditPlatform.Api` now provides the service foundation. Existing browser assets move to ASP.NET Core in later phases; .NET supplies report data to Python.
 
-Plan dated 2026-11-10. P01–P04B are accepted; see [MIGRATION_BASELINE.md](MIGRATION_BASELINE.md), [migration-baseline.json](migration-baseline.json), and [MIGRATION_CONTRACTS.md](MIGRATION_CONTRACTS.md). P05 file confirmation is next; P06–P63 remain pending. Each implementation phase requires file/approach approval. Preserve the working Python app throughout staged replacement.
+Plan dated 2026-11-10. P01–P05A are accepted; see [MIGRATION_BASELINE.md](MIGRATION_BASELINE.md), [migration-baseline.json](migration-baseline.json), and [MIGRATION_CONTRACTS.md](MIGRATION_CONTRACTS.md). P05B file confirmation is next; P05C–P63 remain pending. Each implementation phase requires file/approach approval. Preserve the working Python app throughout staged replacement.
 
 ## Agreed technology direction
 
@@ -42,7 +42,9 @@ Numbers describe the default sequence. P02 records dependencies; subsequent file
 | P03 — Service foundation | Accepted by Aadil: .NET solution, validated settings, structured console logs, and health endpoints; Release build and nine smoke/configuration checks pass. |
 | P04A — PostgreSQL connections | Accepted by Aadil: disabled-by-default settings, bounded singleton pool and readiness; Release build and 32 isolated PostgreSQL tests pass. |
 | P04B — Transactions and schema | Accepted by Aadil: atomic writes, read-only snapshots and [schema ownership](POSTGRES_SCHEMA_OWNERSHIP.md); 54 isolated tests pass. Deployed catalog/metering remain prerequisites for shared-schema changes. |
-| P05 — Audit and errors | Replace SQLite-dependent audit/error storage with the agreed persistence and attribution; reconcile existing records and protect sensitive inputs. |
+| P05A — Audit/error contract | Accepted by Aadil: [record, attribution, privacy and failure contract](AUDIT_ERROR_CONTRACT.md). Existing source reviewed; deployed records remain unverified. |
+| P05B — Audit/error persistence | Pending: PostgreSQL stores, sanitization and failure handling; prove atomic required audits and bounded diagnostic fallback on isolated fixtures. |
+| P05C — Historical logs | Pending: rehearse source-aware registry/log reconciliation, ID/time mappings and repeat-safe recovery; actual data transfer and writer handoff retain separate approval. |
 | P06 — Coexistence | Establish same-origin route switching and a private report-service client contract; demonstrate routing, authorization, and fallback with stubbed responses. |
 | P07 — Authentication | Port login/logout, bcrypt compatibility, expiry, cookie/CSRF behavior, and inactive-user checks; verify session compatibility and rejection cases. |
 | P08 — User management | Port users, roles, activation, password reset, and session invalidation; verify administrator controls against the agreed account policy. |
