@@ -10,6 +10,7 @@ using AuditPlatform.Api.Users;
 using AuditPlatform.Api.Clients;
 using AuditPlatform.Api.Shell;
 using AuditPlatform.Api.Settings;
+using AuditPlatform.Api.Columns;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -72,8 +73,15 @@ builder.Services.AddSingleton<TenantSessionService>();
 builder.Services.AddOptions<SettingsManagementOptions>()
     .Bind(builder.Configuration.GetSection(SettingsManagementOptions.SectionName)).ValidateOnStart();
 builder.Services.AddSingleton<TenantSettingsService>();
+builder.Services.AddOptions<ColumnManagementOptions>()
+    .Bind(builder.Configuration.GetSection(ColumnManagementOptions.SectionName)).ValidateOnStart();
+builder.Services.AddSingleton<TenantColumnService>();
 
 var app = builder.Build();
+if (app.Services.GetRequiredService<IOptions<ColumnManagementOptions>>().Value.Enabled
+    && !app.Services.GetRequiredService<IOptions<ApplicationShellOptions>>().Value.Enabled)
+    throw new OptionsValidationException(ColumnManagementOptions.SectionName,typeof(ColumnManagementOptions),
+        ["Tenant columns require the application shell and its session tenant context."]);
 if (app.Services.GetRequiredService<IOptions<SettingsManagementOptions>>().Value.Enabled
     && !app.Services.GetRequiredService<IOptions<ApplicationShellOptions>>().Value.Enabled)
     throw new OptionsValidationException(SettingsManagementOptions.SectionName,typeof(SettingsManagementOptions),
@@ -96,6 +104,7 @@ app.UseWhen(context => context.RequestServices.GetRequiredService<IOptions<Authe
     || context.Request.Path.StartsWithSegments("/api/users")
     || context.Request.Path.StartsWithSegments("/api/clients")
     || context.Request.Path.StartsWithSegments("/api/settings")
+    || context.Request.Path.StartsWithSegments("/api/columns")
     || (context.RequestServices.GetRequiredService<IOptions<CoexistenceOptions>>().Value.Enabled
         && context.RequestServices.GetRequiredService<CoexistenceRouteTable>()
             .Find(context.Request.Method, context.Request.Path.Value ?? "") is not null)),

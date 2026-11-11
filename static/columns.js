@@ -31,6 +31,12 @@ const addColumnBtn = document.getElementById('addColumnBtn');
 let editingId = null;
 const columnActionsInFlight = new Set();
 
+// Native capability affects presentation only; every API operation rechecks
+// tenant/session permissions. Python retains its existing editable page.
+function canEditTenantColumns() {
+    return !window.AppTenantColumns?.enabled || window.AppTenantColumns.canEdit === true;
+}
+
 function startColumnsLoading(target) {
     if (!window.LoadingUI || typeof window.LoadingUI.startGlobalLoading !== 'function') return null;
     return window.LoadingUI.startGlobalLoading(target);
@@ -163,6 +169,7 @@ function renderColumns(columns) {
         editBtn.style.fontSize = '18px';
         editBtn.title = 'Edit column';
         editBtn.addEventListener('click', () => openEditModal(col, editBtn));
+        editBtn.disabled = !canEditTenantColumns();
 
         const delBtn = document.createElement('button');
         delBtn.textContent = '🗑️';
@@ -173,6 +180,7 @@ function renderColumns(columns) {
         delBtn.style.marginLeft = '8px';
         delBtn.title = 'Delete column (soft)';
         delBtn.addEventListener('click', () => confirmDelete(col.id, col.column_name, delBtn));
+        delBtn.disabled = !canEditTenantColumns();
 
         tdActions.appendChild(editBtn);
         tdActions.appendChild(delBtn);
@@ -234,16 +242,22 @@ async function loadColumnUsage(columnId, target = null) {
     const loadingToken = startColumnsLoading(target);
     try {
         const res = await fetch(API_BASE + '/api/columns/' + columnId + '/usage');
+        if (window.AppTenantColumns?.enabled && res.status === 409) return { requires_review: true };
         if (!res.ok) throw new Error('Failed to fetch usage');
         return await res.json();
     } catch (error) {
-        return null;
+        return window.AppTenantColumns?.enabled ? { requires_review: true } : null;
     } finally {
         stopColumnsLoading(loadingToken);
     }
 }
 
 function renderColumnUsage(usage) {
+    if (usage?.requires_review) {
+        columnUsagePreview.style.display = 'block';
+        columnUsagePreview.textContent = 'Some changes require review because this column has linked definitions, historical bindings or unverified usage.';
+        return;
+    }
     if (!usage) {
         columnUsagePreview.style.display = 'none';
         columnUsagePreview.textContent = '';
@@ -258,6 +272,7 @@ function renderColumnUsage(usage) {
 
 // ---------- MODAL CONTROL ----------
 function openModal(title, columnData = null, triggerBtn = null) {
+    if (!canEditTenantColumns()) return;
     modalTitle.textContent = title;
     modalOverlay.style.display = 'block';
     modal.style.display = 'block';
@@ -312,6 +327,7 @@ function openEditModal(column, triggerBtn = null) { openModal('Edit Column', col
 
 // ---------- CONFIRM DELETE ----------
 async function confirmDelete(id, name, triggerBtn = null) {
+    if (!canEditTenantColumns()) return;
     if (!confirm(`Are you sure you want to delete column "${name}"? This will soft-delete it.`)) {
         return;
     }
@@ -374,6 +390,7 @@ function clearForm() {
 
 // ---------- SAVE FUNCTION ----------
 async function saveColumn(keepModalOpen, triggerBtn) {
+    if (!canEditTenantColumns()) return false;
     const name = colName.value.trim();
     const type = colType.value;
     const category = colCategory.value.trim();
@@ -404,7 +421,7 @@ async function saveColumn(keepModalOpen, triggerBtn) {
         if (editingId) {
             url += '/' + editingId;
             method = 'PUT';
-            payload.is_active = 1;
+            payload.is_active = true;
         }
 
         const res = await fetch(url, {
@@ -489,7 +506,16 @@ document.addEventListener('keydown', function(e) {
 });
 
 // ---------- INIT ----------
-window.onload = function() {
+window.onload = async function() {
+    if (window.clientContextReady) await window.clientContextReady;
+    if (window.AppTenantColumns?.enabled) {
+        document.getElementById('columnIdentityNotice').hidden = false;
+        colNotes.placeholder = 'Notes about the meaning and intended use of this column';
+        if (!canEditTenantColumns()) {
+            addColumnBtn.disabled = true;
+            document.getElementById('columnsReadOnlyNotice').hidden = false;
+        }
+    }
     loadColumns();
     setupSorting();
 };
