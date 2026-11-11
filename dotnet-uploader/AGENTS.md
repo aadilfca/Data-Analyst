@@ -4,7 +4,7 @@
 
 Migrate the complete application backend, financial calculations, reports, Excel exports and jobs to ASP.NET Core/C#. The folder remains `dotnet-uploader/`; `AuditPlatform.Api` provides the service foundation. Retain existing HTML/CSS/JavaScript. Python remains the working comparison/rollback application until each replacement is accepted; no separate Python report service is planned.
 
-Plan dated 2026-11-10; Aadil approved full C# reporting and reports-before-audit sequencing on 2026-11-11. P01–P06 are accepted. See [MIGRATION_BASELINE.md](MIGRATION_BASELINE.md), [migration-baseline.json](migration-baseline.json), and [current contracts](MIGRATION_CONTRACTS.md), which supersede P01's historical ownership proposals. P07 onward remains pending; each implementation phase requires file/approach approval.
+Plan dated 2026-11-10; Aadil approved full C# reporting and reports-before-audit sequencing on 2026-11-11. P01–P07 are locally accepted. See [MIGRATION_BASELINE.md](MIGRATION_BASELINE.md), [migration-baseline.json](migration-baseline.json), and [current contracts](MIGRATION_CONTRACTS.md). Each implementation phase requires file/approach approval.
 
 ## Agreed technology direction
 
@@ -46,7 +46,7 @@ Execution order: P06 → P07–P40 → P53A–P56 (reports) → P41–P52 (audit
 | P05B — Audit/error persistence | Accepted by Aadil: required audit writes, bounded diagnostic logging and safe middleware; 90 isolated tests pass. Candidate SQL remains gated from shared-schema execution. |
 | P05C — Historical logs | Accepted by Aadil: guarded synthetic reconciliation, source/target checkpoints, ID/time mappings and recovery; 112 local tests pass. Actual data transfer/handoff retain separate approval. |
 | P06 — Coexistence | Accepted by Aadil: [routing contract](COEXISTENCE_CONTRACT.md), explicit ownership, default access block and bounded local forwarding; 175 serial tests pass (63 new). Public switching waits for P07; uncertain writes are never replayed. |
-| P07 — Authentication | Port login/logout, bcrypt compatibility, expiry, cookie/CSRF behavior, and inactive-user checks; verify session compatibility and rejection cases. |
+| P07 — Authentication | Locally accepted behind disabled settings. See CHANGELOG_ARCHIVE.md, .NET authentication P07. |
 | P08 — User management | Port users, roles, activation, password reset, and session invalidation; verify administrator controls against the agreed account policy. |
 | P09 — Clients | Port client CRUD, selection, pagination, and scope enforcement; verify permitted workflows and cross-client rejection. |
 | P10 — Application shell | Host existing assets and navigation through ASP.NET Core; verify login redirects, client context, bookmarks, and cache behavior. |
@@ -151,7 +151,8 @@ $env:NUGET_PACKAGES = "$PWD\.tools\packages"
 - `PostgresAuditWriter` requires the supplied write context and trusted server inputs; module ports integrate it with their mutations. Diagnostic capture uses safe symbols and route templates. `LogPersistence__...` limits are defined in [the audit/error contract](AUDIT_ERROR_CONTRACT.md); diagnostics never read request bodies, queries or cookies.
 - Candidate `database/migrations/0001_audit_error.sql` is executed only by owned test fixtures here. Runtime startup performs no DDL. Deployed catalog/capacity evidence and explicit execution approval remain required; P05C handles historical reconciliation and P07/P57 authentication/dashboard integration.
 - `tools/AuditPlatform.LogRehearsal` uses the installed ASP.NET shared runtime and existing packages, but starts no web host. Tests generate owned PostgreSQL clusters and synthetic JSON; the CLI requires `--input`/`--owner-dir` plus secret environment variable `AUDIT_REHEARSAL_CONNECTION`. Input stays in that owned run directory; it does not read SQLite or Python settings. See [reconciliation gates](AUDIT_ERROR_CONTRACT.md#historical-reconciliation-and-delivery-gates).
-- `Coexistence` ships disabled with an empty route table and P07's access block. The [bridge contract](COEXISTENCE_CONTRACT.md) defines exact route registrations, loopback-only targets, payload/deadline limits and controlled rollback; settings alone cannot enable live forwarding. Test controllers/access decisions stay in the test assembly.
+- `Coexistence` ships disabled with an empty route table. P07 authentication is disabled by default; the [bridge contract](COEXISTENCE_CONTRACT.md) defines access, exact registrations, loopback limits and rollback.
+- P07 requires `Authentication__Enabled=true` and a canonical `Authentication__PublicOrigin`; HTTP is limited to localhost. Shared audit schema verification and separate approval precede deployment.
 - `Platform__ApplicationName` and `Platform__DatabaseCapacityLimitBytes` override non-secret defaults. Invalid settings exit with code 1 before listening; the 500,000,000-byte setting is configuration only until capacity enforcement is ported.
 - Supply future secrets through approved environment/secret-store configuration, never appsettings.json, launch settings, or logs. Private settings files, SDKs, caches, and build outputs are ignored.
 - Windows 10 Pro 22H2 is outside the current .NET 10 supported-OS list. Aadil approved local development with this limitation; a local pass does not certify supported production hosting. P62 validates deployment separately.

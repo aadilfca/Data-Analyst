@@ -4,11 +4,11 @@ P06 rehearses route ownership with synthetic HTTP responses. The target remains 
 
 ## Ownership and access
 
-- Production registers no bridge routes; `Coexistence:Enabled` defaults to `false`. Existing health endpoints remain local. Changing settings alone cannot activate forwarding: `PendingCoexistenceAccessGate` denies every registered bridge operation until P07 supplies compatible access checks.
+- Production registers no bridge routes; `Coexistence:Enabled` and authentication default to `false`. Existing health endpoints remain local. Settings alone cannot register forwarding routes.
 - Server code registers an immutable ID, HTTP method, exact canonical path, owner (`DotNet`/`Legacy`) and access category (`Public`/`Authenticated`/`Administrator`/`Client`). No browser parameter, header or configuration value selects a backend URL or registers a route.
 - Duplicate IDs/normalized method-path pairs, reserved health paths, templates, ambiguous paths and unsupported methods fail registration. Case/slash variants of a registered path are rejected before ASP.NET's permissive matching can bypass its gate. Unknown paths never forward; unowned methods on registered paths return 405.
 - The access gate runs before either backend receives a registered operation. Unavailable/unauthenticated/forbidden decisions return 503/401/403. Test gates/controllers exist only in the test assembly. Stub decisions prove dispatch behavior, not real session, client/object authorization or CSRF enforcement.
-- P07 must validate shared sessions, active users, role/client/object scope and mutation CSRF before public switching. Forwarded session cookies remain legacy authentication inputs; identity/role headers are never trusted. Native module endpoints still need their own approved authorization.
+- P07 validates shared active sessions, roles and configured-origin mutation checks. Client routes remain blocked until route-specific scope is proven. Public switching requires module authorization and acceptance; forwarded identity headers are never trusted.
 
 ## Local transport and limits
 

@@ -1,4 +1,5 @@
 using AuditPlatform.Api.Configuration;
+using AuditPlatform.Api.Authentication;
 using AuditPlatform.Api.Coexistence;
 using AuditPlatform.Api.Data;
 using AuditPlatform.Api.Health;
@@ -19,7 +20,7 @@ builder.Services.AddOptions<CoexistenceOptions>()
     .ValidateDataAnnotations()
     .ValidateOnStart();
 builder.Services.AddSingleton(provider => new CoexistenceRouteTable(provider.GetServices<CoexistenceRoute>()));
-builder.Services.AddSingleton<ICoexistenceAccessGate, PendingCoexistenceAccessGate>();
+builder.Services.AddSingleton<ICoexistenceAccessGate, SessionCoexistenceGate>();
 builder.Services.AddSingleton(provider => new LegacyForwarder(
     provider.GetRequiredService<IOptions<CoexistenceOptions>>(),
     provider.GetRequiredService<ILogger<LegacyForwarder>>()));
@@ -46,6 +47,11 @@ builder.Services.AddOptions<LogPersistenceOptions>()
 builder.Services.AddSingleton<LogSanitizer>();
 builder.Services.AddSingleton<PostgresAuditWriter>();
 builder.Services.AddSingleton<DiagnosticErrorLogger>();
+builder.Services.AddOptions<AuthenticationOptions>()
+    .Bind(builder.Configuration.GetSection(AuthenticationOptions.SectionName))
+    .ValidateDataAnnotations().ValidateOnStart();
+builder.Services.AddSingleton<PostgresSessionStore>();
+builder.Services.AddSingleton<AuthenticationService>();
 
 var app = builder.Build();
 // Invalid/duplicate registrations fail before listening. Production currently
@@ -54,6 +60,13 @@ _ = app.Services.GetRequiredService<CoexistenceRouteTable>();
 
 app.UseMiddleware<ExceptionLoggingMiddleware>();
 app.UseRouting();
+app.UseMiddleware<SessionAuthenticationHandler>();
+app.UseWhen(context => context.RequestServices.GetRequiredService<IOptions<AuthenticationOptions>>().Value.Enabled
+    && (context.Request.Path.StartsWithSegments("/api/auth")
+    || (context.RequestServices.GetRequiredService<IOptions<CoexistenceOptions>>().Value.Enabled
+        && context.RequestServices.GetRequiredService<CoexistenceRouteTable>()
+            .Find(context.Request.Method, context.Request.Path.Value ?? "") is not null)),
+    branch => branch.UseMiddleware<CsrfMiddleware>());
 app.UseMiddleware<CoexistenceMiddleware>();
 app.MapControllers();
 

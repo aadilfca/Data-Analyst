@@ -12,6 +12,8 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
+- dotnet-uploader/ → .NET migration foundation, guarded authentication, audit persistence and disabled coexistence routing. See CHANGELOG_ARCHIVE.md.
+
 - routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, statements, category-role notes with unallocated rows, profit links, reconciliations, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
 
 - routers/clients.py + static/clients.* → firm-level client management; admin-only except the paginated `GET /api/clients`. See CHANGELOG_ARCHIVE.md.
@@ -267,6 +269,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-11: Added disabled .NET authentication and guarded session checks; locally accepted. See CHANGELOG_ARCHIVE.md, .NET authentication P07.
 - 2026-11-10: Data Bank renders datasets before all-time metrics and derives client size from grouped estimates; local acceptance pending. See CHANGELOG_ARCHIVE.md, Data Bank first-render performance.
 - 2026-11-10: Compressed older Status entries into concise archive pointers, restoring the log budget.
 - 2026-11-09: Optimized upload reads/comparisons, aligned regression fixtures and fixed Gate Pass/Vendor Bill ERP header aliases; local acceptance pending. See CHANGELOG_ARCHIVE.md, Gate Pass and Vendor Bill ERP mappings.
