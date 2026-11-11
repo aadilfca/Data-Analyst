@@ -37,8 +37,10 @@ public sealed class LogSanitizer(IOptions<LogPersistenceOptions> options)
             return "";
         // Oversized/unrecognizable text is omitted rather than partially scanned
         // or echoed by a fallback. Redaction always precedes display truncation.
-        if (value.Length > 100000 || SensitiveText.IsMatch(value) || value.Any(c => c == '\0'))
+        if (value.Length > 100000 || value.Any(c => c == '\0'))
             return Redacted;
+        try { if (SensitiveText.IsMatch(value)) return Redacted; }
+        catch (RegexMatchTimeoutException) { return Redacted; }
         var runes = value.EnumerateRunes().ToArray();
         return string.Concat((tail ? runes.TakeLast(maximum) : runes.Take(maximum)).Select(r => r.ToString()));
     }
@@ -113,13 +115,49 @@ public sealed class LogSanitizer(IOptions<LogPersistenceOptions> options)
                     var hadOld = oldRow.TryGetValue(key, out var old);
                     var hasNew = newRow.TryGetValue(key, out var current);
                     if (hadOld && hasNew && PythonEqual(old, current)) continue;
-                    var permitted = record.ValueFields.Contains(key) && !Sensitive.IsMatch(key);
+                    var permitted = record.ValueFields.Contains(key) && !SensitiveKey(key);
                     before[key] = permitted ? SafeValue(hadOld ? old : default, 0) : Redacted;
                     after[key] = permitted ? SafeValue(hasNew ? current : default, 0) : Redacted;
                 }
                 return (Payload(before), Payload(after));
             default: return (null, null);
         }
+    }
+
+    // Historical deltas are already compact: diffing them again would erase
+    // evidence such as an added/removed field represented by null on both sides.
+    public (string? Old, string? New) HistoricalCompact(string action, JsonElement? oldRow,
+        JsonElement? newRow, IReadOnlySet<string> valueFields, bool fullRows)
+    {
+        if (fullRows)
+            return Compact(new(new(Guid.NewGuid(), Guid.NewGuid(), LogActor.System, null, action, "Rehearsal"),
+                1, oldRow, newRow, valueFields));
+        if (action == "INSERT") return (null, null);
+        if (action == "DELETE")
+        {
+            var old = Object(oldRow);
+            if (old.Count == 0) return (null, null);
+            if (old.Count != 1 || !old.TryGetValue("_row_fingerprint", out var hash)
+                || hash.ValueKind != JsonValueKind.String || hash.GetString()!.Length != 64
+                || hash.GetString()!.Any(c => !char.IsAsciiHexDigit(c)) || Object(newRow).Count != 0)
+                throw new ArgumentException("Historical DELETE requires an explicit fingerprint payload.");
+            return (JsonSerializer.Serialize(new Dictionary<string, string> { ["_row_fingerprint"] = hash.GetString()! }), null);
+        }
+        if (action != "UPDATE")
+        {
+            if (Object(oldRow).Count != 0 || Object(newRow).Count != 0)
+                throw new ArgumentException("Historical action has an unsupported payload.");
+            return (null, null);
+        }
+        string? Side(JsonElement? source)
+        {
+            var result = new SortedDictionary<string, object?>(StringComparer.Ordinal);
+            foreach (var pair in Object(source))
+                result[pair.Key] = valueFields.Contains(pair.Key) && !SensitiveKey(pair.Key)
+                    ? SafeValue(pair.Value, 0) : Redacted;
+            return Payload(result);
+        }
+        return (Side(oldRow), Side(newRow));
     }
 
     private object? SafeValue(JsonElement value, int depth)
@@ -139,7 +177,7 @@ public sealed class LogSanitizer(IOptions<LogPersistenceOptions> options)
             JsonValueKind.Number => value.Clone(),
             JsonValueKind.Array => value.EnumerateArray().Select(v => SafeValue(v, depth + 1)).ToArray(),
             JsonValueKind.Object => value.EnumerateObject().ToDictionary(p => p.Name,
-                p => Sensitive.IsMatch(p.Name) ? Redacted : SafeValue(p.Value, depth + 1)),
+                p => SensitiveKey(p.Name) ? Redacted : SafeValue(p.Value, depth + 1)),
             _ => Redacted
         };
     }
@@ -151,6 +189,17 @@ public sealed class LogSanitizer(IOptions<LogPersistenceOptions> options)
         if (Encoding.UTF8.GetByteCount(json) > limits.MetadataMaxBytes)
             throw new ArgumentException("Compact audit exceeds the permitted size; the business change must be reviewed.");
         return json;
+    }
+
+    private static bool SensitiveKey(string key)
+    {
+        try { return Sensitive.IsMatch(key); }
+        catch (RegexMatchTimeoutException)
+        {
+            // Do not attach the regex exception: it can retain the supplied
+            // input. Required audit work must fail without leaking that input.
+            throw new ArgumentException("Audit field policy could not be safely evaluated.");
+        }
     }
 
     private static Dictionary<string, JsonElement> Object(JsonElement? value)

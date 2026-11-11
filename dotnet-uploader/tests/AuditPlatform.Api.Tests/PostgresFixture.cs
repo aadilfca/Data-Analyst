@@ -176,6 +176,25 @@ public sealed class PostgresFixture : IAsyncLifetime
     public static Task<string> ReadAuditSchemaAsync(CancellationToken cancellationToken) =>
         File.ReadAllTextAsync(Path.Combine(FindSolutionDirectory(), "database", "migrations", "0001_audit_error.sql"), cancellationToken);
 
+    public string OwnedRunDirectory => runDirectory;
+
+    public async Task ApplyReconciliationSchemaAsync(CancellationToken cancellationToken)
+    {
+        await ApplyAuditSchemaAsync(cancellationToken);
+        await using var connection = await OpenControlConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        // Synthetic client reference fixture; no canonical source rows are
+        // supplied or written by the rehearsal tool itself.
+        await using (var clients = new NpgsqlCommand("""
+            CREATE TABLE IF NOT EXISTS public.clients(id INTEGER PRIMARY KEY);
+            INSERT INTO public.clients(id) VALUES (5),(6) ON CONFLICT DO NOTHING
+            """, connection, transaction)) await clients.ExecuteNonQueryAsync(cancellationToken);
+        var sql = await File.ReadAllTextAsync(Path.Combine(FindSolutionDirectory(), "database", "migrations", "0002_log_reconciliation.sql"), cancellationToken);
+        await using var command = new NpgsqlCommand(sql, connection, transaction);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+
     public async Task<NpgsqlConnection> OpenEmptyOwnedDatabaseAsync(CancellationToken cancellationToken)
     {
         RequireOwnedDirectory();
