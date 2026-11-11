@@ -1,6 +1,10 @@
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using AuditPlatform.Api.Configuration;
+using AuditPlatform.Api.Data;
+using Microsoft.Extensions.Options;
 using Npgsql;
 using Xunit;
 
@@ -93,6 +97,141 @@ public sealed class PostgresFixture : IAsyncLifetime
             || !database.StartsWith("auditplatform_foundation_", StringComparison.Ordinal)
             || !Guid.TryParseExact(database["auditplatform_foundation_".Length..], "N", out _))
             throw new InvalidOperationException("Tests require their own loopback fixture database.");
+    }
+
+    public PostgresDataSourceFactory CreatePool(int maximumPoolSize = 2,
+        int timeoutSeconds = 3, CommitAcknowledgementProxy? proxy = null)
+    {
+        RequireSafeTarget(ConnectionString, Port);
+        var connection = new NpgsqlConnectionStringBuilder(ConnectionString);
+        if (proxy is not null)
+        {
+            if (proxy.UpstreamPort != Port)
+                throw new InvalidOperationException("Proxy must belong to this local test cluster.");
+            connection.Port = proxy.Port;
+            // The one-connection relay parses ordinary PostgreSQL frames,
+            // rather than negotiating encryption for this local-only test.
+            connection["GSS Encryption Mode"] = "Disable";
+        }
+        return new(Options.Create(new PostgresOptions
+        {
+            Enabled = true, ConnectionString = connection.ConnectionString,
+            MaximumPoolSize = maximumPoolSize, ConnectionTimeoutSeconds = 2,
+            CommandTimeoutSeconds = timeoutSeconds
+        }));
+    }
+
+    public async Task<NpgsqlConnection> OpenControlConnectionAsync(CancellationToken cancellationToken)
+    {
+        RequireSafeTarget(ConnectionString, Port);
+        var connection = new NpgsqlConnection(ConnectionString);
+        try
+        {
+            await connection.OpenAsync(cancellationToken);
+            return connection;
+        }
+        catch
+        {
+            await connection.DisposeAsync();
+            throw;
+        }
+    }
+
+    public async Task<string> CreateTableAsync(CancellationToken cancellationToken, bool deferredKey = false)
+    {
+        var name = "\"p04b_" + Guid.NewGuid().ToString("N") + "\"";
+        await using var connection = await OpenControlConnectionAsync(cancellationToken);
+        var keyMode = deferredKey ? " DEFERRABLE INITIALLY DEFERRED" : "";
+        await using var command = new NpgsqlCommand(
+            $"CREATE TABLE {name} (id integer PRIMARY KEY{keyMode}, amount numeric NOT NULL)", connection);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+        return name;
+    }
+
+    public CommitAcknowledgementProxy CreateCommitProxy()
+    {
+        RequireSafeTarget(ConnectionString, Port);
+        return new(Port);
+    }
+
+    // Test-only transport fault: forward a single connection to this fixture,
+    // then drop the server's actual COMMIT completion before the client sees it.
+    public sealed class CommitAcknowledgementProxy : IAsyncDisposable
+    {
+        private readonly TcpListener listener = new(IPAddress.Loopback, 0);
+        private readonly CancellationTokenSource lifetime = new(TimeSpan.FromSeconds(20));
+        private readonly TaskCompletionSource dropped = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly Task running;
+        private int armed;
+        public int UpstreamPort { get; }
+        public int Port { get; }
+        public Task AcknowledgementDropped => dropped.Task;
+
+        internal CommitAcknowledgementProxy(int upstreamPort)
+        {
+            UpstreamPort = upstreamPort;
+            listener.Start();
+            Port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            running = RunAsync();
+        }
+
+        public void Arm() => Interlocked.Exchange(ref armed, 1);
+
+        private async Task RunAsync()
+        {
+            try
+            {
+                using var client = await listener.AcceptTcpClientAsync(lifetime.Token);
+                using var server = new TcpClient();
+                await server.ConnectAsync(IPAddress.Loopback, UpstreamPort, lifetime.Token);
+                using var forwardLifetime = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+                var downstream = client.GetStream();
+                var upstream = server.GetStream();
+                var forwarding = downstream.CopyToAsync(upstream, forwardLifetime.Token);
+                try
+                {
+                    var header = new byte[5];
+                    while (true)
+                    {
+                        await upstream.ReadExactlyAsync(header, lifetime.Token);
+                        var length = BinaryPrimitives.ReadInt32BigEndian(header.AsSpan(1));
+                        if (length is < 4 or > 1048576)
+                            throw new IOException("Unexpected local test protocol frame.");
+                        var payload = new byte[length - 4];
+                        await upstream.ReadExactlyAsync(payload, lifetime.Token);
+                        if (Volatile.Read(ref armed) == 1 && header[0] == (byte)'C'
+                            && payload.AsSpan().SequenceEqual("COMMIT\0"u8))
+                        {
+                            dropped.TrySetResult();
+                            return;
+                        }
+                        await downstream.WriteAsync(header, lifetime.Token);
+                        await downstream.WriteAsync(payload, lifetime.Token);
+                    }
+                }
+                finally
+                {
+                    await forwardLifetime.CancelAsync();
+                    client.Close();
+                    server.Close();
+                    try { await forwarding; }
+                    catch (Exception error) when (error is IOException or OperationCanceledException or SocketException) { }
+                }
+            }
+            catch (Exception error) when (error is IOException or OperationCanceledException or SocketException)
+            {
+                if (!lifetime.IsCancellationRequested)
+                    dropped.TrySetException(error);
+            }
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await lifetime.CancelAsync();
+            listener.Stop();
+            await running;
+            lifetime.Dispose();
+        }
     }
 
     public async ValueTask DisposeAsync()

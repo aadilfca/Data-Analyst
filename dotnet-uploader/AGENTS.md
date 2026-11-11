@@ -4,7 +4,7 @@
 
 Migrate the complete Python application backend to ASP.NET Core/C#, retaining Python for financial report calculations and report generation. The folder remains `dotnet-uploader/`; `AuditPlatform.Api` now provides the service foundation. Existing browser assets move to ASP.NET Core in later phases; .NET supplies report data to Python.
 
-Plan dated 2026-11-10. P01–P04A are accepted; see [MIGRATION_BASELINE.md](MIGRATION_BASELINE.md), [migration-baseline.json](migration-baseline.json), and [MIGRATION_CONTRACTS.md](MIGRATION_CONTRACTS.md). P04B file confirmation is next; P05–P63 remain pending. Each implementation phase requires file/approach approval. Preserve the working Python app throughout staged replacement.
+Plan dated 2026-11-10. P01–P04B are accepted; see [MIGRATION_BASELINE.md](MIGRATION_BASELINE.md), [migration-baseline.json](migration-baseline.json), and [MIGRATION_CONTRACTS.md](MIGRATION_CONTRACTS.md). P05 file confirmation is next; P06–P63 remain pending. Each implementation phase requires file/approach approval. Preserve the working Python app throughout staged replacement.
 
 ## Agreed technology direction
 
@@ -41,7 +41,7 @@ Numbers describe the default sequence. P02 records dependencies; subsequent file
 | P02 — Contracts | Accepted by Aadil; [contracts](MIGRATION_CONTRACTS.md) define ownership, financial/API/report rules, dependencies, rollback, fixtures, and the 500 MB ceiling. |
 | P03 — Service foundation | Accepted by Aadil: .NET solution, validated settings, structured console logs, and health endpoints; Release build and nine smoke/configuration checks pass. |
 | P04A — PostgreSQL connections | Accepted by Aadil: disabled-by-default settings, bounded singleton pool and readiness; Release build and 32 isolated PostgreSQL tests pass. |
-| P04B — Transactions and schema | Pending: explicit transactions, consistent read snapshots, schema inventory and reviewed migration ownership; prove isolation and rollback on a test database. |
+| P04B — Transactions and schema | Accepted by Aadil: atomic writes, read-only snapshots and [schema ownership](POSTGRES_SCHEMA_OWNERSHIP.md); 54 isolated tests pass. Deployed catalog/metering remain prerequisites for shared-schema changes. |
 | P05 — Audit and errors | Replace SQLite-dependent audit/error storage with the agreed persistence and attribution; reconcile existing records and protect sensitive inputs. |
 | P06 — Coexistence | Establish same-origin route switching and a private report-service client contract; demonstrate routing, authorization, and fallback with stubbed responses. |
 | P07 — Authentication | Port login/logout, bcrypt compatibility, expiry, cookie/CSRF behavior, and inactive-user checks; verify session compatibility and rejection cases. |
@@ -131,7 +131,7 @@ $env:TESTINGPLATFORM_TELEMETRY_OPTOUT = '1'
 $env:NUGET_PACKAGES = "$PWD\.tools\packages"
 & .\.dotnet\dotnet.exe restore .\AuditPlatform.slnx --source https://api.nuget.org/v3/index.json --packages $env:NUGET_PACKAGES
 & .\.dotnet\dotnet.exe build .\AuditPlatform.slnx --configuration Release --no-restore
-& .\.dotnet\dotnet.exe run --project .\tests\AuditPlatform.Api.Tests --configuration Release --no-build --no-restore -- -noColor -result-trx "$PWD\.tools\p04a-results\p04a.trx"
+& .\.dotnet\dotnet.exe run --project .\tests\AuditPlatform.Api.Tests --configuration Release --no-build --no-restore -- -noColor -result-trx "$PWD\.tools\p04b-results\p04b.trx"
 & .\.dotnet\dotnet.exe run --project .\src\AuditPlatform.Api --configuration Release --no-build --no-restore
 ```
 
@@ -141,10 +141,11 @@ $env:NUGET_PACKAGES = "$PWD\.tools\packages"
 - `Postgres__MaximumPoolSize` defaults to 10 (range 1–100); connection/command/readiness timeouts default to 5/30/3 seconds (ranges 1–30/1–300/1–15). These settings override connection-string pool/time limits; pooling and state reset stay on, sensitive driver detail/parameter logs stay off.
 - Tests use [EDB's portable PostgreSQL 17.11 archive](https://www.enterprisedb.com/download-postgresql-binaries), extracted to `.tools/postgresql-17.11/pgsql/`; `AUDITPLATFORM_TEST_POSTGRES_BIN` may select another approved binary folder inside `.tools/`. Each run creates a random SCRAM-protected loopback cluster/database and stops it; fixture logs/data remain ignored. No existing connection URL is accepted.
 - Run xUnit through the executable command above; the .NET 10 default `dotnet test` VSTest mode rejects this package's MTP integration. Windows sandbox restriction may require normal local execution for `initdb`; no Windows service is installed.
+- Transaction/snapshot callers must follow the [runtime service contract](POSTGRES_SCHEMA_OWNERSHIP.md#runtime-service-contract). Tests create synthetic tables and use a local relay to prove lost-commit acknowledgement without production fault hooks.
 - `Platform__ApplicationName` and `Platform__DatabaseCapacityLimitBytes` override non-secret defaults. Invalid settings exit with code 1 before listening; the 500,000,000-byte setting is configuration only until capacity enforcement is ported.
 - Supply future secrets through approved environment/secret-store configuration, never appsettings.json, launch settings, or logs. Private settings files, SDKs, caches, and build outputs are ignored.
 - Windows 10 Pro 22H2 is outside the current .NET 10 supported-OS list. Aadil approved local development with this limitation; a local pass does not certify supported production hosting. P62 validates deployment separately.
-- Evidence: ignored `.tools/p03-verification.json`, `.tools/p04a-verification.json` and `.tools/p04a-results/p04a.trx`. Local checks do not certify deployed Supabase/TLS, migrated workflows, transactions or snapshots; remaining work follows its approved phases.
+- Evidence: ignored `.tools/p03-verification.json`, `.tools/p04a-verification.json`, `.tools/p04b-verification.json` and `.tools/p04b-results/p04b.trx`. Local connection/transaction checks do not certify deployed Supabase/TLS/catalog/metering or migrated workflows.
 
 ## Reference links
 

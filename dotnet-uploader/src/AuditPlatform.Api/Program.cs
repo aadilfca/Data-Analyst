@@ -24,6 +24,8 @@ builder.Services.AddOptions<PostgresOptions>()
     .ValidateDataAnnotations()
     .ValidateOnStart();
 builder.Services.AddSingleton<PostgresDataSourceFactory>();
+builder.Services.AddSingleton<PostgresTransactions>();
+builder.Services.AddSingleton<PostgresReadSnapshot>();
 builder.Services.AddSingleton<PostgresReadinessCheck>();
 
 var app = builder.Build();
