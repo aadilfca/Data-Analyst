@@ -1,0 +1,4 @@
+.workspace-picker { max-width: 720px; margin: 40px auto; padding: 24px; }
+#workspaceList { display: grid; gap: 12px; margin: 24px 0; }
+#workspaceList button { padding: 20px; text-align: left; background: white; border: 1px solid #d0d5dd; border-radius: 8px; cursor: pointer; }
+#workspaceList button:disabled { cursor: wait; opacity: .6; }

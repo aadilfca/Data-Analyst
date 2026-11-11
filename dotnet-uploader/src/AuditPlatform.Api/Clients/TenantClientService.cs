@@ -174,6 +174,12 @@ public sealed class TenantClientService(PostgresTransactions transactions, Postg
     {
         if (session is null || session.UserId <= 0 || !AuthenticationService.ValidToken(session.Token)) return (ClientStatus.Forbidden, null);
         int tenant;
+        if (session.TenantContextRequired)
+        {
+            if (session.TenantId is null) return (ClientStatus.AmbiguousTenant, null);
+            tenant = session.TenantId.Value;
+        }
+        else
         await using (var selection = db.CreateCommand("""
             SELECT m.tenant_id FROM public.platform_tenant_memberships m JOIN public.platform_tenants t ON t.id=m.tenant_id
             WHERE m.user_id=$1 AND m.is_active IS TRUE AND t.is_active IS TRUE ORDER BY m.tenant_id LIMIT 2
@@ -192,13 +198,15 @@ public sealed class TenantClientService(PostgresTransactions transactions, Postg
             tenantLock.Parameters.AddWithValue(tenant);
             if (await tenantLock.ExecuteScalarAsync(ct) is null) return (ClientStatus.Forbidden, null);
         }
-        await using var command = db.CreateCommand("""
+        var contextCheck = session.TenantContextRequired ? " AND s.selected_tenant_id=$3 AND s.context_version=$4" : "";
+        await using var command = db.CreateCommand($"""
             SELECT u.id,u.username,m.tenant_role FROM public.sessions s JOIN public.users u ON u.id=s.user_id
             JOIN public.platform_tenant_memberships m ON m.user_id=u.id
             WHERE s.token=$1 AND s.user_id=$2 AND s.expiry>now() AND u.is_active IS TRUE
-                AND m.tenant_id=$3 AND m.is_active IS TRUE FOR SHARE OF s,u,m
+                AND m.tenant_id=$3 AND m.is_active IS TRUE {contextCheck} FOR SHARE OF s,u,m
             """);
         command.Parameters.AddWithValue(session.Token); command.Parameters.AddWithValue(session.UserId); command.Parameters.AddWithValue(tenant);
+        if (session.TenantContextRequired) command.Parameters.AddWithValue(session.ContextVersion);
         await using var actor = await command.ExecuteReaderAsync(ct);
         if (!await actor.ReadAsync(ct) || (admin && actor.GetString(2) != "admin")) return (ClientStatus.Forbidden, null);
         return (ClientStatus.Success, new Actor(tenant, actor.GetInt32(0), actor.GetString(1), actor.GetString(2)));

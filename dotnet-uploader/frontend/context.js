@@ -1,0 +1,81 @@
+// Loaded synchronously by the .NET host before retained page scripts.
+(() => {
+    const tag = document.currentScript;
+    const key = tag.dataset.context || '';
+    const tenant = tag.dataset.tenant || '';
+    const marker = key + '/' + tenant;
+    let changed = true;
+    try {
+        changed = sessionStorage.getItem('app-shell-context') !== marker;
+        if (changed) {
+            // This dedicated application origin uses sessionStorage for page
+            // caches, work scopes and Back history. None may cross workspaces.
+            sessionStorage.clear();
+            sessionStorage.setItem('app-shell-context', marker);
+            ['selectedClientId', 'selectedClientName', 'selectedClientCode'].forEach(k => localStorage.removeItem(k));
+        }
+    } catch (error) { console.warn('Workspace browser state could not be cleared'); }
+
+    // Same-origin tabs share a session cookie. Notify them immediately when a
+    // newly served document observes a different session or tenant revision.
+    try {
+        const channel = new BroadcastChannel('app-shell-context');
+        channel.addEventListener('message', event => {
+            if (event.data.marker !== marker) {
+                document.documentElement.style.visibility = 'hidden';
+                location.replace(event.data.authenticated ? '/shell/tenant_select.html' : '/static/login.html');
+            }
+        });
+        if (changed) channel.postMessage({ marker, authenticated: !!key });
+    } catch (error) { /* Visibility/focus checks cover browsers without channels. */ }
+
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+        const request = new Request(input, init);
+        const url = new URL(request.url);
+        const path = url.pathname.replace(/\/+$/, '').toLowerCase();
+        const bound = url.origin === location.origin && (path.startsWith('/api/users')
+            || path.startsWith('/api/clients')
+            || ['/api/auth/current-client', '/api/auth/select-client'].includes(path));
+        const headers = new Headers(request.headers);
+        if (bound && key) headers.set('X-App-Context', key);
+        const response = await originalFetch(new Request(request, { headers }));
+        if (response.headers.get('X-Context-Changed') === 'true') location.replace('/shell/tenant_select.html');
+        return response;
+    };
+
+    async function recheckContext(event) {
+        if (!key || location.pathname === '/shell/tenant_select.html') return;
+        if (event.type === 'pageshow' && !event.persisted) return;
+        document.documentElement.style.visibility = 'hidden';
+        try {
+            const response = await originalFetch('/api/auth/tenants', { cache: 'no-store' });
+            if (!response.ok) { location.replace('/static/login.html'); return; }
+            const context = await response.json();
+            if (context.context_key !== key || String(context.selected_tenant_id || '') !== tenant) {
+                location.replace('/shell/tenant_select.html'); return;
+            }
+            document.documentElement.style.visibility = '';
+        } catch (error) {
+            // A saved document cannot certify its context while offline.
+            location.replace('/shell/tenant_select.html');
+        }
+    }
+    window.addEventListener('pageshow', recheckContext);
+    window.addEventListener('focus', recheckContext);
+    document.addEventListener('visibilitychange', event => {
+        if (document.visibilityState === 'visible') recheckContext(event);
+    });
+    document.addEventListener('DOMContentLoaded', () => {
+        if (!key || location.pathname === '/shell/tenant_select.html') return;
+        if (typeof NAV_MANIFEST !== 'undefined') NAV_MANIFEST.push({ title: 'Workspace', items: [
+            { label: 'Change workspace', url: '/shell/tenant_select.html', state: 'ready', module: 'Workspace',
+                children: [{ label: 'Select business or CA firm', url: '/shell/tenant_select.html', state: 'ready', keywords: ['tenant', 'firm', 'workspace'] }] }
+        ] });
+        const nav = document.createElement('nav');
+        nav.setAttribute('aria-label', 'Workspace');
+        const link = document.createElement('a');
+        link.href = '/shell/tenant_select.html'; link.textContent = 'Change workspace';
+        nav.appendChild(link); document.body.prepend(nav);
+    });
+})();

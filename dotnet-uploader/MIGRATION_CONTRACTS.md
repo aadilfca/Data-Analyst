@@ -93,18 +93,26 @@ This list records discussion, not blanket authorization to activate policies. Re
 ### P08 isolated tenant users
 
 - Candidate SQL adds per-tenant admin/member roles without granting existing members admin automatically; global legacy roles remain separate. Runtime startup performs no DDL.
-- The default-off user API requires a live session and exactly one active tenant membership, then rechecks tenant-admin access for every action. Multiple memberships require a future trusted tenant picker; headers cannot choose the tenant.
+- Without P10, the default-off user API requires exactly one active tenant membership. P10 uses session-stored selection and rechecks its revision and tenant-admin access for every action; headers cannot choose the tenant.
 - Create/edit and membership activation are tenant-scoped. Shared identities and legacy global administrators cannot have global names/passwords changed through tenant administration; legacy global administrators are not modified. Password resets for eligible accounts revoke their sessions atomically; membership deactivation is rechecked for that tenant without ending other tenants' sessions.
 - Writes and tenant-attributed audits share a transaction. Existing Python last-admin behavior remains unchanged; the absence of a last-admin safeguard is a known limitation. Invalid request details redact bodies that may contain passwords.
 - Current validation caps usernames at 256 UTF-16 units and passwords at 72 UTF-8 bytes; legacy compatibility and historical values require review. Invalid-request details redact raw input. Shared schema/catalog and explicit administrator mapping, complete legacy response parity, multi-tenant selection, cross-backend session enforcement, UI acceptance and separate activation approval precede cutover. Python remains the active user-management implementation.
 
 ### P09 isolated tenant clients
 
-- Default-off native client CRUD/search/pagination and selection use exactly one active tenant membership; ambiguous memberships require P10's trusted picker. Tenant headers, global roles and cached selected-client claims grant no access.
+- Default-off native client CRUD/search/pagination and selection use sole membership without P10, or its server-stored tenant context when enabled. Tenant headers, global roles and cached selected-client claims grant no access.
 - Tenant administrators manage only home-workspace client records. Assigned active audit staff may list/select active clients through an active engagement; this specific permission grants no report/data access. Business members and cross-tenant sharing await explicit policies; business administrators manage their home records.
 - Preserve global client-code uniqueness, optional profile fields, list shape, unpaged legacy calls and paged X-Total-Count. Count/page share one SQL snapshot. Duplicate-code errors omit other-tenant details; full validation/error/timestamp parity remains an activation gate.
 - Client creation/home association, edits, soft deletion/restoration, session selection and tenant-attributed audit writes are atomic. Inactive clients clear saved selections; current-client rechecks access and clears revoked selections. No permanent deletion, shared-data access or automatic engagement/assignment creation is implemented.
 - No schema/data migration is executed. Catalog/mapping, cross-backend authorization, client-card/admin UI acceptance, sharing policies where needed and explicit activation approval precede live routing. P09 is locally accepted behind disabled settings; Python stays active.
+
+### P10 isolated application shell
+
+- Shell hosting defaults off and requires authentication/user/client settings. Package existing flat HTML/JS/CSS assets; expose no repository, upload, workbook or backup directory. Recheck session, selected tenant/role and applicable client selection before protected HTML; retain public login/info and allowlisted retired-ACC bookmark redirects.
+- Candidate SQL adds nullable selected tenant and a session context revision; it seeds no tenant/membership and runs only in owned fixtures. Explicit workspace choice verifies active membership, clears client selection, increments revision and writes its audit atomically. Concurrent stale choices cannot both apply.
+- P08/P09 recheck selected tenant and revision inside their transactions. Their shell requests require X-App-Context, a session fingerprint/revision assertion rather than a tenant selector or credential; reject absent/stale assertions, including route case/slash variants. Every later tenant-bound operation needs equivalent checks before activation.
+- The .NET-only external bootstrap runs before retained scripts, clearing application sessionStorage/history and obsolete selected-client localStorage keys on session/workspace change. Cross-tab notifications, visibility/focus and restored-page checks invalidate stale documents; browser state grants no access. It adds workspace selection to NAV_MANIFEST and a visible switch link without modifying Python assets.
+- Client-card intents remain allowlisted; shared-data access and later-module APIs stay unavailable. Schema/mapping/backup/execution, full parity and cross-backend enforcement retain separate activation gates. Shell/browser rehearsal is not deployment acceptance; remaining modules keep their planned phases.
 
 ## 3. PostgreSQL and financial values
 

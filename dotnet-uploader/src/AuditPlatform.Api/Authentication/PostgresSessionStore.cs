@@ -1,13 +1,17 @@
 using AuditPlatform.Api.Data;
 using AuditPlatform.Api.Logging;
+using AuditPlatform.Api.Configuration;
+using Microsoft.Extensions.Options;
 using Npgsql;
 
 namespace AuditPlatform.Api.Authentication;
 
 public sealed record VerifiedSession(string Token, int UserId, string Username, string? Role,
-    DateTime Expiry, int? ClientId, string? ClientName, string? ClientCode);
+    DateTime Expiry, int? ClientId, string? ClientName, string? ClientCode,
+    bool TenantContextRequired = false, int? TenantId = null, long ContextVersion = 0);
 
-public sealed class PostgresSessionStore(PostgresTransactions transactions, PostgresAuditWriter audit)
+public sealed class PostgresSessionStore(PostgresTransactions transactions, PostgresAuditWriter audit,
+    IOptions<ApplicationShellOptions>? shell = null)
 {
     public Task<bool> IsExpiredAsync(string token, CancellationToken cancellationToken) =>
         transactions.ExecuteAsync(async (db, ct) =>
@@ -23,8 +27,10 @@ public sealed class PostgresSessionStore(PostgresTransactions transactions, Post
     public Task<VerifiedSession?> FindAsync(string token, CancellationToken cancellationToken) =>
         transactions.ExecuteAsync(async (db, ct) =>
         {
-            await using var command = db.CreateCommand("""
+            var scoped = shell?.Value.Enabled == true;
+            await using var command = db.CreateCommand($"""
                 SELECT s.user_id,u.username,u.role,s.expiry,s.selected_client_id,c.client_name,c.client_code
+                    {(scoped ? ",s.selected_tenant_id,s.context_version" : "")}
                 FROM public.sessions s JOIN public.users u ON u.id=s.user_id
                 LEFT JOIN public.clients c ON c.id=s.selected_client_id
                 WHERE s.token=$1 AND s.expiry > now() AND u.is_active IS TRUE
@@ -36,7 +42,8 @@ public sealed class PostgresSessionStore(PostgresTransactions transactions, Post
                 reader.IsDBNull(2) ? null : reader.GetString(2), reader.GetDateTime(3),
                 reader.IsDBNull(5) ? null : reader.GetInt32(4),
                 reader.IsDBNull(5) ? null : reader.GetString(5),
-                reader.IsDBNull(6) ? null : reader.GetString(6));
+                reader.IsDBNull(6) ? null : reader.GetString(6), scoped,
+                scoped && !reader.IsDBNull(7) ? reader.GetInt32(7) : null, scoped ? reader.GetInt64(8) : 0);
         }, cancellationToken);
 
     public Task<(string Result, string? Token, string? Username)> LoginAsync(

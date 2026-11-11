@@ -8,6 +8,7 @@ using AuditPlatform.Api.Middleware;
 using AuditPlatform.Api.Tenancy;
 using AuditPlatform.Api.Users;
 using AuditPlatform.Api.Clients;
+using AuditPlatform.Api.Shell;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -64,8 +65,17 @@ builder.Services.AddSingleton<TenantUserService>();
 builder.Services.AddOptions<ClientManagementOptions>()
     .Bind(builder.Configuration.GetSection(ClientManagementOptions.SectionName)).ValidateOnStart();
 builder.Services.AddSingleton<TenantClientService>();
+builder.Services.AddOptions<ApplicationShellOptions>()
+    .Bind(builder.Configuration.GetSection(ApplicationShellOptions.SectionName)).ValidateOnStart();
+builder.Services.AddSingleton<TenantSessionService>();
 
 var app = builder.Build();
+if (app.Services.GetRequiredService<IOptions<ApplicationShellOptions>>().Value.Enabled
+    && (!app.Services.GetRequiredService<IOptions<AuthenticationOptions>>().Value.Enabled
+        || !app.Services.GetRequiredService<IOptions<ClientManagementOptions>>().Value.Enabled
+        || !app.Services.GetRequiredService<IOptions<UserManagementOptions>>().Value.Enabled))
+    throw new OptionsValidationException(ApplicationShellOptions.SectionName,typeof(ApplicationShellOptions),
+        ["Application shell requires authentication, user management and client management."]);
 // Invalid/duplicate registrations fail before listening. Production currently
 // registers no bridge routes and retains P07's default access block.
 _ = app.Services.GetRequiredService<CoexistenceRouteTable>();
@@ -81,6 +91,7 @@ app.UseWhen(context => context.RequestServices.GetRequiredService<IOptions<Authe
         && context.RequestServices.GetRequiredService<CoexistenceRouteTable>()
             .Find(context.Request.Method, context.Request.Path.Value ?? "") is not null)),
     branch => branch.UseMiddleware<CsrfMiddleware>());
+app.UseMiddleware<ApplicationShellMiddleware>();
 app.UseMiddleware<CoexistenceMiddleware>();
 app.MapControllers();
 

@@ -13,27 +13,29 @@ public sealed record TenantUserResult(TenantUserStatus Status, int? UserId = nul
 public sealed record TenantUserList(TenantUserStatus Status, IReadOnlyList<TenantUser> Users);
 public sealed record TenantSelection(TenantUserStatus Status, int? TenantId = null);
 
-// An internal, tenant-scoped service. No HTTP route consumes it yet: public
-// routing waits for tenant selection and legacy compatibility to be proven.
+// Tenant-scoped backend behind disabled API/shell settings.
 public sealed class TenantUserService(PostgresTransactions transactions, PostgresAuditWriter audit)
 {
-    // Until explicit tenant selection exists, only an unambiguous single active
-    // membership can select a tenant. Membership is rechecked by every action.
+    // P10 uses session-stored selection; without the shell, retain P08's
+    // sole-membership rule. Every operation rechecks membership and context.
     public Task<TenantSelection> ResolveSoleTenantAsync(VerifiedSession? session, CancellationToken cancellationToken = default)
     {
         if (session is null || session.UserId <= 0 || !AuthenticationService.ValidToken(session.Token))
             return Task.FromResult(new TenantSelection(TenantUserStatus.Forbidden));
         return transactions.ExecuteAsync<TenantSelection>(async (db, ct) =>
         {
-            await using var command = db.CreateCommand("""
+            var selection = session.TenantContextRequired
+                ? " AND m.tenant_id=s.selected_tenant_id AND s.context_version=$3" : "";
+            await using var command = db.CreateCommand($"""
                 SELECT m.tenant_id,m.tenant_role FROM public.sessions s
                 JOIN public.users u ON u.id=s.user_id
                 JOIN public.platform_tenant_memberships m ON m.user_id=u.id
                 JOIN public.platform_tenants t ON t.id=m.tenant_id
                 WHERE s.token=$1 AND s.user_id=$2 AND s.expiry>now() AND u.is_active IS TRUE
-                  AND m.is_active IS TRUE AND t.is_active IS TRUE ORDER BY m.tenant_id LIMIT 2
+                  AND m.is_active IS TRUE AND t.is_active IS TRUE {selection} ORDER BY m.tenant_id LIMIT 2
                 """);
             command.Parameters.AddWithValue(session.Token); command.Parameters.AddWithValue(session.UserId);
+            if (session.TenantContextRequired) command.Parameters.AddWithValue(session.ContextVersion);
             await using var reader = await command.ExecuteReaderAsync(ct);
             if (!await reader.ReadAsync(ct)) return new(TenantUserStatus.Forbidden);
             var id = reader.GetInt32(0); var role = reader.GetString(1);
@@ -198,16 +200,18 @@ public sealed class TenantUserService(PostgresTransactions transactions, Postgre
             tenantLock.Parameters.AddWithValue(tenantId);
             if (await tenantLock.ExecuteScalarAsync(ct) is null) return null;
         }
-        await using var command = db.CreateCommand("""
+        var selection = session.TenantContextRequired ? " AND s.selected_tenant_id=$3 AND s.context_version=$4" : "";
+        await using var command = db.CreateCommand($"""
             SELECT u.id,u.username FROM public.sessions s
             JOIN public.users u ON u.id=s.user_id
             JOIN public.platform_tenant_memberships m ON m.user_id=u.id
             WHERE s.token=$1 AND s.user_id=$2 AND s.expiry>now() AND u.is_active IS TRUE
-              AND m.tenant_id=$3 AND m.is_active IS TRUE AND m.tenant_role='admin'
+              AND m.tenant_id=$3 AND m.is_active IS TRUE AND m.tenant_role='admin' {selection}
             FOR SHARE OF s,u,m
             """);
         command.Parameters.AddWithValue(session.Token); command.Parameters.AddWithValue(session.UserId);
         command.Parameters.AddWithValue(tenantId);
+        if (session.TenantContextRequired) command.Parameters.AddWithValue(session.ContextVersion);
         await using var reader = await command.ExecuteReaderAsync(ct);
         return await reader.ReadAsync(ct) ? new LogActor("authenticated", reader.GetInt32(0), reader.GetString(1)) : null;
     }

@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Select workspace</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/shell/tenant_select.css">
+</head>
+<body>
+    <main class="workspace-picker">
+        <h1>Select workspace</h1>
+        <p>Choose your business or CA firm.</p>
+        <p id="workspaceStatus" role="status">Loading workspaces…</p>
+        <div id="workspaceList"></div>
+        <button type="button" id="workspaceRetry">Reload list</button>
+        <button type="button" id="workspaceLogout">Log out</button>
+    </main>
+    <script src="/shell/tenant_select.js"></script>
+</body>
+</html>
