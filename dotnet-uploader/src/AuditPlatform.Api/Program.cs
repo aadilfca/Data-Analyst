@@ -117,7 +117,15 @@ builder.Services.AddSingleton<UploadValidationPlanStore>();
 builder.Services.AddSingleton<UploadValidationPlanSigner>();
 builder.Services.AddSingleton<UploadValidationPlanService>();
 
+builder.Services.AddOptions<UploadImportOptions>()
+    .Bind(builder.Configuration.GetSection(UploadImportOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
+builder.Services.AddSingleton<UploadImportWriter>();
+builder.Services.AddSingleton<UploadImportService>();
+
 var app = builder.Build();
+if(app.Services.GetRequiredService<IOptions<UploadImportOptions>>().Value.Enabled
+    && !app.Services.GetRequiredService<IOptions<UploadValidationPlanOptions>>().Value.Enabled)
+    throw new OptionsValidationException(UploadImportOptions.SectionName,typeof(UploadImportOptions),["Atomic imports require signed validation plans and their prerequisites."]);
 if(app.Services.GetRequiredService<IOptions<UploadValidationPlanOptions>>().Value.Enabled
     && !app.Services.GetRequiredService<IOptions<UploadCorrectionOptions>>().Value.Enabled)
     throw new OptionsValidationException(UploadValidationPlanOptions.SectionName,typeof(UploadValidationPlanOptions),["Plans require source-bound correction review and its prerequisites."]);

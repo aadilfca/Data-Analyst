@@ -236,6 +236,14 @@ This list records discussion, not blanket authorization to activate policies. Re
 - Limit requests to 1 MiB, plan payloads to 4 MiB, rows to 100,000 and source comparisons to existing bounds; enforce concurrency, deadlines/cancellation, scoped receipt limits and bounded cleanup. Plan writes serialize a conservative database-size check including payload/index headroom under the lower configured plan/platform ceiling. Provider metering and all-writer capacity coordination remain cutover gates, not certified by local fixtures.
 - Write only temporary plan metadata; no canonical/history mutation or live UI activation. Existing identity/binding/precision gates remain; ledger plans require their unported balance proof. `CanImport=false` always. P25 must repeat final plan/status/current-data checks inside its atomic write transaction. See CHANGELOG_ARCHIVE.md, Validation plans P24.
 
+### P25 atomic-import boundary
+
+- `UploadImports__Enabled=false` gates `POST /api/upload/file/{id}/atomic-import`; enabling requires P24 and its prerequisites. This isolated foundation is not the existing Upload UI or P27's independently reconciled completion receipt.
+- Consume only a current signed native plan. Recheck live owner/tenant/client/assignment, source bytes, configuration/mapping, expiry, current-row guards, full-voucher membership and the required active-identity index under shared writer locks.
+- One supplied transaction writes current rows, exact prior changed/deleted history plus source/date metadata, counts, audit, Imported status, plan consumption and a compact recovery outcome. Corrections preserve IDs/creation time and return linked audit reviews to Pending; information-only changes merge unchecked fields/source positions without financial history. Complete removals retain history and block protected references; partial extracts retain absent rows.
+- Candidate `0013` adds nullable history metadata and `platform_upload_imports`, never a durable transaction mirror. Same-plan deliveries return one owner-bound outcome; operation-ID reuse with different input rejects. Recovery checks access before source/plan availability; uncertain COMMIT never replays writes and unresolved outcomes require the same operation ID.
+- Batch writes, strict 1 MiB bodies, deadlines/cancellation, concurrency and conservative projected database headroom remain bounded. Rate/ledger bindings, populated derived fields and scoped downstream dependencies block pending P26; independent stored controls/receipt presentation follow P27. Shared-schema execution, provider capacity evidence, cleanup integration, source corpus/scale and P29 UI acceptance remain cutover gates. See CHANGELOG_ARCHIVE.md, Atomic import P25.
+
 ## 3. PostgreSQL and financial values
 
 | Contract | Required behavior |

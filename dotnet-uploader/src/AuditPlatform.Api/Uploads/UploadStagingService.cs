@@ -194,7 +194,7 @@ public sealed class UploadStagingService(PostgresTransactions transactions,Postg
     // live access, expiry, source and configuration are checked again.
     internal async Task<OwnedWorkbookResult<T>> ReadOwnedAsync<T>(VerifiedSession? session,int client,int template,int id,
         string? expectedHash,string? expectedConfiguration,
-        Func<string,string,TemplateDefinition,WorkbookReadLimits,CancellationToken,Task<T>> read,CancellationToken ct)
+        Func<string,string,TemplateDefinition,WorkbookReadLimits,CancellationToken,Task<T>> read,CancellationToken ct,bool recheckAfterRead=true)
     {
         if(!options.Value.Enabled) return new("unavailable");
         try
@@ -222,6 +222,9 @@ public sealed class UploadStagingService(PostgresTransactions transactions,Postg
             // The generated suffix is .bin. Reader format detection uses the
             // source signature; the .xls hint still applies ZIP expansion guards.
             var output=await read(path,receipt.Hash!,before.Definition,limits,ct);
+            // The atomic importer rechecks bytes and authorization inside its
+            // transaction. Its durable outcome must survive post-COMMIT expiry.
+            if(!recheckAfterRead) return new("success",output);
             if(!await Matches()) return new("gone",Code:"staged_file_changed");
             var after=await Snapshot();
             if(after.Receipt is not {State:"ready"} current || current.Expiry<=Now) return new("gone",Code:"staged_file_unavailable");

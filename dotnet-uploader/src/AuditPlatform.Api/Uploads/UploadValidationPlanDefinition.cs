@@ -9,7 +9,7 @@ public sealed record ValidationPlanGuard(long Id,string Hash);
 public sealed record ValidationPlanAction(CorrectionRow Action,IReadOnlyDictionary<string,IdentityAtom>? Values,string? ValidatedDate);
 public sealed record ValidationPlanPayload(string Format,CorrectionRequest Review,string RequestHash,string CorrectionKey,string StoreKey,
     CorrectionCounts Counts,IReadOnlyList<ValidationPlanAction> Actions,IReadOnlyList<ValidationPlanGuard> Guards,
-    IReadOnlyList<string> IncomingGroups,IReadOnlyList<string> ChangedGroups);
+    IReadOnlyList<string> IncomingGroups,IReadOnlyList<string> ChangedGroups,IdentityProfile? ImportProfile=null);
 public sealed record ValidationPlanEnvelope(string Format,Guid RequestId,string PlanId,int Tenant,int User,int Client,int Template,int File,
     string RequestHash,string PayloadHash,string CorrectionKey,string ConfigurationKey,long MappingRevision,string FileHash,
     DateTimeOffset CreatedAt,DateTimeOffset ExpiresAt,bool NoOp,CorrectionCounts Counts);
