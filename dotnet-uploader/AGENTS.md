@@ -61,7 +61,7 @@ Execution order: P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 (repor
 | P16 — Upload staging | Disabled owned local staging/discovery, receipt recovery and expiry locally accepted. See CHANGELOG_ARCHIVE.md, Upload staging P16. |
 | P17 — Workbook reader | Typed bounded XLS/XLSX reader and synthetic Python/browser comparisons locally accepted. Source/coercion limits: CHANGELOG_ARCHIVE.md, Workbook reader P17. |
 | P18 — Upload preparation | Disabled source-bound mapping, date previews and paged row choices locally accepted. UI integration and validation remain gated. See CHANGELOG_ARCHIVE.md, Upload preparation P18. |
-| P19 — Input validation | Port critical-field, numeric, date, and source-error checking; verify precise row guidance and zero canonical writes on rejection. |
+| P19 — Input validation | Disabled source-bound cell/critical-field checks and bounded diagnostics locally accepted. No import authorization. See CHANGELOG_ARCHIVE.md, Input validation P19. |
 | P20 — Footing | Port confirmed control rows, exact totals, tolerances, and variance acknowledgement; verify boundary amounts and confirmation binding. |
 | P21 — Coverage | Port complete/partial report rules, date confirmation, and account scope; verify missing/empty periods and exclusions follow existing policy. |
 | P22 — Duplicate identity | Port canonical identities, exact duplicate checks, multiplicity, and unchanged detection; prove repeat uploads are no-ops. |

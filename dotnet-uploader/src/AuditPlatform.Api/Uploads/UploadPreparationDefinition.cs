@@ -1,4 +1,5 @@
 using AuditPlatform.Api.Workbooks;
+using AuditPlatform.Api.Templates;
 
 namespace AuditPlatform.Api.Uploads;
 
@@ -24,3 +25,5 @@ public sealed record PreparationOutput(PreparationContext Context,IReadOnlyList<
     IReadOnlyList<PreparedRow>? Rows=null,int? TotalRows=null,int? SelectedRows=null);
 public sealed record PreparationResult(string Status,PreparationOutput? Output=null,string? Code=null);
 public sealed record OwnedWorkbookResult<T>(string Status,T? Value=default,string? Code=null);
+internal sealed record PreparedSource(PreparationContext Context,TemplateDefinition Template,
+    IReadOnlyList<PreparationHeader> Headers,IReadOnlyList<PreparedMapping> Mappings,IReadOnlyList<string> Warnings);

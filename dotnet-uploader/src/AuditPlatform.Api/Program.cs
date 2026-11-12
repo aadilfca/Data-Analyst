@@ -95,8 +95,15 @@ builder.Services.AddSingleton<UploadStagingService>();
 builder.Services.AddOptions<UploadPreparationOptions>()
     .Bind(builder.Configuration.GetSection(UploadPreparationOptions.SectionName)).ValidateOnStart();
 builder.Services.AddSingleton<UploadPreparationService>();
+builder.Services.AddOptions<UploadInputValidationOptions>()
+    .Bind(builder.Configuration.GetSection(UploadInputValidationOptions.SectionName)).ValidateOnStart();
+builder.Services.AddSingleton<UploadInputValidationService>();
 
 var app = builder.Build();
+if(app.Services.GetRequiredService<IOptions<UploadInputValidationOptions>>().Value.Enabled
+    && !app.Services.GetRequiredService<IOptions<UploadPreparationOptions>>().Value.Enabled)
+    throw new OptionsValidationException(UploadInputValidationOptions.SectionName,typeof(UploadInputValidationOptions),
+        ["Input validation requires source-bound upload preparation and its tenant prerequisites."]);
 if(app.Services.GetRequiredService<IOptions<UploadPreparationOptions>>().Value.Enabled
     && (!app.Services.GetRequiredService<IOptions<UploadStagingOptions>>().Value.Enabled
         || !app.Services.GetRequiredService<IOptions<SavedMappingOptions>>().Value.Enabled))

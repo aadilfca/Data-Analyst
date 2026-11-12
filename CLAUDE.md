@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- dotnet-uploader/ → .NET foundation, disabled tenant/configuration/staging/preparation APIs, typed workbook reader, guarded sessions and audit persistence. See CHANGELOG_ARCHIVE.md.
+- dotnet-uploader/ → .NET foundation, disabled tenant/configuration/upload APIs, typed workbook reader, input validation, guarded sessions and audit persistence. See CHANGELOG_ARCHIVE.md.
 
 - routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, statements, category-role notes with unallocated rows, profit links, reconciliations, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
 
@@ -269,7 +269,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
-- 2026-11-12: Added disabled source-bound .NET upload preparation, mapping, date previews and row selection; locally accepted. See CHANGELOG_ARCHIVE.md, Upload preparation P18.
+- 2026-11-12: Added disabled .NET preparation/input validation; locally accepted. See CHANGELOG_ARCHIVE.md, Upload preparation P18 and Input validation P19.
 - 2026-11-12: Added typed .NET workbook reading and synthetic Python/browser parity checks; locally accepted. See CHANGELOG_ARCHIVE.md, Workbook reader P17.
 - 2026-11-12: Added disabled owner-bound .NET upload staging, header discovery and expiry recovery; locally accepted. See CHANGELOG_ARCHIVE.md, Upload staging P16.
 - 2026-11-12: Added disabled tenant configuration backup, preview and guarded restore; locally accepted. See CHANGELOG_ARCHIVE.md, Configuration backup P15.

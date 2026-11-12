@@ -17,7 +17,7 @@ public sealed class UploadPreparationService(UploadStagingService staging,Tenant
     IOptions<UploadPreparationOptions> options)
 {
     private readonly SemaphoreSlim requests=new(options.Value.MaximumConcurrentRequests);
-    private sealed class InvalidPreparation : Exception;
+    internal sealed class InvalidPreparation : Exception;
     private sealed class SizeStream(long maximum) : Stream
     {
         public override bool CanRead=>false; public override bool CanSeek=>false; public override bool CanWrite=>true;
@@ -29,7 +29,7 @@ public sealed class UploadPreparationService(UploadStagingService staging,Tenant
         public override long Seek(long offset,SeekOrigin origin)=>throw new NotSupportedException();
         public override void SetLength(long value)=>throw new NotSupportedException();
     }
-    private static long JsonSize<T>(T value,long maximum)
+    internal static long JsonSize<T>(T value,long maximum)
     {using var stream=new SizeStream(maximum);JsonSerializer.Serialize(stream,value);return stream.Length;}
 
     public async Task<PreparationResult> PrepareAsync(VerifiedSession? session,int file,PreparationRequest input,CancellationToken ct=default)
@@ -43,22 +43,9 @@ public sealed class UploadPreparationService(UploadStagingService staging,Tenant
         try
         {
             ct=deadline.Token;
-            var saved=await savedMappings.ReadAsync(session,input.ClientId,input.TemplateId,ct);
-            if(saved.Status!=MappingStatus.Success) return new(saved.Status==MappingStatus.Review?"review":"forbidden",Code:"mapping_unavailable");
-            var snapshot=saved.Snapshot!;
-            if(snapshot.NeedsReview) return new("review",Code:"saved_mapping_needs_review");
-            if(input.MappingRevision is not null && input.MappingRevision!=snapshot.Revision
-                || input.ConfigurationKey is not null && input.ConfigurationKey!=snapshot.ConfigurationKey)
-                return new("conflict",Code:"preparation_context_changed");
-            var result=await staging.ReadOwnedAsync(session,input.ClientId,input.TemplateId,file,input.Sha256,snapshot.ConfigurationKey,
-                (path,hash,template,limits,token)=>Task.FromResult(Build(path,hash,file,template,snapshot,input,limits,options.Value.MaximumResponseBytes,token)),ct);
+            var result=await ReadBoundAsync(session,file,input,
+                (path,hash,template,snapshot,limits,token)=>Task.FromResult(Build(path,hash,file,template,snapshot,input,limits,options.Value.MaximumResponseBytes,token)),ct);
             if(result.Status!="success") return new(result.Status,Code:result.Code);
-            // Saved mappings have their own retained revision. Check after file
-            // work too; stale work cannot be returned as the new selection.
-            var after=await savedMappings.ReadAsync(session,input.ClientId,input.TemplateId,ct);
-            if(after.Status!=MappingStatus.Success) return new("forbidden");
-            if(after.Snapshot!=null && (after.Snapshot.NeedsReview || after.Snapshot.Revision!=snapshot.Revision
-                || after.Snapshot.ConfigurationKey!=snapshot.ConfigurationKey)) return new("conflict",Code:"preparation_context_changed");
             JsonSize(result.Value,options.Value.MaximumResponseBytes);
             return new("success",result.Value);
         }
@@ -68,6 +55,30 @@ public sealed class UploadPreparationService(UploadStagingService staging,Tenant
             or IOException or System.Xml.XmlException or ExcelDataReader.Exceptions.HeaderException or ExcelDataReader.Exceptions.InvalidPasswordException)
         {return new("invalid",Code:"invalid_preparation_source");}
         finally {requests.Release();}
+    }
+
+    // Shared by preparation and input validation. Parsing never holds database
+    // locks, and callers cannot substitute their own template or saved revision.
+    internal async Task<OwnedWorkbookResult<T>> ReadBoundAsync<T>(VerifiedSession? session,int file,PreparationRequest input,
+        Func<string,string,TemplateDefinition,MappingSnapshot,WorkbookReadLimits,CancellationToken,Task<T>> read,CancellationToken ct)
+    {
+        if(!options.Value.Enabled) return new("unavailable");
+        if(!Valid(input,file)) return new("invalid",Code:"invalid_preparation");
+        var saved=await savedMappings.ReadAsync(session,input.ClientId,input.TemplateId,ct);
+        if(saved.Status!=MappingStatus.Success) return new(saved.Status==MappingStatus.Review?"review":"forbidden",Code:"mapping_unavailable");
+        var snapshot=saved.Snapshot!;
+        if(snapshot.NeedsReview) return new("review",Code:"saved_mapping_needs_review");
+        if(input.MappingRevision is not null && input.MappingRevision!=snapshot.Revision
+            || input.ConfigurationKey is not null && input.ConfigurationKey!=snapshot.ConfigurationKey)
+            return new("conflict",Code:"preparation_context_changed");
+        var result=await staging.ReadOwnedAsync(session,input.ClientId,input.TemplateId,file,input.Sha256,snapshot.ConfigurationKey,
+            (path,hash,template,limits,token)=>read(path,hash,template,snapshot,limits,token),ct);
+        if(result.Status!="success") return result;
+        var after=await savedMappings.ReadAsync(session,input.ClientId,input.TemplateId,ct);
+        if(after.Status!=MappingStatus.Success) return new("forbidden");
+        if(after.Snapshot is null || after.Snapshot.NeedsReview || after.Snapshot.Revision!=snapshot.Revision
+            || after.Snapshot.ConfigurationKey!=snapshot.ConfigurationKey) return new("conflict",Code:"preparation_context_changed");
+        return result;
     }
 
     private bool Valid(PreparationRequest r,int file)=>file>0 && r.ClientId>0 && r.TemplateId>0 && r.RequestId!=Guid.Empty
@@ -137,12 +148,10 @@ public sealed class UploadPreparationService(UploadStagingService staging,Tenant
             chosen.TryGetValue(c.Id,out var match)?match.Position:null,chosen.GetValueOrDefault(c.Id).Score,"auto")).ToArray();
     }
 
-    private static PreparationOutput Build(string path,string hash,int file,TemplateDefinition template,MappingSnapshot saved,
-        PreparationRequest input,WorkbookReadLimits limits,int maximumResponseBytes,CancellationToken ct)
+    internal static PreparedSource ResolveSource(IReadOnlyList<WorkbookCell> cells,string hash,int file,
+        TemplateDefinition template,MappingSnapshot saved,PreparationRequest input)
     {
-        using var rows=WorkbookReader.Read(path,".xls",input.Sheet,limits,ct).GetEnumerator();
-        if(!rows.MoveNext()) throw new InvalidPreparation();
-        var headers=Headers(rows.Current.Cells); var warnings=new List<string>();
+        var headers=Headers(cells); var warnings=new List<string>();
         if(headers.Any(h=>h.Ambiguous)) warnings.Add("Blank or duplicate headers require an explicit source position; saved names are not guessed.");
         var mappings=AutoMap(template,headers).ToArray();
         foreach(var entry in saved.Entries)
@@ -172,6 +181,18 @@ public sealed class UploadPreparationService(UploadStagingService staging,Tenant
             Mappings=mappings.Select(m=>new {m.ColumnId,m.SourcePosition}),delimiter,order,
             Excluded=excluded.Order().ToArray(),Forced=forced.Order().ToArray()})));
         var context=new PreparationContext(input.RequestId,file,input.ClientId,input.TemplateId,input.Sheet,hash,template.ConfigurationKey,saved.Revision,selection);
+        return new(context,template,headers,mappings,warnings);
+    }
+
+    private static PreparationOutput Build(string path,string hash,int file,TemplateDefinition template,MappingSnapshot saved,
+        PreparationRequest input,WorkbookReadLimits limits,int maximumResponseBytes,CancellationToken ct)
+    {
+        using var rows=WorkbookReader.Read(path,".xls",input.Sheet,limits,ct).GetEnumerator();
+        if(!rows.MoveNext()) throw new InvalidPreparation();
+        var source=ResolveSource(rows.Current.Cells,hash,file,template,saved,input);
+        var (context,headers,mappings,warnings)=(source.Context,source.Headers,source.Mappings,source.Warnings);
+        string delimiter=input.DateDelimiter??"/",order=(input.DateOrder??"DMY").ToUpperInvariant();
+        var excluded=(input.ExcludedRows??[]).ToHashSet();var forced=(input.ForceIncludeRows??[]).ToHashSet();
         if(input.Operation=="map") return new(context,headers,mappings,warnings);
         var dateMappings=mappings.Where(m=>m.Type=="Date" && m.SourcePosition is not null).ToArray();
         var samples=new List<PreparedDateSample>(); long sampleBytes=0; var counts=dateMappings.ToDictionary(m=>m.ColumnId,_=>0);

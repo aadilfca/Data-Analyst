@@ -180,6 +180,14 @@ This list records discussion, not blanket authorization to activate policies. Re
 - Date choices retain explicit order/delimiter, native calendar values and Python's bare-serial origin. Samples never confirm coverage; Footing-dependent suggestions await P20. Physical row counts/flags and exclusion/override choices do not certify eligibility; P19 validates them.
 - Deadline, concurrency, request/selection/page and response bounds limit work. Current Python Upload UI remains active; live activation, production-corpus/performance proof and import/coverage controls remain later gates. See CHANGELOG_ARCHIVE.md, Upload preparation P18.
 
+### P19 input-validation boundary
+
+- Disabled `POST /api/upload/file/{id}/validate-input` reuses P18's live source/mapping boundary and request limits. Checks write no canonical rows or validation plans; `CanImport` is always false, even when input checks pass.
+- Inspect original mapped errors/nonfinite numbers and identifiable missing caches before blank-field decisions. Preserve Python's NA-text decisions separately from raw cells; source faults cannot become force-includable blanks. Optional unmapped Standard fields remain blank; critical mappings are required.
+- Preserve numeric syntax, date choices, ledger DR/CR/sign rules, source positions and repeated lines without narrowing stored values or approving calculation precision. Recognize controls/continuation notes without performing Footing, coverage or cross-row ledger balance proofs.
+- Partial Standard blank-field exceptions cannot bypass invalid values. Complete reports forbid transaction exclusions/overrides; ledger rejected rows remain blocking. P20/P21 retain financial/scope controls; binary XLS formula presence remains unverified.
+- Scan all rows for counts while paging/bounding diagnostic details; truncation never hides blocking status. Request/source/configuration fingerprints are informational. Full import authorization, live UI activation, production corpus and scale acceptance remain later gates. See CHANGELOG_ARCHIVE.md, Input validation P19.
+
 ## 3. PostgreSQL and financial values
 
 | Contract | Required behavior |
