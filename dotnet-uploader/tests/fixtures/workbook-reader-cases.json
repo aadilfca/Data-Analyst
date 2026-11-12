@@ -1,0 +1,11 @@
+{
+  "workbooks": ["golden_1900.xlsx", "golden_1904.xlsx", "golden_1900.xls", "golden_1904.xls"],
+  "sourceCases": ["leading zeros", "decimal numbers", "long numeric text", "blank", "zero", "boolean", "native date", "time", "elapsed duration", "cached formula", "missing/empty formula result", "Excel error", "literal error text", "NaN text", "numeric precision", "empty string", "merged cells", "repeated rows", "blank rows", "Unicode", "physical positions"],
+  "precisionTokens": ["9007199254740993", "0.1000000000000000000000000000000001", "1e-300", "1.2300", "-0", "1e+100"],
+  "knownBoundaries": [
+    "XLSX numeric lexemes are preserved beyond the precision of converted float values.",
+    "Binary XLS numeric values are IEEE doubles; no original decimal lexeme exists.",
+    "Binary formula presence is unknown through the selected public reader API; cached values/errors remain observable.",
+    "Pandas NA coercion and browser date display can differ from source-cell types; these are recorded separately."
+  ]
+}

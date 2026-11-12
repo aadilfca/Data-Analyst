@@ -1,13 +1,10 @@
-using System.IO.Compression;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using AuditPlatform.Api.Authentication;
 using AuditPlatform.Api.Configuration;
 using AuditPlatform.Api.Data;
 using AuditPlatform.Api.Logging;
 using AuditPlatform.Api.Templates;
-using ExcelDataReader;
 using Microsoft.Extensions.Options;
 using NpgsqlTypes;
 
@@ -293,44 +290,28 @@ public sealed class UploadStagingService(PostgresTransactions transactions,Postg
 
     private IReadOnlyList<StagedSheet> Discover(string path,string extension,CancellationToken ct)
     {
-        using var stream=File.OpenRead(path);
-        int first=stream.ReadByte(),second=stream.ReadByte(); stream.Position=0;
-        if(extension==".xlsx" || first=='P' && second=='K')
-        {
-            using(var zip=new ZipArchive(stream,ZipArchiveMode.Read,true))
-            {
-                if(zip.Entries.Count>10000 || zip.GetEntry("xl/workbook.xml") is null) throw new InvalidWorkbook();
-                long expanded=0; var buffer=new byte[65536];
-                foreach(var entry in zip.Entries)
-                {
-                    ct.ThrowIfCancellationRequested();
-                    using var item=entry.Open(); int count;
-                    while((count=item.Read(buffer))>0)
-                    { expanded+=count; if(expanded>options.Value.MaximumExpandedBytes) throw new InvalidWorkbook(); ct.ThrowIfCancellationRequested(); }
-                }
-            }
-            stream.Position=0;
-        }
-        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-        using var reader=ExcelReaderFactory.CreateReader(stream,new ExcelReaderConfiguration {LeaveOpen=true,SinglePassMode=true});
-        var sheets=new List<StagedSheet>();
-        do
-        {
-            ct.ThrowIfCancellationRequested();
-            if(sheets.Count>=options.Value.MaximumSheets || reader.FieldCount>options.Value.MaximumColumns) throw new InvalidWorkbook();
-            var headers=new List<StagedHeader>();
-            bool hasRow=reader.Read();
-            if(reader.FieldCount>options.Value.MaximumColumns) throw new InvalidWorkbook();
-            if(hasRow) for(int index=0;index<reader.FieldCount;index++)
-            {
-                var value=JsonSerializer.SerializeToElement(reader.GetValue(index));
-                if(value.GetRawText().Length>65536) throw new InvalidWorkbook();
-                headers.Add(new(index,value));
-            }
-            sheets.Add(new(reader.Name,headers));
-            if(JsonSerializer.SerializeToUtf8Bytes(sheets).Length>1048576) throw new InvalidWorkbook();
-        } while(reader.NextResult());
-        if(sheets.Count==0 || sheets.All(s=>s.Headers.Count==0)) throw new InvalidWorkbook();
-        return sheets;
+        var value=options.Value;
+        var limits=new AuditPlatform.Api.Workbooks.WorkbookReadLimits(value.MaximumFileBytes,value.MaximumExpandedBytes,
+            value.MaximumSheets,value.MaximumColumns,value.MaximumRows,value.MaximumCellCharacters);
+        var result=AuditPlatform.Api.Workbooks.WorkbookReader.Discover(path,extension,limits,ct)
+            .Select(sheet=>new StagedSheet(sheet.Name,sheet.Header.Select(cell=>new StagedHeader(cell.Column-1,HeaderValue(cell))).ToArray())).ToArray();
+        if(JsonSerializer.SerializeToUtf8Bytes(result).Length>1048576) throw new InvalidWorkbook();
+        return result;
     }
+
+    private static JsonElement HeaderValue(AuditPlatform.Api.Workbooks.WorkbookCell cell)
+    {
+        // Keep staging's existing JSON value envelope. Full typed cells remain
+        // available to subsequent preparation/validation phases via the reader.
+        object? value=cell.Kind switch {
+            AuditPlatform.Api.Workbooks.WorkbookCellKind.Text=>cell.Text,
+            AuditPlatform.Api.Workbooks.WorkbookCellKind.Number=>double.Parse(cell.NumberToken!,System.Globalization.CultureInfo.InvariantCulture),
+            AuditPlatform.Api.Workbooks.WorkbookCellKind.Boolean=>cell.Boolean,
+            AuditPlatform.Api.Workbooks.WorkbookCellKind.DateTime=>cell.DateTime,
+            AuditPlatform.Api.Workbooks.WorkbookCellKind.Time or AuditPlatform.Api.Workbooks.WorkbookCellKind.Duration=>cell.Time,
+            AuditPlatform.Api.Workbooks.WorkbookCellKind.Error=>throw new AuditPlatform.Api.Workbooks.WorkbookReadException("An Excel header contains an error."),
+            _=>null};
+        return JsonSerializer.SerializeToElement(value);
+    }
+
 }

@@ -162,8 +162,15 @@ This list records discussion, not blanket authorization to activate policies. Re
 - Disabled local staging binds receipts to tenant, user, selected active home client and native template. Administrators and active assigned managers/internees receive staging actions only; another user's receipt remains inaccessible.
 - Caller-generated request IDs reconcile interrupted responses without replay. Reserve and ready transitions require atomic audit; uncertain commits retain receipts/bytes. Staging adds no canonical transactions or validation plans.
 - Files stream within configured limits to generated keys outside application trees. SHA-256 is rechecked on status; missing/altered/expired sources require fresh selection. Owner-authorized expiry cleanup commits first, clears discovery and deletes only registered files.
-- ExcelDataReader 3.9.0 supplies bounded sheet/first-row discovery with positional blank/duplicate headers. Full XLS/XLSX value parity remains P17; import controls and frontend integration follow later phases.
+- ExcelDataReader 3.9.0 and the P17 adapter supply bounded sheet/first-row discovery with positional blank/duplicate headers; import controls and frontend integration follow later phases.
 - Local storage needs operator-restricted permissions. Durable private storage/retention, unattended cleanup after access revocation, deployed schema/capacity and live activation remain gated; no Render filesystem durability is claimed.
+
+### P17 source-cell boundary
+
+- Internal streaming rows retain physical positions, repeated lines, typed blanks/text/numbers/booleans/dates/times/durations/errors, number formats and formula-cache state; formulas are never evaluated.
+- XLSX numeric lexemes survive floating-point conversion; binary XLS exposes round-trip IEEE values and unknown formula presence. Neither representation changes persisted/API number types or approves calculation precision.
+- Synthetic XLS/XLSX comparisons record Python source, existing pandas/import coercion and browser differences separately. Missing formula results and invalid numeric values stay explicit; production ERP corpus and full import/accounting parity remain unverified. See CHANGELOG_ARCHIVE.md, Workbook reader P17.
+- Configured byte/expanded-byte/sheet/column/row/cell limits, cancellation and disposal bound reading; no canonical writes, new endpoints or frontend activation.
 
 ## 3. PostgreSQL and financial values
 

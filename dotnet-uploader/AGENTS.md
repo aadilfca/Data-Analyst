@@ -59,7 +59,7 @@ Execution order: P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 (repor
 | P14 — Saved mappings | Disabled tenant/client header mappings, retained revisions, stale-binding review and guarded Upload controls locally accepted. Live activation remains gated. |
 | P15 — Setup backup | Disabled tenant configuration export, preview and guarded restore locally accepted. See CHANGELOG_ARCHIVE.md, Configuration backup P15. |
 | P16 — Upload staging | Disabled owned local staging/discovery, receipt recovery and expiry locally accepted. See CHANGELOG_ARCHIVE.md, Upload staging P16. |
-| P17 — Workbook reader | Prove XLS/XLSX cell parity for dates, decimals, formulas, errors, blanks, and source positions using golden workbooks. |
+| P17 — Workbook reader | Typed bounded XLS/XLSX reader and synthetic Python/browser comparisons locally accepted. Source/coercion limits: CHANGELOG_ARCHIVE.md, Workbook reader P17. |
 | P18 — Upload preparation | Port header aliases, mapping, date previews, row selection, and permitted overrides; verify stale responses cannot restore obsolete choices. |
 | P19 — Input validation | Port critical-field, numeric, date, and source-error checking; verify precise row guidance and zero canonical writes on rejection. |
 | P20 — Footing | Port confirmed control rows, exact totals, tolerances, and variance acknowledgement; verify boundary amounts and confirmation binding. |
