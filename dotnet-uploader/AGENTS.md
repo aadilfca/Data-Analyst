@@ -63,7 +63,7 @@ Execution order: P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 (repor
 | P18 — Upload preparation | Disabled source-bound mapping, date previews and paged row choices locally accepted. UI integration and validation remain gated. See CHANGELOG_ARCHIVE.md, Upload preparation P18. |
 | P19 — Input validation | Disabled source-bound cell/critical-field checks and bounded diagnostics locally accepted. No import authorization. See CHANGELOG_ARCHIVE.md, Input validation P19. |
 | P20 — Footing | Disabled exact source/subset totals, confirmed controls and bound variance acknowledgement locally accepted. Precision review/import gates remain. See CHANGELOG_ARCHIVE.md, Footing P20. |
-| P21 — Coverage | Port complete/partial report rules, date confirmation, and account scope; verify missing/empty periods and exclusions follow existing policy. |
+| P21 — Coverage | Disabled declared-period, empty-report and ledger-account checks locally accepted. Source/reference freshness retained; import remains gated. See CHANGELOG_ARCHIVE.md, Coverage P21. |
 | P22 — Duplicate identity | Port canonical identities, exact duplicate checks, multiplicity, and unchanged detection; prove repeat uploads are no-ops. |
 | P23 — Corrections | Port correction matching and added/changed/deleted classification; verify ambiguous matches block and legitimate repeated lines survive. |
 | P24 — Validation plans | Port signed request/file/configuration checks, expiry, locking, and freshness; reject altered or concurrently superseded plans. |

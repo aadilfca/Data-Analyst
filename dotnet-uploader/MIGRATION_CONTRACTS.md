@@ -177,7 +177,7 @@ This list records discussion, not blanket authorization to activate policies. Re
 - Disabled `POST /api/upload/file/{id}/prepare` supports mapping, date samples and paged source-row choices. Requires owned staging, saved mappings, session/context and CSRF guards; no canonical writes or validation plans.
 - Workbook hash/expiry, native bindings and live access are checked around parsing; saved-mapping revision and configuration are rechecked. Responses carry request ID, source/configuration context and an informational selection fingerprint. UI integration must discard obsolete responses; this is not a signed import authorization.
 - Exact headers precede ERP aliases and existing fuzzy/positional suggestions. Bind by column ID/key and source position; blank/duplicate source names require explicit positions. Saved names are applied only when unambiguous; comparison policy remains server-owned.
-- Date choices retain explicit order/delimiter, native calendar values and Python's bare-serial origin. Samples never confirm coverage; Footing-dependent suggestions await P20. Physical row counts/flags and exclusion/override choices do not certify eligibility; P19 validates them.
+- Date choices retain explicit order/delimiter, native calendar values and Python's bare-serial origin. Samples never confirm coverage; P21 supplies checked transaction-date suggestions. Physical row counts/flags and exclusion/override choices do not certify eligibility; P19 validates them.
 - Deadline, concurrency, request/selection/page and response bounds limit work. Current Python Upload UI remains active; live activation, production-corpus/performance proof and import/coverage controls remain later gates. See CHANGELOG_ARCHIVE.md, Upload preparation P18.
 
 ### P19 input-validation boundary
@@ -194,7 +194,16 @@ This list records discussion, not blanket authorization to activate policies. Re
 - Aadil approved bounded BigInteger coefficient/scale arithmetic for Footing only. Parse within Python's thousand-digit/adjusted-exponent bounds; retain exact sums/differences with bounded growth. No source rounding, canonical writes, new dependencies or general report-precision approval.
 - Prove full source detail before user exclusions; report selected eligible rows separately. Preserve repeated occurrences/configured document counts and omit controls/notes. Invalid aggregate inputs mark totals incomplete and cannot pass.
 - Absolute differences below 0.01 pass; 0.01–1.00 inclusive require current-result acknowledgement; larger differences block. Review fingerprints bind source/configuration/mapping, mode, row choices, policy and totals, excluding request-correlation ID. Changed or inapplicable acknowledgement is rejected; P24 still owns signed import plans.
-- Conservatively block amounts that a legacy float conversion could change for precision review. Binary XLS formula presence remains unknown. `CanImport=false` always; coverage, stored SQL proof, live UI/corpus/scale acceptance remain later gates. See CHANGELOG_ARCHIVE.md, Footing P20.
+- Conservatively block amounts that a legacy float conversion could change for precision review. Binary XLS formula presence remains unknown. `CanImport=false` always; P21 supplies coverage checks, while stored SQL proof and live UI/corpus/scale acceptance remain gated. See CHANGELOG_ARCHIVE.md, Footing P20.
+
+### P21 coverage boundary
+
+- Disabled `POST /api/upload/file/{id}/coverage` reuses owned source/mapping freshness, P19 classification and P20 exact Footing in one streaming pass. Source checks and applicable coverage rules must pass; `CanImport=false` always.
+- Complete Standard reports require mapped Document Date, canonical ordered ISO dates and explicit full-period confirmation. Every parseable detail date must fit; exclusions/overrides cannot manufacture completeness. Declared boundaries may exceed observed transaction dates; empty replacement requires separate confirmation and genuine absence of detail rows.
+- Partial extracts never certify a complete period or authorize removal of absent rows. Preserve existing Standard exceptions and ledger exclusions; included ledger dates must fit their declared period. Complete ledger coverage must match that period.
+- Ledger account identity comes from the client's latest parsed Trial Balance posting accounts, checked before/after parsing. Missing, duplicate, unavailable or changed reference evidence blocks; reference identity participates in the review key. No Trial Balance writer/schema change or account-picker UI is included.
+- Suggestions scan transaction dates, retaining occurrences and omitting controls/notes. They do not confirm coverage; unresolved source/Footing checks suppress suggested boundaries. P18 date samples remain advisory.
+- Review keys bind source/configuration/mapping, mode, dates, account reference, controls, selections and confirmation choices, excluding request-correlation ID and variance acknowledgement itself. Variance acknowledgement also requires the current coverage key. P24 still owns signed plans; stored-row scope/corrections, ledger balance proofs and live activation remain later gates. See CHANGELOG_ARCHIVE.md, Coverage P21.
 
 ## 3. PostgreSQL and financial values
 

@@ -101,8 +101,15 @@ builder.Services.AddSingleton<UploadInputValidationService>();
 builder.Services.AddOptions<UploadFootingOptions>()
     .Bind(builder.Configuration.GetSection(UploadFootingOptions.SectionName)).ValidateOnStart();
 builder.Services.AddSingleton<UploadFootingService>();
+builder.Services.AddOptions<UploadCoverageOptions>()
+    .Bind(builder.Configuration.GetSection(UploadCoverageOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
+builder.Services.AddSingleton<UploadCoverageService>();
 
 var app = builder.Build();
+if(app.Services.GetRequiredService<IOptions<UploadCoverageOptions>>().Value.Enabled
+    && !app.Services.GetRequiredService<IOptions<UploadFootingOptions>>().Value.Enabled)
+    throw new OptionsValidationException(UploadCoverageOptions.SectionName,typeof(UploadCoverageOptions),
+        ["Coverage requires Footing, input validation and their source-bound tenant prerequisites."]);
 if(app.Services.GetRequiredService<IOptions<UploadFootingOptions>>().Value.Enabled
     && !app.Services.GetRequiredService<IOptions<UploadInputValidationOptions>>().Value.Enabled)
     throw new OptionsValidationException(UploadFootingOptions.SectionName,typeof(UploadFootingOptions),

@@ -57,7 +57,7 @@ public sealed class UploadFootingService(UploadPreparationService preparation,IO
     // selected subset. No second set of transaction/control heuristics exists.
     public static FootingOutput Evaluate(TemplateDefinition template,IReadOnlyList<PreparedMapping> mappings,
         PreparationContext context,FootingRequest input,IEnumerable<WorkbookRow> rows,UploadFootingOptions limits,
-        UploadInputValidationOptions inputLimits,CancellationToken ct=default)
+        UploadInputValidationOptions inputLimits,CancellationToken ct=default,Action<CheckedSourceRow>? observe=null)
     {
         var footings=mappings.Where(m=>m.Role=="footing").ToArray();
         var document=mappings.SingleOrDefault(m=>m.Role=="document_id")??mappings.FirstOrDefault();
@@ -125,7 +125,8 @@ public sealed class UploadFootingService(UploadPreparationService preparation,IO
                 }
             }
         }
-        var validation=UploadInputValidationService.CheckRows(template,mappings,context,input.Validation,rows,inputLimits,ct,Observe);
+        void ObserveRow(CheckedSourceRow row) {Observe(row);observe?.Invoke(row);}
+        var validation=UploadInputValidationService.CheckRows(template,mappings,context,input.Validation,rows,inputLimits,ct,ObserveRow);
         if(footings.Length>0 && !selectedRowSeen) Invalid(input.Validation.ControlTotalRow??1,null,"Choose an existing source control-total row.");
         var checks=new List<FootingColumnCheck>();bool confirmable=false;
         foreach(var mapping in footings)
