@@ -62,7 +62,7 @@ Execution order: P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 (repor
 | P17 — Workbook reader | Typed bounded XLS/XLSX reader and synthetic Python/browser comparisons locally accepted. Source/coercion limits: CHANGELOG_ARCHIVE.md, Workbook reader P17. |
 | P18 — Upload preparation | Disabled source-bound mapping, date previews and paged row choices locally accepted. UI integration and validation remain gated. See CHANGELOG_ARCHIVE.md, Upload preparation P18. |
 | P19 — Input validation | Disabled source-bound cell/critical-field checks and bounded diagnostics locally accepted. No import authorization. See CHANGELOG_ARCHIVE.md, Input validation P19. |
-| P20 — Footing | Port confirmed control rows, exact totals, tolerances, and variance acknowledgement; verify boundary amounts and confirmation binding. |
+| P20 — Footing | Disabled exact source/subset totals, confirmed controls and bound variance acknowledgement locally accepted. Precision review/import gates remain. See CHANGELOG_ARCHIVE.md, Footing P20. |
 | P21 — Coverage | Port complete/partial report rules, date confirmation, and account scope; verify missing/empty periods and exclusions follow existing policy. |
 | P22 — Duplicate identity | Port canonical identities, exact duplicate checks, multiplicity, and unchanged detection; prove repeat uploads are no-ops. |
 | P23 — Corrections | Port correction matching and added/changed/deleted classification; verify ambiguous matches block and legitimate repeated lines survive. |

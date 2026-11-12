@@ -24,9 +24,7 @@ public sealed class UploadInputValidationService(UploadPreparationService prepar
     public async Task<InputValidationResult> ValidateAsync(VerifiedSession? session,int file,InputValidationRequest input,CancellationToken ct=default)
     {
         if(!options.Value.Enabled) return new("unavailable");
-        if(input.Source is null || input.ComparisonMode is not ("correction" or "replace_range")
-            || input.ControlTotalRow is not (null or >=2 and <=1048576) || input.IssuePage is <1 or >1048576
-            || input.IssuePageSize<1 || input.IssuePageSize>options.Value.MaximumIssueRows) return new("invalid",Code:"invalid_input_validation");
+        if(!ValidRequest(input,options.Value)) return new("invalid",Code:"invalid_input_validation");
         if(!await requests.WaitAsync(0,ct)) return new("busy");
         var caller=ct;using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(TimeSpan.FromSeconds(options.Value.TimeoutSeconds));
@@ -54,11 +52,16 @@ public sealed class UploadInputValidationService(UploadPreparationService prepar
         finally {requests.Release();}
     }
 
+    internal static bool ValidRequest(InputValidationRequest input,UploadInputValidationOptions limits)=>input.Source is not null
+        && input.ComparisonMode is "correction" or "replace_range"
+        && input.ControlTotalRow is null or >=2 and <=1048576 && input.IssuePage is >=1 and <=1048576
+        && input.IssuePageSize>=1 && input.IssuePageSize<=limits.MaximumIssueRows;
+
     // Pure streaming checks, also used by golden tests. The authorized wrapper
     // above always supplies the live template/mappings and checks the source twice.
     public static InputValidationOutput CheckRows(TemplateDefinition template,IReadOnlyList<PreparedMapping> mappings,
         PreparationContext context,InputValidationRequest input,IEnumerable<WorkbookRow> rows,
-        UploadInputValidationOptions limits,CancellationToken ct=default)
+        UploadInputValidationOptions limits,CancellationToken ct=default,Action<CheckedSourceRow>? observe=null)
     {
         var issues=new List<InputRowIssue>();long detailBytes=0;int issueRows=0;
         bool blocking=false;int sourceRows=0,transactions=0,controls=0,notes=0,excludedCount=0,errorRows=0,rejected=0,forcedCount=0,eligible=0,last=1;
@@ -122,7 +125,7 @@ public sealed class UploadInputValidationService(UploadPreparationService prepar
                     c.Kind==WorkbookCellKind.Text?c with {Text=c.Text!.Replace(",","")}:c).Valid);
             string? control=populated.Length==0?"blank_control":summary?"total_control":null;
             if(input.ControlTotalRow==row.Number && footing) control="selected_control";
-            if(ledger && Blank(Cell(document)))
+            if(control!="selected_control" && ledger && Blank(Cell(document)))
             {
                 string label=Regex.Replace(Cell(Role("description")).Text?.ToLowerInvariant()??"","[^a-z]","");
                 string? kind=label is "openingbalance" or "balanceforward" or "balancebroughtforward"?"opening":label=="closingbalance"?"closing":null;
@@ -140,7 +143,7 @@ public sealed class UploadInputValidationService(UploadPreparationService prepar
                 if(control=="selected_control") foreach(var m in mapped.Where(m=>m.Role=="footing"))
                 {var check=UploadNumericParser.Check(Cell(m));if(!Blank(Cell(m))&&!check.Valid&&!errors.Any(e=>e.ColumnId==m.ColumnId)) errors.Add(Issue(m,"data_type",check.Error!));}
                 if(errors.Count>0) {blocking=true;errorRows++;}
-                Report(new(row.Number,control,errors,[]));continue;
+                Report(new(row.Number,control,errors,[]));observe?.Invoke(new(row,control,isExcluded,false,errors.Count>0));continue;
             }
             if(ledger && Cell(Role("description")).Kind==WorkbookCellKind.Text && !Blank(Cell(Role("description"))))
             {
@@ -150,7 +153,8 @@ public sealed class UploadInputValidationService(UploadPreparationService prepar
                     notes++;
                     if(parent is null || previous!=row.Number-1 || isExcluded) errors.Add(Issue(Role("description"),"ledger_note","Keep this note directly after an included transaction."));
                     if(errors.Count>0) {blocking=true;errorRows++;}
-                    Report(new(row.Number,"continuation",errors,[],ParentRow:parent));previous=row.Number;continue;
+                    Report(new(row.Number,"continuation",errors,[],ParentRow:parent));previous=row.Number;
+                    observe?.Invoke(new(row,"continuation",isExcluded,false,errors.Count>0));continue;
                 }
             }
             transactions++;
@@ -159,6 +163,7 @@ public sealed class UploadInputValidationService(UploadPreparationService prepar
                 excludedCount++;parent=null;previous=row.Number;
                 if(complete) errors.Add(Issue(null,"selection_not_allowed","Complete reports cannot exclude transaction rows."));
                 if(errors.Count>0) {blocking=true;errorRows++;Report(new(row.Number,"excluded",errors,[]));}
+                observe?.Invoke(new(row,"transaction",true,false,errors.Count>0));
                 continue;
             }
             foreach(var m in mapped)
@@ -187,6 +192,7 @@ public sealed class UploadInputValidationService(UploadPreparationService prepar
             if(errors.Count==0 && (missing.Count==0 || force)) eligible++;
             if(errors.Count>0||missing.Count>0) Report(new(row.Number,"transaction",errors,missing,force));
             parent=errors.Count==0 && missing.Count==0?row.Number:null;previous=row.Number;
+            observe?.Invoke(new(row,"transaction",false,errors.Count==0&&(missing.Count==0||force),errors.Count>0));
         }
         if(excluded.Any(n=>n>last)||forced.Any(n=>n>last)||input.ControlTotalRow>last) Policy(1,"invalid_row_selection","Choose existing source row numbers.");
         if(complete && forced.Count>0) Policy(1,"override_not_allowed","Correct complete-report errors in the source workbook.");

@@ -188,6 +188,14 @@ This list records discussion, not blanket authorization to activate policies. Re
 - Partial Standard blank-field exceptions cannot bypass invalid values. Complete reports forbid transaction exclusions/overrides; ledger rejected rows remain blocking. P20/P21 retain financial/scope controls; binary XLS formula presence remains unverified.
 - Scan all rows for counts while paging/bounding diagnostic details; truncation never hides blocking status. Request/source/configuration fingerprints are informational. Full import authorization, live UI activation, production corpus and scale acceptance remain later gates. See CHANGELOG_ARCHIVE.md, Input validation P19.
 
+### P20 Footing boundary
+
+- Disabled `POST /api/upload/file/{id}/footing` reuses P18/P19 ownership, freshness, input checks and streaming row classification. Confirm a valid control row explicitly; only mapped Numeric Footing totals determine its numeric suitability. Never infer confirmation from a label.
+- Aadil approved bounded BigInteger coefficient/scale arithmetic for Footing only. Parse within Python's thousand-digit/adjusted-exponent bounds; retain exact sums/differences with bounded growth. No source rounding, canonical writes, new dependencies or general report-precision approval.
+- Prove full source detail before user exclusions; report selected eligible rows separately. Preserve repeated occurrences/configured document counts and omit controls/notes. Invalid aggregate inputs mark totals incomplete and cannot pass.
+- Absolute differences below 0.01 pass; 0.01–1.00 inclusive require current-result acknowledgement; larger differences block. Review fingerprints bind source/configuration/mapping, mode, row choices, policy and totals, excluding request-correlation ID. Changed or inapplicable acknowledgement is rejected; P24 still owns signed import plans.
+- Conservatively block amounts that a legacy float conversion could change for precision review. Binary XLS formula presence remains unknown. `CanImport=false` always; coverage, stored SQL proof, live UI/corpus/scale acceptance remain later gates. See CHANGELOG_ARCHIVE.md, Footing P20.
+
 ## 3. PostgreSQL and financial values
 
 | Contract | Required behavior |

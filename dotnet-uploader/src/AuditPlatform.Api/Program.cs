@@ -98,8 +98,15 @@ builder.Services.AddSingleton<UploadPreparationService>();
 builder.Services.AddOptions<UploadInputValidationOptions>()
     .Bind(builder.Configuration.GetSection(UploadInputValidationOptions.SectionName)).ValidateOnStart();
 builder.Services.AddSingleton<UploadInputValidationService>();
+builder.Services.AddOptions<UploadFootingOptions>()
+    .Bind(builder.Configuration.GetSection(UploadFootingOptions.SectionName)).ValidateOnStart();
+builder.Services.AddSingleton<UploadFootingService>();
 
 var app = builder.Build();
+if(app.Services.GetRequiredService<IOptions<UploadFootingOptions>>().Value.Enabled
+    && !app.Services.GetRequiredService<IOptions<UploadInputValidationOptions>>().Value.Enabled)
+    throw new OptionsValidationException(UploadFootingOptions.SectionName,typeof(UploadFootingOptions),
+        ["Footing requires input validation and its source-bound tenant prerequisites."]);
 if(app.Services.GetRequiredService<IOptions<UploadInputValidationOptions>>().Value.Enabled
     && !app.Services.GetRequiredService<IOptions<UploadPreparationOptions>>().Value.Enabled)
     throw new OptionsValidationException(UploadInputValidationOptions.SectionName,typeof(UploadInputValidationOptions),
