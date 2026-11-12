@@ -172,6 +172,14 @@ This list records discussion, not blanket authorization to activate policies. Re
 - Synthetic XLS/XLSX comparisons record Python source, existing pandas/import coercion and browser differences separately. Missing formula results and invalid numeric values stay explicit; production ERP corpus and full import/accounting parity remain unverified. See CHANGELOG_ARCHIVE.md, Workbook reader P17.
 - Configured byte/expanded-byte/sheet/column/row/cell limits, cancellation and disposal bound reading; no canonical writes, new endpoints or frontend activation.
 
+### P18 preparation boundary
+
+- Disabled `POST /api/upload/file/{id}/prepare` supports mapping, date samples and paged source-row choices. Requires owned staging, saved mappings, session/context and CSRF guards; no canonical writes or validation plans.
+- Workbook hash/expiry, native bindings and live access are checked around parsing; saved-mapping revision and configuration are rechecked. Responses carry request ID, source/configuration context and an informational selection fingerprint. UI integration must discard obsolete responses; this is not a signed import authorization.
+- Exact headers precede ERP aliases and existing fuzzy/positional suggestions. Bind by column ID/key and source position; blank/duplicate source names require explicit positions. Saved names are applied only when unambiguous; comparison policy remains server-owned.
+- Date choices retain explicit order/delimiter, native calendar values and Python's bare-serial origin. Samples never confirm coverage; Footing-dependent suggestions await P20. Physical row counts/flags and exclusion/override choices do not certify eligibility; P19 validates them.
+- Deadline, concurrency, request/selection/page and response bounds limit work. Current Python Upload UI remains active; live activation, production-corpus/performance proof and import/coverage controls remain later gates. See CHANGELOG_ARCHIVE.md, Upload preparation P18.
+
 ## 3. PostgreSQL and financial values
 
 | Contract | Required behavior |

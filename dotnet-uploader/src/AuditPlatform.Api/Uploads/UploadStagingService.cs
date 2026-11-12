@@ -5,6 +5,7 @@ using AuditPlatform.Api.Configuration;
 using AuditPlatform.Api.Data;
 using AuditPlatform.Api.Logging;
 using AuditPlatform.Api.Templates;
+using AuditPlatform.Api.Workbooks;
 using Microsoft.Extensions.Options;
 using NpgsqlTypes;
 
@@ -16,7 +17,7 @@ public sealed record StagingResult(string Status,int? FileId=null,Guid? RequestI
     long? Bytes=null,string? Sha256=null,IReadOnlyList<StagedSheet>? Sheets=null,string? Code=null);
 
 // Local private storage is a rehearsal boundary. Public activation still requires
-// durable private storage and P17 cell parity; this module writes no transactions.
+// durable private storage and import acceptance; this module writes no transactions.
 public sealed class UploadStagingService(PostgresTransactions transactions,PostgresAuditWriter audit,IOptions<UploadStagingOptions> options,TimeProvider? clock=null)
 {
     private DateTime Now=>(clock??TimeProvider.System).GetUtcNow().UtcDateTime;
@@ -186,6 +187,51 @@ public sealed class UploadStagingService(PostgresTransactions transactions,Postg
             return result;
         }
         catch(Denied) { return new("forbidden"); }
+    }
+
+    // Only this owner-bound boundary may expose a generated private path to an
+    // internal reader. Database locks are released during file parsing, then
+    // live access, expiry, source and configuration are checked again.
+    internal async Task<OwnedWorkbookResult<T>> ReadOwnedAsync<T>(VerifiedSession? session,int client,int template,int id,
+        string? expectedHash,string? expectedConfiguration,
+        Func<string,string,TemplateDefinition,WorkbookReadLimits,CancellationToken,Task<T>> read,CancellationToken ct)
+    {
+        if(!options.Value.Enabled) return new("unavailable");
+        try
+        {
+            async Task<(Receipt? Receipt,TemplateDefinition Definition)> Snapshot()=>await AuthorizedAsync(session,client,template,async(db,actor,token)=>
+                (await FindAsync(db,actor,client,template,null,id,token),
+                    (await TenantTemplateService.LoadAsync(db,actor.Tenant,template,token)).Single()),ct);
+            var before=await Snapshot(); var receipt=before.Receipt;
+            if(receipt is null) return new("not_found");
+            if(receipt.State!="ready" || receipt.Expiry<=Now) return new("gone",Code:"staged_file_unavailable");
+            if(expectedHash is not null && expectedHash!=receipt.Hash || expectedConfiguration is not null && expectedConfiguration!=before.Definition.ConfigurationKey)
+                return new("conflict",Code:"preparation_context_changed");
+            string path=FilePath(receipt.Key,".bin");
+            // The lease prevents replacement on Windows; verify the registered
+            // bytes both before and after parsing on all supported hosts.
+            await using var lease=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read,65536,FileOptions.Asynchronous);
+            async Task<bool> Matches()
+            {
+                await using var source=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read,65536,FileOptions.Asynchronous);
+                return source.Length==receipt.Bytes && Convert.ToHexString(await SHA256.HashDataAsync(source,ct)).ToLowerInvariant()==receipt.Hash;
+            }
+            if(!await Matches()) return new("gone",Code:"staged_file_changed");
+            var value=options.Value;
+            var limits=new WorkbookReadLimits(value.MaximumFileBytes,value.MaximumExpandedBytes,value.MaximumSheets,value.MaximumColumns,value.MaximumRows,value.MaximumCellCharacters);
+            // The generated suffix is .bin. Reader format detection uses the
+            // source signature; the .xls hint still applies ZIP expansion guards.
+            var output=await read(path,receipt.Hash!,before.Definition,limits,ct);
+            if(!await Matches()) return new("gone",Code:"staged_file_changed");
+            var after=await Snapshot();
+            if(after.Receipt is not {State:"ready"} current || current.Expiry<=Now) return new("gone",Code:"staged_file_unavailable");
+            if(current.Key!=receipt.Key || current.Hash!=receipt.Hash || current.Bytes!=receipt.Bytes
+                || before.Definition.ConfigurationKey!=after.Definition.ConfigurationKey) return new("conflict",Code:"preparation_context_changed");
+            return new("success",output);
+        }
+        catch(Denied) {return new("forbidden");}
+        catch(FileNotFoundException) {return new("gone",Code:"staged_file_missing");}
+        catch(DirectoryNotFoundException) {return new("gone",Code:"staged_file_missing");}
     }
 
     private async Task<T> AuthorizedAsync<T>(VerifiedSession? session,int client,int template,

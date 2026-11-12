@@ -92,8 +92,16 @@ builder.Services.AddSingleton<ConfigurationBackupService>();
 builder.Services.AddOptions<UploadStagingOptions>()
     .Bind(builder.Configuration.GetSection(UploadStagingOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
 builder.Services.AddSingleton<UploadStagingService>();
+builder.Services.AddOptions<UploadPreparationOptions>()
+    .Bind(builder.Configuration.GetSection(UploadPreparationOptions.SectionName)).ValidateOnStart();
+builder.Services.AddSingleton<UploadPreparationService>();
 
 var app = builder.Build();
+if(app.Services.GetRequiredService<IOptions<UploadPreparationOptions>>().Value.Enabled
+    && (!app.Services.GetRequiredService<IOptions<UploadStagingOptions>>().Value.Enabled
+        || !app.Services.GetRequiredService<IOptions<SavedMappingOptions>>().Value.Enabled))
+    throw new OptionsValidationException(UploadPreparationOptions.SectionName,typeof(UploadPreparationOptions),
+        ["Upload preparation requires owned staging, saved mappings and their tenant prerequisites."]);
 if(app.Services.GetRequiredService<IOptions<UploadStagingOptions>>().Value.Enabled
     && !app.Services.GetRequiredService<IOptions<TemplateManagementOptions>>().Value.Enabled)
     throw new OptionsValidationException(UploadStagingOptions.SectionName,typeof(UploadStagingOptions),["Upload staging requires native templates and tenant context."]);
