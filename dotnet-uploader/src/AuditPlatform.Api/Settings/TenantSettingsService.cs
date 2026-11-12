@@ -182,6 +182,32 @@ public sealed class TenantSettingsService(PostgresTransactions transactions, Pos
         command.Parameters.AddWithValue(tenant); command.Parameters.AddWithValue(key); command.Parameters.AddWithValue(value);
         await command.ExecuteNonQueryAsync(ct);
     }
+    // Restore reuses the same setting rules within its caller's transaction.
+    internal async Task<string?> RestoreAsync(PostgresTransactionContext db,int tenant,int user,string name,
+        IReadOnlyDictionary<string,string> input,CancellationToken ct)
+    {
+        var error=await ValidateRestoreAsync(db,tenant,input,ct);
+        if(error is not null) return error;
+        foreach (var (key,value) in input) await PutAsync(db,tenant,key,value,ct);
+        if (input.Count>0) await AuditAsync(db,new Actor(tenant,user,name,"admin"),"RestoreSettings",null,ct);
+        return null;
+    }
+    internal static async Task<string?> ValidateRestoreAsync(PostgresTransactionContext db,int tenant,
+        IReadOnlyDictionary<string,string> input,CancellationToken ct)
+    {
+        if (input.Any(pair => pair.Key is null || pair.Value is null || pair.Key.Contains('\0') || pair.Value.Contains('\0')
+            || (!Defaults.ContainsKey(pair.Key) && pair.Key != BackupKey))) return "Invalid settings in backup";
+        var values = await ValuesAsync(db,tenant,ct);
+        foreach (var (key,value) in input) if (Defaults.ContainsKey(key)) values[key]=value;
+        if (!int.TryParse(values["cashflow_fiscal_year_start_month"],NumberStyles.None,CultureInfo.InvariantCulture,out var month))
+            return "Invalid Cashflows settings in backup";
+        var error=ValidateDefaults(new CashflowDefaults(month,values["cashflow_default_period"],
+            values["cashflow_custom_start"],values["cashflow_custom_end"]));
+        if (error is not null) return error;
+        if (input.TryGetValue(BackupKey,out var policy) && policy is not ("true" or "false"))
+            return "Invalid upload backup policy";
+        return null;
+    }
     private Task<int> AuditAsync(PostgresTransactionContext db,Actor actor,string action,int? id,CancellationToken ct) =>
         audit.WriteAsync(db,new AuditEvent(Guid.NewGuid(),Guid.NewGuid(),new LogActor("authenticated",actor.UserId,actor.Name),null,
             action,"TenantSettings",JsonSerializer.SerializeToElement(new {tenant_id=actor.TenantId,record_id=id})),ct);

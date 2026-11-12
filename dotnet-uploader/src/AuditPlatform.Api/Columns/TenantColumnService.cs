@@ -43,81 +43,87 @@ public sealed class TenantColumnService(PostgresTransactions transactions,Postgr
     {
         try
         {
-            return await RunAsync(session,true,async(db,actor,token)=>
-            {
-                var existing=id is null ? null : await TargetAsync(db,actor.TenantId,id.Value,token);
-                if(id is not null && existing is null) return new(ColumnStatus.NotFound);
-                if(input.ReconciliationRole is not null) return new(ColumnStatus.Invalid,Detail:RoleError);
-                if(input.Type is not ("Text" or "Numeric" or "Date")) return new(ColumnStatus.Invalid,Detail:TypeError);
-                if(string.IsNullOrWhiteSpace(input.Name)) return new(ColumnStatus.Invalid,Detail:"Column name is required");
-                if(existing is null)
-                {
-                    int created;
-                    // The globally unique legacy field now stores an opaque,
-                    // server-generated key for NEW native definitions only.
-                    // No legacy row, name, ID, transaction or fingerprint changes.
-                    await using(var insert=db.CreateCommand("""
-                        INSERT INTO public.master_columns(column_name,data_type,category,notes)
-                        VALUES($1,$2,'General',NULL) RETURNING id
-                        """))
-                    {
-                        insert.Parameters.AddWithValue("col_"+Guid.NewGuid().ToString("N")); insert.Parameters.AddWithValue(input.Type);
-                        created=(int)(await insert.ExecuteScalarAsync(token))!;
-                    }
-                    await using(var definition=db.CreateCommand("""
-                        INSERT INTO public.platform_tenant_columns(column_id,tenant_id,display_name,category,notes,binding_origin)
-                        VALUES($1,$2,$3,$4,$5,'native')
-                        """))
-                    {
-                        definition.Parameters.AddWithValue(created); definition.Parameters.AddWithValue(actor.TenantId);
-                        definition.Parameters.AddWithValue(input.Name); definition.Parameters.AddWithValue(input.Category);
-                        definition.Parameters.AddWithValue(NpgsqlDbType.Text,(object?)input.Notes??DBNull.Value);
-                        await definition.ExecuteNonQueryAsync(token);
-                    }
-                    await AuditAsync(db,actor,created,"Create",token);
-                    return new(ColumnStatus.Success,ColumnId:created);
-                }
-
-                bool label=existing.Name!=input.Name;
-                bool structural=existing.Type!=input.Type || existing.Active!=input.Active;
-                // P13 verifies native template ID/key consumers. Every other
-                // dependency, and every structural change, remains guarded.
-                if((label||structural) && (existing.Origin!="native" || await HasDependenciesAsync(db,existing,token,!structural,actor.TenantId)))
-                    return new(ColumnStatus.DependencyReview,Detail:ReviewError);
-                if(structural && await HasStoredDataAsync(db,existing.StorageKey,token))
-                    return new(ColumnStatus.DependencyReview,Detail:ReviewError);
-                if(structural)
-                {
-                    await using var update=db.CreateCommand("UPDATE public.master_columns SET data_type=$1,is_active=$2 WHERE id=$3");
-                    update.Parameters.AddWithValue(input.Type); update.Parameters.AddWithValue(input.Active); update.Parameters.AddWithValue(existing.Id);
-                    await update.ExecuteNonQueryAsync(token);
-                }
-                // These tenant-only annotations never modify the legacy master
-                // name/category/notes or free-text audit-rule references.
-                await using(var update=db.CreateCommand("""
-                    UPDATE public.platform_tenant_columns SET display_name=$1,category=$2,notes=$3
-                    WHERE tenant_id=$4 AND column_id=$5
-                    """))
-                {
-                    update.Parameters.AddWithValue(input.Name); update.Parameters.AddWithValue(input.Category);
-                    update.Parameters.AddWithValue(NpgsqlDbType.Text,(object?)input.Notes??DBNull.Value);
-                    update.Parameters.AddWithValue(actor.TenantId); update.Parameters.AddWithValue(existing.Id);
-                    await update.ExecuteNonQueryAsync(token);
-                }
-                if(templates?.Value.Enabled==true)
-                {
-                    await using var plans=db.CreateCommand("""
-                        UPDATE public.upload_validation_plans SET status='superseded' WHERE status='ready'
-                        AND template_id IN(SELECT template_id FROM public.template_column_mappings WHERE tenant_id=$1 AND column_id=$2)
-                        """);
-                    plans.Parameters.AddWithValue(actor.TenantId); plans.Parameters.AddWithValue(existing.Id); await plans.ExecuteNonQueryAsync(token);
-                }
-                await AuditAsync(db,actor,existing.Id,"Update",token);
-                return new(ColumnStatus.Success,ColumnId:existing.Id);
-            },ct);
+            return await RunAsync(session,true,(db,actor,token)=>SaveCoreAsync(db,actor,id,input,token),ct);
         }
         catch(PostgresException error) when(error.SqlState==PostgresErrorCodes.UniqueViolation)
         { return new(ColumnStatus.Conflict,Detail:"Column name already exists in this workspace"); }
+    }
+
+    // Shared with the atomic configuration restore; the caller supplies its transaction.
+    internal Task<ColumnResult> RestoreAsync(PostgresTransactionContext db,int tenant,int user,string name,int id,ColumnInput input,CancellationToken ct)
+        => SaveCoreAsync(db,new Actor(tenant,user,name),id,input,ct);
+
+    private async Task<ColumnResult> SaveCoreAsync(PostgresTransactionContext db,Actor actor,int? id,ColumnInput input,CancellationToken token)
+    {
+        var existing=id is null ? null : await TargetAsync(db,actor.TenantId,id.Value,token);
+        if(id is not null && existing is null) return new(ColumnStatus.NotFound);
+        if(input.ReconciliationRole is not null) return new(ColumnStatus.Invalid,Detail:RoleError);
+        if(input.Type is not ("Text" or "Numeric" or "Date")) return new(ColumnStatus.Invalid,Detail:TypeError);
+        if(string.IsNullOrWhiteSpace(input.Name)) return new(ColumnStatus.Invalid,Detail:"Column name is required");
+        if(existing is null)
+        {
+            int created;
+            // The globally unique legacy field now stores an opaque,
+            // server-generated key for NEW native definitions only.
+            // No legacy row, name, ID, transaction or fingerprint changes.
+            await using(var insert=db.CreateCommand("""
+                INSERT INTO public.master_columns(column_name,data_type,category,notes)
+                VALUES($1,$2,'General',NULL) RETURNING id
+                """))
+            {
+                insert.Parameters.AddWithValue("col_"+Guid.NewGuid().ToString("N")); insert.Parameters.AddWithValue(input.Type);
+                created=(int)(await insert.ExecuteScalarAsync(token))!;
+            }
+            await using(var definition=db.CreateCommand("""
+                INSERT INTO public.platform_tenant_columns(column_id,tenant_id,display_name,category,notes,binding_origin)
+                VALUES($1,$2,$3,$4,$5,'native')
+                """))
+            {
+                definition.Parameters.AddWithValue(created); definition.Parameters.AddWithValue(actor.TenantId);
+                definition.Parameters.AddWithValue(input.Name); definition.Parameters.AddWithValue(input.Category);
+                definition.Parameters.AddWithValue(NpgsqlDbType.Text,(object?)input.Notes??DBNull.Value);
+                await definition.ExecuteNonQueryAsync(token);
+            }
+            await AuditAsync(db,actor,created,"Create",token);
+            return new(ColumnStatus.Success,ColumnId:created);
+        }
+
+        bool label=existing.Name!=input.Name;
+        bool structural=existing.Type!=input.Type || existing.Active!=input.Active;
+        // P13 verifies native template ID/key consumers. Every other
+        // dependency, and every structural change, remains guarded.
+        if((label||structural) && (existing.Origin!="native" || await HasDependenciesAsync(db,existing,token,!structural,actor.TenantId)))
+            return new(ColumnStatus.DependencyReview,Detail:ReviewError);
+        if(structural && await HasStoredDataAsync(db,existing.StorageKey,token))
+            return new(ColumnStatus.DependencyReview,Detail:ReviewError);
+        if(structural)
+        {
+            await using var update=db.CreateCommand("UPDATE public.master_columns SET data_type=$1,is_active=$2 WHERE id=$3");
+            update.Parameters.AddWithValue(input.Type); update.Parameters.AddWithValue(input.Active); update.Parameters.AddWithValue(existing.Id);
+            await update.ExecuteNonQueryAsync(token);
+        }
+        // These tenant-only annotations never modify the legacy master
+        // name/category/notes or free-text audit-rule references.
+        await using(var update=db.CreateCommand("""
+            UPDATE public.platform_tenant_columns SET display_name=$1,category=$2,notes=$3
+            WHERE tenant_id=$4 AND column_id=$5
+            """))
+        {
+            update.Parameters.AddWithValue(input.Name); update.Parameters.AddWithValue(input.Category);
+            update.Parameters.AddWithValue(NpgsqlDbType.Text,(object?)input.Notes??DBNull.Value);
+            update.Parameters.AddWithValue(actor.TenantId); update.Parameters.AddWithValue(existing.Id);
+            await update.ExecuteNonQueryAsync(token);
+        }
+        if(templates?.Value.Enabled==true)
+        {
+            await using var plans=db.CreateCommand("""
+                UPDATE public.upload_validation_plans SET status='superseded' WHERE status='ready'
+                AND template_id IN(SELECT template_id FROM public.template_column_mappings WHERE tenant_id=$1 AND column_id=$2)
+                """);
+            plans.Parameters.AddWithValue(actor.TenantId); plans.Parameters.AddWithValue(existing.Id); await plans.ExecuteNonQueryAsync(token);
+        }
+        await AuditAsync(db,actor,existing.Id,"Update",token);
+        return new(ColumnStatus.Success,ColumnId:existing.Id);
     }
 
     public Task<ColumnResult> DeleteAsync(VerifiedSession? session,int id,CancellationToken ct=default) =>

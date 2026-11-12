@@ -151,6 +151,12 @@ This list records discussion, not blanket authorization to activate policies. Re
 - Shared Upload controls send native revisions only when enabled, reuse exact present headers with verified keys, and discard old client/template/file/sheet/generation replies. Stale or incomplete metadata cannot authorize saves; expired/denied access disables actions. Quoted headers use value equality rather than interpolated selectors. Legacy payloads remain unchanged.
 - P14 verifies saved-header behavior with owned PostgreSQL and synthetic staging/auto-map output; workbook reading, complete imports, deployed ownership/bindings, measured schema capacity and live activation remain later gates. No source values, history or financial fingerprints change here.
 
+### P15 configuration backup
+
+- Disabled native export, preview and restore cover existing tenant settings, holidays, columns, templates and saved headers; same-tenant existing identities only. Legacy JSON and transaction restoration remain separate.
+- Administrator session/context, preview revision and explicit confirmation are required. Restore validates bindings, retains permanent identities and applies all changes and audit in one transaction; failures roll back. Existing Setup UI remains legacy-only.
+- Inactive templates/client mappings, unknown bindings, foreign tenants and unsupported comparison changes require review. Preview identifies affected records and warns that upload backup policy may change. Live activation remains gated.
+
 ## 3. PostgreSQL and financial values
 
 | Contract | Required behavior |

@@ -134,6 +134,10 @@ public sealed class TenantTemplateService(PostgresTransactions transactions,Post
         return new(TemplateStatus.Success,Id:target);
     }
 
+    // Reuse ordinary validation inside the restore transaction.
+    internal Task<TemplateResult> RestoreAsync(PostgresTransactionContext db,int tenant,int user,string name,int id,TemplateInput input,CancellationToken ct)
+        => SaveCoreAsync(db,new Actor(tenant,user,name),id,input,ct);
+
     public Task<TemplateResult> DeleteAsync(VerifiedSession? session,int id,string? revision,CancellationToken ct=default)=>
         RunAsync(session,true,async(db,actor,token)=>
         {
@@ -234,7 +238,7 @@ public sealed class TenantTemplateService(PostgresTransactions transactions,Post
 
     public static bool EffectiveComparison(TemplateColumn column,TemplateDefinition template)=>column.Compare
         ??!(template.Purpose=="account_ledger"&&template.Ledger.GetValueOrDefault("balance")==column.Id);
-    private static string? Validate(IReadOnlyList<TemplateColumn> columns,string purpose,Dictionary<string,int> ledger)
+    internal static string? Validate(IReadOnlyList<TemplateColumn> columns,string purpose,Dictionary<string,int> ledger)
     {
         foreach(var c in columns)
         {
