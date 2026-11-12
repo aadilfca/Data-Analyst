@@ -196,10 +196,19 @@ public sealed class UploadValidationPlanStore(PostgresTransactions transactions,
     // the shared writer lock. P25 must repeat this inside its atomic import.
     internal async Task VerifyCurrent(PostgresTransactionContext db,ValidationPlanPayload payload,CancellationToken ct)
     {
-        var source=payload.Review.Coverage.Footing.Validation.Source;bool complete=payload.Review.Coverage.Footing.Validation.ComparisonMode=="replace_range";
+        var source=payload.Review.Coverage.Footing.Validation.Source;
+        if(payload.ImportProfile?.Derivation is {} derivation)
+        {
+            // Resolve the actual owning tenant, never a client-supplied tenant.
+            await using var home=db.CreateCommand("SELECT tenant_id FROM public.platform_tenant_client_homes WHERE client_id=$1");home.Parameters.AddWithValue(source.ClientId);
+            int tenant=(int)(await home.ExecuteScalarAsync(ct)??throw new ValidationPlanRejected("plan_access_denied"));
+            var current=await UploadDerivedFieldService.LoadAsync(db,tenant,source.ClientId,source.TemplateId,derivation,ct);
+            if(current.ContextKey!=derivation.ContextKey) throw new ValidationPlanRejected("derived_configuration_changed");
+        }
+        bool complete=payload.Review.Coverage.Footing.Validation.ComparisonMode=="replace_range";
         await using(var command=db.CreateCommand("""
             SELECT id,CASE WHEN octet_length(row_data::text)<=$6 THEN row_data::text END,COALESCE(version,1),document_group_id,
-                source_identity,source_row_number,source_order_upload_id,extract_date::text,change_detection_status
+                source_identity,source_row_number,source_order_upload_id,extract_date::text,change_detection_status,to_jsonb(client_data)->>'derived_configuration_hash'
             FROM public.client_data WHERE client_id=$1 AND template_id=$2 AND is_deleted IS FALSE
               AND ($3::date IS NULL OR extract_date BETWEEN $3::date AND $4::date OR document_group_id=ANY($5)) ORDER BY id LIMIT $7 FOR UPDATE
             """))
@@ -218,8 +227,8 @@ public sealed class UploadValidationPlanStore(PostgresTransactions transactions,
                 if(bytes>67108864) throw new ValidationPlanRejected("plan_comparison_capacity");
                 string? Text(int i)=>reader.IsDBNull(i)?null:reader.GetString(i);
                 var row=new IdentityStoredRow(reader.GetInt32(0),UploadIdentityValue.FromJson(raw),Text(3),Text(4),reader.GetInt32(2),
-                    reader.IsDBNull(5)?null:reader.GetInt32(5),reader.IsDBNull(6)?null:reader.GetInt32(6),Text(7));
-                if(Text(8)=="deleted"||row.Id!=guards[count].Id||UploadValidationPlanSigner.GuardHash(row)!=guards[count++].Hash) throw new ValidationPlanRejected("plan_data_changed");
+                    reader.IsDBNull(5)?null:reader.GetInt32(5),reader.IsDBNull(6)?null:reader.GetInt32(6),Text(7),Text(9));
+                if(Text(8)=="deleted"||row.Id!=guards[count].Id||payload.ImportProfile?.Derivation is not null&&row.DerivedHash!=guards[count].DerivedHash||UploadValidationPlanSigner.GuardHash(row)!=guards[count++].Hash) throw new ValidationPlanRejected("plan_data_changed");
             }
             if(count!=guards.Length) throw new ValidationPlanRejected("plan_data_changed");
         }

@@ -47,12 +47,14 @@ public sealed class UploadImportService(PostgresTransactions transactions,Upload
                             {common.Parameters.AddWithValue(input.PlanId);if(await common.ExecuteScalarAsync(cancel) is null) throw new ValidationPlanRejected("plan_not_ready");}
                             await using(var lockRows=owned.CreateCommand("LOCK TABLE public.client_data IN SHARE ROW EXCLUSIVE MODE")) await lockRows.ExecuteNonQueryAsync(cancel);
                             await plans.VerifyCurrent(owned,payload,cancel);
+                            await UploadDerivedFieldWriter.GuardAsync(owned,payload,session.TenantId!.Value,cancel);
                             async Task CheckBytes()
                             {
                                 await using var stream=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read,65536,FileOptions.Asynchronous);
                                 if(Convert.ToHexString(await SHA256.HashDataAsync(stream,cancel)).ToLowerInvariant()!=hash) throw new ValidationPlanRejected("import_source_changed");
                             }
                             await CheckBytes();await writer.ApplyAsync(owned,payload,file,input.OperationId,session.Username,cancel);
+                            await UploadDerivedFieldWriter.ApplyAsync(owned,payload,file,session.Username,cancel);
                             await using(var status=owned.CreateCommand("UPDATE public.uploaded_files SET status='Imported',record_count=$2 WHERE id=$1 AND status IN('Pending','Validated')"))
                             {status.Parameters.AddWithValue(file);status.Parameters.AddWithValue(payload.Counts.Incoming);if(await status.ExecuteNonQueryAsync(cancel)!=1) throw new ValidationPlanRejected("import_source_changed");}
                             await using(var consume=owned.CreateCommand("DELETE FROM public.upload_validation_plans WHERE plan_id=$1 AND status='ready'"))

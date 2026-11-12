@@ -32,7 +32,8 @@ public sealed class UploadCorrectionService(UploadIdentityService identity,IOpti
                 {
                     IReadOnlyList<CorrectionRow> actions=[];
                     var output=Build(context.Profile,context.Incoming,context.Existing,input,context.Coverage,
-                        context.StoreKey,context.Collisions,context.IncompleteGroups,new(RequiresBindingReview:true),options.Value,token,context.SourceFailed,
+                        context.StoreKey,context.Collisions,context.IncompleteGroups,new(AccountKey:context.Profile.Derivation?.Keys.GetValueOrDefault("account_code"),DebitKey:context.Profile.Derivation?.Keys.GetValueOrDefault("debit"),
+                            CreditKey:context.Profile.Derivation?.Keys.GetValueOrDefault("credit"),RequiresBindingReview:context.Profile.Derivation is null),options.Value,token,context.SourceFailed,
                         capture is null?null:rows=>actions=rows.ToArray());
                     if(capture is not null) evidence=new(output,context.Profile,context.Incoming,context.Existing,actions);
                     return Task.FromResult(output);

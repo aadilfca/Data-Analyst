@@ -21,7 +21,7 @@ public sealed class UploadImportWriter(IOptions<UploadImportOptions> options,ICo
         await using(var purpose=db.CreateCommand("SELECT data_purpose,rate_source FROM public.templates WHERE id=$1 FOR SHARE"))
         {
             purpose.Parameters.AddWithValue(source.TemplateId);await using var reader=await purpose.ExecuteReaderAsync(ct);
-            if(!await reader.ReadAsync(ct)||reader.GetString(0)!="standard"||!reader.IsDBNull(1))
+            if(!await reader.ReadAsync(ct)||reader.GetString(0)!="standard"||!reader.IsDBNull(1)&&profile.Derivation is null)
                 throw new ValidationPlanRejected("import_derived_fields_required");
         }
         // Table locks also cover writers which do not yet use our advisory lock.
@@ -51,7 +51,7 @@ public sealed class UploadImportWriter(IOptions<UploadImportOptions> options,ICo
                     ||metadata.RootElement.GetProperty("source_order_upload_id").ValueKind==JsonValueKind.Null)) sourceOrderUpdates++;
                 // P26 owns derived report/classification maintenance. Stop rather
                 // than retain stale derived values on an already-populated row.
-                if(metadata.RootElement.EnumerateObject().Any(p=>(p.Name.StartsWith("derived_",StringComparison.Ordinal)||p.Name=="extract_amount")&&p.Value.ValueKind!=JsonValueKind.Null))
+                if(profile.Derivation is null&&metadata.RootElement.EnumerateObject().Any(p=>(p.Name.StartsWith("derived_",StringComparison.Ordinal)||p.Name=="extract_amount")&&p.Value.ValueKind!=JsonValueKind.Null))
                     throw new ValidationPlanRejected("import_derived_fields_required");
                 existing.Add(reader.GetInt32(0),UploadIdentityValue.FromJson(reader.GetString(1)));
             }
@@ -59,6 +59,20 @@ public sealed class UploadImportWriter(IOptions<UploadImportOptions> options,ICo
         if(existing.Count!=ids.Length) throw new ValidationPlanRejected("plan_data_changed");
         long projected=metadataBytes+payload.Actions.Count*1024L+payload.Actions.Sum(a=>a.Values is null?0L:System.Text.Encoding.UTF8.GetByteCount(RawJson(a.Values)))
             +existing.Values.Sum(v=>(long)System.Text.Encoding.UTF8.GetByteCount(RawJson(v)));
+        if(profile.Derivation is not null)
+        {
+            // Metadata-only plans can refresh many unchanged rows. Reserve their
+            // rewrite/index cost too, rather than budgeting only financial actions.
+            await using var estimate=db.CreateCommand("SELECT COALESCE(sum(pg_column_size(c)),0)::bigint+count(*)*2048 FROM public.client_data c WHERE client_id=$1 AND template_id=$2 AND is_deleted IS FALSE AND document_group_id=ANY($3)");
+            estimate.Parameters.AddWithValue(source.ClientId);estimate.Parameters.AddWithValue(source.TemplateId);
+            estimate.Parameters.AddWithValue(payload.IncomingGroups.Concat(payload.ChangedGroups).Distinct(StringComparer.Ordinal).ToArray());
+            projected+=(long)(await estimate.ExecuteScalarAsync(ct))!;
+            if(profile.Derivation.CashflowSource)
+            {
+                await using var history=db.CreateCommand("SELECT count(*)*2048 FROM public.cashflow_voucher_occurrences WHERE client_id=$1 AND template_id=$2");
+                history.Parameters.AddWithValue(source.ClientId);history.Parameters.AddWithValue(source.TemplateId);projected+=(long)(await history.ExecuteScalarAsync(ct))!;
+            }
+        }
         await using(var capacity=db.CreateCommand("SELECT pg_database_size(current_database())"))
             if((long)(await capacity.ExecuteScalarAsync(ct))!+projected*4+1048576>=Math.Min(500000000,configuration?.GetValue<long?>("Platform:DatabaseCapacityLimitBytes")??500000000))
                 throw new ValidationPlanRejected("import_storage_capacity");
@@ -75,6 +89,7 @@ public sealed class UploadImportWriter(IOptions<UploadImportOptions> options,ICo
         // retired stores are inspected only when present and are never recreated.
         foreach(string table in new[]{"cash_bank_transaction_classifications","cashflow_voucher_occurrences","cashflow_prepared_rollups","cash_bank_summary_read_models","cashflow_ledger_rollup_read_models"})
         {
+            if(profile.Derivation is not null&&(table=="cash_bank_summary_read_models"||table=="cashflow_voucher_occurrences"&&profile.Derivation.CashflowSource)) continue;
             await using var exists=db.CreateCommand("SELECT to_regclass($1) IS NOT NULL");exists.Parameters.AddWithValue("public."+table);
             if(!(bool)(await exists.ExecuteScalarAsync(ct))!) continue;
             await using(var tableLock=db.CreateCommand($"LOCK TABLE public.{table} IN SHARE ROW EXCLUSIVE MODE")) await tableLock.ExecuteNonQueryAsync(ct);

@@ -67,21 +67,24 @@ public sealed class UploadValidationPlanService(UploadCorrectionService correcti
                     actions.Add(new(row,values,row.Action=="unchanged"?null:incoming?.PrimaryDate));
                 }
             }
+            var groupCounts=evidence.Incoming.GroupBy(n=>UploadIdentityValue.Group(evidence.Profile,n.Values),StringComparer.Ordinal).ToDictionary(g=>g.Key,g=>g.Count(),StringComparer.Ordinal);
+            bool derivedRefresh=evidence.Profile.Derivation is {} derivation&&evidence.Existing.Any(r=>r.DerivedHash!=derivation.ContextKey&&r.DocumentGroup is {} group&&groupCounts.ContainsKey(group));
+            bool noOp=output.NoOp&&!derivedRefresh;
             var payload=new ValidationPlanPayload(UploadValidationPlanSigner.Format,UploadValidationPlanSigner.Normalize(review),
                 UploadValidationPlanSigner.RequestHash(file,review),output.CorrectionKey,output.StoreKey,output.Counts,actions,
-                evidence.Existing.Select(r=>new ValidationPlanGuard(r.Id,UploadValidationPlanSigner.GuardHash(r))).ToArray(),
+                evidence.Existing.Select(r=>new ValidationPlanGuard(r.Id,UploadValidationPlanSigner.GuardHash(r),r.DerivedHash)).ToArray(),
                 evidence.Incoming.Select(r=>UploadIdentityValue.Group(evidence.Profile,r.Values)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
-                evidence.Actions.Where(r=>r.Action!="unchanged").Select(r=>r.DocumentGroup).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),evidence.Profile);
+                evidence.Actions.Where(r=>r.Action!="unchanged").Select(r=>r.DocumentGroup).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),evidence.Profile,derivedRefresh,groupCounts);
             // Never truncate an actionable plan. Lossless scalar atoms keep the
             // original numeric lexeme and validated calendar date separate.
-            if(!output.NoOp) UploadPreparationService.JsonSize(payload,options.Value.MaximumPayloadBytes);
-            string text=output.NoOp?"":JsonSerializer.Serialize(payload);
+            if(!noOp) UploadPreparationService.JsonSize(payload,options.Value.MaximumPayloadBytes);
+            string text=noOp?"":JsonSerializer.Serialize(payload);
             if(Encoding.UTF8.GetByteCount(text)>options.Value.MaximumPayloadBytes) throw new ValidationPlanRejected("plan_payload_capacity");
             if(stored is not null)
             {
                 await store.VerifyAsync(session,file,stored,payload,signer,deadline.Token);return Success(stored,"valid");
             }
-            try {stored=await store.IssueAsync(session,file,requestId,payload,text,signer,output.NoOp,deadline.Token);}
+            try {stored=await store.IssueAsync(session,file,requestId,payload,text,signer,noOp,deadline.Token);}
             catch(PostgresCommitOutcomeUnknownException)
             {
                 // Reconcile by the durable request ID; never repeat the write.

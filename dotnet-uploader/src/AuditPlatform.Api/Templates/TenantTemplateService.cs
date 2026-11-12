@@ -60,9 +60,13 @@ public sealed class TenantTemplateService(PostgresTransactions transactions,Post
         var error=Validate(ordered,purpose,ledger);
         if(error is not null) return Invalid(error);
         var kind=before?.Kind??KindForNew(input.Name);
-        var rate=kind=="standard" ? null : input.RateSource??"auto";
+        var rate=kind=="standard" ? null : input.RateSource??before?.RateSource??"auto";
         if(rate is not (null or "auto" or "imported" or "derived")) return Invalid("rate_source must be auto, imported or derived");
         if(purpose=="account_ledger") rate=null;
+        var uploadBindings=input.UploadBindings??before?.UploadBindings??new Dictionary<string,int>();
+        if(UploadDerivedBindingError(ordered,uploadBindings) is {} bindingError) return Invalid(bindingError);
+        if(before is not null && !JsonSerializer.Serialize(uploadBindings.OrderBy(p=>p.Key)).Equals(JsonSerializer.Serialize((before.UploadBindings??[]).OrderBy(p=>p.Key)),StringComparison.Ordinal)
+            && (await HasDataAsync(db,before.Id,ct)||await HasUploadsAsync(db,before.Id,ct))) return Review();
         if(before is not null)
         {
             bool structure=before.Purpose!=purpose || !SameLedger(before.Ledger,ledger)
@@ -129,6 +133,11 @@ public sealed class TenantTemplateService(PostgresTransactions transactions,Post
             AddText(mapping,column.Role); mapping.Parameters.AddWithValue(NpgsqlDbType.Boolean,(object?)column.Compare??DBNull.Value);
             mapping.Parameters.AddWithValue(column.Review); mapping.Parameters.AddWithValue(actor.Tenant); mapping.Parameters.AddWithValue(column.StorageKey);
             await mapping.ExecuteNonQueryAsync(ct);
+        }
+        if(uploadBindings.Count>0 || before?.UploadBindings?.Count>0)
+        {
+            await using var binding=db.CreateCommand("INSERT INTO public.platform_template_upload_bindings(template_id,tenant_id,bindings) VALUES($1,$2,$3::jsonb) ON CONFLICT(template_id) DO UPDATE SET bindings=EXCLUDED.bindings");
+            binding.Parameters.AddWithValue(target);binding.Parameters.AddWithValue(actor.Tenant);binding.Parameters.AddWithValue(JsonSerializer.Serialize(uploadBindings));await binding.ExecuteNonQueryAsync(ct);
         }
         await SupersedeAsync(db,target,ct); await AuditAsync(db,actor,target,before is null ? "Create":"Update",ct);
         return new(TemplateStatus.Success,Id:target);
@@ -298,6 +307,23 @@ public sealed class TenantTemplateService(PostgresTransactions transactions,Post
         },ct);
     }
 
+    private static string? UploadDerivedBindingError(IReadOnlyList<TemplateColumn> columns,Dictionary<string,int> bindings)
+    {
+        string[] roles=["amount","quantity","rate","account_code","account_name","debit","credit","description","line_id"];
+        if(bindings.Keys.Except(roles,StringComparer.Ordinal).Any()) return "Unknown upload field role.";
+        foreach(var pair in bindings)
+        {
+            var column=columns.SingleOrDefault(c=>c.Id==pair.Value);
+            if(column is null||!column.Active||column.Review) return "Upload bindings require active selected columns.";
+            if(new[]{"amount","quantity","rate","debit","credit"}.Contains(pair.Key)&&column.Type!="Numeric") return "Amount/quantity/rate/debit/credit bindings require Numeric columns.";
+            if(new[]{"account_code","line_id"}.Contains(pair.Key)&&column.Type!="Text") return "Identifiers require Text columns.";
+        }
+        if(bindings.ContainsKey("account_code")!=bindings.ContainsKey("debit")||bindings.ContainsKey("debit")!=bindings.ContainsKey("credit")) return "Configure account, debit and credit together.";
+        if(bindings.TryGetValue("rate",out int rate)&&new[]{"amount","quantity"}.Any(r=>bindings.GetValueOrDefault(r)==rate)) return "Rate must have its own column.";
+        if(bindings.TryGetValue("debit",out int debit)&&bindings.GetValueOrDefault("credit")==debit) return "Debit and credit require distinct columns.";
+        return null;
+    }
+
     internal static async Task<List<TemplateDefinition>> LoadAsync(PostgresTransactionContext db,int tenant,int? id,CancellationToken ct)
     {
         var rows=new List<TemplateDefinition>();
@@ -333,7 +359,15 @@ public sealed class TenantTemplateService(PostgresTransactions transactions,Post
                     reader.IsDBNull(7)?null:reader.GetBoolean(7),reader.GetBoolean(8),reader.GetInt32(9),reader.GetInt64(10),!reader.IsDBNull(11)&&reader.GetBoolean(11)));
             }
         }
-        return rows.Select(t=>t with {Columns=columns.GetValueOrDefault(t.Id)??[]}).ToList();
+        var bindings=new Dictionary<int,Dictionary<string,int>>();
+        await using(var catalog=db.CreateCommand("SELECT to_regclass('public.platform_template_upload_bindings') IS NOT NULL"))
+        if(await catalog.ExecuteScalarAsync(ct) is true)
+        {
+            await using var command=db.CreateCommand("SELECT template_id,bindings::text FROM public.platform_template_upload_bindings WHERE tenant_id=$1 AND ($2::integer IS NULL OR template_id=$2) FOR SHARE");
+            command.Parameters.AddWithValue(tenant);command.Parameters.AddWithValue(NpgsqlDbType.Integer,(object?)id??DBNull.Value);
+            await using var reader=await command.ExecuteReaderAsync(ct);while(await reader.ReadAsync(ct)) bindings.Add(reader.GetInt32(0),JsonSerializer.Deserialize<Dictionary<string,int>>(reader.GetString(1))!);
+        }
+        return rows.Select(t=>t with {Columns=columns.GetValueOrDefault(t.Id)??[],UploadBindings=bindings.GetValueOrDefault(t.Id)}).ToList();
     }
     private static async Task<List<TemplateColumn>> SelectColumnsAsync(PostgresTransactionContext db,int tenant,IReadOnlyList<int>? ids,CancellationToken ct,bool includeInactive=false)
     {

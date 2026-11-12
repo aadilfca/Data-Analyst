@@ -47,6 +47,7 @@ public sealed class UploadIdentityService(UploadCoverageService coverage,Postgre
             var result=await coverage.ReadCheckedAsync(session,file,input.Coverage,(template,context,maps)=>
             {
                 profile=Profile(template,input.Coverage.LedgerAccountCode);
+                if(profile.Derivation is not null) profile=profile with {Derivation=UploadDerivedFieldService.Bind(template,maps.ToDictionary(m=>m.StorageKey,m=>m.SourcePosition is >0,StringComparer.Ordinal))};
                 return observed=>
                 {
                     var row=observed.Row;
@@ -75,6 +76,12 @@ public sealed class UploadIdentityService(UploadCoverageService coverage,Postgre
             },async(proof,token)=>
             {
                 var rows=incoming.Values.ToArray();
+                if(profile?.Derivation is {} derivation)
+                {
+                    var loaded=await snapshots.ExecuteAsync((db,cancel)=>UploadDerivedFieldService.LoadAsync(db,session!.TenantId!.Value,source.ClientId,source.TemplateId,derivation,cancel),token);
+                    profile=profile with {Derivation=loaded};
+                    rows=rows.Select(r=>r with {Values=UploadDerivedFieldService.Prepare(loaded,r.Values)}).ToArray();
+                }
                 if(!proof.CoverageChecksPassed) return await finish(new(profile!,rows,[],proof,"",new Dictionary<string,List<long>>(),new HashSet<string>(),true),token);
                 var identities=Identities(profile!,rows);
                 var stored=await ReadStoredAsync(session!,profile!,input,proof,rows,identities,bytes,token,corrections);
@@ -100,16 +107,17 @@ public sealed class UploadIdentityService(UploadCoverageService coverage,Postgre
         if(template.Origin!="native"||template.Columns.Any(c=>c.Review)) throw new IdentityReview("identity_binding_review_required");
         // Native metadata has no immutable Line ID/Rate-role bindings yet. Do
         // not certify label-derived semantics or introduce a schema implicitly.
-        if(template.Columns.Any(c=>LineAliases.Contains(UploadNumericParser.Trim(c.Name).ToLowerInvariant()))) throw new IdentityReview("line_binding_review_required");
-        if(template.RateSource is "auto" or "derived") throw new IdentityReview("derived_rate_binding_review_required");
+        var derived=UploadDerivedFieldService.Bind(template);
+        if(derived?.Keys.ContainsKey("line_id")!=true&&template.Columns.Any(c=>LineAliases.Contains(UploadNumericParser.Trim(c.Name).ToLowerInvariant()))) throw new IdentityReview("line_binding_review_required");
+        if(derived is null&&template.RateSource is "auto" or "derived") throw new IdentityReview("derived_rate_binding_review_required");
         var document=template.Columns.SingleOrDefault(c=>c.Role=="document_id")??template.Columns.First();
         var date=template.Purpose=="account_ledger"?template.Columns.SingleOrDefault(c=>c.Id==template.Ledger.GetValueOrDefault("date"))
             :template.Columns.FirstOrDefault(c=>c.Type=="Date");
         if(template.Columns.SingleOrDefault(c=>c.Role=="document_date") is {} configured&&date?.Id!=configured.Id)
             throw new IdentityReview("comparison_date_binding_review_required");
-        int? description=template.Purpose=="account_ledger"?template.Ledger.GetValueOrDefault("description"):null;
+        int? description=template.Purpose=="account_ledger"?template.Ledger.GetValueOrDefault("description"):template.UploadBindings?.GetValueOrDefault("description");
         return new(template.Id,template.Columns.Select(c=>new IdentityColumn(c.StorageKey,c.Type,TenantTemplateService.EffectiveComparison(c,template),c.Id==description)).ToArray(),
-            document.StorageKey,date?.StorageKey,AccountCode:template.Purpose=="account_ledger"?account?.Trim():null);
+            document.StorageKey,date?.StorageKey,LineKey:derived?.Keys.GetValueOrDefault("line_id"),AccountCode:template.Purpose=="account_ledger"?account?.Trim():null,Derivation:derived);
     }
     private static string[] Identities(IdentityProfile profile,IReadOnlyList<IdentitySourceRow> rows)
     {
@@ -132,7 +140,7 @@ public sealed class UploadIdentityService(UploadCoverageService coverage,Postgre
         {
             await using var command=db.CreateCommand("""
                 SELECT cd.id,CASE WHEN octet_length(cd.row_data::text)<=$8 THEN cd.row_data::text END,
-                    COALESCE(cd.version,1),cd.document_group_id,cd.source_identity,cd.source_row_number,cd.source_order_upload_id,cd.extract_date::text,cd.change_detection_status
+                    COALESCE(cd.version,1),cd.document_group_id,cd.source_identity,cd.source_row_number,cd.source_order_upload_id,cd.extract_date::text,cd.change_detection_status,to_jsonb(cd)->>'derived_configuration_hash'
                 FROM public.client_data cd
                 WHERE cd.id>$1 AND cd.client_id=$2 AND cd.template_id=$3 AND cd.is_deleted IS FALSE
                   AND EXISTS(SELECT 1 FROM public.platform_tenant_client_homes h WHERE h.client_id=cd.client_id AND h.tenant_id=$4)
@@ -154,7 +162,7 @@ public sealed class UploadIdentityService(UploadCoverageService coverage,Postgre
                 if(values.Keys.Except(profile.Columns.Select(c=>c.Key).Append(Notes),StringComparer.Ordinal).Any()) throw new IdentityReview("stored_binding_review_required");
                 bytes+=Cost(values);if(bytes>options.Value.MaximumComparisonBytes) throw new IdentityReview("comparison_capacity_review_required");
                 string? Text(int field)=>reader.IsDBNull(field)?null:reader.GetString(field);
-                var row=new IdentityStoredRow(id,values,Text(3),Text(4),reader.GetInt32(2),reader.IsDBNull(5)?null:reader.GetInt32(5),reader.IsDBNull(6)?null:reader.GetInt32(6),Text(7));
+                var row=new IdentityStoredRow(id,values,Text(3),Text(4),reader.GetInt32(2),reader.IsDBNull(5)?null:reader.GetInt32(5),reader.IsDBNull(6)?null:reader.GetInt32(6),Text(7),Text(9));
                 if(corrections&&(row.Version<1||row.DocumentGroup!=UploadIdentityValue.Group(profile,row.Values)))
                     throw new IdentityReview("correction_metadata_review_required");
                 result.Add(row);last=id;read++;

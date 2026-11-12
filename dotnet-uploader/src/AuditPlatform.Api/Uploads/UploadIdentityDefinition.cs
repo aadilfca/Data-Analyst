@@ -14,10 +14,10 @@ public sealed record IdentityResult(string Status,IdentityOutput? Output=null,st
 public sealed record IdentityAtom(string Kind,string? Text=null);
 public sealed record IdentityColumn(string Key,string Type,bool Compare=true,bool Description=false);
 public sealed record IdentityProfile(int TemplateId,IReadOnlyList<IdentityColumn> Columns,string DocumentKey,string? DateKey=null,
-    string? LineKey=null,string? AccountCode=null);
+    string? LineKey=null,string? AccountCode=null,UploadDerivedProfile? Derivation=null);
 public sealed record IdentitySourceRow(int Row,IReadOnlyDictionary<string,IdentityAtom> Values,string? PrimaryDate=null);
 public sealed record IdentityStoredRow(long Id,IReadOnlyDictionary<string,IdentityAtom> Values,string? DocumentGroup,string? Identity,
-    long Version=1,int? SourceRow=null,int? OrderUpload=null,string? PrimaryDate=null);
+    long Version=1,int? SourceRow=null,int? OrderUpload=null,string? PrimaryDate=null,string? DerivedHash=null);
 public sealed class IdentityReview(string code) : Exception(code) {public string Code {get;}=code;}
 
 // Disposable inputs shared by identity and correction review, never an import plan.
