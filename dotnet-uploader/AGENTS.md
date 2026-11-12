@@ -66,7 +66,7 @@ Execution order: P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 (repor
 | P21 — Coverage | Disabled declared-period, empty-report and ledger-account checks locally accepted. Source/reference freshness retained; import remains gated. See CHANGELOG_ARCHIVE.md, Coverage P21. |
 | P22 — Duplicate identity | Disabled identity review, occurrence matching and scoped no-op evidence locally accepted. Unverified Line/Rate bindings and compatibility cases remain gated. See CHANGELOG_ARCHIVE.md, Identity P22. |
 | P23 — Corrections | Disabled correction classification and whole-voucher guards locally accepted. Missing immutable fallback bindings remain gated. See CHANGELOG_ARCHIVE.md, Corrections P23. |
-| P24 — Validation plans | Port signed request/file/configuration checks, expiry, locking, and freshness; reject altered or concurrently superseded plans. |
+| P24 — Validation plans | Disabled signed temporary plans and guarded freshness/retry checks locally accepted. Import remains disabled. See CHANGELOG_ARCHIVE.md, Validation plans P24. |
 | P25 — Atomic import | Port current/history writes and action counts in one transaction; prove rollback, simultaneous delivery, and uncertain-commit reconciliation. |
 | P26 — Derived fields | Port upload-time derived fields and compact classification/occurrence metadata; verify source preservation and report freshness invalidation. |
 | P27 — Import receipts | Port post-import SQL controls, receipts, summaries, and issue workbooks; reconcile stored values independently against source controls. |

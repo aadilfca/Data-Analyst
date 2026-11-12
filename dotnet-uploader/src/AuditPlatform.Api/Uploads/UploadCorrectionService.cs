@@ -10,7 +10,14 @@ namespace AuditPlatform.Api.Uploads;
 public sealed class UploadCorrectionService(UploadIdentityService identity,IOptions<UploadCorrectionOptions> options)
 {
     private readonly SemaphoreSlim requests=new(options.Value.MaximumConcurrentRequests);
-    public async Task<CorrectionResult> CheckAsync(VerifiedSession? session,int file,CorrectionRequest input,CancellationToken ct=default)
+    public Task<CorrectionResult> CheckAsync(VerifiedSession? session,int file,CorrectionRequest input,CancellationToken ct=default)=>RunAsync(session,file,input,null,ct);
+    internal async Task<(CorrectionResult Result,CorrectionEvidence? Evidence)> CaptureAsync(VerifiedSession? session,int file,CorrectionRequest input,CancellationToken ct)
+    {
+        CorrectionEvidence? evidence=null;
+        var result=await RunAsync(session,file,input,value=>evidence=value,ct);
+        return (result,result.Status=="success"?evidence:null);
+    }
+    private async Task<CorrectionResult> RunAsync(VerifiedSession? session,int file,CorrectionRequest input,Action<CorrectionEvidence>? capture,CancellationToken ct)
     {
         if(!options.Value.Enabled) return new("unavailable");
         if(input.Coverage?.Footing?.Validation?.Source is null||input.ExpectedCorrectionKey is not null&&input.ExpectedCorrectionKey.Length!=64
@@ -20,12 +27,20 @@ public sealed class UploadCorrectionService(UploadIdentityService identity,IOpti
         deadline.CancelAfter(TimeSpan.FromSeconds(options.Value.TimeoutSeconds));
         try
         {
-            var result=await identity.ReadCheckedAsync(session,file,new(input.Coverage),
-                (context,token)=>Task.FromResult(Build(context.Profile,context.Incoming,context.Existing,input,context.Coverage,
-                    context.StoreKey,context.Collisions,context.IncompleteGroups,new(RequiresBindingReview:true),options.Value,token,context.SourceFailed)),
+            CorrectionEvidence? evidence=null;
+            var result=await identity.ReadCheckedAsync(session,file,new(input.Coverage),(context,token)=>
+                {
+                    IReadOnlyList<CorrectionRow> actions=[];
+                    var output=Build(context.Profile,context.Incoming,context.Existing,input,context.Coverage,
+                        context.StoreKey,context.Collisions,context.IncompleteGroups,new(RequiresBindingReview:true),options.Value,token,context.SourceFailed,
+                        capture is null?null:rows=>actions=rows.ToArray());
+                    if(capture is not null) evidence=new(output,context.Profile,context.Incoming,context.Existing,actions);
+                    return Task.FromResult(output);
+                },
                 deadline.Token,corrections:true);
             if(result.Status!="success") return new(result.Status,Code:result.Code);
             var output=result.Output!;UploadPreparationService.JsonSize(output,options.Value.MaximumResponseBytes);
+            if(evidence is not null) capture?.Invoke(evidence);
             return output.Status=="confirmation_changed"?new("conflict",output,"correction_check_changed")
                 :output.Coverage.Footing.Status=="invalid_confirmation"?new("invalid",output,"variance_confirmation_not_applicable"):new("success",output);
         }
@@ -39,7 +54,7 @@ public sealed class UploadCorrectionService(UploadIdentityService identity,IOpti
     public static CorrectionOutput Build(IdentityProfile profile,IReadOnlyList<IdentitySourceRow> incoming,
         IReadOnlyList<IdentityStoredRow> existing,CorrectionRequest request,CoverageOutput proof,string storeKey,
         IReadOnlyDictionary<string,List<long>> collisions,IReadOnlySet<string> incompleteGroups,CorrectionBindings bindings,
-        UploadCorrectionOptions limits,CancellationToken ct=default,bool sourceFailed=false)
+        UploadCorrectionOptions limits,CancellationToken ct=default,bool sourceFailed=false,Action<IReadOnlyList<CorrectionRow>>? observe=null)
     {
         var source=request.Coverage.Footing.Validation.Source;
         string delimiter=source.DateDelimiter??"/",order=(source.DateOrder??"DMY").ToUpperInvariant();
@@ -211,6 +226,7 @@ public sealed class UploadCorrectionService(UploadIdentityService identity,IOpti
             try {pageBytes+=UploadPreparationService.JsonSize(row,limits.MaximumResponseBytes/3-pageBytes);page.Add(row);}
             catch(UploadPreparationService.InvalidPreparation) { }
         }
+        observe?.Invoke(rows);
         var output=new CorrectionOutput(status,proof,key,storeKey,counts,passed,unchanged,noOp,false,request.Page,request.PageSize,rows.Count,page,
             issueCount,issues,issueCount>issues.Count||page.Count<Math.Min(request.PageSize,Math.Max(0L,rows.Count-offset)),
             ["Read-only captured-snapshot review; signed plans, atomic current/history writes and live activation remain gated.",

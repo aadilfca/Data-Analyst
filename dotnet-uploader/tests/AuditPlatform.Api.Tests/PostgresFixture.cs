@@ -233,6 +233,18 @@ public sealed class PostgresFixture : IAsyncLifetime
 
     public string OwnedRunDirectory => runDirectory;
 
+    public async Task ApplyUploadValidationPlansAsync(CancellationToken cancellationToken)
+    {
+        RequireOwnedDirectory();
+        await using var connection=await OpenControlConnectionAsync(cancellationToken);
+        await using var transaction=await connection.BeginTransactionAsync(cancellationToken);
+        var sql=await ReadUploadValidationPlansAsync(cancellationToken);
+        await using var command=new NpgsqlCommand(sql,connection,transaction);
+        await command.ExecuteNonQueryAsync(cancellationToken);await transaction.CommitAsync(cancellationToken);
+    }
+    public static Task<string> ReadUploadValidationPlansAsync(CancellationToken cancellationToken)=>
+        File.ReadAllTextAsync(Path.Combine(FindSolutionDirectory(),"database","migrations","0012_upload_validation_plans.sql"),cancellationToken);
+
     public async Task ApplySavedMappingsAsync(CancellationToken cancellationToken)
     {
         RequireOwnedDirectory();

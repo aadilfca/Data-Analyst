@@ -15,3 +15,7 @@ public sealed record CorrectionResult(string Status,CorrectionOutput? Output=nul
 // payloads cannot choose line/account fields or authorize weak single-row pairing.
 public sealed record CorrectionBindings(string? AccountKey=null,string? DebitKey=null,string? CreditKey=null,
     bool AllowSingleFallback=false,bool RequiresBindingReview=false);
+
+// Complete request-local evidence is never serialized into preview responses.
+internal sealed record CorrectionEvidence(CorrectionOutput Output,IdentityProfile Profile,IReadOnlyList<IdentitySourceRow> Incoming,
+    IReadOnlyList<IdentityStoredRow> Existing,IReadOnlyList<CorrectionRow> Actions);

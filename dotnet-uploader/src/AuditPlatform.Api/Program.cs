@@ -110,8 +110,17 @@ builder.Services.AddSingleton<UploadIdentityService>();
 builder.Services.AddOptions<UploadCorrectionOptions>()
     .Bind(builder.Configuration.GetSection(UploadCorrectionOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
 builder.Services.AddSingleton<UploadCorrectionService>();
+builder.Services.AddOptions<UploadValidationPlanOptions>()
+    .Bind(builder.Configuration.GetSection(UploadValidationPlanOptions.SectionName)).ValidateDataAnnotations()
+    .Validate(o=>o.ValidKey(),"Enabled validation plans require a base64 signing key of 32–64 bytes.").ValidateOnStart();
+builder.Services.AddSingleton<UploadValidationPlanStore>();
+builder.Services.AddSingleton<UploadValidationPlanSigner>();
+builder.Services.AddSingleton<UploadValidationPlanService>();
 
 var app = builder.Build();
+if(app.Services.GetRequiredService<IOptions<UploadValidationPlanOptions>>().Value.Enabled
+    && !app.Services.GetRequiredService<IOptions<UploadCorrectionOptions>>().Value.Enabled)
+    throw new OptionsValidationException(UploadValidationPlanOptions.SectionName,typeof(UploadValidationPlanOptions),["Plans require source-bound correction review and its prerequisites."]);
 if(app.Services.GetRequiredService<IOptions<UploadCorrectionOptions>>().Value.Enabled
     && !app.Services.GetRequiredService<IOptions<UploadIdentityOptions>>().Value.Enabled)
     throw new OptionsValidationException(UploadCorrectionOptions.SectionName,typeof(UploadCorrectionOptions),["Corrections require source-bound identity checks and their prerequisites."]);
