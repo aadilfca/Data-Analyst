@@ -23,6 +23,20 @@ public sealed class UploadCoverageService(UploadPreparationService preparation,P
     private sealed class UnavailableReference : Exception;
     public async Task<CoverageResult> CheckAsync(VerifiedSession? session,int file,CoverageRequest input,CancellationToken ct=default)
     {
+        var result=await ReadCheckedAsync(session,file,input,(_,_,_)=>null,(value,_)=>Task.FromResult(value),ct);
+        if(result.Status!="success") return new(result.Status,Code:result.Code);
+        var value=result.Value!;
+        return value.Status=="confirmation_changed"?new("conflict",value,"coverage_check_changed")
+            :value.Footing.Status=="invalid_confirmation"?new("invalid",value,"variance_confirmation_not_applicable"):new("success",value);
+    }
+
+    // Later read-only checks consume the very same classified source pass.
+    // Their finish callback runs without a source/database lock; all source,
+    // mapping, membership and ledger-reference guards still surround that work.
+    internal async Task<OwnedWorkbookResult<T>> ReadCheckedAsync<T>(VerifiedSession? session,int file,CoverageRequest input,
+        Func<TemplateDefinition,PreparationContext,IReadOnlyList<PreparedMapping>,Action<CheckedSourceRow>?> begin,
+        Func<CoverageOutput,CancellationToken,Task<T>> finish,CancellationToken ct)
+    {
         if(!options.Value.Enabled||!footingOptions.Value.Enabled||!inputOptions.Value.Enabled) return new("unavailable");
         if(input.Footing?.Validation is null||!UploadInputValidationService.ValidRequest(input.Footing.Validation,inputOptions.Value)
             || input.ExpectedCoverageKey is not null && input.ExpectedCoverageKey.Length!=64
@@ -46,17 +60,16 @@ public sealed class UploadCoverageService(UploadPreparationService preparation,P
                 using var rows=WorkbookReader.Read(path,".xls",validation.Source.Sheet,limits,token).GetEnumerator();
                 if(!rows.MoveNext()) throw new WorkbookReadException("Workbook has no header row.");
                 var source=UploadPreparationService.ResolveSource(rows.Current.Cells,hash,file,template,saved,validation.Source);
+                var observe=begin(template,source.Context,source.Mappings);
                 IEnumerable<WorkbookRow> Remaining() {while(rows.MoveNext()) yield return rows.Current;}
-                var output=Evaluate(template,source.Mappings,source.Context,input,Remaining(),options.Value,footingOptions.Value,inputOptions.Value,ledger,token);
-                if(ledger is not null && ledger!=await ReadLedgerAsync(session!,validation.Source.ClientId,input.LedgerAccountCode,token)) throw new ReferenceChanged();
+                var output=Evaluate(template,source.Mappings,source.Context,input,Remaining(),options.Value,footingOptions.Value,inputOptions.Value,ledger,token,observe);
                 output=output with {Warnings=source.Warnings.Concat(output.Warnings).Distinct().ToArray()};
                 UploadPreparationService.JsonSize(output,options.Value.MaximumResponseBytes);
-                return output;
+                var value=await finish(output,token);
+                if(ledger is not null && ledger!=await ReadLedgerAsync(session!,validation.Source.ClientId,input.LedgerAccountCode,token)) throw new ReferenceChanged();
+                return value;
             },deadline.Token);
-            if(result.Status!="success") return new(result.Status,Code:result.Code);
-            var value=result.Value!;
-            return value.Status=="confirmation_changed"?new("conflict",value,"coverage_check_changed")
-                :value.Footing.Status=="invalid_confirmation"?new("invalid",value,"variance_confirmation_not_applicable"):new("success",value);
+            return result;
         }
         catch(ReferenceChanged) {return new("conflict",Code:"ledger_reference_changed");}
         catch(InvalidReference) {return new("review",Code:"ledger_account_review_required");}
@@ -102,7 +115,7 @@ public sealed class UploadCoverageService(UploadPreparationService preparation,P
 
     public static CoverageOutput Evaluate(TemplateDefinition template,IReadOnlyList<PreparedMapping> mappings,PreparationContext context,
         CoverageRequest input,IEnumerable<WorkbookRow> rows,UploadCoverageOptions limits,UploadFootingOptions footingLimits,
-        UploadInputValidationOptions inputLimits,CoverageLedger? ledger=null,CancellationToken ct=default)
+        UploadInputValidationOptions inputLimits,CoverageLedger? ledger=null,CancellationToken ct=default,Action<CheckedSourceRow>? observe=null)
     {
         bool complete=input.Footing.Validation.ComparisonMode=="replace_range",isLedger=template.Purpose=="account_ledger";
         var issues=new List<CoverageIssue>();int issueCount=0;long issueBytes=0;
@@ -153,7 +166,8 @@ public sealed class UploadCoverageService(UploadPreparationService preparation,P
                     || string.CompareOrdinal(day.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture),activePeriod.End)>0))
             {outside++;Issue(row.Number,"outside_coverage","This transaction date is outside the declared period. Widen coverage or correct Excel.");}
         }
-        var footing=UploadFootingService.Evaluate(template,mappings,context,input.Footing,rows,footingLimits,inputLimits,ct,Observe);
+        void ObserveRow(CheckedSourceRow row) {Observe(row);observe?.Invoke(row);}
+        var footing=UploadFootingService.Evaluate(template,mappings,context,input.Footing,rows,footingLimits,inputLimits,ct,ObserveRow);
         bool footingReady=footing.InputValidation.InputChecksPassed && (footing.Status=="not_configured"||footing.FootingPassed);
         // No exclusions/rejections/errors may manufacture an empty replacement.
         bool genuinelyEmpty=footing.InputValidation.Counts.TransactionRows==0;

@@ -17,4 +17,4 @@ public sealed record InputValidationOutput(PreparationContext Context,string Com
     int IssueRows,int IssuePage,int IssuePageSize,IReadOnlyList<InputRowIssue> Issues,bool DetailsTruncated,IReadOnlyList<string> Warnings);
 public sealed record InputValidationResult(string Status,InputValidationOutput? Output=null,string? Code=null);
 // Request-local notification only; consumers must process and discard the row.
-public sealed record CheckedSourceRow(WorkbookRow Row,string Kind,bool Excluded,bool Eligible,bool HasErrors);
+public sealed record CheckedSourceRow(WorkbookRow Row,string Kind,bool Excluded,bool Eligible,bool HasErrors,int? ParentRow=null);

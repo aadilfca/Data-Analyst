@@ -154,7 +154,7 @@ public sealed class UploadInputValidationService(UploadPreparationService prepar
                     if(parent is null || previous!=row.Number-1 || isExcluded) errors.Add(Issue(Role("description"),"ledger_note","Keep this note directly after an included transaction."));
                     if(errors.Count>0) {blocking=true;errorRows++;}
                     Report(new(row.Number,"continuation",errors,[],ParentRow:parent));previous=row.Number;
-                    observe?.Invoke(new(row,"continuation",isExcluded,false,errors.Count>0));continue;
+                    observe?.Invoke(new(row,"continuation",isExcluded,false,errors.Count>0,parent));continue;
                 }
             }
             transactions++;
