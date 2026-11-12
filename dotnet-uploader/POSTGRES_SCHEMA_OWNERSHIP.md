@@ -10,6 +10,7 @@ The frozen [P01 inventory](migration-baseline.json) records 95 source-declared t
 |---|---|
 | Existing PostgreSQL objects | Python's `init_db_postgres` and approved `_ensure_postgres_*`/shared upgrades remain the schema owners until a specific change is transferred. Review fresh-bootstrap and already-bootstrapped paths together. |
 | New .NET operations | P04A/P04B provide runtime connections and transactions only. Transfer database execution by accepted module phases under [P02](MIGRATION_CONTRACTS.md); runtime startup performs no DDL. |
+| Upload staging | Candidate `0011_upload_staging.sql` owns native receipt metadata linked to new `uploaded_files` rows; isolated execution only, no legacy adoption or startup DDL. |
 | Audit/error persistence | Existing SQLite-dependent paths need P05's explicit PostgreSQL design; do not infer replacement tables from the source inventory. |
 | Legacy/prepared/temporary objects | Source presence grants no right to recreate or remove them; retain P01's reachability/retirement review and P02's canonical-store contract. |
 

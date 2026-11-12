@@ -19,6 +19,8 @@ P06 rehearses route ownership with synthetic HTTP responses. The target remains 
 
 ## Local transport and limits
 
+P16 staging defaults off. Its explicit action grants and owner-bound receipts activate no import/report routes. Local disk staging and candidate SQL require durable private-storage/retention and shared-schema review before public switching.
+
 - Explicit target format is `http://127.0.0.1:<port>/`, port 1024–65535; credentials, alternate hosts, paths, queries and fragments are rejected. Self-forwarding to the API's listening port is blocked. Remote/container topology needs separate review.
 - Defaults: total deadline 30 seconds (including body transfer), connect timeout 3 seconds, four concurrent transfers, request limit 8,388,608 bytes and response limit 16,777,216 bytes. Validation caps them at 120/10 seconds, 16 transfers and 32/64 MiB. These are rehearsal limits, not accepted upload/export capacity; later module phases review required sizes.
 - One reusable HTTP client uses bounded connections, no cookie jar, no automatic redirect, no proxy and no automatic decompression. Requests are buffered within the size/deadline limit before dispatch; busy requests return 503 without queueing. Responses stream within byte/time limits.

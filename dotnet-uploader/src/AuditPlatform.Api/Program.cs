@@ -14,6 +14,7 @@ using AuditPlatform.Api.Columns;
 using AuditPlatform.Api.Templates;
 using AuditPlatform.Api.Mappings;
 using AuditPlatform.Api.ConfigurationBackup;
+using AuditPlatform.Api.Uploads;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -88,8 +89,14 @@ builder.Services.AddSingleton<TenantMappingService>();
 builder.Services.AddOptions<ConfigurationBackupOptions>()
     .Bind(builder.Configuration.GetSection(ConfigurationBackupOptions.SectionName)).ValidateOnStart();
 builder.Services.AddSingleton<ConfigurationBackupService>();
+builder.Services.AddOptions<UploadStagingOptions>()
+    .Bind(builder.Configuration.GetSection(UploadStagingOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
+builder.Services.AddSingleton<UploadStagingService>();
 
 var app = builder.Build();
+if(app.Services.GetRequiredService<IOptions<UploadStagingOptions>>().Value.Enabled
+    && !app.Services.GetRequiredService<IOptions<TemplateManagementOptions>>().Value.Enabled)
+    throw new OptionsValidationException(UploadStagingOptions.SectionName,typeof(UploadStagingOptions),["Upload staging requires native templates and tenant context."]);
 if (app.Services.GetRequiredService<IOptions<ConfigurationBackupOptions>>().Value.Enabled
     && (!app.Services.GetRequiredService<IOptions<SettingsManagementOptions>>().Value.Enabled
         || !app.Services.GetRequiredService<IOptions<SavedMappingOptions>>().Value.Enabled))
@@ -133,6 +140,9 @@ app.UseWhen(context => context.RequestServices.GetRequiredService<IOptions<Authe
     || context.Request.Path.StartsWithSegments("/api/columns")
     || context.Request.Path.StartsWithSegments("/api/templates")
     || context.Request.Path.StartsWithSegments("/api/backup")
+    || context.Request.Path.StartsWithSegments("/api/import-excel")
+    || context.Request.Path.StartsWithSegments("/api/upload/staging")
+    || context.Request.Path.StartsWithSegments("/api/upload/file")
     || context.Request.Path.StartsWithSegments("/api/upload/save-mapping")
     || context.Request.Path.StartsWithSegments("/api/upload/saved-mapping")
     || (context.RequestServices.GetRequiredService<IOptions<CoexistenceOptions>>().Value.Enabled

@@ -157,6 +157,14 @@ This list records discussion, not blanket authorization to activate policies. Re
 - Administrator session/context, preview revision and explicit confirmation are required. Restore validates bindings, retains permanent identities and applies all changes and audit in one transaction; failures roll back. Existing Setup UI remains legacy-only.
 - Inactive templates/client mappings, unknown bindings, foreign tenants and unsupported comparison changes require review. Preview identifies affected records and warns that upload backup policy may change. Live activation remains gated.
 
+### P16 staged workbooks
+
+- Disabled local staging binds receipts to tenant, user, selected active home client and native template. Administrators and active assigned managers/internees receive staging actions only; another user's receipt remains inaccessible.
+- Caller-generated request IDs reconcile interrupted responses without replay. Reserve and ready transitions require atomic audit; uncertain commits retain receipts/bytes. Staging adds no canonical transactions or validation plans.
+- Files stream within configured limits to generated keys outside application trees. SHA-256 is rechecked on status; missing/altered/expired sources require fresh selection. Owner-authorized expiry cleanup commits first, clears discovery and deletes only registered files.
+- ExcelDataReader 3.9.0 supplies bounded sheet/first-row discovery with positional blank/duplicate headers. Full XLS/XLSX value parity remains P17; import controls and frontend integration follow later phases.
+- Local storage needs operator-restricted permissions. Durable private storage/retention, unattended cleanup after access revocation, deployed schema/capacity and live activation remain gated; no Render filesystem durability is claimed.
+
 ## 3. PostgreSQL and financial values
 
 | Contract | Required behavior |
