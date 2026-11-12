@@ -107,8 +107,14 @@ builder.Services.AddSingleton<UploadCoverageService>();
 builder.Services.AddOptions<UploadIdentityOptions>()
     .Bind(builder.Configuration.GetSection(UploadIdentityOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
 builder.Services.AddSingleton<UploadIdentityService>();
+builder.Services.AddOptions<UploadCorrectionOptions>()
+    .Bind(builder.Configuration.GetSection(UploadCorrectionOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
+builder.Services.AddSingleton<UploadCorrectionService>();
 
 var app = builder.Build();
+if(app.Services.GetRequiredService<IOptions<UploadCorrectionOptions>>().Value.Enabled
+    && !app.Services.GetRequiredService<IOptions<UploadIdentityOptions>>().Value.Enabled)
+    throw new OptionsValidationException(UploadCorrectionOptions.SectionName,typeof(UploadCorrectionOptions),["Corrections require source-bound identity checks and their prerequisites."]);
 if(app.Services.GetRequiredService<IOptions<UploadIdentityOptions>>().Value.Enabled
     && !app.Services.GetRequiredService<IOptions<UploadCoverageOptions>>().Value.Enabled)
     throw new OptionsValidationException(UploadIdentityOptions.SectionName,typeof(UploadIdentityOptions),["Identity checks require source-bound coverage and its prerequisites."]);

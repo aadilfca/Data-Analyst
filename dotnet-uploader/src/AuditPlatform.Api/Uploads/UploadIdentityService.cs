@@ -18,9 +18,20 @@ public sealed class UploadIdentityService(UploadCoverageService coverage,Postgre
     private const string Notes="Ledger Source Notes";
     private static readonly HashSet<string> LineAliases=["line id","line_id","line no","line_no","line number","line_number",
         "line item","line_item","item no","item_no","item number","item_number"];
-    private sealed record Stored(IReadOnlyList<IdentityStoredRow> Rows,string Key,Dictionary<string,List<long>> Identities);
+    private sealed record Stored(IReadOnlyList<IdentityStoredRow> Rows,string Key,Dictionary<string,List<long>> Identities,IReadOnlySet<string> IncompleteGroups);
     private static long Cost(IReadOnlyDictionary<string,IdentityAtom> values)=>values.Sum(v=>128L+2L*(v.Key.Length+(v.Value.Text?.Length??0)));
     public async Task<IdentityResult> CheckAsync(VerifiedSession? session,int file,IdentityRequest input,CancellationToken ct=default)
+    {
+        var result=await ReadCheckedAsync(session,file,input,(context,token)=>Task.FromResult(Build(context.Profile,context.Incoming,
+            context.Existing,input,context.Coverage,context.StoreKey,context.Collisions,options.Value,token,context.SourceFailed)),ct);
+        if(result.Status!="success") return new(result.Status,Code:result.Code);
+        var value=result.Output!;
+        return value.Status=="confirmation_changed"?new("conflict",value,"identity_check_changed")
+            :value.Coverage.Footing.Status=="invalid_confirmation"?new("invalid",value,"variance_confirmation_not_applicable"):new("success",value);
+    }
+
+    internal async Task<IdentityReadResult<T>> ReadCheckedAsync<T>(VerifiedSession? session,int file,IdentityRequest input,
+        Func<IdentityReadContext,CancellationToken,Task<T>> finish,CancellationToken ct,bool corrections=false)
     {
         if(!options.Value.Enabled) return new("unavailable");
         if(input.Coverage?.Footing?.Validation?.Source is null||input.ExpectedIdentityKey is not null&&input.ExpectedIdentityKey.Length!=64
@@ -64,17 +75,16 @@ public sealed class UploadIdentityService(UploadCoverageService coverage,Postgre
             },async(proof,token)=>
             {
                 var rows=incoming.Values.ToArray();
-                if(!proof.CoverageChecksPassed) return Build(profile!,rows,[],input,proof,"",new Dictionary<string,List<long>>(),options.Value,token,sourceFailed:true);
+                if(!proof.CoverageChecksPassed) return await finish(new(profile!,rows,[],proof,"",new Dictionary<string,List<long>>(),new HashSet<string>(),true),token);
                 var identities=Identities(profile!,rows);
-                var stored=await ReadStoredAsync(session!,profile!,input,proof,rows,identities,bytes,token);
-                var output=Build(profile!,rows,stored.Rows,input,proof,stored.Key,stored.Identities,options.Value,token);
+                var stored=await ReadStoredAsync(session!,profile!,input,proof,rows,identities,bytes,token,corrections);
+                var output=await finish(new(profile!,rows,stored.Rows,proof,stored.Key,stored.Identities,stored.IncompleteGroups,false),token);
                 UploadPreparationService.JsonSize(output,options.Value.MaximumResponseBytes);
                 return output;
             },deadline.Token);
             if(result.Status!="success") return new(result.Status,Code:result.Code);
             var value=result.Value!;UploadPreparationService.JsonSize(value,options.Value.MaximumResponseBytes);
-            return value.Status=="confirmation_changed"?new("conflict",value,"identity_check_changed")
-                :value.Coverage.Footing.Status=="invalid_confirmation"?new("invalid",value,"variance_confirmation_not_applicable"):new("success",value);
+            return new("success",value);
         }
         catch(IdentityReview review) {return new("review",Code:review.Code);}
         catch(PostgresException error) when(error.SqlState is "42P01" or "42703") {return new("review",Code:"canonical_store_review_required");}
@@ -112,7 +122,7 @@ public sealed class UploadIdentityService(UploadCoverageService coverage,Postgre
         }).ToArray();
     }
     private Task<Stored> ReadStoredAsync(VerifiedSession session,IdentityProfile profile,IdentityRequest input,CoverageOutput proof,
-        IReadOnlyList<IdentitySourceRow> incoming,string[] identities,long retained,CancellationToken ct)=>snapshots.ExecuteAsync(async(db,token)=>
+        IReadOnlyList<IdentitySourceRow> incoming,string[] identities,long retained,CancellationToken ct,bool corrections=false)=>snapshots.ExecuteAsync(async(db,token)=>
     {
         var result=new List<IdentityStoredRow>();var guards=new StringBuilder();long last=0,bytes=retained;
         bool complete=input.Coverage.Footing.Validation.ComparisonMode=="replace_range";
@@ -145,6 +155,8 @@ public sealed class UploadIdentityService(UploadCoverageService coverage,Postgre
                 bytes+=Cost(values);if(bytes>options.Value.MaximumComparisonBytes) throw new IdentityReview("comparison_capacity_review_required");
                 string? Text(int field)=>reader.IsDBNull(field)?null:reader.GetString(field);
                 var row=new IdentityStoredRow(id,values,Text(3),Text(4),reader.GetInt32(2),reader.IsDBNull(5)?null:reader.GetInt32(5),reader.IsDBNull(6)?null:reader.GetInt32(6),Text(7));
+                if(corrections&&(row.Version<1||row.DocumentGroup!=UploadIdentityValue.Group(profile,row.Values)))
+                    throw new IdentityReview("correction_metadata_review_required");
                 result.Add(row);last=id;read++;
                 guards.Append(UploadIdentityValue.Hash(JsonSerializer.Serialize(new {row.Id,json,row.Version,row.DocumentGroup,row.Identity,row.SourceRow,row.OrderUpload,row.PrimaryDate})));
             }
@@ -157,11 +169,12 @@ public sealed class UploadIdentityService(UploadCoverageService coverage,Postgre
             // cannot disappear just because this preview reads a narrower scope.
             await using var command=db.CreateCommand("""
                 SELECT id,source_identity FROM public.client_data
-                WHERE client_id=$1 AND template_id=$2 AND is_deleted IS FALSE AND COALESCE(change_detection_status,'')<>'deleted'
+                WHERE client_id=$1 AND template_id=$2 AND is_deleted IS FALSE AND ($5 OR COALESCE(change_detection_status,'')<>'deleted')
                   AND source_identity=ANY($3) ORDER BY id LIMIT $4
                 """);
             command.Parameters.AddWithValue(source.ClientId);command.Parameters.AddWithValue(source.TemplateId);
             command.Parameters.AddWithValue(NpgsqlDbType.Array|NpgsqlDbType.Text,identities.Distinct(StringComparer.Ordinal).ToArray());command.Parameters.AddWithValue(options.Value.MaximumRows+1);
+            command.Parameters.AddWithValue(corrections);
             await using var reader=await command.ExecuteReaderAsync(token);int count=0;
             while(await reader.ReadAsync(token))
             {
@@ -171,24 +184,45 @@ public sealed class UploadIdentityService(UploadCoverageService coverage,Postgre
                 guards.Append(UploadIdentityValue.Hash(id.ToString(CultureInfo.InvariantCulture)+":"+identity));
             }
         }
-        return new Stored(result,UploadIdentityValue.Hash(guards.ToString()),active);
+        // Whole-voucher membership is read in this same snapshot. A complete
+        // replacement must not archive/remove only the in-period part of a voucher.
+        var incomplete=new HashSet<string>(StringComparer.Ordinal);
+        if(corrections&&(complete||profile.AccountCode is not null))
+        {
+            string[] members=groups.Concat(result.Select(r=>r.DocumentGroup!)).Distinct(StringComparer.Ordinal).ToArray();
+            var selected=result.Select(r=>r.Id).ToHashSet();
+            if(members.Length>0)
+            {
+                await using var command=db.CreateCommand("""
+                    SELECT cd.id,cd.document_group_id,COALESCE(cd.version,1),cd.extract_date::text
+                    FROM public.client_data cd
+                    WHERE cd.client_id=$1 AND cd.template_id=$2 AND cd.is_deleted IS FALSE
+                      AND cd.document_group_id=ANY($3)
+                      AND EXISTS(SELECT 1 FROM public.platform_tenant_client_homes h WHERE h.client_id=cd.client_id AND h.tenant_id=$4)
+                      AND ($5::text IS NULL OR EXISTS(SELECT 1 FROM public.uploaded_files u WHERE u.id=cd.upload_id AND u.ledger_account_code=$5))
+                    ORDER BY cd.id LIMIT $6
+                    """);
+                command.Parameters.AddWithValue(source.ClientId);command.Parameters.AddWithValue(source.TemplateId);
+                command.Parameters.AddWithValue(NpgsqlDbType.Array|NpgsqlDbType.Text,members);command.Parameters.AddWithValue(session.TenantId!.Value);
+                command.Parameters.AddWithValue(NpgsqlDbType.Text,(object?)profile.AccountCode??DBNull.Value);
+                command.Parameters.AddWithValue(options.Value.MaximumRows+1);
+                await using var reader=await command.ExecuteReaderAsync(token);int count=0;
+                while(await reader.ReadAsync(token))
+                {
+                    if(++count>options.Value.MaximumRows) throw new IdentityReview("comparison_capacity_review_required");
+                    long id=reader.GetInt32(0);string group=reader.GetString(1);
+                    if(!selected.Contains(id)) incomplete.Add(group);
+                    guards.Append(UploadIdentityValue.Hash(JsonSerializer.Serialize(new {id,group,Version=reader.GetInt32(2),Date=reader.IsDBNull(3)?null:reader.GetString(3)})));
+                }
+            }
+        }
+        return new Stored(result,UploadIdentityValue.Hash(guards.ToString()),active,incomplete);
     },ct);
 
-    // Pure occurrence matching, also used by byte/hash and matching oracles.
-    // Unmatched rows are left for P23: this method never guesses corrections.
-    public static IdentityOutput Build(IdentityProfile profile,IReadOnlyList<IdentitySourceRow> incoming,IReadOnlyList<IdentityStoredRow> existing,
-        IdentityRequest request,CoverageOutput proof,string storeKey,IReadOnlyDictionary<string,List<long>> collisions,
-        UploadIdentityOptions limits,CancellationToken ct=default,bool sourceFailed=false)
+    public static IdentityMatches Match(IdentityProfile profile,IReadOnlyList<IdentitySourceRow> incoming,
+        IReadOnlyList<IdentityStoredRow> existing,string delimiter,string order,UploadIdentityOptions limits,
+        CancellationToken ct=default,bool sourceFailed=false)
     {
-        string delimiter=request.Coverage.Footing.Validation.Source.DateDelimiter??"/",order=(request.Coverage.Footing.Validation.Source.DateOrder??"DMY").ToUpperInvariant();
-        var issues=new List<IdentityIssue>();int issueCount=0;long issueBytes=0;
-        void Issue(int row,string kind,string message)
-        {
-            issueCount++;if(issues.Count>=limits.MaximumIssueDetails) return;
-            var issue=new IdentityIssue(row,kind,message);
-            try {issueBytes+=UploadPreparationService.JsonSize(issue,limits.MaximumResponseBytes/8-issueBytes);issues.Add(issue);} catch(UploadPreparationService.InvalidPreparation) { }
-        }
-        if(profile.LineKey is not null&&!profile.Columns.Any(c=>c.Key==profile.LineKey&&c.Compare)) throw new IdentityReview("line_comparison_review_required");
         string[] identities=sourceFailed?[]:Identities(profile,incoming);
         var sourceGroups=incoming.Select(r=>UploadIdentityValue.Group(profile,r.Values)).ToArray();
         var currentGroups=existing.Select(r=>r.DocumentGroup??UploadIdentityValue.Group(profile,r.Values)).ToArray();
@@ -222,6 +256,27 @@ public sealed class UploadIdentityService(UploadCoverageService coverage,Postgre
                 {matched[index]=old;available.Remove(old);}
             }
         }
+        return new(identities,sourceGroups,currentGroups,matched,available);
+    }
+
+    // Pure occurrence matching, also used by byte/hash and matching oracles.
+    // Unmatched rows are left for P23: this method never guesses corrections.
+    public static IdentityOutput Build(IdentityProfile profile,IReadOnlyList<IdentitySourceRow> incoming,IReadOnlyList<IdentityStoredRow> existing,
+        IdentityRequest request,CoverageOutput proof,string storeKey,IReadOnlyDictionary<string,List<long>> collisions,
+        UploadIdentityOptions limits,CancellationToken ct=default,bool sourceFailed=false)
+    {
+        string delimiter=request.Coverage.Footing.Validation.Source.DateDelimiter??"/",order=(request.Coverage.Footing.Validation.Source.DateOrder??"DMY").ToUpperInvariant();
+        var issues=new List<IdentityIssue>();int issueCount=0;long issueBytes=0;
+        void Issue(int row,string kind,string message)
+        {
+            issueCount++;if(issues.Count>=limits.MaximumIssueDetails) return;
+            var issue=new IdentityIssue(row,kind,message);
+            try {issueBytes+=UploadPreparationService.JsonSize(issue,limits.MaximumResponseBytes/8-issueBytes);issues.Add(issue);} catch(UploadPreparationService.InvalidPreparation) { }
+        }
+        if(profile.LineKey is not null&&!profile.Columns.Any(c=>c.Key==profile.LineKey&&c.Compare)) throw new IdentityReview("line_comparison_review_required");
+        var matching=Match(profile,incoming,existing,delimiter,order,limits,ct,sourceFailed);
+        var identities=matching.Identities;var sourceGroups=matching.IncomingGroups;var currentGroups=matching.ExistingGroups;
+        var matched=matching.Matched;var available=matching.UnmatchedExisting;
         int repeatedGroups=0,repeatedRows=0,duplicateLineRows=0;
         if(!sourceFailed)
         foreach(var group in incoming.Select((row,index)=>new {row,index,Key=UploadIdentityValue.SourceIdentity(profile,row.Values)}).GroupBy(x=>x.Key))

@@ -152,6 +152,24 @@ public static class UploadIdentityValue
     public static string Fingerprint(IdentityProfile profile,IReadOnlyDictionary<string,IdentityAtom> row,string? primary,
         string delimiter,string order,bool stored=false,bool equivalent=false)
     {
+        var values=ComparisonValues(profile,row,primary,delimiter,order,stored,equivalent);
+        object? fields=values.OrderBy(v=>v.Key,Comparer<string>.Create(PythonOrder)).Select(v=>(object?)new object?[]{v.Key,v.Value});
+        return Json(equivalent?fields:new object?[]{fields,primary});
+    }
+    public static IReadOnlyDictionary<string,string> ComparedFields(IdentityProfile profile,IReadOnlyDictionary<string,IdentityAtom> row,
+        string? primary,string delimiter,string order,bool stored=false)=>ComparisonValues(profile,row,primary,delimiter,order,stored,true)
+            .ToDictionary(v=>v.Key,v=>Json(v.Value),StringComparer.Ordinal);
+    public static string FieldKey(IEnumerable<KeyValuePair<string,string>> fields)=>Json(fields.OrderBy(v=>v.Key,Comparer<string>.Create(PythonOrder))
+        .Select(v=>(object?)new object?[]{v.Key,v.Value}));
+    public static bool Movement(IdentityAtom value)
+    {
+        if(Blank(value)) return false;
+        return Numeric(value).Digits!="0";
+    }
+    public static string LineKey(IdentityAtom value)=>Line(value);
+    private static Dictionary<string,object?> ComparisonValues(IdentityProfile profile,IReadOnlyDictionary<string,IdentityAtom> row,
+        string? primary,string delimiter,string order,bool stored,bool equivalent)
+    {
         var values=new Dictionary<string,object?>(StringComparer.Ordinal);
         foreach(var column in profile.Columns.Where(c=>c.Compare))
         {
@@ -172,8 +190,7 @@ public static class UploadIdentityValue
         }
         // Ledger notes are data, not positions, and are always compared.
         if(row.TryGetValue("Ledger Source Notes",out var notes)&&!Blank(notes)) values["Ledger Source Notes"]=Raw(notes);
-        object? fields=values.OrderBy(v=>v.Key,Comparer<string>.Create(PythonOrder)).Select(v=>(object?)new object?[]{v.Key,v.Value});
-        return Json(equivalent?fields:new object?[]{fields,primary});
+        return values;
     }
     public static string? Calendar(string value,string delimiter,string order,bool stored=false)
     {

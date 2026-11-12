@@ -19,3 +19,11 @@ public sealed record IdentitySourceRow(int Row,IReadOnlyDictionary<string,Identi
 public sealed record IdentityStoredRow(long Id,IReadOnlyDictionary<string,IdentityAtom> Values,string? DocumentGroup,string? Identity,
     long Version=1,int? SourceRow=null,int? OrderUpload=null,string? PrimaryDate=null);
 public sealed class IdentityReview(string code) : Exception(code) {public string Code {get;}=code;}
+
+// Disposable inputs shared by identity and correction review, never an import plan.
+internal sealed record IdentityReadResult<T>(string Status,T? Output=default,string? Code=null);
+internal sealed record IdentityReadContext(IdentityProfile Profile,IReadOnlyList<IdentitySourceRow> Incoming,
+    IReadOnlyList<IdentityStoredRow> Existing,CoverageOutput Coverage,string StoreKey,
+    IReadOnlyDictionary<string,List<long>> Collisions,IReadOnlySet<string> IncompleteGroups,bool SourceFailed);
+public sealed record IdentityMatches(string[] Identities,string[] IncomingGroups,string[] ExistingGroups,
+    IReadOnlyDictionary<int,int> Matched,IReadOnlySet<int> UnmatchedExisting);
