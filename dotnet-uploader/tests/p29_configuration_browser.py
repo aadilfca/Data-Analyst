@@ -35,6 +35,15 @@ with sync_playwright() as p:
             return {status:response.status, data:await response.json()};
         }""", {"path": path, "body": body, "revision": revision, "method": method})
 
+    def choose_backup(value):
+        # Use the real picker action: it waits for readiness and clears the
+        # previous selection so choosing the same file raises a fresh change.
+        trigger = page.get_by_role('button', name='Choose backup to review', exact=True)
+        expect(trigger).to_be_enabled()
+        with page.expect_file_chooser() as chooser:
+            trigger.click()
+        chooser.value.set_files(value)
+
     page.goto(base + '/static/setup.html?feature=configuration-backup')
     expect(page.locator('#configurationBackup')).to_be_visible()
     expect(page.locator('#legacySetupTransfer')).to_be_hidden()
@@ -108,7 +117,7 @@ with sync_playwright() as p:
     source['templates'][0]['version'] = 9007199254740993
     payload = json.dumps(source, ensure_ascii=False).encode('utf-8')
     file = {"name": "configuration.json", "mimeType": "application/json", "buffer": payload}
-    page.locator('#configurationFileInput').set_input_files(file)
+    choose_backup(file)
     expect(page.locator('#configurationRestorePreview')).to_be_visible()
     expect(page.locator('#configurationRestoreItems')).to_contain_text('Amount: Alternate Amount')
     check(page.locator('#configurationRestoreItems Accounting').count() == 0, 'A template label became HTML')
@@ -122,7 +131,7 @@ with sync_playwright() as p:
     page.locator('#restoreConfigurationBtn').click()
     expect(page.locator('#configurationBackupStatus')).to_contain_text('Configuration changed')
     expect(page.locator('#configurationRestorePreview')).to_be_hidden()
-    page.locator('#configurationFileInput').set_input_files(file)
+    choose_backup(file)
     expect(page.locator('#configurationRestorePreview')).to_be_visible()
     page.locator('#confirmConfigurationRestore').check()
     import_bodies = []
@@ -131,7 +140,7 @@ with sync_playwright() as p:
     expect(page.locator('#configurationBackupStatus')).to_contain_text('Configuration restored')
     check('9007199254740993' in import_bodies[-1], 'The backup version counter was rounded by the browser')
     # A committed restore with a lost HTTP response never submits automatically again.
-    page.locator('#configurationFileInput').set_input_files(file)
+    choose_backup(file)
     expect(page.locator('#configurationRestorePreview')).to_be_visible()
     def lose_response(route):
         response = route.fetch()
@@ -147,7 +156,7 @@ with sync_playwright() as p:
     page.unroute('**/api/backup/import', lose_response)
     # Oversized files are stopped before upload/parsing, and stale UI is cleared.
     before = sum(url.endswith('/api/backup/preview') for _, url in requests)
-    page.locator('#configurationFileInput').set_input_files({"name":"large.json","mimeType":"application/json","buffer":b' ' * (7 * 1024 * 1024 + 1)})
+    choose_backup({"name":"large.json","mimeType":"application/json","buffer":b' ' * (7 * 1024 * 1024 + 1)})
     expect(page.locator('#configurationBackupStatus')).to_contain_text('7 MiB')
     check(sum(url.endswith('/api/backup/preview') for _, url in requests) == before, 'Oversized file reached the API')
     open_editor()

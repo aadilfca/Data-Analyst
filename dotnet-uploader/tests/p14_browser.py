@@ -1,4 +1,9 @@
-"""Owned P14 HTTP/UI fixture; workbook/staging services remain outside this phase."""
+"""Retained-script compatibility fixture against owned native mapping APIs.
+
+P29 serves its own coordinator (including its disabled state). This harness
+selects the retained Python-page script only inside intercepted test HTML;
+native Upload execution is covered by p29_upload_browser.py instead.
+"""
 import sys
 from urllib.parse import urlparse
 from playwright.sync_api import sync_playwright, expect
@@ -21,6 +26,15 @@ with sync_playwright() as playwright:
     expect(page).to_have_url(base + "/static/client_select.html")
     page.locator(".module-card").filter(has_text="Alpha").click()
     expect(page).to_have_url(base + "/static/index.html")
+
+    def retained_upload_page(route):
+        response = route.fetch()
+        html = response.text()
+        native = '<script src="/shell/upload_native.js"></script>'
+        assert html.count(native) == 1
+        html = html.replace(native, '<script src="/static/upload.js?v=35"></script>')
+        route.fulfill(response=response, body=html)
+    context.route("**/static/upload.html", retained_upload_page)
 
     def open_upload(target=page, template=template_id):
         target.goto(base + "/static/upload.html")

@@ -130,8 +130,15 @@ builder.Services.AddSingleton(provider=>new UploadJobSourceStore(provider.GetReq
     new HttpClient(new HttpClientHandler{AllowAutoRedirect=false,UseCookies=false}){Timeout=Timeout.InfiniteTimeSpan}));
 builder.Services.AddSingleton<UploadJobService>();
 builder.Services.AddHostedService<UploadJobWorker>();
+builder.Services.AddOptions<UploadUiOptions>()
+    .Bind(builder.Configuration.GetSection(UploadUiOptions.SectionName)).ValidateOnStart();
 
 var app = builder.Build();
+if(app.Services.GetRequiredService<IOptions<UploadUiOptions>>().Value.Enabled
+    && (!app.Services.GetRequiredService<IOptions<UploadJobOptions>>().Value.Enabled
+        || !app.Services.GetRequiredService<IOptions<ApplicationShellOptions>>().Value.Enabled))
+    throw new OptionsValidationException(UploadUiOptions.SectionName,typeof(UploadUiOptions),
+        ["Native Upload UI requires the application shell, durable jobs and their prerequisites."]);
 if(app.Services.GetRequiredService<IOptions<UploadJobOptions>>().Value.Enabled
     &&(!app.Services.GetRequiredService<IOptions<UploadImportOptions>>().Value.Enabled
         ||app.Services.GetRequiredService<IOptions<UploadJobOptions>>().Value.LeaseSeconds

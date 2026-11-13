@@ -18,7 +18,7 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
     public async Task InvokeAsync(HttpContext context, IOptions<ApplicationShellOptions> options,
         TenantSessionService tenants, AuditPlatform.Api.Clients.TenantClientService clients,
         IOptions<SettingsManagementOptions> settings,IOptions<ColumnManagementOptions> columns,IOptions<TemplateManagementOptions> templates,IOptions<SavedMappingOptions> mappings,
-        IOptions<ConfigurationBackupOptions> backups)
+        IOptions<ConfigurationBackupOptions> backups,IOptions<UploadUiOptions> uploadUi,IOptions<UploadStagingOptions> staging)
     {
         if (!options.Value.Enabled) { await next(context); return; }
         var path=context.Request.Path.Value ?? "/";
@@ -36,6 +36,9 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
             || context.Request.Path.StartsWithSegments("/api/backup")
             || context.Request.Path.StartsWithSegments("/api/upload/save-mapping")
             || context.Request.Path.StartsWithSegments("/api/upload/saved-mapping")
+            || context.Request.Path.StartsWithSegments("/api/upload/file")
+            || context.Request.Path.StartsWithSegments("/api/upload/staging")
+            || canonicalApi=="/api/import-excel"
             || canonicalApi is "/api/auth/current-client" or "/api/auth/select-client";
         if (boundApi && session is not null && (session.TenantId is null
             || context.Request.Headers["X-App-Context"].Count!=1
@@ -109,6 +112,21 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
         // Numeric/hash-only attributes need no user-controlled HTML. This runs
         // before retained scripts, clearing old browser state before they read it.
         var script=$"<script src=\"/shell/context.js\" data-context=\"{key}\" data-tenant=\"{selectedTenant}\" data-settings-enabled=\"{settingsEnabled}\" data-settings-admin=\"{settingsAdmin}\" data-columns-enabled=\"{columnsEnabled}\" data-templates-enabled=\"{templatesEnabled}\" data-mappings-enabled=\"{mappingsEnabled}\" data-backups-enabled=\"{backupsEnabled}\"></script>";
+        script=script.Replace(" data-backups-enabled=",$" data-upload-enabled=\"{(uploadUi.Value.Enabled?"true":"false")}\" data-upload-limit=\"{staging.Value.MaximumFileBytes}\" data-backups-enabled=",StringComparison.Ordinal);
+        if(!shell && file=="upload.html")
+        {
+            // Exact packaged assets only. No nested repository or upload path is served.
+            var coordinator=new System.Text.RegularExpressions.Regex("<script src=\"/static/upload\\.js(?:\\?[^\"]*)?\"></script>",
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+            if(coordinator.Matches(content).Count!=1)
+            {
+                // A future shared-markup change must not reactivate legacy upload calls.
+                context.Response.StatusCode=503;await context.Response.WriteAsync("The native Upload page requires integration review.",context.RequestAborted);return;
+            }
+            content=coordinator.Replace(content,"<script src=\"/static/api_utils.js\"></script><script src=\"/shell/upload_native.js\"></script>");
+            content=content.Replace("/static/vendor/xlsx.full.min.js", "/static/xlsx.full.min.js",StringComparison.Ordinal)
+                .Replace("</head>","<link rel=\"stylesheet\" href=\"/shell/upload_native.css\"></head>",StringComparison.Ordinal);
+        }
         content=content.Replace("<head>","<head>"+script,StringComparison.Ordinal);
         await context.Response.WriteAsync(content,context.RequestAborted);
     }

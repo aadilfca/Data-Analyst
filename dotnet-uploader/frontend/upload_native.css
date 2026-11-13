@@ -1,0 +1,20 @@
+/* Native-only additions retain the existing Upload page and shared palette. */
+body.native-upload [hidden] { display: none !important; }
+.native-upload-panel { margin: 12px 28px; padding: 14px; border: 1px solid #cbd5e1; border-radius: 8px; background: #f8fafc; scroll-margin-top: 110px; }
+.native-upload-panel h2 { font-size: 16px; margin-bottom: 8px; }
+.native-upload-panel p { margin: 6px 0; font-size: 13px; overflow-wrap: anywhere; }
+.native-upload-panel table { border-collapse: collapse; width: 100%; font-size: 12px; margin: 8px 0; }
+.native-upload-panel th, .native-upload-panel td { border: 1px solid #cbd5e1; padding: 6px; text-align: left; overflow-wrap: anywhere; }
+.native-upload-panel th { background: #dbeafe; }
+.native-upload-panel button { margin: 4px 8px 4px 0; padding: 7px 12px; border: 1px solid #cbd5e1; border-radius: 5px; background: white; cursor: pointer; }
+.native-upload-panel button:disabled { opacity: .5; cursor: not-allowed; }
+.native-upload-panel .native-primary { color: white; background: #2563eb; }
+.native-upload-scroll { overflow-x: auto; max-height: 360px; }
+.native-upload-number { font-variant-numeric: tabular-nums; white-space: pre-wrap; }
+#nativeUploadNotice[data-severity="error"] { color: #b91c1c; }
+#nativeUploadNotice[data-severity="success"] { color: #166534; }
+#nativeJobState { font-weight: 600; }
+#nativeImportConfirmation { margin-right: 6px; }
+.native-upload #uploadCoverageStart, .native-upload #uploadCoverageEnd { width: 140px; }
+.native-upload #sourceControlRow { width: 95px; }
+@media (max-width: 650px) { .native-upload-panel { margin: 10px; } }
