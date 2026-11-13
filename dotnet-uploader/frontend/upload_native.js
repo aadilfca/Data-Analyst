@@ -551,7 +551,9 @@
     async function init() {
         buildPanels();
         $('importBtn').textContent = 'Validate'; $('previewBtn').textContent = 'Refresh source rows';
-        $('previewSheet').hidden = true; $('uploadReplacementReview').hidden = true; $('goToDataBankBtn').hidden = true;
+        $('previewSheet').hidden = true; $('uploadReplacementReview').hidden = true;
+        $('goToDataBankBtn').hidden = !window.AppNativeDataBank?.enabled;
+        $('goToDataBankBtn').addEventListener('click', () => { if (window.AppNativeDataBank?.enabled) location.href = '/static/databank.html'; });
         $('uploadBackupHelp').textContent = 'Current/history preservation and completion evidence are handled by the native import. No external archive is created.';
         $('ledgerUploadContext').hidden = true;
         $('clientSelectionWarning').style.display = 'none';

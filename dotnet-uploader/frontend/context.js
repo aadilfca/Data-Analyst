@@ -17,6 +17,7 @@
     // Setup screen cannot fall through into the legacy transfer protocol.
     window.AppConfigurationBackup = { enabled: tag.dataset.backupsEnabled === 'true', canEdit: tag.dataset.settingsAdmin === 'true' };
     window.AppNativeUpload = { enabled: tag.dataset.uploadEnabled === 'true', maximumFileBytes: Number(tag.dataset.uploadLimit) };
+    window.AppNativeDataBank = { enabled: tag.dataset.databankEnabled === 'true' };
     const marker = key + '/' + tenant;
     let changed = true;
     try {
@@ -49,6 +50,7 @@
         const url = new URL(request.url);
         const path = url.pathname.replace(/\/+$/, '').toLowerCase();
         const bound = url.origin === location.origin && (path.startsWith('/api/users')
+            || path === '/api/data' || path.startsWith('/api/data/')
             || path.startsWith('/api/settings')
             || path.startsWith('/api/columns')
             || path.startsWith('/api/templates')
@@ -104,6 +106,8 @@
                 child = { label: 'Configuration backup', url: '/static/setup.html?feature=configuration-backup', state: 'ready', keywords: ['export', 'restore', 'configuration', 'settings backup'] };
             if (path === '/static/upload.html' && window.AppNativeUpload.enabled)
                 child = { label: 'Upload progress and recovery', url: '/static/upload.html?feature=upload-jobs', state: 'ready', keywords: ['import', 'job', 'progress', 'cancel', 'resume', 'receipt', 'evidence'] };
+            if (path === '/static/databank.html' && window.AppNativeDataBank.enabled)
+                child = { label: 'Data Bank previews and totals', url: '/static/databank.html?feature=data-reads', state: 'ready', keywords: ['rows', 'footing', 'coverage', 'ledger', 'filter'] };
             if (child) { item.children ||= []; if (!item.children.some(c => c.url === child.url)) item.children.push(child); }
         }));
         const nav = document.createElement('nav');

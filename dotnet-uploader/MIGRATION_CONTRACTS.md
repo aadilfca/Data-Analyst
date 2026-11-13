@@ -284,6 +284,15 @@ This list records discussion, not blanket authorization to activate policies. Re
 - Persist compact file/job handles before submission, never source rows or credentials. The request UUID is the job ID; lost responses/refresh use owner-checked status. Writes never retry automatically; explicit same-request recovery preserves its immutable ID/options. Progress reports actual stages/attempts/source readiness, with bounded polling, cancellation and explicit owner resume; expiry is never renewed.
 - Completion counts and exact SQL-control strings come from the immutable receipt. Detail downloads remain server-bounded and can expire/refuse stale evidence. Synthetic original/repeat/correction/partial/empty, 1,000-row import and 10,000-row bounded-refusal checks pass; locally accepted. Representative corpus/scale and deployment activation remain gates. See CHANGELOG_ARCHIVE.md, Upload UI P29B.
 
+### P30 Data Bank boundary
+
+- `DataBank__Enabled=false` requires PostgreSQL, shell, tenant templates and settings when enabled. Native pages/APIs never fall through to Python; startup adds no DDL. Default bounds: two readers, 30 seconds, 200 rows/page, 1 MiB responses, 500 templates, 1,024 columns/template and 10,000 ledger accounts; oversize results refuse explicitly.
+- P30 grants home-workspace Data Bank reads to tenant administrators and active assigned managers/internees only. Revalidate session, membership, selected tenant/revision/client and assignment within each operation and again before release. Global roles, client selection, team eligibility and browser caches grant no additional access; sharing remains gated.
+- Capture configuration, filters, page and exact controls in an enforced read-only repeatable snapshot. Availability may omit slower metrics; metrics failure leaves the list usable. Calendar holidays use the selected tenant; overdue retains business-day frequency rules. Ledger choices use imported metadata, exact account codes and original source order.
+- Preserve raw JSON value types and repeated lines. Project permanent storage keys to current labels; native numeric-text companions avoid browser precision loss. Footing aggregates use PostgreSQL NUMERIC over raw JSON; invalid/unsupported totals remain unavailable. Existing approximate amount filters retain their semantics. Full-selection controls are independent of paging/subtotals.
+- Retained pages guard complete scopes, clear obsolete values, bound caches and reject late/wrong-context responses; native subtotals use exact bounded coefficients. Template Viewer remains a marked 200-row view with search within that page. Native history, exports, deletion, frequency editing, Cashflow classification and Verification field-policy previews await their own phases.
+- Verification uses owned PostgreSQL and synthetic Python/browser comparisons. Representative corpus/scale, shared-schema/catalog compatibility and explicit live activation remain gates. See CHANGELOG_ARCHIVE.md, Data Bank P30.
+
 ## 3. PostgreSQL and financial values
 
 | Contract | Required behavior |

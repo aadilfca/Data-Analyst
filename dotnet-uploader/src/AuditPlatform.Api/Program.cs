@@ -15,6 +15,7 @@ using AuditPlatform.Api.Templates;
 using AuditPlatform.Api.Mappings;
 using AuditPlatform.Api.ConfigurationBackup;
 using AuditPlatform.Api.Uploads;
+using AuditPlatform.Api.DataBank;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -132,8 +133,18 @@ builder.Services.AddSingleton<UploadJobService>();
 builder.Services.AddHostedService<UploadJobWorker>();
 builder.Services.AddOptions<UploadUiOptions>()
     .Bind(builder.Configuration.GetSection(UploadUiOptions.SectionName)).ValidateOnStart();
+builder.Services.AddOptions<DataBankOptions>()
+    .Bind(builder.Configuration.GetSection(DataBankOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
+builder.Services.AddSingleton<DataBankService>();
 
 var app = builder.Build();
+if (app.Services.GetRequiredService<IOptions<DataBankOptions>>().Value.Enabled
+    && (!app.Services.GetRequiredService<IOptions<ApplicationShellOptions>>().Value.Enabled
+        || !app.Services.GetRequiredService<IOptions<TemplateManagementOptions>>().Value.Enabled
+        || !app.Services.GetRequiredService<IOptions<SettingsManagementOptions>>().Value.Enabled
+        || !app.Services.GetRequiredService<IOptions<PostgresOptions>>().Value.Enabled))
+    throw new OptionsValidationException(DataBankOptions.SectionName, typeof(DataBankOptions),
+        ["Data Bank requires PostgreSQL, the application shell, tenant templates and settings."]);
 if(app.Services.GetRequiredService<IOptions<UploadUiOptions>>().Value.Enabled
     && (!app.Services.GetRequiredService<IOptions<UploadJobOptions>>().Value.Enabled
         || !app.Services.GetRequiredService<IOptions<ApplicationShellOptions>>().Value.Enabled))

@@ -4,6 +4,34 @@
 
 // API_BASE and STORAGE_KEY are defined in client_context.js
 const dataBankPerfEnabled = new URLSearchParams(window.location.search).get('perf') === '1';
+const nativeDataBank = window.AppNativeDataBank;
+function nativeReadAvailable() { return !nativeDataBank || nativeDataBank.enabled; }
+function assertNativeClient(response, clientId) {
+    if (nativeDataBank && response.headers.get('X-DataBank-Client') !== String(clientId)) throw new Error('Data scope changed. Refresh to continue.');
+}
+function boundDataBankCache(cache) { while (cache.size > PREVIEW_CACHE_MAX_ENTRIES) cache.delete(cache.keys().next().value); }
+
+// Native cells retain JSON types; exact numeric tokens bypass JSON.parse's binary64 conversion.
+function nativeExactNumber(value) {
+    const match = /^([+-]?)(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/.exec(String(value).trim());
+    if (!match || !(match[2] || match[3]) || String(value).length > 4096) return null;
+    const exponent = Number(match[4] || 0); if (!Number.isSafeInteger(exponent) || Math.abs(exponent) > 4096) return null;
+    let scale = (match[3] || '').length - exponent;
+    let coefficient = BigInt((match[1] === '-' ? '-' : '') + (match[2] || '0') + (match[3] || ''));
+    if (scale < 0) { coefficient *= 10n ** BigInt(-scale); scale = 0; }
+    return { coefficient, scale };
+}
+function addNativeExact(left, right) {
+    if (!left || !right) return null;
+    const scale = Math.max(left.scale, right.scale);
+    return { coefficient: left.coefficient * 10n ** BigInt(scale - left.scale) + right.coefficient * 10n ** BigInt(scale - right.scale), scale };
+}
+function nativeExactText(value) {
+    if (!value) return 'Unavailable';
+    let text = (value.coefficient < 0n ? -value.coefficient : value.coefficient).toString().padStart(value.scale + 1, '0');
+    if (value.scale) text = text.slice(0, -value.scale) + '.' + text.slice(-value.scale);
+    return (value.coefficient < 0n ? '-' : '') + text;
+}
 
 function logDataBankPerf(operation, startedAt, details) {
     if (!dataBankPerfEnabled) return;
@@ -85,6 +113,7 @@ let pendingTemplateDelete = null;
 // which template that is) — there is no more multi-template selection.
 let calendarYear = new Date().getFullYear();
 let calendarMonth = new Date().getMonth() + 1; // 1-12
+let calendarRequestSequence = 0;
 let currentPopoverTemplateId = null;
 let currentPopoverTemplateName = '';
 
@@ -580,6 +609,7 @@ function openTemplateCalendarPopover(templateId, templateName) {
 }
 
 function closeTemplateCalendarPopover() {
+    calendarRequestSequence++;
     templateCalendarModal.style.display = 'none';
     currentPopoverTemplateId = null;
     currentPopoverTemplateName = '';
@@ -591,6 +621,12 @@ function closeTemplateCalendarPopover() {
 // data.templates generically as an array (a 1-item array needs no
 // special-casing).
 async function fetchTemplateCalendar() {
+    if (!nativeReadAvailable()) return;
+    const sequence = ++calendarRequestSequence;
+    const template = currentPopoverTemplateId;
+    const year = calendarYear, month = calendarMonth;
+    const current = () => sequence === calendarRequestSequence && template === currentPopoverTemplateId
+        && year === calendarYear && month === calendarMonth && Number(clientId) === Number(getSelectedClientId());
     updateCalendarMonthLabel();
 
     const clientId = getSelectedClientId();
@@ -619,8 +655,12 @@ async function fetchTemplateCalendar() {
             throw new Error(err.detail || 'Failed to fetch coverage calendar');
         }
         const data = await res.json();
+        if (!current()) return;
+        assertNativeClient(res, clientId);
+        if (data.year !== year || data.month !== month || data.templates.some(t => Number(t.template_id) !== Number(template))) throw new Error('Calendar scope changed. Retry.');
         renderCoverageCalendars(data);
     } catch (error) {
+        if (!current()) return;
         console.error('Coverage calendar fetch error:', error);
         coverageCalendarsContainer.innerHTML = `<div class="calendar-empty-state">❌ Error loading calendar: ${escapeHtml(error.message)}</div>`;
     }
@@ -868,9 +908,11 @@ async function loadAvailabilityPayload(clientId, dateRange) {
             throw new Error(err.detail || 'Failed to fetch availability');
         }
         const data = await res.json();
+        assertNativeClient(res, clientId);
         const payload = { data, clientId };
         if (cacheGeneration === previewCacheGeneration) {
             availabilityCache.set(cacheKey, payload);
+            boundDataBankCache(availabilityCache);
         }
         return payload;
     })();
@@ -907,11 +949,13 @@ async function loadAvailabilityMetrics(clientId, cacheGeneration = previewCacheG
             throw new Error(detail);
         }
         const payload = await res.json();
+        assertNativeClient(res, clientId);
         if (Number(payload.client_id) !== Number(clientId) || !Array.isArray(payload.templates)) {
             throw new Error('The data service returned metrics for an unexpected client.');
         }
         if (cacheGeneration === previewCacheGeneration) {
             availabilityMetricsCache.set(cacheKey, { clientId: Number(clientId), payload });
+            boundDataBankCache(availabilityMetricsCache);
         }
         return payload;
     })();
@@ -992,6 +1036,7 @@ async function loadAndApplyAvailabilityMetrics(clientId, requestSequence, cacheG
 function invalidateDataBankCaches({ clientId = null, templateId = null } = {}) {
     previewCacheGeneration += 1;
     availabilityRequestSequence += 1;
+    if (nativeDataBank) { templateColumnsCache = {}; templateSubtotalDefaultCache = {}; templatePurposeCache = {}; }
 
     for (const key of availabilityInFlight.keys()) {
         if (clientId === null || key.startsWith(`${clientId}|`)) {
@@ -1020,6 +1065,7 @@ function invalidateDataBankCaches({ clientId = null, templateId = null } = {}) {
 }
 
 async function fetchAvailability() {
+    if (!nativeReadAvailable()) return;
     const requestSequence = ++availabilityRequestSequence;
     const clientId = getSelectedClientId();
     if (!clientId) {
@@ -1140,15 +1186,16 @@ function renderOverdueUploadsTable() {
     if (overdueUploadsNoData) overdueUploadsNoData.style.display = 'none';
     overdueUploadsTableBody.innerHTML = overdueUploadsData.map(item => `
         <tr>
-            <td>${item.template_name}</td>
+            <td>${escapeHtml(item.template_name)}</td>
             <td>${formatDateForDisplay(item.last_upload_date)}</td>
-            <td>${item.frequency}</td>
+            <td>${escapeHtml(item.frequency)}</td>
             <td>${getOverdueSeverityBadge(item.days_overdue)}</td>
         </tr>
     `).join('');
 }
 
 async function fetchOverdueUploads(clientId) {
+    const generation = previewCacheGeneration;
     if (!clientId) {
         overdueUploadsData = [];
         if (statsOverdueUploads) statsOverdueUploads.textContent = '0';
@@ -1157,13 +1204,18 @@ async function fetchOverdueUploads(clientId) {
     }
     try {
         const res = await fetch(`${API_BASE}/api/data/overdue-uploads?client_id=${clientId}`);
+        if (generation !== previewCacheGeneration || Number(clientId) !== Number(getSelectedClientId())) return;
         if (res.ok) {
             const data = await res.json();
+            if (generation !== previewCacheGeneration || Number(clientId) !== Number(getSelectedClientId())) return;
+            assertNativeClient(res, clientId);
+            if (Number(data.client_id) !== Number(clientId)) throw new Error('Overdue scope changed.');
             overdueUploadsData = data.overdue || [];
         } else {
             overdueUploadsData = [];
         }
     } catch (error) {
+        if (generation !== previewCacheGeneration || Number(clientId) !== Number(getSelectedClientId())) return;
         overdueUploadsData = [];
     }
     if (statsOverdueUploads) statsOverdueUploads.textContent = overdueUploadsData.length;
@@ -1186,6 +1238,7 @@ const UPLOAD_FREQUENCY_OPTIONS = ['Daily', 'Weekly', 'Monthly'];
 function buildFrequencyCell(item) {
     const tdFrequency = document.createElement('td');
     tdFrequency.style.textAlign = 'center';
+    if (nativeDataBank) { tdFrequency.textContent = item.upload_frequency || 'Daily'; tdFrequency.title = 'Frequency editing is awaiting migration.'; return tdFrequency; }
 
     const select = document.createElement('select');
     UPLOAD_FREQUENCY_OPTIONS.forEach(freq => {
@@ -1286,7 +1339,7 @@ function buildDatasetActionButtons(item) {
         // Cashflows classification is deliberately separate from the raw eye
         // preview: it is read-only and shows current Account Control Centre
         // assignments alongside the unchanged source columns.
-        if ((item.template_name || '').trim().toLowerCase() === 'transaction report') {
+        if (!nativeDataBank && (item.template_name || '').trim().toLowerCase() === 'transaction report') {
             const classificationBtn = document.createElement('button');
             classificationBtn.className = 'action-btn preview';
             classificationBtn.textContent = '🏷️';
@@ -1310,7 +1363,7 @@ function buildDatasetActionButtons(item) {
         exportBtn.addEventListener('click', () => {
             exportDataset(item.template_id, item.template_name);
         });
-        tdActions.appendChild(exportBtn);
+        if (!nativeDataBank) tdActions.appendChild(exportBtn);
 
     }
 
@@ -1327,7 +1380,7 @@ function buildDatasetActionButtons(item) {
     deleteBtn.addEventListener('click', () => {
         deleteTemplateData(item.template_id, item.template_name, deleteBtn);
     });
-    tdActions.appendChild(deleteBtn);
+    if (!nativeDataBank) tdActions.appendChild(deleteBtn);
 
     // History remains available when a complete upload has removed every active
     // row from this template; that is when users may need the deletion record most.
@@ -1342,7 +1395,7 @@ function buildDatasetActionButtons(item) {
         event.stopPropagation();
         openUploadHistory(item);
     });
-    tdActions.appendChild(historyBtn);
+    if (!nativeDataBank) tdActions.appendChild(historyBtn);
 
     return tdActions;
 }
@@ -1789,6 +1842,7 @@ async function loadPreviewLedgerAccounts(opening, clientId, templateId, preferre
 }
 
 async function openPreview(templateId, templateName, mode = 'raw') {
+    if (!nativeReadAvailable() || nativeDataBank && mode !== 'raw') return;
     historyRequestSequence++;
     historyModal.style.display = 'none';
     // The shared range (already validated by whichever caller reached this
@@ -2067,6 +2121,7 @@ let templateSubtotalDefaultCache = {};
 let templatePurposeCache = {};
 
 async function fetchTemplateSubtotalDefault(templateId) {
+    const generation = previewCacheGeneration;
     if (Object.prototype.hasOwnProperty.call(templateSubtotalDefaultCache, templateId)) {
         return templateSubtotalDefaultCache[templateId];
     }
@@ -2075,8 +2130,10 @@ async function fetchTemplateSubtotalDefault(templateId) {
         if (!res.ok) throw new Error('Preview settings could not be loaded.');
         const data = await res.json();
         const flag = !!data.has_subtotals_by_default;
-        templateSubtotalDefaultCache[templateId] = flag;
-        templatePurposeCache[templateId] = data.data_purpose || 'standard';
+        if (!nativeDataBank || generation === previewCacheGeneration) {
+            templateSubtotalDefaultCache[templateId] = flag;
+            templatePurposeCache[templateId] = data.data_purpose || 'standard';
+        }
         return flag;
     } catch (e) {
         console.error('Failed to load template subtotal default:', e);
@@ -2140,6 +2197,7 @@ async function loadPreviewPage(endpoint, params, cacheKey, clientId, templateId)
             throw new Error(err.detail || 'Failed to fetch preview');
         }
         const data = await res.json();
+        assertNativeClient(res, clientId);
         if (endpoint === '/api/data/preview' && (Number(data.template_id) !== Number(templateId)
             || (data.preview_metrics?.scope && !previewMetricScopeMatches(data.preview_metrics.scope, {clientId, templateId, params})))) {
             throw new Error('Preview scope changed. Reopen the preview and retry.');
@@ -2216,6 +2274,7 @@ function prefetchNextPreviewPage(spec, data) {
 
 // ---------- FETCH PREVIEW DATA ----------
 async function fetchPreviewData() {
+    if (!nativeReadAvailable()) return;
     if (previewAccountState === 'loading' || previewAccountState === 'error'
         || (previewAccountState === 'ledger' && !previewLedgerAccountCode)) return;
     const clientId = getSelectedClientId();
@@ -2254,7 +2313,7 @@ async function fetchPreviewData() {
             requestSpec.clientId,
             requestSpec.templateId
         );
-        if (requestId !== previewRequestSequence || !isPreviewOpen) return;
+        if (requestId !== previewRequestSequence || !isPreviewOpen || Number(clientId) !== Number(getSelectedClientId())) return;
         if (previewMode === 'raw' && (Number(data.template_id) !== Number(requestSpec.templateId)
             || (data.preview_metrics?.scope && !previewMetricScopeMatches(data.preview_metrics.scope, requestSpec)))) {
             throw new Error('Preview scope changed. Reopen the preview and retry.');
@@ -2416,7 +2475,7 @@ async function renderPreviewRows(rows, requestId = previewRequestSequence) {
     // stitched back together). groupSums accumulates each amount column's
     // running total across the current group's rows, reset whenever a new
     // group starts.
-    let groupSums = {};
+    let groupSums = Object.create(null);
 
     rows.forEach((row, index) => {
         const tr = document.createElement('tr');
@@ -2432,10 +2491,14 @@ async function renderPreviewRows(rows, requestId = previewRequestSequence) {
         const isLastInGroup = previewMode === 'classification' || row.document_group_id !== nextGroupId;
 
         if (isFirstInGroup) {
-            groupSums = {};
-            previewAmountColumns.forEach(col => { groupSums[col] = 0; });
+            groupSums = Object.create(null);
+            previewAmountColumns.forEach(col => { groupSums[col] = nativeDataBank ? { coefficient: 0n, scale: 0 } : 0; });
         }
         previewAmountColumns.forEach(col => {
+            if (nativeDataBank) {
+                const value = row.numeric_text?.[col] ?? row.row_data[col];
+                groupSums[col] = addNativeExact(groupSums[col], nativeExactNumber(value == null || value === '' ? '0' : value)); return;
+            }
             const num = parseFloat(row.row_data[col]);
             if (!isNaN(num)) groupSums[col] += num;
         });
@@ -2492,7 +2555,8 @@ async function renderPreviewRows(rows, requestId = previewRequestSequence) {
             // grouping. Every column always shows that specific line's own
             // value.
             const value = row.row_data[h] !== undefined ? row.row_data[h] : '';
-            const formatted = formatCellValue(value, h);
+            const formatted = nativeDataBank && (row.numeric_text?.[h] != null || previewAmountColumns.includes(h))
+                ? String(row.numeric_text?.[h] ?? (value == null || value === '' ? '—' : value)) : formatCellValue(value, h);
             td.textContent = formatted;
 
             // Rate-derivation requirement, Phase 10 (FINAL): a small provenance
@@ -2550,7 +2614,7 @@ async function renderPreviewRows(rows, requestId = previewRequestSequence) {
                 const td = document.createElement('td');
                 td.style.padding = '6px 12px';
                 if (previewAmountColumns.includes(h)) {
-                    td.textContent = formatCellValue(groupSums[h], h);
+                    td.textContent = nativeDataBank ? nativeExactText(groupSums[h]) : formatCellValue(groupSums[h], h);
                 }
                 subtotalTr.appendChild(td);
             });
@@ -3012,6 +3076,14 @@ document.addEventListener('keydown', (e) => {
 let clientChangeTimeout;
 window.onClientChange = function(clientId) {
     clearTimeout(clientChangeTimeout);
+    if (nativeDataBank) {
+        invalidateDataBankCaches();
+        resetDatasetTables('Client changed. Loading current data…');
+        [statsTotalRecords, statsTotalTemplates, statsClientDbSize, statsOverdueUploads].forEach(el => el.textContent = '—');
+        overdueUploadsData = []; renderOverdueUploadsTable();
+        calendarRequestSequence++; closeTemplateCalendarPopover();
+        previewModal.style.display = 'none'; isPreviewOpen = false;
+    }
     previewRequestSequence++; previewOpenSequence++;
     setPreviewMetricsState();
     finishPreviewLedgerLoading(); closePreviewLedgerOptions();
@@ -3046,6 +3118,7 @@ window.onClientChange = function(clientId) {
 };
 
 async function openClassificationFromQuery() {
+    if (nativeDataBank) return;
     const query = new URLSearchParams(window.location.search);
     if (query.get('cashflows_classification') !== '1') return;
     const templateId = Number(query.get('template_id'));
@@ -3061,6 +3134,13 @@ window.onload = async function() {
     // Show feedback before session/settings initialization so the user never
     // lands on an apparently idle Client Data page.
     showClientDataLoading();
+    if (!nativeReadAvailable()) {
+        await hideClientDataLoading();
+        showStatus('Native Data Bank reads are disabled. Continue using the accepted Python application.', 'info');
+        resetDatasetTables('Data Bank reads are unavailable.');
+        document.querySelectorAll('.main-content button, .main-content input, #uploadMoreBtn').forEach(el => el.disabled = true);
+        return;
+    }
 
     // client_context.js populates the session-backed client cache from an async fetch. window.onload
     // is not a safe barrier for that (see the ready-signal note in client_context.js) -- without this

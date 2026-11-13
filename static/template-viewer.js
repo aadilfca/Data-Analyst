@@ -84,6 +84,7 @@ let currentTemplateConfig = null;
 // so the two "N of M" messages (page-size truncation vs. search narrowing) don't conflate.
 let currentTemplateRows = [];
 let lastFetchTotalRows = 0;
+let viewerRequestSequence = 0;
 
 // ---------- DOM REFS ----------
 const titleEl = document.getElementById('templateViewerTitle');
@@ -169,7 +170,8 @@ function renderTemplateData(rows, emptyMessage = 'No data found for the selected
         headers.forEach(h => {
             const td = document.createElement('td');
             const value = row.row_data[h];
-            td.textContent = (value === undefined || value === null || value === '') ? '—' : value;
+            td.textContent = window.AppNativeDataBank && row.numeric_text?.[h] != null ? row.numeric_text[h]
+                : (value === undefined || value === null || value === '') ? '—' : value;
             tr.appendChild(td);
         });
         tbody.appendChild(tr);
@@ -191,9 +193,10 @@ function applySearchAndRender() {
         // first so a numeric Amount column matches the same way a text column does; a
         // simple "contains" check, no operators (>, <, etc.) at this stage per the brief.
         visibleRows = currentTemplateRows.filter(row =>
-            Object.values(row.row_data || {}).some(value =>
-                value !== null && value !== undefined && String(value).toLowerCase().includes(term)
-            )
+            Object.entries(row.row_data || {}).some(([key, value]) => {
+                const text = window.AppNativeDataBank ? row.numeric_text?.[key] ?? value : value;
+                return text !== null && text !== undefined && String(text).toLowerCase().includes(term);
+            })
         );
     }
 
@@ -216,6 +219,7 @@ function applySearchAndRender() {
 
 // ---------- FETCH ----------
 async function fetchTemplateData() {
+    if (window.AppNativeDataBank && !window.AppNativeDataBank.enabled) return;
     if (!currentTemplateConfig) {
         // No valid template — the toolbar is already inert in this state (see
         // window.onload), so this should not be reachable, but guard anyway.
@@ -232,6 +236,9 @@ async function fetchTemplateData() {
 
     const start = tvStartDateInput.value;
     const end = tvEndDateInput.value;
+    const sequence = ++viewerRequestSequence;
+    const current = () => sequence === viewerRequestSequence && Number(clientId) === Number(window.getSelectedClientId?.())
+        && start === tvStartDateInput.value && end === tvEndDateInput.value;
     if (!start || !end) {
         setStatusMessage('⚠️ Please select both a start and end date.');
         return;
@@ -242,6 +249,7 @@ async function fetchTemplateData() {
     }
 
     setStatusMessage('');
+    currentTemplateRows = []; lastFetchTotalRows = 0;
     setViewerState('loading');
 
     const params = new URLSearchParams({
@@ -260,6 +268,9 @@ async function fetchTemplateData() {
             throw new Error(err.detail || 'Failed to fetch template data');
         }
         const data = await res.json();
+        if (!current()) return;
+        if (window.AppNativeDataBank && (res.headers.get('X-DataBank-Client') !== String(clientId)
+            || Number(data.client_id) !== Number(clientId) || Number(data.template_id) !== currentTemplateId)) throw new Error('Data scope changed. Fetch again.');
         // Phase 4: store the fetch result rather than rendering it directly — search
         // needs to be able to re-filter this same set with no new request, whether the
         // user just typed something or this is a fresh fetch with a search term already
@@ -268,6 +279,7 @@ async function fetchTemplateData() {
         lastFetchTotalRows = data.total_rows;
         applySearchAndRender();
     } catch (error) {
+        if (!current()) return;
         console.error('Template Viewer fetch error:', error);
         setStatusMessage('❌ Error: ' + error.message);
         setViewerState('empty');
@@ -292,6 +304,12 @@ tvSearchInput.addEventListener('input', applySearchAndRender);
 // deciding which of the two branches below applies - everything else in each branch is
 // unchanged from before this fix.
 window.onload = async function () {
+    if (window.AppNativeDataBank && !window.AppNativeDataBank.enabled) {
+        setStatusMessage('Native Data Bank reads are disabled. Continue using the accepted Python application.');
+        [tvFetchBtn, tvStartDateInput, tvEndDateInput, tvSearchInput].forEach(el => el.disabled = true);
+        setViewerState('empty'); tvEmptyState.textContent = 'Data Bank reads are unavailable.'; return;
+    }
+    if (window.clientContextReady) await window.clientContextReady;
     const params = new URLSearchParams(window.location.search);
     const templateParam = params.get('template');
     const templateId = Number(templateParam);
@@ -332,3 +350,10 @@ window.onload = async function () {
         setViewerState('empty');
     }
 };
+window.onClientChange = function () {
+    viewerRequestSequence++; currentTemplateRows = []; lastFetchTotalRows = 0;
+    setViewerState('empty'); tvEmptyState.textContent = 'Client changed. Fetch to load the selected client.';
+};
+window.addEventListener('focus', () => {
+    if (window.AppNativeDataBank?.enabled && currentTemplateConfig) void fetchTemplateData();
+});
