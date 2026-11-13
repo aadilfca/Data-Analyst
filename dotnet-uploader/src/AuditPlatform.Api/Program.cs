@@ -143,8 +143,24 @@ builder.Services.AddOptions<DataIntegrityOptions>()
     .Bind(builder.Configuration.GetSection(DataIntegrityOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
 builder.Services.AddSingleton<AuditPlatform.Api.DataIntegrity.DatabaseSafeguardService>();
 builder.Services.AddSingleton<AuditPlatform.Api.DataIntegrity.DataIntegrityService>();
+builder.Services.AddOptions<StorageCleanupOptions>()
+    .Bind(builder.Configuration.GetSection(StorageCleanupOptions.SectionName)).ValidateDataAnnotations()
+    .Validate(o=>o.ValidKey(),"Enabled cleanup requires a base64 signing key of 32–64 bytes.").ValidateOnStart();
+builder.Services.AddSingleton<AuditPlatform.Api.StorageCleanup.StorageCleanupService>();
+builder.Services.AddSingleton<AuditPlatform.Api.StorageCleanup.StoragePurgeService>();
+builder.Services.AddSingleton<AuditPlatform.Api.StorageCleanup.StorageArtifactCleanupService>();
+builder.Services.AddHostedService<AuditPlatform.Api.StorageCleanup.StorageCleanupWorker>();
 
 var app = builder.Build();
+var cleanupOptions=app.Services.GetRequiredService<IOptions<StorageCleanupOptions>>().Value;
+if(cleanupOptions.Enabled&&!app.Services.GetRequiredService<IOptions<DataBankOptions>>().Value.Enabled
+    ||cleanupOptions.PurgeEnabled&&(!cleanupOptions.Enabled
+        ||!app.Services.GetRequiredService<IOptions<DataBankOptions>>().Value.HistoryEnabled
+        ||!app.Services.GetRequiredService<IOptions<DataBankExportOptions>>().Value.Enabled
+        ||!app.Services.GetRequiredService<IOptions<UploadStagingOptions>>().Value.Enabled)
+    ||cleanupOptions.ArtifactWorkerEnabled&&(!cleanupOptions.Enabled||!cleanupOptions.PurgeEnabled))
+    throw new OptionsValidationException(StorageCleanupOptions.SectionName,typeof(StorageCleanupOptions),
+        ["Cleanup requires scoped Data Bank reads; purge additionally requires complete backups and owned staging. Artifact recovery requires purge."]);
 if (app.Services.GetRequiredService<IOptions<DataIntegrityOptions>>().Value.Enabled
     && (!app.Services.GetRequiredService<IOptions<ApplicationShellOptions>>().Value.Enabled
         || !app.Services.GetRequiredService<IOptions<PostgresOptions>>().Value.Enabled))
@@ -241,6 +257,7 @@ app.UseRouting();
 app.UseMiddleware<SessionAuthenticationHandler>();
 app.UseWhen(context => context.RequestServices.GetRequiredService<IOptions<AuthenticationOptions>>().Value.Enabled
     && (context.Request.Path.StartsWithSegments("/api/auth")
+    || context.Request.Path.StartsWithSegments("/api/storage-cleanup")
     || context.Request.Path.StartsWithSegments("/api/users")
     || context.Request.Path.StartsWithSegments("/api/clients")
     || context.Request.Path.StartsWithSegments("/api/settings")

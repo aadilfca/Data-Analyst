@@ -248,6 +248,7 @@ function renderPreview(preview) {
 }
 
 async function loadPreview() {
+    if (window.AppNativeStorageCleanup) { await loadNativeCleanup(); return; }
     clearError();
     currentPreviewHash = '';
     updateApplyState();
@@ -268,6 +269,7 @@ async function loadPreview() {
 }
 
 async function applyIndexMaintenance(event) {
+    if (window.AppNativeStorageCleanup) return;
     clearError();
     const button = event.currentTarget;
     const indexName = button.dataset.indexName;
@@ -313,6 +315,7 @@ async function applyIndexMaintenance(event) {
 }
 
 async function applyCleanup() {
+    if (window.AppNativeStorageCleanup) return;
     clearError();
     if (!currentPreviewHash || confirmationInput.value !== CONFIRMATION_TEXT) return;
     if (!window.confirm('Apply this fresh cleanup preview? Protected data will be retained.')) return;
@@ -361,3 +364,96 @@ indexReviewBody.addEventListener('click', event => {
     if (button) applyIndexMaintenance({ currentTarget: button });
 });
 window.addEventListener('load', loadPreview);
+
+// Native hosting has its own bounded scope. It never falls through to global
+// legacy cleanup or index-maintenance requests, including when disabled.
+let nativeCleanupSequence = 0;
+let nativeCleanupPreview = null;
+let nativeCleanupBusy = false;
+const nativeCleanupStatus = document.getElementById('nativeCleanupStatus');
+const nativeCleanupSelect = document.getElementById('nativeCleanupTemplate');
+const nativeCleanupApply = document.getElementById('nativeCleanupApply');
+const nativeCleanupConfirm = document.getElementById('nativeCleanupConfirmation');
+function nativeCleanupApplyState() {
+    nativeCleanupApply.disabled = nativeCleanupBusy || !nativeCleanupPreview?.can_apply || nativeCleanupConfirm.value !== 'DELETE APPROVED VALIDATION PLANS';
+}
+async function loadNativeCleanup() {
+    const sequence = ++nativeCleanupSequence;
+    nativeCleanupPreview = null; nativeCleanupConfirm.value = ''; nativeCleanupApplyState();
+    document.querySelectorAll('.cleanup-card,.cleanup-note').forEach(node => { if (node.id !== 'nativeCleanupPanel') node.hidden = true; });
+    document.getElementById('nativeCleanupPanel').hidden = false;
+    document.getElementById('nativeCleanupCounts').textContent = '';
+    if (!window.AppNativeStorageCleanup.enabled || !window.AppNativeStorageCleanup.canApply) {
+        nativeCleanupStatus.textContent = 'Native storage cleanup is disabled or unavailable for your access.';
+        document.getElementById('nativeCleanupRefresh').disabled = true; nativeCleanupSelect.disabled = true; return;
+    }
+    if (window.clientContextReady) await window.clientContextReady;
+    const client = Number(getSelectedClientId());
+    if (!client) { nativeCleanupStatus.textContent = 'Choose a client before checking cleanup.'; return; }
+    nativeCleanupStatus.textContent = 'Checking the selected client…';
+    try {
+        const scopes = await window.ApiUtils.apiFetch(`/api/storage-cleanup/scopes?client_id=${client}`, { cache: 'no-store' });
+        if (!scopes.ok) throw new Error('Cleanup access or configuration needs review.');
+        const body = await scopes.json();
+        if (sequence !== nativeCleanupSequence || client !== Number(getSelectedClientId()) || body.client_id !== client) return;
+        const previous = nativeCleanupSelect.value;
+        nativeCleanupSelect.replaceChildren();
+        body.templates.forEach(template => { const option = document.createElement('option'); option.value = template.id; option.textContent = template.name; nativeCleanupSelect.appendChild(option); });
+        if ([...nativeCleanupSelect.options].some(option => option.value === previous)) nativeCleanupSelect.value = previous;
+        const template = Number(nativeCleanupSelect.value);
+        if (!template) { nativeCleanupStatus.textContent = 'No native templates are available for this client.'; return; }
+        const params = new URLSearchParams({ client_id: client, template_id: template });
+        const [preview, recent] = await Promise.all([
+            window.ApiUtils.apiFetch(`/api/storage-cleanup/preview?${params}&kind=plans`, { cache: 'no-store' }),
+            window.ApiUtils.apiFetch(`/api/storage-cleanup/operations?${params}`, { cache: 'no-store' })
+        ]);
+        if (!preview.ok || !recent.ok) throw new Error('Cleanup evidence is unavailable. No cleanup was submitted.');
+        const data = await preview.json(), operations = await recent.json();
+        if (sequence !== nativeCleanupSequence || client !== Number(getSelectedClientId()) || template !== Number(nativeCleanupSelect.value)) return;
+        if (data.client_id !== client || data.template_id !== template || data.kind !== 'plans') throw new Error('Cleanup scope changed. Refresh to continue.');
+        nativeCleanupPreview = data;
+        document.getElementById('nativeCleanupCounts').textContent = `${Number(data.counts.upload_validation_plans).toLocaleString()} temporary plans are eligible.`;
+        nativeCleanupStatus.textContent = data.can_apply ? `Fresh preview checked ${new Date(data.generated_at).toLocaleString()}.` : 'Active work or stored data needs review; cleanup is blocked.';
+        const list = document.getElementById('nativeCleanupRecent'); list.replaceChildren();
+        operations.forEach(operation => {
+            const row = document.createElement('p');
+            row.textContent = `${new Date(operation.completed_at).toLocaleString()} · ${operation.kind === 'purge' ? 'Stored data deleted' : 'Temporary plans removed'} · ${operation.artifact_status === 'complete' ? 'Artifact cleanup complete' : operation.artifact_status === 'pending' ? 'Temporary-file cleanup pending' : 'Temporary-file cleanup needs review'}`;
+            list.appendChild(row);
+        });
+        if (!operations.length) list.textContent = 'No completed cleanup operations for this template.';
+    } catch (error) {
+        if (sequence === nativeCleanupSequence) { nativeCleanupPreview = null; nativeCleanupStatus.textContent = error.message; document.getElementById('nativeCleanupRecent').replaceChildren(); }
+    } finally { if (sequence === nativeCleanupSequence) nativeCleanupApplyState(); }
+}
+async function applyNativePlanCleanup() {
+    if (nativeCleanupBusy || nativeCleanupApply.disabled || !nativeCleanupPreview) return;
+    const preview = nativeCleanupPreview, client = preview.client_id, template = preview.template_id;
+    if (client !== Number(getSelectedClientId()) || template !== Number(nativeCleanupSelect.value)) return;
+    nativeCleanupBusy = true; nativeCleanupApplyState(); nativeCleanupStatus.textContent = 'Submitting the confirmed cleanup…';
+    const operation = crypto.randomUUID();
+    // Only compact recovery handles are retained, never source rows or credentials.
+    try { sessionStorage.setItem('native-cleanup-operation', JSON.stringify({ operation_id: operation, client_id: client, template_id: template })); } catch (_) {}
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 75000);
+    try {
+        const response = await window.ApiUtils.apiFetchMutate(`/api/storage-cleanup/apply?client_id=${client}&template_id=${template}&kind=plans`, {
+            method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ operation_id: operation, preview_token: preview.preview_token, confirmation: nativeCleanupConfirm.value })
+        });
+        const result = await response.json();
+        if (!response.ok || result.operation_id !== operation) throw new Error('Cleanup was not confirmed. Refresh to check recorded outcomes before retrying.');
+        try { sessionStorage.removeItem('native-cleanup-operation'); } catch (_) {}
+        nativeCleanupStatus.textContent = 'Temporary-plan cleanup committed.';
+    } catch (error) { nativeCleanupStatus.textContent = error.name === 'AbortError' ? 'Outcome not confirmed; refresh to check recorded outcomes before retrying.' : error.message || 'Outcome not confirmed; check recorded outcomes before retrying.'; }
+    finally { clearTimeout(timer); nativeCleanupBusy = false; nativeCleanupPreview = null; nativeCleanupConfirm.value = ''; nativeCleanupApplyState(); }
+}
+nativeCleanupConfirm.addEventListener('input', nativeCleanupApplyState);
+nativeCleanupApply.addEventListener('click', applyNativePlanCleanup);
+nativeCleanupSelect.addEventListener('change', () => { if (!nativeCleanupBusy) void loadNativeCleanup(); });
+document.getElementById('nativeCleanupRefresh').addEventListener('click', () => { if (!nativeCleanupBusy) void loadNativeCleanup(); });
+window.addEventListener('focus', () => { if (window.AppNativeStorageCleanup?.enabled && !nativeCleanupBusy) void loadNativeCleanup(); });
+document.addEventListener('visibilitychange', () => {
+    if (!window.AppNativeStorageCleanup) return;
+    ++nativeCleanupSequence; nativeCleanupPreview = null; nativeCleanupApplyState();
+    if (document.visibilityState === 'visible' && !nativeCleanupBusy) void loadNativeCleanup();
+});

@@ -5,38 +5,50 @@ using AuditPlatform.Api.Configuration;
 using AuditPlatform.Api.Data;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using AuditPlatform.Api.StorageCleanup;
 
 namespace AuditPlatform.Api.DataBank;
 
 public sealed class DataBankExportService(PostgresReadSnapshot snapshots, DataBankService reads,
-    IOptions<DataBankOptions> dataBank, IOptions<DataBankExportOptions> options, TimeProvider? clock = null)
+    IOptions<DataBankOptions> dataBank, IOptions<DataBankExportOptions> options, TimeProvider? clock = null, StorageCleanupService? cleanup = null)
 {
     private readonly SemaphoreSlim requests = new(options.Value.MaximumConcurrentRequests);
-    public async Task<DataBankDownload> DownloadAsync(VerifiedSession? session, DataBankQuery query, bool backup, CancellationToken ct = default)
+    public async Task<DataBankDownload> DownloadAsync(VerifiedSession? session, DataBankQuery query, bool backup, CancellationToken ct = default, bool forPurge = false)
     {
         if (!options.Value.Enabled || !dataBank.Value.Enabled || backup && !dataBank.Value.HistoryEnabled)
             return new("unavailable", Code: "databank_exports_disabled");
         if (session is null) return new("unauthenticated", Code: "not_authenticated");
+        if(forPurge&&(!backup||cleanup?.EnabledForPurge!=true)) return new("unavailable",Code:"cleanup_disabled");
         if (query.TemplateId is not > 0 || !DataBankService.Valid(query with { Operation = backup ? "accounts" : "preview", Page = 1, Limit = 50 }))
             return new("invalid", Code: "invalid_export_scope");
         if (!await requests.WaitAsync(0, ct)) return new("busy", Code: "databank_export_busy");
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct); deadline.CancelAfter(TimeSpan.FromSeconds(options.Value.TimeoutSeconds));
         try
         {
-            var input = await snapshots.ExecuteAsync(async (db, token) =>
+            var captured = await snapshots.ExecuteAsync(async (db, token) =>
             {
                 await DataBankService.Authorize(db, session, query.ClientId, token, admin: backup);
                 var t = await reads.TemplateWithin(db, session.TenantId!.Value, query.TemplateId.Value, token);
-                return await Capture(db, query, t, backup, options.Value, (clock ?? TimeProvider.System).GetUtcNow(), token);
+                CleanupCapture? proof=null;
+                if(forPurge)
+                {
+                    proof=await cleanup!.CaptureWithin(db,session,query.ClientId,t.Id,"purge",token);
+                    if(proof.Blockers.Count>0) throw new CleanupRejected("conflict","cleanup_protected_or_review_required");
+                }
+                return (Workbook:await Capture(db, query, t, backup, options.Value, (clock ?? TimeProvider.System).GetUtcNow(), token),Proof:proof);
             }, deadline.Token);
+            var input=captured.Workbook;
             // ZIP/XML work runs after the input snapshot has closed. All inputs are
             // bounded and request-local, with no stored artifacts or shared files.
             byte[] bytes = DataBankWorkbookWriter.Write(input, options.Value, deadline.Token);
             await snapshots.ExecuteAsync(async (db, token) => { await DataBankService.Authorize(db, session, query.ClientId, token, admin: backup); return true; }, deadline.Token);
             string name = new(input.Template.Name.Select(c => c < ' ' || "<>:\"/\\|?*".Contains(c) ? '_' : c).Take(100).ToArray());
-            return new("success", bytes, $"{name}_{(backup ? "backup" : "matching")}_{input.CapturedAt.UtcDateTime:yyyy-MM-dd}.xlsx");
+            deadline.Token.ThrowIfCancellationRequested();
+            return new("success", bytes, $"{name}_{(backup ? "backup" : "matching")}_{input.CapturedAt.UtcDateTime:yyyy-MM-dd}.xlsx",
+                PurgeProof:captured.Proof is null?null:cleanup!.Sign(session,captured.Proof,"backup"));
         }
         catch (DataBankRejected error) { return new(error.Status, Code: error.Code); }
+        catch (CleanupRejected error) { return new(error.Status, Code: error.Code); }
         catch (InvalidDataException) { return new("too_large", Code: "complete_workbook_exceeds_limits_or_contains_unsupported_cells"); }
         catch (PostgresException error) when (error.SqlState is "42P01" or "42703") { return new("review", Code: "export_schema_review_required"); }
         catch (PostgresException error) when (error.SqlState is "57014" or "55P03") { return new("timeout", Code: "export_database_timeout"); }

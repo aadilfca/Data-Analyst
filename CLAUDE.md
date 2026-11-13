@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- dotnet-uploader/ → Disabled tenant/configuration/upload/Data Bank/Data Integrity APIs, bounded workbooks, guarded imports and durable jobs. See CHANGELOG_ARCHIVE.md.
+- dotnet-uploader/ → Disabled tenant/configuration/upload/data APIs, bounded workbooks, durable jobs and scoped storage cleanup. See CHANGELOG_ARCHIVE.md.
 
 - routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, statements, category-role notes with unallocated rows, profit links, reconciliations, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
 
@@ -29,7 +29,7 @@ One line per file group: what it is now. Full build history for every entry live
 - database.py (users/sessions) → authenticated users and session records for Login → Client Cards → Dashboard; bcrypt, session-stored selected client, seeded placeholder admin. See CHANGELOG_ARCHIVE.md.
 - routers/auth.py → login/logout, current-session lookup, client selection, `get_current_user()`/`require_admin()` guards; timezone-aware session expiry. See CHANGELOG_ARCHIVE.md.
 - routers/users.py → Admin user management (list/create/edit/deactivate/reactivate/reset password); every endpoint `require_admin`, mutations SQLite-audited. See CHANGELOG_ARCHIVE.md.
-- routers/storage_cleanup.py + services/storage_cleanup.py + static/storage_cleanup.* → Guarded deletion, exact-scope finalization, allocation diagnostics and separately approved PostgreSQL maintenance. See CHANGELOG_ARCHIVE.md.
+- routers/storage_cleanup.py + services/storage_cleanup.py + static/storage_cleanup.* → Guarded cleanup, native scoped outcomes, legacy allocation diagnostics and separately approved PostgreSQL maintenance. See CHANGELOG_ARCHIVE.md.
 - static/users.html, static/users.js → firm-level Manage Users UI (sortable/searchable rows, add/edit, deactivate, password reset); shared Admin header/tab strip. See CHANGELOG_ARCHIVE.md.
 - static/login.html, static/login.js, static/app_info.html, static/privacy.html, static/terms.html, static/public_info.css → Login and public application/policy pages. See CHANGELOG_ARCHIVE.md.
 - static/client_select.html, static/client_select.js → standalone Client Cards page with guarded selection, admin entry, and loading feedback. See CHANGELOG_ARCHIVE.md.
@@ -269,7 +269,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
-- 2026-11-13: Added default-off native Data Bank history/downloads and Data Integrity checks; locally accepted. See CHANGELOG_ARCHIVE.md, Data Integrity P32.
+- 2026-11-13: Added default-off scoped native purge, backup proofs and artifact recovery; locally accepted. See CHANGELOG_ARCHIVE.md, Storage cleanup P33.
 - 2026-11-12: Added typed .NET workbook reading and synthetic Python/browser parity checks; locally accepted. See CHANGELOG_ARCHIVE.md, Workbook reader P17.
 - 2026-11-12: Added disabled owner-bound .NET upload staging, header discovery and expiry recovery; locally accepted. See CHANGELOG_ARCHIVE.md, Upload staging P16.
 - 2026-11-12: Added disabled tenant configuration backup, preview and guarded restore; locally accepted. See CHANGELOG_ARCHIVE.md, Configuration backup P15.

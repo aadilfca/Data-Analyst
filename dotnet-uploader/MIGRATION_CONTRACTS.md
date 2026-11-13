@@ -311,6 +311,13 @@ This list records discussion, not blanket authorization to activate policies. Re
 - Sizes remain estimates: Client Data preserves the legacy character-count/row-overhead basis; upload metadata preserves per-row composite-size projections. Arbitrary legacy source files are unmeasured; invalid/foreign upload links are counted without including foreign metadata. Administrator allocation totals are shared samples, not client usage, snapshot-exact storage or reclaimable bytes.
 - Retained tabs/navigation support native disabled, refresh/focus, unavailable-evidence and late-response guards while preserving Python hosting. Passed certifies only the listed baseline, not every upload prerequisite, physical index entries, all values, query speed or storage efficiency. Shared catalog/corpus/scale review and live activation remain separate gates. See CHANGELOG_ARCHIVE.md, Data Integrity P32.
 
+### P33 storage cleanup boundary
+
+- Default-off native cleanup permits selected-home-client administrators to remove eligible temporary plans or one template's current/history/upload dependencies. Unknown ownership, protected evidence, active jobs, transfer grace and unreviewed schema block. Whole-client/global maintenance and compaction remain separately gated.
+- Five-minute actor/context/scope-bound preview and completed-backup proofs must match a fresh locked fingerprint; exact typed confirmation precedes one atomic delete. Complete current/history download starts first; initiation cannot certify a saved external copy. Preserve other scopes, Trial Balance, reusable configuration and indexes.
+- One apply, 60 seconds, 100,000 evidence rows, 32 MiB captured input, 128 KiB responses and 256 generated artifacts by default. Compact immutable outcomes permit same-request reconciliation without replay; retain at most 1,024 operations per scope before review.
+- Post-commit private artifact work uses fenced 150-second leases, 120-second transfers and three attempts. Restart never repeats accounting deletion; pending/review statuses remain explicit. Candidate `0017` is isolated-test only; native flags and startup/live DDL remain off. See CHANGELOG_ARCHIVE.md, Storage cleanup P33.
+
 ## 3. PostgreSQL and financial values
 
 | Contract | Required behavior |

@@ -8,7 +8,7 @@ public sealed record DataBankQuery(string Operation, int ClientId, int? Template
     string? Account = null, bool Metrics = false, int? Year = null, int? Month = null, int[]? TemplateIds = null,
     string Action = "all", int? RowId = null, string RevisionSource = "uploads");
 public sealed record DataBankResult(string Status, object? Value = null, string? Code = null);
-public sealed record DataBankDownload(string Status, byte[]? Bytes = null, string? Name = null, string? Code = null);
+public sealed record DataBankDownload(string Status, byte[]? Bytes = null, string? Name = null, string? Code = null, string? PurgeProof = null);
 internal sealed record DataBankStoredRow(int Id, string Raw, string? Metadata = null, string? Account = null, string? AccountName = null);
 internal sealed record DataBankStoredHistory(int Id, int RowId, string Action, string? At, string? Actor,
     int? SourceUpload, int? ReplacingUpload, string Raw, string? Changes, string? Account, string? AccountName, string? Metadata);

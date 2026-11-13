@@ -388,6 +388,19 @@ public sealed class UploadStagingService(PostgresTransactions transactions,Postg
         }
     }
 
+    // P33 persists generated keys only, after the database purge commits. Never
+    // accept a browser path or move cleanup to a differently configured root.
+    internal string PurgeStorageIdentity()=>Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(
+        Path.GetFullPath(options.Value.RootDirectory).TrimEnd(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar)))).ToLowerInvariant();
+    internal async Task CleanupPurgedAsync(Guid key,string identity,bool restores,long version,CancellationToken ct)
+    {
+        if(!options.Value.Enabled||string.IsNullOrWhiteSpace(options.Value.RootDirectory)||identity!=PurgeStorageIdentity()||key==Guid.Empty)
+            throw new IOException("Purge staging ownership requires review");
+        ct.ThrowIfCancellationRequested();
+        if(restores) await CleanupJobRestoresAsync(key,version,ct);
+        else foreach(string suffix in new[]{".part",".bin"}) {ct.ThrowIfCancellationRequested();File.Delete(FilePath(key,suffix));}
+    }
+
     private IReadOnlyList<StagedSheet> Discover(string path,string extension,CancellationToken ct)
     {
         var value=options.Value;

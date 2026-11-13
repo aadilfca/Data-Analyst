@@ -58,6 +58,24 @@
             <h1>🧹 Storage Cleanup</h1>
             <p>Review database storage before any administrator-approved cleanup.</p>
         </header>
+        <section id="nativeCleanupPanel" class="cleanup-card" hidden>
+            <h2>Selected-client cleanup</h2>
+            <p>Remove eligible temporary validation plans for one template. To remove stored data, use Data Bank’s backup-and-delete action. Shared log deletion, index changes and compaction are unavailable here.</p>
+            <p id="nativeCleanupStatus" role="status" aria-live="polite"></p>
+            <p><a href="/static/client_select.html">Choose a client</a> · <a href="/static/databank.html">Open Data Bank</a></p>
+            <div class="cleanup-toolbar">
+                <label>Template <select id="nativeCleanupTemplate" aria-label="Cleanup template"></select></label>
+                <button type="button" id="nativeCleanupRefresh" class="cleanup-button">Refresh preview</button>
+            </div>
+            <p id="nativeCleanupCounts"></p>
+            <label>Type exactly: DELETE APPROVED VALIDATION PLANS
+                <input id="nativeCleanupConfirmation" type="text" autocomplete="off" spellcheck="false" aria-label="Validation plan cleanup confirmation">
+            </label>
+            <button type="button" id="nativeCleanupApply" class="cleanup-button cleanup-delete-button" disabled>Remove eligible plans</button>
+            <h3>Recent cleanup outcomes</h3>
+            <p>These outcomes distinguish committed database deletion from unfinished temporary-file cleanup. Refresh to check again.</p>
+            <div id="nativeCleanupRecent"></div>
+        </section>
         <div class='cleanup-note cleanup-danger'><strong>Development mode:</strong> backup-before-cleanup is not enforced yet. Use the fresh preview and exact confirmation only while testing deletion behavior.</div>
         <div class="cleanup-note"><strong>Protected data:</strong> current Data Bank rows, Verification details, Trial Balance data, linked evidence, and in-app Audit Rules configuration are not cleanup candidates. Cleanup removes only the approved candidates shown in a fresh preview. Index review, reindexing, dropping, and VACUUM/compaction remain separate explicit actions.</div>
         <div id="cleanupError" class="cleanup-error"></div>
@@ -133,7 +151,8 @@
         </section>
     </div>
     <script src="/static/client_context.js?v=29"></script>
-    <script src="/static/storage_cleanup.js?v=6"></script>
+    <script src="/static/api_utils.js?v=1"></script>
+    <script src="/static/storage_cleanup.js?v=7"></script>
 </body>
 
 </html>

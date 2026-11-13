@@ -1291,6 +1291,7 @@
         </div>
     </div>
 
+    <div id="nativePurgeRecovery" hidden role="status" aria-live="polite"></div>
     <div id="templateDeleteModal" class="preview-modal" role="dialog" aria-modal="true"
         aria-labelledby="templateDeleteTitle"
         style="display:none; position:fixed; inset:0; background:rgba(15,23,42,.58); z-index:1300; justify-content:center; align-items:center;">
@@ -1306,6 +1307,12 @@
             </p>
             <div id="templateDeleteStatus" role="status" aria-live="polite"
                 style="display:none; margin-top:12px; color:#475569;"></div>
+            <div id="nativePurgeConfirmationPanel" hidden>
+                <p>The backup download will start before deletion. This cannot confirm that you saved the file.</p>
+                <label>Type exactly: PERMANENTLY DELETE SELECTED DATA
+                    <input id="nativePurgeConfirmation" type="text" autocomplete="off" spellcheck="false" aria-label="Permanent data deletion confirmation">
+                </label>
+            </div>
             <div class="delete-backup-actions">
                 <button type="button" id="cancelTemplateDeleteBtn" class="delete-backup-cancel">Cancel</button>
                 <button type="button" id="backupAndDeleteTemplateBtn" class="delete-backup-primary">
@@ -1432,7 +1439,7 @@
     <script src="/static/loading_ui.js?v=2"></script>
     <script src="/static/client_context.js?v=29"></script>
     <script src="/static/api_utils.js?v=1"></script>
-    <script src="/static/databank.js?v=16"></script>
+    <script src="/static/databank.js?v=17"></script>
 </body>
 
 </html>

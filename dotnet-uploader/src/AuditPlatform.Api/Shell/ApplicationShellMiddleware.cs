@@ -18,7 +18,7 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
     public async Task InvokeAsync(HttpContext context, IOptions<ApplicationShellOptions> options,
         TenantSessionService tenants, AuditPlatform.Api.Clients.TenantClientService clients,
         IOptions<SettingsManagementOptions> settings,IOptions<ColumnManagementOptions> columns,IOptions<TemplateManagementOptions> templates,IOptions<SavedMappingOptions> mappings,
-        IOptions<ConfigurationBackupOptions> backups,IOptions<UploadUiOptions> uploadUi,IOptions<UploadStagingOptions> staging,IOptions<DataBankOptions> dataBank,IOptions<DataBankExportOptions> dataExports,IOptions<DataIntegrityOptions> integrity)
+        IOptions<ConfigurationBackupOptions> backups,IOptions<UploadUiOptions> uploadUi,IOptions<UploadStagingOptions> staging,IOptions<DataBankOptions> dataBank,IOptions<DataBankExportOptions> dataExports,IOptions<DataIntegrityOptions> integrity,IOptions<StorageCleanupOptions> cleanup)
     {
         if (!options.Value.Enabled) { await next(context); return; }
         var path=context.Request.Path.Value ?? "/";
@@ -31,6 +31,7 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
         var boundApi=context.Request.Path.StartsWithSegments("/api/users")
             || context.Request.Path.StartsWithSegments("/api/data")
             || context.Request.Path.StartsWithSegments("/api/data-integrity")
+            || context.Request.Path.StartsWithSegments("/api/storage-cleanup")
             || context.Request.Path.StartsWithSegments("/api/clients")
             || context.Request.Path.StartsWithSegments("/api/settings")
             || context.Request.Path.StartsWithSegments("/api/columns")
@@ -117,6 +118,7 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
         script=script.Replace(" data-backups-enabled=",$" data-upload-enabled=\"{(uploadUi.Value.Enabled?"true":"false")}\" data-upload-limit=\"{staging.Value.MaximumFileBytes}\" data-backups-enabled=",StringComparison.Ordinal);
         script=script.Replace(" data-backups-enabled=",$" data-databank-enabled=\"{(dataBank.Value.Enabled?"true":"false")}\" data-backups-enabled=",StringComparison.Ordinal);
         script=script.Replace(" data-backups-enabled=",$" data-integrity-enabled=\"{(integrity.Value.Enabled?"true":"false")}\" data-backups-enabled=",StringComparison.Ordinal);
+        script=script.Replace(" data-backups-enabled=",$" data-cleanup-enabled=\"{(cleanup.Value.Enabled?"true":"false")}\" data-purge-enabled=\"{(cleanup.Value.PurgeEnabled?"true":"false")}\" data-backups-enabled=",StringComparison.Ordinal);
         script=script.Replace(" data-backups-enabled=",$" data-history-enabled=\"{(dataBank.Value.HistoryEnabled?"true":"false")}\" data-exports-enabled=\"{(dataExports.Value.Enabled?"true":"false")}\" data-export-limit=\"{dataExports.Value.MaximumWorkbookBytes}\" data-backups-enabled=",StringComparison.Ordinal);
         if(!shell && file=="upload.html")
         {

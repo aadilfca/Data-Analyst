@@ -1480,7 +1480,7 @@ function buildDatasetActionButtons(item) {
     deleteBtn.addEventListener('click', () => {
         deleteTemplateData(item.template_id, item.template_name, deleteBtn);
     });
-    if (!nativeDataBank) tdActions.appendChild(deleteBtn);
+    if (!nativeDataBank || nativePurgeAvailable()) tdActions.appendChild(deleteBtn);
 
     // History remains available when a complete upload has removed every active
     // row from this template; that is when users may need the deletion record most.
@@ -1607,6 +1607,7 @@ async function renderFilteredYourDatasetsTable(progressTarget = null) {
 }
 
 function deleteTemplateData(templateId, templateName, triggerTarget = null) {
+    if (nativeDataBank && !nativePurgeAvailable()) return;
     const clientId = getSelectedClientId();
     if (!clientId) {
         showStatus('⚠️ No client selected.', 'error');
@@ -1626,6 +1627,11 @@ function deleteTemplateData(templateId, templateName, triggerTarget = null) {
     cancelTemplateDeleteBtn.disabled = false;
     closeTemplateDeleteBtn.disabled = false;
     templateDeleteModal.style.display = 'flex';
+    if (nativeDataBank) {
+        document.getElementById('nativePurgeConfirmationPanel').hidden = false;
+        document.getElementById('nativePurgeConfirmation').value = '';
+        backupAndDeleteTemplateBtn.disabled = true;
+    }
     backupAndDeleteTemplateBtn.focus();
 }
 
@@ -1711,6 +1717,7 @@ function downloadTemplateBackup(templateName, templateColumns, currentRows, hist
 }
 
 async function runTemplateBackupAndDelete() {
+    if (nativeDataBank) { await runNativeTemplatePurge(); return; }
     if (!pendingTemplateDelete) return;
     const { clientId, templateId, templateName, triggerTarget } = pendingTemplateDelete;
     const key = String(templateId);
@@ -2929,6 +2936,9 @@ closeHistoryBtn.addEventListener('click', () => {
     historyModal.style.display = 'none';
 });
 function closeTemplateDeleteModal() {
+    if (nativeDataBank && nativePurgeController && !nativePurgePostStarted) {
+        nativePurgeSequence++; nativePurgeController.abort(); templateDeleteModal.style.display = 'none'; pendingTemplateDelete = null; return;
+    }
     if (pendingTemplateDelete && deleteTemplateInFlight.has(String(pendingTemplateDelete.templateId))) return;
     templateDeleteModal.style.display = 'none';
     pendingTemplateDelete = null;
@@ -3192,6 +3202,8 @@ let clientChangeTimeout;
 window.onClientChange = function(clientId) {
     clearTimeout(clientChangeTimeout);
     if (nativeDataBank) {
+        if (nativePurgeController && !nativePurgePostStarted) { nativePurgeSequence++; nativePurgeController.abort(); }
+        templateDeleteModal.style.display = 'none'; pendingTemplateDelete = null;
         cancelNativeDownload(); historyRequestSequence++; historyModal.style.display = 'none'; hideRowHistoryPopover();
         invalidateDataBankCaches();
         resetDatasetTables('Client changed. Loading current data…');
@@ -3251,6 +3263,128 @@ document.getElementById('nativeDownloadCancel').addEventListener('click', cancel
 previewModal.addEventListener('input', updateNativeExportButton);
 previewModal.addEventListener('change', updateNativeExportButton);
 window.addEventListener('focus', () => { if (nativeDataBank?.history && historyModal.style.display === 'flex') void fetchUploadHistory(historyPage); });
+
+// P33 is a separate native path. Legacy paged/browser-built backups and purge
+// URLs above remain Python-only. No write is automatically retried.
+let nativePurgeController = null;
+let nativePurgeSequence = 0;
+let nativePurgePostStarted = false;
+let nativePurgeRecoveryBusy = false;
+function nativePurgeAvailable() {
+    const capability = window.AppNativeStorageCleanup;
+    return !!(capability?.enabled && capability.purge && capability.canApply && nativeDataBank?.exports && nativeDataBank.history && nativeDataBank.canBackup);
+}
+function nativePurgeMessage(operation) {
+    return operation.artifact_status === 'complete' ? 'Stored data deleted; registered temporary-file cleanup complete.'
+        : operation.artifact_status === 'pending' ? 'Stored data deleted; temporary-file cleanup is pending.'
+        : 'Stored data deleted; temporary-file cleanup needs review.';
+}
+function showNativePurgeRecovery(message) {
+    const node = document.getElementById('nativePurgeRecovery'); node.hidden = false; node.replaceChildren();
+    const text = document.createElement('p'); text.textContent = message;
+    const check = document.createElement('button'); check.type = 'button'; check.textContent = 'Check recorded outcome';
+    check.addEventListener('click', () => void checkNativePurgeRecovery());
+    const link = document.createElement('a'); link.href = '/static/storage_cleanup.html'; link.textContent = ' Review cleanup outcomes';
+    node.append(text, check, link);
+}
+async function checkNativePurgeRecovery() {
+    if (!window.AppNativeStorageCleanup?.enabled || nativePurgeRecoveryBusy) return;
+    let handle;
+    try { handle = JSON.parse(sessionStorage.getItem('native-cleanup-operation') || 'null'); } catch (_) { return; }
+    if (!handle) return;
+    if (handle.client_id !== Number(getSelectedClientId())) { showNativePurgeRecovery('An earlier cleanup needs checking in its original client.'); return; }
+    nativePurgeRecoveryBusy = true;
+    const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 35000);
+    try {
+        const response = await window.ApiUtils.apiFetch(`/api/storage-cleanup/operations/${encodeURIComponent(handle.operation_id)}?client_id=${handle.client_id}&template_id=${handle.template_id}`, { cache: 'no-store', signal: controller.signal });
+        const body = await response.json();
+        if (!response.ok || body.operation_id !== handle.operation_id) throw new Error('The earlier outcome is not yet confirmed. Check again before retrying.');
+        if (handle.client_id !== Number(getSelectedClientId())) return;
+        showNativePurgeRecovery(body.kind === 'purge' ? nativePurgeMessage(body) : 'Temporary-plan cleanup committed.');
+        if (body.artifact_status === 'complete') try { sessionStorage.removeItem('native-cleanup-operation'); } catch (_) {}
+        invalidateDataBankCaches({ clientId: handle.client_id, templateId: handle.template_id });
+        await fetchAvailability();
+    } catch (error) { showNativePurgeRecovery(error.message || 'Outcome not confirmed; no deletion was retried.'); }
+    finally { clearTimeout(timeout); nativePurgeRecoveryBusy = false; }
+}
+async function runNativeTemplatePurge() {
+    if (!pendingTemplateDelete || !nativePurgeAvailable() || nativePurgeController
+        || document.getElementById('nativePurgeConfirmation').value !== 'PERMANENTLY DELETE SELECTED DATA') return;
+    const scope = { ...pendingTemplateDelete }, key = String(scope.templateId), sequence = ++nativePurgeSequence;
+    if (scope.clientId !== Number(getSelectedClientId())) return;
+    const controller = new AbortController(); nativePurgeController = controller; nativePurgePostStarted = false;
+    deleteTemplateInFlight.add(key); backupAndDeleteTemplateBtn.disabled = true;
+    const status = text => { if (pendingTemplateDelete && sequence === nativePurgeSequence) { templateDeleteStatus.style.display = 'block'; templateDeleteStatus.textContent = text; } };
+    const current = () => sequence === nativePurgeSequence && scope.clientId === Number(getSelectedClientId()) && document.visibilityState === 'visible';
+    const params = new URLSearchParams({ client_id: scope.clientId, template_id: scope.templateId });
+    let operation = null, timer = setTimeout(() => controller.abort(), 75000);
+    try {
+        status('Checking the exact deletion scope…');
+        const previewResponse = await window.ApiUtils.apiFetch(`/api/storage-cleanup/preview?${params}&kind=purge`, { cache: 'no-store', signal: controller.signal });
+        const preview = await previewResponse.json();
+        if (!previewResponse.ok || !preview.can_apply) throw new Error(preview.blockers?.includes('upload_transfer_grace')
+            ? 'A recent upload is still within its transfer safety window. Wait a few minutes and refresh. No deletion was submitted.'
+            : 'Protected references, active uploads or stored data need review. No deletion was submitted.');
+        if (!current() || preview.client_id !== scope.clientId || preview.template_id !== scope.templateId || preview.kind !== 'purge') throw new Error('Selection changed. No deletion was submitted.');
+        status(`Preparing the complete backup: ${Number(preview.counts.client_data).toLocaleString()} current rows and ${Number(preview.counts.client_data_history).toLocaleString()} prior rows…`);
+        const download = await window.ApiUtils.apiFetch(`/api/data/template/${scope.templateId}/backup?client_id=${scope.clientId}&purge=true`, { cache: 'no-store', signal: controller.signal });
+        if (!download.ok) throw new Error('The complete backup could not be prepared. No deletion was submitted.');
+        assertNativeClient(download, scope.clientId);
+        const proof = download.headers.get('X-Purge-Backup-Proof');
+        if (!proof || download.headers.get('X-DataBank-Template') !== String(scope.templateId) || download.headers.get('X-Export-Scope') !== 'backup') throw new Error('Backup scope could not be verified.');
+        const bytes = await download.arrayBuffer();
+        if (!bytes.byteLength || bytes.byteLength > nativeDataBank.maximumExportBytes || !current()) throw new Error('Backup limits or selection changed. No deletion was submitted.');
+        const header = download.headers.get('Content-Disposition') || '';
+        const match = /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(header);
+        const name = (match ? decodeURIComponent(match[1]) : 'template_backup.xlsx').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_');
+        const url = URL.createObjectURL(new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+        const link = document.createElement('a'); link.href = url; link.download = name; document.body.appendChild(link); link.click(); link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 30000);
+        if (!current()) throw new Error('Selection changed. The backup started; no deletion was submitted.');
+        operation = crypto.randomUUID();
+        // Persist before submitting, so a lost response/refresh can reconcile by ID.
+        try { sessionStorage.setItem('native-cleanup-operation', JSON.stringify({ operation_id: operation, client_id: scope.clientId, template_id: scope.templateId })); }
+        catch (_) { throw new Error('Recovery information could not be saved. No deletion was submitted.'); }
+        nativePurgePostStarted = true; cancelTemplateDeleteBtn.disabled = true; closeTemplateDeleteBtn.disabled = true;
+        clearTimeout(timer); timer = setTimeout(() => controller.abort(), 70000);
+        status('Backup download started. Submitting the confirmed deletion…');
+        const response = await window.ApiUtils.apiFetchMutate(`/api/storage-cleanup/apply?${params}&kind=purge`, {
+            method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ operation_id: operation, preview_token: preview.preview_token, backup_token: proof, confirmation: 'PERMANENTLY DELETE SELECTED DATA' })
+        });
+        const result = await response.json();
+        if (!response.ok || result.operation_id !== operation || result.client_id !== scope.clientId || result.template_id !== scope.templateId)
+            throw new Error('Deletion was not confirmed. Check the recorded outcome before retrying.');
+        if (result.artifact_status === 'complete') try { sessionStorage.removeItem('native-cleanup-operation'); } catch (_) {}
+        if (scope.clientId !== Number(getSelectedClientId())) return;
+        templateDeleteModal.style.display = 'none'; pendingTemplateDelete = null;
+        invalidateDataBankCaches({ clientId: scope.clientId, templateId: scope.templateId });
+        showNativePurgeRecovery(nativePurgeMessage(result)); showStatus(nativePurgeMessage(result), 'success');
+        await fetchAvailability();
+    } catch (error) {
+        const message = nativePurgePostStarted ? 'Deletion outcome is not confirmed. Check the recorded outcome; no write was retried.' : error.message || 'Backup cancelled. No deletion was submitted.';
+        status(message);
+        if (operation && nativePurgePostStarted) {
+            // The recovery action is outside the modal. Release the overlay
+            // after an uncertain response so the user can check its outcome.
+            templateDeleteModal.style.display = 'none'; pendingTemplateDelete = null;
+            showNativePurgeRecovery(message);
+        }
+        else if (operation) try { sessionStorage.removeItem('native-cleanup-operation'); } catch (_) {}
+    } finally {
+        clearTimeout(timer); nativePurgeController = null; nativePurgePostStarted = false; deleteTemplateInFlight.delete(key);
+        cancelTemplateDeleteBtn.disabled = false; closeTemplateDeleteBtn.disabled = false;
+        backupAndDeleteTemplateBtn.disabled = document.getElementById('nativePurgeConfirmation').value !== 'PERMANENTLY DELETE SELECTED DATA';
+    }
+}
+document.getElementById('nativePurgeConfirmation').addEventListener('input', () => {
+    if (nativeDataBank) backupAndDeleteTemplateBtn.disabled = !!nativePurgeController || document.getElementById('nativePurgeConfirmation').value !== 'PERMANENTLY DELETE SELECTED DATA';
+});
+window.addEventListener('focus', () => { if (nativeDataBank && !nativePurgeController) void checkNativePurgeRecovery(); });
+window.addEventListener('load', async () => { if (nativeDataBank) { if (window.clientContextReady) await window.clientContextReady; await checkNativePurgeRecovery(); } });
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden' && nativePurgeController && !nativePurgePostStarted) { nativePurgeSequence++; nativePurgeController.abort(); }
+});
 window.onload = async function() {
     // Show feedback before session/settings initialization so the user never
     // lands on an apparently idle Client Data page.

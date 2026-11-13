@@ -37,7 +37,7 @@ public sealed class DataBankController(DataBankService service, IOptions<DataBan
         [FromQuery] bool sunday_only = false, [FromQuery] string? data_quality = null, [FromQuery] string? ledger_account_code = null, CancellationToken ct = default) =>
         Download(new("preview", client_id, id, date_start, date_end, Search: search, Minimum: amount_min, Maximum: amount_max, Sunday: sunday_only, Quality: data_quality, Account: ledger_account_code), false, ct);
     [HttpGet("template/{id:int}/backup")]
-    public Task<IActionResult> Backup(int id, [FromQuery] int client_id, CancellationToken ct) => Download(new("backup", client_id, id), true, ct);
+    public Task<IActionResult> Backup(int id, [FromQuery] int client_id, CancellationToken ct, [FromQuery] bool purge = false) => Download(new("backup", client_id, id), true, ct, purge);
     [HttpGet("preview")]
     public Task<IActionResult> Preview([FromQuery] int client_id, [FromQuery] int template_id, [FromQuery] string date_start, [FromQuery] string date_end,
         [FromQuery] int page = 1, [FromQuery] int limit = 50, [FromQuery] string? search = null, [FromQuery] double? amount_min = null,
@@ -68,13 +68,14 @@ public sealed class DataBankController(DataBankService service, IOptions<DataBan
             "too_large" => 413, "busy" => 429, "timeout" => 504, "unavailable" => 503, _ => 400
         }, new { detail = result.Code });
     }
-    private async Task<IActionResult> Download(DataBankQuery query, bool backup, CancellationToken ct)
+    private async Task<IActionResult> Download(DataBankQuery query, bool backup, CancellationToken ct, bool purge = false)
     {
         if (Guard() is {} error) return error;
         if (!ModelState.IsValid || Request.Query.ContainsKey("document_id")) return BadRequest(new { detail = "Invalid export scope" });
-        var result = await exports.DownloadAsync(Session, query, backup, ct);
+        var result = await exports.DownloadAsync(Session, query, backup, ct, purge);
         Response.Headers["X-DataBank-Client"] = query.ClientId.ToString(System.Globalization.CultureInfo.InvariantCulture);
         Response.Headers["X-DataBank-Template"] = query.TemplateId.ToString(); Response.Headers["X-Export-Scope"] = backup ? "backup" : "matching";
+        if(result.PurgeProof is not null) Response.Headers["X-Purge-Backup-Proof"]=result.PurgeProof;
         if (result.Status == "success") return File(result.Bytes!, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", result.Name);
         return StatusCode(result.Status switch { "unauthenticated" => 401, "forbidden" => 403, "not_found" => 404, "review" => 409,
             "too_large" => 413, "busy" => 429, "timeout" => 504, "unavailable" => 503, _ => 400 }, new { code = result.Code, detail = result.Status switch {
