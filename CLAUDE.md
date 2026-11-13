@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- dotnet-uploader/ → Disabled tenant/configuration/upload/Data Bank APIs, history, bounded workbooks, guarded imports and durable jobs. See CHANGELOG_ARCHIVE.md.
+- dotnet-uploader/ → Disabled tenant/configuration/upload/Data Bank/Data Integrity APIs, bounded workbooks, guarded imports and durable jobs. See CHANGELOG_ARCHIVE.md.
 
 - routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, statements, category-role notes with unallocated rows, profit links, reconciliations, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
 
@@ -269,7 +269,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
-- 2026-11-13: Added default-off native Data Bank history and bounded downloads; locally accepted. See CHANGELOG_ARCHIVE.md, Data Bank P31.
+- 2026-11-13: Added default-off native Data Bank history/downloads and Data Integrity checks; locally accepted. See CHANGELOG_ARCHIVE.md, Data Integrity P32.
 - 2026-11-12: Added typed .NET workbook reading and synthetic Python/browser parity checks; locally accepted. See CHANGELOG_ARCHIVE.md, Workbook reader P17.
 - 2026-11-12: Added disabled owner-bound .NET upload staging, header discovery and expiry recovery; locally accepted. See CHANGELOG_ARCHIVE.md, Upload staging P16.
 - 2026-11-12: Added disabled tenant configuration backup, preview and guarded restore; locally accepted. See CHANGELOG_ARCHIVE.md, Configuration backup P15.
@@ -287,7 +287,7 @@ One line per file group: what it is now. Full build history for every entry live
 - 2026-11-11: Added disabled .NET authentication and guarded session checks; locally accepted. See CHANGELOG_ARCHIVE.md, .NET authentication P07.
 - 2026-11-10: Data Bank renders datasets before all-time metrics and derives client size from grouped estimates; local acceptance pending. See CHANGELOG_ARCHIVE.md, Data Bank first-render performance.
 - 2026-11-10: Compressed older Status entries into concise archive pointers, restoring the log budget.
-- 2026-11-09: Optimized upload reads/comparisons, aligned regression fixtures and fixed Gate Pass/Vendor Bill ERP header aliases; local acceptance pending. See CHANGELOG_ARCHIVE.md, Gate Pass and Vendor Bill ERP mappings.
+- 2026-11-09: Optimized upload comparisons and corrected Gate Pass/Vendor Bill headers; local acceptance pending. See CHANGELOG_ARCHIVE.md, Gate Pass and Vendor Bill ERP mappings.
 - 2026-11-06: Combined no-change source notes with accessible upload results. See CHANGELOG_ARCHIVE.md, Upload result dialogs — Phase 2.
 - 2026-11-06: Complete reports allow unmapped optional Standard fields and store them blank. See CHANGELOG_ARCHIVE.md, Unmapped Standard fields — Phase 2.
 - 2026-11-06: Footing control rows ignore neighboring values; selected totals remain validated. See CHANGELOG_ARCHIVE.md, Vertical Footing validation.

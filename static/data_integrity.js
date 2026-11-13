@@ -4,6 +4,8 @@ const integrityScannedAt = document.getElementById('integrityScannedAt');
 const integrityMessage = document.getElementById('integrityMessage');
 const refreshIntegrityBtn = document.getElementById('refreshIntegrityBtn');
 let integrityRequest = 0;
+let integrityAbort = null;
+let integrityReady = false;
 const safeguardsOverallStatus = document.getElementById('safeguardsOverallStatus');
 const safeguardsModules = document.getElementById('safeguardsModules');
 const safeguardsScannedAt = document.getElementById('safeguardsScannedAt');
@@ -114,6 +116,7 @@ function renderDatabaseSafeguards(data) {
 }
 
 function integrityCount(value) {
+    if (value === null || value === undefined) return 'Unavailable';
     return Number(value || 0).toLocaleString();
 }
 
@@ -162,8 +165,10 @@ function renderIntegrityModules(data) {
             const groups = Number(module.duplicate_groups || 0);
             const extra = Number(module.duplicate_extra_rows || 0);
             duplicate.textContent = `Review · ${integrityCount(groups)} ${groups === 1 ? 'group' : 'groups'} / ${integrityCount(extra)} extra`;
-        } else if (module.duplicate_status === 'Not fully checked') {
-            duplicate.textContent = `Incomplete · ${integrityCount(module.unidentified_rows)} rows need identity`;
+        } else if (module.duplicate_status === 'Not fully checked' || module.duplicate_groups == null) {
+            duplicate.textContent = module.unidentified_rows == null || module.duplicate_groups == null
+                ? 'Not checked · evidence unavailable'
+                : `Incomplete · ${integrityCount(module.unidentified_rows)} rows need identity`;
         } else {
             duplicate.textContent = 'Clear · 0 groups';
         }
@@ -171,6 +176,12 @@ function renderIntegrityModules(data) {
         duplicateCell.appendChild(duplicate);
 
         name.title = module.duplicate_basis || '';
+        if (module.invalid_upload_links > 0) {
+            const detail = document.createElement('span');
+            detail.className = 'integrity-detail';
+            detail.textContent = `${integrityCount(module.invalid_upload_links)} invalid upload links; associated size incomplete`;
+            name.appendChild(detail);
+        }
         integrityTableBody.appendChild(row);
     });
     if (!data.modules || !data.modules.length) {
@@ -216,6 +227,14 @@ function renderIntegrityOverview(data) {
 
 async function loadDataIntegrityOverview() {
     const request = ++integrityRequest;
+    if (integrityAbort) integrityAbort.abort();
+    // Presence identifies native hosting even when this feature is disabled.
+    if (window.AppNativeDataIntegrity && !window.AppNativeDataIntegrity.enabled) {
+        invalidateIntegrityEvidence('Native Data Integrity is disabled.');
+        refreshIntegrityBtn.disabled = true;
+        refreshIntegrityBtn.textContent = 'Refresh check';
+        return;
+    }
     const clientId = typeof getSelectedClientId === 'function' ? getSelectedClientId() : null;
     if (!clientId) {
         renderDatabaseSafeguards({});
@@ -243,9 +262,13 @@ async function loadDataIntegrityOverview() {
     integrityOverallStatus.textContent = 'Checking';
     integrityOverallStatus.className = 'integrity-status incomplete';
     showIntegrityMessage('');
+    const controller = new AbortController();
+    integrityAbort = controller;
+    const timeout = setTimeout(() => controller.abort(), 65000);
     try {
         const response = await window.ApiUtils.apiFetch(
-            `/api/data-integrity/overview?client_id=${encodeURIComponent(clientId)}`
+            `/api/data-integrity/overview?client_id=${encodeURIComponent(clientId)}`,
+            { signal: controller.signal, cache: 'no-store' }
         );
         if (!response.ok) throw new Error('Could not load data check.');
         const data = await response.json();
@@ -253,7 +276,7 @@ async function loadDataIntegrityOverview() {
         if (Number(data.client_id) !== Number(clientId)) throw new Error('Client scope mismatch.');
         renderIntegrityOverview(data);
     } catch (error) {
-        if (request !== integrityRequest) return;
+        if (request !== integrityRequest || Number(getSelectedClientId()) !== Number(clientId)) return;
         renderDatabaseSafeguards({});
         safeguardsScannedAt.textContent = 'Check could not be completed';
         integrityTableBody.replaceChildren();
@@ -266,15 +289,50 @@ async function loadDataIntegrityOverview() {
         integrityScannedAt.textContent = 'Check could not be completed';
         showIntegrityMessage('Data check unavailable. Try again.', true);
     } finally {
+        clearTimeout(timeout);
         if (request === integrityRequest) {
+            integrityAbort = null;
             refreshIntegrityBtn.disabled = false;
             refreshIntegrityBtn.textContent = 'Refresh check';
         }
     }
 }
 
+function invalidateIntegrityEvidence(message) {
+    renderDatabaseSafeguards({});
+    safeguardsScannedAt.textContent = message;
+    integrityOverallStatus.textContent = 'Not checked';
+    integrityOverallStatus.className = 'integrity-status incomplete';
+    integrityScannedAt.textContent = message;
+    integrityTableBody.replaceChildren();
+    document.getElementById('integrityDatabaseContext').textContent = '';
+    document.getElementById('integrityClientLabel').textContent = 'Check database safeguards and stored data for this client.';
+    showIntegrityMessage(message);
+}
+
+function suspendIntegrityEvidence() {
+    ++integrityRequest;
+    if (integrityAbort) integrityAbort.abort();
+    integrityAbort = null;
+    invalidateIntegrityEvidence('Return to refresh this check.');
+    refreshIntegrityBtn.disabled = false;
+    refreshIntegrityBtn.textContent = 'Refresh check';
+}
+
+function resumeIntegrityEvidence() {
+    if (integrityReady && document.visibilityState === 'visible' && !integrityAbort) loadDataIntegrityOverview();
+}
+window.addEventListener('pagehide', suspendIntegrityEvidence);
+window.addEventListener('pageshow', event => { if (event.persisted) resumeIntegrityEvidence(); });
+window.addEventListener('focus', resumeIntegrityEvidence);
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') suspendIntegrityEvidence();
+    else resumeIntegrityEvidence();
+});
+
 refreshIntegrityBtn.addEventListener('click', loadDataIntegrityOverview);
 window.onload = async function() {
     if (window.clientContextReady) await window.clientContextReady;
+    integrityReady = true;
     await loadDataIntegrityOverview();
 };

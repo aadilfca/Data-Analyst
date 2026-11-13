@@ -17,6 +17,7 @@
     // Setup screen cannot fall through into the legacy transfer protocol.
     window.AppConfigurationBackup = { enabled: tag.dataset.backupsEnabled === 'true', canEdit: tag.dataset.settingsAdmin === 'true' };
     window.AppNativeUpload = { enabled: tag.dataset.uploadEnabled === 'true', maximumFileBytes: Number(tag.dataset.uploadLimit) };
+    window.AppNativeDataIntegrity = { enabled: tag.dataset.integrityEnabled === 'true' };
     window.AppNativeDataBank = { enabled: tag.dataset.databankEnabled === 'true', history: tag.dataset.historyEnabled === 'true',
         exports: tag.dataset.exportsEnabled === 'true', canBackup: tag.dataset.settingsAdmin === 'true', maximumExportBytes: Number(tag.dataset.exportLimit) };
     const marker = key + '/' + tenant;
@@ -52,6 +53,7 @@
         const path = url.pathname.replace(/\/+$/, '').toLowerCase();
         const bound = url.origin === location.origin && (path.startsWith('/api/users')
             || path === '/api/data' || path.startsWith('/api/data/')
+            || path === '/api/data-integrity' || path.startsWith('/api/data-integrity/')
             || path.startsWith('/api/settings')
             || path.startsWith('/api/columns')
             || path.startsWith('/api/templates')

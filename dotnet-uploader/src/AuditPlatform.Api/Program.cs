@@ -139,8 +139,17 @@ builder.Services.AddSingleton<DataBankService>();
 builder.Services.AddOptions<DataBankExportOptions>()
     .Bind(builder.Configuration.GetSection(DataBankExportOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
 builder.Services.AddSingleton<DataBankExportService>();
+builder.Services.AddOptions<DataIntegrityOptions>()
+    .Bind(builder.Configuration.GetSection(DataIntegrityOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
+builder.Services.AddSingleton<AuditPlatform.Api.DataIntegrity.DatabaseSafeguardService>();
+builder.Services.AddSingleton<AuditPlatform.Api.DataIntegrity.DataIntegrityService>();
 
 var app = builder.Build();
+if (app.Services.GetRequiredService<IOptions<DataIntegrityOptions>>().Value.Enabled
+    && (!app.Services.GetRequiredService<IOptions<ApplicationShellOptions>>().Value.Enabled
+        || !app.Services.GetRequiredService<IOptions<PostgresOptions>>().Value.Enabled))
+    throw new OptionsValidationException(DataIntegrityOptions.SectionName, typeof(DataIntegrityOptions),
+        ["Data Integrity requires PostgreSQL and the authenticated application shell."]);
 if ((app.Services.GetRequiredService<IOptions<DataBankExportOptions>>().Value.Enabled
         || app.Services.GetRequiredService<IOptions<DataBankOptions>>().Value.HistoryEnabled)
     && !app.Services.GetRequiredService<IOptions<DataBankOptions>>().Value.Enabled)
