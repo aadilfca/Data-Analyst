@@ -7,6 +7,64 @@ const nativeTenantTemplates = window.AppTenantTemplates?.enabled === true;
 const canEditTenantTemplates = !nativeTenantTemplates || window.AppTenantTemplates.canEdit === true;
 let templateConfigurationKey = null;
 let nativeTemplateKind = null;
+window.TemplateAccountingFields = (() => {
+    const state = {current:{}, generation:0};
+    const accountingFieldRoles = [
+        ['amount', 'Amount'], ['quantity', 'Quantity'], ['rate', 'Rate'],
+        ['account_code', 'Account Code'], ['account_name', 'Account Name'],
+        ['debit', 'Debit'], ['credit', 'Credit'], ['description', 'Description'], ['line_id', 'Line ID (optional)']
+    ];
+
+    function accountingTypeMatches(role, column) {
+        if (['amount', 'quantity', 'rate', 'debit', 'credit'].includes(role)) return column.type === 'Numeric';
+        if (['account_code', 'line_id'].includes(role)) return column.type === 'Text';
+        return true;
+    }
+
+    function accountingBindingError() {
+        for (const [role, id] of Object.entries(state.current)) {
+            const column = selectedColumns.find(c => c.id === id);
+            if (!column || column.comparison_review_required || !accountingTypeMatches(role, column))
+                return 'Review the accounting assignments. Each field must use a compatible selected column.';
+        }
+        const sides = ['account_code', 'debit', 'credit'].filter(role => state.current[role]);
+        if (sides.length && sides.length !== 3) return 'Choose Account Code, Debit and Credit together.';
+        if (state.current.rate && ['amount', 'quantity'].some(role => state.current[role] === state.current.rate))
+            return 'Rate must use a different column from Amount and Quantity.';
+        if (state.current.debit && state.current.debit === state.current.credit) return 'Debit and Credit must use different columns.';
+        return '';
+    }
+
+    function renderAccountingBindings() {
+        const section = document.getElementById('accountingBindingFields');
+        section.hidden = !nativeTenantTemplates || ledgerPurposeSelect.value === 'account_ledger';
+        if (section.hidden) return;
+        const controls = document.getElementById('accountingBindingControls');
+        controls.replaceChildren();
+        accountingFieldRoles.forEach(([role, label]) => {
+            const field = document.createElement('label'); field.textContent = label;
+            const select = document.createElement('select'); select.id = 'accounting-field-' + role;
+            select.setAttribute('aria-label', 'Accounting field: ' + label);
+            select.style.cssText = 'display:block;width:100%;padding:8px;margin-top:4px;border:1px solid #cbd5e1;border-radius:6px;';
+            select.appendChild(new Option('No column selected', ''));
+            selectedColumns.filter(c => !c.comparison_review_required && accountingTypeMatches(role, c))
+                .forEach(c => select.appendChild(new Option(c.name, String(c.id))));
+            const chosen = state.current[role];
+            if (chosen && !Array.from(select.options).some(o => o.value === String(chosen))) {
+                const missing = new Option('Previous assignment needs review', String(chosen)); missing.disabled = true; select.appendChild(missing);
+            }
+            select.value = chosen ? String(chosen) : '';
+            select.addEventListener('change', () => {
+                if (select.value) state.current[role] = Number(select.value); else delete state.current[role];
+                document.getElementById('accountingBindingStatus').textContent = accountingBindingError();
+            });
+            field.appendChild(select); controls.appendChild(field);
+        });
+        document.getElementById('accountingBindingStatus').textContent = accountingBindingError();
+    }
+
+    return {state, render:renderAccountingBindings, error:accountingBindingError};
+})();
 
 // DOM refs
 const templatesBody = document.getElementById('templatesBody');
@@ -151,6 +209,7 @@ function renderLedgerRoleControls() {
 }
 ledgerPurposeSelect.addEventListener('change', () => {
     ledgerColumnRoles = {}; renderLedgerRoleControls(); updateRateSourceVisibility();
+    window.TemplateAccountingFields.render();
     renderSelectedColumns();
 });
 document.getElementById('prepareLedgerBtn').addEventListener('click', async function() {
@@ -674,6 +733,7 @@ function templateColumnComparison(column) {
 }
 
 function renderSelectedColumns() {
+    window.TemplateAccountingFields.render();
     selectedColumnsList.innerHTML = '';
     const conflicts = selectedColumns.filter(c => c.comparison_review_required).map(c => c.name);
     const review = document.getElementById('templateComparisonReview');
@@ -784,6 +844,7 @@ function renderSelectedColumns() {
 
 function updateSelectedCount() {
     renderLedgerRoleControls();
+    window.TemplateAccountingFields.render();
     const count = selectedColumns.length;
     selectedCountBadge.textContent = count + ' selected';
     selectedCountBadge.style.background = count > 0 ? '#e8f5e9' : '#f1f3f4';
@@ -793,6 +854,7 @@ function updateSelectedCount() {
 // ---------- MODAL OPEN / CLOSE ----------
 async function openModal(title, templateData = null, triggerBtn = null) {
     if (!canEditTenantTemplates) return;
+    const generation = ++window.TemplateAccountingFields.state.generation;
     // A table may have been rendered before another administrator's save.
     // Start edits with a fresh server snapshot, then submit its revision.
     if (nativeTenantTemplates && templateData) {
@@ -800,10 +862,12 @@ async function openModal(title, templateData = null, triggerBtn = null) {
             const response = await fetch(API_BASE + '/api/templates/' + templateData.id);
             if (!response.ok) throw new Error('Template is no longer available. Reload the list.');
             templateData = await response.json();
-        } catch (error) { showStatus(error.message, 'error'); return; }
+        } catch (error) { if (generation === window.TemplateAccountingFields.state.generation) showStatus(error.message, 'error'); return; }
     }
+    if (generation !== window.TemplateAccountingFields.state.generation) return;
     templateConfigurationKey = templateData?.configuration_key || null;
     nativeTemplateKind = templateData?.template_kind ?? null;
+    window.TemplateAccountingFields.state.current = nativeTenantTemplates ? {...(templateData?.upload_bindings || {})} : {};
     ledgerSetupDraft = null;
     ledgerColumnRoles = {};
     ledgerPurposeSelect.value = templateData?.data_purpose || 'standard';
@@ -822,6 +886,7 @@ async function openModal(title, templateData = null, triggerBtn = null) {
     document.body.style.overflow = 'hidden';
 
     const columns = await loadMasterColumns(triggerBtn);
+    if (generation !== window.TemplateAccountingFields.state.generation) return;
     if (columns.length === 0) {
         noColumnsMsg.style.display = 'block';
         searchInput.disabled = true;
@@ -866,6 +931,7 @@ async function openModal(title, templateData = null, triggerBtn = null) {
 }
 
 function closeModal() {
+    window.TemplateAccountingFields.state.generation += 1;
     modalOverlay.style.display = 'none';
     modal.style.display = 'none';
     document.body.style.overflow = '';
@@ -938,6 +1004,9 @@ document.getElementById('templateForm').addEventListener('submit', async functio
         || new Set(Object.values(ledgerColumnRoles)).size !== 6 || selectedColumns[0]?.id !== ledgerColumnRoles.voucher)) {
         showModalStatus('Select six distinct ledger column roles and keep the Voucher column first.', 'error'); return;
     }
+    if (nativeTenantTemplates && !ledgerSetupDraft && window.TemplateAccountingFields.error()) {
+        showModalStatus(window.TemplateAccountingFields.error(), 'error'); return;
+    }
     const selectedIds = selectedColumns.map(c => c.id);
     const saveTemplateBtn = document.getElementById('saveTemplateBtn');
     if (templateActionsInFlight.has('template-save')) return;
@@ -971,6 +1040,7 @@ document.getElementById('templateForm').addEventListener('submit', async functio
 
         if (nativeTenantTemplates && !ledgerSetupDraft) {
             payload.column_versions = Object.fromEntries(selectedColumns.map(c => [c.id, c.definition_version]));
+            payload.upload_bindings = {...window.TemplateAccountingFields.state.current};
         }
         const headers = { 'Content-Type': 'application/json' };
         if (nativeTenantTemplates && editingId) headers['X-Template-Revision'] = templateConfigurationKey;
@@ -1140,6 +1210,10 @@ window.onload = async function() {
     document.getElementById('addTemplateBtn').disabled = !canEditTenantTemplates;
     document.getElementById('prepareLedgerBtn').disabled = !canEditTenantTemplates;
     await loadTemplates();
+    if (nativeTenantTemplates && new URLSearchParams(location.search).get('feature') === 'accounting-fields') {
+        document.getElementById('addTemplateBtn').focus();
+        showStatus('Open a template to review its Accounting fields.', 'success');
+    }
 };
 if (nativeTenantTemplates) window.addEventListener('focus', () => {
     // Never replace an unsaved form. Its revision check rejects stale writes.

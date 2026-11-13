@@ -30,7 +30,7 @@ public static class ConfigurationBackupValidation
     // Reject malformed, duplicate and unbound data before any restore writes.
     public static bool IsValid(ConfigurationBackupDocument? document, int tenantId)
     {
-        if (document is null || document.Version != 1 || document.TenantId != tenantId || tenantId <= 0
+        if (document is null || document.Version is not (1 or 2) || document.TenantId != tenantId || tenantId <= 0
             || document.Settings is null || document.Columns is null || document.Templates is null || document.Mappings is null || document.Holidays is null
             || document.Settings.Count>100 || document.Columns.Count>5000 || document.Templates.Count>2000
             || document.Mappings.Count>10000 || document.Holidays.Count>10000
@@ -62,7 +62,9 @@ public static class ConfigurationBackupValidation
                     || column.StorageKey != c.StorageKey || column.Type != c.Type || !column.Active)
                 || template.Columns.Select(c => c.Id).Distinct().Count() != template.Columns.Count
                 || !template.Columns.Select(c=>c.Order).Order().SequenceEqual(Enumerable.Range(0,template.Columns.Count))
-                || TenantTemplateService.Validate(template.Columns.OrderBy(c=>c.Order).ToArray(),template.Purpose,template.Ledger) is not null)
+                || TenantTemplateService.Validate(template.Columns.OrderBy(c=>c.Order).ToArray(),template.Purpose,template.Ledger) is not null
+                || document.Version==2&&template.UploadBindings is null
+                || TenantTemplateService.UploadDerivedBindingError(template.Columns,template.UploadBindings??[]) is not null)
                 return false;
         }
         var templates = document.Templates.ToDictionary(t => t.Id);
@@ -102,7 +104,10 @@ public sealed class ConfigurationBackupService(PostgresTransactions transactions
                 if (await actor.ExecuteScalarAsync(token) is null) return null;
             }
 
-            return await SnapshotAsync(db,session.TenantId.Value,token);
+            var snapshot=await SnapshotAsync(db,session.TenantId.Value,token);
+            if(JsonSerializer.SerializeToUtf8Bytes(snapshot).Length>7*1024*1024)
+                throw new BackupReviewException("Configuration backup exceeds the 7 MiB file limit.");
+            return snapshot;
         },ct);
     }
 
@@ -137,7 +142,8 @@ public sealed class ConfigurationBackupService(PostgresTransactions transactions
                 if((bool)(await inactive.ExecuteScalarAsync(token))!)
                     throw new BackupReviewException("Inactive templates require separate backup review.");
             }
-            var templates = await TenantTemplateService.LoadAsync(db,tenantId,null,token);
+            var templates = (await TenantTemplateService.LoadAsync(db,tenantId,null,token))
+                .Select(t=>t with {UploadBindings=t.UploadBindings??[]}).ToList();
             // A joined read must not silently omit a legacy or broken binding.
             await using (var command=db.CreateCommand("""
                 SELECT EXISTS(SELECT 1 FROM public.template_column_mappings p
@@ -192,7 +198,8 @@ public sealed class ConfigurationBackupService(PostgresTransactions transactions
                 await using var reader=await command.ExecuteReaderAsync(token);
                 while(await reader.ReadAsync(token)) holidays.Add(new(reader.GetInt32(0),reader.GetFieldValue<DateOnly>(1),reader.GetString(2),reader.GetBoolean(3)));
             }
-            var result = new ConfigurationBackupDocument(1,tenantId,settings,columns,templates,mappings,holidays);
+            // Version 2 records an explicit binding set, including an empty set.
+            var result = new ConfigurationBackupDocument(2,tenantId,settings,columns,templates,mappings,holidays);
             if (!ConfigurationBackupValidation.IsValid(result,tenantId))
                 throw new BackupReviewException("Configuration bindings need review before backup.");
             return result;
@@ -206,6 +213,7 @@ public sealed class ConfigurationBackupService(PostgresTransactions transactions
             if(error is not null) return new("invalid",error);
             var current=await SnapshotAsync(db,actor.Tenant,token);
             if (!Compatible(backup!,current)) return new("review","Some backup identities are missing or require review.");
+            if(await BindingReviewAsync(db,backup!,current,token) is {} bindingError) return new("review",bindingError);
             return new("success", "Restore replaces listed settings and existing configuration, including any upload backup policy in the file. Review before confirming.", Revision(backup!,current));
         },ct);
 
@@ -219,6 +227,7 @@ public sealed class ConfigurationBackupService(PostgresTransactions transactions
             var current=await SnapshotAsync(db,actor.Tenant,token);
             if (!Compatible(source,current)) return new("review","Some backup identities are missing or require review.");
             if (revision!=Revision(source,current)) return new("conflict","Configuration changed. Preview again.");
+            if(await BindingReviewAsync(db,source,current,token) is {} bindingError) return new("review",bindingError);
 
             // Any rejection after the first write throws, so the outer transaction rolls back.
             var settingsError=await settingsService.RestoreAsync(db,actor.Tenant,actor.User,actor.Name,source.Settings,token);
@@ -246,7 +255,7 @@ public sealed class ConfigurationBackupService(PostgresTransactions transactions
                 }
                 var input=new TemplateInput(wanted.Name,wanted.Columns.OrderBy(c=>c.Order).Select(c=>c.Id).ToArray(),
                     wanted.Purpose,wanted.Ledger,wanted.Columns.ToDictionary(c=>c.Id,c=>c.Role),comparisons,
-                    wanted.RateSource,wanted.Subtotals,before.ConfigurationKey);
+                    wanted.RateSource,wanted.Subtotals,before.ConfigurationKey,UploadBindings:wanted.UploadBindings??[]);
                 var result=await templateService.RestoreAsync(db,actor.Tenant,actor.User,actor.Name,wanted.Id,input,token);
                 if(result.Status!=TemplateStatus.Success) throw new BackupRejectedException(result.Detail??"Template requires review.");
             }
@@ -332,6 +341,21 @@ public sealed class ConfigurationBackupService(PostgresTransactions transactions
 
     private static string Revision(ConfigurationBackupDocument backup,ConfigurationBackupDocument current) =>
         Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new {backup,current})));
+
+    private static async Task<string?> BindingReviewAsync(PostgresTransactionContext db,ConfigurationBackupDocument backup,ConfigurationBackupDocument current,CancellationToken ct)
+    {
+        var existing=current.Templates.ToDictionary(t=>t.Id);
+        foreach(var wanted in backup.Templates)
+        {
+            var before=existing[wanted.Id];
+            // Older files cannot establish the original assignment when the
+            // template now has bindings. Neither preserve nor clear silently.
+            if(wanted.UploadBindings is null&&before.UploadBindings?.Count>0)
+                return "This older backup does not record accounting field assignments. Export a current configuration backup before restoring.";
+            if(await TenantTemplateService.UploadBindingReviewAsync(db,before,wanted.UploadBindings??[],ct) is {} error) return error;
+        }
+        return null;
+    }
 
     private static bool Compatible(ConfigurationBackupDocument backup,ConfigurationBackupDocument current)
     {

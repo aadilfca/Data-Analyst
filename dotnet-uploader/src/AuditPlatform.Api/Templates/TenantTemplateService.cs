@@ -65,8 +65,7 @@ public sealed class TenantTemplateService(PostgresTransactions transactions,Post
         if(purpose=="account_ledger") rate=null;
         var uploadBindings=input.UploadBindings??before?.UploadBindings??new Dictionary<string,int>();
         if(UploadDerivedBindingError(ordered,uploadBindings) is {} bindingError) return Invalid(bindingError);
-        if(before is not null && !JsonSerializer.Serialize(uploadBindings.OrderBy(p=>p.Key)).Equals(JsonSerializer.Serialize((before.UploadBindings??[]).OrderBy(p=>p.Key)),StringComparison.Ordinal)
-            && (await HasDataAsync(db,before.Id,ct)||await HasUploadsAsync(db,before.Id,ct))) return Review();
+        if(await UploadBindingReviewAsync(db,before,uploadBindings,ct) is {} bindingReview) return new(TemplateStatus.Review,Detail:bindingReview);
         if(before is not null)
         {
             bool structure=before.Purpose!=purpose || !SameLedger(before.Ledger,ledger)
@@ -307,7 +306,7 @@ public sealed class TenantTemplateService(PostgresTransactions transactions,Post
         },ct);
     }
 
-    private static string? UploadDerivedBindingError(IReadOnlyList<TemplateColumn> columns,Dictionary<string,int> bindings)
+    internal static string? UploadDerivedBindingError(IReadOnlyList<TemplateColumn> columns,Dictionary<string,int> bindings)
     {
         string[] roles=["amount","quantity","rate","account_code","account_name","debit","credit","description","line_id"];
         if(bindings.Keys.Except(roles,StringComparer.Ordinal).Any()) return "Unknown upload field role.";
@@ -321,6 +320,21 @@ public sealed class TenantTemplateService(PostgresTransactions transactions,Post
         if(bindings.ContainsKey("account_code")!=bindings.ContainsKey("debit")||bindings.ContainsKey("debit")!=bindings.ContainsKey("credit")) return "Configure account, debit and credit together.";
         if(bindings.TryGetValue("rate",out int rate)&&new[]{"amount","quantity"}.Any(r=>bindings.GetValueOrDefault(r)==rate)) return "Rate must have its own column.";
         if(bindings.TryGetValue("debit",out int debit)&&bindings.GetValueOrDefault("credit")==debit) return "Debit and credit require distinct columns.";
+        return null;
+    }
+
+    // Shared by ordinary saves and backup preview/restore. Preview must not
+    // promise a binding change which existing current/history/uploads protect.
+    internal static async Task<string?> UploadBindingReviewAsync(PostgresTransactionContext db,TemplateDefinition? before,Dictionary<string,int> bindings,CancellationToken ct)
+    {
+        if(bindings.Count>0)
+        {
+            await using var catalog=db.CreateCommand("SELECT to_regclass('public.platform_template_upload_bindings') IS NOT NULL");
+            if(await catalog.ExecuteScalarAsync(ct) is not true) return "Accounting field bindings require the reviewed native schema.";
+        }
+        if(before is not null&&!JsonSerializer.Serialize(bindings.OrderBy(p=>p.Key,StringComparer.Ordinal)).Equals(
+            JsonSerializer.Serialize((before.UploadBindings??[]).OrderBy(p=>p.Key,StringComparer.Ordinal)),StringComparison.Ordinal)
+            &&(await HasDataAsync(db,before.Id,ct)||await HasUploadsAsync(db,before.Id,ct))) return ReviewMessage;
         return null;
     }
 

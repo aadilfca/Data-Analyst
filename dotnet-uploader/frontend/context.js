@@ -13,6 +13,9 @@
         enabled: true, canEdit: tag.dataset.settingsAdmin === 'true'
     };
     if (tag.dataset.mappingsEnabled === 'true') window.AppTenantMappings = { enabled: true };
+    // Presence identifies the native host even when backup is disabled, so its
+    // Setup screen cannot fall through into the legacy transfer protocol.
+    window.AppConfigurationBackup = { enabled: tag.dataset.backupsEnabled === 'true', canEdit: tag.dataset.settingsAdmin === 'true' };
     const marker = key + '/' + tenant;
     let changed = true;
     try {
@@ -48,6 +51,7 @@
             || path.startsWith('/api/settings')
             || path.startsWith('/api/columns')
             || path.startsWith('/api/templates')
+            || path.startsWith('/api/backup')
             || ['/api/upload/save-mapping', '/api/upload/saved-mapping'].includes(path)
             || path.startsWith('/api/clients')
             || ['/api/auth/current-client', '/api/auth/select-client'].includes(path));
@@ -86,6 +90,18 @@
             { label: 'Change workspace', url: '/shell/tenant_select.html', state: 'ready', module: 'Workspace',
                 children: [{ label: 'Select business or CA firm', url: '/shell/tenant_select.html', state: 'ready', keywords: ['tenant', 'firm', 'workspace'] }] }
         ] });
+        // Extend the existing native navigation registry, as Workspace does;
+        // both quick navigation and search continue to read the same manifest.
+        if (typeof NAV_MANIFEST !== 'undefined') NAV_MANIFEST.forEach(group => (group.items || []).forEach(item => {
+            if (typeof item.url !== 'string') return;
+            const path = new URL(item.url, location.href).pathname;
+            let child;
+            if (path === '/static/templates.html' && window.AppTenantTemplates?.enabled && window.AppTenantTemplates.canEdit)
+                child = { label: 'Accounting fields', url: '/static/templates.html?feature=accounting-fields', state: 'ready', keywords: ['amount', 'quantity', 'rate', 'account', 'debit', 'credit', 'column assignments'] };
+            if (path === '/static/setup.html' && window.AppConfigurationBackup.enabled && window.AppConfigurationBackup.canEdit)
+                child = { label: 'Configuration backup', url: '/static/setup.html?feature=configuration-backup', state: 'ready', keywords: ['export', 'restore', 'configuration', 'settings backup'] };
+            if (child) { item.children ||= []; if (!item.children.some(c => c.url === child.url)) item.children.push(child); }
+        }));
         const nav = document.createElement('nav');
         nav.setAttribute('aria-label', 'Workspace');
         const link = document.createElement('a');

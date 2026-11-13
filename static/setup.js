@@ -39,6 +39,7 @@ document.querySelectorAll('.module-card').forEach(card => {
 
 // ---------- BACKUP EXPORT ----------
 async function exportBackup() {
+    if (window.AppConfigurationBackup) return;
     const statusSpan = document.getElementById('backupStatus');
     try {
         statusSpan.style.display = 'inline';
@@ -74,6 +75,7 @@ async function exportBackup() {
 
 // ---------- BACKUP IMPORT ----------
 async function handleImportFile(event) {
+    if (window.AppConfigurationBackup) return;
     const file = event.target.files[0];
     if (!file) return;
 
@@ -140,7 +142,8 @@ async function handleImportFile(event) {
 }
 
 // ---------- LOAD ON PAGE OPEN ----------
-window.onload = function() {
+window.onload = async function() {
+    if (window.clientContextReady) await window.clientContextReady;
     loadSetupStats();
 
     const storageCleanupCard = document.getElementById('storageCleanupCard');
@@ -156,6 +159,7 @@ window.onload = function() {
     }
 
     // Backup export button
+    if (window.AppConfigurationBackup) { document.getElementById('legacySetupTransfer').hidden = true; return; }
     document.getElementById('exportBackupBtn').addEventListener('click', exportBackup);
     // Backup import button triggers file input
     document.getElementById('importBackupBtn').addEventListener('click', function() {
@@ -172,6 +176,7 @@ window.addEventListener('pageshow', function(event) {
 // Manual full backup is isolated from the existing JSON setup-data importer.
 (function () {
     'use strict';
+    if (window.AppConfigurationBackup) return;
     const pendingKey = 'fullDatabaseBackup.pending';
     let ready = false;
     let busy = false;
@@ -395,4 +400,130 @@ window.addEventListener('pageshow', function(event) {
         catch (error) { panel.hidden = false; say(error.message, 'error'); buttons(); }
     });
     window.addEventListener('pagehide', stopProgress);
+})();
+
+// Native configuration files stay in memory with their exact JSON text. A
+// parsed copy supplies display labels only; version counters never round-trip
+// through JavaScript numbers on export or restore.
+(function () {
+    'use strict';
+    const capability = window.AppConfigurationBackup;
+    if (!capability) return;
+    const panel = document.getElementById('configurationBackup');
+    const message = document.getElementById('configurationBackupStatus');
+    const exportButton = document.getElementById('exportConfigurationBtn');
+    const selectButton = document.getElementById('selectConfigurationBtn');
+    const fileInput = document.getElementById('configurationFileInput');
+    const previewPanel = document.getElementById('configurationRestorePreview');
+    const checkbox = document.getElementById('confirmConfigurationRestore');
+    const restoreButton = document.getElementById('restoreConfigurationBtn');
+    const cancelButton = document.getElementById('cancelConfigurationRestoreBtn');
+    const maximumBytes = 7 * 1024 * 1024;
+    let busy = false, generation = 0, preview = null, activeRequest = null;
+    const allowed = capability.enabled && capability.canEdit;
+    panel.hidden = false;
+    document.getElementById('legacySetupTransfer').hidden = true;
+    function say(text, kind = '') { message.textContent = text; message.dataset.kind = kind; }
+    function buttons() {
+        exportButton.disabled = !allowed || busy; selectButton.disabled = !allowed || busy;
+        restoreButton.disabled = !allowed || busy || !preview || !checkbox.checked;
+        checkbox.disabled = busy; cancelButton.disabled = busy;
+        panel.setAttribute('aria-busy', String(busy));
+    }
+    function clearReview() {
+        generation += 1; activeRequest?.abort(); preview = null; checkbox.checked = false;
+        previewPanel.hidden = true; document.getElementById('configurationRestoreItems').replaceChildren(); buttons();
+    }
+    async function readText(response) {
+        const reader = response.body.getReader(), chunks = []; let bytes = 0;
+        try {
+            while (true) {
+                const item = await reader.read(); if (item.done) break;
+                bytes += item.value.byteLength;
+                if (bytes > maximumBytes) throw new Error('Configuration backup exceeds the 7 MiB file limit.');
+                chunks.push(item.value);
+            }
+        } catch (error) { await reader.cancel().catch(() => {}); throw error; }
+        const combined = new Uint8Array(bytes); let position = 0;
+        chunks.forEach(chunk => { combined.set(chunk, position); position += chunk.byteLength; });
+        return new TextDecoder('utf-8', {fatal: true}).decode(combined);
+    }
+    async function request(path, body) {
+        const controller = new AbortController(); activeRequest = controller;
+        const timer = setTimeout(() => controller.abort(), 30000);
+        try {
+            const response = await fetch(API_BASE + '/api/backup/' + path, { method: body === undefined ? 'GET' : 'POST',
+                cache: 'no-store', signal: controller.signal,
+                headers: body === undefined ? {} : {'Content-Type': 'application/json'}, body });
+            const text = await readText(response);
+            let data; try { data = JSON.parse(text); } catch (_) { throw new Error('The configuration response could not be read.'); }
+            if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Configuration request failed.');
+            return {text, data};
+        } finally { clearTimeout(timer); if (activeRequest === controller) activeRequest = null; }
+    }
+    function addItem(text) {
+        const item = document.createElement('li'); item.textContent = text; document.getElementById('configurationRestoreItems').appendChild(item);
+    }
+    function showPreview(backup, result) {
+        document.getElementById('configurationRestoreWarning').textContent = result.warning;
+        addItem('Settings: ' + (result.settings || []).join(', '));
+        addItem('Columns: ' + (result.columns || []).map(c => c.name).join(', '));
+        (result.templates || []).forEach(template => {
+            const wanted = backup.templates.find(t => Number(t.id) === template.id);
+            const columns = new Map((wanted?.columns || []).map(c => [Number(c.id), c.name]));
+            const labels = {amount:'Amount',quantity:'Quantity',rate:'Rate',account_code:'Account Code',account_name:'Account Name',debit:'Debit',credit:'Credit',description:'Description',line_id:'Line ID'};
+            const bindings = wanted?.uploadBindings || {};
+            const assignments = Object.entries(labels).filter(([role]) => Object.hasOwn(bindings, role))
+                .map(([role,label]) => label + ': ' + columns.get(Number(bindings[role])));
+            addItem('Template: ' + template.name + ' — ' + (assignments.join('; ') || 'No accounting field assignments'));
+        });
+        addItem('Saved header mappings: ' + (result.mappings || []).length);
+        addItem('Holidays: ' + (result.holidays || []).map(h => h.label).join(', '));
+        previewPanel.hidden = false;
+    }
+    exportButton.addEventListener('click', async () => {
+        if (!allowed || busy) return; clearReview(); const token = generation; busy = true; buttons(); say('Exporting workspace configuration…');
+        try {
+            const result = await request('export'); if (token !== generation) return;
+            const url = URL.createObjectURL(new Blob([result.text], {type:'application/json'}));
+            const link = document.createElement('a'); link.href = url; link.download = 'workspace_configuration_' + new Date().toISOString().slice(0,10) + '.json';
+            document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+            say('Configuration download started.', 'success');
+        } catch (error) { if (token === generation) say(error.message, 'error'); }
+        finally { busy = false; buttons(); }
+    });
+    selectButton.addEventListener('click', () => { if (allowed && !busy) fileInput.click(); });
+    fileInput.addEventListener('change', async () => {
+        const file = fileInput.files[0]; fileInput.value = ''; if (!file || !allowed || busy) return;
+        clearReview(); const token = generation; busy = true; buttons(); say('Checking the selected configuration…');
+        try {
+            if (file.size > maximumBytes) throw new Error('Configuration backup exceeds the 7 MiB file limit.');
+            const text = await file.text(); if (token !== generation) return;
+            const document = JSON.parse(text);
+            if (![1,2].includes(document.version) || !Array.isArray(document.columns) || !Array.isArray(document.templates))
+                throw new Error('Choose a workspace configuration backup.');
+            const result = await request('preview', text); if (token !== generation) return;
+            if (typeof result.data.revision !== 'string' || !/^[0-9A-F]{64}$/.test(result.data.revision)) throw new Error('A fresh restore preview is required.');
+            preview = {text, revision:result.data.revision}; showPreview(document, result.data);
+            say('Review the listed configuration and confirm when ready.');
+        } catch (error) { if (token === generation) say(error instanceof SyntaxError ? 'Choose a valid JSON configuration backup.' : error.message, 'error'); }
+        finally { busy = false; buttons(); }
+    });
+    checkbox.addEventListener('change', buttons);
+    cancelButton.addEventListener('click', () => { if (!busy) { clearReview(); say('Restore review cancelled.'); } });
+    restoreButton.addEventListener('click', async () => {
+        if (!allowed || busy || !preview || !checkbox.checked) return;
+        const selected = preview, token = generation; preview = null; busy = true; buttons(); say('Restoring the confirmed configuration…');
+        try {
+            const body = '{"backup":' + selected.text + ',"revision":' + JSON.stringify(selected.revision) + ',"confirmed":true}';
+            const result = await request('import', body); if (token !== generation) return;
+            clearReview(); say(result.data.message || 'Configuration restored.', 'success'); await loadSetupStats();
+        } catch (error) {
+            if (token === generation) { clearReview(); say(error.message + ' Refresh the configuration and choose the file for a fresh preview before another restore.', 'error'); }
+        } finally { busy = false; buttons(); }
+    });
+    window.addEventListener('pagehide', clearReview);
+    say(!capability.enabled ? 'Configuration backup is unavailable.' : !capability.canEdit ? 'A workspace administrator can export and restore configuration.' : 'Ready to export or review a configuration backup.');
+    buttons();
+    if (new URLSearchParams(location.search).get('feature') === 'configuration-backup') document.getElementById('configurationBackupTitle').focus();
 })();

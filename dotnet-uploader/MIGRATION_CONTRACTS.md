@@ -154,7 +154,7 @@ This list records discussion, not blanket authorization to activate policies. Re
 ### P15 configuration backup
 
 - Disabled native export, preview and restore cover existing tenant settings, holidays, columns, templates and saved headers; same-tenant existing identities only. Legacy JSON and transaction restoration remain separate.
-- Administrator session/context, preview revision and explicit confirmation are required. Restore validates bindings, retains permanent identities and applies all changes and audit in one transaction; failures roll back. Existing Setup UI remains legacy-only.
+- Administrator session/context, preview revision and explicit confirmation are required. Restore validates bindings, retains permanent identities and applies changes/audit atomically. P29 adds native Setup controls; Python retains its transfer flow.
 - Inactive templates/client mappings, unknown bindings, foreign tenants and unsupported comparison changes require review. Preview identifies affected records and warns that upload backup policy may change. Live activation remains gated.
 
 ### P16 staged workbooks
@@ -270,6 +270,14 @@ This list records discussion, not blanket authorization to activate policies. Re
 - Private Supabase Storage HTTP uses immutable generated keys, a bound endpoint/bucket hash, byte/hash read-back and bounded transfers. `StorageUrl`/`StorageBucket` are non-secret settings; `UploadJobs__StorageKey` is server-secret only. Source-ready means verified private persistence; earlier interruption can require fresh selection. Missing local sources can be restored; altered bytes block. A separate cleanup loop deletes registered objects/restore fragments after expiry/terminal transfer grace, preserving accounting evidence. Changing storage location requires reconciling registered objects first.
 - Defaults: two global workers, eight outstanding jobs per owner/32 overall, three attempts with 2/10-second waits, 120-second leases/15-second heartbeat, 120-second transfers, 64 MiB/file and 256 MiB reserved object bytes. Preserve plan/source expiry; retain up to 128 jobs per owner/client/template with bounded 24-hour terminal cleanup after confirmed source deletion. Submit bodies cap at 1 MiB/two readers; cancellation/resume bodies at 1 KiB; short actions at 30 seconds. Database metadata reserves headroom below C01.
 - Verification uses owned PostgreSQL and local HTTP storage only. Live private-bucket policy, credentials, provider file/quota/egress limits, deletion behaviour, representative large transfers and hosting costs require deployment approval; no bucket is provisioned or live migration run. Existing P16 staging retention, P29 UI and P33 scoped purge remain separate gates. See CHANGELOG_ARCHIVE.md, Durable upload jobs P28.
+
+### P29 configuration integration
+
+- Native template APIs expose `upload_bindings` with permanent selected column IDs. The editor offers compatible accounting fields without caption-based inference; labels/order preserve assignments. Omission preserves existing bindings; explicit empty bindings request guarded clearing. Ordinary edits and backup preview/restore share P26's schema/data/upload guards. Ledger proofs and upload execution remain gated.
+- Version-2 configuration exports record every template's explicit binding set, including empty sets. Restore applies these assignments with existing settings/columns/templates/mappings/holidays and required audit in one transaction. Version-1 files with recorded bindings remain supported; missing bindings require review when the current template is bound, rather than silently preserving or clearing them.
+- Shell capability metadata/context headers control native Setup and extend its existing navigation registry. Native disabled state cannot fall through into legacy transfer/full-backup routes. Python payloads and full-backup flow remain compatible. Default flags stay off; no schema, dependency or live-route activation is added.
+- Native export/files cap at 7 MiB within the existing 8 MiB restore-body limit. The browser retains exact original JSON text, uses parsed values only for display, and requires server preview plus explicit confirmation. Changed files, stale previews and failed/uncertain writes invalidate confirmation; never automatically repeat a restore. Server revisions/authorization remain authoritative; browser requests have 30-second bounds.
+- Verification uses owned PostgreSQL, real Kestrel and existing-venv Chromium with synthetic configuration only. P29 Upload/job UI and complete original/repeat/correction/partial/empty-period performance acceptance remain separate work. See CHANGELOG_ARCHIVE.md, Upload configuration P29A.
 
 ## 3. PostgreSQL and financial values
 

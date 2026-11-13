@@ -37,6 +37,13 @@ public sealed class ConfigurationBackupTests
             Columns = [column with { StorageKey = "different" }]
         }, 3));
         Assert.False(ConfigurationBackupValidation.IsValid(backup with { Columns = [column, column] }, 3));
+        var bound=template with {UploadBindings=new Dictionary<string,int>{{"amount",1}}};
+        Assert.True(ConfigurationBackupValidation.IsValid(backup with {Version=2,Templates=[bound]},3));
+        Assert.False(ConfigurationBackupValidation.IsValid(backup with {Version=2},3));
+        Assert.False(ConfigurationBackupValidation.IsValid(backup with {Version=3,Templates=[bound]},3));
+        Assert.False(ConfigurationBackupValidation.IsValid(backup with {Templates=[bound with {UploadBindings=new Dictionary<string,int>{{"rate",1},{"amount",1}}}]},3));
+        Assert.False(ConfigurationBackupValidation.IsValid(backup with {Templates=[bound with {UploadBindings=new Dictionary<string,int>{{"unknown",1}}}]},3));
+        Assert.False(ConfigurationBackupValidation.IsValid(backup with {Templates=[bound with {UploadBindings=new Dictionary<string,int>{{"account_code",1}}}]},3));
     }
 }
 

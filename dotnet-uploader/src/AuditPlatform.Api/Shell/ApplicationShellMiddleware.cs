@@ -17,7 +17,8 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
 
     public async Task InvokeAsync(HttpContext context, IOptions<ApplicationShellOptions> options,
         TenantSessionService tenants, AuditPlatform.Api.Clients.TenantClientService clients,
-        IOptions<SettingsManagementOptions> settings,IOptions<ColumnManagementOptions> columns,IOptions<TemplateManagementOptions> templates,IOptions<SavedMappingOptions> mappings)
+        IOptions<SettingsManagementOptions> settings,IOptions<ColumnManagementOptions> columns,IOptions<TemplateManagementOptions> templates,IOptions<SavedMappingOptions> mappings,
+        IOptions<ConfigurationBackupOptions> backups)
     {
         if (!options.Value.Enabled) { await next(context); return; }
         var path=context.Request.Path.Value ?? "/";
@@ -32,6 +33,7 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
             || context.Request.Path.StartsWithSegments("/api/settings")
             || context.Request.Path.StartsWithSegments("/api/columns")
             || context.Request.Path.StartsWithSegments("/api/templates")
+            || context.Request.Path.StartsWithSegments("/api/backup")
             || context.Request.Path.StartsWithSegments("/api/upload/save-mapping")
             || context.Request.Path.StartsWithSegments("/api/upload/saved-mapping")
             || canonicalApi is "/api/auth/current-client" or "/api/auth/select-client";
@@ -103,9 +105,10 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
         var columnsEnabled=columns.Value.Enabled ? "true" : "false";
         var templatesEnabled=templates.Value.Enabled ? "true" : "false";
         var mappingsEnabled=mappings.Value.Enabled ? "true" : "false";
+        var backupsEnabled=backups.Value.Enabled ? "true" : "false";
         // Numeric/hash-only attributes need no user-controlled HTML. This runs
         // before retained scripts, clearing old browser state before they read it.
-        var script=$"<script src=\"/shell/context.js\" data-context=\"{key}\" data-tenant=\"{selectedTenant}\" data-settings-enabled=\"{settingsEnabled}\" data-settings-admin=\"{settingsAdmin}\" data-columns-enabled=\"{columnsEnabled}\" data-templates-enabled=\"{templatesEnabled}\" data-mappings-enabled=\"{mappingsEnabled}\"></script>";
+        var script=$"<script src=\"/shell/context.js\" data-context=\"{key}\" data-tenant=\"{selectedTenant}\" data-settings-enabled=\"{settingsEnabled}\" data-settings-admin=\"{settingsAdmin}\" data-columns-enabled=\"{columnsEnabled}\" data-templates-enabled=\"{templatesEnabled}\" data-mappings-enabled=\"{mappingsEnabled}\" data-backups-enabled=\"{backupsEnabled}\"></script>";
         content=content.Replace("<head>","<head>"+script,StringComparison.Ordinal);
         await context.Response.WriteAsync(content,context.RequestAborted);
     }

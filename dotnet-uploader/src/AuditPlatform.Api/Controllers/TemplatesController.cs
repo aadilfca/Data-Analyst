@@ -18,7 +18,8 @@ public sealed class TemplatesController(TenantTemplateService templates,IOptions
         [property:JsonPropertyName("column_comparisons")]Dictionary<int,bool>? Comparisons=null,
         [property:JsonPropertyName("rate_source")]string? RateSource=null,
         [property:JsonPropertyName("has_subtotals_by_default")]bool Subtotals=false,
-        [property:JsonPropertyName("column_versions")]Dictionary<int,long>? ColumnVersions=null);
+        [property:JsonPropertyName("column_versions")]Dictionary<int,long>? ColumnVersions=null,
+        [property:JsonPropertyName("upload_bindings")]Dictionary<string,int>? UploadBindings=null);
     public sealed record LedgerInput([property:JsonPropertyName("ledger_columns")]Dictionary<string,int?>? Roles,
         [property:JsonPropertyName("template_name")]string Name="Account Ledger",
         [property:JsonPropertyName("column_comparisons")]Dictionary<string,bool>? Comparisons=null,
@@ -56,7 +57,7 @@ public sealed class TemplatesController(TenantTemplateService templates,IOptions
         var result=await templates.GetAsync(Session,id,ct); if(result.Status!=TemplateStatus.Success) return Error(result);
         var t=result.Templates![0];
         return Ok(new {template_id=t.Id,columns=t.Columns.Select(c=>ColumnWire(c)),total_columns=t.Columns.Count,
-            data_purpose=t.Purpose,ledger_columns=t.Ledger,configuration_key=t.ConfigurationKey,template_kind=t.Kind});
+            data_purpose=t.Purpose,ledger_columns=t.Ledger,configuration_key=t.ConfigurationKey,template_kind=t.Kind,upload_bindings=t.UploadBindings??[]});
     }
     [HttpGet("by-name/{name}")]
     public async Task<IActionResult> ByName(string name,CancellationToken ct)
@@ -75,7 +76,7 @@ public sealed class TemplatesController(TenantTemplateService templates,IOptions
         if(Guard() is {} error) return error;
         if(!ModelState.IsValid||input?.Name is null||input.Columns is null) return Invalid();
         var result=await templates.SaveAsync(Session,id,new(input.Name,input.Columns,input.Purpose,input.Ledger,input.Roles,
-            input.Comparisons,input.RateSource,input.Subtotals,Revision,input.ColumnVersions),ct);
+            input.Comparisons,input.RateSource,input.Subtotals,Revision,input.ColumnVersions,input.UploadBindings),ct);
         return result.Status==TemplateStatus.Success ? Ok(new {message="Template saved successfully",template_id=result.Id}):Error(result);
     }
     [HttpDelete("{id:int}")]
@@ -130,7 +131,7 @@ public sealed class TemplatesController(TenantTemplateService templates,IOptions
         new {detail=result.Detail??(result.Status==TemplateStatus.NotFound ? "Template not found":"Template access denied")});
     private static object Wire(TemplateDefinition t)=>new {id=t.Id,template_name=t.Name,created_by=t.CreatedBy,created_date=t.CreatedDate,
         is_active=true,is_system=t.System,rate_source=t.RateSource,has_subtotals_by_default=t.Subtotals,data_purpose=t.Purpose,ledger_columns=t.Ledger,
-        columns=t.Columns.Select(c=>ColumnWire(c)),definition_version=t.Version,configuration_key=t.ConfigurationKey,template_kind=t.Kind};
+        columns=t.Columns.Select(c=>ColumnWire(c)),definition_version=t.Version,configuration_key=t.ConfigurationKey,template_kind=t.Kind,upload_bindings=t.UploadBindings??[]};
     private static object ColumnWire(TemplateColumn c,bool columnId=false)
     {
         var row=new Dictionary<string,object?> { [columnId ? "column_id":"id"]=c.Id,["column_name"]=c.Name,["storage_key"]=c.StorageKey,

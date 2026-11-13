@@ -33,6 +33,17 @@
         #fullDatabaseBackup [hidden] { display: none !important; }
         #fullDatabaseBackupStatus[data-kind="error"] { color: #991b1b; }
         #fullDatabaseBackupStatus[data-kind="success"] { color: #166534; }
+        #configurationBackup { background:white;border-radius:16px;padding:24px;margin-top:25px;box-shadow:0 2px 8px #0000000f; }
+        #configurationBackup p { color:#64748b;line-height:1.5; }
+        #configurationBackup .configuration-actions { display:flex;gap:12px;flex-wrap:wrap;align-items:center; }
+        #configurationBackup button:disabled { opacity:.6;cursor:not-allowed; }
+        #cancelConfigurationRestoreBtn { padding:10px 20px;border:1px solid #cbd5e1;border-radius:6px;background:#f1f5f9;color:#1a1a2e;font-size:14px;cursor:pointer; }
+        #configurationRestorePreview label { display:flex;align-items:center;gap:8px;margin-top:12px; }
+        #configurationBackup [hidden] { display:none!important; }
+        #configurationRestorePreview { background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-top:16px; }
+        #configurationRestoreItems { max-height:260px;overflow:auto;overflow-wrap:anywhere; }
+        #configurationBackupStatus[data-kind="error"] { color:#991b1b; }
+        #configurationBackupStatus[data-kind="success"] { color:#166534; }
         @media (max-width: 480px) { #fullDatabaseBackup { padding: 18px; } #fullDatabaseBackup dl { grid-template-columns: 1fr; gap: 5px; } #fullDatabaseBackup dd { margin-bottom: 10px; } #fullDatabaseBackup .backup-progress-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
     </style>
 </head>
@@ -155,8 +166,29 @@
             <a id="fullDatabaseBackupDriveLink" target="_blank" rel="noopener noreferrer" hidden>Open verified Drive copy</a>
             <p>Restoring a backup is a separate controlled step. This action does not restore or replace working data.</p>
         </section>
+        <section id="configurationBackup" aria-labelledby="configurationBackupTitle" hidden>
+            <h2 id="configurationBackupTitle" tabindex="-1">Workspace configuration backup</h2>
+            <p>Save this workspace’s settings, holidays, columns, templates, accounting field assignments and saved Excel header mappings.</p>
+            <div class="configuration-actions">
+                <button id="exportConfigurationBtn" class="btn-upload" type="button">Export configuration</button>
+                <button id="selectConfigurationBtn" class="btn-upload" type="button">Choose backup to review</button>
+                <input id="configurationFileInput" type="file" accept=".json,application/json" hidden>
+            </div>
+            <p id="configurationBackupStatus" role="status" aria-live="polite"></p>
+            <div id="configurationRestorePreview" hidden>
+                <h3>Review configuration restore</h3>
+                <p id="configurationRestoreWarning"></p>
+                <ul id="configurationRestoreItems"></ul>
+                <label><input id="confirmConfigurationRestore" type="checkbox"> Restore the listed configuration in this workspace</label>
+                <div class="configuration-actions" style="margin-top:12px;">
+                    <button id="restoreConfigurationBtn" class="btn-upload" type="button" disabled>Restore configuration</button>
+                    <button id="cancelConfigurationRestoreBtn" type="button">Cancel review</button>
+                </div>
+            </div>
+        </section>
         <!-- Existing Setup Data export/import remains a separate operation. -->
         <section
+            id="legacySetupTransfer"
             style="background:white; border-radius:16px; padding:20px 25px; box-shadow:0 2px 8px rgba(0,0,0,0.06); margin-top:25px;">
             <h2 style="font-size:18px; color:#1a1a2e; margin-bottom:10px;">💾 Legacy setup data transfer</h2>
             <p style="color:#64748b; font-size:14px; margin-bottom:15px;">Export selected setup and client-data tables as JSON.
@@ -175,7 +207,7 @@
     <script src="/static/client_context.js?v=29"></script>
     <script src="/static/loading_ui.js?v=1"></script>
     <script src="/static/api_utils.js?v=1"></script>
-    <script src="/static/setup.js?v=5"></script>
+    <script src="/static/setup.js?v=6"></script>
 </body>
 
 </html>
