@@ -73,7 +73,7 @@ Execution order: P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 (repor
 | P28 — Upload jobs | Disabled durable owner-scoped jobs, bounded retries/cancellation and private source recovery locally accepted. See CHANGELOG_ARCHIVE.md, Durable upload jobs P28. |
 | P29 — Upload acceptance | Disabled native configuration/Upload/jobs locally accepted; synthetic browser/SQL checks pass. Representative-corpus/scale and deployment remain gated. See CHANGELOG_ARCHIVE.md, Upload UI P29B. |
 | P30 — Data Bank reads | Disabled scoped reads, exact totals and guarded retained pages locally accepted. See CHANGELOG_ARCHIVE.md, Data Bank P30. |
-| P31 — History and exports | Port Data Bank history and current/history backup downloads; verify exact rows, changed fields, account scope, and export safety. |
+| P31 — History and exports | Disabled scoped history/revision reads and bounded matching/current-history workbooks locally accepted. See CHANGELOG_ARCHIVE.md, Data Bank P31. |
 | P32 — Data Integrity | Port inventory and required identity/index safeguards; verify findings against controlled valid and invalid test datasets. |
 | P33 — Storage cleanup | Port preview freshness, administrator confirmation, protected-evidence checks, and scoped purge; prove other clients/settings remain intact. |
 | P34 — Trial Balance parsing | Port workbook mappings, source validation, totals, and review issues; compare golden Trial Balance inputs and rejected rows. |

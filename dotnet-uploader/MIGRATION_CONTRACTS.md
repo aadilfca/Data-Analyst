@@ -293,6 +293,15 @@ This list records discussion, not blanket authorization to activate policies. Re
 - Retained pages guard complete scopes, clear obsolete values, bound caches and reject late/wrong-context responses; native subtotals use exact bounded coefficients. Template Viewer remains a marked 200-row view with search within that page. Native history, exports, deletion, frequency editing, Cashflow classification and Verification field-policy previews await their own phases.
 - Verification uses owned PostgreSQL and synthetic Python/browser comparisons. Representative corpus/scale, shared-schema/catalog compatibility and explicit live activation remain gates. See CHANGELOG_ARCHIVE.md, Data Bank P30.
 
+### P31 history/export boundary
+
+- `DataBank:HistoryEnabled=false` and `DataBankExports:Enabled=false` require P30 reads. History/matching exports explicitly permit P30's home administrators and active assigned managers/internees; complete current/history backups require tenant administrators. Context, object access and revocation are rechecked before release; sharing and purge remain gated.
+- History preserves prior JSON, saved action/fields, actor/time and exact ledger scope, including history-only accounts/templates. Unique legacy delete/reinsert matches affect display/action filters only. Saved upload changes and legacy audit records have separate counts/paging; unknown prior field detail stays explicit. Labels resolve permanent keys; exact-number companions preserve browser values.
+- Matching downloads use the loaded preview's dates, filters and account; dirty selections require reload. Complete backups ignore preview filters and include all dates/accounts on Data and Changed-Deleted History sheets. Preserve every raw field, source order, line multiplicity, original action, changed-field JSON and source metadata; source-row JSON also preserves null/missing/type distinctions.
+- Capture complete inputs in one enforced read-only snapshot, close it before ZIP/XML work, then recheck access. Default export bounds: one reader, 60 seconds, 100,000 combined rows, 32 MiB input, 8 MiB compressed/64 MiB expanded workbook; oversized inputs/cells refuse without partial files. No persistent artifact, schema or dependency is added; heavy export/job activation remains gated.
+- OOXML writes literal text/leading-zero codes, booleans and exact numeric tokens. Values outside Excel's reliable numeric precision/range remain text. Escape literal `_xHHHH_`, reject ambiguous headers/unsupported cells, and preserve original JSON alongside readable fields. Framework ZIP/XML follows P27's safety pattern; no formula execution or automatic backup restore is added.
+- Native controls distinguish matching export from administrator backup; progress/cancellation, scope checks and stale-response guards cover histories, revisions and downloads. Python UI/protocols remain compatible. Ledger import/re-upload proof, representative corpus/scale, shared catalog review and live activation remain separate gates. See CHANGELOG_ARCHIVE.md, Data Bank P31.
+
 ## 3. PostgreSQL and financial values
 
 | Contract | Required behavior |

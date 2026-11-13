@@ -17,7 +17,8 @@
     // Setup screen cannot fall through into the legacy transfer protocol.
     window.AppConfigurationBackup = { enabled: tag.dataset.backupsEnabled === 'true', canEdit: tag.dataset.settingsAdmin === 'true' };
     window.AppNativeUpload = { enabled: tag.dataset.uploadEnabled === 'true', maximumFileBytes: Number(tag.dataset.uploadLimit) };
-    window.AppNativeDataBank = { enabled: tag.dataset.databankEnabled === 'true' };
+    window.AppNativeDataBank = { enabled: tag.dataset.databankEnabled === 'true', history: tag.dataset.historyEnabled === 'true',
+        exports: tag.dataset.exportsEnabled === 'true', canBackup: tag.dataset.settingsAdmin === 'true', maximumExportBytes: Number(tag.dataset.exportLimit) };
     const marker = key + '/' + tenant;
     let changed = true;
     try {
@@ -109,6 +110,10 @@
             if (path === '/static/databank.html' && window.AppNativeDataBank.enabled)
                 child = { label: 'Data Bank previews and totals', url: '/static/databank.html?feature=data-reads', state: 'ready', keywords: ['rows', 'footing', 'coverage', 'ledger', 'filter'] };
             if (child) { item.children ||= []; if (!item.children.some(c => c.url === child.url)) item.children.push(child); }
+            if (path === '/static/databank.html' && window.AppNativeDataBank.enabled && window.AppNativeDataBank.history) {
+                item.children ||= []; const url = '/static/databank.html?feature=history-exports';
+                if (!item.children.some(c => c.url === url)) item.children.push({ label: 'Changed/deleted history and downloads', url, state: 'ready', keywords: ['history', 'changed', 'deleted', 'backup', 'export'] });
+            }
         }));
         const nav = document.createElement('nav');
         nav.setAttribute('aria-label', 'Workspace');

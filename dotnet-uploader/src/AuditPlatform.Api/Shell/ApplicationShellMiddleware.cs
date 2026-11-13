@@ -18,7 +18,7 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
     public async Task InvokeAsync(HttpContext context, IOptions<ApplicationShellOptions> options,
         TenantSessionService tenants, AuditPlatform.Api.Clients.TenantClientService clients,
         IOptions<SettingsManagementOptions> settings,IOptions<ColumnManagementOptions> columns,IOptions<TemplateManagementOptions> templates,IOptions<SavedMappingOptions> mappings,
-        IOptions<ConfigurationBackupOptions> backups,IOptions<UploadUiOptions> uploadUi,IOptions<UploadStagingOptions> staging,IOptions<DataBankOptions> dataBank)
+        IOptions<ConfigurationBackupOptions> backups,IOptions<UploadUiOptions> uploadUi,IOptions<UploadStagingOptions> staging,IOptions<DataBankOptions> dataBank,IOptions<DataBankExportOptions> dataExports)
     {
         if (!options.Value.Enabled) { await next(context); return; }
         var path=context.Request.Path.Value ?? "/";
@@ -115,6 +115,7 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
         var script=$"<script src=\"/shell/context.js\" data-context=\"{key}\" data-tenant=\"{selectedTenant}\" data-settings-enabled=\"{settingsEnabled}\" data-settings-admin=\"{settingsAdmin}\" data-columns-enabled=\"{columnsEnabled}\" data-templates-enabled=\"{templatesEnabled}\" data-mappings-enabled=\"{mappingsEnabled}\" data-backups-enabled=\"{backupsEnabled}\"></script>";
         script=script.Replace(" data-backups-enabled=",$" data-upload-enabled=\"{(uploadUi.Value.Enabled?"true":"false")}\" data-upload-limit=\"{staging.Value.MaximumFileBytes}\" data-backups-enabled=",StringComparison.Ordinal);
         script=script.Replace(" data-backups-enabled=",$" data-databank-enabled=\"{(dataBank.Value.Enabled?"true":"false")}\" data-backups-enabled=",StringComparison.Ordinal);
+        script=script.Replace(" data-backups-enabled=",$" data-history-enabled=\"{(dataBank.Value.HistoryEnabled?"true":"false")}\" data-exports-enabled=\"{(dataExports.Value.Enabled?"true":"false")}\" data-export-limit=\"{dataExports.Value.MaximumWorkbookBytes}\" data-backups-enabled=",StringComparison.Ordinal);
         if(!shell && file=="upload.html")
         {
             // Exact packaged assets only. No nested repository or upload path is served.

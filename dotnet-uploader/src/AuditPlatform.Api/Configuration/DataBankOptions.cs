@@ -6,6 +6,7 @@ public sealed class DataBankOptions
 {
     public const string SectionName = "DataBank";
     public bool Enabled { get; set; }
+    public bool HistoryEnabled { get; set; }
     [Range(1, 8)] public int MaximumConcurrentRequests { get; set; } = 2;
     [Range(1, 120)] public int TimeoutSeconds { get; set; } = 30;
     [Range(4096, 8388608)] public int MaximumResponseBytes { get; set; } = 1048576;

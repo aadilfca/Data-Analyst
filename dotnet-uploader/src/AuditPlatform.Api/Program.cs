@@ -136,8 +136,15 @@ builder.Services.AddOptions<UploadUiOptions>()
 builder.Services.AddOptions<DataBankOptions>()
     .Bind(builder.Configuration.GetSection(DataBankOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
 builder.Services.AddSingleton<DataBankService>();
+builder.Services.AddOptions<DataBankExportOptions>()
+    .Bind(builder.Configuration.GetSection(DataBankExportOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
+builder.Services.AddSingleton<DataBankExportService>();
 
 var app = builder.Build();
+if ((app.Services.GetRequiredService<IOptions<DataBankExportOptions>>().Value.Enabled
+        || app.Services.GetRequiredService<IOptions<DataBankOptions>>().Value.HistoryEnabled)
+    && !app.Services.GetRequiredService<IOptions<DataBankOptions>>().Value.Enabled)
+    throw new OptionsValidationException(DataBankOptions.SectionName, typeof(DataBankOptions), ["History and exports require Data Bank reads."]);
 if (app.Services.GetRequiredService<IOptions<DataBankOptions>>().Value.Enabled
     && (!app.Services.GetRequiredService<IOptions<ApplicationShellOptions>>().Value.Enabled
         || !app.Services.GetRequiredService<IOptions<TemplateManagementOptions>>().Value.Enabled

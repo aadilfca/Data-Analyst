@@ -5,6 +5,10 @@
 // API_BASE and STORAGE_KEY are defined in client_context.js
 const dataBankPerfEnabled = new URLSearchParams(window.location.search).get('perf') === '1';
 const nativeDataBank = window.AppNativeDataBank;
+let nativeLoadedExportKey = null;
+let nativeDownloadController = null;
+let nativeDownloadSequence = 0;
+let nativeRevisionSequence = 0;
 function nativeReadAvailable() { return !nativeDataBank || nativeDataBank.enabled; }
 function assertNativeClient(response, clientId) {
     if (nativeDataBank && response.headers.get('X-DataBank-Client') !== String(clientId)) throw new Error('Data scope changed. Refresh to continue.');
@@ -31,6 +35,88 @@ function nativeExactText(value) {
     let text = (value.coefficient < 0n ? -value.coefficient : value.coefficient).toString().padStart(value.scale + 1, '0');
     if (value.scale) text = text.slice(0, -value.scale) + '.' + text.slice(-value.scale);
     return (value.coefficient < 0n ? '-' : '') + text;
+}
+
+function nativeHistoryValue(value) {
+    if (value == null || value === '') return '—';
+    return typeof value === 'object' ? JSON.stringify(value) : String(value);
+}
+function nativeExportKey(spec) {
+    if (!spec) return null;
+    const params = new URLSearchParams(spec.params);
+    ['page', 'limit', 'include_metrics', 'perf'].forEach(key => params.delete(key)); params.sort();
+    return params.toString();
+}
+function updateNativeExportButton() {
+    const button = document.getElementById('nativeExportMatching'); if (!button) return;
+    button.hidden = !nativeDataBank?.exports;
+    if (!nativeDataBank?.exports) return;
+    button.disabled = !!nativeDownloadController || isPreviewLoading || !isPreviewOpen || previewMode !== 'raw'
+        || !nativeLoadedExportKey || nativeExportKey(buildPreviewRequestSpec()) !== nativeLoadedExportKey;
+}
+function cancelNativeDownload() { nativeDownloadSequence++; nativeDownloadController?.abort(); }
+async function nativeDownload(templateId, backup = false) {
+    if (!nativeDataBank?.exports || nativeDownloadController || backup && (!nativeDataBank.history || !nativeDataBank.canBackup)) return;
+    const clientId = Number(getSelectedClientId()); if (!clientId) return;
+    const key = backup ? null : nativeExportKey(buildPreviewRequestSpec());
+    if (!backup && (!isPreviewOpen || previewMode !== 'raw' || isPreviewLoading || key !== nativeLoadedExportKey || Number(previewTemplateId) !== Number(templateId))) return;
+    const params = backup ? new URLSearchParams({ client_id: String(clientId) }) : new URLSearchParams(key);
+    if (!backup) params.delete('template_id');
+    const controller = new AbortController(); nativeDownloadController = controller; const sequence = ++nativeDownloadSequence;
+    const panel = document.getElementById('nativeDownloadPanel'), status = document.getElementById('nativeDownloadStatus'), cancel = document.getElementById('nativeDownloadCancel');
+    panel.hidden = false; cancel.hidden = false; status.textContent = backup ? 'Preparing the complete current/history backup…' : 'Preparing all rows matching the loaded preview…'; updateNativeExportButton();
+    const timer = setTimeout(() => controller.abort(), 75000);
+    try {
+        const response = await fetch(`${API_BASE}/api/data/template/${templateId}/${backup ? 'backup' : 'export'}?${params}`, { signal: controller.signal, cache: 'no-store' });
+        if (!response.ok) { let message = 'Download could not be completed.'; try { message = (await response.json()).detail || message; } catch (_) {} throw new Error(message); }
+        assertNativeClient(response, clientId);
+        if (response.headers.get('X-DataBank-Template') !== String(templateId) || response.headers.get('X-Export-Scope') !== (backup ? 'backup' : 'matching')) throw new Error('Download scope changed. Retry.');
+        const maximum = nativeDataBank.maximumExportBytes;
+        if (!Number.isSafeInteger(maximum) || maximum < 1 || Number(response.headers.get('Content-Length')) > maximum) throw new Error('The complete workbook exceeds the download limit.');
+        const bytes = await response.arrayBuffer(); if (!bytes.byteLength || bytes.byteLength > maximum) throw new Error('The complete workbook exceeds the download limit.');
+        if (sequence !== nativeDownloadSequence || Number(getSelectedClientId()) !== clientId || !backup && (key !== nativeLoadedExportKey || key !== nativeExportKey(buildPreviewRequestSpec()))) throw new Error('Selection changed. Request the download again.');
+        const header = response.headers.get('Content-Disposition') || '';
+        const utf = /filename\*=UTF-8''([^;]+)/i.exec(header), plain = /filename="([^"]+)"/i.exec(header);
+        let name = utf ? decodeURIComponent(utf[1]) : plain ? plain[1] : 'data-export.xlsx'; name = name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_');
+        const url = URL.createObjectURL(new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+        const link = document.createElement('a'); link.href = url; link.download = name; document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 30000);
+        status.textContent = backup ? 'Complete backup download started. No data was deleted.' : 'Matching-row download started.';
+    } catch (error) {
+        status.textContent = controller.signal.aborted || sequence !== nativeDownloadSequence ? 'Download cancelled or timed out. Request it again to retry.' : 'Download unavailable: ' + error.message;
+    } finally {
+        clearTimeout(timer); if (nativeDownloadController === controller) nativeDownloadController = null;
+        cancel.hidden = true; updateNativeExportButton();
+    }
+}
+async function nativeRowRevisions(icon, rowId, source = 'uploads', page = 1) {
+    const clientId = Number(getSelectedClientId()), template = Number(previewTemplateId), sequence = ++nativeRevisionSequence;
+    const current = () => sequence === nativeRevisionSequence && activeHistoryIcon === icon && isPreviewOpen && Number(getSelectedClientId()) === clientId && Number(previewTemplateId) === template;
+    rowHistoryBody.replaceChildren(document.createTextNode('Loading recorded changes…'));
+    try {
+        const params = new URLSearchParams({ client_id: clientId, template_id: template, source, page, limit: 25 });
+        const response = await fetch(`${API_BASE}/api/data/rows/${rowId}/history?${params}`);
+        if (!response.ok) throw new Error('Recorded changes unavailable.'); const data = await response.json(); if (!current()) return;
+        assertNativeClient(response, clientId);
+        if (Number(data.client_data_id) !== Number(rowId) || Number(data.template_id) !== template || data.source !== source || data.page !== page) throw new Error('Revision scope changed.');
+        const choose = document.createElement('select'); choose.setAttribute('aria-label', 'Revision source');
+        for (const [value, label] of [['uploads', 'Saved upload changes'], ['legacy', 'Legacy audit records']]) { const option = document.createElement('option'); option.value = value; option.textContent = label; choose.appendChild(option); }
+        choose.value = source; choose.addEventListener('change', () => nativeRowRevisions(icon, rowId, choose.value, 1));
+        const note = document.createElement('p'); note.textContent = 'Sources may describe the same change; their record counts are separate.';
+        const count = document.createElement('p'); count.textContent = `${data.total} records · page ${page} of ${data.total_pages || 1}`; rowHistoryBody.replaceChildren(choose, note, count);
+        for (const revision of data.revisions || []) {
+            const block = document.createElement('section'), title = document.createElement('p'); title.textContent = `${revision.action} · ${formatHistoryTimestamp(revision.changed_at)} · ${revision.user || 'System'}`; block.appendChild(title);
+            if (!revision.details_available) block.appendChild(document.createTextNode('Field-by-field details were not saved.'));
+            else for (const [field, change] of Object.entries(revision.changed_fields || {})) {
+                const line = document.createElement('p'), name = document.createElement('strong'); name.textContent = field + ': '; line.appendChild(name);
+                appendHistoryChangeValue(line, change, revision.numeric_text?.[field]); block.appendChild(line);
+            }
+            rowHistoryBody.appendChild(block);
+        }
+        for (const [label, target, disabled] of [['Previous', page - 1, page <= 1], ['Next', page + 1, page >= data.total_pages]]) {
+            const button = document.createElement('button'); button.type = 'button'; button.textContent = label; button.disabled = disabled;
+            button.addEventListener('click', () => nativeRowRevisions(icon, rowId, source, target)); rowHistoryBody.appendChild(button);
+        }
+    } catch (error) { if (current()) rowHistoryBody.replaceChildren(document.createTextNode(error.message)); }
 }
 
 function logDataBankPerf(operation, startedAt, details) {
@@ -450,6 +536,7 @@ function escapeHtml(value) {
 // the Phase 1 endpoint and renders generically off the "changes" array,
 // so it works for any template without hardcoding field names.
 function hideRowHistoryPopover() {
+    nativeRevisionSequence++;
     rowHistoryPopover.style.display = 'none';
     activeHistoryIcon = null;
 }
@@ -504,6 +591,11 @@ async function showRowHistoryPopover(icon, clientDataId) {
     rowHistoryBody.innerHTML = '<div style="color:#94a3b8;">Loading...</div>';
     rowHistoryPopover.style.display = 'block';
     activeHistoryIcon = icon;
+
+    if (nativeDataBank) {
+        if (nativeDataBank.history) await nativeRowRevisions(icon, clientDataId);
+        return;
+    }
 
     try {
         const res = await fetch(`${API_BASE}/api/data/rows/${clientDataId}/history`);
@@ -1034,6 +1126,7 @@ async function loadAndApplyAvailabilityMetrics(clientId, requestSequence, cacheG
 }
 
 function invalidateDataBankCaches({ clientId = null, templateId = null } = {}) {
+    nativeLoadedExportKey = null; updateNativeExportButton();
     previewCacheGeneration += 1;
     availabilityRequestSequence += 1;
     if (nativeDataBank) { templateColumnsCache = {}; templateSubtotalDefaultCache = {}; templatePurposeCache = {}; }
@@ -1364,6 +1457,13 @@ function buildDatasetActionButtons(item) {
             exportDataset(item.template_id, item.template_name);
         });
         if (!nativeDataBank) tdActions.appendChild(exportBtn);
+        else if (nativeDataBank.exports) {
+            exportBtn.title = 'Choose matching data and export';
+            const nativeExport = document.createElement('button'); nativeExport.className = 'action-btn export';
+            nativeExport.textContent = '📥'; nativeExport.title = 'Choose matching data and export';
+            nativeExport.addEventListener('click', () => openSharedRangePopover('gate', item.template_id, item.template_name));
+            tdActions.appendChild(nativeExport);
+        }
 
     }
 
@@ -1395,7 +1495,12 @@ function buildDatasetActionButtons(item) {
         event.stopPropagation();
         openUploadHistory(item);
     });
-    if (!nativeDataBank) tdActions.appendChild(historyBtn);
+    if (!nativeDataBank || nativeDataBank.history) tdActions.appendChild(historyBtn);
+    if (nativeDataBank?.exports && nativeDataBank.history && nativeDataBank.canBackup) {
+        const backup = document.createElement('button'); backup.className = 'action-btn export'; backup.textContent = '📦';
+        backup.title = 'Back up all current data and history'; backup.setAttribute('aria-label', `Back up all current data and history for ${item.template_name}`);
+        backup.addEventListener('click', () => nativeDownload(item.template_id, true)); tdActions.appendChild(backup);
+    }
 
     return tdActions;
 }
@@ -1934,14 +2039,14 @@ function formatHistoryTimestamp(value) {
         : parsed.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }
 
-function appendHistoryChangeValue(cell, change) {
+function appendHistoryChangeValue(cell, change, tokens = {}) {
     const oldValue = document.createElement('span');
     oldValue.className = 'history-old-value';
-    oldValue.textContent = formatCellValue(change.old_value);
+    oldValue.textContent = nativeDataBank ? tokens.old_value ?? nativeHistoryValue(change.old_value) : formatCellValue(change.old_value);
     const arrow = document.createTextNode(' → ');
     const newValue = document.createElement('span');
     newValue.className = 'history-new-value';
-    newValue.textContent = formatCellValue(change.new_value);
+    newValue.textContent = nativeDataBank ? tokens.new_value ?? nativeHistoryValue(change.new_value) : formatCellValue(change.new_value);
     cell.append(oldValue, arrow, newValue);
 }
 
@@ -1994,13 +2099,13 @@ function renderUploadHistory(data) {
                 const cell = document.createElement('td');
                 const change = changes && changes[name];
                 if (isDeleted) {
-                    cell.textContent = formatCellValue(rowData[name]);
+                    cell.textContent = nativeDataBank ? entry.numeric_text?.[name] ?? nativeHistoryValue(rowData[name]) : formatCellValue(rowData[name]);
                 } else if (change) {
-                    appendHistoryChangeValue(cell, change);
+                    appendHistoryChangeValue(cell, change, entry.changed_numeric_text?.[name]);
                 } else if (name === historyDocumentKeyColumn) {
                     // Keep the document/voucher identifier visible as context;
                     // other unchanged fields stay blank to focus on the effect.
-                    cell.textContent = formatCellValue(rowData[name]);
+                    cell.textContent = nativeDataBank ? entry.numeric_text?.[name] ?? nativeHistoryValue(rowData[name]) : formatCellValue(rowData[name]);
                 }
                 tr.appendChild(cell);
             });
@@ -2031,6 +2136,7 @@ async function loadHistoryLedgerAccounts(sequence) {
         client_id: String(historyClientId),
         template_id: String(historyTemplateId),
     });
+    if (nativeDataBank) params.set('history', 'true');
     const response = await fetch(`${API_BASE}/api/data/ledger-accounts?${params}`);
     if (!response.ok) throw new Error('Could not load ledger accounts');
     const data = await response.json();
@@ -2049,6 +2155,8 @@ async function loadHistoryLedgerAccounts(sequence) {
 }
 
 async function openUploadHistory(item) {
+    if (nativeDataBank && !nativeDataBank.history) return;
+    if (nativeDataBank) { previewRequestSequence++; isPreviewOpen = false; previewModal.style.display = 'none'; hideRowHistoryPopover(); }
     const clientId = getSelectedClientId();
     if (!clientId || !item.template_id) return;
     historyRequestSequence++;
@@ -2062,6 +2170,7 @@ async function openUploadHistory(item) {
     historyActionFilter.value = 'all';
     historyLedgerSelect.replaceChildren();
     historyLedgerControl.hidden = true;
+    if (nativeDataBank) historyLedgerControl.style.display = 'none';
     historyTableHead.replaceChildren();
     historyTableBody.replaceChildren();
     historyTitle.textContent = `📜 Changed/Deleted data — ${historyTemplateName}`;
@@ -2090,11 +2199,14 @@ async function fetchUploadHistory(page = 1) {
         if (sequence !== historyRequestSequence
             || Number(getSelectedClientId()) !== historyClientId
             || Number(data.template_id) !== historyTemplateId) return;
+        assertNativeClient(response, historyClientId);
+        if (nativeDataBank && Number(data.client_id) !== historyClientId) throw new Error('History scope changed.');
         historyTemplateName = data.template_name || historyTemplateName;
         historyColumns = data.columns || [];
         historyDocumentKeyColumn = data.document_key_column || null;
         historyTitle.textContent = `📜 Changed/Deleted data — ${historyTemplateName}`;
         historyLedgerControl.hidden = data.data_purpose !== 'account_ledger';
+        if (nativeDataBank) historyLedgerControl.style.display = data.data_purpose === 'account_ledger' ? 'flex' : 'none';
         renderUploadHistory(data);
         if (data.data_purpose === 'account_ledger' && historyLedgerSelect.options.length <= 1) {
             try {
@@ -2293,6 +2405,7 @@ async function fetchPreviewData() {
     }
 
     const requestId = ++previewRequestSequence;
+    nativeLoadedExportKey = null; updateNativeExportButton();
     setPreviewMetricsState();
     const requestWasCached = !!getCachedPreviewPage(requestSpec.cacheKey);
     isPreviewLoading = true;
@@ -2335,6 +2448,7 @@ async function fetchPreviewData() {
         const renderStarted = dataBankPerfEnabled ? performance.now() : null;
         await renderPreviewRows(rows, requestId);
         if (requestId !== previewRequestSequence || !isPreviewOpen) return;
+        nativeLoadedExportKey = nativeExportKey(requestSpec);
         updatePagination();
         if (dataBankPerfEnabled) {
             logDataBankPerf('databank_preview', perfStarted, {
@@ -2364,6 +2478,7 @@ async function fetchPreviewData() {
     } finally {
         if (requestId === previewRequestSequence) {
             isPreviewLoading = false;
+            updateNativeExportButton();
         }
     }
 }
@@ -2520,7 +2635,7 @@ async function renderPreviewRows(rows, requestId = previewRequestSequence) {
             const historyIcon = document.createElement('span');
             historyIcon.className = 'history-icon';
             historyIcon.textContent = '⚠️';
-            historyIcon.title = `${row.revision_count} revision(s)`;
+            historyIcon.title = nativeDataBank ? `${row.upload_revision_count || 0} saved upload changes; ${row.revision_count || 0} legacy audit records` : `${row.revision_count} revision(s)`;
             // Click-to-open/toggle instead of hover: hover closed the popover
             // as soon as the mouse moved toward it, before it could be read.
             historyIcon.addEventListener('click', (e) => {
@@ -3077,6 +3192,7 @@ let clientChangeTimeout;
 window.onClientChange = function(clientId) {
     clearTimeout(clientChangeTimeout);
     if (nativeDataBank) {
+        cancelNativeDownload(); historyRequestSequence++; historyModal.style.display = 'none'; hideRowHistoryPopover();
         invalidateDataBankCaches();
         resetDatasetTables('Client changed. Loading current data…');
         [statsTotalRecords, statsTotalTemplates, statsClientDbSize, statsOverdueUploads].forEach(el => el.textContent = '—');
@@ -3130,6 +3246,11 @@ async function openClassificationFromQuery() {
     await openClassificationPreview(templateId, query.get('template_name') || 'Transaction Report');
 }
 // ---------- INIT ----------
+document.getElementById('nativeExportMatching').addEventListener('click', () => nativeDownload(previewTemplateId));
+document.getElementById('nativeDownloadCancel').addEventListener('click', cancelNativeDownload);
+previewModal.addEventListener('input', updateNativeExportButton);
+previewModal.addEventListener('change', updateNativeExportButton);
+window.addEventListener('focus', () => { if (nativeDataBank?.history && historyModal.style.display === 'flex') void fetchUploadHistory(historyPage); });
 window.onload = async function() {
     // Show feedback before session/settings initialization so the user never
     // lands on an apparently idle Client Data page.

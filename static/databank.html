@@ -652,10 +652,10 @@
             font-size: 22px;
             color: #1a1a2e;
         }
-        #previewModal .preview-title-row { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px; }
+        #previewModal .preview-title-row { display: flex; flex-wrap: wrap; width: 100%; align-items: center; justify-content: space-between; gap: 12px; }
         #previewModal .preview-title-block { display: flex; flex: 1 1 auto; min-width: 0; align-items: baseline; }
         #previewModal .preview-title-block h2 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        #previewModal .preview-header-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 12px; }
+        #previewModal .preview-header-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; max-width: 100%; align-items: center; gap: 12px; }
         #previewModal #previewMetrics { display: flex; max-width: 100%; flex-wrap: wrap; justify-content: flex-end; gap: 4px 12px; margin-left: auto; color: #64748b; font-size: 12px; }
         #previewModal #previewMetrics[hidden] { display: none; }
         #previewModal .preview-metric { display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; max-width: 100%; }
@@ -1154,6 +1154,10 @@
 
         <!-- ===== STATUS MESSAGE ===== -->
         <div id="statusMessage" class="upload-status" style="margin-top:20px; display:none;"></div>
+        <div id="nativeDownloadPanel" hidden role="status" style="margin-top:12px;">
+            <span id="nativeDownloadStatus"></span>
+            <button type="button" id="nativeDownloadCancel" hidden>Cancel download</button>
+        </div>
     </div>
 
     <!-- ============================================= -->
@@ -1169,6 +1173,7 @@
                         <h2 id="previewTitle">Dataset Preview</h2>
                     </div>
                     <div class="preview-header-actions">
+                        <button type="button" id="nativeExportMatching" class="btn-secondary" hidden disabled>Export matching rows</button>
                         <!-- Page Size Selector -->
                         <div class="page-size-selector">
                             <label for="pageSizeSelect">Rows per page:</label>
@@ -1427,7 +1432,7 @@
     <script src="/static/loading_ui.js?v=2"></script>
     <script src="/static/client_context.js?v=29"></script>
     <script src="/static/api_utils.js?v=1"></script>
-    <script src="/static/databank.js?v=15"></script>
+    <script src="/static/databank.js?v=16"></script>
 </body>
 
 </html>

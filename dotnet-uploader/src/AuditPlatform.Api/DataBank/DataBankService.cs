@@ -24,6 +24,8 @@ public sealed class DataBankService(PostgresReadSnapshot snapshots, IOptions<Dat
     public async Task<DataBankResult> ReadAsync(VerifiedSession? session, DataBankQuery query, CancellationToken ct = default)
     {
         if (!options.Value.Enabled) return new("unavailable", Code: "databank_disabled");
+        if (query.Operation is "history" or "revisions" or "history-accounts" && !options.Value.HistoryEnabled)
+            return new("unavailable", Code: "databank_history_disabled");
         if (session is null) return new("unauthenticated", Code: "not_authenticated");
         if (!Valid(query)) return new("invalid", Code: "invalid_databank_request");
         if (!await requests.WaitAsync(0, ct)) return new("busy", Code: "databank_busy");
@@ -44,6 +46,9 @@ public sealed class DataBankService(PostgresReadSnapshot snapshots, IOptions<Dat
                     "overdue" => await Overdue(db, session.TenantId.Value, query, templates, token),
                     "accounts" => await Accounts(db, query, templates.Single(t => t.Id == query.TemplateId), token),
                     "preview" => await Preview(db, query, templates.Single(t => t.Id == query.TemplateId), token),
+                    "history" => await DataBankHistoryService.History(db, query, templates.Single(t => t.Id == query.TemplateId), options.Value.MaximumResponseBytes, token),
+                    "revisions" => await DataBankHistoryService.Revisions(db, query, templates.Single(t => t.Id == query.TemplateId), options.Value.MaximumResponseBytes, token),
+                    "history-accounts" => await DataBankHistoryService.Accounts(db, query, templates.Single(t => t.Id == query.TemplateId), options.Value.MaximumLedgerAccounts, token),
                     _ => throw new DataBankRejected("unavailable", "databank_operation_unavailable")
                 };
             }, deadline.Token);
@@ -60,7 +65,7 @@ public sealed class DataBankService(PostgresReadSnapshot snapshots, IOptions<Dat
         finally { requests.Release(); }
     }
 
-    private static bool Valid(DataBankQuery q)
+    internal static bool Valid(DataBankQuery q)
     {
         if (q.ClientId <= 0 || q.TemplateId is <= 0 || q.Page < 1 || q.Limit is < 1 or > 200
             || (long)(q.Page - 1) * q.Limit > int.MaxValue || q.Search?.Length > 512 || q.Account?.Length > 120
@@ -68,7 +73,9 @@ public sealed class DataBankService(PostgresReadSnapshot snapshots, IOptions<Dat
             || q.Quality is not (null or "" or "complete" or "incomplete")
             || q.Minimum is {} min && !double.IsFinite(min) || q.Maximum is {} max && !double.IsFinite(max)
             || q.Minimum > q.Maximum) return false;
-        if (q.Operation is "preview" or "accounts" && q.TemplateId is null) return false;
+        if (q.Operation is "preview" or "accounts" or "history" or "revisions" or "history-accounts" && q.TemplateId is null) return false;
+        if (q.Operation is "history" or "revisions" && (q.Limit > 100 || q.Action is not ("all" or "changed" or "deleted"))) return false;
+        if (q.Operation == "revisions" && (q.RowId is not > 0 || q.RevisionSource is not ("uploads" or "legacy"))) return false;
         if (q.Operation is "availability" or "preview")
             return DateOnly.TryParseExact(q.Start, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var start)
                 && DateOnly.TryParseExact(q.End, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var end) && start <= end;
@@ -77,7 +84,7 @@ public sealed class DataBankService(PostgresReadSnapshot snapshots, IOptions<Dat
         return true;
     }
 
-    private static async Task Authorize(PostgresTransactionContext db, VerifiedSession session, int client, CancellationToken ct)
+    internal static async Task Authorize(PostgresTransactionContext db, VerifiedSession session, int client, CancellationToken ct, bool admin = false)
     {
         if (!session.TenantContextRequired || session.TenantId is not > 0 || !AuthenticationService.ValidToken(session.Token))
             Reject("forbidden", "databank_access_denied");
@@ -90,6 +97,7 @@ public sealed class DataBankService(PostgresReadSnapshot snapshots, IOptions<Dat
             WHERE s.token=$1 AND s.user_id=$2 AND t.id=$3 AND c.id=$4
               AND s.selected_tenant_id=t.id AND s.context_version=$5 AND s.selected_client_id=c.id
               AND s.expiry>now() AND u.is_active IS TRUE AND m.is_active IS TRUE AND t.is_active IS TRUE AND c.is_active IS TRUE
+              AND (NOT $6 OR m.tenant_role='admin')
               AND (m.tenant_role='admin' OR (t.tenant_type='audit_firm' AND EXISTS (
                 SELECT 1 FROM public.platform_audit_engagements e JOIN public.platform_engagement_assignments a
                 ON a.engagement_id=e.id AND a.firm_tenant_id=e.firm_tenant_id
@@ -98,8 +106,12 @@ public sealed class DataBankService(PostgresReadSnapshot snapshots, IOptions<Dat
             """);
         command.Parameters.AddWithValue(session.Token); command.Parameters.AddWithValue(session.UserId);
         command.Parameters.AddWithValue(session.TenantId ?? 0); command.Parameters.AddWithValue(client); command.Parameters.AddWithValue(session.ContextVersion);
+        command.Parameters.AddWithValue(admin);
         if (await command.ExecuteScalarAsync(ct) is null) Reject("forbidden", "databank_access_denied");
     }
+
+    internal async Task<DataBankTemplate> TemplateWithin(PostgresTransactionContext db, int tenant, int id, CancellationToken ct) =>
+        (await Templates(db, tenant, id, ct)).SingleOrDefault() ?? throw new DataBankRejected("not_found", "template_not_found");
 
     private async Task<List<DataBankTemplate>> Templates(PostgresTransactionContext db, int tenant, int? templateId, CancellationToken ct)
     {
@@ -283,7 +295,7 @@ public sealed class DataBankService(PostgresReadSnapshot snapshots, IOptions<Dat
         return new { accounts = rows };
     }
 
-    private async Task<object> Preview(PostgresTransactionContext db, DataBankQuery q, DataBankTemplate t, CancellationToken ct)
+    internal static async Task<string> PreviewPredicate(PostgresTransactionContext db, DataBankQuery q, DataBankTemplate t, NpgsqlCommand command, CancellationToken ct, bool sunday = false)
     {
         if (q.Account is not null)
         {
@@ -294,7 +306,6 @@ public sealed class DataBankService(PostgresReadSnapshot snapshots, IOptions<Dat
         }
         // An account-ledger view must never accidentally broaden into all accounts.
         if (t.Purpose == "account_ledger" && q.Account is null) Reject("invalid", "select_uploaded_ledger_account");
-        await using var command = db.CreateCommand("");
         string Param(object? value, NpgsqlDbType type)
         { command.Parameters.AddWithValue(type, value ?? DBNull.Value); return "$" + command.Parameters.Count.ToString(CultureInfo.InvariantCulture); }
         string client = Param(q.ClientId, NpgsqlDbType.Integer), template = Param(t.Id, NpgsqlDbType.Integer);
@@ -306,6 +317,15 @@ public sealed class DataBankService(PostgresReadSnapshot snapshots, IOptions<Dat
         if (q.Maximum is not null) where += $" AND cd.extract_amount<={Param(q.Maximum, NpgsqlDbType.Double)}";
         if (q.Quality == "incomplete") where += " AND cd.data_quality_flag='incomplete'";
         if (q.Quality == "complete") where += " AND cd.data_quality_flag IS NULL";
+        if (sunday && q.Sunday) where += " AND EXTRACT(DOW FROM cd.extract_date)=0";
+        return where;
+    }
+    private async Task<object> Preview(PostgresTransactionContext db, DataBankQuery q, DataBankTemplate t, CancellationToken ct)
+    {
+        await using var command = db.CreateCommand("");
+        string where = await PreviewPredicate(db, q, t, command, ct);
+        string Param(object? value, NpgsqlDbType type)
+        { command.Parameters.AddWithValue(type, value ?? DBNull.Value); return "$" + command.Parameters.Count.ToString(CultureInfo.InvariantCulture); }
         command.CommandText = $"SELECT count(*) FROM public.client_data cd WHERE {where} AND EXTRACT(DOW FROM cd.extract_date)=0";
         long sundays = (long)(await command.ExecuteScalarAsync(ct))!;
         if (q.Sunday) where += " AND EXTRACT(DOW FROM cd.extract_date)=0";
@@ -361,7 +381,7 @@ public sealed class DataBankService(PostgresReadSnapshot snapshots, IOptions<Dat
             ORDER BY cd.extract_date ASC NULLS LAST,cd.source_order_upload_id ASC NULLS LAST,cd.source_row_number ASC NULLS LAST,cd.id
             LIMIT {Param(q.Limit, NpgsqlDbType.Integer)} OFFSET {Param((q.Page - 1) * q.Limit, NpgsqlDbType.Integer)}
             """;
-        var rows = new List<object>(); long bytes = 0;
+        var rows = new List<Dictionary<string, object?>>(); long bytes = 0;
         await using (var reader = await command.ExecuteReaderAsync(ct))
         while (await reader.ReadAsync(ct))
         {
@@ -383,9 +403,11 @@ public sealed class DataBankService(PostgresReadSnapshot snapshots, IOptions<Dat
                 ? cell.ValueKind == JsonValueKind.String ? cell.GetString()?.Trim() : cell.ValueKind == JsonValueKind.Null ? null : cell.GetRawText().Trim() : null;
             string group = t.Purpose == "account_ledger" ? Text(reader, 6) ?? "__row_" + id
                 : string.IsNullOrEmpty(document) ? "__row_" + id : t.Columns.Any(c => c.Role == "document_id") ? document : document + "||" + date;
-            rows.Add(new { id, row_data = values, numeric_text = tokens, extract_amount = reader.IsDBNull(2) ? (float?)null : reader.GetFloat(2), extract_date = date,
-                data_quality_flag = Text(reader, 4), rate_source = Text(reader, 5), document_group_id = group });
+            rows.Add(new() { ["id"] = id, ["row_data"] = values, ["numeric_text"] = tokens,
+                ["extract_amount"] = reader.IsDBNull(2) ? (float?)null : reader.GetFloat(2), ["extract_date"] = date,
+                ["data_quality_flag"] = Text(reader, 4), ["rate_source"] = Text(reader, 5), ["document_group_id"] = group });
         }
+        if (options.Value.HistoryEnabled) await DataBankHistoryService.Flags(db, q.ClientId, t.Id, rows, ct);
         var result = new Dictionary<string, object?> { ["client_id"] = q.ClientId, ["template_id"] = t.Id, ["template_name"] = t.Name,
             ["total_rows"] = total, ["sunday_count"] = sundays, ["page"] = q.Page, ["limit"] = q.Limit, ["document_key_column"] = t.Document?.Name,
             ["date_column"] = t.Columns.FirstOrDefault(c => c.Type == "Date")?.Name, ["amount_columns"] = t.Columns.Where(c => c.Type == "Numeric").Select(c => c.Name).ToArray(),
