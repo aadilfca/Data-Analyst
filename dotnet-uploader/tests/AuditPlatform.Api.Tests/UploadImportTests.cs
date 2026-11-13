@@ -165,7 +165,7 @@ public sealed class UploadImportTests(ImportGoldenFixture golden) : IClassFixtur
             CREATE TABLE public.voucher_line_physical_bill_items(source_document_row_id INTEGER);
             CREATE TABLE public.cashflow_prepared_lines(source_client_data_id INTEGER);
             """);
-        await fixture.ApplyUploadImportsAsync(Token);
+        await fixture.ApplyUploadImportsAsync(Token);await fixture.ApplyUploadImportReceiptsAsync(Token);
         await Assert.ThrowsAsync<PostgresException>(()=>fixture.ApplyUploadImportsAsync(Token));
         var corrections=new UploadCorrectionService(identity,Options.Create(new UploadCorrectionOptions{Enabled=true}));
         var settings=Options.Create(Settings());var signer=new UploadValidationPlanSigner(settings);

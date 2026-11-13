@@ -222,8 +222,8 @@ public sealed class UploadStagingService(PostgresTransactions transactions,Postg
             // The generated suffix is .bin. Reader format detection uses the
             // source signature; the .xls hint still applies ZIP expansion guards.
             var output=await read(path,receipt.Hash!,before.Definition,limits,ct);
-            // The atomic importer rechecks bytes and authorization inside its
-            // transaction. Its durable outcome must survive post-COMMIT expiry.
+            // Import and no-change receipt coordinators recheck bytes/access
+            // inside their transaction. Durable outcomes survive later expiry.
             if(!recheckAfterRead) return new("success",output);
             if(!await Matches()) return new("gone",Code:"staged_file_changed");
             var after=await Snapshot();

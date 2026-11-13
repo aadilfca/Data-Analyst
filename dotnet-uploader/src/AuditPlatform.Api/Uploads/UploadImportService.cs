@@ -9,7 +9,7 @@ using Npgsql;
 namespace AuditPlatform.Api.Uploads;
 
 public sealed class UploadImportService(PostgresTransactions transactions,UploadValidationPlanStore plans,UploadValidationPlanSigner signer,
-    UploadStagingService staging,UploadImportWriter writer,PostgresAuditWriter audit,IOptions<UploadImportOptions> options,TimeProvider? clock=null)
+    UploadStagingService staging,UploadImportWriter writer,PostgresAuditWriter audit,IOptions<UploadImportOptions> options,TimeProvider? clock=null,IConfiguration? configuration=null)
 {
     private readonly SemaphoreSlim requests=new(options.Value.MaximumConcurrentRequests);
     private DateTimeOffset Now=>(clock??TimeProvider.System).GetUtcNow();
@@ -31,7 +31,7 @@ public sealed class UploadImportService(PostgresTransactions transactions,Upload
                     await plans.AuthorizeAsync(db,session,file,input.Review,false,async(context,_,cancellation)=>
                     {
                         var recovered=await ReadOutcome(context,session,file,input,cancellation);if(recovered is not null) return recovered;
-                        return await plans.AuthorizeAsync(context,session,file,input.Review,true,async(owned,_,cancel)=>
+                        return await plans.AuthorizeAsync(context,session,file,input.Review,true,async(owned,sourceExpiry,cancel)=>
                         {
                             var plan=await plans.Read(owned,session,null,input.PlanId,cancel)??throw new ValidationPlanRejected("plan_not_found");
                             UploadValidationPlanStore.Validate(plan,signer,Now);
@@ -59,7 +59,10 @@ public sealed class UploadImportService(PostgresTransactions transactions,Upload
                             {status.Parameters.AddWithValue(file);status.Parameters.AddWithValue(payload.Counts.Incoming);if(await status.ExecuteNonQueryAsync(cancel)!=1) throw new ValidationPlanRejected("import_source_changed");}
                             await using(var consume=owned.CreateCommand("DELETE FROM public.upload_validation_plans WHERE plan_id=$1 AND status='ready'"))
                             {consume.Parameters.AddWithValue(input.PlanId);if(await consume.ExecuteNonQueryAsync(cancel)!=1) throw new ValidationPlanRejected("plan_not_ready");}
-                            var outcome=new UploadImportOutput(input.OperationId,input.PlanId,file,payload.Counts,Now);
+                            var completion=Now;
+                            var completionReceipt=await UploadImportReceiptService.CreateWithinAsync(owned,session,file,input.OperationId,payload,"imported",completion,sourceExpiry,options.Value,cancel,
+                                configuration?.GetValue<long?>("Platform:DatabaseCapacityLimitBytes")??500000000);
+                            var outcome=new UploadImportOutput(input.OperationId,input.PlanId,file,payload.Counts,completion,completionReceipt.Id,completionReceipt.Reconciliation.Status);
                             await audit.WriteAsync(owned,new AuditEvent(Guid.NewGuid(),input.OperationId,new LogActor("authenticated",session.UserId,session.Username),source.ClientId,
                                 "UploadImported","UploadImport",JsonSerializer.SerializeToElement(new {tenant_id=session.TenantId,template_id=source.TemplateId,record_id=file,
                                     added=payload.Counts.Added,changed=payload.Counts.Changed,removed=payload.Counts.Removed})),cancel);

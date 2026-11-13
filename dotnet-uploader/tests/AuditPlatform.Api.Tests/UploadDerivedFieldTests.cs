@@ -208,7 +208,7 @@ public sealed class UploadDerivedFieldTests(DerivedGoldenFixture golden) : IClas
             INSERT INTO public.platform_tenant_columns(column_id,tenant_id,display_name,binding_origin) VALUES(7,101,'Memo','native');
             INSERT INTO public.template_column_mappings(template_id,column_id,sort_order,tenant_id,storage_key,compare_for_changes) VALUES(1,7,6,101,'col_7',FALSE);
             """);
-        await fixture.ApplyUploadImportsAsync(Token);await fixture.ApplyUploadDerivedFieldsAsync(Token);
+        await fixture.ApplyUploadImportsAsync(Token);await fixture.ApplyUploadImportReceiptsAsync(Token);await fixture.ApplyUploadDerivedFieldsAsync(Token);
         await Assert.ThrowsAsync<PostgresException>(()=>fixture.ApplyUploadDerivedFieldsAsync(Token));
         await Sql("""INSERT INTO public.platform_template_upload_bindings VALUES(1,101,'{"amount":3,"account_code":4,"account_name":6,"debit":3,"credit":5}')""");
         var corrections=new UploadCorrectionService(identity,Options.Create(new UploadCorrectionOptions{Enabled=true}));

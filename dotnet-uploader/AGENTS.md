@@ -67,9 +67,9 @@ Execution order: P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 (repor
 | P22 — Duplicate identity | Disabled identity review, occurrence matching and scoped no-op evidence locally accepted. Unverified Line/Rate bindings and compatibility cases remain gated. See CHANGELOG_ARCHIVE.md, Identity P22. |
 | P23 — Corrections | Disabled correction classification and whole-voucher guards locally accepted. Missing immutable fallback bindings remain gated. See CHANGELOG_ARCHIVE.md, Corrections P23. |
 | P24 — Validation plans | Disabled signed temporary plans and guarded freshness/retry checks locally accepted. Import remains disabled. See CHANGELOG_ARCHIVE.md, Validation plans P24. |
-| P25 — Atomic import | Disabled transactional current/history writes, protected references and compact recovery locally accepted. P26/P27 and live cutover remain gated. See CHANGELOG_ARCHIVE.md, Atomic import P25. |
+| P25 — Atomic import | Disabled transactional current/history writes, protected references and compact recovery locally accepted. Live cutover remains gated. See CHANGELOG_ARCHIVE.md, Atomic import P25. |
 | P26 — Derived fields | Disabled permanent bindings, guarded Rates, canonical fields and atomic voucher/freshness metadata locally accepted. See CHANGELOG_ARCHIVE.md, Derived fields P26. |
-| P27 — Import receipts | Port post-import SQL controls, receipts, summaries, and issue workbooks; reconcile stored values independently against source controls. |
+| P27 — Import receipts | Disabled independent SQL controls, immutable receipts and bounded OOXML evidence locally accepted. See CHANGELOG_ARCHIVE.md, Import receipts P27. |
 | P28 — Upload jobs | Add durable upload job progress, ownership, bounded retries, cancellation rules, and restart recovery; prove interrupted jobs cannot duplicate imports. |
 | P29 — Upload acceptance | Complete native binding/backup UI integration; exercise Upload against .NET with original/repeat/correction/partial/empty-period cases and measured performance. |
 | P30 — Data Bank reads | Port availability, metrics, previews, filters, pagination, and source order; verify totals and stale-cache protections. |

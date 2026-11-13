@@ -74,7 +74,9 @@ public sealed class UploadValidationPlanService(UploadCorrectionService correcti
                 UploadValidationPlanSigner.RequestHash(file,review),output.CorrectionKey,output.StoreKey,output.Counts,actions,
                 evidence.Existing.Select(r=>new ValidationPlanGuard(r.Id,UploadValidationPlanSigner.GuardHash(r),r.DerivedHash)).ToArray(),
                 evidence.Incoming.Select(r=>UploadIdentityValue.Group(evidence.Profile,r.Values)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
-                evidence.Actions.Where(r=>r.Action!="unchanged").Select(r=>r.DocumentGroup).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),evidence.Profile,derivedRefresh,groupCounts);
+                evidence.Actions.Where(r=>r.Action!="unchanged").Select(r=>r.DocumentGroup).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),evidence.Profile,derivedRefresh,groupCounts,
+                UploadStoredControlService.Capture(output.Coverage,evidence.Profile),
+                evidence.Actions.Where(a=>a.Row is not null).Select(a=>new ReceiptSourceRow(a.Row!.Value,a.ExistingId,a.DocumentGroup,a.Action)).ToArray());
             // Never truncate an actionable plan. Lossless scalar atoms keep the
             // original numeric lexeme and validated calendar date separate.
             if(!noOp) UploadPreparationService.JsonSize(payload,options.Value.MaximumPayloadBytes);

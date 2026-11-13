@@ -121,6 +121,7 @@ builder.Services.AddOptions<UploadImportOptions>()
     .Bind(builder.Configuration.GetSection(UploadImportOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
 builder.Services.AddSingleton<UploadImportWriter>();
 builder.Services.AddSingleton<UploadImportService>();
+builder.Services.AddSingleton<UploadImportReceiptService>();
 
 var app = builder.Build();
 if(app.Services.GetRequiredService<IOptions<UploadImportOptions>>().Value.Enabled

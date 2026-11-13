@@ -22,12 +22,48 @@ public sealed class UploadValidationPlanStore(PostgresTransactions transactions,
     internal async Task<T> AuthorizeAsync<T>(PostgresTransactionContext db,VerifiedSession session,int file,CorrectionRequest review,bool requireSource,
         Func<PostgresTransactionContext,DateTimeOffset,CancellationToken,Task<T>> action,CancellationToken token)
     {
-        if(!session.TenantContextRequired||session.TenantId is not >0||!AuthenticationService.ValidToken(session.Token)) throw new ValidationPlanRejected("plan_access_denied");
         var source=review.Coverage.Footing.Validation.Source;
+        return await AuthorizeScopeAsync(db,session,source.ClientId,source.TemplateId,async(_,__)=>
+        {
+            if(!requireSource) return await action(db,DateTimeOffset.MaxValue,token);
+            var definition=(await TenantTemplateService.LoadAsync(db,session.TenantId!.Value,source.TemplateId,token)).SingleOrDefault();
+            if(definition is null||definition.Origin!="native"||definition.Columns.Any(c=>!c.Active||c.Review)||definition.ConfigurationKey!=source.ConfigurationKey)
+                throw new ValidationPlanRejected("plan_configuration_changed");
+            await using(var revision=db.CreateCommand("""
+                SELECT definition_version FROM public.platform_tenant_saved_mapping_sets
+                WHERE tenant_id=$1 AND client_id=$2 AND template_id=$3 FOR SHARE
+                """))
+            {
+                revision.Parameters.AddWithValue(session.TenantId.Value);revision.Parameters.AddWithValue(source.ClientId);revision.Parameters.AddWithValue(source.TemplateId);
+                long current=Convert.ToInt64(await revision.ExecuteScalarAsync(token)??0,CultureInfo.InvariantCulture);
+                if(current!=source.MappingRevision) throw new ValidationPlanRejected("plan_mapping_changed");
+            }
+            DateTimeOffset expiry;
+            await using(var staged=db.CreateCommand("""
+                SELECT s.expires_at,s.sha256 FROM public.platform_upload_staging s JOIN public.uploaded_files f ON f.id=s.upload_id
+                WHERE s.upload_id=$1 AND s.tenant_id=$2 AND s.user_id=$3 AND s.client_id=$4 AND s.template_id=$5 AND s.state='ready'
+                  AND f.client_id=$4 AND f.template_id=$5 AND f.status IN('Pending','Validated') FOR SHARE OF s,f
+                """))
+            {
+                staged.Parameters.AddWithValue(file);staged.Parameters.AddWithValue(session.TenantId.Value);staged.Parameters.AddWithValue(session.UserId);
+                staged.Parameters.AddWithValue(source.ClientId);staged.Parameters.AddWithValue(source.TemplateId);
+                await using var reader=await staged.ExecuteReaderAsync(token);
+                if(!await reader.ReadAsync(token)) throw new ValidationPlanRejected("plan_source_unavailable");
+                expiry=new(reader.GetDateTime(0));
+                if(expiry<=Now||reader.GetString(1)!=source.Sha256) throw new ValidationPlanRejected("plan_source_changed");
+            }
+            return await action(db,expiry,token);
+        },token);
+    }
+
+    internal async Task<T> AuthorizeScopeAsync<T>(PostgresTransactionContext db,VerifiedSession session,int client,int template,
+        Func<PostgresTransactionContext,CancellationToken,Task<T>> action,CancellationToken token)
+    {
+        if(!session.TenantContextRequired||session.TenantId is not >0||!AuthenticationService.ValidToken(session.Token)) throw new ValidationPlanRejected("plan_access_denied");
         // Match existing configuration writers, then the Python import scope lock.
         await using(var config=db.CreateCommand("SELECT pg_advisory_xact_lock(746102)")) await config.ExecuteNonQueryAsync(token);
         await using(var scope=db.CreateCommand("SELECT pg_advisory_xact_lock(hashtext($1))"))
-        {scope.Parameters.AddWithValue($"upload-validation:{source.ClientId}:{source.TemplateId}");await scope.ExecuteNonQueryAsync(token);}
+        {scope.Parameters.AddWithValue($"upload-validation:{client}:{template}");await scope.ExecuteNonQueryAsync(token);}
         await using(var tenant=db.CreateCommand("SELECT id FROM public.platform_tenants WHERE id=$1 AND is_active IS TRUE FOR UPDATE"))
         {tenant.Parameters.AddWithValue(session.TenantId.Value);if(await tenant.ExecuteScalarAsync(token) is null) throw new ValidationPlanRejected("plan_access_denied");}
         string role;
@@ -42,7 +78,7 @@ public sealed class UploadValidationPlanStore(PostgresTransactions transactions,
             """))
         {
             access.Parameters.AddWithValue(session.Token);access.Parameters.AddWithValue(session.UserId);access.Parameters.AddWithValue(session.TenantId.Value);
-            access.Parameters.AddWithValue(session.ContextVersion);access.Parameters.AddWithValue(source.ClientId);
+            access.Parameters.AddWithValue(session.ContextVersion);access.Parameters.AddWithValue(client);
             role=(string?)await access.ExecuteScalarAsync(token)??throw new ValidationPlanRejected("plan_access_denied");
         }
         if(role!="admin")
@@ -53,37 +89,10 @@ public sealed class UploadValidationPlanStore(PostgresTransactions transactions,
                 WHERE a.firm_tenant_id=$1 AND a.user_id=$2 AND e.client_id=$3 AND a.is_active IS TRUE AND e.is_active IS TRUE
                   AND a.team_role IN('manager','internee') FOR SHARE OF a,e
                 """);
-            assignment.Parameters.AddWithValue(session.TenantId.Value);assignment.Parameters.AddWithValue(session.UserId);assignment.Parameters.AddWithValue(source.ClientId);
+            assignment.Parameters.AddWithValue(session.TenantId.Value);assignment.Parameters.AddWithValue(session.UserId);assignment.Parameters.AddWithValue(client);
             if(await assignment.ExecuteScalarAsync(token) is null) throw new ValidationPlanRejected("plan_access_denied");
         }
-        if(!requireSource) return await action(db,DateTimeOffset.MaxValue,token);
-        var definition=(await TenantTemplateService.LoadAsync(db,session.TenantId.Value,source.TemplateId,token)).SingleOrDefault();
-        if(definition is null||definition.Origin!="native"||definition.Columns.Any(c=>!c.Active||c.Review)||definition.ConfigurationKey!=source.ConfigurationKey)
-            throw new ValidationPlanRejected("plan_configuration_changed");
-        await using(var revision=db.CreateCommand("""
-            SELECT definition_version FROM public.platform_tenant_saved_mapping_sets
-            WHERE tenant_id=$1 AND client_id=$2 AND template_id=$3 FOR SHARE
-            """))
-        {
-            revision.Parameters.AddWithValue(session.TenantId.Value);revision.Parameters.AddWithValue(source.ClientId);revision.Parameters.AddWithValue(source.TemplateId);
-            long current=Convert.ToInt64(await revision.ExecuteScalarAsync(token)??0,CultureInfo.InvariantCulture);
-            if(current!=source.MappingRevision) throw new ValidationPlanRejected("plan_mapping_changed");
-        }
-        DateTimeOffset expiry;
-        await using(var staged=db.CreateCommand("""
-            SELECT s.expires_at,s.sha256 FROM public.platform_upload_staging s JOIN public.uploaded_files f ON f.id=s.upload_id
-            WHERE s.upload_id=$1 AND s.tenant_id=$2 AND s.user_id=$3 AND s.client_id=$4 AND s.template_id=$5 AND s.state='ready'
-              AND f.client_id=$4 AND f.template_id=$5 AND f.status IN('Pending','Validated') FOR SHARE OF s,f
-            """))
-        {
-            staged.Parameters.AddWithValue(file);staged.Parameters.AddWithValue(session.TenantId.Value);staged.Parameters.AddWithValue(session.UserId);
-            staged.Parameters.AddWithValue(source.ClientId);staged.Parameters.AddWithValue(source.TemplateId);
-            await using var reader=await staged.ExecuteReaderAsync(token);
-            if(!await reader.ReadAsync(token)) throw new ValidationPlanRejected("plan_source_unavailable");
-            expiry=new(reader.GetDateTime(0));
-            if(expiry<=Now||reader.GetString(1)!=source.Sha256) throw new ValidationPlanRejected("plan_source_changed");
-        }
-        return await action(db,expiry,token);
+        return await action(db,token);
     }
 
     public Task<StoredValidationPlan> FindAsync(VerifiedSession session,int file,CorrectionRequest review,string planId,CancellationToken ct)=>
