@@ -237,6 +237,57 @@ public sealed class UploadStagingService(PostgresTransactions transactions,Postg
         catch(DirectoryNotFoundException) {return new("gone",Code:"staged_file_missing");}
     }
 
+    // Restore only a missing registered file, never overwrite altered bytes.
+    // Authorization, receipt identity and expiry are checked before and after
+    // network work; all normal readers still verify the original SHA-256.
+    internal async Task RestoreJobSourceAsync(VerifiedSession session,UploadJobData job,UploadJobSourceStore storage,CancellationToken ct)
+    {
+        try {await RestoreJobSourceCore(session,job,storage,ct);}
+        catch(Denied) {throw new ValidationPlanRejected("plan_access_denied");}
+    }
+    private async Task RestoreJobSourceCore(VerifiedSession session,UploadJobData job,UploadJobSourceStore storage,CancellationToken ct)
+    {
+        async Task<Receipt> Owned()=>await AuthorizedAsync(session,job.Client,job.Template,async(db,actor,token)=>
+        {
+            var r=await FindAsync(db,actor,job.Client,job.Template,null,job.File,token)??throw new UploadJobRejected("job_source_missing");
+            if(r.State is not ("ready" or "missing")||r.Expiry<=Now||r.Hash!=job.SourceHash||r.Bytes!=job.Bytes) throw new UploadJobRejected("job_source_changed");
+            return r;
+        },ct);
+        var receipt=await Owned();string target=FilePath(receipt.Key,".bin");if(File.Exists(target)) return;
+        // The persisted job/version identifies crash leftovers for bounded cleanup.
+        string temporary=FilePath(job.Id,"."+job.Version.ToString(System.Globalization.CultureInfo.InvariantCulture)+".restore");
+        try
+        {
+            if(!await storage.RestoreAsync(job,temporary,ct)) throw new UploadJobRejected("job_durable_source_missing");
+            var current=await Owned();if(current.Key!=receipt.Key) throw new UploadJobRejected("job_source_changed");
+            // Revalidate directory/reparse guards immediately before publication.
+            target=FilePath(receipt.Key,".bin");try {File.Move(temporary,target,false);} catch(IOException) when(File.Exists(target)) { }
+            await AuthorizedAsync(session,job.Client,job.Template,async(db,actor,token)=>
+            {
+                var r=await FindAsync(db,actor,job.Client,job.Template,null,job.File,token)??throw new UploadJobRejected("job_source_missing");
+                if(r.Key!=receipt.Key||r.Expiry<=Now||r.Hash!=job.SourceHash||r.State is not ("ready" or "missing")) throw new UploadJobRejected("job_source_changed");
+                await using var update=db.CreateCommand("UPDATE public.platform_upload_staging SET state='ready' WHERE upload_id=$1 AND state='missing'");update.Parameters.AddWithValue(job.File);await update.ExecuteNonQueryAsync(token);return true;
+            },ct);
+        }
+        finally {if(File.Exists(temporary)) File.Delete(temporary);}
+    }
+
+    internal Task CleanupJobRestoresAsync(Guid id,long version,CancellationToken ct)
+    {
+        // Registered IDs and lease versions only; never enumerate or remove
+        // unrelated staging files, source workbooks, or application trees.
+        string prefix=id.ToString("N")+".";
+        string directory=Path.GetDirectoryName(FilePath(id,".cleanup"))!;
+        foreach(string path in Directory.EnumerateFiles(directory,prefix+"*.restore").Take(8))
+        {
+            ct.ThrowIfCancellationRequested();string name=Path.GetFileName(path);
+            if(!long.TryParse(name.AsSpan(prefix.Length,name.Length-prefix.Length-8),System.Globalization.NumberStyles.None,System.Globalization.CultureInfo.InvariantCulture,out long attempt)
+                ||attempt<1||attempt>version) continue;
+            File.Delete(FilePath(id,"."+attempt.ToString(System.Globalization.CultureInfo.InvariantCulture)+".restore"));
+        }
+        return Task.CompletedTask;
+    }
+
     private async Task<T> AuthorizedAsync<T>(VerifiedSession? session,int client,int template,
         Func<PostgresTransactionContext,Actor,CancellationToken,Task<T>> action,CancellationToken ct)
     {

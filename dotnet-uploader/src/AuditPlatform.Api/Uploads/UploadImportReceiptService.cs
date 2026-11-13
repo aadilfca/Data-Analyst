@@ -19,7 +19,9 @@ public sealed class UploadImportReceiptService(PostgresTransactions transactions
     public async Task<ReceiptResult> GetAsync(VerifiedSession? session,int file,Guid id,CancellationToken ct=default)=>
         await Run(session,async(actor,token)=>new("success",await ReadAuthorized(actor,file,id,token)),ct);
 
-    public async Task<ReceiptResult> CheckNoChangesAsync(VerifiedSession? session,int file,ValidationPlanRequest input,CancellationToken ct=default)=>
+    public Task<ReceiptResult> CheckNoChangesAsync(VerifiedSession? session,int file,ValidationPlanRequest input,CancellationToken ct=default)=>CheckNoChanges(session,file,input,null,ct);
+    internal Task<ReceiptResult> CheckJobAsync(VerifiedSession session,int file,ValidationPlanRequest input,UploadJobExecution job,CancellationToken ct)=>CheckNoChanges(session,file,input,job,ct);
+    private async Task<ReceiptResult> CheckNoChanges(VerifiedSession? session,int file,ValidationPlanRequest input,UploadJobExecution? job,CancellationToken ct)=>
         await Run(session,async(actor,token)=>
         {
             if(input.RequestId==Guid.Empty||file<1||input.Review?.Coverage?.Footing?.Validation?.Source is null) return new("invalid",Code:"invalid_receipt_request");
@@ -54,12 +56,14 @@ public sealed class UploadImportReceiptService(PostgresTransactions transactions
                         if(retried.Value.Hash!=requestHash||retried.Value.Receipt.Kind!="no_changes") throw new ValidationPlanRejected("receipt_request_reused");
                         return retried.Value.Receipt;
                     }
+                    if(job is not null) await job.GuardAsync(owned,ownedToken);
                     await using(var current=owned.CreateCommand("LOCK TABLE public.client_data IN SHARE MODE")) await current.ExecuteNonQueryAsync(ownedToken);
                     await plans.VerifyCurrent(owned,payload,ownedToken);
                     var receipt=await CreateWithinAsync(owned,actor,file,input.RequestId,payload,"no_changes",Now,expiry,options.Value,ownedToken,configuration?.GetValue<long?>("Platform:DatabaseCapacityLimitBytes")??500000000);
                     await using var bytes=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read,65536,FileOptions.Asynchronous);
                     if(Convert.ToHexString(await SHA256.HashDataAsync(bytes,ownedToken)).ToLowerInvariant()!=sourceHash||expiry<=Now)
                         throw new ValidationPlanRejected("receipt_source_changed");
+                    if(job is not null) await job.CompleteAsync(owned,new(receipt.Id,receipt.Reconciliation.Status),ownedToken);
                     return receipt;
                 },transactionToken),cancel),token,recheckAfterRead:false);
             return result.Status=="success"?new("success",result.Value):new(result.Status,Code:result.Code);

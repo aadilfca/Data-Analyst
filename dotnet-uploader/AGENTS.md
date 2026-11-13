@@ -70,7 +70,7 @@ Execution order: P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 (repor
 | P25 — Atomic import | Disabled transactional current/history writes, protected references and compact recovery locally accepted. Live cutover remains gated. See CHANGELOG_ARCHIVE.md, Atomic import P25. |
 | P26 — Derived fields | Disabled permanent bindings, guarded Rates, canonical fields and atomic voucher/freshness metadata locally accepted. See CHANGELOG_ARCHIVE.md, Derived fields P26. |
 | P27 — Import receipts | Disabled independent SQL controls, immutable receipts and bounded OOXML evidence locally accepted. See CHANGELOG_ARCHIVE.md, Import receipts P27. |
-| P28 — Upload jobs | Add durable upload job progress, ownership, bounded retries, cancellation rules, and restart recovery; prove interrupted jobs cannot duplicate imports. |
+| P28 — Upload jobs | Disabled durable owner-scoped jobs, bounded retries/cancellation and private source recovery locally accepted. See CHANGELOG_ARCHIVE.md, Durable upload jobs P28. |
 | P29 — Upload acceptance | Complete native binding/backup UI integration; exercise Upload against .NET with original/repeat/correction/partial/empty-period cases and measured performance. |
 | P30 — Data Bank reads | Port availability, metrics, previews, filters, pagination, and source order; verify totals and stale-cache protections. |
 | P31 — History and exports | Port Data Bank history and current/history backup downloads; verify exact rows, changed fields, account scope, and export safety. |

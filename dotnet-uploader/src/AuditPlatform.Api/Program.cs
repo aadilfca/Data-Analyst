@@ -122,8 +122,22 @@ builder.Services.AddOptions<UploadImportOptions>()
 builder.Services.AddSingleton<UploadImportWriter>();
 builder.Services.AddSingleton<UploadImportService>();
 builder.Services.AddSingleton<UploadImportReceiptService>();
+builder.Services.AddOptions<UploadJobOptions>()
+    .Bind(builder.Configuration.GetSection(UploadJobOptions.SectionName)).ValidateDataAnnotations()
+    .Validate(o=>o.ValidStorage(),"Enabled upload jobs require private storage configuration.").ValidateOnStart();
+builder.Services.AddSingleton<UploadJobStore>();
+builder.Services.AddSingleton(provider=>new UploadJobSourceStore(provider.GetRequiredService<IOptions<UploadJobOptions>>(),
+    new HttpClient(new HttpClientHandler{AllowAutoRedirect=false,UseCookies=false}){Timeout=Timeout.InfiniteTimeSpan}));
+builder.Services.AddSingleton<UploadJobService>();
+builder.Services.AddHostedService<UploadJobWorker>();
 
 var app = builder.Build();
+if(app.Services.GetRequiredService<IOptions<UploadJobOptions>>().Value.Enabled
+    &&(!app.Services.GetRequiredService<IOptions<UploadImportOptions>>().Value.Enabled
+        ||app.Services.GetRequiredService<IOptions<UploadJobOptions>>().Value.LeaseSeconds
+            <=app.Services.GetRequiredService<IOptions<UploadImportOptions>>().Value.TimeoutSeconds
+                +2*app.Services.GetRequiredService<IOptions<UploadJobOptions>>().Value.HeartbeatSeconds))
+    throw new OptionsValidationException(UploadJobOptions.SectionName,typeof(UploadJobOptions),["Jobs require atomic imports and a lease longer than the import deadline plus heartbeat margin."]);
 if(app.Services.GetRequiredService<IOptions<UploadImportOptions>>().Value.Enabled
     && !app.Services.GetRequiredService<IOptions<UploadValidationPlanOptions>>().Value.Enabled)
     throw new OptionsValidationException(UploadImportOptions.SectionName,typeof(UploadImportOptions),["Atomic imports require signed validation plans and their prerequisites."]);

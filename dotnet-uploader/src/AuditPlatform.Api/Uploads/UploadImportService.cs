@@ -14,7 +14,9 @@ public sealed class UploadImportService(PostgresTransactions transactions,Upload
     private readonly SemaphoreSlim requests=new(options.Value.MaximumConcurrentRequests);
     private DateTimeOffset Now=>(clock??TimeProvider.System).GetUtcNow();
 
-    public async Task<UploadImportResult> ImportAsync(VerifiedSession? session,int file,UploadImportRequest input,CancellationToken ct=default)
+    public Task<UploadImportResult> ImportAsync(VerifiedSession? session,int file,UploadImportRequest input,CancellationToken ct=default)=>Run(session,file,input,null,ct);
+    internal Task<UploadImportResult> ImportJobAsync(VerifiedSession session,int file,UploadImportRequest input,UploadJobExecution job,CancellationToken ct)=>Run(session,file,input,job,ct);
+    private async Task<UploadImportResult> Run(VerifiedSession? session,int file,UploadImportRequest input,UploadJobExecution? job,CancellationToken ct)
     {
         if(!options.Value.Enabled) return new("unavailable");
         if(session is null) return new("unauthenticated");
@@ -31,6 +33,7 @@ public sealed class UploadImportService(PostgresTransactions transactions,Upload
                     await plans.AuthorizeAsync(db,session,file,input.Review,false,async(context,_,cancellation)=>
                     {
                         var recovered=await ReadOutcome(context,session,file,input,cancellation);if(recovered is not null) return recovered;
+                        if(job is not null) await job.GuardAsync(context,cancellation);
                         return await plans.AuthorizeAsync(context,session,file,input.Review,true,async(owned,sourceExpiry,cancel)=>
                         {
                             var plan=await plans.Read(owned,session,null,input.PlanId,cancel)??throw new ValidationPlanRejected("plan_not_found");
@@ -78,6 +81,7 @@ public sealed class UploadImportService(PostgresTransactions transactions,Upload
                             }
                             await CheckBytes();
                             if(plan.Envelope.ExpiresAt<=Now) throw new ValidationPlanRejected("plan_expired");
+                            if(job is not null) await job.CompleteAsync(owned,new(outcome.ReceiptId!.Value,outcome.ControlStatus!,outcome),cancel);
                             return outcome;
                         },cancellation);
                     },transactionToken),token),deadline.Token,recheckAfterRead:false);

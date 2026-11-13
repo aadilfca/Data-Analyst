@@ -15,6 +15,7 @@ The frozen [P01 inventory](migration-baseline.json) records 95 source-declared t
 | Atomic imports | Candidate `0013_upload_imports.sql` adds nullable history metadata and compact native outcomes; no canonical table rebuild or startup DDL. Isolated execution only. |
 | Upload derivations | Candidate `0014_upload_derived_fields.sql` adds native binding metadata and a nullable canonical freshness marker; existing raw values/derived types remain unchanged. Isolated execution only. |
 | Import receipts | Candidate `0015_upload_import_receipts.sql` owns immutable compact completion evidence and scoped row references, never raw-row mirrors; imported receipts share the outcome transaction. Isolated execution only. |
+| Upload jobs | Candidate `0016_upload_jobs.sql` owns immutable scoped requests, leases/attempts and compact completion references; success shares the import/receipt transaction. Private object storage holds temporary workbooks. Isolated execution only. |
 | Audit/error persistence | Existing SQLite-dependent paths need P05's explicit PostgreSQL design; do not infer replacement tables from the source inventory. |
 | Legacy/prepared/temporary objects | Source presence grants no right to recreate or remove them; retain P01's reachability/retirement review and P02's canonical-store contract. |
 
