@@ -2968,6 +2968,13 @@ async function loadAvailableUploadAccounts(uploadId, target = availableUploadsDr
         loadAvailableUploadCategories(uploadId, clientId, loadToken);
         return true;
     } catch (error) {
+        if (loadToken === availableAccountsLoadToken
+            && (!availableUploadsDropdown || String(availableUploadsDropdown.value) === String(uploadId))
+            && clientId === (window.getSelectedClientId ? window.getSelectedClientId() : null)) {
+            availableAccountsTableBody.querySelectorAll('tr.tb-draft-heading, tr.tb-draft-total, tr.tb-footing-unavailable, tr.tb-erp-warning').forEach(row => row.remove());
+            renderSavedDraftReconciliation({current_reconciliation: null,
+                current_reconciliation_error: 'Current saved footing could not be refreshed. Retry loading this Trial Balance.'});
+        }
         showStatus('❌ ' + error.message, 'error');
         return false;
     } finally {
@@ -3151,10 +3158,13 @@ function renderAvailableAccountsTable(accounts, adjustments, controls = {}) {
     savedAdjustments.forEach(function (adjustment) {
         const tr = document.createElement('tr');
         tr.className = 'tb-generated-difference';
+        const included = adjustment.included_in_footing !== false;
+        tr.dataset.footingIncluded = String(included);
+        if (!included) tr.title = 'This account is no longer a Leaf; its saved difference is excluded from current footing totals.';
         const values = [
             adjustment.account_code || '—',
             'Difference — ' + (adjustment.account_name || adjustment.account_code || 'Leaf account'),
-            adjustment.global_adjustment ? 'Unassigned global difference' : 'Leaf adjustment',
+            adjustment.global_adjustment ? 'Unassigned global difference' : included ? 'Leaf adjustment' : 'Saved difference (excluded)',
             '',
             '',
             Number(adjustment.opening_dr_adjustment || 0) || '', Number(adjustment.opening_cr_adjustment || 0) || '',
@@ -3628,7 +3638,7 @@ function renderTrialBalanceControls(result, targetId) {
     if (!container) return;
     container.replaceChildren();
     if (result.stale) {
-        container.textContent = 'Account codes or leaf selection changed after validation. These are the original saved differences; re-import the file to validate the revised selection.';
+        container.textContent = 'Account codes or leaf selection changed after validation. Footings use current saved Leaf accounts; original ERP validation is out of date and saved differences remain unchanged.';
         return;
     }
 }
@@ -3840,8 +3850,12 @@ function renderTrialBalanceControlFooter(columns, mappingRoleByIndex) {
 // Reuse one footer for validation and saved uploads. Its values are exact server
 // summaries of the retained source accounts and existing adjustment entries.
 function renderDraftReconciliation(body, columns, mappingRoleByIndex, controls, includeOriginal = false) {
-    if (!Object.prototype.hasOwnProperty.call(controls, 'draft_reconciliation')) return;
-    const summary = controls.stale ? null : controls.draft_reconciliation;
+    const saved = body === availableAccountsTableBody;
+    const hasCurrent = Object.prototype.hasOwnProperty.call(controls, 'current_reconciliation');
+    if (!hasCurrent && !Object.prototype.hasOwnProperty.call(controls, 'draft_reconciliation')) return;
+    const summary = saved && hasCurrent ? controls.current_reconciliation : controls.stale ? null : controls.draft_reconciliation;
+    const unavailable = saved ? 'Unavailable' : 'Pending';
+    const unavailableReason = saved ? controls.current_reconciliation_error || 'Current saved footing is unavailable. Refresh or review the saved source data.' : 'Revalidate the source data';
     const decimalPlaces = body === tbValidationBody ? 0 : 2;
     function section(label, className) {
         const row = document.createElement('tr');
@@ -3852,6 +3866,7 @@ function renderDraftReconciliation(body, columns, mappingRoleByIndex, controls, 
     }
     if (controls.erp_unbalanced && !controls.stale) section('ERP imbalance: query pending.', 'tb-erp-warning');
     section('Draft Trial Balance reconciliation', 'tb-draft-heading');
+    if (saved && !summary) section(unavailableReason, 'tb-footing-unavailable');
     const definitions = includeOriginal ? [{label:'Original leaf totals', key:'original_totals'}] : [];
     definitions.push({label:'Difference adjustments', key:'adjustment_totals'},
                      {label:'Adjusted App totals', key:'adjusted_totals'},
@@ -3871,24 +3886,25 @@ function renderDraftReconciliation(body, columns, mappingRoleByIndex, controls, 
                     // Show one result per pair in its debit column, even when the
                     // user's mapped source columns are arranged in a different order.
                     if (role.endsWith('_dr_column')) {
-                        const pair = summary && summary.pair_differences[role.split('_')[0]];
+                        const pair = summary && summary.pair_differences?.[role.split('_')[0]];
                         const rounded = pair && formatTrialBalanceControlAmount(pair.difference, decimalPlaces);
-                        cell.textContent = !pair ? 'Pending' : pair.within_tolerance
+                        cell.textContent = !pair ? unavailable : pair.within_tolerance
                             ? formatTrialBalanceControlAmount(0, decimalPlaces)
                             : decimalPlaces === 0 && rounded === '0' ? '<1' : rounded;
                         if (pair) {
                             cell.classList.add(pair.within_tolerance ? 'tb-footing-zero' : 'tb-footing-nonzero');
                             cell.title = 'Unrounded debit minus credit: ' + pair.difference;
-                        }
+                        } else cell.title = unavailableReason;
                     }
                 } else {
-                    const value = summary && summary[definition.key][role];
-                    cell.textContent = summary ? formatTrialBalanceControlAmount(value, decimalPlaces) : 'Pending';
-                    if (summary) cell.title = 'Unrounded amount: ' + value;
+                    const value = summary && summary[definition.key]?.[role];
+                    const present = summary && (!saved || (value !== undefined && value !== null && String(value).trim() !== ''));
+                    cell.textContent = present ? formatTrialBalanceControlAmount(value, decimalPlaces) : unavailable;
+                    cell.title = present ? 'Unrounded amount: ' + value : unavailableReason;
                 }
             } else if (column.kind === 'classification') {
                 cell.textContent = 'Control';
-                if (includeOriginal) cell.title = !summary ? 'Revalidate the source data' : definition.key === 'pairs'
+                if (includeOriginal) cell.title = !summary ? unavailableReason : definition.key === 'pairs'
                     ? 'Opening / Period / Closing: debit minus credit'
                     : definition.key === 'adjusted_totals' ? 'Draft totals including separate differences' : 'Source figures retained';
             } else if (column.kind === 'issues') {

@@ -23,6 +23,7 @@ classification override.
 """
 
 import json
+import math
 import re
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -1514,7 +1515,7 @@ def list_trial_balance_accounts(upload_id: int, is_leaf: Optional[bool] = None):
     show either the full hierarchy or a ledger-only view.
     """
     controls = _require_upload(upload_id)
-    controls = controls if isinstance(controls, dict) else {}
+    controls = dict(controls) if isinstance(controls, dict) else {}
 
     query = """SELECT id, account_code, source_account_code, account_name, level, classification, manually_overridden,
                       opening_dr, opening_cr, period_dr, period_cr, closing_dr, closing_cr
@@ -1549,48 +1550,43 @@ def list_trial_balance_accounts(upload_id: int, is_leaf: Optional[bool] = None):
             "level": r["level"],
             "is_leaf": account_is_leaf,
             "manually_overridden": bool(r["manually_overridden"]),
-            "opening_dr": r["opening_dr"],
-            "opening_cr": r["opening_cr"],
-            "period_dr": r["period_dr"],
-            "period_cr": r["period_cr"],
-            "closing_dr": r["closing_dr"],
-            "closing_cr": r["closing_cr"],
+            "opening_dr": _saved_trial_balance_amount(r["opening_dr"]),
+            "opening_cr": _saved_trial_balance_amount(r["opening_cr"]),
+            "period_dr": _saved_trial_balance_amount(r["period_dr"]),
+            "period_cr": _saved_trial_balance_amount(r["period_cr"]),
+            "closing_dr": _saved_trial_balance_amount(r["closing_dr"]),
+            "closing_cr": _saved_trial_balance_amount(r["closing_cr"]),
         })
 
     current_classifications = sorted([r['account_code'], r['classification'] if r['manually_overridden'] else auto_classification[r['account_code']]] for r in rows)
     if controls.get('account_classifications') and current_classifications != controls['account_classifications']:
         controls['stale'] = True
 
+    # A stale ERP validation does not make current stored figures unknowable.
+    # Rebuild these read-only footings from the same rows returned above, never
+    # from the visible filter or by creating fresh balancing adjustments.
+    leaf_rows = [row for row in rows if (
+        row['classification'] if row['manually_overridden'] else auto_classification[row['account_code']]) == 'leaf']
+    leaf_ids = {row['id'] for row in leaf_rows}
+    controls['current_reconciliation'], controls['current_reconciliation_error'] = _saved_trial_balance_reconciliation(
+        leaf_rows, adjustment_rows, controls.get('global_adjustments', []))
     if controls.get('stale'):
         controls['draft_reconciliation'] = None
     elif not controls.get('draft_reconciliation'):
-        # Older uploads have the original accounts and adjustment entries but no
-        # summary metadata. Reconstruct it read-only, including actual Leaves only.
-        roles = [period + '_' + side + '_column'
-                 for period in ('opening', 'period', 'closing') for side in ('dr', 'cr')]
-        leaf_rows = [row for row in rows if (
-            row['classification'] if row['manually_overridden'] else auto_classification[row['account_code']]) == 'leaf']
-        leaf_ids = {row['id'] for row in leaf_rows}
-        original = {role: sum((_parse_validation_amount(row[role.replace('_column', '')])
-                               for row in leaf_rows), Decimal('0')) for role in roles}
-        adjusted = dict(original)
-        for entry in adjustment_rows:
-            if entry['account_id'] in leaf_ids:
-                for side in ('dr', 'cr'):
-                    adjusted['closing_' + side + '_column'] += Decimal(str(entry['closing_' + side + '_adjustment']))
-        for entry in controls.get('global_adjustments', []):
-            for role in roles:
-                adjusted[role] += Decimal(str(entry.get(role.replace('_column', '_adjustment'), 0)))
-        controls['draft_reconciliation'] = _build_draft_reconciliation(original, adjusted) if leaf_rows else None
+        controls['draft_reconciliation'] = controls['current_reconciliation']
     if 'erp_unbalanced' not in controls:
         comparisons = controls.get('source_total_comparison', [])
         labels = {period + '_' + side + '_column': label + ' ' + side.title()
                   for period, label in (('opening', 'Opening'), ('period', 'Period'), ('closing', 'Closing'))
                   for side in ('dr', 'cr')}
-        by_label = {entry['field']: Decimal(entry['source_total']) for entry in comparisons}
-        controls['erp_unbalanced'] = _erp_totals_unbalanced(
-            {role: by_label[label] for role, label in labels.items()}
-            if all(label in by_label for label in labels.values()) else None)
+        try:
+            by_label = {entry['field']: Decimal(entry['source_total']) for entry in comparisons}
+            controls['erp_unbalanced'] = _erp_totals_unbalanced(
+                {role: by_label[label] for role, label in labels.items()}
+                if all(label in by_label and by_label[label].is_finite() for label in labels.values()) else None)
+        except (InvalidOperation, ValueError, TypeError, KeyError):
+            # Missing historic ERP evidence cannot invalidate current stored sums.
+            controls['erp_unbalanced'] = None
 
     adjustments = [
         {
@@ -1598,16 +1594,57 @@ def list_trial_balance_accounts(upload_id: int, is_leaf: Optional[bool] = None):
             "account_code": row["account_code"],
             "account_name": row["account_name"],
             "source_excel_row": row["source_excel_row"],
-            "expected_closing_net": float(row["expected_closing_net"]),
-            "original_closing_net": float(row["original_closing_net"]),
-            "difference_net": float(row["difference_net"]),
-            "closing_dr_adjustment": float(row["closing_dr_adjustment"]),
-            "closing_cr_adjustment": float(row["closing_cr_adjustment"]),
+            "expected_closing_net": _saved_trial_balance_amount(row["expected_closing_net"], as_float=True),
+            "original_closing_net": _saved_trial_balance_amount(row["original_closing_net"], as_float=True),
+            "difference_net": _saved_trial_balance_amount(row["difference_net"], as_float=True),
+            "closing_dr_adjustment": _saved_trial_balance_amount(row["closing_dr_adjustment"], as_float=True),
+            "closing_cr_adjustment": _saved_trial_balance_amount(row["closing_cr_adjustment"], as_float=True),
+            "included_in_footing": row['account_id'] in leaf_ids,
         }
         for row in adjustment_rows
     ]
     return {"upload_id": upload_id, "accounts": accounts, "adjustments": adjustments,
             "global_adjustments": controls.get("global_adjustments", []), "validation_controls": controls}
+
+
+def _saved_trial_balance_amount(value, as_float=False):
+    """Keep invalid saved values visible without invalid JSON numeric tokens."""
+    try:
+        number = float(value) if as_float else value
+    except (ValueError, TypeError, OverflowError):
+        return str(value) if value is not None else None
+    if ((isinstance(number, float) and not math.isfinite(number))
+            or (isinstance(number, Decimal) and not number.is_finite())):
+        return str(value)
+    return number
+
+
+def _saved_trial_balance_reconciliation(leaf_rows, adjustment_rows, global_adjustments):
+    """Sum current stored Leaves and applicable saved entries without writing."""
+    roles = [period + '_' + side + '_column'
+             for period in ('opening', 'period', 'closing') for side in ('dr', 'cr')]
+
+    def amount(value):
+        parsed = _parse_validation_amount(value)
+        if parsed is None:
+            raise ValueError('Invalid stored amount')
+        return parsed
+
+    try:
+        original = {role: sum((amount(row[role.replace('_column', '')]) for row in leaf_rows), Decimal('0'))
+                    for role in roles}
+        adjusted = dict(original)
+        leaf_ids = {row['id'] for row in leaf_rows}
+        for entry in adjustment_rows:
+            if entry['account_id'] in leaf_ids:
+                for side in ('dr', 'cr'):
+                    adjusted['closing_' + side + '_column'] += amount(entry['closing_' + side + '_adjustment'])
+        for entry in global_adjustments:
+            for role in roles:
+                adjusted[role] += amount(entry.get(role.replace('_column', '_adjustment'), 0))
+        return _build_draft_reconciliation(original, adjusted), None
+    except (ValueError, InvalidOperation, TypeError, KeyError, AttributeError):
+        return None, 'Current saved footing is unavailable because a saved amount or Difference entry is invalid.'
 
 
 @router.get("/api/trial-balance/uploads")

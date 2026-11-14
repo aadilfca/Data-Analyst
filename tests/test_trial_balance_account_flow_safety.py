@@ -462,3 +462,127 @@ def test_code_correction_empty_source_and_identical_mapping_are_noops(same):
     with patch.object(trial_balance,'execute_query_pg',side_effect=query), patch.object(trial_balance,'execute_write_pg') as write:
         trial_balance._copy_shared_code_assignments(5,'OLD','NEW')
         write.assert_not_called()
+
+
+@pytest.fixture
+def saved_footing_source():
+    from copy import deepcopy
+
+    def account(id, code, values, classification='leaf', overridden=False):
+        return dict(id=id, account_code=code, source_account_code=code, account_name=code,
+                    level=len(code.split('-')), classification=classification, manually_overridden=overridden,
+                    **dict(zip(AMOUNT_FIELDS, values)))
+
+    rows = [account(1, '100', [999] * 6, 'parent'),
+            account(2, '100-01', [100, 0, 25, 5, 120, 0]),
+            account(3, '200-01', [0, 100, 5, 25, 0, 120])]
+    adjustments = [dict(account_id=id, account_code=code, account_name=code, source_excel_row=id+1,
+                        expected_closing_net=120, original_closing_net=110, difference_net=10,
+                        closing_dr_adjustment=dr, closing_cr_adjustment=cr)
+                   for id, code, dr, cr in [(2, '100-01', 10, 0), (1, '100', 0, 55)]]
+    controls = dict(account_classifications=[['100', 'parent'], ['100-00', 'leaf'], ['200-01', 'leaf']],
+                    draft_reconciliation={'historic': 'retain'},
+                    global_adjustments=[dict(global_adjustment=True, account_name='Saved footing',
+                                             period_dr_adjustment='7', closing_dr_adjustment='7')])
+    return deepcopy((rows, adjustments, controls))
+
+
+def _read_saved_footing(rows, adjustments, controls, is_leaf=None):
+    from copy import deepcopy
+    before = deepcopy((rows, adjustments, controls))
+    with patch.object(trial_balance, '_require_upload', return_value=controls), patch.object(
+        trial_balance, 'execute_query_pg', side_effect=[rows, adjustments]) as query, patch.object(
+        trial_balance, 'execute_write_pg') as write, patch.object(trial_balance, 'execute_batch_pg') as batch, patch.object(
+        trial_balance, 'log_audit') as audit:
+        result = trial_balance.list_trial_balance_accounts(55, is_leaf=is_leaf)
+    assert query.call_count == 2
+    write.assert_not_called()
+    batch.assert_not_called()
+    audit.assert_not_called()
+    assert (rows, adjustments, controls) == before
+    return result
+
+
+@pytest.mark.parametrize('is_leaf', [None, True, False])
+def test_saved_footing_refreshes_stale_code_totals_without_writes_or_filter_narrowing(saved_footing_source, is_leaf):
+    rows, adjustments, controls = saved_footing_source
+    result = _read_saved_footing(rows, adjustments, controls, is_leaf)
+    current = result['validation_controls']
+    assert current['stale'] is True
+    assert current['draft_reconciliation'] is None
+    assert current['current_reconciliation_error'] is None
+    summary = current['current_reconciliation']
+    assert list(summary['original_totals'].values()) == ['100', '100', '30', '30', '120', '120']
+    assert list(summary['adjustment_totals'].values()) == ['0', '0', '7', '0', '17', '0']
+    assert list(summary['adjusted_totals'].values()) == ['100', '100', '37', '30', '137', '120']
+    assert summary['pair_differences']['closing'] == dict(difference='17', within_tolerance=False)
+    assert [row['included_in_footing'] for row in result['adjustments']] == [True, False]
+    assert result['global_adjustments'] == controls['global_adjustments']
+
+
+def test_saved_footing_classification_change_excludes_only_inactive_saved_differences(saved_footing_source):
+    rows, adjustments, controls = saved_footing_source
+    rows[1].update(classification='parent', manually_overridden=True)
+    result = _read_saved_footing(rows, adjustments, controls)
+    summary = result['validation_controls']['current_reconciliation']
+    assert list(summary['original_totals'].values()) == ['0', '100', '5', '25', '0', '120']
+    assert list(summary['adjustment_totals'].values()) == ['0', '0', '7', '0', '7', '0']
+    assert not any(row['included_in_footing'] for row in result['adjustments'])
+    assert result['accounts'][1]['opening_dr'] == 100
+    assert len(result['adjustments']) == 2
+
+
+@pytest.mark.parametrize('historic', [None, {'historic': 'unchanged'}])
+def test_saved_footing_rebuilds_fresh_and_older_uploads_from_current_rows(saved_footing_source, historic):
+    rows, adjustments, controls = saved_footing_source
+    controls.pop('account_classifications')
+    controls['draft_reconciliation'] = historic
+    result = _read_saved_footing(rows, adjustments, controls)['validation_controls']
+    assert not result.get('stale')
+    assert result['current_reconciliation']['original_totals']['opening_dr_column'] == '100'
+    assert result['draft_reconciliation'] == (historic or result['current_reconciliation'])
+
+
+def test_saved_footing_empty_upload_has_zero_totals_and_no_invented_differences():
+    result = _read_saved_footing([], [], {})
+    summary = result['validation_controls']['current_reconciliation']
+    assert set(summary['original_totals'].values()) == {'0'}
+    assert set(summary['adjusted_totals'].values()) == {'0'}
+    assert all(pair['within_tolerance'] for pair in summary['pair_differences'].values())
+    assert result['adjustments'] == result['global_adjustments'] == []
+
+
+@pytest.mark.parametrize('bad', ['invalid', 'NaN', 'Infinity'])
+def test_saved_footing_invalid_amount_is_unavailable_without_using_historic_totals(saved_footing_source, bad):
+    rows, adjustments, controls = saved_footing_source
+    rows[1]['opening_dr'] = bad
+    result = _read_saved_footing(rows, adjustments, controls)['validation_controls']
+    assert result['current_reconciliation'] is None
+    assert 'invalid' in result['current_reconciliation_error']
+
+
+def test_saved_footing_malformed_erp_history_does_not_hide_current_numbers(saved_footing_source):
+    rows, adjustments, controls = saved_footing_source
+    controls['source_total_comparison'] = [{'field': 'Opening Dr', 'source_total': 'bad'}]
+    result = _read_saved_footing(rows, adjustments, controls)['validation_controls']
+    assert result['current_reconciliation']['original_totals']['opening_dr_column'] == '100'
+    assert result['erp_unbalanced'] is None
+
+
+def test_saved_footing_nonfinite_saved_numbers_have_safe_http_unavailable_response(saved_footing_source):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    rows, adjustments, controls = saved_footing_source
+    rows[1]['opening_dr'] = float('nan')
+    adjustments[0]['closing_dr_adjustment'] = float('inf')
+    app = FastAPI()
+    app.include_router(trial_balance.router)
+    with patch.object(trial_balance, '_require_upload', return_value=controls), patch.object(
+        trial_balance, 'execute_query_pg', side_effect=[rows, adjustments]), TestClient(app) as client:
+        response = client.get('/api/trial-balance/accounts?upload_id=55')
+    assert response.status_code == 200
+    result = response.json()
+    assert result['validation_controls']['current_reconciliation'] is None
+    assert result['accounts'][1]['opening_dr'] == 'nan'
+    assert result['adjustments'][0]['closing_dr_adjustment'] == 'inf'

@@ -76,7 +76,7 @@ Execution order: P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 (repor
 | P31 — History and exports | Disabled scoped history/revision reads and bounded matching/current-history workbooks locally accepted. See CHANGELOG_ARCHIVE.md, Data Bank P31. |
 | P32 — Data Integrity | Default-off scoped inventory and 14 baseline safeguards locally accepted. See CHANGELOG_ARCHIVE.md, Data Integrity P32. |
 | P33 — Storage cleanup | Default-off template purge, backup proofs, temporary-plan cleanup and artifact recovery locally accepted. Broader maintenance remains gated. See CHANGELOG_ARCHIVE.md, Storage cleanup P33. |
-| P34 — Trial Balance parsing | Port workbook mappings, source validation, totals, and review issues; compare golden Trial Balance inputs and rejected rows. |
+| P34 — Trial Balance parsing | Non-writing bounded workbook parsing, source controls and draft Difference lines locally accepted. Storage/API/UI remain later phases. See CHANGELOG_ARCHIVE.md, Trial Balance parsing P34. |
 | P35 — Trial Balance storage | Port period conflicts, confirmed replacement, hierarchy, uploads, and deletion dependencies; verify atomic replacement and historical scope. |
 | P36 — Trial Balance review | Port strict code corrections, classifications, summaries, and assignment reads; verify existing review screens and safeguards. |
 | P37 — Statement setup | Port FS/Note configuration, mappings and profit links; bring forward the minimum statement/context calculation needed for source-bound profit confirmation. Verify it against the legacy engine before switching that operation. |

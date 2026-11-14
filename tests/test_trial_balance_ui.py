@@ -1222,3 +1222,131 @@ def test_import_unlinked_parent_confirmation_can_cancel_before_upload(browser):
     assert page.evaluate('confirmations.length') == 1
     assert page.evaluate('calls.length') == 0
     page.close()
+
+
+def _saved_footing_payload(parent=False, invalid=False, empty=False):
+    """Use the actual read endpoint with owned rows, never a live database."""
+    from unittest.mock import patch
+    from routers import trial_balance
+
+    fields = ['opening_dr', 'opening_cr', 'period_dr', 'period_cr', 'closing_dr', 'closing_cr']
+    rows = [dict(id=1, account_code='100', source_account_code='100', account_name='Assets', level=1,
+                 classification='parent', manually_overridden=False, **dict.fromkeys(fields, 999)),
+            dict(id=2, account_code='100-01', source_account_code='100-01', account_name='Cash', level=2,
+                 classification='parent' if parent else 'leaf', manually_overridden=parent,
+                 **dict(zip(fields, [100, 0, 25, 5, 120, 0]))),
+            dict(id=3, account_code='200-01', source_account_code='200-01', account_name='Capital', level=2,
+                 classification='leaf', manually_overridden=False, **dict(zip(fields, [0, 100, 5, 25, 0, 120])))]
+    adjustments = [dict(account_id=2, account_code='100-01', account_name='Cash', source_excel_row=3,
+                        expected_closing_net=130, original_closing_net=120, difference_net=10,
+                        closing_dr_adjustment=10, closing_cr_adjustment=0)]
+    controls = dict(account_classifications=[['100', 'parent'], ['100-00', 'leaf'], ['200-01', 'leaf']],
+                    global_adjustments=[dict(global_adjustment=True, account_name='Saved difference',
+                                             period_dr_adjustment='7', closing_dr_adjustment='7')])
+    if invalid:
+        rows[1]['opening_dr'] = 'invalid'
+    if empty:
+        rows, adjustments, controls = [], [], {}
+    with patch.object(trial_balance, '_require_upload', return_value=controls), patch.object(
+        trial_balance, 'execute_query_pg', side_effect=[rows, adjustments]):
+        return trial_balance.list_trial_balance_accounts(55)
+
+
+def _saved_footing_page(browser, payload, after=None):
+    import re
+
+    page = browser.new_page(viewport={'width': 1800, 'height': 1100})
+    errors = []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    html = (PROJECT_ROOT / 'static/trial_balance.html').read_text(encoding='utf-8')
+    page.set_content(re.sub(r'<script[\s\S]*?</script>', '', html))
+    for script in ('account_assignment_shared.js', 'financial_statement_workspace.js', 'cashflow_workspace.js', 'trial_balance.js'):
+        page.add_script_tag(path=str(PROJECT_ROOT / 'static' / script))
+    page.evaluate("""async ({payload,after}) => {
+        window.API_BASE='';window.getSelectedClientId=()=>42;window.isClientSelected=()=>true;
+        window.footingPayload=payload;window.nextFootingPayload=after;window.footingCalls=[];
+        availableTrialBalancesSection.style.display='block';availableAccountsTableWrapper.style.display='block';
+        availableUploadsDropdown.innerHTML='<option value="55">Synthetic half-year</option>';
+        tbWorkflowMode='trial_balance';
+        window.fetch=async(url,options={})=>{
+            footingCalls.push({url,method:options.method||'GET'});
+            if(url.includes('/override')){
+                footingPayload=nextFootingPayload;return {ok:true,json:async()=>({})};
+            }
+            if(url.includes('/trial-balance/accounts?')) return {ok:true,json:async()=>footingPayload};
+            return {ok:false,json:async()=>({detail:'Synthetic assignment lookup unavailable'})};
+        };
+        window.ApiUtils={apiFetch:(url,options)=>window.fetch(url,options),apiFetchMutate:(url,options)=>window.fetch(url,options)};
+        await loadAvailableUploadAccounts('55');
+    }""", {'payload': payload, 'after': after})
+    return page, errors
+
+
+def _saved_footer_values(page, kind):
+    return page.locator('#availableAccountsTableBody .tb-draft-' + kind + ' td').all_text_contents()[5:11]
+
+
+def test_saved_footing_numbers_survive_stale_validation_and_refresh_after_leaf_change(browser):
+    page, errors = _saved_footing_page(browser, _saved_footing_payload(), _saved_footing_payload(parent=True))
+    assert _saved_footer_values(page, 'original_totals') == ['100.00', '100.00', '30.00', '30.00', '120.00', '120.00']
+    assert _saved_footer_values(page, 'adjustment_totals') == ['0.00', '0.00', '7.00', '0.00', '17.00', '0.00']
+    assert _saved_footer_values(page, 'adjusted_totals') == ['100.00', '100.00', '37.00', '30.00', '137.00', '120.00']
+    assert _saved_footer_values(page, 'pairs') == ['0.00', '', '7.00', '', '17.00', '']
+    assert 'current saved Leaf accounts' in page.locator('#tbSavedValidationControls').inner_text()
+    assert 'Pending' not in page.locator('#availableAccountsTableBody').inner_text()
+    classification = page.locator('#availableAccountsTableBody tr[data-account-code="100-01"] td').nth(2)
+    classification.dblclick()
+    classification.locator('select').select_option('parent')
+    classification.locator('select').press('Enter')
+    page.wait_for_function("document.querySelector('#availableAccountsTableBody .tb-draft-original_totals td:nth-child(6)')?.textContent === '0.00'")
+    assert _saved_footer_values(page, 'original_totals') == ['0.00', '100.00', '5.00', '25.00', '0.00', '120.00']
+    assert _saved_footer_values(page, 'adjustment_totals') == ['0.00', '0.00', '7.00', '0.00', '7.00', '0.00']
+    assert _saved_footer_values(page, 'adjusted_totals') == ['0.00', '100.00', '12.00', '25.00', '7.00', '120.00']
+    excluded = page.locator('#availableAccountsTableBody tr[data-footing-included="false"]')
+    assert 'Saved difference (excluded)' in excluded.inner_text()
+    assert 'no longer a Leaf' in excluded.get_attribute('title')
+    assert page.evaluate('footingPayload.accounts[1].opening_dr') == 100
+    assert page.evaluate("footingCalls.filter(c=>c.method==='PUT').length") == 1
+    assert not errors, errors
+    directory = PROJECT_ROOT / 'dotnet-uploader/.tools/tb-footing-fix'
+    directory.mkdir(parents=True, exist_ok=True)
+    page.locator('#availableTrialBalancesSection').screenshot(path=str(directory / 'current-footings.png'))
+    page.close()
+
+
+def test_saved_footing_unavailable_is_explicit_and_never_uses_historic_totals(browser):
+    payload = _saved_footing_payload(invalid=True)
+    roles = [period + '_' + side + '_column' for period in ('opening', 'period', 'closing') for side in ('dr', 'cr')]
+    payload['validation_controls']['draft_reconciliation'] = {'original_totals': {role: '999999' for role in roles}}
+    page, errors = _saved_footing_page(browser, payload)
+    assert _saved_footer_values(page, 'original_totals') == ['Unavailable'] * 6
+    assert _saved_footer_values(page, 'adjusted_totals') == ['Unavailable'] * 6
+    assert _saved_footer_values(page, 'pairs') == ['Unavailable', '', 'Unavailable', '', 'Unavailable', '']
+    assert 'invalid' in page.locator('#availableAccountsTableBody .tb-footing-unavailable').inner_text()
+    assert 'Pending' not in page.locator('#availableAccountsTableBody').inner_text()
+    assert not errors, errors
+    page.close()
+
+
+def test_saved_footing_empty_upload_displays_zero_controls(browser):
+    page, errors = _saved_footing_page(browser, _saved_footing_payload(empty=True))
+    assert _saved_footer_values(page, 'original_totals') == ['0.00'] * 6
+    assert _saved_footer_values(page, 'adjustment_totals') == ['0.00'] * 6
+    assert _saved_footer_values(page, 'pairs') == ['0.00', '', '0.00', '', '0.00', '']
+    assert not errors, errors
+    page.close()
+
+
+def test_saved_footing_failed_refresh_cannot_keep_prior_numbers_as_current(browser):
+    page, errors = _saved_footing_page(browser, _saved_footing_payload())
+    assert _saved_footer_values(page, 'original_totals')[0] == '100.00'
+    page.evaluate("""async () => {
+        window.fetch=async()=>({ok:false,json:async()=>({detail:'Synthetic read failure'})});
+        await loadAvailableUploadAccounts('55');
+    }""")
+    assert _saved_footer_values(page, 'original_totals') == ['Unavailable'] * 6
+    assert page.locator('#availableAccountsTableBody .tb-draft-heading').count() == 1
+    assert 'could not be refreshed' in page.locator('#availableAccountsTableBody .tb-footing-unavailable').inner_text()
+    assert 'Pending' not in page.locator('#availableAccountsTableBody').inner_text()
+    assert not errors, errors
+    page.close()

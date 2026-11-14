@@ -191,7 +191,7 @@ This list records discussion, not blanket authorization to activate policies. Re
 ### P20 Footing boundary
 
 - Disabled `POST /api/upload/file/{id}/footing` reuses P18/P19 ownership, freshness, input checks and streaming row classification. Confirm a valid control row explicitly; only mapped Numeric Footing totals determine its numeric suitability. Never infer confirmation from a label.
-- Aadil approved bounded BigInteger coefficient/scale arithmetic for Footing only. Parse within Python's thousand-digit/adjusted-exponent bounds; retain exact sums/differences with bounded growth. No source rounding, canonical writes, new dependencies or general report-precision approval.
+- Bounded BigInteger coefficient/scale arithmetic is approved for Footing and P34 Trial Balance validation only. Retain thousand-digit/adjusted-exponent bounds and exact sums/differences; no source rounding, canonical writes, new dependencies or general report-precision approval.
 - Prove full source detail before user exclusions; report selected eligible rows separately. Preserve repeated occurrences/configured document counts and omit controls/notes. Invalid aggregate inputs mark totals incomplete and cannot pass.
 - Absolute differences below 0.01 pass; 0.01–1.00 inclusive require current-result acknowledgement; larger differences block. Review fingerprints bind source/configuration/mapping, mode, row choices, policy and totals, excluding request-correlation ID. Changed or inapplicable acknowledgement is rejected; P24 still owns signed import plans.
 - Conservatively block amounts that a legacy float conversion could change for precision review. Binary XLS formula presence remains unknown. `CanImport=false` always; P21 supplies coverage checks, while stored SQL proof and live UI/corpus/scale acceptance remain gated. See CHANGELOG_ARCHIVE.md, Footing P20.
@@ -317,6 +317,13 @@ This list records discussion, not blanket authorization to activate policies. Re
 - Five-minute actor/context/scope-bound preview and completed-backup proofs must match a fresh locked fingerprint; exact typed confirmation precedes one atomic delete. Complete current/history download starts first; initiation cannot certify a saved external copy. Preserve other scopes, Trial Balance, reusable configuration and indexes.
 - One apply, 60 seconds, 100,000 evidence rows, 32 MiB captured input, 128 KiB responses and 256 generated artifacts by default. Compact immutable outcomes permit same-request reconciliation without replay; retain at most 1,024 operations per scope before review.
 - Post-commit private artifact work uses fenced 150-second leases, 120-second transfers and three attempts. Restart never repeats accounting deletion; pending/review statuses remain explicit. Candidate `0017` is isolated-test only; native flags and startup/live DDL remain off. See CHANGELOG_ARCHIVE.md, Storage cleanup P33.
+
+### P34 Trial Balance parsing boundary
+
+- Unhosted, non-writing parser reuses the accepted XLS/XLSX reader and first-sheet/header contract. Eight distinct required roles plus optional Type bind actual source columns; ambiguous suggestions remain unresolved. Saved mappings, storage, APIs, UI integration and client/action authorization follow later phases.
+- Preserve typed source cells, physical Excel positions, effective corrections, nearest-present hierarchy and parent format warnings. Explicit subtotal exclusions and ERP-total/No-total choice govern leaf-only source controls. Invalid amounts, duplicate codes and ERP-total differences over 0.01 block; separate draft Difference lines retain existing advisory roll-forward/global behavior without changing original values.
+- Reuse bounded exact arithmetic solely for these controls: up to 1,000 significant digits and adjusted exponents from -1,000 through 1,000. Unsafe source/aggregate/draft legacy conversions require precision review; no import approval or persisted/report numeric policy follows. Binary XLS formula provenance remains unknown; missing XLSX cached results block mapped values.
+- Defaults: 100,000 physical data rows, combined 32 MiB serialized input/review evidence, 10,000 issues and 60 seconds with cancellation; accepted reader caps remain ceilings. Refuse overflow, incomplete evidence and changed source hashes. Fingerprints bind effective review choices; `CanImport=false` always. See CHANGELOG_ARCHIVE.md, Trial Balance parsing P34.
 
 ## 3. PostgreSQL and financial values
 
