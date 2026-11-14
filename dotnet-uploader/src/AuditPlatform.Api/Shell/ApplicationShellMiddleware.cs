@@ -18,7 +18,7 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
     public async Task InvokeAsync(HttpContext context, IOptions<ApplicationShellOptions> options,
         TenantSessionService tenants, AuditPlatform.Api.Clients.TenantClientService clients,
         IOptions<SettingsManagementOptions> settings,IOptions<ColumnManagementOptions> columns,IOptions<TemplateManagementOptions> templates,IOptions<SavedMappingOptions> mappings,
-        IOptions<ConfigurationBackupOptions> backups,IOptions<UploadUiOptions> uploadUi,IOptions<UploadStagingOptions> staging,IOptions<DataBankOptions> dataBank,IOptions<DataBankExportOptions> dataExports,IOptions<DataIntegrityOptions> integrity,IOptions<StorageCleanupOptions> cleanup)
+        IOptions<ConfigurationBackupOptions> backups,IOptions<UploadUiOptions> uploadUi,IOptions<UploadStagingOptions> staging,IOptions<DataBankOptions> dataBank,IOptions<DataBankExportOptions> dataExports,IOptions<DataIntegrityOptions> integrity,IOptions<StorageCleanupOptions> cleanup,IOptions<TrialBalanceReviewOptions> trialBalance)
     {
         if (!options.Value.Enabled) { await next(context); return; }
         var path=context.Request.Path.Value ?? "/";
@@ -30,6 +30,8 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
         var canonicalApi=path.TrimEnd('/').ToLowerInvariant();
         var boundApi=context.Request.Path.StartsWithSegments("/api/users")
             || context.Request.Path.StartsWithSegments("/api/data")
+            || context.Request.Path.StartsWithSegments("/api/trial-balance")
+            || context.Request.Path.StartsWithSegments("/api/account-control-center")
             || context.Request.Path.StartsWithSegments("/api/data-integrity")
             || context.Request.Path.StartsWithSegments("/api/storage-cleanup")
             || context.Request.Path.StartsWithSegments("/api/clients")
@@ -91,6 +93,7 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
             if (!picker && tenantContext.SelectedTenantId is null) { context.Response.Redirect("/shell/tenant_select.html"); return; }
             var current=tenantContext.Tenants.SingleOrDefault(t=>t.Id==tenantContext.SelectedTenantId);
             if (AdminPages.Contains(file) && current?.Role!="admin") { context.Response.StatusCode=403; return; }
+            if(file=="trial_balance.html"&&current?.Role!="admin"){context.Response.StatusCode=403;return;}
             if (!picker && !NoClientPages.Contains(file))
             {
                 var selected=await clients.SelectionAsync(session,null,context.RequestAborted);
@@ -99,6 +102,8 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
             }
         }
         context.Response.Headers.CacheControl="no-store";
+        if(html&&file=="trial_balance.html"&&!trialBalance.Value.UiEnabled)
+        {context.Response.StatusCode=503;await context.Response.WriteAsync("Trial Balance review is unavailable.",context.RequestAborted);return;}
         context.Response.ContentType=extension switch { ".html"=>"text/html; charset=utf-8", ".js"=>"text/javascript; charset=utf-8",
             ".css"=>"text/css; charset=utf-8", ".svg"=>"image/svg+xml", _=>"image/png" };
         if (HttpMethods.IsHead(context.Request.Method)) return;
@@ -116,6 +121,7 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
         // before retained scripts, clearing old browser state before they read it.
         var script=$"<script src=\"/shell/context.js\" data-context=\"{key}\" data-tenant=\"{selectedTenant}\" data-settings-enabled=\"{settingsEnabled}\" data-settings-admin=\"{settingsAdmin}\" data-columns-enabled=\"{columnsEnabled}\" data-templates-enabled=\"{templatesEnabled}\" data-mappings-enabled=\"{mappingsEnabled}\" data-backups-enabled=\"{backupsEnabled}\"></script>";
         script=script.Replace(" data-backups-enabled=",$" data-upload-enabled=\"{(uploadUi.Value.Enabled?"true":"false")}\" data-upload-limit=\"{staging.Value.MaximumFileBytes}\" data-backups-enabled=",StringComparison.Ordinal);
+        script=script.Replace(" data-backups-enabled=",$" data-trial-balance-enabled=\"{(trialBalance.Value.UiEnabled?"true":"false")}\" data-backups-enabled=",StringComparison.Ordinal);
         script=script.Replace(" data-backups-enabled=",$" data-databank-enabled=\"{(dataBank.Value.Enabled?"true":"false")}\" data-backups-enabled=",StringComparison.Ordinal);
         script=script.Replace(" data-backups-enabled=",$" data-integrity-enabled=\"{(integrity.Value.Enabled?"true":"false")}\" data-backups-enabled=",StringComparison.Ordinal);
         script=script.Replace(" data-backups-enabled=",$" data-cleanup-enabled=\"{(cleanup.Value.Enabled?"true":"false")}\" data-purge-enabled=\"{(cleanup.Value.PurgeEnabled?"true":"false")}\" data-backups-enabled=",StringComparison.Ordinal);

@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- dotnet-uploader/ → Disabled tenant/configuration/upload/data APIs, bounded workbooks/jobs, scoped cleanup and guarded Trial Balance parsing/storage. See CHANGELOG_ARCHIVE.md.
+- dotnet-uploader/ → Disabled tenant/configuration/upload/data APIs, bounded workbooks/jobs, scoped cleanup and guarded Trial Balance parsing/storage/review. See CHANGELOG_ARCHIVE.md.
 
 - routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, statements, category-role notes with unallocated rows, profit links, reconciliations, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
 
@@ -269,6 +269,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-14: Added disabled native Trial Balance review, guarded corrections/classifications and current footings; locally accepted. See CHANGELOG_ARCHIVE.md, Trial Balance review P36.
 - 2026-11-14: Added default-off native Trial Balance storage, scoped replacement/deletion and recovery; locally accepted. See CHANGELOG_ARCHIVE.md, Trial Balance storage P35.
 - 2026-11-14: Restored saved Trial Balance footings after code/Leaf changes; locally accepted. See CHANGELOG_ARCHIVE.md, Saved Trial Balance footing.
 - 2026-11-12: Added typed .NET workbook reading and synthetic Python/browser parity checks; locally accepted. See CHANGELOG_ARCHIVE.md, Workbook reader P17.
@@ -343,7 +344,6 @@ One line per file group: what it is now. Full build history for every entry live
 - 2026-10-20: Uploads add raw-source totals, row-aware issue reports, and public privacy/terms pages. See CHANGELOG_ARCHIVE.md.
 - 2026-10-19: Uploads add ledger roles, expiring validation plans, coverage replacement, correction safeguards, Drive archives and readable issue reports; production branding remains pending. See CHANGELOG_ARCHIVE.md.
 - 2026-10-19: Cashflows moves to canonical Client Data with bounded source fetching, coverage diagnostics, browser caches, exports and isolated experiments. See CHANGELOG_ARCHIVE.md.
-- Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; performance findings reference the investigation documents.
 - 2026-10-06–12: Upload lifecycle, source coverage, cleanup safeguards and Cashflows preparation advanced. See CHANGELOG_ARCHIVE.md.
 - 2026-09-01–10-02: Database, Reconciliation, Rulebook, Account Sets, Verification, Forms and Cashflows foundations progressed. See CHANGELOG_ARCHIVE.md.
 - 2026-11-06: Upload comparison now respects numeric meaning, blank-versus-zero lines, and exact imported Rates. See CHANGELOG_ARCHIVE.md, Numeric comparison and Rate preservation.

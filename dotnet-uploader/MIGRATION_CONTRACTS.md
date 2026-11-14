@@ -191,7 +191,7 @@ This list records discussion, not blanket authorization to activate policies. Re
 ### P20 Footing boundary
 
 - Disabled `POST /api/upload/file/{id}/footing` reuses P18/P19 ownership, freshness, input checks and streaming row classification. Confirm a valid control row explicitly; only mapped Numeric Footing totals determine its numeric suitability. Never infer confirmation from a label.
-- Bounded BigInteger coefficient/scale arithmetic covers Footing, P34 validation and P35 source/storage comparisons. Preserve approved bounds; no rounding, amount-type widening or general report-precision approval.
+- Bounded BigInteger coefficient/scale arithmetic covers Footing, Trial Balance validation, source/storage comparisons and saved footing controls. Preserve bounds; no rounding, type widening or general report-precision approval.
 - Prove full source detail before user exclusions; report selected eligible rows separately. Preserve repeated occurrences/configured document counts and omit controls/notes. Invalid aggregate inputs mark totals incomplete and cannot pass.
 - Absolute differences below 0.01 pass; 0.01–1.00 inclusive require current-result acknowledgement; larger differences block. Review fingerprints bind source/configuration/mapping, mode, row choices, policy and totals, excluding request-correlation ID. Changed or inapplicable acknowledgement is rejected; P24 still owns signed import plans.
 - Conservatively block amounts that a legacy float conversion could change for precision review. Binary XLS formula presence remains unknown. `CanImport=false` always; P21 supplies coverage checks, while stored SQL proof and live UI/corpus/scale acceptance remain gated. See CHANGELOG_ARCHIVE.md, Footing P20.
@@ -333,6 +333,16 @@ This list records discussion, not blanket authorization to activate policies. Re
 - Check actual amount-column types and canonical read-back; reject altered or unsupported values before replacement, without widening columns. Exact comparison grants no new report numeric policy. Native ownership guards reject legacy mutations until their later ports.
 - Defaults: one apply/two parsers per process, 60-second deadline, inherited P34 limits, 100,000 snapshot rows/32 MiB, 128 KiB response, 256 uploads/catalog entries and 1,024 retained operations per client; refuse at capacity. Project allocation plus payload/index/audit headroom under the lower configured/C01 ceiling; deletes claim no reclaimed space. Configuration/client/table locks serialize freshness and capacity checks.
 - Reused operation IDs return only matching completed outcomes; changed requests/actors conflict. Lost commit acknowledgement permits bounded read-only reconciliation, never automatic write replay. Source paths are trusted adapter inputs, absent from durable outcomes; completed recovery needs no workbook. Representative schema/corpus, restricted-role and production-scale acceptance remain gated. See CHANGELOG_ARCHIVE.md, Trial Balance storage P35.
+
+### P36 saved Trial Balance review
+
+- Review APIs/UI default off and require the authenticated native shell/PostgreSQL. Current selected-client home-workspace administrators only; unowned legacy uploads are read-only. Context assertions and transaction authorization both apply.
+- Reuse accepted hierarchy/exact arithmetic. Current saved footings cover every current Leaf independently of paging/search; preserve original ERP controls and saved Difference entries. Unsafe/malformed evidence is Unavailable; empty scope is zero.
+- Signed five-minute read/save snapshots bind actor/context, source, target assignments and exact intent. Strict numeric/hyphen code batches preserve occupied-code rules, leading zeros, original codes, manual overrides and four carry-forward/conflict policies. Protected Account Set/unknown dependencies block writes.
+- Candidate-only `0019` adds compact immutable review intent/outcomes and narrow code/hierarchy/classification permissions; `0018` stays unchanged. Commit changes, mandatory audit and outcome atomically; verify protected source fields afterward. No amount/raw-cell/adjustment/import-evidence changes or legacy adoption.
+- Durable operation IDs reconcile lost acknowledgements/restarts without automatic write replay. Browser drafts survive rejection; unresolved saves retain bounded recovery state. Explicit same-request retry follows a status check and still revalidates/reconciles server-side.
+- Defaults: one apply/two readers, 60 seconds, 1 MiB/1,000 explicit edits, 100,000 combined snapshot rows/32 MiB, 1 MiB response, 100-row pages/500 maximum, 2 MiB retained browser state and 1,024 operations/client. Project metadata/mapping/audit growth under C01; refuse overflow.
+- Native saved review exposes read-only existing assignments; source upload/replacement/deletion hosting, setup mutations, composite Cashflow/ledger workflows and reports retain later integration gates. No Python fallback, browser source paths, new dependency or live SQL. See CHANGELOG_ARCHIVE.md, Trial Balance review P36.
 
 ## 3. PostgreSQL and financial values
 

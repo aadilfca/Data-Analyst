@@ -18,6 +18,7 @@ The frozen [P01 inventory](migration-baseline.json) records 95 source-declared t
 | Upload jobs | Candidate `0016_upload_jobs.sql` owns immutable scoped requests, leases/attempts and compact completion references; success shares the import/receipt transaction. Private object storage holds temporary workbooks. Isolated execution only. |
 | Scoped cleanup | Candidate `0017_storage_cleanup.sql` owns compact outcomes/artifact recovery and scoped purge exceptions to staging/plan retention guards. Isolated execution only; existing migration files remain unchanged. |
 | Trial Balance storage | Candidate `0018_trial_balance_storage.sql` owns compact operation/ownership metadata and guards native canonical uploads/accounts/adjustments. Isolated execution only; no legacy adoption, amount-type changes or startup DDL. |
+| Trial Balance review | Candidate `0019_trial_balance_review.sql` owns immutable review intent/outcomes and narrow native account-edit permissions. Source fields, amounts, adjustments and import ownership stay immutable; isolated execution only. |
 | Audit/error persistence | Existing SQLite-dependent paths need P05's explicit PostgreSQL design; do not infer replacement tables from the source inventory. |
 | Legacy/prepared/temporary objects | Source presence grants no right to recreate or remove them; retain P01's reachability/retirement review and P02's canonical-store contract. |
 

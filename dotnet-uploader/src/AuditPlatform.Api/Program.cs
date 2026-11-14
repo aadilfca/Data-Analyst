@@ -16,6 +16,7 @@ using AuditPlatform.Api.Mappings;
 using AuditPlatform.Api.ConfigurationBackup;
 using AuditPlatform.Api.Uploads;
 using AuditPlatform.Api.DataBank;
+using AuditPlatform.Api.TrialBalance;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -136,6 +137,12 @@ builder.Services.AddOptions<UploadUiOptions>()
 builder.Services.AddOptions<DataBankOptions>()
     .Bind(builder.Configuration.GetSection(DataBankOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
 builder.Services.AddSingleton<DataBankService>();
+builder.Services.AddOptions<TrialBalanceReviewOptions>()
+    .Bind(builder.Configuration.GetSection(TrialBalanceReviewOptions.SectionName)).ValidateDataAnnotations()
+    .Validate(o=>o.Valid(),"Enabled Trial Balance review requires a signing key; its UI requires review.").ValidateOnStart();
+builder.Services.AddSingleton(sp=>new TrialBalanceReviewService(sp.GetRequiredService<PostgresTransactions>(),
+    sp.GetRequiredService<PostgresReadSnapshot>(),sp.GetRequiredService<PostgresAuditWriter>(),sp.GetRequiredService<IOptions<TrialBalanceReviewOptions>>(),
+    sp.GetRequiredService<IOptions<PlatformOptions>>().Value.DatabaseCapacityLimitBytes));
 builder.Services.AddOptions<DataBankExportOptions>()
     .Bind(builder.Configuration.GetSection(DataBankExportOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
 builder.Services.AddSingleton<DataBankExportService>();
@@ -152,6 +159,10 @@ builder.Services.AddSingleton<AuditPlatform.Api.StorageCleanup.StorageArtifactCl
 builder.Services.AddHostedService<AuditPlatform.Api.StorageCleanup.StorageCleanupWorker>();
 
 var app = builder.Build();
+if(app.Services.GetRequiredService<IOptions<TrialBalanceReviewOptions>>().Value.Enabled
+    && (!app.Services.GetRequiredService<IOptions<ApplicationShellOptions>>().Value.Enabled
+        ||!app.Services.GetRequiredService<IOptions<PostgresOptions>>().Value.Enabled))
+    throw new OptionsValidationException(TrialBalanceReviewOptions.SectionName,typeof(TrialBalanceReviewOptions),["Trial Balance review requires PostgreSQL and the authenticated application shell."]);
 var cleanupOptions=app.Services.GetRequiredService<IOptions<StorageCleanupOptions>>().Value;
 if(cleanupOptions.Enabled&&!app.Services.GetRequiredService<IOptions<DataBankOptions>>().Value.Enabled
     ||cleanupOptions.PurgeEnabled&&(!cleanupOptions.Enabled

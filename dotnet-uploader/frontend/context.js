@@ -17,6 +17,7 @@
     // Setup screen cannot fall through into the legacy transfer protocol.
     window.AppConfigurationBackup = { enabled: tag.dataset.backupsEnabled === 'true', canEdit: tag.dataset.settingsAdmin === 'true' };
     window.AppNativeUpload = { enabled: tag.dataset.uploadEnabled === 'true', maximumFileBytes: Number(tag.dataset.uploadLimit) };
+    window.AppNativeTrialBalance = { enabled: tag.dataset.trialBalanceEnabled === 'true' };
     window.AppNativeDataIntegrity = { enabled: tag.dataset.integrityEnabled === 'true' };
     window.AppNativeStorageCleanup = { enabled: tag.dataset.cleanupEnabled === 'true', purge: tag.dataset.purgeEnabled === 'true', canApply: tag.dataset.settingsAdmin === 'true' };
     window.AppNativeDataBank = { enabled: tag.dataset.databankEnabled === 'true', history: tag.dataset.historyEnabled === 'true',
@@ -54,6 +55,8 @@
         const path = url.pathname.replace(/\/+$/, '').toLowerCase();
         const bound = url.origin === location.origin && (path.startsWith('/api/users')
             || path === '/api/data' || path.startsWith('/api/data/')
+            || path === '/api/trial-balance' || path.startsWith('/api/trial-balance/')
+            || path === '/api/account-control-center' || path.startsWith('/api/account-control-center/')
             || path === '/api/data-integrity' || path.startsWith('/api/data-integrity/')
             || path === '/api/storage-cleanup' || path.startsWith('/api/storage-cleanup/')
             || path.startsWith('/api/settings')
@@ -113,6 +116,8 @@
                 child = { label: 'Upload progress and recovery', url: '/static/upload.html?feature=upload-jobs', state: 'ready', keywords: ['import', 'job', 'progress', 'cancel', 'resume', 'receipt', 'evidence'] };
             if (path === '/static/databank.html' && window.AppNativeDataBank.enabled)
                 child = { label: 'Data Bank previews and totals', url: '/static/databank.html?feature=data-reads', state: 'ready', keywords: ['rows', 'footing', 'coverage', 'ledger', 'filter'] };
+            if (path === '/static/trial_balance.html' && window.AppNativeTrialBalance.enabled)
+                child = { label: 'Saved Trial Balance review', url: '/static/trial_balance.html?view=available', state: 'ready', keywords: ['codes', 'classification', 'leaf', 'parent', 'footing', 'review'] };
             if (child) { item.children ||= []; if (!item.children.some(c => c.url === child.url)) item.children.push(child); }
             if (path === '/static/databank.html' && window.AppNativeDataBank.enabled && window.AppNativeDataBank.history) {
                 item.children ||= []; const url = '/static/databank.html?feature=history-exports';

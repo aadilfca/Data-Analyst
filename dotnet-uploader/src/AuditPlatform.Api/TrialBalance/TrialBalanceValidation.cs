@@ -178,7 +178,7 @@ internal static class TrialBalanceValidation
         var match=Regex.Match(value,@"^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})(?: 00:00:00)?$",RegexOptions.CultureInvariant,TimeSpan.FromMilliseconds(100));
         return match.Success&&DateTime.TryParseExact(value.Split(' ')[0],["yyyy-M-d","yyyy-MM-dd","yyyy-M-dd","yyyy-MM-d"],CultureInfo.InvariantCulture,DateTimeStyles.None,out _);
     }
-    private static Dictionary<string,(string Classification,string? Parent)> Hierarchy(IEnumerable<string> codes,CancellationToken ct)
+    internal static Dictionary<string,(string Classification,string? Parent)> Hierarchy(IEnumerable<string> codes,CancellationToken ct)
     {
         static string Normal(string p)=>p.Length>0&&p.All(c=>c is >= '0' and <= '9')?(p.TrimStart('0') is {Length:>0} n?n:"0"):p;
         var set=codes.ToHashSet(StringComparer.Ordinal);var rawRoot=new Node();var normalRoot=new Node();

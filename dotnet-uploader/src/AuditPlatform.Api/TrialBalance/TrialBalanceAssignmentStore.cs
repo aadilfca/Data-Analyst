@@ -43,7 +43,12 @@ internal static class TrialBalanceAssignmentStore
         TrialBalanceReview review,Dictionary<int,string> originals,CancellationToken ct)
     {
         var pairs=review.Accounts.Select(a=>(Source:originals[a.ExcelRow],Target:a.AccountCode)).Where(p=>p.Source!=p.Target).Distinct().ToArray();
-        if(pairs.Length==0) return;
+        await CarryCodesAsync(db,actor,client,pairs,true,ct);
+    }
+    internal static async Task CarryCodesAsync(PostgresTransactionContext db,TrialBalanceStorageActor actor,int client,
+        IReadOnlyList<(string Source,string Target)> pairs,bool apply,CancellationToken ct)
+    {
+        if(pairs.Count==0) return;
         var codes=pairs.SelectMany(p=>new[]{p.Source,p.Target}).Distinct().ToArray();
         foreach(var table in Tables)
         {
@@ -63,7 +68,7 @@ internal static class TrialBalanceAssignmentStore
                 {if(table.Columns.All(c=>JsonElement.DeepEquals(source.GetProperty(c),target.GetProperty(c)))) continue;if(Assigned(table,target)) throw new TrialBalanceStorageRejected("conflict","tb_assignment_conflict");}
                 planned[pair.Target]=source;existing[pair.Target]=source;
             }
-            if(planned.Count==0) continue;
+            if(planned.Count==0||!apply) continue;
             var payload=planned.Select(p=>new {account_code=p.Key,values=table.Columns.ToDictionary(c=>c,c=>p.Value.GetProperty(c))}).ToArray();
             TrialBalanceBudget.Size(payload,33554432);string jsonText=JsonSerializer.Serialize(payload);
             string columns=string.Join(',',table.Columns.Select(TrialBalanceStorageStore.Quote));

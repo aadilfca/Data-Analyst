@@ -15,6 +15,8 @@ public sealed class SessionAuthenticationHandler(RequestDelegate next)
         var shell=context.RequestServices.GetRequiredService<IOptions<ApplicationShellOptions>>().Value.Enabled;
         var isProtectedSurface = context.Request.Path.StartsWithSegments("/api/auth")
             || context.Request.Path.StartsWithSegments("/api/data")
+            || context.Request.Path.StartsWithSegments("/api/trial-balance")
+            || context.Request.Path.StartsWithSegments("/api/account-control-center")
             || context.Request.Path.StartsWithSegments("/api/data-integrity")
             || context.Request.Path.StartsWithSegments("/api/storage-cleanup")
             || context.Request.Path.StartsWithSegments("/api/users")

@@ -20,6 +20,9 @@ let availableUploadsRequestToken = 0;
 
 // Which saved upload is currently active for the Available Trial Balances view.
 let currentUploadId = null;
+// Native saved review is explicit, including its disabled state. No native
+// upload/setup request falls through to the Python protocol.
+const tbNative = {present: Object.hasOwn(window, 'AppNativeTrialBalance'), page:1, search:'', data:null, pending:null};
 // Draft account codes never alter the saved hierarchy or assignments until one save succeeds.
 const tbPendingCodeCorrections = new Map();
 let tbAccountCodeErrorPopup = null;
@@ -105,6 +108,14 @@ function getElement(id) {
 
 // Keep every Trial Balance API request on the shared GET-retry/mutation path.
 function tbApiRequest(url, options) {
+    if (tbNative.present) {
+        if (!window.AppNativeTrialBalance.enabled) throw new Error('Trial Balance review is unavailable.');
+        const bound = new URL(url, location.href);
+        if (bound.pathname.startsWith('/api/trial-balance/') || bound.pathname.startsWith('/api/account-control-center/')) {
+            if (!bound.searchParams.has('client_id')) bound.searchParams.set('client_id', window.getSelectedClientId());
+            url = bound.href;
+        }
+    }
     const requestOptions = options || {};
     const method = String(requestOptions.method || 'GET').toUpperCase();
     if (!window.ApiUtils) throw new Error('The shared API request helper is unavailable.');
@@ -2925,6 +2936,7 @@ async function loadAvailableUploadAccounts(uploadId, target = availableUploadsDr
     if (window.AccountAssignments) AccountAssignments.invalidate(tbReadAssignmentJson);
     tbWorkflowLoadToken++;
     const previousUploadId = availableCategoryUploadId;
+    if (tbNative.present && previousUploadId !== String(uploadId)) { tbNative.page=1; tbNative.search=''; if(getElement('tbNativeSearch'))getElement('tbNativeSearch').value=''; }
     if (previousUploadId !== String(uploadId)) {
         setSavedFilterQuery('category', '');
         setSavedFilterQuery('note', '');
@@ -2948,7 +2960,8 @@ async function loadAvailableUploadAccounts(uploadId, target = availableUploadsDr
     const loadingToken = startTrialBalanceLoading(target);
 
     try {
-        const res = await tbApiRequest(API_BASE + '/api/trial-balance/accounts?upload_id=' + encodeURIComponent(uploadId));
+        const nativeQuery = tbNative.present ? '&page=' + tbNative.page + '&limit=100&search=' + encodeURIComponent(tbNative.search) : '';
+        const res = await tbApiRequest(API_BASE + '/api/trial-balance/accounts?upload_id=' + encodeURIComponent(uploadId) + nativeQuery);
         if (loadToken !== availableAccountsLoadToken || (availableUploadsDropdown && String(availableUploadsDropdown.value) !== String(uploadId))) return;
         const result = await res.json();
         if (loadToken !== availableAccountsLoadToken || (availableUploadsDropdown && String(availableUploadsDropdown.value) !== String(uploadId))) return;
@@ -2956,6 +2969,7 @@ async function loadAvailableUploadAccounts(uploadId, target = availableUploadsDr
         if (!res.ok) {
             throw new Error(result.detail || 'Failed to load accounts');
         }
+        if (tbNative.present) tbNativeAccept(result, clientId, uploadId);
 
         renderTrialBalanceControls(result.validation_controls || {}, 'tbSavedValidationControls');
         renderAvailableAccountsTable(result.accounts, (result.adjustments || []).concat(result.global_adjustments || []), result.validation_controls || {});
@@ -2965,7 +2979,8 @@ async function loadAvailableUploadAccounts(uploadId, target = availableUploadsDr
         restoreSavedWorkflowReturnState();
         syncSavedWorkflowColumns();
         applySavedCategoryFilter();
-        loadAvailableUploadCategories(uploadId, clientId, loadToken);
+        if (tbNative.present) tbNativeAfterRender();
+        else loadAvailableUploadCategories(uploadId, clientId, loadToken);
         return true;
     } catch (error) {
         if (loadToken === availableAccountsLoadToken
@@ -3061,6 +3076,7 @@ function renderAvailableAccountsTable(accounts, adjustments, controls = {}) {
         display.title = 'Double-click to edit' + (account.source_account_code && account.source_account_code !== account.account_code ? '\nImported: ' + account.source_account_code : '');
         tdCode.appendChild(display);
         display.addEventListener('dblclick', function () {
+            if (tbNative.present && (!tbNative.data?.can_edit || tbNative.pending)) return;
             const input = document.createElement('input');
             if (tbCodeSaveRunning || tbFsBusyCount > 0 || tbFsModalOpen || trialBalanceActionsInFlight.has('account-code-upload:' + availableUploadsDropdown.value)) return;
             clearTbAccountCodeErrorPopup();
@@ -3095,6 +3111,7 @@ function renderAvailableAccountsTable(accounts, adjustments, controls = {}) {
         tdClassification.appendChild(buildClassificationCellContent(account));
         tdClassification.title = 'Double-click to edit';
         tdClassification.addEventListener('dblclick', function () {
+            if (tbNative.present && (!tbNative.data?.can_edit || tbNative.pending)) return;
             if (tdClassification.querySelector('select')) return;
             const select = document.createElement('select');
             select.setAttribute('aria-label', 'Classification for ' + (account.account_name || account.account_code));
@@ -3191,6 +3208,7 @@ function tbUpdateCodeCorrectionsBar() {
     if (label) label.textContent = tbPendingCodeCorrections.size + ' unsaved code correction(s)';
     ['tbSaveCodeCorrections', 'tbDiscardCodeCorrections'].forEach(id => {
         const button = document.getElementById(id); if (button) button.disabled = tbCodeSaveRunning;
+        if(button&&id==='tbSaveCodeCorrections'&&tbNative.present&&(!tbNative.data?.can_edit||tbNative.pending))button.disabled=true;
     });
 }
 
@@ -3231,11 +3249,11 @@ async function tbSaveAccountCodes() {
     const token = startTrialBalanceLoading(document.getElementById('tbSaveCodeCorrections'));
     let saved = false;
     try {
-        const response = await tbApiRequest(API_BASE + '/api/trial-balance/uploads/' + encodeURIComponent(uploadId) + '/account-codes', {
+        const response = tbNative.present ? null : await tbApiRequest(API_BASE + '/api/trial-balance/uploads/' + encodeURIComponent(uploadId) + '/account-codes', {
             method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({corrections})
         });
-        const result = await response.json();
-        if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Could not save account codes.');
+        const result = tbNative.present ? await tbNativeSave('codes', corrections) : await response.json();
+        if (response && !response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Could not save account codes.');
         if (String(result.upload_id) !== uploadId) throw new Error('Save acknowledgement could not be verified. Reload before retrying.');
         saved = true;
         tbPendingCodeCorrections.clear(); tbUpdateCodeCorrectionsBar();
@@ -3279,7 +3297,7 @@ function tbAskAboutAccountCodes() {
 async function tbGuardAccountCodeAction(event) {
     if (tbCodeGuardResuming || (!tbPendingCodeCorrections.size && !tbCodeSaveRunning)) return;
     const target = event.target.closest('a,button,input,select,td');
-    if (!target || target.closest('#tbCodeCorrectionsBar,#tbCodeCorrectionsDialog')) return;
+    if (!target || target.closest('#tbCodeCorrectionsBar,#tbCodeCorrectionsDialog,#tbNativeRecover,#tbNativeRetry,#tbNativeRefresh')) return;
     if (target.closest('#availableAccountsTableBody td:first-child')) return;
     event.preventDefault(); event.stopImmediatePropagation();
     if (tbCodeSaveRunning || tbCodeDecisionPending) return;
@@ -3337,11 +3355,11 @@ async function saveAvailableClassification(account, isLeaf, trigger) {
     const loadingToken = startTrialBalanceLoading(trigger);
     trigger.disabled = true;
     try {
-        const response = await tbApiRequest(API_BASE + '/api/trial-balance/accounts/' + account.id + '/override', {
+        const response = tbNative.present ? null : await tbApiRequest(API_BASE + '/api/trial-balance/accounts/' + account.id + '/override', {
             method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({is_leaf: isLeaf})
         });
-        const result = await response.json();
-        if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Could not save classification');
+        const result = tbNative.present ? await tbNativeSave('classification', [{account_id:account.id,expected_account_code:account.account_code,is_leaf:isLeaf}]) : await response.json();
+        if (response && !response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Could not save classification');
         showStatus('✅ Classification saved for this upload.', 'success');
         await loadAvailableUploadAccounts(uploadId, trigger);
         if (String(currentUploadId) === String(uploadId)) await loadSummary(uploadId);
@@ -3611,12 +3629,107 @@ if (closeAvailableTrialBalancesBtn) {
 }
 
 // ---------- INIT ----------
+function tbNativeBytes(value) { return new TextEncoder().encode(JSON.stringify(value)).length; }
+function tbNativeAccept(result, client, upload) {
+    if(String(result.client_id)!==String(client)||String(result.upload_id)!==String(upload)||String(window.getSelectedClientId())!==String(client)
+        ||!Array.isArray(result.accounts)||!result.pagination||!result.review_token)throw new Error('The review response does not match the selected Trial Balance.');
+    if(tbNativeBytes({data:result,pending:tbNative.pending})>2097152)throw new Error('This review page exceeds its memory limit. Narrow the search.');
+    tbNative.data=result;
+}
+async function tbNativeJson(url, options) {
+    const response=await tbApiRequest(API_BASE+url,options);
+    const raw=await response.text();if(new TextEncoder().encode(raw).length>1048576)throw new Error('The review response is too large.');
+    const result=JSON.parse(raw);
+    if(!response.ok) {
+        const messages={tb_review_snapshot_changed:'The Trial Balance changed. Reload and review your draft before saving.',
+            tb_review_occupied_code:'That code already belongs to another account.',tb_assignment_conflict:'The target code has a conflicting saved assignment.',
+            tb_review_confirmation_stale:'This review expired or changed. Reload before saving.',tb_review_operation_not_found:'No completed result is available yet. Check again, or explicitly retry the same save.'};
+        const error=new Error(messages[result.detail]||'The review request could not be completed. Refresh and check your access.');
+        error.definite=result.status!=='unknown'&&response.status<500;error.code=result.detail;throw error;
+    }
+    return result;
+}
+function tbNativePending(value) {
+    if(value&&tbNativeBytes({data:tbNative.data,pending:value})>2097152)throw new Error('The draft exceeds its memory limit. Save fewer corrections.');
+    if(value)sessionStorage.setItem('tb-native-review-pending',JSON.stringify(value));
+    else {try{sessionStorage.removeItem('tb-native-review-pending');}catch(error){ /* A verified receipt still prevents replay. */ }}
+    tbNative.pending=value;getElement('tbNativeRecover').hidden=!value;getElement('tbNativeRetry').hidden=true;
+}
+async function tbNativeTransmit(pending) {
+    try {
+        const result=await tbNativeJson('/api/trial-balance/uploads/'+pending.upload+'/review/'+pending.kind+'?client_id='+pending.client,
+            {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(pending.request)});
+        if(String(result.operation_id)!==pending.request.operation_id||String(result.upload_id)!==String(pending.upload))throw new Error('Save acknowledgement could not be verified. Check the saved result.');
+        tbNativePending(null);return result;
+    }catch(error){
+        if(error.definite)tbNativePending(null);
+        else getElement('tbNativeReviewNotice').textContent='Save status is unresolved. Check the saved result before editing; the save will not be repeated automatically.';
+        throw error;
+    }
+}
+async function tbNativeSave(kind, changes) {
+    if(tbNative.pending)throw new Error('Check the unresolved saved result before editing again.');
+    if(!tbNative.data?.can_edit)throw new Error('This Trial Balance is read-only.');
+    const client=window.getSelectedClientId(),upload=availableUploadsDropdown.value;
+    const request={operation_id:crypto.randomUUID(),review_token:tbNative.data.review_token,changes};
+    const preview=await tbNativeJson('/api/trial-balance/uploads/'+upload+'/review/'+kind+'/preview?client_id='+client,
+        {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});
+    if(String(window.getSelectedClientId())!==String(client)||availableUploadsDropdown.value!==upload||String(preview.upload_id)!==String(upload))throw new Error('Review context changed before saving.');
+    request.review_token=preview.review_token;const pending={client,upload,kind,request};
+    tbNativePending(pending);return tbNativeTransmit(pending);
+}
+function tbNativeAfterRender() {
+    const data=tbNative.data;if(!data)return;
+    const pagination=data.pagination;getElement('tbNativePage').textContent='Page '+pagination.page+' of '+pagination.pages+' · '+pagination.total+' accounts';
+    getElement('tbNativePrevious').disabled=pagination.page<=1;getElement('tbNativeNext').disabled=pagination.page>=pagination.pages;
+    getElement('tbNativeReviewNotice').textContent=tbNative.pending?'A saved result needs checking before further edits.':
+        data.can_edit?'Footings cover the entire Trial Balance, including accounts on other pages.':'This Trial Balance is read-only. Footings cover all current saved Leaves.';
+    const table=document.createElement('table'),head=document.createElement('tr');
+    ['Account','Verification workstream','Financial category','Note','Cashflow category','Cashflow rule'].forEach(label=>{const th=document.createElement('th');th.textContent=label;head.appendChild(th);});table.appendChild(head);
+    for(const row of data.accounts){
+        const values=row.assignment_values||{},control=values.account_control_assignments||{},category=values.account_control_cashflow_category_assignments||{},flow=values.account_control_cashflow_assignments||{};
+        const label=(catalog,id)=>id==null?'Unassigned':catalog?.[String(id)]||'Assigned; label unavailable';
+        const tr=document.createElement('tr');[row.account_code,control.verification_workstream||'Unassigned',label(data.assignment_labels?.categories,control.financial_statement_category_id),
+            label(data.assignment_labels?.categories,control.note_category_id),label(data.assignment_labels?.cashflow,category.category_id),
+            [flow.section,flow.cash_bank_role,flow.treatment_type].filter(Boolean).join(' / ')||'Unassigned'].forEach(value=>{const td=document.createElement('td');td.textContent=value;tr.appendChild(td);});table.appendChild(tr);
+    }
+    getElement('tbNativeAssignmentValues').replaceChildren(table);
+    // Keep staged drafts visible after a rejected save and explicit refresh.
+    for(const row of data.accounts){const item=tbPendingCodeCorrections.get(row.id);if(!item)continue;
+        const tr=Array.from(availableAccountsTableBody.querySelectorAll('tr[data-account-code]')).find(tr=>tr.dataset.accountCode===row.account_code);
+        const display=tr?.querySelector('.tb-account-code-display');if(display){item.display=display;display.textContent=item.account_code;display.classList.add('tb-code-pending');}}
+    tbUpdateCodeCorrectionsBar();if(!data.can_edit||tbNative.pending)getElement('tbSaveCodeCorrections').disabled=true;
+}
+async function tbNativeStart() {
+    if(!window.AppNativeTrialBalance.enabled)throw new Error('Trial Balance review is unavailable.');
+    tbFsIsAdmin=true;tbWorkflowMode='trial_balance';syncSavedWorkflowColumns();
+    if(uploadViewContainer)uploadViewContainer.style.display='none';availableTrialBalancesSection.style.display='block';
+    for(const selector of ['.tb-saved-workflow-field','.tb-saved-source-actions','#tbAssignmentSetup','#tbNextUnassigned','#tbAssignCategoriesBtn'])
+        availableTrialBalancesSection.querySelectorAll(selector).forEach(el=>{el.hidden=true;el.style.display='none';});
+    getElement('tbNativeReviewTools').hidden=false;
+    try{const raw=sessionStorage.getItem('tb-native-review-pending');if(raw){const pending=JSON.parse(raw);if(String(pending.client)===String(window.getSelectedClientId()))tbNativePending(pending);}}catch(error){showStatus('Recovery information could not be read. Reload before saving.','error');}
+    getElement('tbNativeFind').addEventListener('click',()=>{tbNative.search=getElement('tbNativeSearch').value.trim();tbNative.page=1;loadAvailableUploadAccounts(availableUploadsDropdown.value);});
+    getElement('tbNativeRefresh').addEventListener('click',()=>loadAvailableUploadAccounts(availableUploadsDropdown.value));
+    getElement('tbNativeSearch').addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();getElement('tbNativeFind').click();}});
+    for(const [id,delta] of [['tbNativePrevious',-1],['tbNativeNext',1]])getElement(id).addEventListener('click',()=>{tbNative.page+=delta;loadAvailableUploadAccounts(availableUploadsDropdown.value);});
+    const finish=async(result,pending)=>{if(String(result.upload_id)!==String(pending.upload)||String(result.operation_id)!==pending.request.operation_id)throw new Error('Save result could not be verified.');
+        tbNativePending(null);if(String(window.getSelectedClientId())===String(pending.client)&&availableUploadsDropdown.value===String(pending.upload)){
+            tbPendingCodeCorrections.clear();tbUpdateCodeCorrectionsBar();await loadAvailableUploadAccounts(pending.upload);}showStatus('Saved result verified.','success');};
+    getElement('tbNativeRecover').addEventListener('click',async()=>{const pending=tbNative.pending;if(!pending)return;try{
+        await finish(await tbNativeJson('/api/trial-balance/uploads/'+pending.upload+'/review/operations/'+pending.request.operation_id+'?client_id='+pending.client),pending);
+    }catch(error){if(error.code==='tb_review_operation_not_found')getElement('tbNativeRetry').hidden=false;showStatus(error.message,'error');}});
+    getElement('tbNativeRetry').addEventListener('click',async()=>{const pending=tbNative.pending;if(!pending)return;try{await finish(await tbNativeTransmit(pending),pending);}catch(error){showStatus(error.message,'error');}});
+    const requested=new URLSearchParams(location.search).get('upload_id');await loadAvailableUploads(availableTrialBalancesBtn,requested);
+    if(!availableUploadsDropdown.value&&availableUploadsDropdown.options.length>1){availableUploadsDropdown.selectedIndex=1;await loadAvailableUploadAccounts(availableUploadsDropdown.value);}
+}
+
 window.onload = async function () {
     // client_context.js populates the session-backed client cache from an async fetch. window.onload
     // is not a safe barrier for that (see the ready-signal note in client_context.js) -- without this
     // await, getSelectedClientId() returns null here and the page shows its "no client selected"
     // warning with Upload permanently disabled, despite a valid session.
     if (window.clientContextReady) await window.clientContextReady;
+    if (tbNative.present) { await tbNativeStart(); return; }
     if (typeof window.initUtils === 'function') await window.initUtils();
     updateClientDependentUI();
     tbFsIsAdmin=typeof window.isAdminUser==='function'?await window.isAdminUser():false;
