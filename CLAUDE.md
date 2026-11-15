@@ -41,7 +41,7 @@ One line per file group: what it is now. Full build history for every entry live
 - static/account_control_center.* → retired screens; legacy page bookmarks redirect to the Trial Balance assignment workspace. APIs remain in the router. See CHANGELOG_ARCHIVE.md.
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Two-pane Audit Rules editor for Documents, Cross-checks, Categories, Voucher Checks and Assertions, plus Assign Categories. See CHANGELOG_ARCHIVE.md.
-- category_control_center_prototype.html → standalone review-only prototype for the Category Control Center redesign; sample data only, no backend connection.
+- category_control_center_prototype.html, upload_mapping_prototype.html → standalone review-only Category Control Center and inline upload mapping prototypes; sample data only, no backend connection.
 - routers/verification.py + static/verification.* → Configured verification workstreams, Treasury routing, signed movements, evidence, checks, statuses and loading feedback. See CHANGELOG_ARCHIVE.md.
 - static/template-viewer.html, static/template-viewer.js → Scoped, bounded Data Bank viewer with native precision/freshness guards and Python compatibility. See CHANGELOG_ARCHIVE.md.
 - static/search_index.js → deleted; feature registry merged into `NAV_MANIFEST` in `client_context.js` — do not recreate. See CHANGELOG_ARCHIVE.md.
@@ -269,6 +269,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-15: Restored the Python upload page to the last committed layout; uncommitted mapping redesign removed. See CHANGELOG_ARCHIVE.md, Upload mapping rollback.
 - 2026-11-14: Added disabled native Trial Balance review, guarded corrections/classifications and current footings; locally accepted. See CHANGELOG_ARCHIVE.md, Trial Balance review P36.
 - 2026-11-14: Added default-off native Trial Balance storage, scoped replacement/deletion and recovery; locally accepted. See CHANGELOG_ARCHIVE.md, Trial Balance storage P35.
 - 2026-11-14: Restored saved Trial Balance footings after code/Leaf changes; locally accepted. See CHANGELOG_ARCHIVE.md, Saved Trial Balance footing.

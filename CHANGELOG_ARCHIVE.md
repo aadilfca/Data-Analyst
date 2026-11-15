@@ -10055,3 +10055,25 @@ Browser evidence covers double-click/lost-submit acknowledgement, refresh and an
 Latest synthetic measurements: original/repeat/correction/partial/empty browser flows take 3.5–6.3 seconds; a 1,000-line voucher imports in 4.2 seconds. The 10,000-line sample completes source/Footing review but hits the existing 4 MiB plan-payload cap and refuses accounting writes in 4.2 seconds; no limits were raised or rows silently excluded. Combined Kestrel/xUnit peak working set is about 224.5 MiB, not an isolated production-app measurement. Maximum observed API response is about 14 KiB. These are local automation timings, not production service levels or representative ERP scale certification. Initial fixture-only client/derived storage omissions and a navigation assertion were corrected using confirmed accepted fixtures; failure captures use UTF-8.
 
 No packages, live services/schema or private ERP workbooks were used. Native defaults stay off and startup runs no DDL. Representative corpus/scale, ledger/precision/retired-copy dependencies, provider capacity/policy and deployment activation remain gates; P30 Data Bank follows this accepted phase. Existing in-memory request-size warnings remain; real Kestrel body-limit regressions pass. Status/Architecture and File_Map were rewritten in place within their budgets. The protected router SHA-256 remains `0C4372F482D4D796568A184C30D3ABFD8CF3FD1167CECF414F92FD7CF43FD8FA`; editor files and prior user changes are preserved. Aadil authorized stage/commit/push with `feat: integrate native upload workflow and job controls` after positive local testing.
+
+## Inline upload mapping — 2026-11-15
+
+After separate file-list and approach approval, the Python Upload screen places one mapping selector below each Excel header in the existing paged Row Selection preview. Mapping count, required-field warnings, Save/Clear Mapping, row collapse, and an optional separate mapping list sit above the data table. Both mapping views update `currentMappings`; validation checks the existing mapping-table readiness and locked-restore guards, then submits that shared state. Footing controls moved above the preview. The report-period, coverage, backup, row-selection, validation, import and full-sheet preview workflows remain in place. No backend or accounting rules changed.
+
+Verification: `node --check static/upload.js` and `git diff --check` pass. The local browser route redirected to Login, so rendered mapping interaction could not be inspected without credentials; none were entered. No upload tests were run. Local-server acceptance remains pending.
+
+## Upload layout refinement — 2026-11-15
+
+After file-list and approach approval, restyled the mapping controls as a distinct full-width row beneath the template/workbook toolbar, with consistent 32px actions and clear status/action grouping. Stacked the optional separate mapping list, report/import safeguards and paged preview into one full-width column so opening or hiding mapping no longer reduces preview width. Moved Excel control totals into a bordered card directly above the report/import controls; preserved control IDs and event wiring. No JavaScript, backend or accounting behavior changed.
+
+Verification: `git diff --check` passes. The local app requires login for browser inspection; no credentials were entered. Local visual acceptance remains pending.
+
+## Upload layout refinement rollback — 2026-11-15
+
+Restored the earlier 38/62 upload-panel layout and Footing position after review. The inline mapping toolbar remains below the upload controls, with the inline header selectors and optional synchronized mapping list preserved. No JavaScript, backend or import behavior changed.
+
+Verification: `git diff --check` passes. Visual local-server acceptance remains pending.
+
+## Upload mapping rollback — 2026-11-15
+
+Restored `static/upload.html` and `static/upload.js` to committed revision `b832bbc` and updated current-state references. The Render service remained on its startup screen, so the deployed commit could not be independently confirmed. The standalone prototype remains available.

@@ -4,7 +4,7 @@ This document lists all source files in the project, grouped by directory, with 
 `DEVELOPMENT_PLAN.md` — active roadmap for evidence, phase decisions, discoveries, implementation scope, and next actions.
 | File | Purpose |
 |------|---------|
-| `category_control_center_prototype.html` | Standalone, review-only HTML/CSS/JavaScript prototype for the proposed Category Control Center redesign; sample data only, with no backend or database connection. |
+| `category_control_center_prototype.html`, `upload_mapping_prototype.html` | Standalone, review-only HTML/CSS/JavaScript prototypes for Category Control Center and inline upload mapping; sample data only, no backend or database connection. |
 | `CLAUDE.md` | Project-level context for Claude Code: stack, architecture map, conventions, workflow rules, and a one-line-per-phase status log. Read automatically every session. |
 | `CHANGELOG_ARCHIVE.md` | Detailed forensic write-ups of past phases (verification steps, test output) — only consulted when a phase touches an already-logged file/pattern. |
 | `KNOWN_ISSUES.md` | Findings log for the Code Health Review protocol defined in `CLAUDE.md` — one row per finding (`Date \| Module \| Finding \| Severity`, severity being Fix / Feature / Defer). Append-only; kept out of `CLAUDE.md` because it grows on every review, same reasoning as `CHANGELOG_ARCHIVE.md`. Starts empty. |
@@ -68,7 +68,7 @@ This document lists all source files in the project, grouped by directory, with 
 | `client_settings.html` | Retired direct-bookmark information page pointing users to Account Control Centre; no editable voucher-prefix configuration. |
 | `columns.html` | Reusable-column table/modal, search/sort, soft deletion and optional native identity/read-only notices. |
 | `templates.html` | Manage Templates — ordered columns, roles/comparisons, quick-add, ledger preparation, Rate Source, previews and soft deletion; optional native tenant read-only notice. |
-| `upload.html` | Upload Client Data — template/sheet selection, Date Delimiter/Order format popover with a live sample-date preview, auto-mapping table with Save/Clear Saved Mapping, Row Selection grid (exclude rows, auto-flag heuristic, blank-critical-field rejection with an "Import anyway" override), full-sheet preview, Validate → Upload flow, and the post-upload Import Summary popup. |
+| `upload.html` | Upload Client Data — template/sheet selection, date-format controls, auto-mapping table with Save/Clear Mapping, row selection, full-sheet preview, validation/import and import summary. |
 | `databank.html`, `data_integrity.html` | Data Bank backup/delete and history review; Data Integrity safeguards and client-scoped module inventory tabs. |
 | `error_dashboard.html` | Error Dashboard — stats cards, filterable/paginated error table, detail modal, resolve/delete actions. |
 | `settings.html` | Settings/holidays page with shared firm header/tabs and an optional .NET tenant read-only notice. |
@@ -99,7 +99,7 @@ This document lists all source files in the project, grouped by directory, with 
 | `client_settings.js` | Loads/saves a client's 5-category voucher prefixes via chip-list editors, cross-category duplicate validation. |
 | `columns.js` | Column CRUD, category choices, search/sort and usage preview; native tenant permissions, fixed-key label editing and dependency-review feedback. |
 | `templates.js` | Template editor, ordered roles/comparisons, accounting assignments, quick-add, ledger preparation and safe previews; native edits retain fixed bindings/revisions. |
-| `upload.js` | Upload selection, headers, dates, row controls, validation/import and restore; native mappings use fixed keys, revisions and selection checks. Python payloads remain compatible. |
+| `upload.js` | Upload selection, headers, dates, row controls, mapping, validation/import and restore; saved mappings use fixed keys, revisions and selection checks. |
 | `databank.js`, `data_integrity.js` | Data Bank previews/history, complete backup/delete proofs and outcome recovery; read-only inventory/safeguards, freshness and tab navigation. |
 | `error_dashboard.js` | Error log dashboard: load stats, fetch errors with filters, render table, detail modal, resolve/delete, pagination. |
 | `settings.js` | Settings, Cashflows defaults, holidays and backup-choice controls; escaped saved values and optional .NET tenant-admin editing. Shared tabs remain in `client_context.js`. |
