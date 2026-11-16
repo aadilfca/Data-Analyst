@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Profit confirmation P37 — 2026-11-16
+
+Added an unhosted pure C# profit-link evaluator and focused synthetic tests. It mirrors the legacy decision gates for the configured final total, active equity destination, nonzero category coverage, mapped Trial Balance reconciliation (absolute difference at most 0.01), unmapped nonzero accounts and context-matched closing confirmation. `already_in_capital` blocks a duplicate link. Exact amount parsing is reused; invalid values return unavailable. No source loading, full statements, API, persistence, schema, UI, Python changes, packages or activation were added. Later .NET report phases can reuse the helper.
+
+Verification: the Release test-project build passes with zero warnings/errors; all nine focused P37 tests pass through the test assembly's xUnit/Microsoft.Testing.Platform runner. The conventional `dotnet test` command still selects VSTest because `global.json` does not select MTP, and MTP 2.5.2 rejects that route under .NET 10. No project-wide runner setting or dependency was changed.
+
 ## Trial Balance review P36 — 2026-11-14
 
 Confirmed 26 candidate files and explicit approach approval cover default-off saved-review APIs and the retained Trial Balance page. New review options/contracts/service/store/writer/summary, controller, isolated candidate `0019` and synthetic tests reuse P34 hierarchy and exact arithmetic plus P35 ownership, locking and four assignment carry-forward rules. The existing asset globs already package the required files; no project/package changes were needed. Root architecture/status and file-map rows were rewritten within budget; a redundant history-pointer line was removed from Status without removing event history.

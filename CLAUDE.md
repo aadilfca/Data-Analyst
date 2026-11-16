@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- dotnet-uploader/ → Disabled tenant/configuration/upload/data APIs, bounded workbooks/jobs, scoped cleanup and guarded Trial Balance parsing/storage/review. See CHANGELOG_ARCHIVE.md.
+- dotnet-uploader/ → Disabled native APIs; bounded uploads, Data Bank, cleanup, Trial Balance review, and reusable profit-link checks. See CHANGELOG_ARCHIVE.md.
 
 - routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, statements, category-role notes with unallocated rows, profit links, reconciliations, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
 
@@ -269,6 +269,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-16: Added an isolated .NET profit-link confirmation helper; report integration remains a later phase. See CHANGELOG_ARCHIVE.md, Profit confirmation P37.
 - 2026-11-15: Restored the Python upload page to the last committed layout; uncommitted mapping redesign removed. See CHANGELOG_ARCHIVE.md, Upload mapping rollback.
 - 2026-11-14: Added disabled native Trial Balance review, guarded corrections/classifications and current footings; locally accepted. See CHANGELOG_ARCHIVE.md, Trial Balance review P36.
 - 2026-11-14: Added default-off native Trial Balance storage, scoped replacement/deletion and recovery; locally accepted. See CHANGELOG_ARCHIVE.md, Trial Balance storage P35.
@@ -347,8 +348,6 @@ One line per file group: what it is now. Full build history for every entry live
 - 2026-10-19: Cashflows moves to canonical Client Data with bounded source fetching, coverage diagnostics, browser caches, exports and isolated experiments. See CHANGELOG_ARCHIVE.md.
 - 2026-10-06–12: Upload lifecycle, source coverage, cleanup safeguards and Cashflows preparation advanced. See CHANGELOG_ARCHIVE.md.
 - 2026-09-01–10-02: Database, Reconciliation, Rulebook, Account Sets, Verification, Forms and Cashflows foundations progressed. See CHANGELOG_ARCHIVE.md.
-- 2026-11-06: Upload comparison now respects numeric meaning, blank-versus-zero lines, and exact imported Rates. See CHANGELOG_ARCHIVE.md, Numeric comparison and Rate preservation.
-- 2026-11-06: Unique anchors pair numeric corrections; history shows legacy replacements as changes. See CHANGELOG_ARCHIVE.md, Unique line matching and history display.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

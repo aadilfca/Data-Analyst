@@ -344,6 +344,12 @@ This list records discussion, not blanket authorization to activate policies. Re
 - Defaults: one apply/two readers, 60 seconds, 1 MiB/1,000 explicit edits, 100,000 combined snapshot rows/32 MiB, 1 MiB response, 100-row pages/500 maximum, 2 MiB retained browser state and 1,024 operations/client. Project metadata/mapping/audit growth under C01; refuse overflow.
 - Native saved review exposes read-only existing assignments; source upload/replacement/deletion hosting, setup mutations, composite Cashflow/ledger workflows and reports retain later integration gates. No Python fallback, browser source paths, new dependency or live SQL. See CHANGELOG_ARCHIVE.md, Trial Balance review P36.
 
+### P37 profit-confirmation context
+
+- An unhosted pure C# helper evaluates an already-calculated final Income Statement total and its covered categories against mapped Trial Balance profit. It does not calculate full statements or load sources.
+- Require a selected final total, active Balance Sheet equity destination, coverage of every nonzero Income Statement category, no nonzero unmapped accounts, and a current matching closing confirmation. Reconcile within an absolute difference of 0.01; `already_in_capital` never applies a second link.
+- Use the existing bounded exact-amount type; invalid amounts return unavailable. No float conversion, endpoint, persistence, schema, UI, dependency, Python edit or activation is included. Later report phases may reuse this helper.
+
 ## 3. PostgreSQL and financial values
 
 | Contract | Required behavior |
