@@ -39,6 +39,18 @@ public sealed class ReportInputTests
                 CREATE TABLE public.uploaded_files(id integer PRIMARY KEY,file_name text NOT NULL,upload_date timestamptz,
                     client_id integer NOT NULL,template_id integer NOT NULL);
                 CREATE TABLE public.templates(id integer PRIMARY KEY,template_name text NOT NULL);
+                ALTER TABLE public.uploaded_files ADD COLUMN status text NOT NULL DEFAULT 'Imported';
+                ALTER TABLE public.uploaded_files ADD COLUMN ledger_account_code text;
+                ALTER TABLE public.uploaded_files ADD COLUMN ledger_account_name text;
+                ALTER TABLE public.uploaded_files ADD COLUMN ledger_period_start date;
+                ALTER TABLE public.uploaded_files ADD COLUMN ledger_period_end date;
+                ALTER TABLE public.uploaded_files ADD COLUMN ledger_evidence jsonb;
+                ALTER TABLE public.templates ADD COLUMN is_active boolean NOT NULL DEFAULT true;
+                ALTER TABLE public.templates ADD COLUMN data_purpose text NOT NULL DEFAULT 'standard';
+                ALTER TABLE public.templates ADD COLUMN ledger_columns text NOT NULL DEFAULT '{}';
+                CREATE TABLE public.master_columns(id integer PRIMARY KEY,column_name text NOT NULL,data_type text NOT NULL,is_active boolean NOT NULL DEFAULT true);
+                CREATE TABLE public.template_column_mappings(id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                    template_id integer NOT NULL,column_id integer NOT NULL,sort_order integer NOT NULL DEFAULT 0);
                 ALTER TABLE public.client_data ADD COLUMN template_id integer NOT NULL DEFAULT 1;
                 ALTER TABLE public.client_data ADD COLUMN upload_id integer NOT NULL DEFAULT 1;
                 ALTER TABLE public.client_data ADD COLUMN version integer NOT NULL DEFAULT 1;
@@ -62,6 +74,20 @@ public sealed class ReportInputTests
                     source_category_id integer,source_calculation_id integer,operator text NOT NULL,sort_order integer NOT NULL DEFAULT 0);
                 CREATE TABLE public.account_control_profit_links(
                     client_id integer PRIMARY KEY,source_calculation_id integer NOT NULL,target_category_id integer NOT NULL);
+                CREATE TABLE public.account_control_cashflow_settings(client_id integer PRIMARY KEY,
+                    match_internal_transfers boolean NOT NULL DEFAULT true,receipt_presentation text NOT NULL DEFAULT 'gross',
+                    source_upload_id integer,source_template_id integer);
+                CREATE TABLE public.account_control_cashflow_categories(id integer PRIMARY KEY,client_id integer NOT NULL,
+                    category_key text NOT NULL,label text NOT NULL,sort_order integer NOT NULL DEFAULT 0,is_active boolean NOT NULL DEFAULT true);
+                CREATE TABLE public.account_control_cashflow_category_assignments(id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                    client_id integer NOT NULL,account_code text NOT NULL,category_id integer NOT NULL);
+                CREATE TABLE public.account_control_cashflow_assignments(client_id integer NOT NULL,account_code text NOT NULL,
+                    section text NOT NULL,category_label text,cash_bank_role text NOT NULL,treatment_type text NOT NULL);
+                CREATE TABLE public.account_control_cashflow_role_categories(client_id integer NOT NULL,role_key text NOT NULL,category_id integer NOT NULL);
+                CREATE TABLE public.account_control_cashflow_treasury_accounts(client_id integer NOT NULL,account_code text NOT NULL,
+                    treasury_type text NOT NULL,is_active boolean NOT NULL DEFAULT true);
+                CREATE TABLE public.account_control_cashflow_source_mappings(client_id integer NOT NULL,template_id integer NOT NULL,
+                    role text NOT NULL,template_column_id integer NOT NULL);
                 CREATE TABLE public.trial_balance_profit_status(
                     upload_id integer PRIMARY KEY,client_id integer NOT NULL,closing_status text NOT NULL,context_key text NOT NULL);
                 INSERT INTO public.account_control_categories(id,client_id,category_type,category_key,label)
@@ -74,6 +100,17 @@ public sealed class ReportInputTests
                 INSERT INTO public.report_category_sets VALUES(1,10,'ledger_summary','Ledger Summary',true);
                 INSERT INTO public.report_categories VALUES(1,1,'cash','Cash',NULL,1,true);
                 INSERT INTO public.report_account_category_assignments(client_id,category_set_id,account_code,category_id) VALUES(10,1,'100',1);
+                INSERT INTO public.account_control_cashflow_settings(client_id,source_upload_id,source_template_id) VALUES(10,1,1);
+                INSERT INTO public.account_control_cashflow_categories(id,client_id,category_key,label) VALUES(11,10,'receipts','Receipts');
+                INSERT INTO public.account_control_cashflow_category_assignments(client_id,account_code,category_id) VALUES(10,'100',11);
+                INSERT INTO public.account_control_cashflow_treasury_accounts(client_id,account_code,treasury_type) VALUES(10,'B1','bank');
+                INSERT INTO public.templates(id,template_name,data_purpose,ledger_columns) VALUES(2,'ledger','account_ledger','{}');
+                INSERT INTO public.uploaded_files(id,file_name,client_id,template_id,status,ledger_account_code,
+                    ledger_period_start,ledger_period_end,ledger_evidence)
+                    VALUES(3,'bank-ledger.xlsx',10,2,'Imported','B1','2026-01-01','2026-01-31',
+                    '{"balance_check":{"status":"consistent"}}');
+                INSERT INTO public.master_columns(id,column_name,data_type) VALUES(1,'voucher','Text');
+                INSERT INTO public.template_column_mappings(template_id,column_id,sort_order) VALUES(2,1,0);
                 CREATE TABLE public.trial_balance_uploads(id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
                     client_id integer NOT NULL REFERENCES public.clients(id) ON DELETE CASCADE,as_of_date date,file_name text,
                     status text NOT NULL DEFAULT 'pending',row_count integer NOT NULL DEFAULT 0,notes text,
@@ -115,6 +152,8 @@ public sealed class ReportInputTests
                 INSERT INTO public.trial_balance_accounts(upload_id,account_code,account_name,classification,
                     debit_amount,credit_amount,closing_dr,closing_cr,raw_row_data)
                     VALUES(30,'100','Cash','leaf',0.1,0,0.1,0,'{"source":"trial-balance"}'::jsonb);
+                INSERT INTO public.client_data(client_id,template_id,upload_id,row_data,source_fingerprint,extract_date)
+                    VALUES(10,2,3,'{"voucher":"V1"}'::jsonb,'ledger-fingerprint','2026-01-15');
                 INSERT INTO public.trial_balance_rollforward_adjustments(
                     upload_id,account_id,source_excel_row,expected_closing_net,original_closing_net,difference_net,
                     closing_dr_adjustment,closing_cr_adjustment)
@@ -131,7 +170,8 @@ public sealed class ReportInputTests
                 10,"Alpha","A",true,101,0);
             var other = new VerifiedSession(new string('b',64),2,"other","admin",DateTime.UtcNow.AddHours(1),
                 20,"Beta","B",true,102,0);
-            var request = new ReportInputRequest { ClientId=10,Kind=ReportInputKind.FinancialStatements,TrialBalanceUploadId=30 };
+            var request = new ReportInputRequest { ClientId=10,Kind=ReportInputKind.FinancialStatements,
+                UploadId=1,TrialBalanceUploadId=30 };
 
             var first = await service.CaptureAsync(owner,request,Ct);
             Assert.Equal("success",first.Status);
@@ -147,6 +187,13 @@ public sealed class ReportInputTests
             Assert.Single(first.Snapshot.TrialBalanceAdjustments.Items);
             Assert.Equal("0.01",first.Snapshot.TrialBalanceAdjustments.Items[0].DifferenceNet.ExactValue);
             Assert.Single(first.Snapshot.AccountAssignments.Items);
+            var ledgerRequest=new ReportInputRequest { ClientId=10,Kind=ReportInputKind.LedgerSource,UploadId=1,
+                TemplateId=1,PeriodStart="2026-01-01",PeriodEnd="2026-01-31",CategorySource=ReportAccountCategorySource.Cashflow };
+            var cashflowInputs=await service.CaptureAsync(owner,ledgerRequest,Ct);
+            Assert.Equal("success",cashflowInputs.Status);
+            Assert.Single(cashflowInputs.Snapshot!.CashflowLedgerEvidenceUploads.Items);
+            Assert.Single(cashflowInputs.Snapshot.CashflowLedgerEvidenceRows.Items);
+            Assert.Equal("B1",cashflowInputs.Snapshot.CashflowLedgerEvidenceRows.Items[0].AccountCode);
             Assert.Equal("forbidden",(await service.CaptureAsync(other,request,Ct)).Status);
             Assert.Equal("not_found",(await service.CaptureAsync(owner,request with {UploadId=2},Ct)).Status);
 

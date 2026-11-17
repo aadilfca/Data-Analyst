@@ -19,6 +19,9 @@ using AuditPlatform.Api.DataBank;
 using AuditPlatform.Api.TrialBalance;
 using AuditPlatform.Api.Verification;
 using AuditPlatform.Api.Reconciliation;
+using AuditPlatform.Api.Reports;
+using AuditPlatform.Api.FinancialStatements;
+using AuditPlatform.Api.Cashflows;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -151,6 +154,43 @@ builder.Services.AddSingleton<VerificationSetupService>();
 builder.Services.AddOptions<ReconciliationSetupOptions>()
     .Bind(builder.Configuration.GetSection(ReconciliationSetupOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
 builder.Services.AddSingleton<ReconciliationSetupService>();
+builder.Services.AddOptions<ReportInputOptions>()
+    .Bind(builder.Configuration.GetSection(ReportInputOptions.SectionName))
+    .ValidateDataAnnotations().ValidateOnStart();
+builder.Services.AddSingleton<ReportInputService>();
+builder.Services.AddSingleton<FinancialStatementCalculationService>();
+builder.Services.AddSingleton<FinancialStatementNotesService>();
+builder.Services.AddSingleton<CashflowCalculationService>();
+builder.Services.AddSingleton<FinancialReportReconciliationService>();
+builder.Services.AddOptions<FinancialReportJobOptions>()
+    .Bind(builder.Configuration.GetSection(FinancialReportJobOptions.SectionName))
+    .ValidateDataAnnotations().ValidateOnStart();
+builder.Services.AddSingleton<FinancialReportJobStore>();
+builder.Services.AddSingleton<FinancialReportJobService>();
+builder.Services.AddHostedService<FinancialReportJobWorker>();
+foreach (var route in new[]
+{
+    ("financial-report-jobs-submit", "POST", "/api/reconciliation/financial-reports/jobs"),
+    ("financial-report-jobs-get", "GET", "/api/reconciliation/financial-reports/jobs"),
+    ("financial-report-jobs-cancel", "POST", "/api/reconciliation/financial-reports/jobs/cancel"),
+    ("financial-report-jobs-download", "GET", "/api/reconciliation/financial-reports/jobs/download")
+})
+    builder.Services.AddSingleton<CoexistenceRoute>(provider => new CoexistenceRoute(route.Item1, route.Item2,
+        route.Item3, provider.GetRequiredService<IOptions<ReportInputOptions>>().Value.Enabled
+            && provider.GetRequiredService<IOptions<FinancialReportJobOptions>>().Value.Enabled
+                ? CoexistenceOwner.DotNet : CoexistenceOwner.Legacy, CoexistenceAccess.Authenticated));
+foreach (var route in new[]
+{
+    ("financial-statements-balance-sheet", "GET", "/api/reconciliation/financial-statements/balance-sheet"),
+    ("financial-statements-income-statement", "GET", "/api/reconciliation/financial-statements/income-statement"),
+    ("financial-statements-notes", "GET", "/api/reconciliation/financial-statements/notes"),
+    ("cashflows-preview", "GET", "/api/reconciliation/cashflows/preview"),
+    ("cashflows-reconciliation", "GET", "/api/reconciliation/cashflows/reconciliation"),
+    ("financial-report-download", "GET", "/api/reconciliation/reports/download")
+})
+    builder.Services.AddSingleton<CoexistenceRoute>(provider => new CoexistenceRoute(route.Item1, route.Item2,
+        route.Item3, provider.GetRequiredService<IOptions<ReportInputOptions>>().Value.Enabled
+            ? CoexistenceOwner.DotNet : CoexistenceOwner.Legacy, CoexistenceAccess.Authenticated));
 builder.Services.AddOptions<DataBankExportOptions>()
     .Bind(builder.Configuration.GetSection(DataBankExportOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
 builder.Services.AddSingleton<DataBankExportService>();
@@ -167,6 +207,12 @@ builder.Services.AddSingleton<AuditPlatform.Api.StorageCleanup.StorageArtifactCl
 builder.Services.AddHostedService<AuditPlatform.Api.StorageCleanup.StorageCleanupWorker>();
 
 var app = builder.Build();
+if(app.Services.GetRequiredService<IOptions<FinancialReportJobOptions>>().Value.Enabled
+    && (!app.Services.GetRequiredService<IOptions<ReportInputOptions>>().Value.Enabled
+        || !app.Services.GetRequiredService<IOptions<PostgresOptions>>().Value.Enabled
+        || !app.Services.GetRequiredService<IOptions<ApplicationShellOptions>>().Value.Enabled))
+    throw new OptionsValidationException(FinancialReportJobOptions.SectionName,typeof(FinancialReportJobOptions),
+        ["Financial report jobs require the accepted report inputs, PostgreSQL and authenticated tenant shell."]);
 if(app.Services.GetRequiredService<IOptions<TrialBalanceReviewOptions>>().Value.Enabled
     && (!app.Services.GetRequiredService<IOptions<ApplicationShellOptions>>().Value.Enabled
         ||!app.Services.GetRequiredService<IOptions<PostgresOptions>>().Value.Enabled))

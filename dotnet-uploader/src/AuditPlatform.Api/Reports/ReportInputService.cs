@@ -62,12 +62,35 @@ public sealed class ReportInputService(PostgresReadSnapshot snapshots, IOptions<
                 var cashflowRoleCategories = Empty<ReportCashflowRoleCategory>();
                 var treasuryAccounts = Empty<ReportCashflowTreasuryAccount>();
                 var columnMappings = Empty<ReportCashflowColumnMapping>();
+                var ledgerEvidenceUploads = Empty<ReportCashflowLedgerEvidenceUpload>();
+                var ledgerEvidenceRows = Empty<ReportCashflowLedgerEvidenceRow>();
 
-                clientDataUploads = await ResolveClientDataUploadsAsync(db, normalized, budget, token);
-                clientData = await ReadClientDataAsync(db, normalized, clientDataUploads.Items, budget, token);
+                var captureRequest = normalized;
+                if (normalized.Kind == ReportInputKind.LedgerSource
+                    && normalized.CategorySource == ReportAccountCategorySource.Cashflow)
+                {
+                    cashflowSettings = await ReadCashflowSettingsAsync(db, normalized.ClientId, budget, token);
+                    var selectedSource = cashflowSettings.Items.SingleOrDefault();
+                    if (selectedSource?.SourceUploadId is null && selectedSource?.SourceTemplateId is null)
+                        return new ReportInputCaptureResult("unavailable", Code: "cashflow_source_unconfigured");
+                    if (normalized.UploadId is { } requestedSourceUpload && requestedSourceUpload != selectedSource.SourceUploadId
+                        || normalized.TemplateId is { } requestedTemplate && requestedTemplate != selectedSource.SourceTemplateId)
+                        return new ReportInputCaptureResult("conflict", Code: "cashflow_source_selection_changed");
+                    captureRequest = normalized with
+                    {
+                        UploadId = selectedSource.SourceUploadId,
+                        TemplateId = selectedSource.SourceTemplateId
+                    };
+                }
+                clientDataUploads = await ResolveClientDataUploadsAsync(db, captureRequest, budget, token);
+                clientData = await ReadClientDataAsync(db, captureRequest, clientDataUploads.Items, budget, token);
 
-                uploads = await ReadTrialBalanceUploadAsync(db, normalized.ClientId,
-                    normalized.TrialBalanceUploadId, budget, token, true);
+                bool captureTrialBalance = normalized.Kind == ReportInputKind.FinancialStatements
+                    || normalized.TrialBalanceUploadId is not null;
+                uploads = captureTrialBalance
+                    ? await ReadTrialBalanceUploadAsync(db, normalized.ClientId,
+                        normalized.TrialBalanceUploadId, budget, token, true)
+                    : Empty<ReportTrialBalanceUpload>();
                 int? trialBalanceUploadId = uploads.Items.SingleOrDefault()?.Id;
                 if (normalized.TrialBalanceUploadId is not null && trialBalanceUploadId is null)
                     return new ReportInputCaptureResult("not_found", Code: "report_input_trial_balance_not_found");
@@ -104,18 +127,23 @@ public sealed class ReportInputService(PostgresReadSnapshot snapshots, IOptions<
                     categories = await ReadReportCategoriesAsync(db, normalized.ClientId, categorySource, budget, token);
                     if (categorySource == ReportAccountCategorySource.Cashflow)
                     {
-                        cashflowSettings = await ReadCashflowSettingsAsync(db, normalized.ClientId, budget, token);
                         cashflowAssignments = await ReadCashflowAssignmentsAsync(db, normalized.ClientId, budget, token);
                         cashflowRoleCategories = await ReadCashflowRoleCategoriesAsync(db, normalized.ClientId, budget, token);
                         treasuryAccounts = await ReadTreasuryAccountsAsync(db, normalized.ClientId, budget, token);
                         columnMappings = await ReadCashflowColumnMappingsAsync(db, normalized.ClientId,
-                            normalized.TemplateId, budget, token);
+                            captureRequest.TemplateId, budget, token);
+                        string[] treasuryCodes = treasuryAccounts.Items.Select(row => row.AccountCode)
+                            .Distinct(StringComparer.Ordinal).ToArray();
+                        ledgerEvidenceUploads = await ReadCashflowLedgerEvidenceUploadsAsync(db, normalized.ClientId,
+                            treasuryCodes, budget, token);
+                        ledgerEvidenceRows = await ReadCashflowLedgerEvidenceRowsAsync(db, normalized.ClientId,
+                            ledgerEvidenceUploads.Items, budget, token);
                     }
                 }
 
                 DateTime capturedAt = await CaptureTimestampAsync(db, token);
                 var scope = new ReportInputScope(normalized.ClientId, normalized.Kind, normalized.UploadId,
-                    normalized.TemplateId, clientDataUploads.Items.Select(row => row.Id).ToArray(),
+                    captureRequest.TemplateId, clientDataUploads.Items.Select(row => row.Id).ToArray(),
                     trialBalanceUploadId, normalized.PeriodStart, normalized.PeriodEnd,
                     normalized.Kind == ReportInputKind.FinancialStatements ? null : normalized.CategorySource,
                     normalized.SelectedAccountCodes, normalized.TreasuryView);
@@ -129,7 +157,9 @@ public sealed class ReportInputService(PostgresReadSnapshot snapshots, IOptions<
                     ProfitLinks = profitLinks.Items, ProfitStatuses = profitStatuses.Items,
                     CashflowSettings = cashflowSettings.Items, CashflowAssignments = cashflowAssignments.Items,
                     CashflowRoleCategories = cashflowRoleCategories.Items, TreasuryAccounts = treasuryAccounts.Items,
-                    CashflowColumnMappings = columnMappings.Items
+                    CashflowColumnMappings = columnMappings.Items,
+                    CashflowLedgerEvidenceUploads = ledgerEvidenceUploads.Items,
+                    CashflowLedgerEvidenceRows = ledgerEvidenceRows.Items
                 });
                 string fingerprint = Hash(new
                 {
@@ -141,7 +171,8 @@ public sealed class ReportInputService(PostgresReadSnapshot snapshots, IOptions<
                 var snapshot = new ReportInputSnapshot(scope, identity, clientDataUploads, clientData, uploads,
                     accounts, trialBalanceAdjustments, assignments, mappings, categories, calculations, components, profitLinks,
                     profitStatuses, cashflowSettings, cashflowAssignments, cashflowRoleCategories,
-                    treasuryAccounts, columnMappings);
+                    treasuryAccounts, columnMappings)
+                { CashflowLedgerEvidenceUploads = ledgerEvidenceUploads, CashflowLedgerEvidenceRows = ledgerEvidenceRows };
                 return new ReportInputCaptureResult("success", snapshot);
             }, deadline.Token);
         }
@@ -326,6 +357,39 @@ public sealed class ReportInputService(PostgresReadSnapshot snapshots, IOptions<
     private Task<ReportInputDataset<ReportCashflowColumnMapping>> ReadCashflowColumnMappingsAsync(PostgresTransactionContext db,int client,int? template,CaptureBudget b,CancellationToken ct) =>
         Query<ReportCashflowColumnMapping>(db,"SELECT m.template_id,m.role,c.column_name FROM public.account_control_cashflow_source_mappings m JOIN public.master_columns c ON c.id=m.template_column_id WHERE m.client_id=$1 AND ($2::integer IS NULL OR m.template_id=$2) ORDER BY m.template_id,m.role LIMIT $3",[client,(object?)template??DBNull.Value],r=>new ReportCashflowColumnMapping(r.GetInt32(0),r.GetString(1),r.GetString(2)),b,ct);
 
+    private Task<ReportInputDataset<ReportCashflowLedgerEvidenceUpload>> ReadCashflowLedgerEvidenceUploadsAsync(
+        PostgresTransactionContext db, int client, string[] treasuryCodes, CaptureBudget budget, CancellationToken ct) =>
+        treasuryCodes.Length == 0 ? Task.FromResult(Complete<ReportCashflowLedgerEvidenceUpload>([], 0))
+        : Query<ReportCashflowLedgerEvidenceUpload>(db, """
+            SELECT u.id,u.template_id,u.ledger_account_code,u.ledger_account_name,
+                   u.ledger_period_start,u.ledger_period_end,u.ledger_evidence::text,
+                   t.ledger_columns::text,
+                   COALESCE((SELECT json_agg(json_build_object('id',m.id,'column_name',m.column_name,'data_type',m.data_type)
+                       ORDER BY p.sort_order)::text
+                       FROM public.template_column_mappings p JOIN public.master_columns m
+                         ON m.id=p.column_id AND m.is_active IS TRUE WHERE p.template_id=t.id),'[]')
+            FROM public.uploaded_files u JOIN public.templates t ON t.id=u.template_id
+            WHERE u.client_id=$1 AND u.status='Imported' AND u.ledger_account_code=ANY($2)
+              AND t.data_purpose='account_ledger' AND t.is_active IS TRUE ORDER BY u.id LIMIT $3
+            """, [client, treasuryCodes], r => new ReportCashflowLedgerEvidenceUpload(
+                r.GetInt32(0),r.GetInt32(1),r.GetString(2),NullableString(r,3),NullableDateOnly(r,4),
+                NullableDateOnly(r,5),NullableString(r,6),NullableString(r,7),r.GetString(8)), budget, ct);
+
+    private Task<ReportInputDataset<ReportCashflowLedgerEvidenceRow>> ReadCashflowLedgerEvidenceRowsAsync(
+        PostgresTransactionContext db, int client, IReadOnlyList<ReportCashflowLedgerEvidenceUpload> uploads,
+        CaptureBudget budget, CancellationToken ct) => uploads.Count == 0
+        ? Task.FromResult(Complete<ReportCashflowLedgerEvidenceRow>([], 0))
+        : Query<ReportCashflowLedgerEvidenceRow>(db, """
+            SELECT cd.id,cd.upload_id,cd.template_id,u.ledger_account_code,cd.version,
+                   cd.source_fingerprint,cd.extract_date,cd.row_data::text
+            FROM public.client_data cd JOIN public.uploaded_files u
+              ON u.id=cd.upload_id AND u.client_id=cd.client_id AND u.template_id=cd.template_id
+            WHERE cd.client_id=$1 AND cd.is_deleted IS FALSE AND u.status='Imported' AND cd.upload_id=ANY($2)
+            ORDER BY cd.id LIMIT $3
+            """, [client, uploads.Select(row => row.Id).ToArray()], r => new ReportCashflowLedgerEvidenceRow(
+                r.GetInt32(0),r.GetInt32(1),r.GetInt32(2),r.GetString(3),r.GetInt32(4),
+                NullableString(r,5),NullableDateOnly(r,6),r.GetString(7)), budget, ct);
+
     private async Task<DateTime> CaptureTimestampAsync(PostgresTransactionContext db,CancellationToken ct)
     { await using var command=db.CreateCommand("SELECT transaction_timestamp()"); return (DateTime)(await command.ExecuteScalarAsync(ct))!; }
 
@@ -368,7 +432,9 @@ public sealed class ReportInputService(PostgresReadSnapshot snapshots, IOptions<
     {
         normalized=request;error="report_input_request_invalid";
         if(request.ClientId<1||!Enum.IsDefined(request.Kind)||request.UploadId is <=0||request.TemplateId is <=0
-            ||request.UploadId is not null&&request.TemplateId is not null||request.TrialBalanceUploadId is <=0
+            ||request.UploadId is not null&&request.TemplateId is not null
+                && !(request.Kind == ReportInputKind.LedgerSource && request.CategorySource == ReportAccountCategorySource.Cashflow)
+            ||request.TrialBalanceUploadId is <=0
             ||!Enum.IsDefined(request.CategorySource)) return false;
         string? start=NormalizeDate(request.PeriodStart),end=NormalizeDate(request.PeriodEnd);
         if(request.PeriodStart is not null&&start is null||request.PeriodEnd is not null&&end is null

@@ -47,7 +47,11 @@ public sealed record ReportInputSnapshot(ReportInputScope Scope, ReportInputIden
     ReportInputDataset<ReportCashflowAccountAssignment> CashflowAccountAssignments,
     ReportInputDataset<ReportCashflowRoleCategory> CashflowRoleCategories,
     ReportInputDataset<ReportCashflowTreasuryAccount> CashflowTreasuryAccounts,
-    ReportInputDataset<ReportCashflowColumnMapping> CashflowColumnMappings);
+    ReportInputDataset<ReportCashflowColumnMapping> CashflowColumnMappings)
+{
+    public ReportInputDataset<ReportCashflowLedgerEvidenceUpload> CashflowLedgerEvidenceUploads { get; init; } = new(false,false,0,0,[]);
+    public ReportInputDataset<ReportCashflowLedgerEvidenceRow> CashflowLedgerEvidenceRows { get; init; } = new(false,false,0,0,[]);
+}
 
 public sealed record ReportInputCaptureResult(string Status, ReportInputSnapshot? Snapshot = null, string? Code = null);
 
@@ -102,6 +106,13 @@ public sealed record ReportCashflowRoleCategory(int ClientId, string RoleKey, in
 public sealed record ReportCashflowTreasuryAccount(string AccountCode, string TreasuryType);
 
 public sealed record ReportCashflowColumnMapping(int TemplateId, string Role, string ColumnName);
+
+public sealed record ReportCashflowLedgerEvidenceUpload(int Id, int TemplateId, string AccountCode,
+    string? AccountName, DateOnly? PeriodStart, DateOnly? PeriodEnd, string? EvidenceJson,
+    string? LedgerColumnsJson, string TemplateColumnsJson);
+
+public sealed record ReportCashflowLedgerEvidenceRow(int Id, int UploadId, int TemplateId,
+    string AccountCode, int Version, string? SourceFingerprint, DateOnly? ExtractDate, string RowDataJson);
 
 public sealed record ReportAmountValue(string RawValue, string StorageType, string ExactValue)
 {

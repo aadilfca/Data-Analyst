@@ -1,5 +1,13 @@
 # Changelog Archive
 
+## P53C–P56 report implementation pass — 2026-11-17 (in progress)
+
+Within the approved batch, added C# Notes, Cashflows, independent Cash/Bank balance/posting evidence, authenticated report and job APIs, bounded literal-text OOXML workbooks, and durable tenant/user/client/session-bound report jobs with idempotency, cancellation, retries, expiry and migration `0020`. Report and job options remain disabled by default; selected-client ownership is rechecked in the database transaction. Mixed Treasury vouchers now stay under review instead of receiving a false matched movement proof.
+
+Verification: the .NET solution builds with zero warnings/errors; 9 focused Notes/Cashflows/reconciliation/workbook tests pass. The isolated PostgreSQL job lifecycle test passes (1/1), and the report-input scope/fingerprint/evidence capture test passes (1/1). The sandbox initially blocked `pg_ctl`; both database tests passed through the reviewed local execution path. NuGet restore was recovered from the repository's local package feed; no package was downloaded. `git diff --check` is pending final closeout.
+
+This is not full P53C–P56 parity or cutover acceptance. Cashflows still lacks legacy party-payment/detail and complete internal-transfer behavior; split-view/result shapes and workbook layout are not fully matched; the existing browser UI remains on the Python path; report-job execution, artifact recovery and full owner/revocation/restart cases need additional acceptance. Keep both options disabled. Aadil should test the local server and compare reports/workbook cells with the accepted Python outputs before these phases can be called complete or committed.
+
 ## Financial statements P53B — 2026-11-17
 
 Extended the selected-TB P53A snapshot with saved validation-controls JSON and client-scoped roll-forward adjustments. Added an internal C# Balance Sheet/Income Statement calculator using exact amount handling, Trial Balance hierarchy, and P37 profit confirmation. It ports presentation signs, category subtotals/totals and source lineage, diagnostics, opening comparison/review, current-profit linking, profit bridge and transfer reconciliation. Context hashes match legacy Python golden vectors, including floating-point and Unicode cases. No route, DI registration, schema, UI, Python change or activation was added; REAL/DOUBLE source values remain approximate.

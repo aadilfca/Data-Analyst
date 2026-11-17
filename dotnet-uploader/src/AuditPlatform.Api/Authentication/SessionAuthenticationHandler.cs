@@ -25,6 +25,7 @@ public sealed class SessionAuthenticationHandler(RequestDelegate next)
             || context.Request.Path.StartsWithSegments("/api/columns")
             || context.Request.Path.StartsWithSegments("/api/templates")
             || context.Request.Path.StartsWithSegments("/api/backup")
+            || context.Request.Path.StartsWithSegments("/api/reconciliation")
             || context.Request.Path.StartsWithSegments("/api/import-excel")
             || context.Request.Path.StartsWithSegments("/api/upload/staging")
             || context.Request.Path.StartsWithSegments("/api/upload/file")
@@ -59,11 +60,18 @@ public sealed class SessionCoexistenceGate(IOptions<AuthenticationOptions> optio
     {
         if (!options.Value.Enabled) return ValueTask.FromResult(CoexistenceAccessDecision.Unavailable);
         if (route.Access == CoexistenceAccess.Public) return ValueTask.FromResult(CoexistenceAccessDecision.Allowed);
-        // Legacy routes do not yet enforce selected-tenant context. A shell
-        // session cannot inherit global-role bridge privileges.
-        if (shell?.Value.Enabled==true) return ValueTask.FromResult(CoexistenceAccessDecision.Forbidden);
         if (context.Items[typeof(VerifiedSession)] is not VerifiedSession session)
             return ValueTask.FromResult(CoexistenceAccessDecision.Unauthenticated);
+        bool selectedClientReport = route.Owner == CoexistenceOwner.DotNet
+            && route.Access == CoexistenceAccess.Authenticated
+            && (route.Path.StartsWith("/api/reconciliation/financial-statements/", StringComparison.Ordinal)
+                || route.Path.StartsWith("/api/reconciliation/cashflows/", StringComparison.Ordinal)
+                || route.Path.StartsWith("/api/reconciliation/financial-reports/", StringComparison.Ordinal));
+        // These report routes repeat tenant, selected-client, membership and
+        // administrator checks inside their scoped PostgreSQL snapshot/job store.
+        // Other bridge routes retain the shell-era block.
+        if (shell?.Value.Enabled==true && !selectedClientReport)
+            return ValueTask.FromResult(CoexistenceAccessDecision.Forbidden);
         if (route.Access == CoexistenceAccess.Client)
             return ValueTask.FromResult(CoexistenceAccessDecision.Forbidden); // Object scope needs a route-specific policy.
         if (route.Access == CoexistenceAccess.Administrator && session.Role != "admin")
