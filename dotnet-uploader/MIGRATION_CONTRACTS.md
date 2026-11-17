@@ -439,6 +439,8 @@ The browser calls .NET; authorized query services supply typed inputs to C# calc
 
 Source/configuration freshness is part of every result and cache key. Preserve each endpoint's existing current-versus-as-of behavior; never describe mixed snapshots as current. Require an explicit recompute or conflict result when freshness checks fail.
 
+P53A provides an internal, unregistered capture service only. It authorizes the selected client, materializes typed report inputs from one read-only repeatable-read snapshot, fingerprints scope/source/configuration, preserves raw JSON and exact numeric tokens, and rejects capacity overflow without truncation. Complete-empty is distinct from not-found or unavailable. It adds no route, calculation, schema, UI or activation; amount types already stored as REAL/DOUBLE remain approximate.
+
 Proposed job states are queued, preparing_inputs, running, succeeded, failed, cancelled and expired; adapt legacy public statuses separately. Persist owner/lease/attempt/progress, bound retries over immutable inputs and handle worker loss. Calculation/export code does not mutate accounting records. Final job/storage limits require P28/P56/P62 approval; heavy export activation waits for P56 recovery/access checks.
 
 ## 7. Dependencies and rollback

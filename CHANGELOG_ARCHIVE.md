@@ -10101,3 +10101,9 @@ Verification: `git diff --check` passes. Visual local-server acceptance remains 
 ## Upload mapping rollback — 2026-11-15
 
 Restored `static/upload.html` and `static/upload.js` to committed revision `b832bbc` and updated current-state references. The Render service remained on its startup screen, so the deployed commit could not be independently confirmed. The standalone prototype remains available.
+
+## Report inputs/precision P53A — 2026-11-17
+
+Added an internal, unregistered C# report-input service. It reauthorizes selected-client access, resolves uploads and the parsed Trial Balance, validates selected leaf accounts, and materializes journal rows, raw JSON, assignments, categories, statement calculations/profit controls, and Cashflow configuration through one bounded read-only repeatable-read snapshot. Stable source/configuration fingerprints include the resolved scope; complete-empty data remains distinct from missing selected uploads. Capacity overflow refuses the whole capture without returning partial results.
+
+`UploadExactAmount` preserves numeric text without rounding; REAL values remain explicitly approximate and raw row JSON is retained. No endpoint, DI registration, calculation, schema, UI, Python change or activation was added. Added an isolated PostgreSQL test for selected-tenant authorization, source scope, complete-empty behavior, stable and changed configuration fingerprints, and numeric bounds. Release API/test build passed with zero warnings/errors; the focused PostgreSQL test passed (1/1). The cached .NET SDK and PostgreSQL fixture were used locally; no packages were downloaded. P53B Financial Statements follows; local-server acceptance and phase Git closeout remain pending.
