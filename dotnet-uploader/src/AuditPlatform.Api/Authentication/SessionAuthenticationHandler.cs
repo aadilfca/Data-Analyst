@@ -63,7 +63,7 @@ public sealed class SessionCoexistenceGate(IOptions<AuthenticationOptions> optio
         if (context.Items[typeof(VerifiedSession)] is not VerifiedSession session)
             return ValueTask.FromResult(CoexistenceAccessDecision.Unauthenticated);
         bool selectedClientReport = route.Owner == CoexistenceOwner.DotNet
-            && route.Access == CoexistenceAccess.Authenticated
+            && (route.Access is CoexistenceAccess.Authenticated or CoexistenceAccess.Administrator)
             && (route.Path.StartsWith("/api/reconciliation/financial-statements/", StringComparison.Ordinal)
                 || route.Path.StartsWith("/api/reconciliation/cashflows/", StringComparison.Ordinal)
                 || route.Path.StartsWith("/api/reconciliation/financial-reports/", StringComparison.Ordinal));

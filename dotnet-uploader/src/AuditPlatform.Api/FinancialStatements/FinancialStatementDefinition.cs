@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace AuditPlatform.Api.FinancialStatements;
 
 internal enum FinancialStatementSection { BalanceSheet, IncomeStatement }
@@ -15,13 +17,16 @@ internal sealed record FinancialStatementView(string Basis, string Section,
     IReadOnlyList<FinancialStatementOpeningIncomeItem> OpeningIncomeItems,
     FinancialStatementControls Controls);
 
-internal sealed record FinancialStatementCategory(int Id, string Label, string Section, string RowType,
+internal sealed record FinancialStatementCategory(int Id, string Label,
+    [property: JsonPropertyName("statement_section")] string Section, string RowType,
     int? ParentCategoryId, int SortOrder, bool IsActive, string CategoryKey,
     string? PresentationRole, string? IncomeStatementRole, string? RawNet, string? Amount,
     int AccountCount, string? EffectivePresentationRole, string? EffectiveIncomeStatementRole,
     string? ErpAmount, string? LinkedProfit);
 
-internal sealed record FinancialStatementFormula(int Id, string Label, string Section, string Type,
+internal sealed record FinancialStatementFormula(int Id, string Label,
+    [property: JsonPropertyName("statement_section")] string Section,
+    [property: JsonPropertyName("calculation_type")] string Type,
     int? ParentHeadingId, int SortOrder, string? Amount,
     IReadOnlyList<FinancialStatementFormulaComponent> Components,
     IReadOnlyList<int> SourceCategoryIds,

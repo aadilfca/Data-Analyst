@@ -269,7 +269,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
-- 2026-11-16–17: Added .NET P37–P40 helpers and default-off P53A–P56 report inputs, statements/Notes, Cashflows, reconciliation, workbooks and jobs; parity review remains. See CHANGELOG_ARCHIVE.md.
+- 2026-11-16–17: Added default-off .NET P37–P40 and P53A–P56 report APIs, calculations, workpapers, workbooks and jobs; exact parity and database integration remain. See CHANGELOG_ARCHIVE.md.
 - 2026-11-15: Restored the Python upload page to the last committed layout; uncommitted mapping redesign removed. See CHANGELOG_ARCHIVE.md, Upload mapping rollback.
 - 2026-11-14: Added disabled native Trial Balance review, guarded corrections/classifications and current footings; locally accepted. See CHANGELOG_ARCHIVE.md, Trial Balance review P36.
 - 2026-11-14: Added default-off native Trial Balance storage, scoped replacement/deletion and recovery; locally accepted. See CHANGELOG_ARCHIVE.md, Trial Balance storage P35.

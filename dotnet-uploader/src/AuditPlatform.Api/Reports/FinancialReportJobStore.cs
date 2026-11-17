@@ -16,6 +16,13 @@ internal sealed class FinancialReportJobStore(PostgresTransactions transactions,
         string fingerprint,CancellationToken ct)=>transactions.ExecuteAsync(async(db,token)=>
     {
         var scope=await TrialBalanceStorageStore.Authorize(db,actor,request.ClientId,false,token);
+        // Serialize admission for this owner across hosts. The same lock protects
+        // both idempotency lookup and the outstanding-job limit from request races.
+        await using(var ownerLock=db.CreateCommand("SELECT pg_advisory_xact_lock(hashtextextended($1,0))"))
+        {
+            ownerLock.Parameters.AddWithValue($"financial-report-jobs:{scope.Tenant}:{actor!.UserId}");
+            await ownerLock.ExecuteNonQueryAsync(token);
+        }
         string sessionHash=Hash(actor!.Token);string requestJson=JsonSerializer.Serialize(request);
         string requestHash=Hash(requestJson);var id=Guid.NewGuid();
         await using(var existing=db.CreateCommand("""
@@ -69,7 +76,8 @@ internal sealed class FinancialReportJobStore(PostgresTransactions transactions,
             catch(TrialBalanceStorageRejected error){return new(error.Status,Code:error.Code);}
             await using var command=db.CreateCommand("""
                 SELECT job_id,request_json::text,request_hash,input_fingerprint,state,attempts,lease_id,lease_until,
-                       expires_at,code,file_name,tenant_id,user_id,client_id,context_version,session_hash,artifact_size,artifact_sha256
+                       expires_at,code,file_name,tenant_id,user_id,client_id,context_version,session_hash,artifact_size,artifact_sha256,
+                       stage,progress_current,progress_total,source_ready
                 FROM public.financial_report_jobs WHERE job_id=$1 AND tenant_id=$2 AND user_id=$3 AND client_id=$4
                 """);
             command.Parameters.AddWithValue(id);command.Parameters.AddWithValue(actor.TenantId!.Value);
@@ -89,9 +97,10 @@ internal sealed class FinancialReportJobStore(PostgresTransactions transactions,
             catch(TrialBalanceStorageRejected error){return new(error.Status,Code:error.Code);}
             await using(var update=db.CreateCommand("""
                 UPDATE public.financial_report_jobs SET state=CASE WHEN state='queued' THEN 'cancelled' ELSE state END,
-                    cancel_requested=CASE WHEN state='running' THEN TRUE ELSE cancel_requested END,updated_at=now()
+                    stage=CASE WHEN state='queued' THEN 'cancelled' ELSE stage END,
+                    cancel_requested=CASE WHEN state IN ('preparing_inputs','running') THEN TRUE ELSE cancel_requested END,updated_at=now()
                 WHERE job_id=$1 AND tenant_id=$2 AND user_id=$3 AND client_id=$4 AND context_version=$5
-                  AND session_hash=$6 AND state IN ('queued','running')
+                  AND session_hash=$6 AND state IN ('queued','preparing_inputs','running')
                 """))
             {
                 update.Parameters.AddWithValue(id);update.Parameters.AddWithValue(actor.TenantId!.Value);
@@ -136,22 +145,32 @@ internal sealed class FinancialReportJobStore(PostgresTransactions transactions,
     public Task<FinancialReportJobLease?> ClaimAsync(CancellationToken ct)=>transactions.ExecuteAsync(async(db,token)=>
     {
         await using(var expired=db.CreateCommand("""
-            UPDATE public.financial_report_jobs SET state='failed',code='job_attempts_exhausted',updated_at=now()
-            WHERE state='running' AND lease_until<now() AND attempts>=maximum_attempts
+            UPDATE public.financial_report_jobs SET state=CASE WHEN cancel_requested THEN 'cancelled' ELSE 'failed' END,
+                stage=CASE WHEN cancel_requested THEN 'cancelled' ELSE 'failed' END,
+                code=CASE WHEN cancel_requested THEN NULL ELSE 'job_attempts_exhausted' END,
+                lease_id=NULL,lease_until=NULL,updated_at=now()
+            WHERE state IN ('preparing_inputs','running') AND lease_until<now() AND attempts>=maximum_attempts
             """))await expired.ExecuteNonQueryAsync(token);
+        await using(var cancelled=db.CreateCommand("""
+            UPDATE public.financial_report_jobs SET state='cancelled',stage='cancelled',lease_id=NULL,lease_until=NULL,updated_at=now()
+            WHERE state IN ('preparing_inputs','running') AND cancel_requested AND lease_until<now()
+            """))await cancelled.ExecuteNonQueryAsync(token);
         Guid lease=Guid.NewGuid();
         await using var claim=db.CreateCommand("""
             WITH candidate AS (
                 SELECT job_id FROM public.financial_report_jobs
-                WHERE (state='queued' AND available_at<=now()) OR (state='running' AND lease_until<now() AND attempts<maximum_attempts)
+                WHERE expires_at>now() AND cancel_requested IS FALSE
+                  AND ((state='queued' AND available_at<=now()) OR (state IN ('preparing_inputs','running') AND lease_until<now() AND attempts<maximum_attempts))
                 ORDER BY available_at,created_at FOR UPDATE SKIP LOCKED LIMIT 1
             )
-            UPDATE public.financial_report_jobs j SET state='running',attempts=j.attempts+1,lease_id=$1,
+            UPDATE public.financial_report_jobs j SET state='preparing_inputs',stage='capturing_inputs',
+                progress_current=0,source_ready=false,attempts=j.attempts+1,lease_id=$1,
                 lease_until=now()+make_interval(secs=>$2),updated_at=now()
             FROM candidate WHERE j.job_id=candidate.job_id
             RETURNING j.job_id,j.request_json::text,j.request_hash,j.input_fingerprint,j.state,j.attempts,
                 j.lease_id,j.lease_until,j.expires_at,j.code,j.file_name,j.tenant_id,j.user_id,j.client_id,
-                j.context_version,j.session_hash
+                j.context_version,j.session_hash,j.artifact_size,j.artifact_sha256,
+                j.stage,j.progress_current,j.progress_total,j.source_ready
             """);
         claim.Parameters.AddWithValue(lease);claim.Parameters.AddWithValue(options.Value.LeaseSeconds);
         await using var reader=await claim.ExecuteReaderAsync(token);if(!await reader.ReadAsync(token))return null;
@@ -159,7 +178,7 @@ internal sealed class FinancialReportJobStore(PostgresTransactions transactions,
         VerifiedSession? actor=await ActorAsync(db,job,token);
         if(actor is null)
         {
-            await using var fail=db.CreateCommand("UPDATE public.financial_report_jobs SET state='failed',code='job_session_revoked',lease_id=NULL,lease_until=NULL WHERE job_id=$1 AND lease_id=$2");
+            await using var fail=db.CreateCommand("UPDATE public.financial_report_jobs SET state='failed',stage='failed',code='job_session_revoked',lease_id=NULL,lease_until=NULL WHERE job_id=$1 AND lease_id=$2");
             fail.Parameters.AddWithValue(job.Id);fail.Parameters.AddWithValue(lease);await fail.ExecuteNonQueryAsync(token);return null;
         }
         return new FinancialReportJobLease(job,actor);
@@ -171,35 +190,60 @@ internal sealed class FinancialReportJobStore(PostgresTransactions transactions,
         string hash=Convert.ToHexString(SHA256.HashData(artifact)).ToLowerInvariant();
         await using var command=db.CreateCommand("""
             UPDATE public.financial_report_jobs SET state=CASE WHEN cancel_requested THEN 'cancelled' ELSE 'succeeded' END,
+                stage=CASE WHEN cancel_requested THEN 'cancelled' ELSE 'completed' END,
+                progress_current=CASE WHEN cancel_requested THEN progress_current ELSE progress_total END,
+                source_ready=CASE WHEN cancel_requested THEN source_ready ELSE true END,
                 file_name=CASE WHEN cancel_requested THEN NULL ELSE $3 END,
                 artifact_content_type=CASE WHEN cancel_requested THEN NULL ELSE 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' END,
                 artifact_bytes=CASE WHEN cancel_requested THEN NULL ELSE $4 END,
                 artifact_size=CASE WHEN cancel_requested THEN NULL ELSE $5 END,
                 artifact_sha256=CASE WHEN cancel_requested THEN NULL ELSE $6 END,
                 lease_id=NULL,lease_until=NULL,updated_at=now(),code=NULL
-            WHERE job_id=$1 AND lease_id=$2 AND state='running'
+            WHERE job_id=$1 AND lease_id=$2 AND state IN ('preparing_inputs','running')
             """);
         command.Parameters.AddWithValue(lease.Job.Id);command.Parameters.AddWithValue(lease.Job.LeaseId!.Value);
         command.Parameters.AddWithValue(fileName);command.Parameters.AddWithValue(artifact);command.Parameters.AddWithValue(artifact.Length);command.Parameters.AddWithValue(hash);
         await command.ExecuteNonQueryAsync(token);return true;
     },ct);
 
-    public Task FailAsync(FinancialReportJobLease lease,string code,CancellationToken ct)=>transactions.ExecuteAsync(async(db,token)=>
+    public Task UpdateProgressAsync(FinancialReportJobLease lease,string state,string stage,
+        int current,bool sourceReady,CancellationToken ct)=>transactions.ExecuteAsync(async(db,token)=>
+    {
+        if(state is not ("preparing_inputs" or "running")||stage.Length is <1 or >40
+            ||current is <0 or >3)throw new ArgumentOutOfRangeException(nameof(current));
+        await using var command=db.CreateCommand("""
+            UPDATE public.financial_report_jobs SET state=$3,stage=$4,progress_current=$5,
+                source_ready=$6,updated_at=now()
+            WHERE job_id=$1 AND lease_id=$2 AND state IN ('preparing_inputs','running')
+            """);
+        command.Parameters.AddWithValue(lease.Job.Id);command.Parameters.AddWithValue(lease.Job.LeaseId!.Value);
+        command.Parameters.AddWithValue(state);command.Parameters.AddWithValue(stage);command.Parameters.AddWithValue(current);
+        command.Parameters.AddWithValue(sourceReady);await command.ExecuteNonQueryAsync(token);return true;
+    },ct);
+
+    public Task FailAsync(FinancialReportJobLease lease,string code,bool retryable,CancellationToken ct)=>transactions.ExecuteAsync(async(db,token)=>
     {
         await using var command=db.CreateCommand("""
-            UPDATE public.financial_report_jobs SET state=CASE WHEN attempts<maximum_attempts THEN 'queued' ELSE 'failed' END,
-                available_at=now()+interval '5 seconds',code=$3,lease_id=NULL,lease_until=NULL,updated_at=now()
-            WHERE job_id=$1 AND lease_id=$2 AND state='running'
-            """);command.Parameters.AddWithValue(lease.Job.Id);command.Parameters.AddWithValue(lease.Job.LeaseId!.Value);command.Parameters.AddWithValue(code);
+            UPDATE public.financial_report_jobs SET state=CASE WHEN cancel_requested THEN 'cancelled'
+                    WHEN $4 IS TRUE AND attempts<maximum_attempts THEN 'queued' ELSE 'failed' END,
+                stage=CASE WHEN cancel_requested THEN 'cancelled' WHEN $4 IS TRUE AND attempts<maximum_attempts THEN 'queued' ELSE 'failed' END,
+                progress_current=CASE WHEN $4 IS TRUE AND attempts<maximum_attempts AND cancel_requested IS FALSE THEN 0 ELSE progress_current END,
+                source_ready=CASE WHEN $4 IS TRUE AND attempts<maximum_attempts AND cancel_requested IS FALSE THEN false ELSE source_ready END,
+                available_at=now()+interval '5 seconds',code=CASE WHEN cancel_requested THEN NULL ELSE $3 END,
+                lease_id=NULL,lease_until=NULL,updated_at=now()
+            WHERE job_id=$1 AND lease_id=$2 AND state IN ('preparing_inputs','running')
+            """);command.Parameters.AddWithValue(lease.Job.Id);command.Parameters.AddWithValue(lease.Job.LeaseId!.Value);
+        command.Parameters.AddWithValue(code);command.Parameters.AddWithValue(retryable);
         await command.ExecuteNonQueryAsync(token);return true;
     },ct);
 
     public Task CleanupAsync(CancellationToken ct)=>transactions.ExecuteAsync(async(db,token)=>
     {
         await using var command=db.CreateCommand("""
-            UPDATE public.financial_report_jobs SET state='expired',artifact_bytes=NULL,artifact_size=NULL,
-                artifact_sha256=NULL,file_name=NULL,artifact_content_type=NULL,updated_at=now()
-            WHERE expires_at<=now() AND state IN ('succeeded','failed','cancelled')
+            UPDATE public.financial_report_jobs SET state='expired',stage='expired',artifact_bytes=NULL,artifact_size=NULL,
+                artifact_sha256=NULL,file_name=NULL,artifact_content_type=NULL,lease_id=NULL,lease_until=NULL,
+                cancel_requested=TRUE,updated_at=now()
+            WHERE expires_at<=now() AND state<>'expired'
             """);await command.ExecuteNonQueryAsync(token);return true;
     },ct);
 
@@ -224,11 +268,14 @@ internal sealed class FinancialReportJobStore(PostgresTransactions transactions,
 
     private static async Task<FinancialReportJobResult> ReadOutputAsync(PostgresTransactionContext db,Guid id,CancellationToken ct)
     {
-        await using var command=db.CreateCommand("SELECT job_id,request_json::text,state,attempts,expires_at,code,file_name,artifact_size FROM public.financial_report_jobs WHERE job_id=$1");command.Parameters.AddWithValue(id);
+        await using var command=db.CreateCommand("SELECT job_id,request_json::text,state,attempts,expires_at,code,file_name,artifact_size,stage,progress_current,progress_total,source_ready FROM public.financial_report_jobs WHERE job_id=$1");command.Parameters.AddWithValue(id);
         await using var reader=await command.ExecuteReaderAsync(ct);if(!await reader.ReadAsync(ct))return new("not_found",Code:"job_not_found");
         var request=JsonSerializer.Deserialize<FinancialReportJobRequest>(reader.GetString(1))!;
-        return new("success",new(reader.GetGuid(0),request.ClientId,request.Report,reader.GetString(2),reader.GetInt32(3),new DateTimeOffset(reader.GetDateTime(4)),
-            reader.IsDBNull(5)?null:reader.GetString(5),reader.IsDBNull(6)?null:reader.GetString(6),reader.IsDBNull(7)?null:reader.GetInt32(7)));
+        return new("success",new FinancialReportJobOutput(reader.GetGuid(0),request.ClientId,request.Report,
+            reader.GetString(2),reader.GetInt32(3),new DateTimeOffset(reader.GetDateTime(4)),
+            reader.IsDBNull(5)?null:reader.GetString(5),reader.IsDBNull(6)?null:reader.GetString(6),
+            reader.IsDBNull(7)?null:reader.GetInt32(7))
+        {Stage=reader.GetString(8),ProgressCurrent=reader.GetInt32(9),ProgressTotal=reader.GetInt32(10),SourceReady=reader.GetBoolean(11)});
     }
 
     private static FinancialReportJobData ReadJob(NpgsqlDataReader r)
@@ -237,8 +284,11 @@ internal sealed class FinancialReportJobStore(PostgresTransactions transactions,
         return new(r.GetGuid(0),r.GetInt32(11),r.GetInt32(12),r.GetInt32(13),r.GetInt64(14),
             r.GetString(15).Trim(),request,r.GetString(3).Trim(),r.GetString(4),r.GetInt32(5),
             r.IsDBNull(6)?null:r.GetGuid(6),r.IsDBNull(7)?null:new DateTimeOffset(r.GetDateTime(7)),new DateTimeOffset(r.GetDateTime(8)),
-            r.IsDBNull(9)?null:r.GetString(9),r.IsDBNull(10)?null:r.GetString(10),null,null);
+            r.IsDBNull(9)?null:r.GetString(9),r.IsDBNull(10)?null:r.GetString(10),null,null,
+            r.GetString(18),r.GetInt32(19),r.GetInt32(20),r.GetBoolean(21));
     }
-    private static FinancialReportJobOutput Output(FinancialReportJobData job,int? bytes)=>new(job.Id,job.ClientId,job.Request.Report,job.State,job.Attempts,job.ExpiresAt,job.Code,job.FileName,bytes);
+    private static FinancialReportJobOutput Output(FinancialReportJobData job,int? bytes)=>new FinancialReportJobOutput(
+        job.Id,job.ClientId,job.Request.Report,job.State,job.Attempts,job.ExpiresAt,job.Code,job.FileName,bytes)
+        {Stage=job.Stage,ProgressCurrent=job.ProgressCurrent,ProgressTotal=job.ProgressTotal,SourceReady=job.SourceReady};
     private static string Hash(string value)=>Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 }

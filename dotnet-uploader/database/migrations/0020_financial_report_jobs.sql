@@ -10,8 +10,12 @@ CREATE TABLE IF NOT EXISTS public.financial_report_jobs (
     request_json JSONB NOT NULL,
     input_fingerprint CHAR(64) NOT NULL CHECK (input_fingerprint ~ '^[0-9a-f]{64}$'),
     state TEXT NOT NULL DEFAULT 'queued'
-        CHECK (state IN ('queued','running','succeeded','failed','cancelled','expired')),
+        CHECK (state IN ('queued','preparing_inputs','running','succeeded','failed','cancelled','expired')),
     attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    stage TEXT NOT NULL DEFAULT 'queued' CHECK (char_length(stage) BETWEEN 1 AND 40),
+    progress_current INTEGER NOT NULL DEFAULT 0 CHECK (progress_current >= 0),
+    progress_total INTEGER NOT NULL DEFAULT 3 CHECK (progress_total >= 1 AND progress_current <= progress_total),
+    source_ready BOOLEAN NOT NULL DEFAULT false,
     maximum_attempts INTEGER NOT NULL CHECK (maximum_attempts BETWEEN 1 AND 3),
     lease_id UUID,
     lease_until TIMESTAMPTZ,
@@ -34,7 +38,7 @@ CREATE TABLE IF NOT EXISTS public.financial_report_jobs (
 
 CREATE INDEX IF NOT EXISTS idx_financial_report_jobs_queue
     ON public.financial_report_jobs(available_at,created_at)
-    WHERE state IN ('queued','running');
+    WHERE state IN ('queued','preparing_inputs','running');
 CREATE INDEX IF NOT EXISTS idx_financial_report_jobs_owner
     ON public.financial_report_jobs(tenant_id,user_id,client_id,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_financial_report_jobs_expiry

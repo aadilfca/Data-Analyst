@@ -18,6 +18,9 @@ public sealed record ReportInputRequest
     public ReportAccountCategorySource CategorySource { get; init; } = ReportAccountCategorySource.LedgerSummary;
     public IReadOnlyList<string>? SelectedAccountCodes { get; init; }
     public string? TreasuryView { get; init; }
+    public bool MetadataOnly { get; init; }
+    public bool IncludeLatestTrialBalance { get; init; }
+    public bool IncludeVoucherContext { get; init; }
 }
 
 public sealed record ReportInputDataset<T>(bool Requested, bool Complete, long RowCount,
@@ -28,7 +31,8 @@ public sealed record ReportInputIdentity(string Version, string Fingerprint, str
 
 public sealed record ReportInputScope(int ClientId, ReportInputKind Kind, int? UploadId, int? TemplateId,
     IReadOnlyList<int> ResolvedUploadIds, int? TrialBalanceUploadId, string? PeriodStart, string? PeriodEnd,
-    ReportAccountCategorySource? CategorySource, IReadOnlyList<string>? SelectedAccountCodes, string? TreasuryView);
+    ReportAccountCategorySource? CategorySource, IReadOnlyList<string>? SelectedAccountCodes, string? TreasuryView)
+{ public bool IncludeVoucherContext { get; init; } }
 
 public sealed record ReportInputSnapshot(ReportInputScope Scope, ReportInputIdentity Identity,
     ReportInputDataset<ReportLedgerUpload> ClientDataUploads,
@@ -51,6 +55,7 @@ public sealed record ReportInputSnapshot(ReportInputScope Scope, ReportInputIden
 {
     public ReportInputDataset<ReportCashflowLedgerEvidenceUpload> CashflowLedgerEvidenceUploads { get; init; } = new(false,false,0,0,[]);
     public ReportInputDataset<ReportCashflowLedgerEvidenceRow> CashflowLedgerEvidenceRows { get; init; } = new(false,false,0,0,[]);
+    public long? CashflowReportRevision { get; init; }
 }
 
 public sealed record ReportInputCaptureResult(string Status, ReportInputSnapshot? Snapshot = null, string? Code = null);

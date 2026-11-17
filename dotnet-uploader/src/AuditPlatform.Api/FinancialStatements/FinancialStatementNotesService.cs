@@ -46,6 +46,23 @@ internal sealed class FinancialStatementNotesService
         var roots = noteRows.Values.Where(row => row.ParentCategoryId is null && row.SourceStatementCategoryId is not null)
             .OrderBy(row => statementCategories.GetValueOrDefault(row.SourceStatementCategoryId!.Value)?.SortOrder ?? 0)
             .ThenBy(row => row.SortOrder).ThenBy(row => row.Id).ToArray();
+        if (section == FinancialStatementSection.IncomeStatement)
+        {
+            var linkedCategoryIds = roots.Where(row => row.SourceStatementCategoryId is not null)
+                .Select(row => row.SourceStatementCategoryId!.Value).ToHashSet();
+            var missingRoles = statementCategories.Values
+                .Where(row => (row.AccountCount > 0 || linkedCategoryIds.Contains(row.Id))
+                    && row.EffectiveIncomeStatementRole is not ("income" or "expense"))
+                .OrderBy(row => row.Label, StringComparer.Ordinal)
+                .Select(row => row.Label).ToArray();
+            if (missingRoles.Length > 0)
+            {
+                string labels = string.Join(", ", missingRoles.Take(10));
+                if (missingRoles.Length > 10) labels += $" and {missingRoles.Length - 10} more";
+                throw new FinancialStatementInputException(
+                    "Set an Income/Expense role in Financial Statements for: " + labels);
+            }
+        }
         var totals = noteRows.Keys.ToDictionary(id => id, _ => new Totals());
         var assignedByCategory = statementCategories.Keys.ToDictionary(id => id, _ => 0);
         var assignments = snapshot.AccountAssignments.Items.ToDictionary(row => row.AccountCode.Trim(), StringComparer.Ordinal);

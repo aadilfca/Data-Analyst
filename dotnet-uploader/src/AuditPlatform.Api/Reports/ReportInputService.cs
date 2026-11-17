@@ -66,6 +66,7 @@ public sealed class ReportInputService(PostgresReadSnapshot snapshots, IOptions<
                 var ledgerEvidenceRows = Empty<ReportCashflowLedgerEvidenceRow>();
 
                 var captureRequest = normalized;
+                long? cashflowReportRevision = null;
                 if (normalized.Kind == ReportInputKind.LedgerSource
                     && normalized.CategorySource == ReportAccountCategorySource.Cashflow)
                 {
@@ -81,11 +82,15 @@ public sealed class ReportInputService(PostgresReadSnapshot snapshots, IOptions<
                         UploadId = selectedSource.SourceUploadId,
                         TemplateId = selectedSource.SourceTemplateId
                     };
+                    cashflowReportRevision = await ReadCashflowReportRevisionAsync(db, normalized.ClientId, token);
                 }
                 clientDataUploads = await ResolveClientDataUploadsAsync(db, captureRequest, budget, token);
-                clientData = await ReadClientDataAsync(db, captureRequest, clientDataUploads.Items, budget, token);
+                clientData = normalized.MetadataOnly
+                    ? Complete<ReportClientDataRow>([], 0)
+                    : await ReadClientDataAsync(db, captureRequest, clientDataUploads.Items, budget, token);
 
                 bool captureTrialBalance = normalized.Kind == ReportInputKind.FinancialStatements
+                    || normalized.IncludeLatestTrialBalance
                     || normalized.TrialBalanceUploadId is not null;
                 uploads = captureTrialBalance
                     ? await ReadTrialBalanceUploadAsync(db, normalized.ClientId,
@@ -127,6 +132,9 @@ public sealed class ReportInputService(PostgresReadSnapshot snapshots, IOptions<
                     categories = await ReadReportCategoriesAsync(db, normalized.ClientId, categorySource, budget, token);
                     if (categorySource == ReportAccountCategorySource.Cashflow)
                     {
+                        // Vendor payment schedules use the same saved verification workstream
+                        // assignments as the Python report; never infer vendors from captions.
+                        assignments = await ReadStatementAssignmentsAsync(db, normalized.ClientId, budget, token);
                         cashflowAssignments = await ReadCashflowAssignmentsAsync(db, normalized.ClientId, budget, token);
                         cashflowRoleCategories = await ReadCashflowRoleCategoriesAsync(db, normalized.ClientId, budget, token);
                         treasuryAccounts = await ReadTreasuryAccountsAsync(db, normalized.ClientId, budget, token);
@@ -146,12 +154,17 @@ public sealed class ReportInputService(PostgresReadSnapshot snapshots, IOptions<
                     captureRequest.TemplateId, clientDataUploads.Items.Select(row => row.Id).ToArray(),
                     trialBalanceUploadId, normalized.PeriodStart, normalized.PeriodEnd,
                     normalized.Kind == ReportInputKind.FinancialStatements ? null : normalized.CategorySource,
-                    normalized.SelectedAccountCodes, normalized.TreasuryView);
+                    normalized.SelectedAccountCodes, normalized.TreasuryView)
+                { IncludeVoucherContext=normalized.IncludeVoucherContext };
                 string configurationFingerprint = Hash(new
                 {
-                    scope.ClientId, scope.Kind, scope.TrialBalanceUploadId, scope.CategorySource,
-                    TrialBalanceUploads = uploads.Items, Accounts = accounts.Items,
-                    TrialBalanceAdjustments = trialBalanceAdjustments.Items, Assignments = assignments.Items,
+                    scope.ClientId, scope.Kind,
+                    TrialBalanceUploadId = normalized.IncludeLatestTrialBalance ? null : scope.TrialBalanceUploadId,
+                    scope.CategorySource,
+                    TrialBalanceUploads = normalized.IncludeLatestTrialBalance ? Array.Empty<ReportTrialBalanceUpload>() : uploads.Items,
+                    Accounts = normalized.IncludeLatestTrialBalance ? Array.Empty<ReportTrialBalanceAccount>() : accounts.Items,
+                    TrialBalanceAdjustments = normalized.IncludeLatestTrialBalance ? Array.Empty<ReportTrialBalanceAdjustment>() : trialBalanceAdjustments.Items,
+                    Assignments = assignments.Items,
                     CategoryMappings = mappings.Items, Categories = categories.Items,
                     Calculations = calculations.Items, Components = components.Items,
                     ProfitLinks = profitLinks.Items, ProfitStatuses = profitStatuses.Items,
@@ -172,7 +185,11 @@ public sealed class ReportInputService(PostgresReadSnapshot snapshots, IOptions<
                     accounts, trialBalanceAdjustments, assignments, mappings, categories, calculations, components, profitLinks,
                     profitStatuses, cashflowSettings, cashflowAssignments, cashflowRoleCategories,
                     treasuryAccounts, columnMappings)
-                { CashflowLedgerEvidenceUploads = ledgerEvidenceUploads, CashflowLedgerEvidenceRows = ledgerEvidenceRows };
+                {
+                    CashflowLedgerEvidenceUploads = ledgerEvidenceUploads,
+                    CashflowLedgerEvidenceRows = ledgerEvidenceRows,
+                    CashflowReportRevision = cashflowReportRevision
+                };
                 return new ReportInputCaptureResult("success", snapshot);
             }, deadline.Token);
         }
@@ -229,15 +246,23 @@ public sealed class ReportInputService(PostgresReadSnapshot snapshots, IOptions<
         CaptureBudget budget, CancellationToken ct)
     {
         if (uploads.Count == 0) return Complete<ReportClientDataRow>([], 0);
-        var filters = new List<string> { "client_id=$1", "is_deleted IS FALSE", "upload_id=ANY($2)" };
-        if (request.PeriodStart is not null) filters.Add("extract_date >= $3::date");
-        if (request.PeriodEnd is not null) filters.Add($"extract_date < ${(request.PeriodStart is null ? 3 : 4)}::date + INTERVAL '1 day'");
+        var filters = new List<string> { "cd.client_id=$1", "cd.is_deleted IS FALSE", "cd.upload_id=ANY($2)" };
+        string PeriodFilter(string alias)
+        {
+            var clauses=new List<string>();
+            if(request.PeriodStart is not null)clauses.Add($"{alias}.extract_date >= $3::date");
+            if(request.PeriodEnd is not null)clauses.Add($"{alias}.extract_date < ${(request.PeriodStart is null ? 3 : 4)}::date + INTERVAL '1 day'");
+            return clauses.Count==0?"TRUE":string.Join(" AND ",clauses);
+        }
+        if(request.IncludeVoucherContext)
+            filters.Add($"({PeriodFilter("cd")} OR cd.derived_voucher_id IN (SELECT DISTINCT context.derived_voucher_id FROM public.client_data context WHERE context.client_id=$1 AND context.is_deleted IS FALSE AND context.upload_id=ANY($2) AND {PeriodFilter("context")} AND NULLIF(BTRIM(context.derived_voucher_id),'') IS NOT NULL))");
+        else if(request.PeriodStart is not null||request.PeriodEnd is not null)filters.Add(PeriodFilter("cd"));
         int capPosition = (request.PeriodStart is not null ? 1 : 0) + (request.PeriodEnd is not null ? 1 : 0) + 3;
         string sql = $"""
             SELECT id,template_id,upload_id,version,source_fingerprint,extract_date,
                    extract_amount::double precision::text,row_data::text
-            FROM public.client_data WHERE {string.Join(" AND ", filters)}
-            ORDER BY extract_date NULLS LAST,id LIMIT ${capPosition}
+            FROM public.client_data cd WHERE {string.Join(" AND ", filters)}
+            ORDER BY cd.extract_date NULLS LAST,cd.id LIMIT ${capPosition}
             """;
         await using var command = db.CreateCommand(sql);
         command.Parameters.AddWithValue(request.ClientId);
@@ -345,6 +370,14 @@ public sealed class ReportInputService(PostgresReadSnapshot snapshots, IOptions<
     private Task<ReportInputDataset<ReportCashflowSettings>> ReadCashflowSettingsAsync(PostgresTransactionContext db,int client,CaptureBudget b,CancellationToken ct) =>
         Query<ReportCashflowSettings>(db,"SELECT client_id,match_internal_transfers,receipt_presentation,source_upload_id,source_template_id FROM public.account_control_cashflow_settings WHERE client_id=$1 ORDER BY client_id LIMIT $2",[client],r=>new ReportCashflowSettings(r.GetInt32(0),r.GetBoolean(1),r.GetString(2),NullableInt(r,3),NullableInt(r,4)),b,ct);
 
+    private static async Task<long> ReadCashflowReportRevisionAsync(PostgresTransactionContext db, int client, CancellationToken ct)
+    {
+        await using var command = db.CreateCommand("SELECT COALESCE((SELECT revision FROM public.cashflow_report_revisions WHERE client_id=$1),1)");
+        command.Parameters.AddWithValue(client);
+        object? value = await command.ExecuteScalarAsync(ct);
+        return Convert.ToInt64(value, CultureInfo.InvariantCulture);
+    }
+
     private Task<ReportInputDataset<ReportCashflowAccountAssignment>> ReadCashflowAssignmentsAsync(PostgresTransactionContext db,int client,CaptureBudget b,CancellationToken ct) =>
         Query<ReportCashflowAccountAssignment>(db,"SELECT client_id,account_code,section,category_label,cash_bank_role,treatment_type FROM public.account_control_cashflow_assignments WHERE client_id=$1 ORDER BY account_code LIMIT $2",[client],r=>new ReportCashflowAccountAssignment(r.GetInt32(0),r.GetString(1),r.GetString(2),NullableString(r,3),r.GetString(4),r.GetString(5)),b,ct);
 
@@ -432,6 +465,14 @@ public sealed class ReportInputService(PostgresReadSnapshot snapshots, IOptions<
     {
         normalized=request;error="report_input_request_invalid";
         if(request.ClientId<1||!Enum.IsDefined(request.Kind)||request.UploadId is <=0||request.TemplateId is <=0
+            ||request.MetadataOnly && (request.Kind != ReportInputKind.LedgerSource
+                || request.CategorySource != ReportAccountCategorySource.Cashflow)
+            ||request.IncludeLatestTrialBalance && (!request.MetadataOnly
+                || request.Kind != ReportInputKind.LedgerSource
+                || request.CategorySource != ReportAccountCategorySource.Cashflow)
+            ||request.IncludeVoucherContext&&(request.Kind!=ReportInputKind.LedgerSource
+                ||request.CategorySource!=ReportAccountCategorySource.Cashflow
+                ||request.PeriodStart is null||request.PeriodEnd is null)
             ||request.UploadId is not null&&request.TemplateId is not null
                 && !(request.Kind == ReportInputKind.LedgerSource && request.CategorySource == ReportAccountCategorySource.Cashflow)
             ||request.TrialBalanceUploadId is <=0

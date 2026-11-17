@@ -3373,6 +3373,11 @@
         if (task.id) discardReconciliationExport(task);
     }
     function discardReconciliationExport(task) {
+        if (task.backend === 'dotnet') {
+            fetch('/api/reconciliation/cashflows/reconciliation/exports?id=' + encodeURIComponent(task.id),
+                {method: 'DELETE', cache: 'no-store', keepalive: true}).catch(function () {});
+            return;
+        }
         fetch('/api/reconciliation/cashflows/reconciliation/exports/' + encodeURIComponent(task.id)
             + '?client_id=' + encodeURIComponent(task.scope.client_id),
             {method: 'DELETE', cache: 'no-store', keepalive: true}).catch(function () {});
@@ -4356,22 +4361,40 @@
         }); };
         try {
             // Await acknowledgement even after closing, so a late-created job can be cancelled.
-            let job = await request('/api/reconciliation/cashflows/reconciliation/exports', {method: 'POST',
-                headers: {'Content-Type': 'application/json'}, body: JSON.stringify({client_id: scope.client_id,
-                    period_start: scope.period_start, period_end: scope.period_end, group_by: scope.group_by,
-                    treasury_view: scope.treasury_view, expected_fingerprint: result.evidence_fingerprint,
-                    expected_identity: result.cache_identity,
-                    ...(scope.account_selection ? {selected_treasury_account_codes: scope.account_selection.account_codes} : {})})}, false);
+            let job, dotnetJob = false;
+            const requestId = window.crypto && typeof window.crypto.randomUUID === 'function'
+                ? window.crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+                    const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16);
+                });
+            try {
+                job = await request('/api/reconciliation/financial-reports/jobs', {method: 'POST',
+                    headers: {'Content-Type': 'application/json'}, body: JSON.stringify({requestId: requestId,
+                        clientId: scope.client_id, report: 'cashflow_reconciliation', periodStart: scope.period_start,
+                        periodEnd: scope.period_end, groupBy: scope.group_by, treasuryView: scope.treasury_view,
+                        expectedFingerprint: result.evidence_fingerprint, expectedIdentity: result.cache_identity,
+                        ...(scope.account_selection ? {selectedTreasuryAccountCodes: scope.account_selection.account_codes} : {})})}, false);
+                dotnetJob = true;
+            } catch (error) {
+                if (![404, 405, 503].includes(error.status)) throw error;
+                job = await request('/api/reconciliation/cashflows/reconciliation/exports', {method: 'POST',
+                    headers: {'Content-Type': 'application/json'}, body: JSON.stringify({client_id: scope.client_id,
+                        period_start: scope.period_start, period_end: scope.period_end, group_by: scope.group_by,
+                        treasury_view: scope.treasury_view, expected_fingerprint: result.evidence_fingerprint,
+                        expected_identity: result.cache_identity,
+                        ...(scope.account_selection ? {selected_treasury_account_codes: scope.account_selection.account_codes} : {})})}, false);
+            }
+            task.backend = dotnetJob ? 'dotnet' : 'legacy';
             task.id = job.id;
             if (task.cancelled || !current()) { discardReconciliationExport(task); return; }
-            const base = '/api/reconciliation/cashflows/reconciliation/exports/' + encodeURIComponent(job.id);
+            const base = dotnetJob ? '/api/reconciliation/cashflows/reconciliation/exports?id=' + encodeURIComponent(job.id)
+                : '/api/reconciliation/cashflows/reconciliation/exports/' + encodeURIComponent(job.id);
             const clientQuery = '?client_id=' + encodeURIComponent(scope.client_id);
             const deadline = Date.now() + 660000;
             while (true) {
                 if (!current()) return;
-                if (job.state === 'ready') break;
+                if (job.state === 'ready' || (dotnetJob && job.state === 'succeeded')) break;
                 if (['failed', 'cancelled'].includes(job.state)) {
-                    const error = new Error(job.error || 'Export cancelled.'); error.status = job.error_status; throw error;
+                    const error = new Error(job.error || job.code || 'Export cancelled.'); error.status = job.error_status; throw error;
                 }
                 if (Date.now() > deadline) {
                     discardReconciliationExport(task);
@@ -4379,14 +4402,18 @@
                 }
                 const loading = state.loading;
                 window.LoadingUI.showSpinner(loading.title, job.stage || 'Preparing reconciliation Excel…');
-                const counted = job.total != null && job.total > 0;
+                const progressCurrent = dotnetJob ? job.progressCurrent : job.current;
+                const progressTotal = dotnetJob ? job.progressTotal : job.total;
+                const counted = progressTotal != null && progressTotal > 0;
                 window.LoadingUI.showProgressBar(loading.progress, {mode: counted ? 'determinate' : 'indeterminate',
-                    message: counted ? Number(job.current).toLocaleString() + ' of ' + Number(job.total).toLocaleString() + ' rows' : 'Preparing the complete report evidence.'});
-                if (counted) window.LoadingUI.updateProgressBar(loading.progress, job.current, job.total);
+                    message: counted ? Number(progressCurrent).toLocaleString() + ' of ' + Number(progressTotal).toLocaleString() + ' rows' : 'Preparing the complete report evidence.'});
+                if (counted) window.LoadingUI.updateProgressBar(loading.progress, progressCurrent, progressTotal);
                 await pause();
-                job = await request(base + clientQuery);
+                job = await request(dotnetJob ? base : base + clientQuery);
             }
-            const file = await request(base + '/download' + clientQuery, {download: true});
+            const file = await request(dotnetJob
+                ? '/api/reconciliation/financial-reports/jobs/download?id=' + encodeURIComponent(job.id)
+                : base + '/download' + clientQuery, {download: true});
             if (!current()) return;
             const match = (file.headers.get('Content-Disposition') || '').match(/filename="?([^";]+)"?/i);
             const url = URL.createObjectURL(file.blob), link = document.createElement('a');
@@ -4548,8 +4575,9 @@
         const exportButton = element('cashflowsExportButton');
         if (exportButton) exportButton.hidden = !source.ready || !(preview.periods || []).length;
         const ledgerDrilldownButton = element('cashflowsLedgerDrilldownButton');
-        if (ledgerDrilldownButton) ledgerDrilldownButton.hidden = !source.ready || !(preview.periods || []).length;
-        element('cashflowsReconciliationButton').hidden = !source.ready || !(preview.periods || []).length;
+        if (ledgerDrilldownButton) ledgerDrilldownButton.hidden = !preview.drilldown_details_prepared || !(preview.periods || []).length;
+        const reconciliationReady = source.reconciliation_ready == null ? source.ready : source.reconciliation_ready;
+        element('cashflowsReconciliationButton').hidden = !reconciliationReady || !(preview.periods || []).length;
         syncCashflowReconciliationEntry();
 
         resetLazyCashflowSections();
@@ -4577,6 +4605,47 @@
         if (blockingReasons.length) showCashflowToast(blockingReasons.join(' '), true);
         else if (preview.selection_review_count) showCashflowToast(String(preview.selection_review_count) + ' voucher(s) need selected-account allocation review. See Review required.', false);
         else if (reviewCount) showCashflowToast(String(reviewCount) + ' counter-account line(s) need category review.', false);
+    }
+    function newFinancialReportRequestId() {
+        if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
+        const bytes = new Uint8Array(16);
+        window.crypto.getRandomValues(bytes);
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        const hex = Array.from(bytes, function (value) { return value.toString(16).padStart(2, '0'); }).join('');
+        return hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16) + '-' + hex.slice(16, 20) + '-' + hex.slice(20);
+    }
+    async function downloadQueuedCashflowReport(scope, button, query) {
+        const request = {requestId: newFinancialReportRequestId(), clientId: Number(clientId), report: 'cashflows',
+            periodStart: scope.period_start, periodEnd: scope.period_end, groupBy: scope.group_by || 'month',
+            treasuryView: scope.treasury_view || 'combined', selectedTreasuryAccountCodes: cashflowAccountCodes(scope),
+            search: query.get('search') || '', category: query.get('category') || '',
+            accountHead: query.get('account_head') || '', treasuryType: query.get('treasury_type') || '',
+            periodKey: query.get('period_key') || '', summaryFilter: query.get('summary_filter') || '',
+            hideZeroRows: query.get('hide_zero_rows') === 'true'};
+        const submitted = await api('/api/reconciliation/financial-reports/jobs', {
+            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(request), cache: 'no-store'
+        });
+        if (!submitted || !submitted.id) throw new Error('The report job was not accepted.');
+        const id = String(submitted.id);
+        const deadline = Date.now() + 20 * 60 * 1000;
+        let job = submitted;
+        while (Date.now() < deadline) {
+            if (job.state === 'succeeded') break;
+            if (['failed', 'cancelled', 'expired'].includes(job.state)) {
+                throw new Error(job.code || 'The queued Cashflows export did not complete.');
+            }
+            button.textContent = job.attempt > 1 ? 'Retrying export…' : 'Building export…';
+            await new Promise(resolve => window.setTimeout(resolve, 1500));
+            job = await api('/api/reconciliation/financial-reports/jobs?id=' + encodeURIComponent(id), {cache: 'no-store'});
+        }
+        if (job.state !== 'succeeded') throw new Error('The queued export is taking longer than this request can wait. Retry from the report screen.');
+        const response = await fetch('/api/reconciliation/financial-reports/jobs/download?id=' + encodeURIComponent(id), {cache: 'no-store'});
+        if (!response.ok) {
+            const payload = await response.json().catch(function () { return {}; });
+            throw new Error(payload.detail || 'The completed Cashflows workbook is unavailable.');
+        }
+        return response;
     }
     async function downloadCashflowReport(mode) {
         if (cashflowLoadedClientChanged()) return;
@@ -4607,7 +4676,8 @@
                 query.set('summary_filter', cashflowSummaryFilter);
                 query.set('hide_zero_rows', hideCashflowZeroRows ? 'true' : 'false');
             }
-            const response = await fetch('/api/reconciliation/cashflows/export?' + query.toString());
+            let response = await fetch('/api/reconciliation/cashflows/export?' + query.toString());
+            if (response.status === 413) response = await downloadQueuedCashflowReport(scope, button, query);
             if (!response.ok) {
                 const payload = await response.json().catch(function () { return {}; });
                 const detail = payload.detail;

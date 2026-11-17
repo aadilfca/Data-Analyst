@@ -173,24 +173,35 @@ foreach (var route in new[]
     ("financial-report-jobs-submit", "POST", "/api/reconciliation/financial-reports/jobs"),
     ("financial-report-jobs-get", "GET", "/api/reconciliation/financial-reports/jobs"),
     ("financial-report-jobs-cancel", "POST", "/api/reconciliation/financial-reports/jobs/cancel"),
-    ("financial-report-jobs-download", "GET", "/api/reconciliation/financial-reports/jobs/download")
+    ("financial-report-jobs-download", "GET", "/api/reconciliation/financial-reports/jobs/download"),
+    ("cashflow-reconciliation-export-submit", "POST", "/api/reconciliation/cashflows/reconciliation/exports"),
+    ("cashflow-reconciliation-export-get", "GET", "/api/reconciliation/cashflows/reconciliation/exports"),
+    ("cashflow-reconciliation-export-cancel", "DELETE", "/api/reconciliation/cashflows/reconciliation/exports"),
+    ("cashflow-reconciliation-export-download", "GET", "/api/reconciliation/cashflows/reconciliation/exports/download")
 })
     builder.Services.AddSingleton<CoexistenceRoute>(provider => new CoexistenceRoute(route.Item1, route.Item2,
         route.Item3, provider.GetRequiredService<IOptions<ReportInputOptions>>().Value.Enabled
             && provider.GetRequiredService<IOptions<FinancialReportJobOptions>>().Value.Enabled
-                ? CoexistenceOwner.DotNet : CoexistenceOwner.Legacy, CoexistenceAccess.Authenticated));
+                ? CoexistenceOwner.DotNet : CoexistenceOwner.Legacy, CoexistenceAccess.Administrator));
 foreach (var route in new[]
 {
     ("financial-statements-balance-sheet", "GET", "/api/reconciliation/financial-statements/balance-sheet"),
     ("financial-statements-income-statement", "GET", "/api/reconciliation/financial-statements/income-statement"),
     ("financial-statements-notes", "GET", "/api/reconciliation/financial-statements/notes"),
+    ("cashflows-account-options", "GET", "/api/reconciliation/cashflows/account-options"),
+    ("cashflows-revision", "GET", "/api/reconciliation/cashflows/revision"),
     ("cashflows-preview", "GET", "/api/reconciliation/cashflows/preview"),
     ("cashflows-reconciliation", "GET", "/api/reconciliation/cashflows/reconciliation"),
+    ("cashflows-reconciliation-cache-validation", "GET", "/api/reconciliation/cashflows/reconciliation/cache-validation"),
+    ("cashflows-reconciliation-adjustment-transactions", "GET", "/api/reconciliation/cashflows/reconciliation/adjustment-transactions"),
+    ("cashflows-reconciliation-adjustment-bundle", "GET", "/api/reconciliation/cashflows/reconciliation/adjustment-bundle"),
+    ("cashflows-drilldown", "GET", "/api/reconciliation/cashflows/drilldown"),
+    ("cashflows-export", "GET", "/api/reconciliation/cashflows/export"),
     ("financial-report-download", "GET", "/api/reconciliation/reports/download")
 })
     builder.Services.AddSingleton<CoexistenceRoute>(provider => new CoexistenceRoute(route.Item1, route.Item2,
         route.Item3, provider.GetRequiredService<IOptions<ReportInputOptions>>().Value.Enabled
-            ? CoexistenceOwner.DotNet : CoexistenceOwner.Legacy, CoexistenceAccess.Authenticated));
+            ? CoexistenceOwner.DotNet : CoexistenceOwner.Legacy, CoexistenceAccess.Administrator));
 builder.Services.AddOptions<DataBankExportOptions>()
     .Bind(builder.Configuration.GetSection(DataBankExportOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
 builder.Services.AddSingleton<DataBankExportService>();
