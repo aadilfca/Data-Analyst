@@ -49,6 +49,7 @@ public sealed class ReportInputService(PostgresReadSnapshot snapshots, IOptions<
                 var clientData = Empty<ReportClientDataRow>();
                 var uploads = Empty<ReportTrialBalanceUpload>();
                 var accounts = Empty<ReportTrialBalanceAccount>();
+                var trialBalanceAdjustments = Empty<ReportTrialBalanceAdjustment>();
                 var assignments = Empty<ReportAccountAssignment>();
                 var mappings = Empty<ReportCategoryMapping>();
                 var categories = Empty<ReportCategory>();
@@ -74,6 +75,8 @@ public sealed class ReportInputService(PostgresReadSnapshot snapshots, IOptions<
                 {
                     accounts = await ReadTrialBalanceAccountsAsync(db, normalized.ClientId,
                         trialBalanceUploadId.Value, budget, token, true);
+                    trialBalanceAdjustments = await ReadTrialBalanceAdjustmentsAsync(db, normalized.ClientId,
+                        trialBalanceUploadId.Value, budget, token);
                     if (normalized.SelectedAccountCodes is not null
                         && normalized.SelectedAccountCodes.Except(accounts.Items
                             .Where(row => string.Equals(row.Classification, "leaf", StringComparison.OrdinalIgnoreCase))
@@ -119,7 +122,8 @@ public sealed class ReportInputService(PostgresReadSnapshot snapshots, IOptions<
                 string configurationFingerprint = Hash(new
                 {
                     scope.ClientId, scope.Kind, scope.TrialBalanceUploadId, scope.CategorySource,
-                    TrialBalanceUploads = uploads.Items, Accounts = accounts.Items, Assignments = assignments.Items,
+                    TrialBalanceUploads = uploads.Items, Accounts = accounts.Items,
+                    TrialBalanceAdjustments = trialBalanceAdjustments.Items, Assignments = assignments.Items,
                     CategoryMappings = mappings.Items, Categories = categories.Items,
                     Calculations = calculations.Items, Components = components.Items,
                     ProfitLinks = profitLinks.Items, ProfitStatuses = profitStatuses.Items,
@@ -135,7 +139,7 @@ public sealed class ReportInputService(PostgresReadSnapshot snapshots, IOptions<
                 var identity = new ReportInputIdentity("report-input-v1", fingerprint,
                     configurationFingerprint, DateTime.SpecifyKind(capturedAt, DateTimeKind.Utc));
                 var snapshot = new ReportInputSnapshot(scope, identity, clientDataUploads, clientData, uploads,
-                    accounts, assignments, mappings, categories, calculations, components, profitLinks,
+                    accounts, trialBalanceAdjustments, assignments, mappings, categories, calculations, components, profitLinks,
                     profitStatuses, cashflowSettings, cashflowAssignments, cashflowRoleCategories,
                     treasuryAccounts, columnMappings);
                 return new ReportInputCaptureResult("success", snapshot);
@@ -220,7 +224,7 @@ public sealed class ReportInputService(PostgresReadSnapshot snapshots, IOptions<
         bool requested)
     {
         string sql = """
-            SELECT id,client_id,as_of_date,file_name,period_start,period_end,period_type,uploaded_at
+            SELECT id,client_id,as_of_date,file_name,period_start,period_end,period_type,uploaded_at,validation_controls::text
             FROM public.trial_balance_uploads WHERE client_id=$1 AND status='parsed'
               AND ($2::integer IS NULL OR id=$2)
             ORDER BY period_end DESC NULLS LAST,uploaded_at DESC NULLS LAST,id DESC LIMIT $3
@@ -230,7 +234,7 @@ public sealed class ReportInputService(PostgresReadSnapshot snapshots, IOptions<
         command.Parameters.AddWithValue(options.Value.MaximumRows + 1);
         return await ReadAsync(command, r => new ReportTrialBalanceUpload(r.GetInt32(0), r.GetInt32(1),
             DateOnly.FromDateTime(r.GetDateTime(2)), r.GetString(3), NullableDateOnly(r, 4), NullableDateOnly(r, 5),
-            NullableString(r, 6), NullableDateTime(r, 7)), budget, ct, requested);
+            NullableString(r, 6), NullableDateTime(r, 7), NullableString(r, 8)), budget, ct, requested);
     }
 
     private async Task<ReportInputDataset<ReportTrialBalanceAccount>> ReadTrialBalanceAccountsAsync(
@@ -253,6 +257,26 @@ public sealed class ReportInputService(PostgresReadSnapshot snapshots, IOptions<
             NullableString(r,3),NullableString(r,4),NullableString(r,5),r.GetInt32(6),r.GetString(7),r.GetBoolean(8),
             r.GetInt32(9),NullableString(r,10),Amount(r,11,"real"),Amount(r,12,"real"),Amount(r,13,"real"),
             Amount(r,14,"real"),Amount(r,15,"real"),Amount(r,16,"real"),Amount(r,17,"real"),Amount(r,18,"real")), budget, ct, requested);
+    }
+
+    private async Task<ReportInputDataset<ReportTrialBalanceAdjustment>> ReadTrialBalanceAdjustmentsAsync(
+        PostgresTransactionContext db, int clientId, int uploadId, CaptureBudget budget, CancellationToken ct)
+    {
+        const string sql = """
+            SELECT a.id,a.upload_id,a.account_id,a.source_excel_row,a.expected_closing_net::text,
+                   a.original_closing_net::text,a.difference_net::text,a.closing_dr_adjustment::text,
+                   a.closing_cr_adjustment::text
+            FROM public.trial_balance_rollforward_adjustments a
+            JOIN public.trial_balance_uploads u ON u.id=a.upload_id
+            WHERE u.client_id=$1 AND a.upload_id=$2 ORDER BY a.id LIMIT $3
+            """;
+        await using var command=db.CreateCommand(sql);
+        command.Parameters.AddWithValue(clientId); command.Parameters.AddWithValue(uploadId);
+        command.Parameters.AddWithValue(options.Value.MaximumRows+1);
+        return await ReadAsync(command,r=>new ReportTrialBalanceAdjustment(r.GetInt32(0),r.GetInt32(1),
+            r.GetInt32(2),r.GetInt32(3),ReportAmountValue.From(r.GetString(4),"numeric"),
+            ReportAmountValue.From(r.GetString(5),"numeric"),ReportAmountValue.From(r.GetString(6),"numeric"),
+            ReportAmountValue.From(r.GetString(7),"numeric"),ReportAmountValue.From(r.GetString(8),"numeric")),budget,ct);
     }
 
     private Task<ReportInputDataset<ReportAccountAssignment>> ReadStatementAssignmentsAsync(PostgresTransactionContext db,int client,CaptureBudget b,CancellationToken ct) =>

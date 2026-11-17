@@ -441,6 +441,8 @@ Source/configuration freshness is part of every result and cache key. Preserve e
 
 P53A provides an internal, unregistered capture service only. It authorizes the selected client, materializes typed report inputs from one read-only repeatable-read snapshot, fingerprints scope/source/configuration, preserves raw JSON and exact numeric tokens, and rejects capacity overflow without truncation. Complete-empty is distinct from not-found or unavailable. It adds no route, calculation, schema, UI or activation; amount types already stored as REAL/DOUBLE remain approximate.
 
+P53B extends that snapshot with the selected upload's saved validation controls and roll-forward adjustments, then adds an internal, unregistered C# Balance Sheet/Income Statement engine. It reuses exact amount parsing, Trial Balance leaf classification and P37 profit confirmation; preserves Python-compatible context hashes; and returns formula lineage, diagnostics, opening comparisons, profit bridge and transfer proof. It rejects incomplete/unsafe inputs and overlapping or circular formulas. Existing REAL/DOUBLE storage remains approximate. No route, DI registration, schema, UI, Python behavior or activation is added.
+
 Proposed job states are queued, preparing_inputs, running, succeeded, failed, cancelled and expired; adapt legacy public statuses separately. Persist owner/lease/attempt/progress, bound retries over immutable inputs and handle worker loss. Calculation/export code does not mutate accounting records. Final job/storage limits require P28/P56/P62 approval; heavy export activation waits for P56 recovery/access checks.
 
 ## 7. Dependencies and rollback

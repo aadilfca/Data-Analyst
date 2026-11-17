@@ -110,11 +110,15 @@ public sealed class ReportInputTests
             await Sql(connection, await File.ReadAllTextAsync(Path.Combine(root,"database","migrations","0018_trial_balance_storage.sql"),Ct));
             await Sql(connection, await File.ReadAllTextAsync(Path.Combine(root,"database","migrations","0019_trial_balance_review.sql"),Ct));
             await Sql(connection, """
-                INSERT INTO public.trial_balance_uploads(id,client_id,as_of_date,file_name,status,row_count,period_end) OVERRIDING SYSTEM VALUE
-                    VALUES(30,10,'2026-01-31','tb.xlsx','parsed',1,'2026-01-31');
+                INSERT INTO public.trial_balance_uploads(id,client_id,as_of_date,file_name,status,row_count,period_end,validation_controls) OVERRIDING SYSTEM VALUE
+                    VALUES(30,10,'2026-01-31','tb.xlsx','parsed',1,'2026-01-31','{"account_classifications":[["100","leaf"]],"global_adjustments":[]}');
                 INSERT INTO public.trial_balance_accounts(upload_id,account_code,account_name,classification,
                     debit_amount,credit_amount,closing_dr,closing_cr,raw_row_data)
                     VALUES(30,'100','Cash','leaf',0.1,0,0.1,0,'{"source":"trial-balance"}'::jsonb);
+                INSERT INTO public.trial_balance_rollforward_adjustments(
+                    upload_id,account_id,source_excel_row,expected_closing_net,original_closing_net,difference_net,
+                    closing_dr_adjustment,closing_cr_adjustment)
+                SELECT 30,id,5,0.1,0.09,0.01,0.01,0 FROM public.trial_balance_accounts WHERE upload_id=30;
                 """);
 
             pool = fixture.CreatePool();
@@ -138,7 +142,10 @@ public sealed class ReportInputTests
             Assert.Equal("0.10",ReportAmountValue.From("0.10","numeric").ExactValue);
             Assert.Throws<FormatException>(()=>ReportAmountValue.From("1e1001","numeric"));
             Assert.True(first.Snapshot.ClientData.Complete);
+            Assert.NotNull(first.Snapshot.TrialBalanceUploads.Items[0].ValidationControlsJson);
             Assert.Single(first.Snapshot.TrialBalanceAccounts.Items);
+            Assert.Single(first.Snapshot.TrialBalanceAdjustments.Items);
+            Assert.Equal("0.01",first.Snapshot.TrialBalanceAdjustments.Items[0].DifferenceNet.ExactValue);
             Assert.Single(first.Snapshot.AccountAssignments.Items);
             Assert.Equal("forbidden",(await service.CaptureAsync(other,request,Ct)).Status);
             Assert.Equal("not_found",(await service.CaptureAsync(owner,request with {UploadId=2},Ct)).Status);

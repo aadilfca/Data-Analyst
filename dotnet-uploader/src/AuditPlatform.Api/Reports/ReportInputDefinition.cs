@@ -35,6 +35,7 @@ public sealed record ReportInputSnapshot(ReportInputScope Scope, ReportInputIden
     ReportInputDataset<ReportClientDataRow> ClientData,
     ReportInputDataset<ReportTrialBalanceUpload> TrialBalanceUploads,
     ReportInputDataset<ReportTrialBalanceAccount> TrialBalanceAccounts,
+    ReportInputDataset<ReportTrialBalanceAdjustment> TrialBalanceAdjustments,
     ReportInputDataset<ReportAccountAssignment> AccountAssignments,
     ReportInputDataset<ReportCategoryMapping> CategoryMappings,
     ReportInputDataset<ReportCategory> Categories,
@@ -53,7 +54,8 @@ public sealed record ReportInputCaptureResult(string Status, ReportInputSnapshot
 public sealed record ReportLedgerUpload(int Id, int ClientId, int TemplateId, string FileName, DateTime? UploadDate);
 
 public sealed record ReportTrialBalanceUpload(int Id, int ClientId, DateOnly AsOfDate, string FileName,
-    DateOnly? PeriodStart, DateOnly? PeriodEnd, string? PeriodType, DateTime? UploadedAt);
+    DateOnly? PeriodStart, DateOnly? PeriodEnd, string? PeriodType, DateTime? UploadedAt,
+    string? ValidationControlsJson);
 
 public sealed record ReportClientDataRow(int Id, int TemplateId, int UploadId, int Version,
     string? SourceFingerprint, DateOnly? ExtractDate, ReportAmountValue? ExtractAmount, string RowDataJson);
@@ -64,6 +66,10 @@ public sealed record ReportTrialBalanceAccount(int Id, int UploadId, string Acco
     ReportAmountValue? OpeningDebit, ReportAmountValue? OpeningCredit,
     ReportAmountValue? PeriodDebit, ReportAmountValue? PeriodCredit,
     ReportAmountValue? ClosingDebit, ReportAmountValue? ClosingCredit);
+
+public sealed record ReportTrialBalanceAdjustment(int Id, int UploadId, int AccountId, int SourceExcelRow,
+    ReportAmountValue ExpectedClosingNet, ReportAmountValue OriginalClosingNet, ReportAmountValue DifferenceNet,
+    ReportAmountValue ClosingDebitAdjustment, ReportAmountValue ClosingCreditAdjustment);
 
 public sealed record ReportAccountAssignment(int ClientId, string AccountCode, string? VerificationWorkstream,
     int? FinancialStatementCategoryId, int? NoteCategoryId);
