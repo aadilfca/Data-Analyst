@@ -101,6 +101,7 @@ public sealed class UploadDerivedFieldTests(DerivedGoldenFixture golden) : IClas
         await using var connection=await fixture.OpenControlConnectionAsync(Token);
         async Task Sql(string sql) {await using var command=new NpgsqlCommand(sql,connection);await command.ExecuteNonQueryAsync(Token);}
         async Task<long> Count(string sql) {await using var command=new NpgsqlCommand(sql,connection);return (long)(await command.ExecuteScalarAsync(Token))!;}
+        async Task<string?> TextValue(string sql) {await using var command=new NpgsqlCommand(sql,connection);return (string?)await command.ExecuteScalarAsync(Token);}
         await Sql("""
             CREATE TABLE public.users(id INTEGER PRIMARY KEY,username TEXT,password_hash TEXT,is_active BOOLEAN DEFAULT TRUE,role TEXT,last_login TIMESTAMPTZ);
             CREATE TABLE public.clients(id INTEGER PRIMARY KEY,client_code TEXT,client_name TEXT,is_active BOOLEAN DEFAULT TRUE);
@@ -329,6 +330,57 @@ public sealed class UploadDerivedFieldTests(DerivedGoldenFixture golden) : IClas
         rateDefinition=(await templateService.GetAsync(owner,2,Token)).Templates!.Single();
         var rebind=new TemplateInput(rateDefinition.Name,rateDefinition.Columns.Select(c=>c.Id).ToArray(),Revision:rateDefinition.ConfigurationKey,UploadBindings:new(){{"amount",8},{"quantity",3},{"rate",9}});
         Assert.Equal(TemplateStatus.Review,(await templateService.SaveAsync(owner,2,rebind,Token)).Status);
+
+        var cashflowTemplate=(await templateService.GetAsync(owner,1,Token)).Templates!.Single();
+        var cashflowProfile=UploadDerivedFieldService.Bind(cashflowTemplate)!;
+        long revisionBefore=await Count("SELECT revision FROM public.cashflow_report_revisions WHERE client_id=10");
+        long historyBefore=await Count("SELECT count(*) FROM public.client_data_history WHERE client_id=10");
+        string? rawBefore=await TextValue("SELECT string_agg(id::text||':'||row_data::text,'|' ORDER BY id) FROM public.client_data WHERE client_id=10 AND template_id=1");
+        string? occurrencesBefore=await TextValue("SELECT string_agg(occurrence_key||':'||voucher_fingerprint||':'||decision_status,'|' ORDER BY occurrence_key) FROM public.cashflow_voucher_occurrences WHERE client_id=10 AND template_id=1");
+        await Sql("INSERT INTO public.cash_bank_summary_read_models(client_id,template_id) VALUES(10,1)");
+        await Sql("CREATE FUNCTION public.p38_fail() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic classification failure'; END $$;CREATE TRIGGER p38_fail BEFORE UPDATE OF derived_treasury_type ON public.client_data FOR EACH ROW EXECUTE FUNCTION public.p38_fail()");
+        await Assert.ThrowsAsync<PostgresException>(()=>tx.ExecuteAsync(async(db,ct)=>
+        {
+            await UploadDerivedFieldWriter.LockForTreasuryConfigurationChangeAsync(db,ct);
+            var previous=await UploadDerivedFieldService.LoadAsync(db,101,10,1,cashflowProfile,ct);
+            await using(var update=db.CreateCommand("UPDATE public.account_control_cashflow_treasury_accounts SET treasury_type='cash' WHERE client_id=10 AND account_code='001'")) await update.ExecuteNonQueryAsync(ct);
+            return await UploadDerivedFieldWriter.RefreshAfterTreasuryConfigurationChangeAsync(db,101,10,1,previous,cashflowProfile,"Admin",true,ct);
+        },Token));
+        Assert.Equal("bank",await TextValue("SELECT treasury_type FROM public.account_control_cashflow_treasury_accounts WHERE client_id=10 AND account_code='001' AND is_active IS TRUE"));
+        Assert.Equal(revisionBefore,await Count("SELECT revision FROM public.cashflow_report_revisions WHERE client_id=10"));
+        Assert.Equal(1L,await Count("SELECT count(*) FROM public.cash_bank_summary_read_models WHERE client_id=10"));
+        Assert.Equal(rawBefore,await TextValue("SELECT string_agg(id::text||':'||row_data::text,'|' ORDER BY id) FROM public.client_data WHERE client_id=10 AND template_id=1"));
+        Assert.Equal(historyBefore,await Count("SELECT count(*) FROM public.client_data_history WHERE client_id=10"));
+        Assert.Equal(occurrencesBefore,await TextValue("SELECT string_agg(occurrence_key||':'||voucher_fingerprint||':'||decision_status,'|' ORDER BY occurrence_key) FROM public.cashflow_voucher_occurrences WHERE client_id=10 AND template_id=1"));
+        await Sql("DROP TRIGGER p38_fail ON public.client_data;DROP FUNCTION public.p38_fail()");
+
+        await Assert.ThrowsAsync<IdentityReview>(()=>tx.ExecuteAsync(async(db,ct)=>
+        {
+            await UploadDerivedFieldWriter.LockForTreasuryConfigurationChangeAsync(db,ct);
+            var previous=await UploadDerivedFieldService.LoadAsync(db,101,10,1,cashflowProfile,ct);
+            await using(var update=db.CreateCommand("UPDATE public.account_control_cashflow_treasury_accounts SET treasury_type='cash' WHERE client_id=10 AND account_code='001'")) await update.ExecuteNonQueryAsync(ct);
+            return await UploadDerivedFieldWriter.RefreshAfterTreasuryConfigurationChangeAsync(db,101,10,1,previous with {ContextKey="stale"},cashflowProfile,"Admin",true,ct);
+        },Token));
+        Assert.Equal("bank",await TextValue("SELECT treasury_type FROM public.account_control_cashflow_treasury_accounts WHERE client_id=10 AND account_code='001' AND is_active IS TRUE"));
+        Assert.Equal(revisionBefore,await Count("SELECT revision FROM public.cashflow_report_revisions WHERE client_id=10"));
+
+        Assert.Equal(0,await tx.ExecuteAsync((db,ct)=>UploadDerivedFieldWriter.RefreshAfterTreasuryConfigurationChangeAsync(db,101,10,1,cashflowProfile,cashflowProfile,"Admin",false,ct),Token));
+        Assert.Equal(revisionBefore,await Count("SELECT revision FROM public.cashflow_report_revisions WHERE client_id=10"));
+        int activeRows=checked((int)await Count("SELECT count(*) FROM public.client_data WHERE client_id=10 AND template_id=1 AND is_deleted IS FALSE AND change_detection_status<>'deleted'"));
+        int refreshed=await tx.ExecuteAsync(async(db,ct)=>
+        {
+            await UploadDerivedFieldWriter.LockForTreasuryConfigurationChangeAsync(db,ct);
+            var previous=await UploadDerivedFieldService.LoadAsync(db,101,10,1,cashflowProfile,ct);
+            await using(var update=db.CreateCommand("UPDATE public.account_control_cashflow_treasury_accounts SET treasury_type='cash' WHERE client_id=10 AND account_code='001'")) await update.ExecuteNonQueryAsync(ct);
+            return await UploadDerivedFieldWriter.RefreshAfterTreasuryConfigurationChangeAsync(db,101,10,1,previous,cashflowProfile,"Admin",true,ct);
+        },Token);
+        Assert.Equal(activeRows,refreshed);
+        Assert.Equal(revisionBefore+1,await Count("SELECT revision FROM public.cashflow_report_revisions WHERE client_id=10"));
+        Assert.Equal(0L,await Count("SELECT count(*) FROM public.cash_bank_summary_read_models WHERE client_id=10"));
+        Assert.Equal(0L,await Count("SELECT count(*) FROM public.client_data WHERE client_id=10 AND template_id=1 AND is_deleted IS FALSE AND change_detection_status<>'deleted' AND derived_account_code='001' AND derived_treasury_type IS DISTINCT FROM 'cash'"));
+        Assert.Equal(rawBefore,await TextValue("SELECT string_agg(id::text||':'||row_data::text,'|' ORDER BY id) FROM public.client_data WHERE client_id=10 AND template_id=1"));
+        Assert.Equal(historyBefore,await Count("SELECT count(*) FROM public.client_data_history WHERE client_id=10"));
+        Assert.Equal(occurrencesBefore,await TextValue("SELECT string_agg(occurrence_key||':'||voucher_fingerprint||':'||decision_status,'|' ORDER BY occurrence_key) FROM public.cashflow_voucher_occurrences WHERE client_id=10 AND template_id=1"));
 
     }
 }

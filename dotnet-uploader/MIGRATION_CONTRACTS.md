@@ -350,6 +350,12 @@ This list records discussion, not blanket authorization to activate policies. Re
 - Require a selected final total, active Balance Sheet equity destination, coverage of every nonzero Income Statement category, no nonzero unmapped accounts, and a current matching closing confirmation. Reconcile within an absolute difference of 0.01; `already_in_capital` never applies a second link.
 - Use the existing bounded exact-amount type; invalid amounts return unavailable. No float conversion, endpoint, persistence, schema, UI, dependency, Python edit or activation is included. Later report phases may reuse this helper.
 
+### P38 Cash/Bank classification refresh
+
+- After an effective Treasury mapping change, the caller holds one transaction and locks `client_data` before Treasury/settings/source-mapping tables. Reclassify every active row for the configured Cashflows source template with the current native mapping; require matching prior row context and no unrelated profile change. Cap work at 100,000 rows/64 MiB and refuse overflow before writes.
+- Update only derived Treasury type/account/status, version and configuration hash on canonical `client_data`. Preserve raw `row_data`, identity, history and voucher-occurrence decisions. Do not rebuild prepared transaction copies or rollups.
+- In that transaction, invalidate the client summary cache and advance `cashflow_report_revisions` once. No-op mapping requests skip both. The internal writer remains unhosted until the native configuration-write phase; no route, schema, Python change or activation is included.
+
 ## 3. PostgreSQL and financial values
 
 | Contract | Required behavior |

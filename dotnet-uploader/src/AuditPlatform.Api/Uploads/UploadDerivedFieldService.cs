@@ -121,6 +121,21 @@ public static class UploadDerivedFieldService
         if(profile.RateMode=="derived") result[profile.Keys["rate"]]=Rate(raw.GetValueOrDefault(profile.Keys["amount"],new("blank")),raw.GetValueOrDefault(profile.Keys["quantity"],new("blank")),profile.Precision);
         return result;
     }
+    public static string? AccountCode(UploadDerivedProfile profile,IReadOnlyDictionary<string,IdentityAtom> raw)
+    {
+        if(!profile.Keys.TryGetValue("account_code",out string? key)) return null;
+        var atom=raw.GetValueOrDefault(key,new("blank"));
+        if(UploadIdentityValue.Blank(atom)) return null;
+        if(atom.Kind!="text") throw new IdentityReview("derived_identifier_review_required");
+        return UploadNumericParser.Trim(atom.Text!);
+    }
+    public static (string? Type,string? TreasuryAccount,string Status) ClassifyTreasury(UploadDerivedProfile profile,string? account)
+    {
+        var types=(profile.Treasury??[]).Where(t=>t.Account==account&&t.Type is "cash" or "bank").Select(t=>t.Type).Distinct(StringComparer.Ordinal).ToArray();
+        if(types.Length==1) return (types[0],account,types[0]);
+        if(account is null||types.Length>1) return (null,null,"unmapped");
+        return (null,null,"non_treasury");
+    }
     public static UploadDerivedValues Project(UploadDerivedProfile profile,IReadOnlyDictionary<string,IdentityAtom> raw,string? date)
     {
         IdentityAtom Atom(string role)=>profile.Keys.TryGetValue(role,out var key)?raw.GetValueOrDefault(key,new("blank")):new("blank");
@@ -133,9 +148,8 @@ public static class UploadDerivedFieldService
                 throw new IdentityReview("derived_precision_review_required");return value;
         }
         double Number(string role)=>Numeric(Atom(role));
-        string? account=Text("account_code"),voucher=Text("document"),name=Text("account_name");
-        var types=(profile.Treasury??[]).Where(t=>t.Account==account&&t.Type is "cash" or "bank").Select(t=>t.Type).Distinct(StringComparer.Ordinal).ToArray();
-        string? type=types.Length==1?types[0]:null;string status=type??(account is null||types.Length>1?"unmapped":"non_treasury");
+        string? account=AccountCode(profile,raw),voucher=Text("document"),name=Text("account_name");
+        var classification=ClassifyTreasury(profile,account);
         double? amount=null;
         if(profile.Keys.ContainsKey("amount")) {double n=Number("amount");if(n!=0) amount=n;}
         if(amount is null)
@@ -147,7 +161,8 @@ public static class UploadDerivedFieldService
         if(amount is {} helper&&(!float.IsFinite((float)helper)||helper!=0&&(float)helper==0)) throw new IdentityReview("derived_helper_range_review_required");
         DateOnly? day=date is null?null:DateOnly.ParseExact(date,"yyyy-MM-dd",CultureInfo.InvariantCulture);
         string? month=day?.ToString("yyyy-MM",CultureInfo.InvariantCulture);
-        return new(voucher,account,name,date,month,day is null?null:month+(day.Value.Day<=14?"-F1":"-F2"),Number("debit"),Number("credit"),amount,type,type is null?null:account,status);
+        return new(voucher,account,name,date,month,day is null?null:month+(day.Value.Day<=14?"-F1":"-F2"),Number("debit"),Number("credit"),amount,
+            classification.Type,classification.TreasuryAccount,classification.Status);
     }
     private static string Normal(string text)
     {

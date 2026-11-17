@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Cash/Bank refresh P38 — 2026-11-17
+
+Added an internal C# transaction helper for effective Treasury mapping changes. It follows import lock order, reclassifies bounded active rows from the configured Cashflows source template, updates only derived Treasury fields/configuration hash, removes the summary cache and advances the report revision once. No-op requests do nothing; source JSON, identities, history and voucher-occurrence evidence remain unchanged. Prepared transaction copies, routes, schema, Python behavior and activation are untouched.
+
+Regression coverage now includes mapping-refresh rollback, retained-context guard, no-op and successful refresh, cache/revision behavior, and preservation of raw rows, history and occurrence decisions. The Release solution build passes with zero warnings/errors; the focused PostgreSQL-backed `OwnedAtomicDerivationFreshnessAndRecovery` test passes (1/1). A sandboxed full-suite attempt could not start PostgreSQL because Windows blocked `initdb`'s restricted child token; the focused run succeeded in the documented normal local execution context. `git diff --check` passes. Local acceptance remains pending.
+
 ## Profit confirmation P37 — 2026-11-16
 
 Added an unhosted pure C# profit-link evaluator and focused synthetic tests. It mirrors the legacy decision gates for the configured final total, active equity destination, nonzero category coverage, mapped Trial Balance reconciliation (absolute difference at most 0.01), unmapped nonzero accounts and context-matched closing confirmation. `already_in_capital` blocks a duplicate link. Exact amount parsing is reused; invalid values return unavailable. No source loading, full statements, API, persistence, schema, UI, Python changes, packages or activation were added. Later .NET report phases can reuse the helper.
