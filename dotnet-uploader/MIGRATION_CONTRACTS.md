@@ -362,6 +362,13 @@ This list records discussion, not blanket authorization to activate policies. Re
 - Use the existing Account Set tables. Preserve include/exclude exact and subtree selectors, exclusion precedence, manual leaf overrides, editable drafts, preview, non-empty publication, immutable published versions and one copied revision draft at a time. Audit every mutation in the same transaction.
 - No schema, Verification execution, frontend, Python behavior or activation changes are part of P39. Existing Cashflows readers retain the vendor assignment values they use today.
 
+### P40 Reconciliation setup
+
+- Keep `/api/reconciliation` setup routes disabled by default. Require the authenticated selected-client home administrator and repeat ownership checks inside each write transaction; audit every successful mutation atomically.
+- Replace groups and balances only within the selected client/group. Accept accounts from the latest parsed Trial Balance, normalize months, reject duplicate account/month pairs, preserve zero as evidence, and keep absent months missing.
+- Keep report category sets, definitions and assignments independent of Verification and Financial Statement classifications. Validate parent/active keys and soft-retire/upsert definitions to retain IDs and history.
+- No schema, Python, UI, report calculation or activation changes. Release build and isolated PostgreSQL tests cover replacement scope, rollback, tenant isolation, missing/zero balances and category validation.
+
 ## 3. PostgreSQL and financial values
 
 | Contract | Required behavior |
@@ -442,7 +449,7 @@ Proposed job states are queued, preparing_inputs, running, succeeded, failed, ca
 | P07A–P07C, before P08 | Agree foundational direction, then separately approve and rehearse tenant and sharing foundations; resolve detailed policies in relevant phases before enabling operations. Preserve P07 acceptance and existing data; no public switch before proven cross-application authorization. |
 | P08–P15 | Tenant membership, engagement assignment, sharing and session/client/role behavior must be consistent across both applications before route switches. Capture response fixtures and verify configuration guards. |
 | P16–P29 | Valid client/template/mapping inputs and shared transactions are prerequisites. Settle capacity implementation, hash vectors, coverage/Footing policy, and source revision invalidation before enabling imports. |
-| P30–P40 | Preserve existing Verification/evidence references during purge and both consumers during setup changes. P37 brings forward minimum statement/context calculation for profit confirmation; P38 preserves classification/preparation/revision effects; P39 retains vendor workstream assignments read by Cashflows. |
+| P30–P40 | Preserve Verification/evidence references during purge and both consumers during setup changes. P37 adds profit context; P38 preserves classification/preparation/revision effects; P39 retains Cashflows vendor assignments; P40 keeps report categories independent and balance evidence explicit. |
 | P53A–P56, after P40 | Execute eight report steps in the plan: inputs/precision, statements, Notes, Cashflows, reconciliation/evidence, APIs/screens, workbooks and jobs/acceptance. Reuse P37's proven helper; compare source controls, legacy results and exported evidence before switching each operation. |
 | P41–P45, after reports | Port Audit Rules documents, cross-checks, categories, compilation and historical guards. Keep report categories independent of Verification classifications and preserve shared metadata/revisions. |
 | P46–P52 | Rulebook/assignment contracts and evidence IDs must already match. Test frozen histories, concurrent edits, and shared-modal behavior before switching writes. |

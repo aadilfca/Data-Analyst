@@ -18,6 +18,7 @@ using AuditPlatform.Api.Uploads;
 using AuditPlatform.Api.DataBank;
 using AuditPlatform.Api.TrialBalance;
 using AuditPlatform.Api.Verification;
+using AuditPlatform.Api.Reconciliation;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -147,6 +148,9 @@ builder.Services.AddSingleton(sp=>new TrialBalanceReviewService(sp.GetRequiredSe
 builder.Services.AddOptions<VerificationSetupOptions>()
     .Bind(builder.Configuration.GetSection(VerificationSetupOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
 builder.Services.AddSingleton<VerificationSetupService>();
+builder.Services.AddOptions<ReconciliationSetupOptions>()
+    .Bind(builder.Configuration.GetSection(ReconciliationSetupOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
+builder.Services.AddSingleton<ReconciliationSetupService>();
 builder.Services.AddOptions<DataBankExportOptions>()
     .Bind(builder.Configuration.GetSection(DataBankExportOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
 builder.Services.AddSingleton<DataBankExportService>();
@@ -186,6 +190,11 @@ if(app.Services.GetRequiredService<IOptions<VerificationSetupOptions>>().Value.E
         ||!app.Services.GetRequiredService<IOptions<PostgresOptions>>().Value.Enabled))
     throw new OptionsValidationException(VerificationSetupOptions.SectionName,typeof(VerificationSetupOptions),
         ["Verification setup requires PostgreSQL and the authenticated application shell."]);
+if (app.Services.GetRequiredService<IOptions<ReconciliationSetupOptions>>().Value.Enabled
+    && (!app.Services.GetRequiredService<IOptions<ApplicationShellOptions>>().Value.Enabled
+        || !app.Services.GetRequiredService<IOptions<PostgresOptions>>().Value.Enabled))
+    throw new OptionsValidationException(ReconciliationSetupOptions.SectionName, typeof(ReconciliationSetupOptions),
+        ["Reconciliation setup requires PostgreSQL and the authenticated application shell."]);
 if ((app.Services.GetRequiredService<IOptions<DataBankExportOptions>>().Value.Enabled
         || app.Services.GetRequiredService<IOptions<DataBankOptions>>().Value.HistoryEnabled)
     && !app.Services.GetRequiredService<IOptions<DataBankOptions>>().Value.Enabled)
@@ -285,6 +294,7 @@ app.UseWhen(context => context.RequestServices.GetRequiredService<IOptions<Authe
     || context.Request.Path.StartsWithSegments("/api/templates")
     || context.Request.Path.StartsWithSegments("/api/backup")
     || context.Request.Path.StartsWithSegments("/api/account-control-center")
+    || context.Request.Path.StartsWithSegments("/api/reconciliation")
     || context.Request.Path.StartsWithSegments("/api/import-excel")
     || context.Request.Path.StartsWithSegments("/api/upload/staging")
     || context.Request.Path.StartsWithSegments("/api/upload/file")

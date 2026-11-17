@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Reconciliation setup P40 — 2026-11-17
+
+Added default-off C# setup APIs under `/api/reconciliation`: group listing/suggestions/replacement, monthly balance listing/replacement, report-category-set listing/creation, category listing/replacement and account-assignment listing/replacement. All reads/writes use the selected-client tenant authorization; mutations recheck access in the transaction, lock the related configuration and audit successful writes atomically. Existing Trial Balance accounts are the allowed account source. Balance inputs normalize months, reject duplicate account/month entries, preserve zero values and do not synthesize missing months. Category parents and active assignment keys are validated; category definitions soft-retire/upsert to retain IDs/history. Report categories stay separate from Verification and Financial Statement assignments. Startup requires PostgreSQL and the application shell when enabled; the feature remains disabled by default. No schema, Python, frontend, report calculation or activation changed.
+
+Verification: the full Release solution builds with zero warnings/errors. Both focused tests pass against the owned disposable PostgreSQL fixture (2/2), covering disabled-by-default behavior, tenant/client isolation, scoped replacements, balance rollback, missing versus zero evidence, category parent validation and independence from Account Control categories. `git diff --check` passes. The sandbox blocked `pg_ctl`; the same tests passed in the normal local execution context. P40 remains subject to Aadil's local acceptance before Git changes.
+
 ## Verification setup P39 — 2026-11-17
 
 Added default-off C# APIs for current leaf account assignments and Account Set setup. Writes recheck the selected tenant/client administrator in the transaction, lock the existing configuration tables, preserve Financial Statement/Notes assignments, and audit atomically. Existing selectors retain exact/dash-subtree matching, exclusion precedence and manual classification overrides. Drafts support preview, non-empty publication, immutable published versions and one revision draft copied to the latest parsed upload. Existing Cashflows vendor-account assignments remain compatible. No schema, Verification execution, frontend, Python behavior or activation changed.
