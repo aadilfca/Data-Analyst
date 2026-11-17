@@ -356,6 +356,12 @@ This list records discussion, not blanket authorization to activate policies. Re
 - Update only derived Treasury type/account/status, version and configuration hash on canonical `client_data`. Preserve raw `row_data`, identity, history and voucher-occurrence decisions. Do not rebuild prepared transaction copies or rollups.
 - In that transaction, invalidate the client summary cache and advance `cashflow_report_revisions` once. No-op mapping requests skip both. The internal writer remains unhosted until the native configuration-write phase; no route, schema, Python change or activation is included.
 
+### P39 Verification setup
+
+- Keep native Verification setup disabled by default and require the authenticated selected-client home administrator. Assignment writes may change only `verification_workstream`; preserve Financial Statement and Notes categories. Only current Trial Balance leaves are assignable; bulk changes follow the shared hierarchy and dash-delimited subtree boundaries.
+- Use the existing Account Set tables. Preserve include/exclude exact and subtree selectors, exclusion precedence, manual leaf overrides, editable drafts, preview, non-empty publication, immutable published versions and one copied revision draft at a time. Audit every mutation in the same transaction.
+- No schema, Verification execution, frontend, Python behavior or activation changes are part of P39. Existing Cashflows readers retain the vendor assignment values they use today.
+
 ## 3. PostgreSQL and financial values
 
 | Contract | Required behavior |

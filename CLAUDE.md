@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- dotnet-uploader/ → Disabled native APIs; bounded uploads, Data Bank, cleanup, Trial Balance review, and Cash/Bank refresh effects. See CHANGELOG_ARCHIVE.md.
+- dotnet-uploader/ → Disabled native APIs; bounded uploads, Data Bank, cleanup, Trial Balance review, Verification setup, and Cash/Bank refresh effects. See CHANGELOG_ARCHIVE.md.
 
 - routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, statements, category-role notes with unallocated rows, profit links, reconciliations, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
 
@@ -269,8 +269,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
-- 2026-11-17: Added unhosted .NET Cash/Bank reclassification after mapping changes; canonical rows and report revisions remain atomic. See CHANGELOG_ARCHIVE.md, Cash/Bank refresh P38.
-- 2026-11-16: Added an isolated .NET profit-link confirmation helper; report integration remains a later phase. See CHANGELOG_ARCHIVE.md, Profit confirmation P37.
+- 2026-11-16–17: Added .NET profit confirmation, Cash/Bank refresh and Verification setup helpers. See CHANGELOG_ARCHIVE.md, Profit confirmation P37, Cash/Bank refresh P38, Verification setup P39.
 - 2026-11-15: Restored the Python upload page to the last committed layout; uncommitted mapping redesign removed. See CHANGELOG_ARCHIVE.md, Upload mapping rollback.
 - 2026-11-14: Added disabled native Trial Balance review, guarded corrections/classifications and current footings; locally accepted. See CHANGELOG_ARCHIVE.md, Trial Balance review P36.
 - 2026-11-14: Added default-off native Trial Balance storage, scoped replacement/deletion and recovery; locally accepted. See CHANGELOG_ARCHIVE.md, Trial Balance storage P35.

@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Verification setup P39 — 2026-11-17
+
+Added default-off C# APIs for current leaf account assignments and Account Set setup. Writes recheck the selected tenant/client administrator in the transaction, lock the existing configuration tables, preserve Financial Statement/Notes assignments, and audit atomically. Existing selectors retain exact/dash-subtree matching, exclusion precedence and manual classification overrides. Drafts support preview, non-empty publication, immutable published versions and one revision draft copied to the latest parsed upload. Existing Cashflows vendor-account assignments remain compatible. No schema, Verification execution, frontend, Python behavior or activation changed.
+
+Release solution build passes with zero warnings/errors. Both focused tests pass against the disposable PostgreSQL fixture, covering default-off behavior, partial assignment preservation, bulk subtree boundaries, Account Set preview/publish/revision, tenant isolation and rollback when the required audit write fails. The first sandboxed fixture launch was blocked by Windows process restrictions; the same test passed in the normal local execution context. `git diff --check` passes. P39 remains subject to Aadil's local acceptance before Git changes.
+
 ## Cash/Bank refresh P38 — 2026-11-17
 
 Added an internal C# transaction helper for effective Treasury mapping changes. It follows import lock order, reclassifies bounded active rows from the configured Cashflows source template, updates only derived Treasury fields/configuration hash, removes the summary cache and advances the report revision once. No-op requests do nothing; source JSON, identities, history and voucher-occurrence evidence remain unchanged. Prepared transaction copies, routes, schema, Python behavior and activation are untouched.
