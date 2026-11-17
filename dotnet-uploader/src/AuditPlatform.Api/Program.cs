@@ -22,6 +22,7 @@ using AuditPlatform.Api.Reconciliation;
 using AuditPlatform.Api.Reports;
 using AuditPlatform.Api.FinancialStatements;
 using AuditPlatform.Api.Cashflows;
+using AuditPlatform.Api.AuditRules;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -154,6 +155,9 @@ builder.Services.AddSingleton<VerificationSetupService>();
 builder.Services.AddOptions<ReconciliationSetupOptions>()
     .Bind(builder.Configuration.GetSection(ReconciliationSetupOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
 builder.Services.AddSingleton<ReconciliationSetupService>();
+builder.Services.AddOptions<AuditRulesOptions>()
+    .Bind(builder.Configuration.GetSection(AuditRulesOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
+builder.Services.AddSingleton<AuditRuleService>();
 builder.Services.AddOptions<ReportInputOptions>()
     .Bind(builder.Configuration.GetSection(ReportInputOptions.SectionName))
     .ValidateDataAnnotations().ValidateOnStart();
@@ -183,6 +187,77 @@ foreach (var route in new[]
         route.Item3, provider.GetRequiredService<IOptions<ReportInputOptions>>().Value.Enabled
             && provider.GetRequiredService<IOptions<FinancialReportJobOptions>>().Value.Enabled
                 ? CoexistenceOwner.DotNet : CoexistenceOwner.Legacy, CoexistenceAccess.Administrator));
+var auditRuleOwner = builder.Configuration.GetValue<bool>($"{AuditRulesOptions.SectionName}:Enabled")
+    && builder.Configuration.GetValue<bool>($"{AuditRulesOptions.SectionName}:RouteOwnershipEnabled")
+    && builder.Configuration.GetValue<bool>($"{CoexistenceOptions.SectionName}:Enabled")
+    && builder.Configuration.GetValue<bool>($"{ApplicationShellOptions.SectionName}:Enabled")
+    ? CoexistenceOwner.DotNet : CoexistenceOwner.Legacy;
+foreach (var kind in AuditRuleKinds.All)
+{
+    string collection = $"/api/audit-rules/{kind}";
+    foreach (var method in new[] { "GET", "POST" })
+        builder.Services.AddSingleton(new CoexistenceRoute($"audit-rules-{kind}-{method.ToLowerInvariant()}", method,
+            collection, auditRuleOwner, CoexistenceAccess.Administrator));
+    foreach (var method in new[] { "GET", "PUT", "DELETE" })
+        builder.Services.AddSingleton(new CoexistenceRoute($"audit-rules-{kind}-item-{method.ToLowerInvariant()}", method,
+            collection + "/{id:int}", auditRuleOwner, CoexistenceAccess.Administrator));
+    builder.Services.AddSingleton(new CoexistenceRoute($"audit-rules-{kind}-restore", "POST",
+        collection + "/{id:int}/restore", auditRuleOwner, CoexistenceAccess.Administrator));
+}
+foreach (var route in new[]
+{
+    ("audit-rules-rulebook", "GET", "/api/audit-rules/rulebook"),
+    ("audit-rules-changes", "GET", "/api/audit-rules/changes")
+})
+    builder.Services.AddSingleton(new CoexistenceRoute(route.Item1, route.Item2, route.Item3,
+        auditRuleOwner, CoexistenceAccess.Administrator));
+foreach (var route in new[]
+{
+    ("audit-rules-signature-specimens-list", "GET", "/api/audit-rules/signature-specimens"),
+    ("audit-rules-signature-specimens-create", "POST", "/api/audit-rules/signature-specimens"),
+    ("audit-rules-signature-specimens-get", "GET", "/api/audit-rules/signature-specimens/{id:int}"),
+    ("audit-rules-signature-specimens-update", "PUT", "/api/audit-rules/signature-specimens/{id:int}"),
+    ("audit-rules-signature-specimens-delete", "DELETE", "/api/audit-rules/signature-specimens/{id:int}"),
+    ("audit-rules-signature-specimens-restore", "POST", "/api/audit-rules/signature-specimens/{id:int}/restore"),
+    ("audit-rules-signature-specimens-hard-delete", "DELETE", "/api/audit-rules/signature-specimens/{id:int}/hard-delete")
+})
+    builder.Services.AddSingleton(new CoexistenceRoute(route.Item1, route.Item2, route.Item3,
+        auditRuleOwner, CoexistenceAccess.Administrator));
+foreach (var route in new[]
+{
+    ("audit-rules-cross-check-matrix-get", "GET", "/api/audit-rules/cross-checks/{id:int}/matrix"),
+    ("audit-rules-cross-check-matrix-put", "PUT", "/api/audit-rules/cross-checks/{id:int}/matrix"),
+    ("audit-rules-category-validation-get", "GET", "/api/audit-rules/categories/{id:int}/validation-rules"),
+    ("audit-rules-category-validation-put", "PUT", "/api/audit-rules/categories/{id:int}/validation-rules"),
+    ("audit-rules-category-documents-get", "GET", "/api/audit-rules/categories/{id:int}/documents"),
+    ("audit-rules-category-documents-put", "PUT", "/api/audit-rules/categories/{id:int}/documents"),
+    ("audit-rules-category-cross-checks-get", "GET", "/api/audit-rules/categories/{id:int}/cross-checks"),
+    ("audit-rules-category-cross-checks-put", "PUT", "/api/audit-rules/categories/{id:int}/cross-checks")
+})
+    builder.Services.AddSingleton(new CoexistenceRoute(route.Item1, route.Item2, route.Item3,
+        auditRuleOwner, CoexistenceAccess.Administrator));
+foreach (var route in new[]
+{
+    ("audit-rules-document-transaction-approval", "PUT", "/api/audit-rules/documents/{id:int}/transaction-level-approval"),
+    ("audit-rules-cross-check-fields-post", "POST", "/api/audit-rules/cross-checks/{id:int}/fields"),
+    ("audit-rules-cross-check-field-delete", "DELETE", "/api/audit-rules/cross-check-fields/{id:int}"),
+    ("audit-rules-cross-check-field-order", "PUT", "/api/audit-rules/cross-checks/{id:int}/field-order"),
+    ("audit-rules-cross-check-cell", "PUT", "/api/audit-rules/cross-check-fields/{fieldId:int}/cells/{documentId:int}"),
+    ("audit-rules-cross-check-condition", "PUT", "/api/audit-rules/cross-check-fields/{id:int}/condition"),
+    ("audit-rules-cross-check-documents", "PUT", "/api/audit-rules/cross-checks/{id:int}/documents"),
+    ("audit-rules-cross-check-meta", "PUT", "/api/audit-rules/cross-checks/{id:int}/meta"),
+    ("audit-rules-category-required", "PUT", "/api/audit-rules/categories/{categoryId:int}/documents/{documentId:int}/required"),
+    ("audit-rules-category-document-assertions-get", "GET", "/api/audit-rules/categories/{categoryId:int}/documents/{documentId:int}/assertions"),
+    ("audit-rules-category-document-assertions-put", "PUT", "/api/audit-rules/categories/{categoryId:int}/documents/{documentId:int}/assertions"),
+    ("audit-rules-category-cross-check-assertions-get", "GET", "/api/audit-rules/categories/{categoryId:int}/cross-checks/{crossCheckId:int}/assertions"),
+    ("audit-rules-category-cross-check-assertions-put", "PUT", "/api/audit-rules/categories/{categoryId:int}/cross-checks/{crossCheckId:int}/assertions"),
+    ("audit-rules-category-assertion-gaps", "GET", "/api/audit-rules/categories/{id:int}/assertion-gaps"),
+    ("audit-rules-voucher-check-reorder", "POST", "/api/audit-rules/voucher-checks/reorder"),
+    ("audit-rules-voucher-check-assertions-get", "GET", "/api/audit-rules/voucher-checks/{id:int}/assertions"),
+    ("audit-rules-voucher-check-assertions-put", "PUT", "/api/audit-rules/voucher-checks/{id:int}/assertions")
+})
+    builder.Services.AddSingleton(new CoexistenceRoute(route.Item1, route.Item2, route.Item3,
+        auditRuleOwner, CoexistenceAccess.Administrator));
 foreach (var route in new[]
 {
     ("financial-statements-balance-sheet", "GET", "/api/reconciliation/financial-statements/balance-sheet"),
@@ -252,6 +327,11 @@ if (app.Services.GetRequiredService<IOptions<ReconciliationSetupOptions>>().Valu
         || !app.Services.GetRequiredService<IOptions<PostgresOptions>>().Value.Enabled))
     throw new OptionsValidationException(ReconciliationSetupOptions.SectionName, typeof(ReconciliationSetupOptions),
         ["Reconciliation setup requires PostgreSQL and the authenticated application shell."]);
+if (app.Services.GetRequiredService<IOptions<AuditRulesOptions>>().Value.Enabled
+    && (!app.Services.GetRequiredService<IOptions<ApplicationShellOptions>>().Value.Enabled
+        || !app.Services.GetRequiredService<IOptions<PostgresOptions>>().Value.Enabled))
+    throw new OptionsValidationException(AuditRulesOptions.SectionName, typeof(AuditRulesOptions),
+        ["Audit Rules require PostgreSQL and the authenticated application shell."]);
 if ((app.Services.GetRequiredService<IOptions<DataBankExportOptions>>().Value.Enabled
         || app.Services.GetRequiredService<IOptions<DataBankOptions>>().Value.HistoryEnabled)
     && !app.Services.GetRequiredService<IOptions<DataBankOptions>>().Value.Enabled)
@@ -350,6 +430,7 @@ app.UseWhen(context => context.RequestServices.GetRequiredService<IOptions<Authe
     || context.Request.Path.StartsWithSegments("/api/columns")
     || context.Request.Path.StartsWithSegments("/api/templates")
     || context.Request.Path.StartsWithSegments("/api/backup")
+    || context.Request.Path.StartsWithSegments("/api/audit-rules")
     || context.Request.Path.StartsWithSegments("/api/account-control-center")
     || context.Request.Path.StartsWithSegments("/api/reconciliation")
     || context.Request.Path.StartsWithSegments("/api/import-excel")

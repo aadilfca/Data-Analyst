@@ -26,7 +26,7 @@ public sealed class CoexistenceMiddleware(RequestDelegate next)
         var rawPath = string.IsNullOrEmpty(raw) ? path : raw.Split('?', 2)[0];
         // Reject alternate encodings/path bases rather than forwarding a
         // differently interpreted route to another HTTP server.
-        if (context.Request.PathBase.HasValue || rawPath != path || path != route.Path)
+        if (context.Request.PathBase.HasValue || rawPath != path || !CoexistenceRouteTable.MatchesPath(route, path))
         {
             await LegacyForwarder.RejectAsync(context, 400, "ambiguous_path", "not_sent");
             return;
