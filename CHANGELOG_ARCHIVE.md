@@ -10177,3 +10177,11 @@ Added default-off `GET /api/verification/session/{id}/audit_workbook` and `GET /
 The Verification export retains Python's nine columns, sequential line numbering, voucher date, procedures ratio, labelled observation text and status. Its dedicated bounded XLSX writer produces numeric safe amounts, freezes and filters the header, wraps observations, caps widths and writes user text as literals. Exact routes and dependency registration remain behind the existing default-off Verification/coexistence gates; no UI or Python code changed. The unused legacy Audited Cashbook export remains for P52 route-parity review.
 
 Release API build passed with zero warnings/errors. Tests and database checks were not run per the deployment-testing plan. Candidate migration `0022` remains unapplied; local acceptance and ownership activation remain for P57–P63.
+
+## Verification route parity P52 — 2026-11-18
+
+Added tenant/selected-client scoped equivalents for Verification stats, supporting-document search, frozen Rulebook guidance, account/category lookup and suggestions, read-only line-status reasons, voucher-check reads and audited writes, batched procedure checks, and document-assignment status. Stats now count native selected-client session details rather than the legacy global `verifications` table. Voucher-check writes leave observation flags untouched; mutation paths retain transaction and audit handling.
+
+Added the legacy `print_sheet` response and bounded `export_excel` workbook using the established audited-cashbook projection, while retaining P51's separate nine-column export. Registered all P52 paths as exact default-off coexistence routes and updated project records. No Python/UI/schema edits or migration application.
+
+Release API build passed with zero warnings/errors; `git diff --check` passed. Automated tests and database integration were skipped per Aadil's deployment plan. Candidate migration `0022` remains unapplied, and route ownership remains disabled pending deployment acceptance.

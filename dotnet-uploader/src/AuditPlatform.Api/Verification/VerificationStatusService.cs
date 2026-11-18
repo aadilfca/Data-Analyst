@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using AuditPlatform.Api.Data;
 using Npgsql;
@@ -25,6 +26,148 @@ public sealed class VerificationStatusService
             if (status is not null) result[detailId] = status;
         }
         return result;
+    }
+
+    // Python's line-status explanation is explicitly read-only. This projects the same native
+    // gates without calling RecomputeLineAsync (which persists status/category snapshots).
+    internal async Task<VerificationRuntimeResult> LineStatusReasonAsync(PostgresTransactionContext db,
+        VerificationReviewContext owner, int detailId, CancellationToken ct)
+    {
+        int clientDataId; string? transactionRef, savedCategoryName, savedRulesetHash, savedStatus;
+        int? frozenCategoryId, savedMatrixVersion; string rowText; string? amountText;
+        await using (var command = db.CreateCommand("""
+            SELECT vd.client_data_id,vd.transaction_ref,vd.category_id_applied,vd.category_name_applied,
+                vd.applied_ruleset_hash,vd.cleared_status,vd.matrix_version_applied,cd.row_data::text,cd.extract_amount::text
+            FROM public.verification_details vd
+            JOIN public.verification_sessions vs ON vs.id=vd.session_id AND vs.client_id=$2
+            JOIN public.client_data cd ON cd.id=vd.client_data_id AND cd.client_id=vs.client_id
+            WHERE vd.id=$1 AND vd.range_status='active'
+            """))
+        {
+            command.Parameters.AddWithValue(detailId); command.Parameters.AddWithValue(owner.ClientId);
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct)) return NotFound("verification_detail_not_found");
+            clientDataId = reader.GetInt32(0); transactionRef = reader.IsDBNull(1) ? null : reader.GetString(1);
+            frozenCategoryId = reader.IsDBNull(2) ? null : reader.GetInt32(2);
+            savedCategoryName = reader.IsDBNull(3) ? null : reader.GetString(3);
+            savedRulesetHash = reader.IsDBNull(4) ? null : reader.GetString(4);
+            savedStatus = reader.IsDBNull(5) ? null : reader.GetString(5);
+            savedMatrixVersion = reader.IsDBNull(6) ? null : reader.GetInt32(6);
+            rowText = reader.IsDBNull(7) ? "{}" : reader.GetString(7);
+            amountText = reader.IsDBNull(8) ? null : reader.GetString(8);
+        }
+        using var rowDocument = JsonDocument.Parse(rowText);
+        JsonElement rowData = rowDocument.RootElement;
+        string? accountCode = AccountCode(rowData);
+        if (frozenCategoryId is null && string.IsNullOrWhiteSpace(accountCode))
+            return Success(new { voucher_line_id = detailId, cleared_status = (string?)null,
+                matrix_version_applied = (int?)null, ruleset_freshness = "unavailable",
+                reason = "This line has no account code, so no Category could be resolved - Cleared/Query is not computed for it.",
+                gates = Array.Empty<object>(), working_paper_gates = Array.Empty<object>() });
+        int? categoryId = frozenCategoryId; string? categoryName = savedCategoryName;
+        if (categoryId is null)
+            (categoryId, categoryName) = await ResolveCategoryAsync(db, owner.TenantId, owner.ClientId, accountCode!, ct);
+        if (categoryId is null || string.IsNullOrWhiteSpace(categoryName))
+            return Success(new { voucher_line_id = detailId, cleared_status = (string?)null,
+                matrix_version_applied = (int?)null, ruleset_freshness = "unavailable",
+                reason = $"Account code {accountCode} has no active Category assigned, so Cleared/Query is not computed for this line. Assign one under Audit Rules → Assign Categories.",
+                gates = Array.Empty<object>(), working_paper_gates = Array.Empty<object>() });
+
+        JsonElement profile = FindCategory(owner.Rulebook, categoryId.Value);
+        if (profile.ValueKind != JsonValueKind.Object)
+            return Success(new { voucher_line_id = detailId, cleared_status = (string?)null,
+                matrix_version_applied = (int?)null, ruleset_freshness = "unavailable",
+                reason = "Category is not present in this session's frozen Rulebook.",
+                gates = Array.Empty<object>(), working_paper_gates = Array.Empty<object>() });
+
+        int[] siblings = await ReadSiblingIdsAsync(db, detailId, clientDataId, owner.ClientId, ct);
+        var links = await ReadEvidenceLinksAsync(db, owner.TenantId, siblings, owner.ClientId, ct);
+        var documents = ArrayProperty(profile, "documents").ToArray();
+        bool documentsOk = await RequiredDocumentsCompleteAsync(db, owner.TenantId, siblings, documents,
+            ProcedureRoles(profile), Numeric(amountText), ct);
+        var checkDefinitions = ArrayProperty(owner.Rulebook, "voucher_checks").ToArray();
+        bool checksOk = await VoucherChecksCompleteAsync(db, owner.TenantId, owner.ClientId, transactionRef, owner.Rulebook, ct);
+        var doneCheckIds = new HashSet<int>();
+        if (!string.IsNullOrWhiteSpace(transactionRef))
+        {
+            await using var checks = db.CreateCommand("SELECT check_id FROM public.voucher_check_status WHERE rulebook_source='native' AND tenant_id=$1 AND client_id=$2 AND transaction_ref=$3 AND state='done'");
+            checks.Parameters.AddWithValue(owner.TenantId); checks.Parameters.AddWithValue(owner.ClientId); checks.Parameters.AddWithValue(transactionRef);
+            await using var reader = await checks.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct)) doneCheckIds.Add(reader.GetInt32(0));
+        }
+        int signatureCount = links.Count(link => link.SignatureException);
+        bool signatureOk = signatureCount == 0;
+        JsonElement detailedCrossChecks = JsonSerializer.SerializeToElement(await DetailedCrossChecksAsync(db, detailId, owner, ct));
+        JsonElement crossCheckResults = Prop(detailedCrossChecks, "results");
+        var failedCrossChecks = crossCheckResults.ValueKind == JsonValueKind.Array
+            ? crossCheckResults.EnumerateArray().Where(item => Text(item, "status") == "fail").ToArray() : [];
+        bool crossChecksOk = failedCrossChecks.Length == 0;
+        bool accountHeadOk = !await HasLatestObservationTextAsync(db, owner.TenantId, siblings,
+            "[System] Account Head Recommendation", -1, ct);
+        bool correctnessOk = await HasLatestObservationTextAsync(db, owner.TenantId, siblings,
+            "[System] Voucher Line Correctness", -2, ct, requiredText: "correct");
+
+        var gates = new List<StatusGate>
+        {
+            Gate("documents", "Required documents linked", documentsOk,
+                documentsOk ? $"All {documents.Length} required document(s) are complete." : "One or more required documents are incomplete.", documents.Length == 0),
+            Gate("voucher_checks", "Voucher-level checks complete", checksOk,
+                string.IsNullOrWhiteSpace(transactionRef) ? "This line has no voucher reference, so the voucher-level checks can't be read."
+                    : BuildVoucherCheckDetail(checkDefinitions, doneCheckIds), !string.IsNullOrWhiteSpace(transactionRef) && checkDefinitions.Length == 0),
+            Gate("signature", "No signature exceptions", signatureOk,
+                signatureOk ? "No linked evidence row is flagged with a signature exception."
+                    : $"{signatureCount} linked evidence row(s) are flagged with a signature exception."),
+            Gate("cross_checks", "Cross-document checks passed", crossChecksOk,
+                failedCrossChecks.Length == 0 ? (crossCheckResults.ValueKind == JsonValueKind.Array && crossCheckResults.GetArrayLength() > 0
+                    ? "All cross-document checks passed." : "No cross-document checks are configured for this Category.")
+                    : "Failed: " + string.Join("; ", failedCrossChecks.Select(item => $"{Text(item, "name")} — {Text(item, "message")}")),
+                crossCheckResults.ValueKind != JsonValueKind.Array || crossCheckResults.GetArrayLength() == 0),
+            Gate("account_head", "No pending Account Head recommendation", accountHeadOk,
+                accountHeadOk ? "No Account Head recommendation is recorded for this line."
+                    : "An Account Head recommendation is recorded for this line — clear it once the proper account head is assigned."),
+            Gate("voucher_line_correct", "Voucher Line marked Correct", correctnessOk,
+                correctnessOk ? "The Voucher Line is marked Correct." : "Mark the Voucher Line as Correct before clearing this line.")
+        };
+        string cleared = gates.All(gate => gate.Status is "pass" or "not_applicable") ? "Cleared" : "Query";
+        string? expectedHash = null;
+        var categorySnapshot = await ReadCategorySnapshotAsync(db, owner.TenantId, categoryId.Value, ct);
+        var globalFingerprint = await ReadGlobalEvaluationFingerprintAsync(db, owner.TenantId, ct);
+        if (categorySnapshot is not null && globalFingerprint is not null)
+            expectedHash = AppliedRulesetHash(profile, categorySnapshot.EvaluationFingerprint, globalFingerprint);
+        string freshness = savedRulesetHash is null ? "not_computed"
+            : expectedHash is null || !string.Equals(savedRulesetHash, expectedHash, StringComparison.Ordinal) ? "stale" : "current";
+        var ordered = gates.OrderBy(gate => gate.Status == "fail" ? 0 : gate.Status == "not_applicable" ? 1 : 2).ToArray();
+        var workingGates = new[]
+        {
+            GroupGate("evidence", "Evidence complete", [gates[0], gates[2]]),
+            GroupGate("voucher_checks", "Voucher-level checks", [gates[1]]),
+            GroupGate("cross_checks", "Cross-document checks", [gates[3]]),
+            GroupGate("account_head", "Account Head", [gates[4]]),
+            GroupGate("voucher_line_correct", "Voucher Line", [gates[5]])
+        };
+        return Success(new { voucher_line_id = detailId, cleared_status = cleared,
+            matrix_version_applied = savedMatrixVersion ?? Int(profile, "matrix_version"), ruleset_freshness = freshness,
+            reason = (string?)null, gates = ordered, working_paper_gates = workingGates });
+    }
+
+    private sealed record StatusGate([property: JsonPropertyName("key")] string Key,
+        [property: JsonPropertyName("label")] string Label,
+        [property: JsonPropertyName("status")] string Status,
+        [property: JsonPropertyName("detail")] string Detail);
+    private static StatusGate Gate(string key, string label, bool ok, string detail, bool notApplicable = false) =>
+        new(key, label, notApplicable ? "not_applicable" : ok ? "pass" : "fail", detail);
+    private static object GroupGate(string key, string label, IReadOnlyList<StatusGate> checks)
+    {
+        string state = checks.Any(check => check.Status == "fail") ? "fail"
+            : checks.All(check => check.Status == "not_applicable") ? "not_applicable" : "pass";
+        return new { key, label, status = state, detail = string.Join(" ", checks.Where(check => check.Status == "fail").Select(check => check.Detail)), checks };
+    }
+    private static string BuildVoucherCheckDetail(JsonElement[] definitions, HashSet<int> done)
+    {
+        var outstanding = definitions.Where(check => Int(check, "id") is int id && !done.Contains(id))
+            .Select(check => Text(check, "name") ?? "Voucher check").ToArray();
+        return outstanding.Length == 0 ? "(voucher-wide) Every voucher-level check is marked done."
+            : "(voucher-wide) Not yet marked done: " + string.Join(", ", outstanding);
     }
 
     // Audit Workbook needs the same per-Document completion badges as the Python read model,
@@ -766,6 +909,7 @@ public sealed class VerificationStatusService
     private static bool Bool(JsonElement value, string key, bool fallback = false) => TryField(value, key, out var item) ? item.ValueKind == JsonValueKind.True || item.ValueKind != JsonValueKind.False && fallback : fallback;
     private static int? Int(JsonElement value, string key) => TryField(value, key, out var item) && item.TryGetInt32(out int result) ? result : null;
     private static string? String(JsonElement value, string key) => TryField(value, key, out var item) && item.ValueKind == JsonValueKind.String ? item.GetString() : null;
+    private static string? Text(JsonElement value, string key) => String(value, key);
     private static JsonElement Prop(JsonElement value, string key) => TryField(value, key, out var item) ? item : default;
     private static IEnumerable<JsonElement> ArrayProperty(JsonElement value, string key) { var item = Prop(value, key); return item.ValueKind == JsonValueKind.Array ? item.EnumerateArray().ToArray() : []; }
     private static IReadOnlyDictionary<int, string[]> ProcedureRoles(JsonElement category)
@@ -797,4 +941,8 @@ public sealed class VerificationStatusService
         }
         return result;
     }
+
+    private static VerificationRuntimeResult Success<T>(T value) =>
+        new("success", JsonSerializer.SerializeToElement(value));
+    private static VerificationRuntimeResult NotFound(string code) => new("not_found", Code: code);
 }

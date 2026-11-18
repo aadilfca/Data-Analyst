@@ -162,6 +162,7 @@ builder.Services.AddSingleton<VerificationFormService>();
 builder.Services.AddSingleton<VerificationPhysicalBillService>();
 builder.Services.AddSingleton<VerificationCrossCheckService>();
 builder.Services.AddSingleton<VerificationReviewService>();
+builder.Services.AddSingleton<VerificationLookupService>();
 builder.Services.AddSingleton<AuditWorkbookService>();
 builder.Services.AddOptions<ReconciliationSetupOptions>()
     .Bind(builder.Configuration.GetSection(ReconciliationSetupOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
@@ -231,8 +232,21 @@ foreach (var route in new[]
     ("verification-session-index", "GET", "/api/verification/session/{session_id:int}/index"),
     ("verification-session-progress", "GET", "/api/verification/session/{session_id:int}/progress"),
     ("verification-voucher-stats", "GET", "/api/verification/session/{session_id:int}/voucher_stats"),
+    ("verification-stats", "GET", "/api/verification/stats"),
+    ("verification-supporting-search", "GET", "/api/verification/supporting"),
+    ("verification-audit-guidance", "GET", "/api/verification/audit_guidance"),
+    ("verification-category-for-account", "GET", "/api/verification/category-for-account"),
+    ("verification-suggest-account-head", "GET", "/api/verification/suggest-account-head"),
+    ("verification-line-status-reason", "GET", "/api/verification/line_status_reason/{voucher_line_id:int}"),
+    ("verification-voucher-checks", "GET", "/api/verification/voucher_checks"),
+    ("verification-voucher-check-save", "POST", "/api/verification/save_voucher_check"),
+    ("verification-voucher-checks-batch", "POST", "/api/verification/save_voucher_checks_batch"),
+    ("verification-procedure-checks-batch", "POST", "/api/verification/procedure_checks_batch"),
+    ("verification-document-assignment-status", "GET", "/api/verification/document_assignment_status"),
     ("verification-audit-workbook", "GET", "/api/verification/session/{session_id:int}/audit_workbook"),
     ("verification-export-excel", "GET", "/api/verification/export_verification_excel/{session_id:int}"),
+    ("verification-print-sheet", "GET", "/api/verification/print_sheet/{session_id:int}"),
+    ("verification-audited-cashbook-export", "GET", "/api/verification/export_excel/{session_id:int}"),
     ("verification-audited-cashbook", "GET", "/api/verification/audited_cashbook/{session_id:int}"),
     ("verification-rulebook", "GET", "/api/verification/session/{session_id:int}/rulebook"),
     ("verification-rulebook-rebase", "POST", "/api/verification/session/{session_id:int}/rulebook/rebase"),

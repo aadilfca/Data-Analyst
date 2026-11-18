@@ -38,6 +38,25 @@ public sealed class AuditWorkbookController(AuditWorkbookService service,
         return File(workbook.Bytes, workbook.ContentType, workbook.Filename);
     }
 
+    [HttpGet("print_sheet/{session_id:int}")]
+    public async Task<IActionResult> PrintSheet(int session_id, [FromQuery] string sheet_type = "verification",
+        CancellationToken ct = default)
+    {
+        var blocked = Guard();
+        return blocked ?? Result(await service.PrintSheetAsync(Session, session_id, sheet_type, ct));
+    }
+
+    [HttpGet("export_excel/{session_id:int}")]
+    public async Task<IActionResult> ExportAuditedCashbook(int session_id, CancellationToken ct)
+    {
+        var blocked = Guard();
+        if (blocked is not null) return blocked;
+        var result = await service.ExportAuditedCashbookAsync(Session, session_id, ct);
+        if (result.Failure is not null) return Result(result.Failure);
+        var workbook = result.Download!;
+        return File(workbook.Bytes, workbook.ContentType, workbook.Filename);
+    }
+
     private IActionResult Result(VerificationRuntimeResult result)
     {
         if (result.Status == "success") return Ok(result.Value);

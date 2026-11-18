@@ -58,6 +58,43 @@ public sealed class VerificationEvidenceService(PostgresTransactions transaction
         }, token);
     }, ct);
 
+    public Task<VerificationRuntimeResult> DocumentAssignmentStatusAsync(VerifiedSession? session,
+        string clientDataIds, CancellationToken ct = default) => Run(async token =>
+    {
+        int[] ids;
+        try { ids = (clientDataIds ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(int.Parse).Where(id => id > 0).ToArray(); }
+        catch (FormatException) { return Invalid("invalid_client_data_ids"); }
+        if (ids.Length > 500) return Invalid("client_data_id_limit_exceeded");
+        if (ids.Length == 0) return Success(new { statuses = Array.Empty<object>() });
+        int? clientId = session?.ClientId;
+        if (clientId is not > 0) return new("forbidden", Code: "verification_client_access_denied");
+        return await transactions.ExecuteAsync(async (db, inner) =>
+        {
+            var scope = await sessions.ResolveSelectedClientContextAsync(db, session, clientId.Value, inner);
+            if (scope.Failure is not null) return scope.Failure;
+            var assigned = new Dictionary<int, (string? Voucher, int Line)>();
+            await using var command = db.CreateCommand("""
+                SELECT DISTINCT ON (v.client_data_id) v.client_data_id,d.transaction_ref,v.voucher_line_id
+                FROM public.voucher_line_documents v
+                JOIN public.verification_details d ON d.id=v.voucher_line_id AND d.range_status='active'
+                JOIN public.verification_sessions s ON s.id=d.session_id AND s.client_id=$2 AND s.status<>'Cancelled'
+                JOIN public.client_data c ON c.id=v.client_data_id AND c.client_id=s.client_id AND c.is_deleted IS FALSE
+                WHERE v.rulebook_source='native' AND v.tenant_id=$1 AND v.client_data_id=ANY($3) AND v.status='active'
+                ORDER BY v.client_data_id,v.linked_at DESC,v.id DESC
+                """);
+            command.Parameters.AddWithValue(scope.Context!.TenantId); command.Parameters.AddWithValue(clientId.Value);
+            command.Parameters.AddWithValue(ids);
+            await using var reader = await command.ExecuteReaderAsync(inner);
+            while (await reader.ReadAsync(inner)) assigned[reader.GetInt32(0)] =
+                (reader.IsDBNull(1) ? null : reader.GetString(1), reader.GetInt32(2));
+            var statuses = ids.Select(id => assigned.TryGetValue(id, out var match)
+                ? new { client_data_id = id, assigned = true, voucher_id = match.Voucher, voucher_line_id = (int?)match.Line }
+                : new { client_data_id = id, assigned = false, voucher_id = (string?)null, voucher_line_id = (int?)null }).ToArray();
+            return Success(new { statuses });
+        }, token);
+    }, ct);
+
     public Task<VerificationRuntimeResult> AssignDocumentAsync(VerifiedSession? session,
         VerificationDocumentAssignRequest request, CancellationToken ct = default) => Run(async token =>
     {

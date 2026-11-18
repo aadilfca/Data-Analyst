@@ -14,6 +14,10 @@ internal static class VerificationWorkbookWriter
     private const string PackageNs = "http://schemas.openxmlformats.org/package/2006/relationships";
     private static readonly string[] Headers = ["Sr No.", "Date", "Account Code", "Account Type", "Account Name",
         "Amount", "Procedures", "Observations", "Status"];
+    private static readonly string[] CashbookHeaders = ["Voucher ID", "Date", "Description", "Account Code",
+        "Account Name", "Amount", "Vendor", "Unit", "Qty", "Rate", "Calculated Amount", "Purchase Demand",
+        "Purchase Order", "Gate Pass", "Store Receiving", "Vendor Bill", "Observations", "Comments",
+        "Validation Status", "Verification Status", "Verified By", "Verified At"];
 
     public static byte[] Write(IReadOnlyList<VerificationWorkbookExportRow> rows, ReportInputOptions options,
         CancellationToken ct)
@@ -66,6 +70,117 @@ internal static class VerificationWorkbookWriter
         }
         return output.ToArray();
     }
+
+    public static byte[] WriteAuditedCashbook(IReadOnlyList<AuditedCashbookExportRow> rows,
+        ReportInputOptions options, CancellationToken ct)
+    {
+        if (!options.Valid() || rows.Count == 0 || rows.Count + 1 > options.MaximumWorkbookRows)
+            throw new InvalidDataException("Audited Cashbook workbook exceeds its configured row limit.");
+        using var output = new CappedStream(options.MaximumWorkbookBytes);
+        using (var archive = new ZipArchive(output, ZipArchiveMode.Create, true, Encoding.UTF8))
+        {
+            WriteEntry(archive, "[Content_Types].xml", writer =>
+            {
+                writer.WriteStartElement("Types", "http://schemas.openxmlformats.org/package/2006/content-types");
+                writer.WriteStartElement("Default"); writer.WriteAttributeString("Extension", "rels");
+                writer.WriteAttributeString("ContentType", "application/vnd.openxmlformats-package.relationships+xml"); writer.WriteEndElement();
+                writer.WriteStartElement("Default"); writer.WriteAttributeString("Extension", "xml");
+                writer.WriteAttributeString("ContentType", "application/xml"); writer.WriteEndElement();
+                writer.WriteStartElement("Override"); writer.WriteAttributeString("PartName", "/xl/workbook.xml");
+                writer.WriteAttributeString("ContentType", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"); writer.WriteEndElement();
+                writer.WriteStartElement("Override"); writer.WriteAttributeString("PartName", "/xl/styles.xml");
+                writer.WriteAttributeString("ContentType", "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"); writer.WriteEndElement();
+                writer.WriteStartElement("Override"); writer.WriteAttributeString("PartName", "/xl/worksheets/sheet1.xml");
+                writer.WriteAttributeString("ContentType", "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"); writer.WriteEndElement();
+                writer.WriteEndElement();
+            });
+            WriteEntry(archive, "_rels/.rels", writer =>
+            {
+                writer.WriteStartElement("Relationships", PackageNs); writer.WriteStartElement("Relationship");
+                writer.WriteAttributeString("Id", "rId1"); writer.WriteAttributeString("Type", RelNs + "/officeDocument");
+                writer.WriteAttributeString("Target", "xl/workbook.xml"); writer.WriteEndElement(); writer.WriteEndElement();
+            });
+            WriteEntry(archive, "xl/workbook.xml", writer =>
+            {
+                writer.WriteStartElement("workbook", MainNs); writer.WriteAttributeString("xmlns", "r", null, RelNs);
+                writer.WriteStartElement("sheets"); writer.WriteStartElement("sheet");
+                writer.WriteAttributeString("name", "Audited Cashbook"); writer.WriteAttributeString("sheetId", "1");
+                writer.WriteAttributeString("r", "id", RelNs, "rId1"); writer.WriteEndElement();
+                writer.WriteEndElement(); writer.WriteEndElement();
+            });
+            WriteEntry(archive, "xl/_rels/workbook.xml.rels", writer =>
+            {
+                writer.WriteStartElement("Relationships", PackageNs); writer.WriteStartElement("Relationship");
+                writer.WriteAttributeString("Id", "rId1"); writer.WriteAttributeString("Type", RelNs + "/worksheet");
+                writer.WriteAttributeString("Target", "worksheets/sheet1.xml"); writer.WriteEndElement();
+                writer.WriteStartElement("Relationship"); writer.WriteAttributeString("Id", "rId2");
+                writer.WriteAttributeString("Type", RelNs + "/styles"); writer.WriteAttributeString("Target", "styles.xml");
+                writer.WriteEndElement(); writer.WriteEndElement();
+            });
+            WriteEntry(archive, "xl/styles.xml", WriteStyles);
+            WriteEntry(archive, "xl/worksheets/sheet1.xml", writer => WriteCashbookSheet(writer, rows, options, ct));
+        }
+        return output.ToArray();
+    }
+
+    private static void WriteCashbookSheet(XmlWriter writer, IReadOnlyList<AuditedCashbookExportRow> rows,
+        ReportInputOptions options, CancellationToken ct)
+    {
+        writer.WriteStartElement("worksheet", MainNs);
+        writer.WriteStartElement("sheetViews"); writer.WriteStartElement("sheetView");
+        writer.WriteAttributeString("workbookViewId", "0"); writer.WriteStartElement("pane");
+        writer.WriteAttributeString("ySplit", "1"); writer.WriteAttributeString("topLeftCell", "A2");
+        writer.WriteAttributeString("activePane", "bottomLeft"); writer.WriteAttributeString("state", "frozen");
+        writer.WriteEndElement(); writer.WriteEndElement(); writer.WriteEndElement();
+        writer.WriteStartElement("cols");
+        for (int column = 0; column < CashbookHeaders.Length; column++)
+        {
+            int longest = CashbookHeaders[column].Length;
+            foreach (var row in rows) longest = Math.Max(longest, CashbookText(row, column).Length);
+            writer.WriteStartElement("col"); writer.WriteAttributeString("min", (column + 1).ToString(CultureInfo.InvariantCulture));
+            writer.WriteAttributeString("max", (column + 1).ToString(CultureInfo.InvariantCulture));
+            writer.WriteAttributeString("width", Math.Clamp(longest + 2, 8, 50).ToString(CultureInfo.InvariantCulture));
+            writer.WriteAttributeString("customWidth", "1"); writer.WriteEndElement();
+        }
+        writer.WriteEndElement(); writer.WriteStartElement("sheetData");
+        WriteCashbookRow(writer, 1, CashbookHeaders, null);
+        int rowNumber = 1;
+        foreach (var row in rows)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (++rowNumber > options.MaximumWorkbookRows) throw new InvalidDataException("Audited Cashbook workbook row limit exceeded.");
+            WriteCashbookRow(writer, rowNumber, row.Cells, row.Amount);
+        }
+        writer.WriteEndElement(); writer.WriteStartElement("autoFilter", MainNs);
+        writer.WriteAttributeString("ref", $"A1:V{rowNumber.ToString(CultureInfo.InvariantCulture)}");
+        writer.WriteEndElement(); writer.WriteEndElement();
+    }
+
+    private static void WriteCashbookRow(XmlWriter writer, int rowNumber, IReadOnlyList<string?> values, decimal? amount)
+    {
+        writer.WriteStartElement("row"); writer.WriteAttributeString("r", rowNumber.ToString(CultureInfo.InvariantCulture));
+        for (int index = 0; index < CashbookHeaders.Length; index++)
+        {
+            string? value = index < values.Count ? values[index] : "";
+            writer.WriteStartElement("c"); writer.WriteAttributeString("r", Column(index + 1) + rowNumber.ToString(CultureInfo.InvariantCulture));
+            if (rowNumber == 1) writer.WriteAttributeString("s", "1");
+            if (rowNumber > 1 && index == 5 && amount is decimal numeric
+                && SafeNumber(numeric.ToString(CultureInfo.InvariantCulture), out string safe))
+            { writer.WriteStartElement("v", MainNs); writer.WriteString(safe); writer.WriteEndElement(); }
+            else
+            {
+                writer.WriteAttributeString("t", "inlineStr"); writer.WriteStartElement("is");
+                writer.WriteStartElement("t", MainNs); writer.WriteAttributeString("xml", "space", "http://www.w3.org/XML/1998/namespace", "preserve");
+                writer.WriteString(value ?? ""); writer.WriteEndElement(); writer.WriteEndElement();
+            }
+            writer.WriteEndElement();
+        }
+        writer.WriteEndElement();
+    }
+
+    private static string CashbookText(AuditedCashbookExportRow row, int index) =>
+        index == 5 && row.Amount.HasValue ? row.Amount.Value.ToString(CultureInfo.InvariantCulture)
+            : index < row.Cells.Count ? row.Cells[index] ?? "" : "";
 
     private static void WriteSheet(XmlWriter writer, IReadOnlyList<VerificationWorkbookExportRow> rows,
         ReportInputOptions options, CancellationToken ct)

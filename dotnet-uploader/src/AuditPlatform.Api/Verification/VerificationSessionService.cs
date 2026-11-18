@@ -574,6 +574,22 @@ public sealed class VerificationSessionService(PostgresTransactions transactions
             checked((int)current.Value.Version), current.Value.Payload), null);
     }
 
+    // Read-only account/guidance lookups do not have a Verification session id, but still
+    // require the same live selected-client, tenant-membership and engagement checks.
+    internal async Task<(VerificationReviewContext? Context, VerificationRuntimeResult? Failure)>
+        ResolveSelectedClientContextAsync(PostgresTransactionContext db, VerifiedSession? session,
+            int clientId, CancellationToken ct)
+    {
+        if (clientId < 1) return (null, new("forbidden", Code: "verification_client_access_denied"));
+        var actor = await AuthorizeClientAsync(db, session, clientId, ct);
+        if (actor is null) return (null, new("forbidden", Code: "verification_client_access_denied"));
+        var current = await ReadCurrentRulebookAsync(db, actor.TenantId, ct);
+        if (current is null) return (null, new("unavailable", Code: "verification_rulebook_unavailable"));
+        int version = checked((int)current.Value.Version);
+        return (new(actor.TenantId, actor.UserId, actor.Username, actor.TenantRole,
+            clientId, version, version, current.Value.Payload), null);
+    }
+
     internal static async Task<Dictionary<string, object?>?> VoucherNavigationWithinTransactionAsync(
         PostgresTransactionContext db, int tenantId, int sessionId, int currentDetailId, string direction, CancellationToken ct)
     {

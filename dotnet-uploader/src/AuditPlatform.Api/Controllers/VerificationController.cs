@@ -9,7 +9,8 @@ namespace AuditPlatform.Api.Controllers;
 [Route("api/verification")]
 public sealed class VerificationController(VerificationSessionService service, VerificationReviewService review,
     VerificationEvidenceService evidence, VerificationFormService forms, VerificationPhysicalBillService physicalBills,
-    VerificationCrossCheckService crossChecks, IOptions<VerificationRuntimeOptions> options) : ControllerBase
+    VerificationCrossCheckService crossChecks, VerificationLookupService lookups,
+    IOptions<VerificationRuntimeOptions> options) : ControllerBase
 {
     private VerifiedSession? Session => HttpContext.Items[typeof(VerifiedSession)] as VerifiedSession;
 
@@ -100,6 +101,55 @@ public sealed class VerificationController(VerificationSessionService service, V
     [HttpGet("session/{session_id:int}/voucher_stats")]
     public async Task<IActionResult> VoucherStats(int session_id, CancellationToken ct)
     { var blocked = Guard(); return blocked ?? Result(await service.VoucherStatsAsync(Session, session_id, ct)); }
+
+    [HttpGet("stats")]
+    public async Task<IActionResult> Stats(CancellationToken ct)
+    { var blocked = Guard(); return blocked ?? Result(await lookups.StatsAsync(Session, ct)); }
+
+    [HttpGet("supporting")]
+    public async Task<IActionResult> Supporting([FromQuery] int client_id, [FromQuery] string search,
+        [FromQuery] int template_id, [FromQuery] int limit = 50, CancellationToken ct = default)
+    { var blocked = Guard(); return blocked ?? Result(await lookups.SupportingAsync(Session, client_id, search, template_id, limit, ct)); }
+
+    [HttpGet("audit_guidance")]
+    public async Task<IActionResult> AuditGuidance([FromQuery] string transaction_type, CancellationToken ct)
+    { var blocked = Guard(); return blocked ?? Result(await lookups.AuditGuidanceAsync(Session, transaction_type, ct)); }
+
+    [HttpGet("category-for-account")]
+    public async Task<IActionResult> CategoryForAccount([FromQuery] int client_id, [FromQuery] string account_code, CancellationToken ct)
+    { var blocked = Guard(); return blocked ?? Result(await lookups.CategoryForAccountAsync(Session, client_id, account_code, ct)); }
+
+    [HttpGet("suggest-account-head")]
+    public async Task<IActionResult> SuggestAccountHead([FromQuery] int client_id, [FromQuery] string description,
+        [FromQuery] string? category, CancellationToken ct)
+    { var blocked = Guard(); return blocked ?? Result(await lookups.SuggestAccountHeadAsync(Session, client_id, description, category, ct)); }
+
+    [HttpGet("line_status_reason/{voucher_line_id:int}")]
+    public async Task<IActionResult> LineStatusReason(int voucher_line_id, CancellationToken ct)
+    { var blocked = Guard(); return blocked ?? Result(await lookups.LineStatusReasonAsync(Session, voucher_line_id, ct)); }
+
+    [HttpGet("voucher_checks")]
+    public async Task<IActionResult> VoucherChecks([FromQuery] int client_id, [FromQuery] string transaction_ref, CancellationToken ct)
+    { var blocked = Guard(); return blocked ?? Result(await review.VoucherChecksAsync(Session, client_id, transaction_ref, ct)); }
+
+    [HttpPost("save_voucher_check")]
+    [RequestSizeLimit(65536)]
+    public async Task<IActionResult> SaveVoucherCheck([FromBody] VerificationVoucherCheckSaveRequest? request, CancellationToken ct)
+    { var blocked = Guard(); return blocked ?? Result(await review.SaveVoucherCheckAsync(Session, request!, ct)); }
+
+    [HttpPost("save_voucher_checks_batch")]
+    [RequestSizeLimit(262144)]
+    public async Task<IActionResult> SaveVoucherChecksBatch([FromBody] VerificationVoucherChecksBatchRequest? request, CancellationToken ct)
+    { var blocked = Guard(); return blocked ?? Result(await review.SaveVoucherChecksBatchAsync(Session, request!, ct)); }
+
+    [HttpPost("procedure_checks_batch")]
+    [RequestSizeLimit(262144)]
+    public async Task<IActionResult> ProcedureChecksBatch([FromBody] VerificationProcedureChecksBatchRequest? request, CancellationToken ct)
+    { var blocked = Guard(); return blocked ?? Result(await review.SaveProcedureChecksBatchAsync(Session, request!, ct)); }
+
+    [HttpGet("document_assignment_status")]
+    public async Task<IActionResult> DocumentAssignmentStatus([FromQuery] string client_data_ids, CancellationToken ct)
+    { var blocked = Guard(); return blocked ?? Result(await evidence.DocumentAssignmentStatusAsync(Session, client_data_ids, ct)); }
 
     [HttpGet("audited_cashbook/{session_id:int}")]
     public async Task<IActionResult> AuditedCashbook(int session_id, CancellationToken ct)

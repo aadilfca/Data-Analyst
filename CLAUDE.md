@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- dotnet-uploader/ → Disabled native APIs; bounded Upload/setup, P41–P45 Audit Rules, P46–P51 Verification, and P53A–P56 reports/jobs. Acceptance and route ownership remain. See CHANGELOG_ARCHIVE.md.
+- dotnet-uploader/ → Disabled native APIs; bounded Upload/setup, P41–P45 Audit Rules, P46–P52 Verification, and P53A–P56 reports/jobs. Acceptance and route ownership remain. See CHANGELOG_ARCHIVE.md.
 - dotnet-uploader/src/AuditPlatform.Api/Verification/VerificationEvidenceService.cs → Scoped evidence links, Form/Physical Bill modal support, procedure checks, and observation persistence. See CHANGELOG_ARCHIVE.md.
 
 - routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, statements, category-role notes with unallocated rows, profit links, reconciliations, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
@@ -43,7 +43,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Two-pane Audit Rules editor for Documents, Cross-checks, Categories, Voucher Checks and Assertions, plus Assign Categories. See CHANGELOG_ARCHIVE.md.
 - category_control_center_prototype.html, upload_mapping_prototype.html → standalone review-only Category Control Center and inline upload mapping prototypes; sample data only, no backend connection.
-- routers/verification.py + static/verification.* → Python Verification reference; disabled C# P46–P51 sessions, review, Audit Workbook and exports; P52 route parity remains. See CHANGELOG_ARCHIVE.md.
+- routers/verification.py + static/verification.* → Python Verification reference; disabled C# P46–P52 sessions, review, lookups, Audit Workbook and exports. Acceptance and route ownership remain. See CHANGELOG_ARCHIVE.md.
 - static/template-viewer.html, static/template-viewer.js → Scoped, bounded Data Bank viewer with native precision/freshness guards and Python compatibility. See CHANGELOG_ARCHIVE.md.
 - static/search_index.js → deleted; feature registry merged into `NAV_MANIFEST` in `client_context.js` — do not recreate. See CHANGELOG_ARCHIVE.md.
 - static/loading_ui.js → shared `window.LoadingUI` primitives, including token-based target-aware global progress-cursor ownership. See CHANGELOG_ARCHIVE.md.
@@ -270,7 +270,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
-- 2026-11-18: Added default-off .NET P51 Audit Workbook and Verification Excel export; see CHANGELOG_ARCHIVE.md.
+- 2026-11-18: Added default-off .NET P52 Verification lookup/check routes and legacy Cashbook print/export; see CHANGELOG_ARCHIVE.md.
 - 2026-11-18: Added default-off C# P50 Forms, Physical Bills and native Rulebook evidence identities; candidate migration `0022` remains unapplied. See CHANGELOG_ARCHIVE.md.
 - 2026-11-18: Added default-off C# P49 Verification evidence links, procedure ticks and observations. Local acceptance remains; see CHANGELOG_ARCHIVE.md.
 - 2026-11-18: Added default-off C# P48 atomic Verification saves, validation/completion, voucher checks and Cleared/Query gates. Local acceptance remains; see CHANGELOG_ARCHIVE.md.

@@ -99,6 +99,62 @@ public sealed class AuditWorkbookService(PostgresReadSnapshot snapshots, Verific
         return (null, new(bytes, filename, ExcelContentType));
     }
 
+    public async Task<VerificationRuntimeResult> PrintSheetAsync(VerifiedSession? session, int sessionId,
+        string sheetType, CancellationToken ct = default)
+    {
+        if (sheetType is not ("verification" or "observation")) return Invalid("invalid_print_sheet_type");
+        var audited = await sessions.AuditedCashbookAsync(session, sessionId, ct);
+        if (audited.Status != "success" || audited.Value is not JsonElement value) return audited;
+        var header = Property(value, "session");
+        var transactions = Property(value, "transactions");
+        if (transactions.ValueKind != JsonValueKind.Array) return Invalid("verification_session_not_found");
+        var rows = transactions.EnumerateArray().Where(row => sheetType != "observation"
+            || !string.IsNullOrWhiteSpace(Text(row, "observations"))
+            || !string.IsNullOrWhiteSpace(Text(row, "comments"))).Select(row => row.Clone()).ToArray();
+        return Success(new { session_info = header, transactions = rows, sheet_type = sheetType, total_count = rows.Length });
+    }
+
+    internal async Task<(VerificationRuntimeResult? Failure, VerificationWorkbookDownload? Download)> ExportAuditedCashbookAsync(
+        VerifiedSession? session, int sessionId, CancellationToken ct = default)
+    {
+        var audited = await sessions.AuditedCashbookAsync(session, sessionId, ct);
+        if (audited.Status != "success" || audited.Value is not JsonElement value) return (audited, null);
+        var sessionInfo = Property(value, "session");
+        var transactions = Property(value, "transactions");
+        if (transactions.ValueKind != JsonValueKind.Array) return (Invalid("verification_session_not_found"), null);
+        var rows = new List<AuditedCashbookExportRow>();
+        foreach (var transaction in transactions.EnumerateArray())
+        {
+            var rowData = Property(transaction, "row_data");
+            var lineItems = Property(transaction, "line_items");
+            var firstLine = lineItems.ValueKind == JsonValueKind.Array && lineItems.GetArrayLength() > 0
+                ? lineItems[0] : default;
+            var procedures = Property(transaction, "procedure_flags");
+            string? verifiedAt = Text(transaction, "verified_at");
+            if (DateTimeOffset.TryParse(verifiedAt, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var instant))
+                verifiedAt = instant.ToLocalTime().ToString("dd/MM/yyyy HH:mm", CultureInfo.InvariantCulture);
+            var cells = new string?[]
+            {
+                Text(transaction, "voucher_id"), Text(transaction, "extract_date"), Text(rowData, "Description"),
+                Text(rowData, "Account Code"), Text(rowData, "Account Name"), Text(transaction, "extract_amount"),
+                Text(firstLine, "vendor"), Text(firstLine, "unit"), Text(firstLine, "qty"), Text(firstLine, "rate"),
+                Text(firstLine, "calculated_amount"), Flag(procedures, "purchase_demand"), Flag(procedures, "purchase_order"),
+                Flag(procedures, "gate_pass"), Flag(procedures, "store_receiving"), Flag(procedures, "vendor_bill"),
+                Text(transaction, "observations"), Text(transaction, "comments"), Text(transaction, "validation_status"),
+                Text(transaction, "verification_status"), Text(transaction, "verified_by"), verifiedAt
+            };
+            decimal? amount = decimal.TryParse(Text(transaction, "extract_amount"), NumberStyles.Float,
+                CultureInfo.InvariantCulture, out var parsedAmount) ? parsedAmount : null;
+            rows.Add(new(cells, amount));
+        }
+        if (rows.Count == 0) return (Invalid("verification_export_empty"), null);
+        byte[] bytes;
+        try { bytes = VerificationWorkbookWriter.WriteAuditedCashbook(rows, workbookOptions.Value, ct); }
+        catch (InvalidDataException) { return (new("too_large", Code: "verification_export_capacity"), null); }
+        string cashbook = Text(sessionInfo, "cashbook_name") ?? "Audited_Cashbook";
+        return (null, new(bytes, $"Audited_Cashbook_{SafeFilename(cashbook)}_{DateTimeOffset.Now:yyyyMMdd}.xlsx", ExcelContentType));
+    }
+
     private async Task<LoadOutcome> LoadAsync(PostgresTransactionContext db, VerifiedSession? session,
         int sessionId, CancellationToken ct)
     {
@@ -282,6 +338,18 @@ public sealed class AuditWorkbookService(PostgresReadSnapshot snapshots, Verific
     }
     private static int? NullableInt(NpgsqlDataReader reader, int ordinal) => reader.IsDBNull(ordinal) ? null : reader.GetInt32(ordinal);
     private static string? NullableString(NpgsqlDataReader reader, int ordinal) => reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
+    private static JsonElement Property(JsonElement value, string name) => value.ValueKind == JsonValueKind.Object
+        && value.TryGetProperty(name, out var property) ? property : default;
+    private static string? Text(JsonElement value, string name)
+    {
+        var property = Property(value, name);
+        return property.ValueKind switch
+        {
+            JsonValueKind.String => property.GetString(), JsonValueKind.Number => property.GetRawText(),
+            JsonValueKind.True => "True", JsonValueKind.False => "False", _ => null
+        };
+    }
+    private static string Flag(JsonElement value, string name) => Property(value, name).ValueKind == JsonValueKind.True ? "✓" : "";
     private static string SafeFilename(string value)
     {
         var safe = new string(value.Select(character => char.IsAsciiLetterOrDigit(character)

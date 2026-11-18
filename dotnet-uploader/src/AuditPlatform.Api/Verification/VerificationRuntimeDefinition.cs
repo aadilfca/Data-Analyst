@@ -77,6 +77,26 @@ public sealed class VerificationVoucherCheckInput
     [JsonPropertyName("state")] public string State { get; set; } = "untouched";
 }
 
+public sealed class VerificationVoucherCheckSaveRequest
+{
+    [JsonPropertyName("client_id")] public int ClientId { get; set; }
+    [JsonPropertyName("transaction_ref")] public string TransactionRef { get; set; } = "";
+    [JsonPropertyName("check_id")] public int CheckId { get; set; }
+    [JsonPropertyName("state")] public string State { get; set; } = "untouched";
+}
+
+public sealed class VerificationVoucherChecksBatchRequest
+{
+    [JsonPropertyName("client_id")] public int ClientId { get; set; }
+    [JsonPropertyName("transaction_ref")] public string TransactionRef { get; set; } = "";
+    [JsonPropertyName("checks")] public List<VerificationVoucherCheckInput> Checks { get; set; } = [];
+}
+
+public sealed class VerificationProcedureChecksBatchRequest
+{
+    [JsonPropertyName("checks")] public List<VerificationProcedureCheckInput> Checks { get; set; } = [];
+}
+
 public sealed class VerificationProcedureCheckInput
 {
     [JsonPropertyName("voucher_line_id")] public int VoucherLineId { get; set; }
@@ -175,3 +195,5 @@ internal sealed record VerificationAuditWorkbookLineInput(int DetailId, int Clie
 
 internal sealed record VerificationAuditWorkbookProcedureProgress(int Done, int Total,
     int? CategoryId, string? CategoryName);
+
+internal sealed record AuditedCashbookExportRow(IReadOnlyList<string?> Cells, decimal? Amount);

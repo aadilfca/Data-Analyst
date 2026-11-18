@@ -84,6 +84,115 @@ public sealed class VerificationReviewService(PostgresTransactions transactions,
         }, token);
     }, ct);
 
+    public Task<VerificationRuntimeResult> VoucherChecksAsync(VerifiedSession? session, int clientId,
+        string transactionRef, CancellationToken ct = default) => Run(async token =>
+    {
+        if (clientId < 1 || string.IsNullOrWhiteSpace(transactionRef) || transactionRef.Length > 500)
+            return Invalid("invalid_voucher_reference");
+        return await transactions.ExecuteAsync(async (db, inner) =>
+        {
+            var resolved = await sessions.ResolveSelectedClientContextAsync(db, session, clientId, inner);
+            if (resolved.Failure is not null) return resolved.Failure;
+            if (!await VoucherExistsAsync(db, resolved.Context!, transactionRef, inner)) return NotFound("verification_voucher_not_found");
+            var owner = resolved.Context!;
+            var saved = await ReadVoucherChecksAsync(db, owner.TenantId, clientId, transactionRef, owner.Rulebook, inner);
+            var definitions = owner.Rulebook.TryGetProperty("voucher_checks", out var checks) && checks.ValueKind == JsonValueKind.Array
+                ? checks.EnumerateArray().Where(check => check.TryGetProperty("id", out var id) && id.TryGetInt32(out _))
+                    .Select(check => new { id = check.GetProperty("id").GetInt32(),
+                        name = check.TryGetProperty("name", out var name) ? name.GetString() ?? "" : "",
+                        sort_order = check.TryGetProperty("sort_order", out var order) && order.TryGetInt32(out int sort) ? sort : 0,
+                        state = saved.FirstOrDefault(item => item.CheckId == check.GetProperty("id").GetInt32())?.State ?? "untouched" })
+                    .OrderBy(item => item.sort_order).ToArray() : [];
+            return Success(definitions);
+        }, token);
+    }, ct);
+
+    public Task<VerificationRuntimeResult> SaveVoucherCheckAsync(VerifiedSession? session,
+        VerificationVoucherCheckSaveRequest request, CancellationToken ct = default) => Run(async token =>
+    {
+        if (request is null || request.ClientId < 1 || string.IsNullOrWhiteSpace(request.TransactionRef)
+            || request.TransactionRef.Length > 500 || request.CheckId < 1
+            || request.State is not ("untouched" or "done" or "not_done")) return Invalid("invalid_voucher_check_state");
+        return await transactions.ExecuteAsync(async (db, inner) =>
+        {
+            var resolved = await sessions.ResolveSelectedClientContextAsync(db, session, request.ClientId, inner);
+            if (resolved.Failure is not null) return resolved.Failure;
+            var owner = resolved.Context!;
+            if (!await VoucherExistsAsync(db, owner, request.TransactionRef, inner)) return NotFound("verification_voucher_not_found");
+            var saved = await SaveVoucherChecksAsync(db, owner, request.TransactionRef,
+                [new() { CheckId = request.CheckId, State = request.State }], verify: false, inner);
+            if (saved.Failure is not null) return saved.Failure;
+            await WriteAuditAsync(db, owner, "VERIFICATION_VOUCHER_CHECK_SAVED", new
+            { transaction_ref = request.TransactionRef, check_id = request.CheckId, state = request.State }, inner);
+            return Success(new { client_id = request.ClientId, transaction_ref = request.TransactionRef,
+                check_id = request.CheckId, state = request.State });
+        }, token);
+    }, ct);
+
+    public Task<VerificationRuntimeResult> SaveVoucherChecksBatchAsync(VerifiedSession? session,
+        VerificationVoucherChecksBatchRequest request, CancellationToken ct = default) => Run(async token =>
+    {
+        if (request is null || request.ClientId < 1 || string.IsNullOrWhiteSpace(request.TransactionRef)
+            || request.TransactionRef.Length > 500 || request.Checks is null || request.Checks.Count > 500)
+            return Invalid("invalid_voucher_checks_batch");
+        return await transactions.ExecuteAsync(async (db, inner) =>
+        {
+            var resolved = await sessions.ResolveSelectedClientContextAsync(db, session, request.ClientId, inner);
+            if (resolved.Failure is not null) return resolved.Failure;
+            var owner = resolved.Context!;
+            if (!await VoucherExistsAsync(db, owner, request.TransactionRef, inner)) return NotFound("verification_voucher_not_found");
+            var saved = await SaveVoucherChecksAsync(db, owner, request.TransactionRef, request.Checks, verify: false, inner);
+            if (saved.Failure is not null) return saved.Failure;
+            await WriteAuditAsync(db, owner, "VERIFICATION_VOUCHER_CHECKS_BATCH_SAVED", new
+            { transaction_ref = request.TransactionRef, checks = request.Checks }, inner);
+            return Success(new { client_id = request.ClientId, transaction_ref = request.TransactionRef, checks = request.Checks });
+        }, token);
+    }, ct);
+
+    public Task<VerificationRuntimeResult> SaveProcedureChecksBatchAsync(VerifiedSession? session,
+        VerificationProcedureChecksBatchRequest request, CancellationToken ct = default) => Run(async token =>
+    {
+        if (request?.Checks is null || request.Checks.Count > 1000) return Invalid("invalid_procedure_checks_batch");
+        if (request.Checks.Count == 0) return Success(new { message = "Procedure checks saved successfully.", count = 0 });
+        if (request.Checks.Any(check => check.VoucherLineId < 1)) return Invalid("invalid_procedure_check");
+        return await transactions.ExecuteAsync(async (db, inner) =>
+        {
+            int? sessionId;
+            await using (var find = db.CreateCommand("SELECT session_id FROM public.verification_details WHERE id=$1 AND range_status='active'"))
+            { find.Parameters.AddWithValue(request.Checks[0].VoucherLineId); sessionId = await find.ExecuteScalarAsync(inner) as int?; }
+            if (sessionId is null) return NotFound("verification_detail_not_found");
+            var resolved = await sessions.ResolveReviewContextAsync(db, session, sessionId.Value, inner);
+            if (resolved.Failure is not null) return resolved.Failure;
+            var owner = resolved.Context!;
+            int[] ids = request.Checks.Select(check => check.VoucherLineId).Distinct().ToArray();
+            var eligible = new HashSet<int>();
+            await using (var rows = db.CreateCommand("SELECT id FROM public.verification_details WHERE session_id=$1 AND id=ANY($2) AND status='Pending' AND range_status='active' FOR UPDATE"))
+            {
+                rows.Parameters.AddWithValue(sessionId.Value); rows.Parameters.AddWithValue(ids);
+                await using var reader = await rows.ExecuteReaderAsync(inner); while (await reader.ReadAsync(inner)) eligible.Add(reader.GetInt32(0));
+            }
+            if (eligible.Count != ids.Length) return Invalid("invalid_procedure_check");
+            var failure = await SaveProcedureChecksAsync(db, owner, sessionId.Value, request.Checks, eligible, inner);
+            if (failure is not null) return failure;
+            await WriteAuditAsync(db, owner, "VERIFICATION_PROCEDURE_CHECKS_BATCH_SAVED", new
+            { session_id = sessionId.Value, count = request.Checks.Count }, inner);
+            return Success(new { message = "Procedure checks saved successfully.", count = request.Checks.Count });
+        }, token);
+    }, ct);
+
+    private static async Task<bool> VoucherExistsAsync(PostgresTransactionContext db,
+        VerificationReviewContext owner, string transactionRef, CancellationToken ct)
+    {
+        await using var command = db.CreateCommand("""
+            SELECT EXISTS(SELECT 1 FROM public.verification_details d
+            JOIN public.verification_sessions s ON s.id=d.session_id AND s.client_id=$2 AND s.status<>'Cancelled'
+            JOIN public.platform_tenant_client_homes h ON h.client_id=s.client_id AND h.tenant_id=$1
+            WHERE d.transaction_ref=$3 AND d.range_status='active')
+            """);
+        command.Parameters.AddWithValue(owner.TenantId); command.Parameters.AddWithValue(owner.ClientId);
+        command.Parameters.AddWithValue(transactionRef); return (bool)(await command.ExecuteScalarAsync(ct) ?? false);
+    }
+
     public Task<VerificationRuntimeResult> ValidateAsync(VerifiedSession? session,
         VerificationValidateRequest request, CancellationToken ct = default) => Run(async token =>
     {
