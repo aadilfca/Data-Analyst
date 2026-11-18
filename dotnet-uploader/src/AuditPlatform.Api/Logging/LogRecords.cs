@@ -35,7 +35,7 @@ public sealed record DiagnosticError(
     Guid EventId, string CorrelationId, LogActor Actor, int? ClientId,
     string Module, string Endpoint, string Method, int StatusCode,
     string Category, string SafeMessage, string? SafeTrace, JsonElement? Metadata,
-    bool OutcomeUnknown = false, Guid? OperationId = null);
+    bool OutcomeUnknown = false, Guid? OperationId = null, int? TenantId = null);
 
 public sealed record DiagnosticLogResult(
     int? ErrorId, string Code, string UserMessage, string SuggestedAction, string Persistence);

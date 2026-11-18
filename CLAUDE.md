@@ -12,15 +12,15 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- dotnet-uploader/ → Disabled native APIs; bounded Upload/setup, P41–P45 Audit Rules, P46–P52 Verification, and P53A–P56 reports/jobs. Acceptance and route ownership remain. See CHANGELOG_ARCHIVE.md.
+- dotnet-uploader/ → Default-off C# Upload/setup, Audit Rules, Verification, reports/jobs, Dashboard and tenant error administration. Acceptance and route ownership remain. See CHANGELOG_ARCHIVE.md.
 - dotnet-uploader/src/AuditPlatform.Api/Verification/VerificationEvidenceService.cs → Scoped evidence links, Form/Physical Bill modal support, procedure checks, and observation persistence. See CHANGELOG_ARCHIVE.md.
 
 - routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, statements, category-role notes with unallocated rows, profit links, reconciliations, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
 
 - routers/clients.py + static/clients.* → firm-level client management; admin-only except the paginated `GET /api/clients`. See CHANGELOG_ARCHIVE.md.
-- routers/dashboard.py + static/index.html, script.js → dashboard cards, live KPIs, allocated database size and selected-client integrity status. See CHANGELOG_ARCHIVE.md.
+- routers/dashboard.py + static/index.html, script.js → Dashboard cards/KPIs; default-off C# workspace summaries and shared administrator allocation. See CHANGELOG_ARCHIVE.md.
 - routers/data.py, data_integrity.py + static/databank.*, data_integrity.* → Scoped previews/history, exact native values, bounded downloads, separate metrics/calendars and Data Integrity safeguards. See CHANGELOG_ARCHIVE.md.
-- routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
+- routers/error_log.py + static/error_dashboard.* → Legacy error UI; default-off C# tenant administration, safe rendering and audited resolution/deletion. See CHANGELOG_ARCHIVE.md.
 - routers/import_export.py + static/upload.* → Template-first uploads, guarded saved-mapping controls, bounded dates, coverage, Footing, stored reconciliation and paged previews. See CHANGELOG_ARCHIVE.md.
 - routers/settings.py + routers/google_drive_auth.py + static/settings.* → Settings, holidays and Drive controls; safe rendering and optional tenant read-only UI. See CHANGELOG_ARCHIVE.md.
 - routers/templates.py + static/templates.*, static/columns.* → Templates, reusable columns, native accounting assignments, guarded editors, ledger preparation and configuration backup/restore. See CHANGELOG_ARCHIVE.md.
@@ -270,6 +270,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-18: Added default-off C# P57 Dashboard and tenant error administration; candidate migration `0023` remains unapplied. See CHANGELOG_ARCHIVE.md.
 - 2026-11-18: Added default-off .NET P52 Verification lookup/check routes and legacy Cashbook print/export; see CHANGELOG_ARCHIVE.md.
 - 2026-11-18: Added default-off C# P50 Forms, Physical Bills and native Rulebook evidence identities; candidate migration `0022` remains unapplied. See CHANGELOG_ARCHIVE.md.
 - 2026-11-18: Added default-off C# P49 Verification evidence links, procedure ticks and observations. Local acceptance remains; see CHANGELOG_ARCHIVE.md.

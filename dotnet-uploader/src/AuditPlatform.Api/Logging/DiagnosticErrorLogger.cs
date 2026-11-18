@@ -12,7 +12,7 @@ namespace AuditPlatform.Api.Logging;
 public sealed class DiagnosticErrorLogger(
     PostgresTransactions transactions, PostgresDataSourceFactory factory,
     LogSanitizer sanitizer, IOptions<LogPersistenceOptions> options,
-    ILogger<DiagnosticErrorLogger> console)
+    ILogger<DiagnosticErrorLogger> console, IOptions<ErrorLogManagementOptions>? management = null)
 {
     public const string UnknownCode = "ERR-UNK-001";
     public const string GenericMessage = "An unexpected error occurred. Please try again or contact support.";
@@ -42,7 +42,9 @@ public sealed class DiagnosticErrorLogger(
         return new(Guid.NewGuid(), correlationId, actor, scope?.ClientId,
             descriptor?.ControllerName ?? "Request", endpoint is null ? "unmatched" : "/" + endpoint.TrimStart('/'), method, 500,
             category, "Unhandled " + root.GetType().Name + ".", sanitizer.Text(trace, 5000, tail: true), null,
-            error is PostgresCommitOutcomeUnknownException, scope?.OperationId);
+            error is PostgresCommitOutcomeUnknownException, scope?.OperationId,
+            context.Items[typeof(AuditPlatform.Api.Authentication.VerifiedSession)] is AuditPlatform.Api.Authentication.VerifiedSession verified
+                && verified.TenantContextRequired && verified.UserId == actor.UserId ? verified.TenantId : null);
     }
 
     public async Task<DiagnosticLogResult> LogAsync(DiagnosticError record, CancellationToken cancellationToken = default)
@@ -77,12 +79,17 @@ public sealed class DiagnosticErrorLogger(
                             suggestion = SafeRegistryText(reader.GetString(2), GenericAction, 500);
                     }
                 }
-                await using var command = context.CreateCommand("""
+                var scoped = management?.Value.Enabled == true;
+                var sql = """
                     INSERT INTO public.error_log(error_code_id,error_code,user_id,client_id,module,endpoint,
                         method,status_code,error_category,error_message,stack_trace,input_data,suggested_fix,
                         event_id,operation_id,actor_user_id,actor_kind,correlation_id)
                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id
-                    """);
+                    """;
+                // The old INSERT remains compatible until candidate 0023 is explicitly deployed.
+                if (scoped) sql = sql.Replace("correlation_id)","correlation_id,tenant_id)",StringComparison.Ordinal)
+                    .Replace("$18)","$18,$19)",StringComparison.Ordinal);
+                await using var command = context.CreateCommand(sql);
                 PostgresAuditWriter.Add(command, NpgsqlDbType.Integer, registryId);
                 PostgresAuditWriter.Add(command, NpgsqlDbType.Text, UnknownCode);
                 PostgresAuditWriter.Add(command, NpgsqlDbType.Text, sanitizer.Text(record.Actor.Name, 256));
@@ -101,6 +108,7 @@ public sealed class DiagnosticErrorLogger(
                 PostgresAuditWriter.Add(command, NpgsqlDbType.Integer, record.Actor.UserId);
                 PostgresAuditWriter.Add(command, NpgsqlDbType.Text, record.Actor.Kind);
                 PostgresAuditWriter.Add(command, NpgsqlDbType.Text, record.CorrelationId);
+                if (scoped) PostgresAuditWriter.Add(command, NpgsqlDbType.Integer, record.TenantId);
                 var id = (int)(await command.ExecuteScalarAsync(token))!;
                 return new DiagnosticLogResult(id, UnknownCode, message, suggestion, "persisted");
             }, budget.Token);

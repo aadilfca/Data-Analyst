@@ -28,7 +28,9 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
         // An assertion prevents an old tab's form from acting in a different
         // selected tenant. The services repeat the version check inside writes.
         var canonicalApi=path.TrimEnd('/').ToLowerInvariant();
-        var boundApi=context.Request.Path.StartsWithSegments("/api/users")
+        var boundApi=context.Request.Path.StartsWithSegments("/api/dashboard")
+            || context.Request.Path.StartsWithSegments("/api/error-logs")
+            || context.Request.Path.StartsWithSegments("/api/users")
             || context.Request.Path.StartsWithSegments("/api/data")
             || context.Request.Path.StartsWithSegments("/api/trial-balance")
             || context.Request.Path.StartsWithSegments("/api/account-control-center")

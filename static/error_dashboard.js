@@ -40,6 +40,10 @@ const closeModalBtn = document.getElementById('closeModalBtn');
 const limit = 20;
 
 // ---------- HELPERS ----------
+function errorDashboardEscape(value) {
+    return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
 function showStatus(msg, type = 'info') {
     statusMessage.textContent = msg;
     statusMessage.className = 'upload-status ' + type;
@@ -87,7 +91,7 @@ async function loadStats() {
         const cat = stats.category_breakdown || {};
         let catHtml = '';
         for (const [key, count] of Object.entries(cat)) {
-            catHtml += `<span style="font-size:12px; background:#f1f5f9; padding:2px 10px; border-radius:10px; margin:0 4px;">${key}: ${count}</span>`;
+            catHtml += `<span style="font-size:12px; background:#f1f5f9; padding:2px 10px; border-radius:10px; margin:0 4px;">${errorDashboardEscape(key)}: ${errorDashboardEscape(count)}</span>`;
         }
         categoryStatsDiv.innerHTML = catHtml || 'No categories';
     } catch (error) {
@@ -125,6 +129,13 @@ async function loadErrors() {
         // Since we don't have total, we'll use the response length to determine next/prev.
 
         renderErrors(data);
+        const countHeader = res.headers.get('X-Total-Count');
+        if (countHeader !== null && /^\d+$/.test(countHeader)) {
+            totalRecords = Number(countHeader);
+            totalPages = Math.max(1, Math.ceil(totalRecords / limit));
+            updatePagination();
+            return;
+        }
         // Update pagination based on length and known limit
         const count = data.length;
         // If we got less than limit, we're on last page
@@ -300,6 +311,9 @@ async function openDetailModal(errorId) {
 }
 
 function buildDetailHTML(err) {
+    // Treat every stored string as text at this rendering boundary.
+    err = Object.fromEntries(Object.entries(err).map(([key, value]) => [key,
+        typeof value === 'string' ? errorDashboardEscape(value) : value]));
     return `
         <div class="detail-grid">
             <div class="label">Error Code</div>
@@ -404,8 +418,7 @@ async function resolveError(errorId, notes) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 is_resolved: true,
-                resolution_notes: notes || 'Resolved via dashboard',
-                resolved_by: 'Admin'
+                resolution_notes: notes || 'Resolved via dashboard'
             })
         });
         if (!res.ok) throw new Error('Failed to resolve error');
@@ -427,8 +440,7 @@ async function toggleResolve(errorId, currentStatus) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 is_resolved: newStatus,
-                resolution_notes: newStatus ? 'Resolved via dashboard' : '',
-                resolved_by: 'Admin'
+                resolution_notes: newStatus ? 'Resolved via dashboard' : ''
             })
         });
         if (!res.ok) throw new Error('Failed to update');
@@ -462,7 +474,8 @@ detailModal.addEventListener('click', function(e) {
 });
 
 // ---------- INIT ----------
-window.onload = function() {
+window.onload = async function() {
+    if (window.clientContextReady) await window.clientContextReady;
     loadStats();
     loadErrors();
 };

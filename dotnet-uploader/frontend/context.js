@@ -2,6 +2,7 @@
 (() => {
     const tag = document.currentScript;
     const key = tag.dataset.context || '';
+    window.AppNativeAdministration = true;
     const tenant = tag.dataset.tenant || '';
     if (tag.dataset.settingsEnabled === 'true') window.AppTenantSettings = {
         enabled: true, canEdit: tag.dataset.settingsAdmin === 'true'
@@ -53,7 +54,7 @@
         const request = new Request(input, init);
         const url = new URL(request.url);
         const path = url.pathname.replace(/\/+$/, '').toLowerCase();
-        const bound = url.origin === location.origin && (path.startsWith('/api/users')
+        const bound = url.origin === location.origin && (path.startsWith('/api/dashboard') || path.startsWith('/api/error-logs') || path.startsWith('/api/users')
             || path === '/api/data' || path.startsWith('/api/data/')
             || path === '/api/trial-balance' || path.startsWith('/api/trial-balance/')
             || path === '/api/account-control-center' || path.startsWith('/api/account-control-center/')

@@ -506,6 +506,8 @@ function getEvictionNextKey() {
 
 // ---------- ENFORCE CLIENT SELECTION ----------
 function enforceClientSelection() {
+    // Native error administration is workspace-wide and server-guarded for administrators.
+    if (window.AppNativeAdministration && window.location.pathname === '/static/error_dashboard.html') return true;
     if (!isClientSelected()) {
         // A page that carries its own valid ?client_id= already has everything it needs, so
         // blocking it here was wrong: the clients.html cogwheel builds a fully-resolved

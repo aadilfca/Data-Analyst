@@ -103,7 +103,7 @@ Execution order: P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 (repor
 | P50 — Procedures | Port procedure checks and observation synchronization; verify per-line completion, voucher rollups, and freshness after edits. |
 | P51 — Verification engine | Port status gates, cross-check evaluation, and atomic Save/Verify; compare baseline decisions, historical hashes, and concurrent edits. |
 | P52 — Audit Workbook | Port Workbook reads, filters, badges, print data, and operational exports; verify shared-modal behavior and Verification parity. |
-| P57 — Dashboard/admin | Port dashboard statistics and error-management UI APIs; verify values against authoritative records and administrator permissions. |
+| P57 — Dashboard/admin | Backend implementation accepted; default-off workspace statistics and administrator error APIs. Candidate `0023` remains unapplied; full workflow acceptance remains P61. See CHANGELOG_ARCHIVE.md. |
 | P58 — Google Drive | Port OAuth reconnect, encrypted credential handling, and supported Drive operations; verify authorization, retry, and checksum behavior. |
 | P59 — Database backups | Port backup coordination and verified recovery tooling; rehearse isolated restoration and document external-service/file limitations. |
 | P60 — Operational tools | Replace required startup, tray, maintenance, and backfill tools; inventory retained test tools and obtain approval for obsolete-script retirement. |

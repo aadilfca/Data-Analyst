@@ -20,6 +20,8 @@ public sealed class SessionAuthenticationHandler(RequestDelegate next)
             || context.Request.Path.StartsWithSegments("/api/account-control-center")
             || context.Request.Path.StartsWithSegments("/api/data-integrity")
             || context.Request.Path.StartsWithSegments("/api/storage-cleanup")
+            || context.Request.Path.StartsWithSegments("/api/dashboard")
+            || context.Request.Path.StartsWithSegments("/api/error-logs")
             || context.Request.Path.StartsWithSegments("/api/users")
             || context.Request.Path.StartsWithSegments("/api/clients")
             || context.Request.Path.StartsWithSegments("/api/settings")
@@ -82,7 +84,9 @@ public sealed class SessionCoexistenceGate(IOptions<AuthenticationOptions> optio
         // These report routes repeat tenant, selected-client, membership and
         // administrator checks inside their scoped PostgreSQL snapshot/job store.
         // Other bridge routes retain the shell-era block.
-        if (shell?.Value.Enabled==true && !selectedClientReport && !selectedClientVerification && !tenantAdmin && !legacyAdmin)
+        bool workspaceRead = route.Owner == CoexistenceOwner.DotNet && route.Access == CoexistenceAccess.Authenticated
+            && (route.Path.StartsWith("/api/dashboard/",StringComparison.Ordinal) || route.Path.StartsWith("/api/error-logs",StringComparison.Ordinal));
+        if (shell?.Value.Enabled==true && !workspaceRead && !selectedClientReport && !selectedClientVerification && !tenantAdmin && !legacyAdmin)
             return CoexistenceAccessDecision.Forbidden;
         if (route.Access == CoexistenceAccess.Client)
             return CoexistenceAccessDecision.Forbidden; // Object scope needs a route-specific policy.

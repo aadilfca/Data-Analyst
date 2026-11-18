@@ -2,8 +2,14 @@
 // 📊 DASHBOARD LOGIC
 // ==============================================
 
+// Stored labels remain text when a table uses an HTML template.
+function dashboardEscape(value) {
+    return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
 // ---------- LOAD DASHBOARD STATS ----------
 async function loadDashboardStats() {
+    if (window.clientContextReady) await window.clientContextReady;
     try {
         const res = await window.ApiUtils.apiFetch('/api/dashboard/stats');
         if (res.ok) {
@@ -15,7 +21,7 @@ async function loadDashboardStats() {
             }
         } else {
             const lastUploadEl = document.getElementById('lastUploadDate');
-            if (lastUploadEl) lastUploadEl.textContent = 'Never';
+            if (lastUploadEl) lastUploadEl.textContent = 'Unavailable';
         }
     } catch (error) {
         const lastUploadEl = document.getElementById('lastUploadDate');
@@ -25,17 +31,18 @@ async function loadDashboardStats() {
 
 // ---------- LOAD QUICK OVERVIEW KPI STATS (Phase B2) ----------
 async function loadKpiStats() {
+    if (window.clientContextReady) await window.clientContextReady;
     try {
         const res = await window.ApiUtils.apiFetch('/api/dashboard/kpi-stats');
         if (res.ok) {
             const data = await res.json();
             document.getElementById('openQueries').textContent = data.open_queries ?? 0;
             document.getElementById('verificationProgress').textContent = `${data.verification_progress_pct ?? 0}%`;
-            document.getElementById('unresolvedErrors').textContent = data.unresolved_errors ?? 0;
+            document.getElementById('unresolvedErrors').textContent = data.unresolved_errors ?? 'Unavailable';
         } else {
-            document.getElementById('openQueries').textContent = '0';
-            document.getElementById('verificationProgress').textContent = '0%';
-            document.getElementById('unresolvedErrors').textContent = '0';
+            document.getElementById('openQueries').textContent = 'Unavailable';
+            document.getElementById('verificationProgress').textContent = 'Unavailable';
+            document.getElementById('unresolvedErrors').textContent = 'Unavailable';
         }
     } catch (error) {
         document.getElementById('openQueries').textContent = '⚠️';
@@ -83,16 +90,17 @@ function renderOverdueUploadsTable() {
     if (noData) noData.style.display = 'none';
     tbody.innerHTML = overdueUploadsData.map(item => `
         <tr>
-            <td style="padding:12px 16px; border-bottom:1px solid #f0f2f5;">${item.client_name}</td>
-            <td style="padding:12px 16px; border-bottom:1px solid #f0f2f5;">${item.template_name}</td>
-            <td style="padding:12px 16px; border-bottom:1px solid #f0f2f5;">${formatDate(item.last_upload_date)}</td>
-            <td style="padding:12px 16px; border-bottom:1px solid #f0f2f5;">${item.frequency}</td>
+            <td style="padding:12px 16px; border-bottom:1px solid #f0f2f5;">${dashboardEscape(item.client_name)}</td>
+            <td style="padding:12px 16px; border-bottom:1px solid #f0f2f5;">${dashboardEscape(item.template_name)}</td>
+            <td style="padding:12px 16px; border-bottom:1px solid #f0f2f5;">${dashboardEscape(formatDate(item.last_upload_date))}</td>
+            <td style="padding:12px 16px; border-bottom:1px solid #f0f2f5;">${dashboardEscape(item.frequency)}</td>
             <td style="padding:12px 16px; border-bottom:1px solid #f0f2f5;">${getOverdueSeverityBadge(item.days_overdue)}</td>
         </tr>
     `).join('');
 }
 
 async function loadOverdueUploads() {
+    if (window.clientContextReady) await window.clientContextReady;
     overdueUploadsError = false;
     try {
         const res = await window.ApiUtils.apiFetch('/api/dashboard/overdue-uploads');
@@ -120,6 +128,7 @@ function toggleOverdueUploadsPanel() {
 
 // ---------- LOAD DATABASE SIZE (Database Size Visibility, Phase A2) ----------
 async function loadDbSize() {
+    if (window.clientContextReady) await window.clientContextReady;
     const value = document.getElementById('dbSize');
     if (!value) return;
     value.title = 'Database files include current records, indexes, other modules and space available for reuse. Deleting records may not reduce this number immediately.';

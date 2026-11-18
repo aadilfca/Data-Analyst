@@ -381,6 +381,23 @@ builder.Services.AddSingleton<AuditPlatform.Api.StorageCleanup.StoragePurgeServi
 builder.Services.AddSingleton<AuditPlatform.Api.StorageCleanup.StorageArtifactCleanupService>();
 builder.Services.AddHostedService<AuditPlatform.Api.StorageCleanup.StorageCleanupWorker>();
 
+// P57 remains default-off; enabling reads never silently changes coexistence ownership.
+builder.Services.AddOptions<DashboardOptions>().Bind(builder.Configuration.GetSection(DashboardOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
+builder.Services.AddOptions<ErrorLogManagementOptions>().Bind(builder.Configuration.GetSection(ErrorLogManagementOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
+builder.Services.AddSingleton<AuditPlatform.Api.Dashboard.DashboardService>();
+builder.Services.AddSingleton<DiagnosticErrorManagementService>();
+foreach (var (method,path) in new[] {("GET","/api/dashboard/stats"),("GET","/api/dashboard/kpi-stats"),
+    ("GET","/api/dashboard/db-size"),("GET","/api/dashboard/overdue-uploads"),("GET","/api/error-logs"),
+    ("GET","/api/error-logs/stats"),("GET","/api/error-logs/{id:int}"),("PUT","/api/error-logs/{id:int}"),("DELETE","/api/error-logs/{id:int}")})
+{
+    bool errorRoute=path.StartsWith("/api/error-logs",StringComparison.Ordinal);
+    string section=errorRoute?ErrorLogManagementOptions.SectionName:DashboardOptions.SectionName;
+    bool own=builder.Configuration.GetValue<bool>(section+":Enabled") && builder.Configuration.GetValue<bool>(section+":RouteOwnershipEnabled")
+        && builder.Configuration.GetValue<bool>(ApplicationShellOptions.SectionName+":Enabled");
+    builder.Services.AddSingleton(new CoexistenceRoute("p57-"+method+"-"+path.Replace("/","-",StringComparison.Ordinal).Replace("{id:int}","id",StringComparison.Ordinal),method,path,
+        own?CoexistenceOwner.DotNet:CoexistenceOwner.Legacy,CoexistenceAccess.Authenticated));
+}
+
 var app = builder.Build();
 if(app.Services.GetRequiredService<IOptions<FinancialReportJobOptions>>().Value.Enabled
     && (!app.Services.GetRequiredService<IOptions<ReportInputOptions>>().Value.Enabled
@@ -513,12 +530,19 @@ if (app.Services.GetRequiredService<IOptions<ApplicationShellOptions>>().Value.E
 // registers no bridge routes and retains P07's default access block.
 _ = app.Services.GetRequiredService<CoexistenceRouteTable>();
 
+if ((app.Services.GetRequiredService<IOptions<DashboardOptions>>().Value.Enabled
+    || app.Services.GetRequiredService<IOptions<ErrorLogManagementOptions>>().Value.Enabled)
+    && (!app.Services.GetRequiredService<IOptions<ApplicationShellOptions>>().Value.Enabled
+        || !app.Services.GetRequiredService<IOptions<PostgresOptions>>().Value.Enabled))
+    throw new OptionsValidationException("P57",typeof(DashboardOptions),["Dashboard and error management require PostgreSQL and the authenticated workspace shell."]);
 app.UseMiddleware<ExceptionLoggingMiddleware>();
 app.UseRouting();
 app.UseMiddleware<SessionAuthenticationHandler>();
 app.UseWhen(context => context.RequestServices.GetRequiredService<IOptions<AuthenticationOptions>>().Value.Enabled
     && (context.Request.Path.StartsWithSegments("/api/auth")
     || context.Request.Path.StartsWithSegments("/api/storage-cleanup")
+    || context.Request.Path.StartsWithSegments("/api/dashboard")
+    || context.Request.Path.StartsWithSegments("/api/error-logs")
     || context.Request.Path.StartsWithSegments("/api/users")
     || context.Request.Path.StartsWithSegments("/api/clients")
     || context.Request.Path.StartsWithSegments("/api/settings")
