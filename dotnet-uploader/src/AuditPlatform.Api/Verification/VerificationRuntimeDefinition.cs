@@ -30,6 +30,47 @@ public sealed class VerificationBundleLineRequest : VerificationLineSaveRequest
     [JsonPropertyName("transaction_ref")] public string? TransactionRef { get; set; }
 }
 
+public sealed class VerificationFormSaveRequest
+{
+    [JsonPropertyName("voucher_line_id")] public int VoucherLineId { get; set; }
+    [JsonPropertyName("document_id")] public int DocumentId { get; set; }
+    [JsonPropertyName("entries")] public List<VerificationFormEntryInput> Entries { get; set; } = [];
+}
+public sealed class VerificationFormEntryInput
+{
+    [JsonPropertyName("bill_group_index")] public int BillGroupIndex { get; set; }
+    [JsonPropertyName("row_scope")] public string RowScope { get; set; } = "header";
+    [JsonPropertyName("sort_order")] public int SortOrder { get; set; } = -1;
+    [JsonPropertyName("values")] public List<VerificationFormValueInput> Values { get; set; } = [];
+}
+public sealed class VerificationFormValueInput
+{
+    [JsonPropertyName("field_id")] public int FieldId { get; set; }
+    [JsonPropertyName("value")] public JsonElement Value { get; set; }
+}
+public sealed class VerificationPhysicalBillSaveRequest
+{
+    [JsonPropertyName("voucher_line_id")] public int VoucherLineId { get; set; }
+    [JsonPropertyName("document_id")] public int DocumentId { get; set; }
+    [JsonPropertyName("bills")] public List<VerificationPhysicalBillInput> Bills { get; set; } = [];
+}
+public sealed class VerificationPhysicalBillInput
+{
+    [JsonPropertyName("bill_no")] public string? BillNo { get; set; }
+    [JsonPropertyName("bill_date")] public string? BillDate { get; set; }
+    [JsonPropertyName("vendor_name")] public string? VendorName { get; set; }
+    [JsonPropertyName("items")] public List<VerificationPhysicalBillItemInput> Items { get; set; } = [];
+}
+public sealed class VerificationPhysicalBillItemInput
+{
+    [JsonPropertyName("item_name")] public string? ItemName { get; set; }
+    [JsonPropertyName("quantity")] public JsonElement Quantity { get; set; }
+    [JsonPropertyName("rate")] public JsonElement Rate { get; set; }
+    [JsonPropertyName("source_document_row_id")] public int? SourceDocumentRowId { get; set; }
+    [JsonPropertyName("source_template")] public string? SourceTemplate { get; set; }
+}
+public sealed record VerificationSourcePreviewRequest([property: JsonPropertyName("source_type")] string SourceType);
+
 public sealed class VerificationVoucherCheckInput
 {
     [JsonPropertyName("check_id")] public int CheckId { get; set; }
@@ -103,6 +144,8 @@ public sealed class VerificationBundleSaveRequest
     [JsonPropertyName("observations")] public List<VerificationObservationInput> Observations { get; set; } = [];
     [JsonPropertyName("account_head_notes")] public List<VerificationAccountHeadNoteInput> AccountHeadNotes { get; set; } = [];
     [JsonPropertyName("voucher_line_correctness")] public List<VerificationLineCorrectnessInput> VoucherLineCorrectness { get; set; } = [];
+    [JsonPropertyName("form_entries")] public List<VerificationFormSaveRequest> FormEntries { get; set; } = [];
+    [JsonPropertyName("physical_bills")] public List<VerificationPhysicalBillSaveRequest> PhysicalBills { get; set; } = [];
 }
 
 public sealed record VerificationSaveAndVerifyRequest(

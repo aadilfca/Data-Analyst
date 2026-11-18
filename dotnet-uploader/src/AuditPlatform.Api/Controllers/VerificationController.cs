@@ -8,7 +8,8 @@ namespace AuditPlatform.Api.Controllers;
 
 [Route("api/verification")]
 public sealed class VerificationController(VerificationSessionService service, VerificationReviewService review,
-    VerificationEvidenceService evidence, IOptions<VerificationRuntimeOptions> options) : ControllerBase
+    VerificationEvidenceService evidence, VerificationFormService forms, VerificationPhysicalBillService physicalBills,
+    VerificationCrossCheckService crossChecks, IOptions<VerificationRuntimeOptions> options) : ControllerBase
 {
     private VerifiedSession? Session => HttpContext.Items[typeof(VerifiedSession)] as VerifiedSession;
 
@@ -155,6 +156,44 @@ public sealed class VerificationController(VerificationSessionService service, V
     [RequestSizeLimit(4194304)]
     public async Task<IActionResult> SaveBundle([FromBody] VerificationBundleSaveRequest? request, CancellationToken ct)
     { var blocked = Guard(); return blocked ?? Result(await review.SaveBundleAsync(Session, request!, ct)); }
+
+    [HttpGet("form_entries/{voucher_line_id:int}/{document_id:int}")]
+    public async Task<IActionResult> FormEntries(int voucher_line_id,int document_id,CancellationToken ct)
+    { var blocked=Guard();return blocked??Result(await forms.GetAsync(Session,voucher_line_id,document_id,ct)); }
+
+    [HttpPost("save_form_entries")]
+    [RequestSizeLimit(1048576)]
+    public async Task<IActionResult> SaveFormEntries([FromBody] VerificationFormSaveRequest? request,CancellationToken ct)
+    { var blocked=Guard();return blocked??Result(await forms.SaveAsync(Session,request!,ct)); }
+
+    [HttpGet("form_copy_sources/{voucher_line_id:int}/{document_id:int}")]
+    public async Task<IActionResult> FormCopySources(int voucher_line_id,int document_id,CancellationToken ct)
+    { var blocked=Guard();return blocked??Result(await forms.CopySourcesAsync(Session,voucher_line_id,document_id,ct)); }
+
+    [HttpGet("physical_bills/{voucher_line_id:int}")]
+    public async Task<IActionResult> PhysicalBills(int voucher_line_id,CancellationToken ct)
+    { var blocked=Guard();return blocked??Result(await physicalBills.GetAsync(Session,voucher_line_id,ct)); }
+
+    [HttpPost("save_physical_bill")]
+    [RequestSizeLimit(1048576)]
+    public async Task<IActionResult> SavePhysicalBill([FromBody] VerificationPhysicalBillSaveRequest? request,CancellationToken ct)
+    { var blocked=Guard();return blocked??Result(await physicalBills.SaveAsync(Session,request!,ct)); }
+
+    [HttpGet("physical_bill_source_preview/{client_data_id:int}")]
+    public async Task<IActionResult> PhysicalBillSourcePreview(int client_data_id,[FromQuery]string source_type,CancellationToken ct)
+    { var blocked=Guard();return blocked??Result(await physicalBills.PreviewAsync(Session,client_data_id,source_type,ct)); }
+
+    [HttpGet("cross_check_results/{voucher_line_id:int}")]
+    public async Task<IActionResult> CrossCheckResults(int voucher_line_id,CancellationToken ct)
+    { var blocked=Guard();return blocked??Result(await crossChecks.GetAsync(Session,voucher_line_id,ct)); }
+
+    [HttpGet("voucher_support_data/{voucher_line_id:int}")]
+    public async Task<IActionResult> VoucherSupportData(int voucher_line_id,CancellationToken ct)
+    { var blocked=Guard();return blocked??Result(await evidence.GetVoucherSupportAsync(Session,voucher_line_id,ct)); }
+
+    [HttpGet("procedure_modal_data/{voucher_line_id:int}")]
+    public async Task<IActionResult> ProcedureModalData(int voucher_line_id,CancellationToken ct)
+    { var blocked=Guard();return blocked??Result(await evidence.GetProcedureModalAsync(Session,voucher_line_id,crossChecks,ct)); }
 
     [HttpPost("verify_voucher_checks")]
     [RequestSizeLimit(1024)]

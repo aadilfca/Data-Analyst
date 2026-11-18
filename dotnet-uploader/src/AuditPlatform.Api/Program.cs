@@ -158,6 +158,9 @@ builder.Services.AddOptions<VerificationRuntimeOptions>()
 builder.Services.AddSingleton<VerificationSessionService>();
 builder.Services.AddSingleton<VerificationStatusService>();
 builder.Services.AddSingleton<VerificationEvidenceService>();
+builder.Services.AddSingleton<VerificationFormService>();
+builder.Services.AddSingleton<VerificationPhysicalBillService>();
+builder.Services.AddSingleton<VerificationCrossCheckService>();
 builder.Services.AddSingleton<VerificationReviewService>();
 builder.Services.AddOptions<ReconciliationSetupOptions>()
     .Bind(builder.Configuration.GetSection(ReconciliationSetupOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
@@ -248,7 +251,16 @@ foreach (var route in new[]
     ("verification-procedure-checks-get", "GET", "/api/verification/procedure_checks/{voucher_line_id:int}"),
     ("verification-procedure-check-set", "POST", "/api/verification/procedure_checks"),
     ("verification-observations-get", "GET", "/api/verification/line_observations/{voucher_line_id:int}"),
-    ("verification-observation-save", "POST", "/api/verification/save_line_observation")
+    ("verification-observation-save", "POST", "/api/verification/save_line_observation"),
+    ("verification-form-get", "GET", "/api/verification/form_entries/{voucher_line_id:int}/{document_id:int}"),
+    ("verification-form-save", "POST", "/api/verification/save_form_entries"),
+    ("verification-form-copy-sources", "GET", "/api/verification/form_copy_sources/{voucher_line_id:int}/{document_id:int}"),
+    ("verification-physical-bills-get", "GET", "/api/verification/physical_bills/{voucher_line_id:int}"),
+    ("verification-physical-bills-save", "POST", "/api/verification/save_physical_bill"),
+    ("verification-physical-bill-source-preview", "GET", "/api/verification/physical_bill_source_preview/{client_data_id:int}"),
+    ("verification-cross-check-results", "GET", "/api/verification/cross_check_results/{voucher_line_id:int}"),
+    ("verification-voucher-support", "GET", "/api/verification/voucher_support_data/{voucher_line_id:int}"),
+    ("verification-procedure-modal", "GET", "/api/verification/procedure_modal_data/{voucher_line_id:int}")
 })
     builder.Services.AddSingleton(new CoexistenceRoute(route.Item1, route.Item2, route.Item3,
         verificationOwner, CoexistenceAccess.Authenticated));

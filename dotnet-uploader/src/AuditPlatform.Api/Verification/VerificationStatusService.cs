@@ -69,20 +69,20 @@ public sealed class VerificationStatusService
             throw new InvalidOperationException("The current Audit Rules snapshot is unavailable. Rebuild Audit Rules before saving verification work.");
         string appliedHash = AppliedRulesetHash(profile, categorySnapshot.EvaluationFingerprint, globalFingerprint);
 
-        var siblingIds = await ReadSiblingIdsAsync(db, detailId, clientDataId, ct);
-        var links = await ReadEvidenceLinksAsync(db, siblingIds, ct);
+        var siblingIds = await ReadSiblingIdsAsync(db, detailId, clientDataId, owner.ClientId, ct);
+        var links = await ReadEvidenceLinksAsync(db, owner.TenantId, siblingIds, owner.ClientId, ct);
         // Python's evaluator treats every active Document compiled into the Category snapshot
         // as part of the evidence gate, regardless of the editor's display-only required flag.
         var categoryDocuments = ArrayProperty(profile, "documents").ToArray();
-        bool documentsOk = await RequiredDocumentsCompleteAsync(db, siblingIds, categoryDocuments,
+        bool documentsOk = await RequiredDocumentsCompleteAsync(db, owner.TenantId, siblingIds, categoryDocuments,
             ProcedureRoles(profile), Numeric(extractAmountText), ct);
-        bool voucherChecksOk = await VoucherChecksCompleteAsync(db, owner.ClientId, transactionRef,
+        bool voucherChecksOk = await VoucherChecksCompleteAsync(db, owner.TenantId, owner.ClientId, transactionRef,
             owner.Rulebook, ct);
         bool signaturesOk = !links.Any(link => link.SignatureException);
-        bool crossChecksOk = await CrossChecksPassAsync(db, rowData, links, siblingIds, profile, Numeric(extractAmountText), ct);
-        bool accountHeadOk = !await HasLatestObservationTextAsync(db, siblingIds,
+        bool crossChecksOk = await CrossChecksPassAsync(db, owner.TenantId, rowData, links, siblingIds, profile, Numeric(extractAmountText), ct);
+        bool accountHeadOk = !await HasLatestObservationTextAsync(db, owner.TenantId, siblingIds,
             "[System] Account Head Recommendation", -1, ct);
-        bool correctnessOk = await HasLatestObservationTextAsync(db, siblingIds,
+        bool correctnessOk = await HasLatestObservationTextAsync(db, owner.TenantId, siblingIds,
             "[System] Voucher Line Correctness", -2, ct, requiredText: "correct");
         string cleared = documentsOk && voucherChecksOk && signaturesOk && crossChecksOk && accountHeadOk && correctnessOk
             ? "Cleared" : "Query";
@@ -135,27 +135,27 @@ public sealed class VerificationStatusService
         return (null, null);
     }
 
-    private static async Task<int[]> ReadSiblingIdsAsync(PostgresTransactionContext db, int lineId, int clientDataId, CancellationToken ct)
+    private static async Task<int[]> ReadSiblingIdsAsync(PostgresTransactionContext db, int lineId, int clientDataId, int clientId, CancellationToken ct)
     {
         var ids = new List<int>();
-        await using var command = db.CreateCommand("SELECT id FROM public.verification_details WHERE client_data_id=$1 ORDER BY id");
-        command.Parameters.AddWithValue(clientDataId); await using var reader = await command.ExecuteReaderAsync(ct);
+        await using var command = db.CreateCommand("SELECT d.id FROM public.verification_details d JOIN public.verification_sessions s ON s.id=d.session_id AND s.client_id=$2 JOIN public.client_data c ON c.id=d.client_data_id AND c.client_id=s.client_id WHERE d.client_data_id=$1 ORDER BY d.id");
+        command.Parameters.AddWithValue(clientDataId);command.Parameters.AddWithValue(clientId); await using var reader = await command.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct)) ids.Add(reader.GetInt32(0));
         return ids.Count == 0 ? [lineId] : ids.ToArray();
     }
 
-    private static async Task<List<EvidenceLink>> ReadEvidenceLinksAsync(PostgresTransactionContext db, int[] siblings, CancellationToken ct)
+    private static async Task<List<EvidenceLink>> ReadEvidenceLinksAsync(PostgresTransactionContext db, int tenantId, int[] siblings, int clientId, CancellationToken ct)
     {
         var result = new List<EvidenceLink>();
         if (siblings.Length == 0) return result;
-        await using var command = db.CreateCommand("SELECT document_id,client_data_id,signature_exception FROM public.voucher_line_documents WHERE voucher_line_id=ANY($1) AND status='active'");
-        command.Parameters.AddWithValue(siblings);
+        await using var command = db.CreateCommand("SELECT v.document_id,v.client_data_id,v.signature_exception FROM public.voucher_line_documents v JOIN public.client_data c ON c.id=v.client_data_id AND c.client_id=$3 AND c.is_deleted IS FALSE WHERE v.rulebook_source='native' AND v.tenant_id=$1 AND v.voucher_line_id=ANY($2) AND v.status='active'");
+        command.Parameters.AddWithValue(tenantId);command.Parameters.AddWithValue(siblings);command.Parameters.AddWithValue(clientId);
         await using var reader = await command.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct)) result.Add(new(reader.GetInt32(0), reader.GetInt32(1), !reader.IsDBNull(2) && reader.GetBoolean(2)));
         return result;
     }
 
-    private static async Task<bool> RequiredDocumentsCompleteAsync(PostgresTransactionContext db, int[] siblings,
+    private static async Task<bool> RequiredDocumentsCompleteAsync(PostgresTransactionContext db, int tenantId, int[] siblings,
         JsonElement[] documents, IReadOnlyDictionary<int, string[]> procedureRoles, double? voucherAmount, CancellationToken ct)
     {
         foreach (var document in documents)
@@ -165,40 +165,40 @@ public sealed class VerificationStatusService
             int? template = Int(document, "template_id");
             if (type == "physical_bill")
             {
-                if (!await PhysicalBillCompleteAsync(db, siblings, id, voucherAmount, ct)) return false;
+                if (!await PhysicalBillCompleteAsync(db, tenantId, siblings, id, voucherAmount, ct)) return false;
             }
             else if (type == "form")
             {
-                bool formComplete = await FormCompleteAsync(db, siblings, document, voucherAmount, ct);
+                bool formComplete = await FormCompleteAsync(db, tenantId, siblings, document, voucherAmount, ct);
                 if (!formComplete) return false;
                 if (procedureRoles.TryGetValue(id, out var formRoles) && formRoles.Length > 0
-                    && !await RolesCompleteAsync(db, siblings, id, formRoles, ct)) return false;
+                    && !await RolesCompleteAsync(db, tenantId, siblings, id, formRoles, ct)) return false;
             }
             else if (template is not null)
             {
-                if (!await LinkedAsync(db, siblings, id, ct)) return false;
+                if (!await LinkedAsync(db, tenantId, siblings, id, ct)) return false;
             }
             else
             {
                 if (!procedureRoles.TryGetValue(id, out var roles) || roles.Length == 0
-                    || !await RolesCompleteAsync(db, siblings, id, roles, ct)) return false;
+                    || !await RolesCompleteAsync(db, tenantId, siblings, id, roles, ct)) return false;
             }
         }
         return true;
     }
 
-    private static async Task<bool> LinkedAsync(PostgresTransactionContext db, int[] siblings, int documentId, CancellationToken ct)
+    private static async Task<bool> LinkedAsync(PostgresTransactionContext db, int tenantId, int[] siblings, int documentId, CancellationToken ct)
     {
-        await using var command = db.CreateCommand("SELECT EXISTS(SELECT 1 FROM public.voucher_line_documents WHERE voucher_line_id=ANY($1) AND document_id=$2 AND status='active')");
-        command.Parameters.AddWithValue(siblings); command.Parameters.AddWithValue(documentId);
+        await using var command = db.CreateCommand("SELECT EXISTS(SELECT 1 FROM public.voucher_line_documents WHERE rulebook_source='native' AND tenant_id=$1 AND voucher_line_id=ANY($2) AND document_id=$3 AND status='active')");
+        command.Parameters.AddWithValue(tenantId); command.Parameters.AddWithValue(siblings); command.Parameters.AddWithValue(documentId);
         return (bool)(await command.ExecuteScalarAsync(ct) ?? false);
     }
 
-    private static async Task<bool> RolesCompleteAsync(PostgresTransactionContext db, int[] siblings, int documentId, string[] roles, CancellationToken ct)
+    private static async Task<bool> RolesCompleteAsync(PostgresTransactionContext db, int tenantId, int[] siblings, int documentId, string[] roles, CancellationToken ct)
     {
         var latest = new Dictionary<string, (DateTimeOffset? At, bool Checked)>(StringComparer.Ordinal);
-        await using var command = db.CreateCommand("SELECT role_name,is_checked,checked_at FROM public.voucher_line_procedure_checks WHERE voucher_line_id=ANY($1) AND document_id=$2");
-        command.Parameters.AddWithValue(siblings); command.Parameters.AddWithValue(documentId);
+        await using var command = db.CreateCommand("SELECT role_name,is_checked,checked_at FROM public.voucher_line_procedure_checks WHERE rulebook_source='native' AND tenant_id=$1 AND voucher_line_id=ANY($2) AND document_id=$3");
+        command.Parameters.AddWithValue(tenantId); command.Parameters.AddWithValue(siblings); command.Parameters.AddWithValue(documentId);
         await using var reader = await command.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
@@ -210,22 +210,22 @@ public sealed class VerificationStatusService
         return roles.All(role => latest.TryGetValue(role, out var state) && state.Checked);
     }
 
-    private static async Task<bool> PhysicalBillCompleteAsync(PostgresTransactionContext db, int[] siblings, int documentId, double? voucherAmount, CancellationToken ct)
+    private static async Task<bool> PhysicalBillCompleteAsync(PostgresTransactionContext db, int tenantId, int[] siblings, int documentId, double? voucherAmount, CancellationToken ct)
     {
         if (voucherAmount is null) return false;
         double total = 0; int bills = 0;
         await using var command = db.CreateCommand("""
             WITH winning AS (
                 SELECT voucher_line_id FROM public.voucher_line_physical_bills
-                WHERE voucher_line_id=ANY($1) AND document_id=$2
+                WHERE rulebook_source='native' AND tenant_id=$1 AND voucher_line_id=ANY($2) AND document_id=$3
                 ORDER BY updated_at DESC,voucher_line_id DESC LIMIT 1
             )
             SELECT b.id,b.bill_no,b.bill_date,b.vendor_name,i.amount
             FROM public.voucher_line_physical_bills b LEFT JOIN public.voucher_line_physical_bill_items i ON i.bill_id=b.id
-            WHERE b.voucher_line_id=(SELECT voucher_line_id FROM winning) AND b.document_id=$2
+            WHERE b.rulebook_source='native' AND b.tenant_id=$1 AND b.voucher_line_id=(SELECT voucher_line_id FROM winning) AND b.document_id=$3
             ORDER BY b.sort_order,b.id,i.sort_order,i.id
             """);
-        command.Parameters.AddWithValue(siblings); command.Parameters.AddWithValue(documentId);
+        command.Parameters.AddWithValue(tenantId); command.Parameters.AddWithValue(siblings); command.Parameters.AddWithValue(documentId);
         await using var reader = await command.ExecuteReaderAsync(ct);
         int current = -1; bool headerOk = true; int items = 0;
         while (await reader.ReadAsync(ct))
@@ -245,7 +245,7 @@ public sealed class VerificationStatusService
         return Math.Abs(total - voucherAmount.Value) <= 0.005d;
     }
 
-    private static async Task<bool> FormCompleteAsync(PostgresTransactionContext db, int[] siblings, JsonElement document,
+    private static async Task<bool> FormCompleteAsync(PostgresTransactionContext db, int tenantId, int[] siblings, JsonElement document,
         double? voucherAmount, CancellationToken ct)
     {
         var fields = ArrayProperty(document, "form_fields").ToArray();
@@ -253,13 +253,14 @@ public sealed class VerificationStatusService
         var fieldIds = fields.Select(field => Int(field, "id")).Where(id => id.HasValue).Select(id => id!.Value).ToHashSet();
         var rows = new List<(int LineId, DateTime Updated, int Group, string Scope, int Sort, int FieldId, string Type, string? Text, double? Number, DateTime? Date, bool HasValue)>();
         await using (var command = db.CreateCommand("""
-            SELECT e.voucher_line_id,e.updated_at,e.bill_group_index,e.row_scope,e.sort_order,f.id,f.field_type,v.value_text,v.value_numeric,v.value_date
+            SELECT e.voucher_line_id,e.updated_at,e.bill_group_index,e.row_scope,e.sort_order,(f->>'id')::int,f->>'field_type',v.value_text,v.value_numeric,v.value_date
             FROM public.voucher_line_form_entries e JOIN public.voucher_line_form_values v ON v.entry_id=e.id
-            JOIN public.audit_rule_document_fields f ON f.id=v.field_id
-            WHERE e.voucher_line_id=ANY($1) AND e.document_id=$2 AND f.id=ANY($3)
+            JOIN public.platform_audit_rule_entities d ON d.tenant_id=e.tenant_id AND d.entity_kind='documents' AND d.id=e.document_id
+            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(d.definition->'form_fields','[]'::jsonb)) f
+            WHERE e.rulebook_source='native' AND e.tenant_id=$1 AND e.voucher_line_id=ANY($2) AND e.document_id=$3 AND (f->>'id')::int=v.field_id AND (f->>'id')::int=ANY($4)
             """))
         {
-            command.Parameters.AddWithValue(siblings); command.Parameters.AddWithValue(Int(document, "document_id") ?? 0);
+            command.Parameters.AddWithValue(tenantId); command.Parameters.AddWithValue(siblings); command.Parameters.AddWithValue(Int(document, "document_id") ?? 0);
             command.Parameters.AddWithValue(fieldIds.ToArray()); await using var reader = await command.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))
             {
@@ -302,35 +303,35 @@ public sealed class VerificationStatusService
         return label is "amount" or "billamount" or "totalamount" || String(field, "field_type") == "arithmetic_multiply" && label == "total";
     }
 
-    private static async Task<bool> VoucherChecksCompleteAsync(PostgresTransactionContext db, int clientId, string? transactionRef,
+    private static async Task<bool> VoucherChecksCompleteAsync(PostgresTransactionContext db, int tenantId, int clientId, string? transactionRef,
         JsonElement rulebook, CancellationToken ct)
     {
         var checks = ArrayProperty(rulebook, "voucher_checks").Select(check => Int(check, "id")).Where(id => id.HasValue).Select(id => id!.Value).ToArray();
         if (checks.Length == 0) return true;
         if (string.IsNullOrWhiteSpace(transactionRef)) return false;
-        await using var command = db.CreateCommand("SELECT check_id FROM public.voucher_check_status WHERE client_id=$1 AND transaction_ref=$2 AND state='done'");
-        command.Parameters.AddWithValue(clientId); command.Parameters.AddWithValue(transactionRef);
+        await using var command = db.CreateCommand("SELECT check_id FROM public.voucher_check_status WHERE rulebook_source='native' AND tenant_id=$1 AND client_id=$2 AND transaction_ref=$3 AND state='done'");
+        command.Parameters.AddWithValue(tenantId); command.Parameters.AddWithValue(clientId); command.Parameters.AddWithValue(transactionRef);
         await using var reader = await command.ExecuteReaderAsync(ct); var done = new HashSet<int>();
         while (await reader.ReadAsync(ct)) done.Add(reader.GetInt32(0));
         return checks.All(done.Contains);
     }
 
-    private static async Task<bool> HasLatestObservationTextAsync(PostgresTransactionContext db, int[] siblings,
+    private static async Task<bool> HasLatestObservationTextAsync(PostgresTransactionContext db, int tenantId, int[] siblings,
         string systemName, int fallbackDocumentId, CancellationToken ct, string? requiredText = null)
     {
         await using var command = db.CreateCommand("""
             SELECT o.observation_text,o.updated_at FROM public.voucher_line_observations o
-            LEFT JOIN public.audit_rule_documents d ON d.id=o.document_id
-            WHERE o.voucher_line_id=ANY($1) AND (o.document_id=$2 OR d.name=$3)
+            LEFT JOIN public.platform_audit_rule_entities d ON d.tenant_id=o.tenant_id AND d.entity_kind='documents' AND d.id=o.document_id
+            WHERE o.rulebook_source='native' AND o.tenant_id=$1 AND o.voucher_line_id=ANY($2) AND (o.document_id=$3 OR d.definition->>'name'=$4)
             ORDER BY o.updated_at DESC,o.id DESC LIMIT 1
             """);
-        command.Parameters.AddWithValue(siblings); command.Parameters.AddWithValue(fallbackDocumentId); command.Parameters.AddWithValue(systemName);
+        command.Parameters.AddWithValue(tenantId); command.Parameters.AddWithValue(siblings); command.Parameters.AddWithValue(fallbackDocumentId); command.Parameters.AddWithValue(systemName);
         var value = await command.ExecuteScalarAsync(ct);
         string? text = value is DBNull or null ? null : Convert.ToString(value, CultureInfo.InvariantCulture);
         return requiredText is null ? !string.IsNullOrWhiteSpace(text) : string.Equals(text?.Trim(), requiredText, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static async Task<bool> CrossChecksPassAsync(PostgresTransactionContext db, JsonElement rowData,
+    private static async Task<bool> CrossChecksPassAsync(PostgresTransactionContext db, int tenantId, JsonElement rowData,
         IReadOnlyList<EvidenceLink> links, int[] siblingIds, JsonElement profile, double? voucherAmount, CancellationToken ct)
     {
         var linked = links.GroupBy(link => link.DocumentId).ToDictionary(group => group.Key, group => group.Select(item => item.ClientDataId).Distinct().ToArray());
@@ -341,7 +342,7 @@ public sealed class VerificationStatusService
             var matrix = Prop(rule, "matrix");
             if (matrix.ValueKind == JsonValueKind.Object)
             {
-                if (!await MatrixCrossCheckPassesAsync(db, rule, matrix, linked, siblingIds, voucherAmount, ct)) return false;
+                if (!await MatrixCrossCheckPassesAsync(db, tenantId, rule, matrix, linked, siblingIds, voucherAmount, ct)) return false;
                 continue;
             }
             string? field = String(rule, "compare_field");
@@ -352,11 +353,11 @@ public sealed class VerificationStatusService
                 int id = Int(doc, "document_id") ?? 0;
                 bool manual = String(doc, "document_type") is "form" or "physical_bill";
                 bool isLinked = linked.TryGetValue(id, out var dataIds) && dataIds.Length > 0;
-                if (manual) isLinked = await ManualEvidenceExistsAsync(db, siblingIds, id, String(doc, "document_type")!, ct);
+                if (manual) isLinked = await ManualEvidenceExistsAsync(db, tenantId, siblingIds, id, String(doc, "document_type")!, ct);
                 double? sum = null;
                 if (isLinked && field is not null)
                 {
-                    var rowValues = await ReadDocumentFieldValuesAsync(db, doc, id, manual ? siblingIds : dataIds!, field, ct);
+                    var rowValues = await ReadDocumentFieldValuesAsync(db, tenantId, doc, id, manual ? siblingIds : dataIds!, field, ct);
                     if (rowValues.Count > 0) sum = rowValues.Sum();
                 }
                 chain.Add((doc, String(doc, "name") ?? "Document", isLinked, sum));
@@ -394,6 +395,58 @@ public sealed class VerificationStatusService
         return true;
     }
 
+    internal async Task<object> DetailedCrossChecksAsync(PostgresTransactionContext db, int detailId,
+        VerificationReviewContext owner, CancellationToken ct)
+    {
+        int clientDataId; int? categoryId; string? categoryName; string rowText; string? amountText;
+        await using(var command=db.CreateCommand("SELECT vd.client_data_id,vd.category_id_applied,vd.category_name_applied,cd.row_data::text,cd.extract_amount::text FROM public.verification_details vd JOIN public.verification_sessions s ON s.id=vd.session_id AND s.client_id=$2 JOIN public.client_data cd ON cd.id=vd.client_data_id AND cd.client_id=s.client_id WHERE vd.id=$1 AND vd.range_status='active'"))
+        {command.Parameters.AddWithValue(detailId);command.Parameters.AddWithValue(owner.ClientId);await using var reader=await command.ExecuteReaderAsync(ct);if(!await reader.ReadAsync(ct))return new{voucher_line_id=detailId,category_id=(int?)null,category_name=(string?)null,evaluated=false,reason="Voucher line not found.",summary=new{passed=0,failed=0,shortfall=0,not_evaluated=0},results=Array.Empty<object>()};clientDataId=reader.GetInt32(0);categoryId=reader.IsDBNull(1)?null:reader.GetInt32(1);categoryName=reader.IsDBNull(2)?null:reader.GetString(2);rowText=reader.GetString(3);amountText=reader.IsDBNull(4)?null:reader.GetString(4);}
+        using var rowDoc=JsonDocument.Parse(rowText);var rowData=rowDoc.RootElement;
+        if(categoryId is null){string? code=AccountCode(rowData);if(string.IsNullOrWhiteSpace(code))return new{voucher_line_id=detailId,category_id=(int?)null,category_name=(string?)null,evaluated=false,reason="No account code on this line - Category unresolvable.",summary=new{passed=0,failed=0,shortfall=0,not_evaluated=0},results=Array.Empty<object>()};(categoryId,categoryName)=await ResolveCategoryAsync(db,owner.TenantId,owner.ClientId,code,ct);}
+        if(categoryId is null)return new{voucher_line_id=detailId,category_id=(int?)null,category_name=(string?)null,evaluated=false,reason="This line's account code has no active Category assigned.",summary=new{passed=0,failed=0,shortfall=0,not_evaluated=0},results=Array.Empty<object>()};
+        JsonElement profile=FindCategory(owner.Rulebook,categoryId.Value);if(profile.ValueKind!=JsonValueKind.Object)return new{voucher_line_id=detailId,category_id=categoryId,category_name=categoryName,evaluated=false,reason="Category is not present in this session's frozen Rulebook.",summary=new{passed=0,failed=0,shortfall=0,not_evaluated=0},results=Array.Empty<object>()};
+        int[] siblings=await ReadSiblingIdsAsync(db,detailId,clientDataId,owner.ClientId,ct);var links=await ReadEvidenceLinksAsync(db,owner.TenantId,siblings,owner.ClientId,ct);var linked=links.GroupBy(x=>x.DocumentId).ToDictionary(g=>g.Key,g=>g.Select(x=>x.ClientDataId).Distinct().ToArray());double? amount=Numeric(amountText);
+        var results=new List<object>();int passed=0,failed=0,shortfall=0,notEvaluated=0;
+        foreach(var rule in ArrayProperty(profile,"cross_checks"))
+        {
+            var one=JsonSerializer.SerializeToElement(new{cross_checks=new[]{rule}});bool ok=await CrossChecksPassAsync(db,owner.TenantId,rowData,links,siblings,one,amount,ct);
+            var docs=ArrayProperty(rule,"document_chain").OrderBy(d=>Int(d,"sort_order")??0).ToArray();var matrix=Prop(rule,"matrix");
+            var chain=new List<object>();bool anyMissing=false;var matrixFields=new List<object>();var failures=new List<string>();var shortfalls=new List<object>();bool hasNotEvaluated=false;
+            foreach(var doc in docs){int id=Int(doc,"document_id")??0;string type=String(doc,"document_type")??"linked_template";bool manual=type is"form" or"physical_bill";int[] evidenceIds=manual?siblings:linked.GetValueOrDefault(id)??[];string? field=String(rule,"compare_field");var values=manual?field is null?[]:await ReadDocumentFieldValuesAsync(db,owner.TenantId,doc,id,evidenceIds,field,ct):field is null?[]:await ReadEvidenceValuesAsync(db,evidenceIds,field,ct);double? value=values.Count>0?values.Sum():null;bool exists=manual?values.Count>0:evidenceIds.Length>0;if(!exists)anyMissing=true;chain.Add(new{document_id=id,document_name=String(doc,"name")??"Document",sort_order=Int(doc,"sort_order")??0,document_type=type,linked=exists,value,row_count=values.Count});}
+            var matrixDocValues=new Dictionary<int,(double Value,int Count)>();
+            if(matrix.ValueKind==JsonValueKind.Object)
+            {
+                var matrixDocs=ArrayProperty(matrix,"documents").OrderBy(d=>Int(d,"sort_order")??0).ToArray();
+                foreach(var fieldConfig in ArrayProperty(matrix,"fields"))
+                {
+                    JsonElement cells=Prop(fieldConfig,"cells");string? op=String(fieldConfig,"operator")??"=";bool blocking=Bool(fieldConfig,"blocking");string behavior=String(fieldConfig,"missing_data_behavior")??"not_configured";string risk=String(fieldConfig,"risk")??"Medium";int sort=Int(fieldConfig,"sort_order")??0;var values=new List<object>();var numbers=new List<double?>();int configured=0;string rowStatus="not_evaluated";string rowMessage="";
+                    foreach(var document in matrixDocs)
+                    {
+                        int id=Int(document,"document_id")??0;if(!TryField(cells,id.ToString(CultureInfo.InvariantCulture),out var col)||col.ValueKind!=JsonValueKind.String)continue;configured++;
+                        bool manual=String(document,"document_type") is "form" or "physical_bill";int[] sourceIds=manual?siblings:linked.GetValueOrDefault(id)??[];bool linkedOk=manual?await ManualEvidenceExistsAsync(db,owner.TenantId,siblings,id,String(document,"document_type")!,ct):sourceIds.Length>0;
+                        var read=linkedOk?(manual?await ReadDocumentFieldValuesAsync(db,owner.TenantId,document,id,sourceIds,col.GetString()!,ct):await ReadEvidenceValuesAsync(db,sourceIds,col.GetString()!,ct)):[];double? value=read.Count==0?null:read.Sum();numbers.Add(value);if(!value.HasValue)anyMissing=true;
+                        values.Add(new{document_id=id,document_name=String(document,"name")??"Document",field_name=col.GetString(),value,row_count=read.Count,linked=linkedOk});if(value.HasValue&&!matrixDocValues.ContainsKey(id))matrixDocValues[id]=(value.Value,read.Count);
+                    }
+                    double tolerance=TryField(fieldConfig,"tolerance",out var tolJson)&&TryDouble(tolJson,out var tolValue)?tolValue:0;
+                    if(configured<2){hasNotEvaluated=true;rowMessage="At least two document fields are required.";}
+                    else if(numbers.Any(n=>!n.HasValue)){rowMessage="One or more selected fields are missing or not linked.";if(behavior is "not_configured" or "not_linked")hasNotEvaluated=true;else if(blocking){rowStatus="fail";failures.Add($"Matrix row {sort+1}: {rowMessage}");}else{rowStatus="shortfall";shortfalls.Add(new{row_id=Int(fieldConfig,"id"),message=rowMessage,risk});}}
+                    else{bool rowFailed=numbers.Zip(numbers.Skip(1),(a,b)=>op switch{"="=>Math.Abs(a!.Value-b!.Value)>tolerance+0.005d,"!="=>Math.Abs(a!.Value-b!.Value)<=tolerance+0.005d,">="=>a!.Value<b!.Value-tolerance-0.005d,"<="=>a!.Value>b!.Value+tolerance+0.005d,">"=>a!.Value<=b!.Value+tolerance+0.005d,"<"=>a!.Value>=b!.Value-tolerance-0.005d,_=>false}).Any(x=>x);if(rowFailed){rowMessage="Configured matrix values do not satisfy the selected operator.";if(blocking){rowStatus="fail";failures.Add($"Matrix row {sort+1}: {rowMessage}");}else{rowStatus="shortfall";shortfalls.Add(new{row_id=Int(fieldConfig,"id"),message=rowMessage,risk});}}else{rowStatus="pass";rowMessage="Condition passed.";}}
+                    matrixFields.Add(new{field_id=Int(fieldConfig,"id"),sort_order=sort,operator_type=op,tolerance,missing_data_behavior=behavior,blocking,risk,cells,values,status=rowStatus,message=rowMessage});
+                }
+                chain.Clear();foreach(var document in matrixDocs){int id=Int(document,"document_id")??0;bool has=matrixDocValues.TryGetValue(id,out var value);chain.Add(new{document_id=id,document_name=String(document,"name")??"Document",sort_order=Int(document,"sort_order")??0,linked=linked.GetValueOrDefault(id)?.Length>0||has,value=has?(double?)value.Value:null,row_count=has?value.Count:0});}
+            }
+            string comparison=String(rule,"comparison_type")??"all_equal";var comparable=chain.Select((raw,i)=>(raw,i)).Where(x=>{var v=Prop(JsonSerializer.SerializeToElement(x.raw),"value");var linkedFlag=Prop(JsonSerializer.SerializeToElement(x.raw),"linked");return linkedFlag.ValueKind==JsonValueKind.True&&v.ValueKind==JsonValueKind.Number;}).Select(x=>JsonSerializer.SerializeToElement(x.raw)).ToArray();
+            double? anchorValue=null;string? anchorName=null;int? anchorId=null;foreach(var raw in chain.AsEnumerable().Reverse()){using var j=JsonDocument.Parse(JsonSerializer.Serialize(raw));var root=j.RootElement;if(root.TryGetProperty("value",out var v)&&v.ValueKind==JsonValueKind.Number&&((matrix.ValueKind==JsonValueKind.Object)||(root.TryGetProperty("linked",out var isLinked)&&isLinked.GetBoolean()))){anchorValue=v.GetDouble();anchorName=root.GetProperty("document_name").GetString();anchorId=root.GetProperty("document_id").GetInt32();break;}}
+            object? voucherComparison=null;if(Bool(rule,"compare_to_voucher_line")){bool? match=anchorValue.HasValue&&amount.HasValue?Math.Abs(anchorValue.Value-amount.Value)<=0.005d:null;voucherComparison=new{anchor_value=anchorValue,voucher_amount=amount,match};if(match is false)failures.Add($"{anchorName} {String(rule,"compare_field")} {anchorValue:g} does not equal the voucher line amount {amount:g}");}
+            if(matrix.ValueKind!=JsonValueKind.Object&&comparable.Length>=2){var nums=comparable.Select(e=>e.GetProperty("value").GetDouble()).ToArray();string field=String(rule,"compare_field")??"value";for(int i=1;i<nums.Length;i++){double prior=nums[i-1],next=nums[i];string priorName=comparable[i-1].GetProperty("document_name").GetString()??"Document",nextName=comparable[i].GetProperty("document_name").GetString()??"Document";if(comparison is"All equal" or"Must be equal"){if(Math.Abs(next-prior)>0.005d)failures.Add($"{nextName} {field} {next:g} does not equal {priorName} {prior:g}");}else if(comparison=="Sequential increasing"&&next<=prior+0.005d)failures.Add($"{nextName} {field} {next:g} is not greater than {priorName} {prior:g}");else if(comparison=="Sequential decreasing"&&next>=prior-0.005d)failures.Add($"{nextName} {field} {next:g} is not less than {priorName} {prior:g}");else if(comparison=="May be less, never more"){if(next>prior+0.005d)failures.Add($"{nextName} {field} {next:g} exceeds {priorName} {prior:g}");else if(next<prior-0.005d)shortfalls.Add(new{from_document=priorName,to_document=nextName,from_value=prior,to_value=next,difference=prior-next});}else if(comparison=="Within tolerance %"){double allowed=Math.Abs(prior)*0.05d;if(Math.Abs(prior)<=0.005d?Math.Abs(next-prior)>0.005d:Math.Abs(next-prior)>allowed+0.005d)failures.Add($"{nextName} {field} {next:g} is outside the 5% tolerance from {priorName} {prior:g}");}}}
+            if(!ok&&failures.Count==0&&shortfalls.Count==0)failures.Add("Configured evidence values do not satisfy this Cross-check.");
+            string status=failures.Count>0?"fail":shortfalls.Count>0?"shortfall":matrix.ValueKind==JsonValueKind.Object?(hasNotEvaluated||matrixFields.Count==0?"not_evaluated":"pass"):(comparable.Length>=2||voucherComparison is not null?"pass":"not_evaluated");string message=status switch{"fail"=>string.Join("; ",failures),"shortfall"=>"One or more configured comparisons has a reported shortfall.","pass"=>matrix.ValueKind==JsonValueKind.Object?"All matrix conditions passed.":"All comparisons passed.",_=>anyMissing?"Required evidence is not linked or entered.":"Not enough comparable values to evaluate."};
+            if(status=="pass")passed++;else if(status=="fail")failed++;else if(status=="shortfall")shortfall++;else notEvaluated++;
+            results.Add(new{cross_check_id=Int(rule,"id"),name=String(rule,"name")??"Cross-check",compare_field=String(rule,"compare_field"),comparison_type=matrix.ValueKind==JsonValueKind.Object?"matrix":comparison,compare_to_voucher_line=Bool(rule,"compare_to_voucher_line"),status,message,anchor_document_id=anchorId,anchor_document_name=anchorName,document_chain=chain,chain,matrix_rows=matrixFields,matrix_fields=matrixFields,voucher_line_comparison=voucherComparison,failures,shortfalls});
+        }
+        return new{voucher_line_id=detailId,category_id=categoryId,category_name=categoryName,evaluated=true,reason=(string?)null,summary=new{passed,failed,shortfall,not_evaluated=notEvaluated},results};
+    }
+
     private static async Task<List<double>> ReadEvidenceValuesAsync(PostgresTransactionContext db, int[] clientDataIds, string field, CancellationToken ct)
     {
         var result = new List<double>();
@@ -408,16 +461,16 @@ public sealed class VerificationStatusService
         return result;
     }
 
-    private static async Task<bool> ManualEvidenceExistsAsync(PostgresTransactionContext db, int[] siblingIds,
+    private static async Task<bool> ManualEvidenceExistsAsync(PostgresTransactionContext db, int tenantId, int[] siblingIds,
         int documentId, string documentType, CancellationToken ct)
     {
         string table = documentType == "form" ? "voucher_line_form_entries" : "voucher_line_physical_bills";
-        await using var command = db.CreateCommand($"SELECT EXISTS(SELECT 1 FROM public.{table} WHERE voucher_line_id=ANY($1) AND document_id=$2)");
-        command.Parameters.AddWithValue(siblingIds); command.Parameters.AddWithValue(documentId);
+        await using var command = db.CreateCommand($"SELECT EXISTS(SELECT 1 FROM public.{table} WHERE rulebook_source='native' AND tenant_id=$1 AND voucher_line_id=ANY($2) AND document_id=$3)");
+        command.Parameters.AddWithValue(tenantId); command.Parameters.AddWithValue(siblingIds); command.Parameters.AddWithValue(documentId);
         return (bool)(await command.ExecuteScalarAsync(ct) ?? false);
     }
 
-    private static async Task<List<double>> ReadDocumentFieldValuesAsync(PostgresTransactionContext db,
+    private static async Task<List<double>> ReadDocumentFieldValuesAsync(PostgresTransactionContext db, int tenantId,
         JsonElement document, int documentId, int[] clientDataIds, string field, CancellationToken ct)
     {
         string type = String(document, "document_type") ?? "linked_template";
@@ -429,15 +482,15 @@ public sealed class VerificationStatusService
             await using var command = db.CreateCommand("""
                 WITH winning AS (
                     SELECT voucher_line_id FROM public.voucher_line_physical_bills
-                    WHERE voucher_line_id=ANY($1) AND document_id=$2
+                    WHERE rulebook_source='native' AND tenant_id=$1 AND voucher_line_id=ANY($2) AND document_id=$3
                     ORDER BY updated_at DESC,voucher_line_id DESC LIMIT 1
                 )
                 SELECT i.amount FROM public.voucher_line_physical_bills b
                 JOIN public.voucher_line_physical_bill_items i ON i.bill_id=b.id
-                WHERE b.voucher_line_id=(SELECT voucher_line_id FROM winning) AND b.document_id=$2
+                WHERE b.rulebook_source='native' AND b.tenant_id=$1 AND b.voucher_line_id=(SELECT voucher_line_id FROM winning) AND b.document_id=$3
                 ORDER BY b.sort_order,b.id,i.sort_order,i.id
                 """);
-            command.Parameters.AddWithValue(clientDataIds); command.Parameters.AddWithValue(documentId);
+            command.Parameters.AddWithValue(tenantId); command.Parameters.AddWithValue(clientDataIds); command.Parameters.AddWithValue(documentId);
             await using var reader = await command.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct)) if (!reader.IsDBNull(0)) values.Add(Convert.ToDouble(reader.GetValue(0), CultureInfo.InvariantCulture));
             return values;
@@ -448,18 +501,19 @@ public sealed class VerificationStatusService
             await using var command = db.CreateCommand("""
                 WITH winning AS (
                     SELECT e.voucher_line_id FROM public.voucher_line_form_entries e
-                    WHERE e.voucher_line_id=ANY($1) AND e.document_id=$2
+                    WHERE e.rulebook_source='native' AND e.tenant_id=$1 AND e.voucher_line_id=ANY($2) AND e.document_id=$3
                     ORDER BY e.updated_at DESC,e.voucher_line_id DESC LIMIT 1
                 )
                 SELECT v.value_numeric,v.value_text
                 FROM public.voucher_line_form_entries e
                 JOIN public.voucher_line_form_values v ON v.entry_id=e.id
-                JOIN public.audit_rule_document_fields f ON f.id=v.field_id AND f.document_id=e.document_id
+                JOIN public.platform_audit_rule_entities d ON d.tenant_id=e.tenant_id AND d.entity_kind='documents' AND d.id=e.document_id
+                CROSS JOIN LATERAL jsonb_array_elements(COALESCE(d.definition->'form_fields','[]'::jsonb)) f
                 WHERE e.voucher_line_id=(SELECT voucher_line_id FROM winning)
-                  AND e.document_id=$2 AND lower(f.field_name)=lower($3)
+                  AND e.rulebook_source='native' AND e.tenant_id=$1 AND e.document_id=$3 AND (f->>'id')::int=v.field_id AND lower(f->>'field_name')=lower($4)
                 ORDER BY e.updated_at,e.bill_group_index,e.row_scope,e.sort_order
                 """);
-            command.Parameters.AddWithValue(clientDataIds); command.Parameters.AddWithValue(documentId); command.Parameters.AddWithValue(field);
+            command.Parameters.AddWithValue(tenantId); command.Parameters.AddWithValue(clientDataIds); command.Parameters.AddWithValue(documentId); command.Parameters.AddWithValue(field);
             await using var reader = await command.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))
             {
@@ -471,7 +525,7 @@ public sealed class VerificationStatusService
         return await ReadEvidenceValuesAsync(db, clientDataIds, field, ct);
     }
 
-    private static async Task<bool> MatrixCrossCheckPassesAsync(PostgresTransactionContext db, JsonElement rule, JsonElement matrix,
+    private static async Task<bool> MatrixCrossCheckPassesAsync(PostgresTransactionContext db, int tenantId, JsonElement rule, JsonElement matrix,
         IReadOnlyDictionary<int, int[]> linked, int[] siblingIds, double? voucherAmount, CancellationToken ct)
     {
         var docs = ArrayProperty(matrix, "documents").OrderBy(doc => Int(doc, "sort_order") ?? 0).ToArray();
@@ -488,7 +542,7 @@ public sealed class VerificationStatusService
                 configuredCount++;
                 bool manual = String(doc, "document_type") is "form" or "physical_bill";
                 var ids = manual ? siblingIds : linked.GetValueOrDefault(id) ?? [];
-                var data = await ReadDocumentFieldValuesAsync(db, doc, id, ids, column.GetString()!, ct);
+                var data = await ReadDocumentFieldValuesAsync(db, tenantId, doc, id, ids, column.GetString()!, ct);
                 double? value = data.Count == 0 ? null : data.Sum();
                 values.Add(value);
                 if (value.HasValue && !chainValues.ContainsKey(id)) chainValues[id] = value.Value;

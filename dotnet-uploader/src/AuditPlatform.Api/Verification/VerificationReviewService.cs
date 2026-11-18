@@ -13,7 +13,8 @@ namespace AuditPlatform.Api.Verification;
 
 /// <summary>Transactional line review and completion operations for an authorized Verification session.</summary>
 public sealed class VerificationReviewService(PostgresTransactions transactions, VerificationSessionService sessions,
-    VerificationStatusService status, VerificationEvidenceService evidence, PostgresAuditWriter audit,
+    VerificationStatusService status, VerificationEvidenceService evidence, VerificationFormService forms,
+    VerificationPhysicalBillService physicalBills, PostgresAuditWriter audit,
     IOptions<VerificationRuntimeOptions> options)
 {
     private sealed record ReviewLine(int Id, int ClientDataId, string? TransactionRef, string? Status,
@@ -72,7 +73,7 @@ public sealed class VerificationReviewService(PostgresTransactions transactions,
             var owner = resolved.Context!;
             var current = await ReadLineForUpdateAsync(db, owner, sessionId, currentDetailId, inner);
             if (current is null) return NotFound("verification_detail_not_found");
-            var existingChecks = await ReadVoucherChecksAsync(db, owner.ClientId, current.TransactionRef, owner.Rulebook, inner);
+            var existingChecks = await ReadVoucherChecksAsync(db, owner.TenantId, owner.ClientId, current.TransactionRef, owner.Rulebook, inner);
             var checkResult = await SaveVoucherChecksAsync(db, owner, current.TransactionRef, existingChecks, verify: true, inner, persist: false);
             if (checkResult.Failure is not null) return checkResult.Failure;
             if (!string.IsNullOrWhiteSpace(current.TransactionRef))
@@ -169,7 +170,12 @@ public sealed class VerificationReviewService(PostgresTransactions transactions,
             || request.Lines.Any(line => line is null || line.DetailId < 1 || !ValidLineItems(line.LineItems))
             || request.VoucherChecks is null || request.ProcedureChecks is null || request.Observations is null
             || request.AccountHeadNotes is null || request.VoucherLineCorrectness is null
+            || request.FormEntries is null || request.PhysicalBills is null
             || request.Lines.Select(line => line.DetailId).Distinct().Count() != request.Lines.Count
+            || request.FormEntries.Any(x=>x is null||x.Entries is null||x.VoucherLineId<1||x.DocumentId<1)
+            || request.PhysicalBills.Any(x=>x is null||x.Bills is null||x.VoucherLineId<1||x.DocumentId<1)
+            || request.FormEntries.Any(x=>!request.Lines.Any(line=>line.DetailId==x.VoucherLineId))
+            || request.PhysicalBills.Any(x=>!request.Lines.Any(line=>line.DetailId==x.VoucherLineId))
             || !request.Lines.Any(line => line.DetailId == request.CurrentDetailId)) return Invalid("invalid_verification_bundle");
         return await transactions.ExecuteAsync(async (db, inner) =>
         {
@@ -184,7 +190,7 @@ public sealed class VerificationReviewService(PostgresTransactions transactions,
             if (request.Verify)
             {
                 var submittedChecks = useStoredVoucherChecks
-                    ? await ReadVoucherChecksAsync(db, owner.ClientId, current.TransactionRef, owner.Rulebook, inner)
+                    ? await ReadVoucherChecksAsync(db, owner.TenantId, owner.ClientId, current.TransactionRef, owner.Rulebook, inner)
                     : request.VoucherChecks;
                 var checks = await SaveVoucherChecksAsync(db, owner, current.TransactionRef,
                     submittedChecks, verify: true, inner);
@@ -199,6 +205,10 @@ public sealed class VerificationReviewService(PostgresTransactions transactions,
                 foreach (var line in eligible)
                 {
                     var payload = request.Lines.Single(item => item.DetailId == line.Id);
+                    foreach(var form in request.FormEntries.Where(x=>x.VoucherLineId==line.Id))
+                    {var formError=await forms.SaveWithinTransactionAsync(db,owner,line.Id,form,inner);if(formError is not null)return formError;}
+                    foreach(var bill in request.PhysicalBills.Where(x=>x.VoucherLineId==line.Id))
+                    {var billError=await physicalBills.SaveWithinTransactionAsync(db,owner,line.Id,bill,inner);if(billError is not null)return billError;}
                     await SaveLineAsync(db, owner, request.SessionId, line, payload.LineItems,
                         payload.TransactionType, payload.ProcedureData, inner);
                 }
@@ -224,6 +234,10 @@ public sealed class VerificationReviewService(PostgresTransactions transactions,
             foreach (var line in eligible)
             {
                 var payload = request.Lines.Single(item => item.DetailId == line.Id);
+                foreach(var form in request.FormEntries.Where(x=>x.VoucherLineId==line.Id))
+                {var formError=await forms.SaveWithinTransactionAsync(db,owner,line.Id,form,inner);if(formError is not null)return formError;}
+                foreach(var bill in request.PhysicalBills.Where(x=>x.VoucherLineId==line.Id))
+                {var billError=await physicalBills.SaveWithinTransactionAsync(db,owner,line.Id,bill,inner);if(billError is not null)return billError;}
                 await SaveLineAsync(db, owner, request.SessionId, line, payload.LineItems,
                     payload.TransactionType, payload.ProcedureData, inner);
             }
@@ -373,11 +387,11 @@ public sealed class VerificationReviewService(PostgresTransactions transactions,
             foreach (var item in inputs)
             {
                 await using var upsert = db.CreateCommand("""
-                    INSERT INTO public.voucher_check_status(client_id,transaction_ref,check_id,state,updated_at)
-                    VALUES($1,$2,$3,$4,now())
-                    ON CONFLICT(client_id,transaction_ref,check_id) DO UPDATE SET state=EXCLUDED.state,updated_at=now()
+                    INSERT INTO public.voucher_check_status(tenant_id,rulebook_source,client_id,transaction_ref,check_id,state,updated_at)
+                    VALUES($1,'native',$2,$3,$4,$5,now())
+                    ON CONFLICT(tenant_id,client_id,transaction_ref,check_id) WHERE rulebook_source='native' DO UPDATE SET state=EXCLUDED.state,updated_at=now()
                     """);
-                upsert.Parameters.AddWithValue(owner.ClientId); upsert.Parameters.AddWithValue(transactionRef);
+                upsert.Parameters.AddWithValue(owner.TenantId); upsert.Parameters.AddWithValue(owner.ClientId); upsert.Parameters.AddWithValue(transactionRef);
                 upsert.Parameters.AddWithValue(item.CheckId); upsert.Parameters.AddWithValue(item.State);
                 await upsert.ExecuteNonQueryAsync(ct);
             }
@@ -392,9 +406,9 @@ public sealed class VerificationReviewService(PostgresTransactions transactions,
     {
         await using var command = db.CreateCommand("""
             UPDATE public.voucher_check_status SET flagged_in_observations=(state='not_done')
-            WHERE client_id=$1 AND transaction_ref=$2 AND check_id=ANY($3)
+            WHERE rulebook_source='native' AND tenant_id=$1 AND client_id=$2 AND transaction_ref=$3 AND check_id=ANY($4)
             """);
-        command.Parameters.AddWithValue(owner.ClientId); command.Parameters.AddWithValue(transactionRef);
+        command.Parameters.AddWithValue(owner.TenantId); command.Parameters.AddWithValue(owner.ClientId); command.Parameters.AddWithValue(transactionRef);
         command.Parameters.AddWithValue(notDone.Concat(done).Distinct().ToArray());
         await command.ExecuteNonQueryAsync(ct);
     }
@@ -423,12 +437,12 @@ public sealed class VerificationReviewService(PostgresTransactions transactions,
         foreach (var input in inputs)
         {
             await using var upsert = db.CreateCommand("""
-                INSERT INTO public.voucher_line_procedure_checks(voucher_line_id,document_id,role_name,is_checked,checked_at,checked_by)
-                VALUES($1,$2,$3,$4,now(),$5)
-                ON CONFLICT(voucher_line_id,document_id,role_name) DO UPDATE
+                INSERT INTO public.voucher_line_procedure_checks(tenant_id,rulebook_source,voucher_line_id,document_id,role_name,is_checked,checked_at,checked_by)
+                VALUES($1,'native',$2,$3,$4,$5,now(),$6)
+                ON CONFLICT(voucher_line_id,tenant_id,document_id,role_name) WHERE rulebook_source='native' DO UPDATE
                 SET is_checked=EXCLUDED.is_checked,checked_at=now(),checked_by=EXCLUDED.checked_by
                 """);
-            upsert.Parameters.AddWithValue(input.VoucherLineId); upsert.Parameters.AddWithValue(input.DocumentId);
+            upsert.Parameters.AddWithValue(owner.TenantId); upsert.Parameters.AddWithValue(input.VoucherLineId); upsert.Parameters.AddWithValue(input.DocumentId);
             upsert.Parameters.AddWithValue(input.RoleName); upsert.Parameters.AddWithValue(input.IsChecked);
             upsert.Parameters.AddWithValue(owner.Username); await upsert.ExecuteNonQueryAsync(ct);
         }
@@ -444,15 +458,15 @@ public sealed class VerificationReviewService(PostgresTransactions transactions,
     }
 
     private static async Task<List<VerificationVoucherCheckInput>> ReadVoucherChecksAsync(PostgresTransactionContext db,
-        int clientId, string? transactionRef, JsonElement rulebook, CancellationToken ct)
+        int tenantId, int clientId, string? transactionRef, JsonElement rulebook, CancellationToken ct)
     {
         var existing = new Dictionary<int, string>();
         if (!string.IsNullOrWhiteSpace(transactionRef))
         {
             await using var command = db.CreateCommand("""
-                SELECT check_id,state FROM public.voucher_check_status WHERE client_id=$1 AND transaction_ref=$2
+                SELECT check_id,state FROM public.voucher_check_status WHERE rulebook_source='native' AND tenant_id=$1 AND client_id=$2 AND transaction_ref=$3
                 """);
-            command.Parameters.AddWithValue(clientId); command.Parameters.AddWithValue(transactionRef);
+            command.Parameters.AddWithValue(tenantId); command.Parameters.AddWithValue(clientId); command.Parameters.AddWithValue(transactionRef);
             await using var reader = await command.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct)) existing[reader.GetInt32(0)] = reader.GetString(1);
         }
