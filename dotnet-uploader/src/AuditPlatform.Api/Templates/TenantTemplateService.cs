@@ -269,7 +269,7 @@ public sealed class TenantTemplateService(PostgresTransactions transactions,Post
         "voucher" or "description"=>type=="Text","date"=>type=="Date","balance"=>type is "Text" or "Numeric",_=>type=="Numeric"};
     private static TemplateColumn? DocumentColumn(IReadOnlyList<TemplateColumn> columns)=>columns.SingleOrDefault(c=>c.Role=="document_id")??columns.FirstOrDefault();
     private static TemplateColumn? DateColumn(IReadOnlyList<TemplateColumn> columns)=>columns.SingleOrDefault(c=>c.Role=="document_date")??columns.FirstOrDefault(c=>c.Type=="Date");
-    private static string KindForNew(string name)=>name.Trim().ToLowerInvariant() switch {"purchase order"=>"purchase_order","store receiving"=>"store_receiving","vendor bill"=>"vendor_bill",_=>"standard"};
+    internal static string KindForNew(string name)=>name.Trim().ToLowerInvariant() switch {"purchase order"=>"purchase_order","store receiving"=>"store_receiving","vendor bill"=>"vendor_bill",_=>"standard"};
     private static bool SameLedger(Dictionary<string,int> a,Dictionary<string,int> b)=>a.Count==b.Count&&a.All(k=>b.TryGetValue(k.Key,out var value)&&value==k.Value);
     private static TemplateResult Review()=>new(TemplateStatus.Review,Detail:ReviewMessage);
     private static TemplateResult Stale()=>new(TemplateStatus.Review,Detail:"Template or column definitions changed. Reload the template before saving.");
@@ -338,15 +338,17 @@ public sealed class TenantTemplateService(PostgresTransactions transactions,Post
         return null;
     }
 
-    internal static async Task<List<TemplateDefinition>> LoadAsync(PostgresTransactionContext db,int tenant,int? id,CancellationToken ct)
+    // Operator previews use a read-only snapshot; ordinary runtime callers keep
+    // the existing row locks that protect their following configuration writes.
+    internal static async Task<List<TemplateDefinition>> LoadAsync(PostgresTransactionContext db,int tenant,int? id,CancellationToken ct,bool lockRows=true)
     {
         var rows=new List<TemplateDefinition>();
         await using(var command=db.CreateCommand("""
             SELECT t.id,d.display_name,t.created_by,t.created_date,t.is_system,t.has_subtotals_by_default,t.data_purpose,t.ledger_columns,
                 t.rate_source,d.template_kind,d.binding_origin,d.definition_version
             FROM public.templates t JOIN public.platform_tenant_templates d ON d.template_id=t.id
-            WHERE d.tenant_id=$1 AND t.is_active IS TRUE AND ($2::integer IS NULL OR t.id=$2) ORDER BY d.display_name FOR SHARE OF t,d
-            """))
+            WHERE d.tenant_id=$1 AND t.is_active IS TRUE AND ($2::integer IS NULL OR t.id=$2) ORDER BY d.display_name
+            """+(lockRows?" FOR SHARE OF t,d":"")))
         {
             command.Parameters.AddWithValue(tenant); command.Parameters.AddWithValue(NpgsqlDbType.Integer,(object?)id??DBNull.Value);
             await using var reader=await command.ExecuteReaderAsync(ct);
@@ -361,8 +363,8 @@ public sealed class TenantTemplateService(PostgresTransactions transactions,Post
             FROM public.template_column_mappings p JOIN public.platform_tenant_templates d ON d.template_id=p.template_id AND d.tenant_id=p.tenant_id
             JOIN public.platform_tenant_columns c ON c.tenant_id=p.tenant_id AND c.column_id=p.column_id
             JOIN public.master_columns m ON m.id=p.column_id AND m.column_name=p.storage_key
-            WHERE d.tenant_id=$1 AND ($2::integer IS NULL OR p.template_id=$2) ORDER BY p.template_id,p.sort_order FOR SHARE OF p,c,m
-            """))
+            WHERE d.tenant_id=$1 AND ($2::integer IS NULL OR p.template_id=$2) ORDER BY p.template_id,p.sort_order
+            """+(lockRows?" FOR SHARE OF p,c,m":"")))
         {
             command.Parameters.AddWithValue(tenant); command.Parameters.AddWithValue(NpgsqlDbType.Integer,(object?)id??DBNull.Value);
             await using var reader=await command.ExecuteReaderAsync(ct);
@@ -377,7 +379,7 @@ public sealed class TenantTemplateService(PostgresTransactions transactions,Post
         await using(var catalog=db.CreateCommand("SELECT to_regclass('public.platform_template_upload_bindings') IS NOT NULL"))
         if(await catalog.ExecuteScalarAsync(ct) is true)
         {
-            await using var command=db.CreateCommand("SELECT template_id,bindings::text FROM public.platform_template_upload_bindings WHERE tenant_id=$1 AND ($2::integer IS NULL OR template_id=$2) FOR SHARE");
+            await using var command=db.CreateCommand("SELECT template_id,bindings::text FROM public.platform_template_upload_bindings WHERE tenant_id=$1 AND ($2::integer IS NULL OR template_id=$2)"+(lockRows?" FOR SHARE":""));
             command.Parameters.AddWithValue(tenant);command.Parameters.AddWithValue(NpgsqlDbType.Integer,(object?)id??DBNull.Value);
             await using var reader=await command.ExecuteReaderAsync(ct);while(await reader.ReadAsync(ct)) bindings.Add(reader.GetInt32(0),JsonSerializer.Deserialize<Dictionary<string,int>>(reader.GetString(1))!);
         }

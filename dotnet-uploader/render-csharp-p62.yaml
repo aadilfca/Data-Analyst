@@ -1,0 +1,35 @@
+# Inactive P62 candidate. Create a separate Render Blueprint using this path
+# only after a dedicated non-production PostgreSQL database is ready.
+# The root render.yaml remains the live Python service.
+services:
+  - type: web
+    name: audit-platform-csharp-p62-rehearsal
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: dotnet-uploader/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health/app-ready
+    autoDeployTrigger: "off"
+    maxShutdownDelaySeconds: 60
+    envVars:
+      - key: ASPNETCORE_ENVIRONMENT
+        value: Production
+      - key: Postgres__Enabled
+        value: "true"
+      - key: Postgres__ConnectionString
+        sync: false
+      - key: ApplicationShell__Enabled
+        value: "true"
+      - key: Authentication__Enabled
+        value: "true"
+      - key: Authentication__PublicOrigin
+        sync: false
+      - key: UserManagement__Enabled
+        value: "true"
+      - key: ClientManagement__Enabled
+        value: "true"
+      - key: LocalDatabaseBackup__Enabled
+        value: "false"
+      - key: UploadJobs__Enabled
+        value: "false"

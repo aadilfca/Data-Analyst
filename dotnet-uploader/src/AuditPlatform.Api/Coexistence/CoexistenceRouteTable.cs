@@ -50,8 +50,22 @@ public sealed class CoexistenceRouteTable
         return routes.Values.FirstOrDefault(route => route.Method == method && IsTemplateMatch(route.Path, path));
     }
 
-    public static bool MatchesPath(CoexistenceRoute route, string path) =>
-        string.Equals(Key(route.Path), Key(path), StringComparison.Ordinal) || IsTemplateMatch(route.Path, path);
+    public static bool MatchesPath(CoexistenceRoute route, string path)
+    {
+        var expected = route.Path.Split('/');
+        var actual = path.Split('/');
+        if (expected.Length != actual.Length) return false;
+        for (int i = 0; i < expected.Length; i++)
+        {
+            if (IsIntegerParameter(expected[i]))
+            {
+                if (actual[i].Length is 0 or > 10 || actual[i].Any(c => !char.IsAsciiDigit(c))
+                    || !int.TryParse(actual[i], out int id) || id <= 0) return false;
+            }
+            else if (!string.Equals(expected[i], actual[i], StringComparison.Ordinal)) return false;
+        }
+        return true;
+    }
 
     public string? AllowedMethods(string path)
     {

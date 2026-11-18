@@ -23,6 +23,7 @@ using AuditPlatform.Api.Reports;
 using AuditPlatform.Api.FinancialStatements;
 using AuditPlatform.Api.Cashflows;
 using AuditPlatform.Api.AuditRules;
+using AuditPlatform.Api.LocalDatabaseBackup;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -380,6 +381,9 @@ builder.Services.AddSingleton<AuditPlatform.Api.StorageCleanup.StorageCleanupSer
 builder.Services.AddSingleton<AuditPlatform.Api.StorageCleanup.StoragePurgeService>();
 builder.Services.AddSingleton<AuditPlatform.Api.StorageCleanup.StorageArtifactCleanupService>();
 builder.Services.AddHostedService<AuditPlatform.Api.StorageCleanup.StorageCleanupWorker>();
+builder.Services.AddOptions<LocalDatabaseBackupOptions>()
+    .Bind(builder.Configuration.GetSection(LocalDatabaseBackupOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
+builder.Services.AddSingleton<LocalDatabaseBackupService>();
 
 // P57 remains default-off; enabling reads never silently changes coexistence ownership.
 builder.Services.AddOptions<DashboardOptions>().Bind(builder.Configuration.GetSection(DashboardOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
@@ -530,6 +534,13 @@ if (app.Services.GetRequiredService<IOptions<ApplicationShellOptions>>().Value.E
 // registers no bridge routes and retains P07's default access block.
 _ = app.Services.GetRequiredService<CoexistenceRouteTable>();
 
+var localBackupOptions=app.Services.GetRequiredService<IOptions<LocalDatabaseBackupOptions>>().Value;
+if(localBackupOptions.Enabled&&(!OperatingSystem.IsWindows()
+    ||!app.Services.GetRequiredService<IOptions<PostgresOptions>>().Value.Enabled
+    ||!app.Services.GetRequiredService<IOptions<AuthenticationOptions>>().Value.Enabled
+    ||!app.Services.GetRequiredService<IOptions<ApplicationShellOptions>>().Value.Enabled))
+    throw new OptionsValidationException(LocalDatabaseBackupOptions.SectionName,typeof(LocalDatabaseBackupOptions),
+        ["Local database backup requires Windows, PostgreSQL and the authenticated application shell."]);
 if ((app.Services.GetRequiredService<IOptions<DashboardOptions>>().Value.Enabled
     || app.Services.GetRequiredService<IOptions<ErrorLogManagementOptions>>().Value.Enabled)
     && (!app.Services.GetRequiredService<IOptions<ApplicationShellOptions>>().Value.Enabled
@@ -549,6 +560,7 @@ app.UseWhen(context => context.RequestServices.GetRequiredService<IOptions<Authe
     || context.Request.Path.StartsWithSegments("/api/columns")
     || context.Request.Path.StartsWithSegments("/api/templates")
     || context.Request.Path.StartsWithSegments("/api/backup")
+    || context.Request.Path.StartsWithSegments("/api/database-backup")
     || context.Request.Path.StartsWithSegments("/api/audit-rules")
     || context.Request.Path.StartsWithSegments("/api/account-control-center")
     || context.Request.Path.StartsWithSegments("/api/reconciliation")

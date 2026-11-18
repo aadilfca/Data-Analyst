@@ -1351,7 +1351,12 @@ async function hardDeleteSignatureSpecimen(specimenId, name, role) {
     try {
         const res = await fetch(API_BASE + '/api/audit-rules/signature-specimens/' + specimenId + '/hard-delete', { method: 'DELETE' });
         const result = await res.json();
-        if (!res.ok) throw new Error(result.detail || result.message || 'Failed to permanently delete signature specimen');
+        if (!res.ok) {
+            const message = result.detail === 'signature_specimen_retained_as_migration_provenance'
+                ? 'This specimen is retained as the source link for adopted historical records. Deactivate it instead; its history must remain available.'
+                : result.detail || result.message || 'Failed to permanently delete signature specimen';
+            throw new Error(message);
+        }
 
         showDetailStatus('✅ ' + result.message, 'success');
         if (currentSpecimensDoc) delete categoryDocumentAuthorisationCache[currentSpecimensDoc.id];

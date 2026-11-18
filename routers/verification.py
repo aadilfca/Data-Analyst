@@ -16,7 +16,7 @@ import re
 import time
 from typing import List, Optional, Dict, Any
 import io
-from functools import wraps
+from functools import wraps, lru_cache
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side
@@ -64,6 +64,28 @@ router = APIRouter()
 _MIN_TS = datetime.min.replace(tzinfo=timezone.utc)
 ARITHMETIC_MULTIPLY_FIELD_TYPE = 'arithmetic_multiply'
 NUMERIC_FORM_FIELD_TYPES = {'numeric', ARITHMETIC_MULTIPLY_FIELD_TYPE}
+
+
+@lru_cache(maxsize=1)
+def _legacy_verification_conflict_predicate_pg():
+    """Keep legacy upserts valid before and after the C# evidence migration.
+
+    Schema migrations require a process restart. Detect once per process rather
+    than adding a remote catalog request to every saved check or observation.
+    This only adapts conflict targets; mixed-backend data access still needs
+    separate cutover/rollback acceptance.
+    """
+    columns = execute_query_pg("""
+        SELECT table_name, data_type FROM information_schema.columns
+        WHERE table_schema = 'public' AND column_name = 'rulebook_source'
+          AND table_name IN ('voucher_line_observations',
+                             'voucher_line_procedure_checks', 'voucher_check_status')
+    """)
+    if not columns:
+        return ''
+    if len(columns) != 3 or any(column['data_type'] != 'text' for column in columns):
+        raise RuntimeError('Verification evidence schema is partially migrated; restart after a complete reviewed migration.')
+    return " WHERE rulebook_source = 'legacy'"
 
 def _ts_sort_key(value):
     return value if value is not None else _MIN_TS
@@ -560,10 +582,10 @@ def _write_shortfall_observations(voucher_line_id: int, cross_check_result: dict
             sentinel_id = _get_or_create_cross_check_shortfall_document_id(rule_result['cross_check_id'])
             text = _format_shortfall_observation_text(rule_result) if rule_result['status'] == 'shortfall' else ''
             execute_write_pg(
-                """
+                f"""
                 INSERT INTO voucher_line_observations (voucher_line_id, document_id, observation_text, synced, updated_by, updated_at)
                 VALUES (%s, %s, %s, FALSE, 'System', CURRENT_TIMESTAMP)
-                ON CONFLICT(voucher_line_id, document_id)
+                ON CONFLICT(voucher_line_id, document_id){_legacy_verification_conflict_predicate_pg()}
                 DO UPDATE SET observation_text = excluded.observation_text, synced = FALSE, updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP
                 """,
                 (voucher_line_id, sentinel_id, text)
@@ -2578,20 +2600,20 @@ def save_and_verify_voucher_bundle(
             system_document_ids = _get_system_observation_document_ids(create=True)
         for entry in observations:
             execute_write_pg(
-                """INSERT INTO voucher_line_observations
+                f"""INSERT INTO voucher_line_observations
                    (voucher_line_id, document_id, observation_text, synced, updated_by, updated_at)
                    VALUES (%s, %s, %s, FALSE, %s, CURRENT_TIMESTAMP)
-                   ON CONFLICT(voucher_line_id, document_id) DO UPDATE SET
+                   ON CONFLICT(voucher_line_id, document_id){_legacy_verification_conflict_predicate_pg()} DO UPDATE SET
                    observation_text = excluded.observation_text, synced = FALSE,
                    updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP""",
                 (entry['voucher_line_id'], entry['document_id'], entry.get('observation_text', ''), 'Analyst')
             )
         for entry in account_head_notes:
             execute_write_pg(
-                """INSERT INTO voucher_line_observations
+                f"""INSERT INTO voucher_line_observations
                    (voucher_line_id, document_id, observation_text, synced, updated_by, updated_at)
                    VALUES (%s, %s, %s, FALSE, %s, CURRENT_TIMESTAMP)
-                   ON CONFLICT(voucher_line_id, document_id) DO UPDATE SET
+                   ON CONFLICT(voucher_line_id, document_id){_legacy_verification_conflict_predicate_pg()} DO UPDATE SET
                    observation_text = excluded.observation_text, synced = FALSE,
                    updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP""",
                 (entry['voucher_line_id'], system_document_ids['account_head'],
@@ -2601,10 +2623,10 @@ def save_and_verify_voucher_bundle(
             raw_value = entry.get('is_correct')
             is_correct = raw_value is True or raw_value == 1 or str(raw_value).lower() == 'true'
             execute_write_pg(
-                """INSERT INTO voucher_line_observations
+                f"""INSERT INTO voucher_line_observations
                    (voucher_line_id, document_id, observation_text, synced, updated_by, updated_at)
                    VALUES (%s, %s, %s, FALSE, %s, CURRENT_TIMESTAMP)
-                   ON CONFLICT(voucher_line_id, document_id) DO UPDATE SET
+                   ON CONFLICT(voucher_line_id, document_id){_legacy_verification_conflict_predicate_pg()} DO UPDATE SET
                    observation_text = excluded.observation_text, synced = FALSE,
                    updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP""",
                 (entry['voucher_line_id'], system_document_ids['voucher_line_correctness'],
@@ -4830,10 +4852,10 @@ def save_voucher_check_status(
         raise HTTPException(400, f"Check {check_id} is not a configured active voucher-level check.")
 
     execute_write_pg(
-        """
+        f"""
         INSERT INTO voucher_check_status (client_id, transaction_ref, check_id, state, updated_at)
         VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
-        ON CONFLICT(client_id, transaction_ref, check_id)
+        ON CONFLICT(client_id, transaction_ref, check_id){_legacy_verification_conflict_predicate_pg()}
         DO UPDATE SET state = excluded.state, updated_at = CURRENT_TIMESTAMP
         """,
         (client_id, transaction_ref, check_id, state)
@@ -4869,10 +4891,10 @@ def save_voucher_checks_batch(
                 raise HTTPException(400, f"Invalid state '{check.get('state')}'.")
         for check in checks:
             execute_write_pg(
-                """INSERT INTO voucher_check_status
+                f"""INSERT INTO voucher_check_status
                    (client_id, transaction_ref, check_id, state, updated_at)
                    VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
-                   ON CONFLICT(client_id, transaction_ref, check_id)
+                   ON CONFLICT(client_id, transaction_ref, check_id){_legacy_verification_conflict_predicate_pg()}
                    DO UPDATE SET state = excluded.state, updated_at = CURRENT_TIMESTAMP""",
                 (client_id, transaction_ref, check['check_id'], check['state'])
             )
@@ -5209,10 +5231,10 @@ def set_procedure_check(
         raise HTTPException(400, f"'{role_name}' is not a configured auth role for this document.")
 
     execute_write_pg(
-        """
+        f"""
         INSERT INTO voucher_line_procedure_checks (voucher_line_id, document_id, role_name, is_checked, checked_by, checked_at)
         VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-        ON CONFLICT(voucher_line_id, document_id, role_name)
+        ON CONFLICT(voucher_line_id, document_id, role_name){_legacy_verification_conflict_predicate_pg()}
         DO UPDATE SET is_checked = excluded.is_checked, checked_by = excluded.checked_by, checked_at = CURRENT_TIMESTAMP
         """,
         (voucher_line_id, document_id, role_name, is_checked, checked_by)
@@ -5275,10 +5297,10 @@ def set_procedure_checks_batch(
             raise HTTPException(400, "Role is not configured for this document.")
         for check in checks:
             execute_write_pg(
-                """INSERT INTO voucher_line_procedure_checks
+                f"""INSERT INTO voucher_line_procedure_checks
                    (voucher_line_id, document_id, role_name, is_checked, checked_by, checked_at)
                    VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-                   ON CONFLICT(voucher_line_id, document_id, role_name)
+                   ON CONFLICT(voucher_line_id, document_id, role_name){_legacy_verification_conflict_predicate_pg()}
                    DO UPDATE SET is_checked = excluded.is_checked,
                                  checked_by = excluded.checked_by, checked_at = CURRENT_TIMESTAMP""",
                 (check['voucher_line_id'], check['document_id'], check['role_name'],
@@ -5634,10 +5656,10 @@ def save_line_observation(
             raise HTTPException(404, "Document not found or inactive.")
 
     execute_write_pg(
-        """
+        f"""
         INSERT INTO voucher_line_observations (voucher_line_id, document_id, observation_text, synced, updated_by, updated_at)
         VALUES (%s, %s, %s, FALSE, %s, CURRENT_TIMESTAMP)
-        ON CONFLICT(voucher_line_id, document_id)
+        ON CONFLICT(voucher_line_id, document_id){_legacy_verification_conflict_predicate_pg()}
         DO UPDATE SET observation_text = excluded.observation_text, synced = FALSE, updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP
         """,
         (voucher_line_id, document_id, observation_text, updated_by)

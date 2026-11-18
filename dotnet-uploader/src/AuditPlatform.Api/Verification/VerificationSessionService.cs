@@ -14,6 +14,9 @@ namespace AuditPlatform.Api.Verification;
 public sealed class VerificationSessionService(PostgresTransactions transactions, PostgresAuditWriter audit,
     IOptions<VerificationRuntimeOptions> options)
 {
+    // These legacy Rulebook builds are retained as immutable history because
+    // their compiled source is no longer available for a faithful re-evaluation.
+    private static readonly HashSet<int> ReadOnlyLegacyRulebookVersions = [53, 308];
     private static readonly string[] Workstreams = ["cash", "bank", "local_vendor", "import_vendor", "export_customer", "payroll", "contractor"];
     private static readonly string[] VoucherAliases = ["Voucher ID", "Voucher No", "Voucher Number", "Voucher", "Invoice No", "Invoice Number"];
     private static readonly string[] AccountAliases = ["Account Name", "Account", "Account Detail", "Account Code", "Ledger", "Head"];
@@ -345,6 +348,8 @@ public sealed class VerificationSessionService(PostgresTransactions transactions
         {
             var owner = await SessionOwnerAsync(db, session, sessionId, true, inner);
             if (owner is null) return new("not_found", Code: "verification_session_not_found");
+            if (IsReadOnlyLegacyRulebookVersion(owner.Value.RulebookVersion))
+                return new("conflict", Code: "verification_legacy_session_read_only");
             var current = await ReadCurrentRulebookAsync(db, owner.Value.Actor.TenantId, inner);
             if (current is null) return new("unavailable", Code: "verification_rulebook_unavailable");
             if (owner.Value.RulebookVersion == current.Value.Version)
@@ -370,6 +375,8 @@ public sealed class VerificationSessionService(PostgresTransactions transactions
         {
             var owner = await SessionOwnerAsync(db, session, sessionId, action is "enter" or "close", inner);
             if (owner is null) return new("not_found", Code: "verification_session_not_found");
+            if (IsReadOnlyLegacyRulebookVersion(owner.Value.RulebookVersion))
+                return new("conflict", Code: "verification_legacy_session_read_only");
             if (action == "enter")
             {
                 await using var upsert = db.CreateCommand("""
@@ -430,6 +437,8 @@ public sealed class VerificationSessionService(PostgresTransactions transactions
         {
             var owner = await SessionOwnerAsync(db, session, sessionId, true, inner);
             if (owner is null) return new("not_found", Code: "verification_session_not_found");
+            if (IsReadOnlyLegacyRulebookVersion(owner.Value.RulebookVersion))
+                return new("conflict", Code: "verification_legacy_session_read_only");
             string cashbook; string type;
             await using (var find = db.CreateCommand("SELECT cashbook_name,session_type FROM public.verification_sessions WHERE id=$1 AND client_id=$2"))
             {
@@ -509,11 +518,13 @@ public sealed class VerificationSessionService(PostgresTransactions transactions
         while (await reader.ReadAsync(ct)) changes.Add(new { config_version = reader.GetInt64(0), entity_type = reader.GetString(1),
             entity_id = NullableInt(reader, 2), action = reader.GetString(3), entity_name = NullableString(reader, 4),
             changed_by = reader.GetString(5), changed_at = reader.GetDateTime(6) });
-        return new("conflict", JsonSerializer.SerializeToElement(new { code = "RULEBOOK_VERSION_MISMATCH",
+        bool readOnly = IsReadOnlyLegacyRulebookVersion(oldVersion);
+        return new("conflict", JsonSerializer.SerializeToElement(new { code = readOnly ? "verification_legacy_session_read_only" : "RULEBOOK_VERSION_MISMATCH",
             message = "This Verification session uses an older Rulebook version.", session_id = sessionId,
             session_version = oldVersion, current_version = currentVersion, changes,
-            recovery = new { method = "POST", path = $"/api/verification/session/{sessionId}/rulebook/rebase", preserves_work = true } }),
-            "RULEBOOK_VERSION_MISMATCH");
+            read_only = readOnly,
+            recovery = readOnly ? null : new { method = "POST", path = $"/api/verification/session/{sessionId}/rulebook/rebase", preserves_work = true } }),
+            readOnly ? "verification_legacy_session_read_only" : "RULEBOOK_VERSION_MISMATCH");
     }
 
     private async Task<(Actor Actor, int ClientId, int? RulebookVersion)?> SessionOwnerAsync(PostgresTransactionContext db,
@@ -549,6 +560,8 @@ public sealed class VerificationSessionService(PostgresTransactions transactions
     {
         var owner = await SessionOwnerAsync(db, session, sessionId, true, ct);
         if (owner is null) return (null, new("not_found", Code: "verification_session_not_found"));
+        if (IsReadOnlyLegacyRulebookVersion(owner.Value.RulebookVersion))
+            return (null, new("conflict", Code: "verification_legacy_session_read_only"));
         var current = await ReadCurrentRulebookLockedAsync(db, owner.Value.Actor.TenantId, ct);
         if (current is null) return (null, new("unavailable", Code: "verification_rulebook_unavailable"));
         if (owner.Value.RulebookVersion is int oldVersion && oldVersion != current.Value.Version)
@@ -1016,6 +1029,8 @@ public sealed class VerificationSessionService(PostgresTransactions transactions
 
     private static VerificationRuntimeResult Success<T>(T value) => new("success", JsonSerializer.SerializeToElement(value));
     private static VerificationRuntimeResult Invalid(string code) => new("invalid", Code: code);
+    internal static bool IsReadOnlyLegacyRulebookVersion(int? version) =>
+        version is int value && ReadOnlyLegacyRulebookVersions.Contains(value);
     private static string? Alias(JsonElement row, IEnumerable<string> aliases)
     {
         foreach (var key in aliases)

@@ -3,6 +3,7 @@
     const tag = document.currentScript;
     const key = tag.dataset.context || '';
     window.AppNativeAdministration = true;
+    window.AppLocalDatabaseBackup = { native: true, enabled: tag.dataset.localDatabaseBackupEnabled === 'true' };
     const tenant = tag.dataset.tenant || '';
     if (tag.dataset.settingsEnabled === 'true') window.AppTenantSettings = {
         enabled: true, canEdit: tag.dataset.settingsAdmin === 'true'
@@ -64,6 +65,7 @@
             || path.startsWith('/api/columns')
             || path.startsWith('/api/templates')
             || path.startsWith('/api/backup')
+            || path.startsWith('/api/database-backup')
             || ['/api/upload/save-mapping', '/api/upload/saved-mapping'].includes(path)
             || path.startsWith('/api/upload/file/') || path.startsWith('/api/upload/staging/') || path === '/api/import-excel'
             || path.startsWith('/api/clients')

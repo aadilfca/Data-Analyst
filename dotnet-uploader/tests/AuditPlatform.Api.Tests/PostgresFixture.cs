@@ -232,6 +232,7 @@ public sealed class PostgresFixture : IAsyncLifetime
             "0005_tenant_user_roles.sql"), cancellationToken);
 
     public string OwnedRunDirectory => runDirectory;
+    public string BinaryDirectory => binaryDirectory;
 
     public async Task ApplyUploadJobsAsync(CancellationToken ct)
     {

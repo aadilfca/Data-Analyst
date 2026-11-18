@@ -47,6 +47,31 @@ public sealed class PostgresFoundationTests(PostgresFixture fixture) : IClassFix
     }
 
     [Fact]
+    public async Task Application_readiness_requires_enabled_shell_and_healthy_database()
+    {
+        await using (var app = CreateApp())
+        {
+            using var client = app.CreateClient();
+            await AssertApplicationHealthAsync(client, HttpStatusCode.ServiceUnavailable, "application_shell_not_configured");
+        }
+
+        await using (var app = CreateApp(configureShell: shell => shell.Enabled = true,
+            configureAuthentication: auth =>
+        {
+            auth.Enabled = true;
+            auth.PublicOrigin = "http://127.0.0.1:5080";
+        }, configureUsers: users => users.Enabled = true,
+            configureClients: clients => clients.Enabled = true))
+        {
+            using var client = app.CreateClient();
+            await AssertApplicationHealthAsync(client, HttpStatusCode.OK);
+            using var home = await client.GetAsync("/", TestCancellation);
+            Assert.Equal(HttpStatusCode.OK, home.StatusCode);
+            Assert.Equal("text/html", home.Content.Headers.ContentType?.MediaType);
+        }
+    }
+
+    [Fact]
     public async Task Unreachable_database_returns_sanitized_503_while_liveness_stays_200()
     {
         // Hold a local TCP port without accepting a PostgreSQL handshake. This
@@ -238,10 +263,18 @@ public sealed class PostgresFoundationTests(PostgresFixture fixture) : IClassFix
     [Fact]
     public void Invalid_database_settings_prevent_host_startup()
     {
-        using var app = CreateApp(options => options.MaximumPoolSize = 0);
+        var app = CreateApp(options => options.MaximumPoolSize = 0);
         // The entry point handles startup validation by returning exit code 1;
         // WebApplicationFactory must therefore refuse to expose a live server.
-        Assert.ThrowsAny<Exception>(() => app.CreateClient());
+        try { Assert.ThrowsAny<Exception>(() => app.CreateClient()); }
+        finally
+        {
+            // A factory whose host failed during startup has no hosted-service
+            // collection for DisposeAsync to stop. Startup rejection is the
+            // behavior under test; don't let this test-host cleanup bug mask it.
+            try { app.Dispose(); }
+            catch (ArgumentNullException) { }
+        }
     }
 
     [Theory]
@@ -274,7 +307,9 @@ public sealed class PostgresFoundationTests(PostgresFixture fixture) : IClassFix
         return new(Options.Create(settings));
     }
 
-    private WebApplicationFactory<Program> CreateApp(Action<PostgresOptions>? configure = null)
+    private WebApplicationFactory<Program> CreateApp(Action<PostgresOptions>? configure = null,
+        Action<ApplicationShellOptions>? configureShell = null, Action<AuthenticationOptions>? configureAuthentication = null,
+        Action<UserManagementOptions>? configureUsers = null, Action<ClientManagementOptions>? configureClients = null)
     {
         PostgresFixture.RequireSafeTarget(fixture.ConnectionString, fixture.Port);
         return new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
@@ -290,6 +325,10 @@ public sealed class PostgresFoundationTests(PostgresFixture fixture) : IClassFix
                 options.ReadinessTimeoutSeconds = 2;
                 configure?.Invoke(options);
             }));
+            builder.ConfigureServices(services => services.PostConfigure<ApplicationShellOptions>(options => configureShell?.Invoke(options)));
+            builder.ConfigureServices(services => services.PostConfigure<AuthenticationOptions>(options => configureAuthentication?.Invoke(options)));
+            builder.ConfigureServices(services => services.PostConfigure<UserManagementOptions>(options => configureUsers?.Invoke(options)));
+            builder.ConfigureServices(services => services.PostConfigure<ClientManagementOptions>(options => configureClients?.Invoke(options)));
         });
     }
 
@@ -308,5 +347,14 @@ public sealed class PostgresFoundationTests(PostgresFixture fixture) : IClassFix
         Assert.DoesNotContain("PRIVATE_PASSWORD_SENTINEL", body);
         Assert.DoesNotContain("127.0.0.1", body);
         Assert.DoesNotContain("auditplatform_foundation_", body);
+    }
+
+    private static async Task AssertApplicationHealthAsync(HttpClient client, HttpStatusCode expected, string? reason = null)
+    {
+        using var response = await client.GetAsync("/health/app-ready", TestCancellation);
+        Assert.Equal(expected, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestCancellation));
+        Assert.Equal(reason is null ? "ready" : "not_ready", json.RootElement.GetProperty("status").GetString());
+        if (reason is not null) Assert.Equal(reason, json.RootElement.GetProperty("reason").GetString());
     }
 }

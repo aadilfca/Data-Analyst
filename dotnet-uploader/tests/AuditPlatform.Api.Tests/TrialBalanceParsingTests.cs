@@ -150,8 +150,8 @@ public sealed class TrialBalanceParsingTests(TrialBalanceGoldenFixture fixture) 
         {during.CancelAfter(TimeSpan.FromMilliseconds(25));await Assert.ThrowsAnyAsync<OperationCanceledException>(()=>Task.Run(()=>TrialBalanceParser.Parse(path,".xlsx",input,cancellationToken:during.Token)));}
         Assert.Equal("parsing_timeout",Assert.Throws<TrialBalanceRejected>(()=>TrialBalanceParser.Parse(path,".xlsx",input,new(TimeoutSeconds:1),Ct)).Code);
         var timer=Stopwatch.StartNew();var review=TrialBalanceParser.Parse(path,".xlsx",input,cancellationToken:Ct);timer.Stop();
-        Assert.True(review.Valid);Assert.False(review.CanImport);Assert.Equal(10000,review.AccountCount);Assert.Equal(10000,review.SourceRows.Count);
-        SameAmount("6250",review.SourceLeafTotals["opening_dr_column"]);SameAmount("6250",review.SourceLeafTotals["closing_cr_column"]);
+        Assert.True(review.Valid);Assert.False(review.CanImport);Assert.Equal(15000,review.AccountCount);Assert.Equal(15000,review.SourceRows.Count);
+        SameAmount("9375",review.SourceLeafTotals["opening_dr_column"]);SameAmount("9375",review.SourceLeafTotals["closing_cr_column"]);
         long bytes=JsonSerializer.SerializeToUtf8Bytes(review).LongLength;Assert.True(bytes<=33554432);
         File.WriteAllText(Path.Combine(fixture.DirectoryPath,"large-result.json"),JsonSerializer.Serialize(new {rows=review.AccountCount,milliseconds=timer.ElapsedMilliseconds,bytes,passed=true}));
     }

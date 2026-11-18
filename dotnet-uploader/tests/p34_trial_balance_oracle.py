@@ -184,7 +184,7 @@ def main():
     workbook = openpyxl.Workbook(write_only=True)
     sheet = workbook.create_sheet('Data')
     sheet.append(HEADERS)
-    for i in range(10000):
+    for i in range(15000):
         amounts = [1.25, 0, 0, 0, 1.25, 0] if i % 2 == 0 else [0, 1.25, 0, 0, 0, 1.25]
         sheet.append([f'{i:06}', 'Synthetic'] + amounts)
     workbook.save(large)

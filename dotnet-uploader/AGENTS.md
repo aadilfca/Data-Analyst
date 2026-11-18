@@ -33,7 +33,7 @@ Plan dated 2026-11-10; Aadil approved full C# reporting and reports-before-audit
 
 ## Phased implementation plan
 
-Execution order: P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 (reports) → P41–P52 (audit modules) → P57–P63. Existing IDs remain stable; P02 records dependencies. P07A sets foundational direction; detailed policies follow the relevant approved phases.
+Execution order: P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 (reports) → P41–P52 (audit modules) → P57 → P59–P63. Existing IDs remain stable; Google Drive integration is removed from the plan. P02 records dependencies.
 
 | Phase / area | Bounded work and acceptance condition |
 |---|---|
@@ -103,13 +103,26 @@ Execution order: P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 (repor
 | P50 — Procedures | Port procedure checks and observation synchronization; verify per-line completion, voucher rollups, and freshness after edits. |
 | P51 — Verification engine | Port status gates, cross-check evaluation, and atomic Save/Verify; compare baseline decisions, historical hashes, and concurrent edits. |
 | P52 — Audit Workbook | Port Workbook reads, filters, badges, print data, and operational exports; verify shared-modal behavior and Verification parity. |
-| P57 — Dashboard/admin | Backend implementation accepted; default-off workspace statistics and administrator error APIs. Candidate `0023` remains unapplied; full workflow acceptance remains P61. See CHANGELOG_ARCHIVE.md. |
-| P58 — Google Drive | Port OAuth reconnect, encrypted credential handling, and supported Drive operations; verify authorization, retry, and checksum behavior. |
-| P59 — Database backups | Port backup coordination and verified recovery tooling; rehearse isolated restoration and document external-service/file limitations. |
-| P60 — Operational tools | Replace required startup, tray, maintenance, and backfill tools; inventory retained test tools and obtain approval for obsolete-script retirement. |
-| P61 — Integrated acceptance | Run full workflow, accounting, security, concurrency, network-failure, and performance comparisons; resolve failures without weakening controls. |
-| P62 — Deployment rehearsal | Verify containers, regions, costs, monitoring, storage, secrets, backups, and rollback in staging; record an operator runbook. |
-| P63 — Controlled cutover | Switch accepted modules in approved stages, observe results, and rehearse rollback; retire legacy backend code only after explicit acceptance. |
+| P57 — Dashboard/admin | Backend implementation accepted; default-off workspace statistics and administrator error APIs. Candidate `0023` remains unapplied; selected workflow review is deferred to P62 staging. See CHANGELOG_ARCHIVE.md. |
+| P59 — Backups | Implemented default-off local C# full-database ZIP and isolated restore; existing C# current/history workbook proof gates selected-template purge. No Drive integration or live migration. Automated checks pass; Aadil's C# Setup test remains. See CHANGELOG_ARCHIVE.md. |
+| P60 — Operational tools | Added a separate C# tray launcher with actionable readiness diagnostics and per-user local configuration guidance; Python launcher remains the rollback until P63. Manual tray/database check remains. No Python tool retired. |
+| P61 — System readiness | Database foundation 33/33 and backup/recovery 3/3 pass; configured shell/root readiness passes. Full Release build is clean. Tray menu and user-configured local DB remain operator checks; feature acceptance is deferred to P62. |
+| P62 — Deployment rehearsal | Added an inactive Render/Linux Docker candidate; live Python Blueprint unchanged. Build and rehearse only against a dedicated non-production DB; Aadil manually reviews selected app workflows in staging. See OPERATIONS.md. |
+| P63 — Controlled cutover | Separate production gate: requires staging acceptance, protected recovery copy on a different device, provider baseline and explicit cutover approval. Keep Python rollback available until accepted. |
+
+## Remaining cutover work packages
+
+These packages use the existing phase IDs; finish each before its dependent package.
+
+| Package | Result required |
+|---|---|
+| 1. Database assessment | Catalog/source preflight complete; `0022` defects repaired and all 25 candidates replayed on a local restore. Provider headroom/production baseline remain. See POSTGRES_SCHEMA_OWNERSHIP.md. |
+| 2. Isolated recovery | Passed: fresh snapshot backup restored locally; 96 tables, 438,001 rows, 84 sequences and accounting/schema controls match. Two protected copies share one disk; offline copy remains. See CHANGELOG_ARCHIVE.md. |
+| 3. Existing-data adoption | Configuration and Rulebook definitions rehearsed with originals intact and review exceptions retained. Historical evidence archive/adoption, Ledger import, remaining settings and report ownership remain. See POSTGRES_SCHEMA_OWNERSHIP.md. |
+| 4. Complete configuration | Correct shell prerequisites; configure native modules, credentials, jobs, private temporary storage, tray and backups. |
+| 5. P61 system readiness | Check isolated DB connection/configuration, tray/startup, backup/recovery and rollback; feature workflows are deferred. |
+| 6. P62 deployment rehearsal | Build the candidate, prove system startup/recovery/rollback in staging, then Aadil manually tests the selected C# features. |
+| 7. P63 controlled cutover | Only after staging acceptance and external recovery/provider prerequisites; switch in approved stages and preserve rollback. |
 
 ## Phase completion and tracking
 

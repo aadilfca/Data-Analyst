@@ -176,7 +176,7 @@ window.addEventListener('pageshow', function(event) {
 // Manual full backup is isolated from the existing JSON setup-data importer.
 (function () {
     'use strict';
-    if (window.AppConfigurationBackup) return;
+    const localOnly = window.AppLocalDatabaseBackup?.native === true;
     const pendingKey = 'fullDatabaseBackup.pending';
     let ready = false;
     let busy = false;
@@ -190,6 +190,23 @@ window.addEventListener('pageshow', function(event) {
     const createButton = document.getElementById('createFullDatabaseBackupBtn');
     const checkButton = document.getElementById('checkFullDatabaseBackupBtn');
     const message = document.getElementById('fullDatabaseBackupStatus');
+
+    // A C# host with this default-off capability must not probe the backup API
+    // or expose the panel until local backup is explicitly enabled.
+    if (localOnly && window.AppLocalDatabaseBackup?.enabled !== true) {
+        panel.hidden = true;
+        return;
+    }
+
+    if (localOnly) {
+        document.querySelector('[data-backup-step="3"]').textContent = '4. Verify local ZIP';
+        document.getElementById('fullDatabaseBackupTransfer').hidden = true;
+        document.getElementById('fullDatabaseBackupDriveLink').hidden = true;
+        const labels = document.querySelectorAll('#fullDatabaseBackupDetails dt');
+        if (labels[2]) labels[2].textContent = 'Local verification';
+        if (labels[4]) labels[4].textContent = 'File checked';
+        document.getElementById('fullDatabaseBackupDrive').textContent = 'Local file';
+    }
 
     function remember(value) {
         operation = value;
@@ -212,15 +229,17 @@ window.addEventListener('pageshow', function(event) {
     }
 
     function showBackup(value) {
-        if (!value || !value.bytes && !value.drive_verified) return;
+        if (!value || !value.bytes && !value.drive_verified && value.state !== 'complete') return;
         document.getElementById('fullDatabaseBackupDetails').hidden = false;
         document.getElementById('fullDatabaseBackupFile').textContent = value.file_name || 'Not yet created';
         document.getElementById('fullDatabaseBackupPath').textContent = value.local_path || '';
-        document.getElementById('fullDatabaseBackupDrive').textContent = value.drive_verified ? 'Verified — both copies matched' : 'Not yet verified';
+        document.getElementById('fullDatabaseBackupDrive').textContent = localOnly
+            ? (value.state === 'complete' ? 'Verified locally' : 'Not yet verified')
+            : (value.drive_verified ? 'Verified — both copies matched' : 'Not yet verified');
         document.getElementById('fullDatabaseBackupCreated').textContent = value.created_at ? new Date(value.created_at).toLocaleString() : '';
         document.getElementById('fullDatabaseBackupVerified').textContent = value.verified_at ? new Date(value.verified_at).toLocaleString() : 'Not yet completed';
         const link = document.getElementById('fullDatabaseBackupDriveLink');
-        link.hidden = !value.drive_verified;
+        link.hidden = localOnly || !value.drive_verified;
         if (value.drive_verified && /^https:\/\/drive\.google\.com\/file\/d\/[A-Za-z0-9_-]+\/view$/.test(value.drive_url || '')) link.href = value.drive_url;
         else { link.hidden = true; link.removeAttribute('href'); }
     }
@@ -317,12 +336,13 @@ window.addEventListener('pageshow', function(event) {
         const data = await response.json();
         ready = data.ready === true;
         running = data.backup && data.backup.running === true;
-        retryDrive = data.backup && data.backup.state === 'local_verified';
+        retryDrive = !localOnly && data.backup && data.backup.state === 'local_verified';
         showBackup(data.backup);
         showProgress(data.backup, running);
         if (data.backup && data.backup.state === 'complete') {
             remember(null);
-            say('Backup completed. The local and Drive copies matched; your working data stays in use.', 'success');
+            say(localOnly ? 'Full database backup saved and verified on this computer. Your working data stays in use.'
+                : 'Backup completed. The local and Drive copies matched; your working data stays in use.', 'success');
         } else if (running) {
             say('The backup is running. Its current step is shown below; check status before starting another copy.');
         } else if (retryDrive) {
@@ -331,7 +351,8 @@ window.addEventListener('pageshow', function(event) {
             remember(null);
             say(data.backup.error || 'The earlier local backup did not finish. Its files were retained; you can create a new backup.', 'error');
         } else {
-            say(ready ? 'Ready to create a new dated backup and verify its Drive copy.' : (data.requirements || ['Full backup is not configured on this computer.']).join(' '));
+            say(ready ? (localOnly ? 'Ready to create and verify a new dated local backup.' : 'Ready to create a new dated backup and verify its Drive copy.')
+                : (data.requirements || ['Full backup is not configured on this computer.']).join(' '));
         }
         buttons();
     }
@@ -352,7 +373,9 @@ window.addEventListener('pageshow', function(event) {
             document.getElementById('fullDatabaseBackupDriveLink').hidden = true;
         }
         buttons();
-        say(retryDrive ? 'Verifying the Drive copy of the saved backup…' : 'Creating and verifying your full backup. This can take several minutes.');
+        say(retryDrive ? 'Verifying the Drive copy of the saved backup…' : localOnly
+            ? 'Creating and verifying your full local backup. This can take several minutes.'
+            : 'Creating and verifying your full backup. This can take several minutes.');
         showProgress({ state: 'creating', progress: { stage: retryDrive ? 'drive' : 'export', completed_steps: retryDrive ? 3 : 0, label: retryDrive ? 'Copying to Drive and comparing both copies' : 'Saving database data' } }, true);
         startProgress(operation);
         try {
@@ -373,7 +396,8 @@ window.addEventListener('pageshow', function(event) {
             }
             remember(null);
             retryDrive = false;
-            say('Backup completed. The local and Drive copies matched; your working data stays in use.', 'success');
+            say(localOnly ? 'Full database backup saved and verified on this computer. Your working data stays in use.'
+                : 'Backup completed. The local and Drive copies matched; your working data stays in use.', 'success');
         } catch (_) {
             say('The connection was interrupted. Use Check backup status; the same backup reference has been retained.', 'error');
         } finally {

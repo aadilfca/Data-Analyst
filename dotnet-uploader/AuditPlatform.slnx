@@ -7,5 +7,7 @@
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/AuditPlatform.LogRehearsal/AuditPlatform.LogRehearsal.csproj" />
+    <Project Path="tools/AuditPlatform.Tray/AuditPlatform.Tray.csproj" />
+    <Project Path="tools/AuditPlatform.WorkspaceAdoption/AuditPlatform.WorkspaceAdoption.csproj" />
   </Folder>
 </Solution>

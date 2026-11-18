@@ -68,10 +68,24 @@ ALTER TABLE public.voucher_line_form_values
 ALTER TABLE public.voucher_check_status
     DROP CONSTRAINT IF EXISTS voucher_check_status_check_id_fkey;
 
--- Preserve the old Python uniqueness boundary for legacy records and give native records
--- tenant-qualified identity, including when a native ID equals a legacy ID.
-ALTER TABLE public.voucher_line_procedure_checks
-    DROP CONSTRAINT IF EXISTS voucher_line_procedure_checks_voucher_line_id_document_id_role_name_key;
+-- Preserve the old uniqueness boundary for legacy records and give native rows
+-- tenant-qualified identity. Deploy the compatible Python conflict predicates
+-- and restart its process before any legacy rollback; old SQL cannot infer these
+-- partial indexes. Mixed-backend read/write compatibility needs separate proof.
+-- PostgreSQL shortens generated constraint names by truncating individual name
+-- components, so resolve this exact column set instead of guessing its name.
+DO $$ DECLARE old_unique RECORD; BEGIN
+    FOR old_unique IN
+        SELECT c.conname FROM pg_constraint c
+        WHERE c.conrelid='public.voucher_line_procedure_checks'::regclass
+          AND c.contype='u'
+          AND ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(attnum,position)
+                    JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.attnum
+                    ORDER BY k.position)=ARRAY['voucher_line_id','document_id','role_name']::text[]
+    LOOP
+        EXECUTE format('ALTER TABLE public.voucher_line_procedure_checks DROP CONSTRAINT %I',old_unique.conname);
+    END LOOP;
+END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS voucher_line_procedure_checks_legacy_identity
     ON public.voucher_line_procedure_checks(voucher_line_id,document_id,role_name) WHERE rulebook_source='legacy';
 CREATE UNIQUE INDEX IF NOT EXISTS voucher_line_procedure_checks_native_identity

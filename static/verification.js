@@ -1634,8 +1634,11 @@ async function loadSessionRulebook(sessionId) {
             ? payload.detail
             : (payload.error && payload.error.http_detail);
         if (rulebookResponse.status === 409 && detail && typeof detail === 'object' &&
-            detail.code === 'RULEBOOK_VERSION_MISMATCH') {
-            const error = new Error(detail.message || 'This Verification session uses an older Rulebook version.');
+            ['RULEBOOK_VERSION_MISMATCH', 'verification_legacy_session_read_only'].includes(detail.code)) {
+            const readOnly = detail.code === 'verification_legacy_session_read_only';
+            const error = new Error(readOnly
+                ? 'This historical Verification session is preserved as read-only because its original Rulebook is unavailable.'
+                : (detail.message || 'This Verification session uses an older Rulebook version.'));
             error.code = detail.code;
             error.recovery = detail.recovery || null;
             error.changes = Array.isArray(detail.changes) ? detail.changes : [];
@@ -1817,7 +1820,9 @@ async function restoreSessionView(sessionId) {
         await activateSessionView(sessionId, targetVoucherId, rulebookPromise);
     } catch (e) {
         console.error('Error restoring verification session:', e);
-        if (e.code === 'RULEBOOK_VERSION_MISMATCH' && e.recoveryDeclined) {
+        if (e.code === 'verification_legacy_session_read_only') {
+            showDashboardWithMessage('This historical Verification session is preserved as read-only. It was not changed.');
+        } else if (e.code === 'RULEBOOK_VERSION_MISMATCH' && e.recoveryDeclined) {
             showDashboardWithMessage('The session was left unchanged because Rulebook recovery was declined.');
         } else {
             showDashboardWithMessage('Could not restore this verification session.');

@@ -225,6 +225,19 @@ public sealed class AuditRuleService(PostgresTransactions transactions, Postgres
         }, token);
     }, ct);
 
+    internal static async Task<bool> HasAdoptionProvenanceAsync(PostgresTransactionContext db, int tenantId,
+        int specimenId, CancellationToken ct)
+    {
+        await using (var exists = db.CreateCommand("SELECT to_regclass('public.platform_audit_rule_specimen_adoption_map') IS NOT NULL"))
+            if (await exists.ExecuteScalarAsync(ct) is not true) return false;
+        await using var command = db.CreateCommand("""
+            SELECT EXISTS(SELECT 1 FROM public.platform_audit_rule_specimen_adoption_map
+                WHERE tenant_id=$1 AND specimen_id=$2)
+            """);
+        command.Parameters.AddWithValue(tenantId); command.Parameters.AddWithValue(specimenId);
+        return await command.ExecuteScalarAsync(ct) is true;
+    }
+
     public Task<AuditRuleResult> HardDeleteSignatureSpecimenAsync(VerifiedSession? session, int id,
         long? expectedVersion, CancellationToken ct = default) => Run(async token =>
     {
@@ -240,6 +253,8 @@ public sealed class AuditRuleService(PostgresTransactions transactions, Postgres
             long version = await CurrentVersionAsync(db, tenant.Value, inner);
             if (expectedVersion is not null && expectedVersion.Value != version)
                 return new("conflict", Code: "audit_rules_version_changed", Version: version);
+            if (await HasAdoptionProvenanceAsync(db, tenant.Value, id, inner))
+                return new("conflict", Code: "signature_specimen_retained_as_migration_provenance", Version: version);
             string? name;
             await using (var delete = db.CreateCommand("""
                 DELETE FROM public.platform_audit_rule_signature_specimens
@@ -1230,7 +1245,7 @@ public sealed class AuditRuleService(PostgresTransactions transactions, Postgres
         return (bool)(await command.ExecuteScalarAsync(ct))!;
     }
 
-    private static async Task<bool> ValidateReferencesAsync(PostgresTransactionContext db, int tenant, string kind,
+    internal static async Task<bool> ValidateReferencesAsync(PostgresTransactionContext db, int tenant, string kind,
         JsonObject definition, CancellationToken ct)
     {
         if (kind == "documents" && !await ValidateDocumentDefinitionAsync(db, tenant, definition, ct))
@@ -1271,13 +1286,18 @@ public sealed class AuditRuleService(PostgresTransactions transactions, Postgres
                 ?? (definition["documents"] is JsonArray docs ? ReadObjectIds(docs, "document_id") : null);
             if (documentIds is null) return false;
             var perDocument = definition["document_fields"] as JsonObject ?? new JsonObject();
+            var matrix = definition["matrix"] as JsonObject;
+            // Populated matrices select fields in their cells; their flat
+            // compare_field can be the legacy '(matrix)' placeholder. Keep
+            // flat-field checks for non-matrix definitions and empty drafts.
+            if (matrix?["fields"] is not JsonArray { Count: > 0 })
             foreach (int documentId in documentIds)
             {
                 string? field = ReadString(perDocument[documentId.ToString(System.Globalization.CultureInfo.InvariantCulture)])
                     ?? ReadString(definition["compare_field"]);
                 if (field is null || !await DocumentFieldExistsAsync(db, tenant, documentId, field, ct)) return false;
             }
-            if (definition["matrix"] is JsonObject matrix && !await ValidateMatrixDefinitionAsync(db, tenant, definition, matrix, ct)) return false;
+            if (matrix is not null && !await ValidateMatrixDefinitionAsync(db, tenant, definition, matrix, ct)) return false;
         }
         return true;
     }
@@ -1396,7 +1416,7 @@ public sealed class AuditRuleService(PostgresTransactions transactions, Postgres
         return true;
     }
 
-    private static bool NormalizeVerificationFieldPolicy(JsonObject definition, TemplateDefinition? template)
+    internal static bool NormalizeVerificationFieldPolicy(JsonObject definition, TemplateDefinition? template)
     {
         if (definition["verification_field_policy"] is null) return true;
         if (definition["verification_field_policy"] is not JsonObject policy || template is null) return false;
@@ -1444,7 +1464,7 @@ public sealed class AuditRuleService(PostgresTransactions transactions, Postgres
         return true;
     }
 
-    private static bool ValidateFormFields(JsonArray fields)
+    internal static bool ValidateFormFields(JsonArray fields)
     {
         var names = new Dictionary<string, (string Type, string Scope, string[] Operands)>(StringComparer.OrdinalIgnoreCase);
         foreach (var node in fields)
@@ -1557,7 +1577,7 @@ public sealed class AuditRuleService(PostgresTransactions transactions, Postgres
         _ => false
     };
 
-    private static bool ValidateCategoryRules(JsonObject definition)
+    internal static bool ValidateCategoryRules(JsonObject definition)
     {
         JsonNode? rules = definition["validation_rules_json"] ?? definition["validation_rules"];
         if (rules is null) return true;
@@ -1724,7 +1744,7 @@ public sealed class AuditRuleService(PostgresTransactions transactions, Postgres
         return true;
     }
 
-    private async Task PublishSnapshotsAsync(PostgresTransactionContext db, int tenant, long version, CancellationToken ct)
+    internal static async Task PublishSnapshotsAsync(PostgresTransactionContext db, int tenant, long version, CancellationToken ct)
     {
         var payload = await BuildSnapshotAsync(db, tenant, version, ct);
         string canonical = Canonical(payload), fingerprint = Fingerprint(canonical);
@@ -1803,7 +1823,7 @@ public sealed class AuditRuleService(PostgresTransactions transactions, Postgres
         command.Parameters.AddWithValue(tenant); return (long)(await command.ExecuteScalarAsync(ct) ?? 1L);
     }
 
-    private async Task<JsonElement> BuildSnapshotAsync(PostgresTransactionContext db, int tenant, long version, CancellationToken ct)
+    private static async Task<JsonElement> BuildSnapshotAsync(PostgresTransactionContext db, int tenant, long version, CancellationToken ct)
     {
         var assertions = new List<JsonElement>(); var voucherChecks = new List<JsonElement>();
         await using var command = db.CreateCommand("""
@@ -1830,6 +1850,9 @@ public sealed class AuditRuleService(PostgresTransactions transactions, Postgres
             var element = JsonDocument.Parse(item.ToJsonString(JsonOptions)).RootElement.Clone();
             if (reader.GetString(1) == "assertions") assertions.Add(element); else voucherChecks.Add(element);
         }
+        // The Category compiler borrows this same connection. End the global
+        // reader before it starts its queries, including when no rows remain.
+        await reader.DisposeAsync();
         var activeAssertionIds = assertions.Select(assertion => assertion.GetProperty("id").GetInt32()).ToHashSet();
         for (int index = 0; index < voucherChecks.Count; index++)
         {
@@ -1851,7 +1874,7 @@ public sealed class AuditRuleService(PostgresTransactions transactions, Postgres
     private sealed record CategorySnapshotBuild(int Id, bool IsActive, string Fingerprint,
         string EvaluationFingerprint, string CanonicalPayload);
 
-    private async Task<List<CategorySnapshotBuild>> BuildCategorySnapshotsAsync(PostgresTransactionContext db, int tenant, CancellationToken ct)
+    private static async Task<List<CategorySnapshotBuild>> BuildCategorySnapshotsAsync(PostgresTransactionContext db, int tenant, CancellationToken ct)
     {
         var entities = AuditRuleKinds.All.ToDictionary(kind => kind, _ => new List<JsonObject>(), StringComparer.Ordinal);
         await using (var command = db.CreateCommand("""
@@ -2533,7 +2556,7 @@ public sealed class AuditRuleService(PostgresTransactions transactions, Postgres
         return JsonDocument.Parse(value.ToJsonString(JsonOptions)).RootElement.Clone();
     }
 
-    private JsonObject? ValidateDefinition(string kind, JsonElement request, bool requireComplete = true)
+    internal static JsonObject? ValidateDefinition(string kind, JsonElement request, bool requireComplete = true)
     {
         string[] comparisonTypes = ["All equal", "Sequential increasing", "Sequential decreasing",
             "Within tolerance %", "Must be equal", "May be less, never more"];

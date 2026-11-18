@@ -18,7 +18,7 @@ public sealed class TenantMappingService(PostgresTransactions transactions,Postg
         return (bool)(await command.ExecuteScalarAsync(ct))!;
     }
     private sealed record Actor(int Tenant,int User,string Name);
-    private sealed record Stored(long Revision,string? Binding,IReadOnlyList<SavedHeader> Entries);
+    private sealed record Stored(long Revision,string? Binding,IReadOnlyList<SavedHeader> Entries,bool PendingAdoption);
     private const string StaleMessage="Saved mapping or template changed. Reload and review the mapping before saving.";
 
     public Task<MappingResult> ReadAsync(VerifiedSession? session,int client,int template,CancellationToken ct=default)=>
@@ -73,6 +73,11 @@ public sealed class TenantMappingService(PostgresTransactions transactions,Postg
             { plans.Parameters.AddWithValue(client); plans.Parameters.AddWithValue(template); await plans.ExecuteNonQueryAsync(token); }
             await audit.WriteAsync(db,new AuditEvent(Guid.NewGuid(),Guid.NewGuid(),new LogActor("authenticated",actor.User,actor.Name),client,
                 clear ? "Delete":"Save","TenantMappings",JsonSerializer.SerializeToElement(new {tenant_id=actor.Tenant,template_id=template})),token);
+            if(await ReviewStoreExistsAsync(db,token))
+            {
+                await using var resolved=db.CreateCommand("DELETE FROM public.platform_saved_mapping_adoption_review WHERE tenant_id=$1 AND client_id=$2 AND template_id=$3");
+                AddScope(resolved,actor.Tenant,client,template);await resolved.ExecuteNonQueryAsync(token);
+            }
             var after=Snapshot(definition,await StoredAsync(db,actor.Tenant,client,template,token));
             return new(MappingStatus.Success,after,clear ? before.Entries.Count:saved.Length);
         },ct);
@@ -145,9 +150,7 @@ public sealed class TenantMappingService(PostgresTransactions transactions,Postg
     private static MappingSnapshot Snapshot(TemplateDefinition template,Stored stored)
     {
         string binding=SavedMappingDefinition.BindingKey(template);
-        var current=template.Columns.ToDictionary(c=>c.Id,c=>c.StorageKey);
-        bool review=stored.Entries.Count>0 && (stored.Binding!=binding || template.Columns.Any(c=>c.Review)
-            || stored.Entries.Any(e=>!current.TryGetValue(e.ColumnId,out var key)||key!=e.StorageKey));
+        bool review=SavedMappingDefinition.NeedsReview(template,stored.Binding,stored.Entries,stored.PendingAdoption);
         return new(stored.Revision,template.ConfigurationKey,binding,review,stored.Entries);
     }
     private static async Task<Stored> StoredAsync(PostgresTransactionContext db,int tenant,int client,int template,CancellationToken ct)
@@ -170,7 +173,18 @@ public sealed class TenantMappingService(PostgresTransactions transactions,Postg
             AddScope(command,tenant,client,template); await using var reader=await command.ExecuteReaderAsync(ct);
             while(await reader.ReadAsync(ct)) entries.Add(new(reader.GetInt32(0),reader.GetString(1),reader.GetString(2)));
         }
-        return new(revision,binding,entries);
+        bool pending=false;
+        if(await ReviewStoreExistsAsync(db,ct))
+        {
+            await using var review=db.CreateCommand("SELECT EXISTS(SELECT 1 FROM public.platform_saved_mapping_adoption_review WHERE tenant_id=$1 AND client_id=$2 AND template_id=$3)");
+            AddScope(review,tenant,client,template);pending=await review.ExecuteScalarAsync(ct) is true;
+        }
+        return new(revision,binding,entries,pending);
+    }
+    private static async Task<bool> ReviewStoreExistsAsync(PostgresTransactionContext db,CancellationToken ct)
+    {
+        await using var command=db.CreateCommand("SELECT to_regclass('public.platform_saved_mapping_adoption_review') IS NOT NULL");
+        return await command.ExecuteScalarAsync(ct) is true;
     }
     private static void AddScope(NpgsqlCommand command,int tenant,int client,int template)
     { command.Parameters.AddWithValue(tenant); command.Parameters.AddWithValue(client); command.Parameters.AddWithValue(template); }

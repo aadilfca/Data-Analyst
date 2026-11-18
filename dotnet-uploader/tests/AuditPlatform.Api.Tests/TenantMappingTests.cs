@@ -127,6 +127,18 @@ public sealed class TenantMappingTests(PostgresFixture fixture) : IClassFixture<
         Assert.Equal(1L,await Count("SELECT count(*) FROM public.upload_validation_plans WHERE id=1 AND status='superseded'"));
         Assert.Equal(2L,await Count("SELECT count(*) FROM public.upload_validation_plans WHERE id IN(2,3) AND status='ready'"));
         Assert.Empty((await Read(beta,11,id)).Entries);
+        // Pending legacy exceptions must remain visible until an authorized,
+        // current save reviews that exact client/template scope.
+        await Sql(await File.ReadAllTextAsync(Path.Combine(root,"database","migrations","0024_saved_mapping_adoption_review.sql"),Token));
+        await Sql($"INSERT INTO public.platform_saved_mapping_adoption_review(tenant_id,source_mapping_id,client_id,template_id,reason) VALUES(101,9001,10,{id},'missing_column_binding'),(101,9002,11,{id},'inactive_client')");
+        var pending=await Read(admin,10,id);
+        Assert.True(pending.NeedsReview); Assert.True((await Read(beta,11,id)).NeedsReview);
+        Assert.Equal(MappingStatus.Conflict,(await Save(admin,10,id,[new(key,"Stale review")],empty)).Status);
+        Assert.Equal(2L,await Count("SELECT count(*) FROM public.platform_saved_mapping_adoption_review"));
+        var reviewed=await Save(admin,10,id,[new(key,"  ERP Reference  ")],pending);
+        Assert.Equal(MappingStatus.Success,reviewed.Status); Assert.False(reviewed.Snapshot!.NeedsReview);
+        Assert.Equal(1L,await Count("SELECT count(*) FROM public.platform_saved_mapping_adoption_review WHERE client_id=11"));
+        Assert.True((await Read(beta,11,id)).NeedsReview);
         Assert.Equal(MappingStatus.Success,(await Save(other,20,otherId,[new(otherKey,"Different tenant ERP")])).Status);
         Assert.Equal(MappingStatus.Success,(await Save(staff,30,cId,[new(cKey,"Assigned ERP")])).Status);
         await Sql("UPDATE public.platform_engagement_assignments SET is_active=FALSE WHERE engagement_id=201 AND user_id=1");
@@ -190,6 +202,7 @@ public sealed class TenantMappingTests(PostgresFixture fixture) : IClassFixture<
         Assert.Equal(ColumnStatus.Success,(await flagOffColumns.DeleteAsync(admin,spare,Token)).Status);
         Assert.Equal(TemplateStatus.Success,(await flagOffTemplates.DeleteAsync(admin,spareId,spareTemplate.ConfigurationKey,Token)).Status);
 
+        await Sql($"INSERT INTO public.platform_saved_mapping_adoption_review(tenant_id,source_mapping_id,client_id,template_id,reason) VALUES(101,9003,10,{id},'missing_column_binding')");
         saved=await Read(admin,10,id); var sets=await Count("SELECT count(*) FROM public.platform_tenant_saved_mapping_sets");
         await Sql("UPDATE public.upload_validation_plans SET status='ready' WHERE id=1");
         await Sql("ALTER TABLE public.audit_log RENAME TO audit_unavailable");
@@ -201,7 +214,13 @@ public sealed class TenantMappingTests(PostgresFixture fixture) : IClassFixture<
         }
         finally { await Sql("ALTER TABLE public.audit_unavailable RENAME TO audit_log"); }
         var after=await Read(admin,10,id); Assert.Equal(saved.Revision,after.Revision); Assert.Equal(saved.Entries,after.Entries);
+        Assert.True(after.NeedsReview);
+        Assert.Equal(2L,await Count("SELECT count(*) FROM public.platform_saved_mapping_adoption_review"));
         Assert.Equal(sets,await Count("SELECT count(*) FROM public.platform_tenant_saved_mapping_sets"));
+        var betaReview=await Read(beta,11,id);
+        var betaCleared=await service.ClearAsync(beta,11,id,betaReview.Revision,betaReview.ConfigurationKey,Token);
+        Assert.Equal(MappingStatus.Success,betaCleared.Status); Assert.False(betaCleared.Snapshot!.NeedsReview);
+        Assert.Equal(1L,await Count("SELECT count(*) FROM public.platform_saved_mapping_adoption_review WHERE client_id=10"));
         Assert.Equal(1L,await Count("SELECT count(*) FROM public.upload_validation_plans WHERE id=1 AND status='ready'"));
         Assert.Equal(fingerprint,await Fingerprint());
         await Sql("ALTER TABLE public.platform_tenant_saved_mappings RENAME TO missing_mapping_dependency");

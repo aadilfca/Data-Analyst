@@ -13,6 +13,13 @@ public sealed record MappingResult(MappingStatus Status,MappingSnapshot? Snapsho
 
 public static class SavedMappingDefinition
 {
+    public static bool NeedsReview(TemplateDefinition template,string? storedBinding,IReadOnlyList<SavedHeader> entries,bool pendingAdoption=false)
+    {
+        var current=template.Columns.ToDictionary(column=>column.Id,column=>column.StorageKey);
+        return pendingAdoption || entries.Count>0 && (storedBinding!=BindingKey(template) || template.Columns.Any(column=>column.Review)
+            || entries.Any(entry=>!current.TryGetValue(entry.ColumnId,out var key)||key!=entry.StorageKey));
+    }
+
     // Display-only changes do not invalidate stable header bindings. Edits to
     // meaning/order/policy require review, independently of the editor token.
     public static string BindingKey(TemplateDefinition t)=>Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(

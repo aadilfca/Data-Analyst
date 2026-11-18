@@ -16,5 +16,6 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="4.0.1" PrivateAssets="all" />
     <ProjectReference Include="../../src/AuditPlatform.Api/AuditPlatform.Api.csproj" />
     <ProjectReference Include="../../tools/AuditPlatform.LogRehearsal/AuditPlatform.LogRehearsal.csproj" />
+    <ProjectReference Include="../../tools/AuditPlatform.WorkspaceAdoption/AuditPlatform.WorkspaceAdoption.csproj" />
   </ItemGroup>
 </Project>

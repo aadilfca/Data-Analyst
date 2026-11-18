@@ -892,17 +892,6 @@ def _guard_ledger_plan(request, payload):
         raise HTTPException(409, "The staged ledger changed after validation; validate again")
 
 
-def _check_upload_storage_budget(additional_bytes=0):
-    """Leave room for transaction/index growth and temporary validation payloads."""
-    budget = get_database_storage_budget_pg(additional_bytes)
-    if budget["blocked"]:
-        raise HTTPException(507, detail={
-            "message": "Upload stopped to keep the database below the 400 MB safety limit. Archive approved data before retrying.",
-            **budget,
-        })
-    return budget
-
-
 def _with_storage_status(result):
     """Expose the warning through the existing upload message/response contract."""
     if isinstance(result, dict):
@@ -2053,16 +2042,9 @@ def _create_validation_plan(
     plan_id = uuid4().hex
     file_hash = _validation_file_sha256(file_path)
     request_signature = _validation_request_signature(request)
-    # Include the action payload, source/index growth and allocation overhead.
     with pg_transaction():
-        execute_query_pg("SELECT pg_advisory_xact_lock(hashtext('upload-storage-budget'))")
         execute_query_pg("SELECT pg_advisory_xact_lock(hashtext(%s))",
                          (f"upload-validation:{request.client_id}:{request.template_id}",))
-        _check_upload_storage_budget(
-            len(json.dumps(plan_payload, default=str).encode("utf-8")) * 4
-            + int(plan_payload.get("history_estimated_bytes", 0))
-            + 1_048_576
-        )
         execute_write_pg(
             """DELETE FROM upload_validation_plans
                WHERE (client_id = %s AND template_id = %s)
@@ -5150,12 +5132,6 @@ def _import_validation_plan(request: ImportRequest, background_tasks: Background
                                  pg_transaction, _validation_request_signature(request))
 
     with pg_transaction() as conn:
-        execute_query_pg("SELECT pg_advisory_xact_lock(hashtext('upload-storage-budget'))")
-        _check_upload_storage_budget(
-            len(json.dumps(plan_payload, default=str).encode("utf-8")) * 4
-            + int(plan_payload.get("history_estimated_bytes", 0))
-            + 1_048_576
-        )
         execute_query_pg(
             "SELECT pg_advisory_xact_lock(hashtext(%s))",
             (f"upload-validation:{request.client_id}:{request.template_id}",),
@@ -5967,16 +5943,9 @@ def validate_and_import(request: ImportRequest, background_tasks: BackgroundTask
     # both raw client_data and derived classification writes succeed.
     cashflow_voucher_resolution = None
     with pg_transaction() as conn:
-        execute_query_pg("SELECT pg_advisory_xact_lock(hashtext('upload-storage-budget'))")
         execute_query_pg(
             "SELECT pg_advisory_xact_lock(hashtext(%s))",
             (f"upload-validation:{request.client_id}:{request.template_id}",),
-        )
-        growth_rows = change_detection.get("new", []) + [item["new_row_data"] for item in change_detection.get("changed", [])]
-        _check_upload_storage_budget(
-            len(json.dumps(growth_rows, default=str).encode("utf-8")) * 4
-            + _history_storage_estimate(change_detection)
-            + 1_048_576
         )
         _apply_source_order_updates(conn, request, change_detection.get('source_order', []))
         execute_write_pg("UPDATE uploaded_files SET status = 'Imported', client_id = %s WHERE id = %s",

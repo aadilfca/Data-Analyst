@@ -77,6 +77,8 @@ public sealed class ReportInputTests
                 CREATE TABLE public.account_control_cashflow_settings(client_id integer PRIMARY KEY,
                     match_internal_transfers boolean NOT NULL DEFAULT true,receipt_presentation text NOT NULL DEFAULT 'gross',
                     source_upload_id integer,source_template_id integer);
+                CREATE TABLE public.cashflow_report_revisions(client_id integer PRIMARY KEY,revision bigint NOT NULL DEFAULT 1,
+                    changed_at timestamptz,changed_by text,change_reason text);
                 CREATE TABLE public.account_control_cashflow_categories(id integer PRIMARY KEY,client_id integer NOT NULL,
                     category_key text NOT NULL,label text NOT NULL,sort_order integer NOT NULL DEFAULT 0,is_active boolean NOT NULL DEFAULT true);
                 CREATE TABLE public.account_control_cashflow_category_assignments(id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -190,7 +192,7 @@ public sealed class ReportInputTests
             var ledgerRequest=new ReportInputRequest { ClientId=10,Kind=ReportInputKind.LedgerSource,UploadId=1,
                 TemplateId=1,PeriodStart="2026-01-01",PeriodEnd="2026-01-31",CategorySource=ReportAccountCategorySource.Cashflow };
             var cashflowInputs=await service.CaptureAsync(owner,ledgerRequest,Ct);
-            Assert.Equal("success",cashflowInputs.Status);
+            Assert.Equal("success",cashflowInputs.Status == "success" ? "success" : $"{cashflowInputs.Status} ({cashflowInputs.Code})");
             Assert.Single(cashflowInputs.Snapshot!.CashflowLedgerEvidenceUploads.Items);
             Assert.Single(cashflowInputs.Snapshot.CashflowLedgerEvidenceRows.Items);
             Assert.Equal("B1",cashflowInputs.Snapshot.CashflowLedgerEvidenceRows.Items[0].AccountCode);
