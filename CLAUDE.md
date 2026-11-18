@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- dotnet-uploader/ → Disabled native APIs; bounded Upload/setup, P41–P45 Audit Rules, P46–P50 Verification sessions, review, evidence and Forms, and P53A–P56 reports/jobs. Local acceptance remains. See CHANGELOG_ARCHIVE.md.
+- dotnet-uploader/ → Disabled native APIs; bounded Upload/setup, P41–P45 Audit Rules, P46–P51 Verification, and P53A–P56 reports/jobs. Acceptance and route ownership remain. See CHANGELOG_ARCHIVE.md.
 - dotnet-uploader/src/AuditPlatform.Api/Verification/VerificationEvidenceService.cs → Scoped evidence links, Form/Physical Bill modal support, procedure checks, and observation persistence. See CHANGELOG_ARCHIVE.md.
 
 - routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, statements, category-role notes with unallocated rows, profit links, reconciliations, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
@@ -43,7 +43,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Two-pane Audit Rules editor for Documents, Cross-checks, Categories, Voucher Checks and Assertions, plus Assign Categories. See CHANGELOG_ARCHIVE.md.
 - category_control_center_prototype.html, upload_mapping_prototype.html → standalone review-only Category Control Center and inline upload mapping prototypes; sample data only, no backend connection.
-- routers/verification.py + static/verification.* → Python Verification reference; disabled C# P46–P50 lifecycle, navigation, atomic review, status gates, evidence, Forms and Physical Bills; parity continues in P51–P52. See CHANGELOG_ARCHIVE.md.
+- routers/verification.py + static/verification.* → Python Verification reference; disabled C# P46–P51 sessions, review, Audit Workbook and exports; P52 route parity remains. See CHANGELOG_ARCHIVE.md.
 - static/template-viewer.html, static/template-viewer.js → Scoped, bounded Data Bank viewer with native precision/freshness guards and Python compatibility. See CHANGELOG_ARCHIVE.md.
 - static/search_index.js → deleted; feature registry merged into `NAV_MANIFEST` in `client_context.js` — do not recreate. See CHANGELOG_ARCHIVE.md.
 - static/loading_ui.js → shared `window.LoadingUI` primitives, including token-based target-aware global progress-cursor ownership. See CHANGELOG_ARCHIVE.md.
@@ -270,6 +270,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-18: Added default-off .NET P51 Audit Workbook and Verification Excel export; see CHANGELOG_ARCHIVE.md.
 - 2026-11-18: Added default-off C# P50 Forms, Physical Bills and native Rulebook evidence identities; candidate migration `0022` remains unapplied. See CHANGELOG_ARCHIVE.md.
 - 2026-11-18: Added default-off C# P49 Verification evidence links, procedure ticks and observations. Local acceptance remains; see CHANGELOG_ARCHIVE.md.
 - 2026-11-18: Added default-off C# P48 atomic Verification saves, validation/completion, voucher checks and Cleared/Query gates. Local acceptance remains; see CHANGELOG_ARCHIVE.md.
@@ -286,14 +287,8 @@ One line per file group: what it is now. Full build history for every entry live
 - 2026-11-11: Added disabled tenant templates and corrected Python list invalidation; locally accepted. See CHANGELOG_ARCHIVE.md, Tenant templates P13.
 - 2026-11-11: Added disabled tenant columns with immutable keys and editable labels; locally accepted. See CHANGELOG_ARCHIVE.md, Tenant columns P12.
 - 2026-11-11: Added disabled tenant settings/holidays and safe Settings UI; locally accepted. See CHANGELOG_ARCHIVE.md, Tenant settings P11.
-- 2026-11-11: Added disabled .NET shell hosting and session-bound tenant selection; locally accepted. See CHANGELOG_ARCHIVE.md, Application shell P10.
-- 2026-11-11: Added disabled tenant-scoped .NET client management and guarded selection; locally accepted. See CHANGELOG_ARCHIVE.md, Tenant clients P09.
-- 2026-11-11: Added disabled tenant-scoped .NET user management; locally accepted. See CHANGELOG_ARCHIVE.md, Tenant users P08.
-- 2026-11-11: Added isolated engagement and audit-team eligibility foundation; locally accepted. See CHANGELOG_ARCHIVE.md, Engagement foundation P07C.
-- 2026-11-11: Added isolated .NET tenant foundation and guarded membership lookup; locally accepted. See CHANGELOG_ARCHIVE.md, Tenant foundation P07B.
-- 2026-11-11: Documented tenant collaboration foundations; detailed policies follow their development phases. See CHANGELOG_ARCHIVE.md, Collaboration contract P07A.
-- 2026-11-11: Planned tenant and audit-firm collaboration foundations before P08; detailed workflow decisions pending. See CHANGELOG_ARCHIVE.md, Tenant collaboration plan.
-- 2026-11-11: Added disabled .NET authentication and guarded session checks; locally accepted. See CHANGELOG_ARCHIVE.md, .NET authentication P07.
+- 2026-11-11: Added .NET tenant/collaboration foundations, engagement and audit-team eligibility (P07A–P07C). See CHANGELOG_ARCHIVE.md.
+- 2026-11-11: Added .NET authentication, tenant users/clients and selected-client shell (P07–P10). See CHANGELOG_ARCHIVE.md.
 - 2026-11-10: Data Bank renders datasets before all-time metrics and derives client size from grouped estimates; local acceptance pending. See CHANGELOG_ARCHIVE.md, Data Bank first-render performance.
 - 2026-11-10: Compressed older Status entries into concise archive pointers, restoring the log budget.
 - 2026-11-09: Optimized upload comparisons and corrected Gate Pass/Vendor Bill headers; local acceptance pending. See CHANGELOG_ARCHIVE.md, Gate Pass and Vendor Bill ERP mappings.

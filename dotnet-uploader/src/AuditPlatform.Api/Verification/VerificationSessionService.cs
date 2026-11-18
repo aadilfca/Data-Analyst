@@ -558,6 +558,22 @@ public sealed class VerificationSessionService(PostgresTransactions transactions
             checked((int)current.Value.Version), current.Value.Payload), null);
     }
 
+    // Read-only projections use the same selected-client/session and frozen Rulebook checks
+    // without taking the write lock used by review mutations.
+    internal async Task<(VerificationReviewContext? Context, VerificationRuntimeResult? Failure)> ResolveReadContextAsync(
+        PostgresTransactionContext db, VerifiedSession? session, int sessionId, CancellationToken ct)
+    {
+        var owner = await SessionOwnerAsync(db, session, sessionId, false, ct);
+        if (owner is null) return (null, new("not_found", Code: "verification_session_not_found"));
+        var current = await ReadCurrentRulebookAsync(db, owner.Value.Actor.TenantId, ct);
+        if (current is null) return (null, new("unavailable", Code: "verification_rulebook_unavailable"));
+        if (owner.Value.RulebookVersion is int oldVersion && oldVersion != current.Value.Version)
+            return (null, await VersionMismatch(db, ct, sessionId, owner.Value.Actor.TenantId, oldVersion, current.Value.Version, ct));
+        return (new(owner.Value.Actor.TenantId, owner.Value.Actor.UserId, owner.Value.Actor.Username,
+            owner.Value.Actor.TenantRole, owner.Value.ClientId, owner.Value.RulebookVersion,
+            checked((int)current.Value.Version), current.Value.Payload), null);
+    }
+
     internal static async Task<Dictionary<string, object?>?> VoucherNavigationWithinTransactionAsync(
         PostgresTransactionContext db, int tenantId, int sessionId, int currentDetailId, string direction, CancellationToken ct)
     {

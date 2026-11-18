@@ -27,6 +27,119 @@ public sealed class VerificationStatusService
         return result;
     }
 
+    // Audit Workbook needs the same per-Document completion badges as the Python read model,
+    // but a GET must never recompute or persist Cleared/Query status. Reuse the existing Form,
+    // Physical Bill, evidence-link, role-tick and voucher-check rules in a read-only projection.
+    internal async Task<IReadOnlyDictionary<int, VerificationAuditWorkbookProcedureProgress>>
+        AuditWorkbookProcedureProgressAsync(PostgresTransactionContext db, VerificationReviewContext owner,
+            IReadOnlyList<VerificationAuditWorkbookLineInput> lines, CancellationToken ct)
+    {
+        var result = new Dictionary<int, VerificationAuditWorkbookProcedureProgress>();
+        var siblingCache = new Dictionary<int, int[]>();
+        var categoryCache = new Dictionary<string, (int? Id, string? Name)>(StringComparer.Ordinal);
+        var voucherCheckCache = new Dictionary<string, bool>(StringComparer.Ordinal);
+        var documentCompletionCache = new Dictionary<(string Siblings, int DocumentId), bool>();
+
+        foreach (var line in lines)
+        {
+            int? categoryId = line.AppliedCategoryId;
+            string? categoryName = line.AppliedCategoryName;
+            if (categoryId is null)
+            {
+                string? code = AccountCode(line.RowData);
+                if (string.IsNullOrWhiteSpace(code))
+                {
+                    result[line.DetailId] = new(0, 0, null, null);
+                    continue;
+                }
+                if (!categoryCache.TryGetValue(code, out var resolved))
+                {
+                    resolved = await ResolveCategoryAsync(db, owner.TenantId, owner.ClientId, code, ct);
+                    categoryCache[code] = resolved;
+                }
+                categoryId = resolved.Id;
+                categoryName = resolved.Name;
+            }
+
+            if (categoryId is null)
+            {
+                result[line.DetailId] = new(0, 0, null, null);
+                continue;
+            }
+
+            JsonElement profile = FindCategory(owner.Rulebook, categoryId.Value);
+            if (profile.ValueKind != JsonValueKind.Object
+                || (line.AppliedCategoryId is null
+                    && (!profile.TryGetProperty("is_active", out var active) || !active.GetBoolean())))
+            {
+                result[line.DetailId] = new(0, 0, categoryId, categoryName);
+                continue;
+            }
+
+            var documents = ArrayProperty(profile, "documents").ToArray();
+            if (documents.Length == 0)
+            {
+                result[line.DetailId] = new(0, 0, categoryId, categoryName);
+                continue;
+            }
+
+            if (!siblingCache.TryGetValue(line.ClientDataId, out var siblings))
+            {
+                siblings = await ReadSiblingIdsAsync(db, line.DetailId, line.ClientDataId, owner.ClientId, ct);
+                siblingCache[line.ClientDataId] = siblings;
+            }
+            string siblingKey = string.Join(',', siblings);
+            var roles = ProcedureRoles(profile);
+            bool? voucherChecksComplete = null;
+            int done = 0;
+            double? amount = Numeric(line.ExtractAmount);
+
+            foreach (var document in documents)
+            {
+                int documentId = Int(document, "document_id") ?? 0;
+                if (documentId < 1) continue;
+                var cacheKey = (siblingKey, documentId);
+                bool complete;
+                if (!documentCompletionCache.TryGetValue(cacheKey, out complete))
+                {
+                    string type = String(document, "document_type") ?? "linked_template";
+                    int? templateId = Int(document, "template_id");
+                    if (type == "physical_bill")
+                        complete = await PhysicalBillCompleteAsync(db, owner.TenantId, siblings, documentId, amount, ct);
+                    else if (type == "form")
+                    {
+                        complete = await FormCompleteAsync(db, owner.TenantId, siblings, document, amount, ct);
+                        if (complete && roles.TryGetValue(documentId, out var formRoles) && formRoles.Length > 0)
+                            complete = await RolesCompleteAsync(db, owner.TenantId, siblings, documentId, formRoles, ct);
+                    }
+                    else if (templateId is not null)
+                        complete = await LinkedAsync(db, owner.TenantId, siblings, documentId, ct);
+                    else
+                        complete = roles.TryGetValue(documentId, out var requiredRoles) && requiredRoles.Length > 0
+                            && await RolesCompleteAsync(db, owner.TenantId, siblings, documentId, requiredRoles, ct);
+
+                    documentCompletionCache[cacheKey] = complete;
+                }
+
+                if (complete && Bool(document, "transaction_level_approval"))
+                {
+                    string voucherKey = line.TransactionRef ?? "";
+                    if (!voucherCheckCache.TryGetValue(voucherKey, out bool checksComplete))
+                    {
+                        checksComplete = await VoucherChecksCompleteAsync(db, owner.TenantId, owner.ClientId,
+                            line.TransactionRef, owner.Rulebook, ct);
+                        voucherCheckCache[voucherKey] = checksComplete;
+                    }
+                    voucherChecksComplete ??= checksComplete;
+                    complete = voucherChecksComplete.Value;
+                }
+                if (complete) done++;
+            }
+            result[line.DetailId] = new(done, documents.Length, categoryId, categoryName);
+        }
+        return result;
+    }
+
     private static async Task<VerificationLineStatusResult?> RecomputeLineAsync(PostgresTransactionContext db,
         VerificationReviewContext owner, int detailId, CancellationToken ct)
     {

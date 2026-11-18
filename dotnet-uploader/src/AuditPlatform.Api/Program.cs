@@ -162,6 +162,7 @@ builder.Services.AddSingleton<VerificationFormService>();
 builder.Services.AddSingleton<VerificationPhysicalBillService>();
 builder.Services.AddSingleton<VerificationCrossCheckService>();
 builder.Services.AddSingleton<VerificationReviewService>();
+builder.Services.AddSingleton<AuditWorkbookService>();
 builder.Services.AddOptions<ReconciliationSetupOptions>()
     .Bind(builder.Configuration.GetSection(ReconciliationSetupOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
 builder.Services.AddSingleton<ReconciliationSetupService>();
@@ -230,6 +231,8 @@ foreach (var route in new[]
     ("verification-session-index", "GET", "/api/verification/session/{session_id:int}/index"),
     ("verification-session-progress", "GET", "/api/verification/session/{session_id:int}/progress"),
     ("verification-voucher-stats", "GET", "/api/verification/session/{session_id:int}/voucher_stats"),
+    ("verification-audit-workbook", "GET", "/api/verification/session/{session_id:int}/audit_workbook"),
+    ("verification-export-excel", "GET", "/api/verification/export_verification_excel/{session_id:int}"),
     ("verification-audited-cashbook", "GET", "/api/verification/audited_cashbook/{session_id:int}"),
     ("verification-rulebook", "GET", "/api/verification/session/{session_id:int}/rulebook"),
     ("verification-rulebook-rebase", "POST", "/api/verification/session/{session_id:int}/rulebook/rebase"),

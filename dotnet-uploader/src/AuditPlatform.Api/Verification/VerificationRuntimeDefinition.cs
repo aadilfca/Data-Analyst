@@ -168,3 +168,10 @@ internal sealed record VerificationReviewContext(int TenantId, int UserId, strin
 
 internal sealed record VerificationLineStatusResult(string ClearedStatus, int? MatrixVersion,
     int? CategoryId, string? CategoryName, string AppliedRulesetHash);
+
+internal sealed record VerificationAuditWorkbookLineInput(int DetailId, int ClientDataId,
+    string? TransactionRef, JsonElement RowData, string? ExtractAmount, int? AppliedCategoryId,
+    string? AppliedCategoryName);
+
+internal sealed record VerificationAuditWorkbookProcedureProgress(int Done, int Total,
+    int? CategoryId, string? CategoryName);
