@@ -152,6 +152,12 @@ builder.Services.AddSingleton(sp=>new TrialBalanceReviewService(sp.GetRequiredSe
 builder.Services.AddOptions<VerificationSetupOptions>()
     .Bind(builder.Configuration.GetSection(VerificationSetupOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
 builder.Services.AddSingleton<VerificationSetupService>();
+builder.Services.AddOptions<VerificationRuntimeOptions>()
+    .Bind(builder.Configuration.GetSection(VerificationRuntimeOptions.SectionName)).ValidateDataAnnotations()
+    .Validate(o=>o.Valid(),"Verification runtime settings are invalid.").ValidateOnStart();
+builder.Services.AddSingleton<VerificationSessionService>();
+builder.Services.AddSingleton<VerificationStatusService>();
+builder.Services.AddSingleton<VerificationReviewService>();
 builder.Services.AddOptions<ReconciliationSetupOptions>()
     .Bind(builder.Configuration.GetSection(ReconciliationSetupOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
 builder.Services.AddSingleton<ReconciliationSetupService>();
@@ -192,6 +198,51 @@ var auditRuleOwner = builder.Configuration.GetValue<bool>($"{AuditRulesOptions.S
     && builder.Configuration.GetValue<bool>($"{CoexistenceOptions.SectionName}:Enabled")
     && builder.Configuration.GetValue<bool>($"{ApplicationShellOptions.SectionName}:Enabled")
     ? CoexistenceOwner.DotNet : CoexistenceOwner.Legacy;
+var verificationOwner = builder.Configuration.GetValue<bool>($"{VerificationRuntimeOptions.SectionName}:Enabled")
+    && builder.Configuration.GetValue<bool>($"{VerificationRuntimeOptions.SectionName}:RouteOwnershipEnabled")
+    && builder.Configuration.GetValue<bool>($"{AuditRulesOptions.SectionName}:Enabled")
+    && builder.Configuration.GetValue<bool>($"{AuditRulesOptions.SectionName}:RouteOwnershipEnabled")
+    && builder.Configuration.GetValue<bool>($"{CoexistenceOptions.SectionName}:Enabled")
+    && builder.Configuration.GetValue<bool>($"{ApplicationShellOptions.SectionName}:Enabled")
+    ? CoexistenceOwner.DotNet : CoexistenceOwner.Legacy;
+foreach (var route in new[]
+{
+    ("verification-cashbooks", "GET", "/api/verification/cashbooks"),
+    ("verification-local-vendors", "GET", "/api/verification/local_vendors"),
+    ("verification-import-vendors", "GET", "/api/verification/import_vendors"),
+    ("verification-export-customers", "GET", "/api/verification/export_customers"),
+    ("verification-payroll-accounts", "GET", "/api/verification/payroll_accounts"),
+    ("verification-contractor-accounts", "GET", "/api/verification/contractor_accounts"),
+    ("verification-latest-cashbook-date", "GET", "/api/verification/latest_cashbook_date"),
+    ("verification-latest-local-vendor-date", "GET", "/api/verification/latest_local_vendor_date"),
+    ("verification-latest-import-vendor-date", "GET", "/api/verification/latest_import_vendor_date"),
+    ("verification-latest-export-customer-date", "GET", "/api/verification/latest_export_customer_date"),
+    ("verification-latest-payroll-date", "GET", "/api/verification/latest_payroll_date"),
+    ("verification-latest-contractor-date", "GET", "/api/verification/latest_contractor_date"),
+    ("verification-preview", "GET", "/api/verification/preview_cashbook"),
+    ("verification-start-session", "POST", "/api/verification/start_session"),
+    ("verification-next-voucher", "GET", "/api/verification/next/{session_id:int}"),
+    ("verification-voucher-navigation", "GET", "/api/verification/voucher_nav/{session_id:int}"),
+    ("verification-session-index", "GET", "/api/verification/session/{session_id:int}/index"),
+    ("verification-session-progress", "GET", "/api/verification/session/{session_id:int}/progress"),
+    ("verification-voucher-stats", "GET", "/api/verification/session/{session_id:int}/voucher_stats"),
+    ("verification-audited-cashbook", "GET", "/api/verification/audited_cashbook/{session_id:int}"),
+    ("verification-rulebook", "GET", "/api/verification/session/{session_id:int}/rulebook"),
+    ("verification-rulebook-rebase", "POST", "/api/verification/session/{session_id:int}/rulebook/rebase"),
+    ("verification-session-range", "POST", "/api/verification/session/{session_id:int}/reconcile_range"),
+    ("verification-presence-enter", "POST", "/api/verification/presence/enter"),
+    ("verification-presence-heartbeat", "POST", "/api/verification/presence/heartbeat"),
+    ("verification-presence-leave", "POST", "/api/verification/presence/leave"),
+    ("verification-session-close", "POST", "/api/verification/session/close"),
+    ("verification-save-line-items", "POST", "/api/verification/save_line_items"),
+    ("verification-save-and-verify", "POST", "/api/verification/save_and_verify_voucher"),
+    ("verification-save-and-verify-bundle", "POST", "/api/verification/save_and_verify_voucher_bundle"),
+    ("verification-voucher-checks-verify", "POST", "/api/verification/verify_voucher_checks"),
+    ("verification-validate", "POST", "/api/verification/validate"),
+    ("verification-complete", "POST", "/api/verification/complete")
+})
+    builder.Services.AddSingleton(new CoexistenceRoute(route.Item1, route.Item2, route.Item3,
+        verificationOwner, CoexistenceAccess.Authenticated));
 foreach (var kind in AuditRuleKinds.All)
 {
     string collection = $"/api/audit-rules/{kind}";
@@ -322,6 +373,12 @@ if(app.Services.GetRequiredService<IOptions<VerificationSetupOptions>>().Value.E
         ||!app.Services.GetRequiredService<IOptions<PostgresOptions>>().Value.Enabled))
     throw new OptionsValidationException(VerificationSetupOptions.SectionName,typeof(VerificationSetupOptions),
         ["Verification setup requires PostgreSQL and the authenticated application shell."]);
+if (app.Services.GetRequiredService<IOptions<VerificationRuntimeOptions>>().Value.Enabled
+    && (!app.Services.GetRequiredService<IOptions<ApplicationShellOptions>>().Value.Enabled
+        || !app.Services.GetRequiredService<IOptions<PostgresOptions>>().Value.Enabled
+        || !app.Services.GetRequiredService<IOptions<AuditRulesOptions>>().Value.Enabled))
+    throw new OptionsValidationException(VerificationRuntimeOptions.SectionName,typeof(VerificationRuntimeOptions),
+        ["Verification runtime requires PostgreSQL, the authenticated application shell, and compiled Audit Rules."]);
 if (app.Services.GetRequiredService<IOptions<ReconciliationSetupOptions>>().Value.Enabled
     && (!app.Services.GetRequiredService<IOptions<ApplicationShellOptions>>().Value.Enabled
         || !app.Services.GetRequiredService<IOptions<PostgresOptions>>().Value.Enabled))

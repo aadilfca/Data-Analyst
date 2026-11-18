@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- dotnet-uploader/ → Disabled native APIs; bounded Upload/setup, P41–P45 Audit Rules APIs/compiler, and P53A–P56 reports/workbooks/jobs. Local database acceptance remains. See CHANGELOG_ARCHIVE.md.
+- dotnet-uploader/ → Disabled native APIs; bounded Upload/setup, P41–P45 Audit Rules, P46–P48 Verification sessions/review, and P53A–P56 reports/jobs. Local acceptance remains. See CHANGELOG_ARCHIVE.md.
 
 - routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, statements, category-role notes with unallocated rows, profit links, reconciliations, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
 
@@ -42,7 +42,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Two-pane Audit Rules editor for Documents, Cross-checks, Categories, Voucher Checks and Assertions, plus Assign Categories. See CHANGELOG_ARCHIVE.md.
 - category_control_center_prototype.html, upload_mapping_prototype.html → standalone review-only Category Control Center and inline upload mapping prototypes; sample data only, no backend connection.
-- routers/verification.py + static/verification.* → Configured verification workstreams, Treasury routing, signed movements, evidence, checks, statuses and loading feedback. See CHANGELOG_ARCHIVE.md.
+- routers/verification.py + static/verification.* → Python Verification reference; disabled C# P46–P48 lifecycle, navigation, atomic review and status gates; parity continues in P49–P52. See CHANGELOG_ARCHIVE.md.
 - static/template-viewer.html, static/template-viewer.js → Scoped, bounded Data Bank viewer with native precision/freshness guards and Python compatibility. See CHANGELOG_ARCHIVE.md.
 - static/search_index.js → deleted; feature registry merged into `NAV_MANIFEST` in `client_context.js` — do not recreate. See CHANGELOG_ARCHIVE.md.
 - static/loading_ui.js → shared `window.LoadingUI` primitives, including token-based target-aware global progress-cursor ownership. See CHANGELOG_ARCHIVE.md.
@@ -269,6 +269,8 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-18: Added default-off C# P48 atomic Verification saves, validation/completion, voucher checks and Cleared/Query gates. Local acceptance remains; see CHANGELOG_ARCHIVE.md.
+- 2026-11-17: Added default-off .NET P46–P47 Verification sessions and read models; behavior checks remain for deployment, P48–P52 remain. See CHANGELOG_ARCHIVE.md.
 - 2026-11-16–17: Added default-off .NET P37–P40, P53A–P56, and P41–P45 Audit Rules APIs/compiler. Local database acceptance remains. See CHANGELOG_ARCHIVE.md.
 - 2026-11-15: Restored the Python upload page to the last committed layout; uncommitted mapping redesign removed. See CHANGELOG_ARCHIVE.md, Upload mapping rollback.
 - 2026-11-14: Added disabled native Trial Balance review, guarded corrections/classifications and current footings; locally accepted. See CHANGELOG_ARCHIVE.md, Trial Balance review P36.

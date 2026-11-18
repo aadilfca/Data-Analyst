@@ -28,6 +28,7 @@ public sealed class SessionAuthenticationHandler(RequestDelegate next)
             || context.Request.Path.StartsWithSegments("/api/backup")
             || context.Request.Path.StartsWithSegments("/api/reconciliation")
             || context.Request.Path.StartsWithSegments("/api/audit-rules")
+            || context.Request.Path.StartsWithSegments("/api/verification")
             || context.Request.Path.StartsWithSegments("/api/import-excel")
             || context.Request.Path.StartsWithSegments("/api/upload/staging")
             || context.Request.Path.StartsWithSegments("/api/upload/file")
@@ -70,6 +71,9 @@ public sealed class SessionCoexistenceGate(IOptions<AuthenticationOptions> optio
             && (route.Path.StartsWith("/api/reconciliation/financial-statements/", StringComparison.Ordinal)
                 || route.Path.StartsWith("/api/reconciliation/cashflows/", StringComparison.Ordinal)
                 || route.Path.StartsWith("/api/reconciliation/financial-reports/", StringComparison.Ordinal));
+        bool selectedClientVerification = route.Owner == CoexistenceOwner.DotNet
+            && route.Access == CoexistenceAccess.Authenticated
+            && route.Path.StartsWith("/api/verification/", StringComparison.Ordinal);
         bool auditRules = route.Path.StartsWith("/api/audit-rules/", StringComparison.Ordinal)
             && route.Access == CoexistenceAccess.Administrator;
         bool tenantAdmin = auditRules && route.Owner == CoexistenceOwner.DotNet && tenantUsers is not null
@@ -78,7 +82,7 @@ public sealed class SessionCoexistenceGate(IOptions<AuthenticationOptions> optio
         // These report routes repeat tenant, selected-client, membership and
         // administrator checks inside their scoped PostgreSQL snapshot/job store.
         // Other bridge routes retain the shell-era block.
-        if (shell?.Value.Enabled==true && !selectedClientReport && !tenantAdmin && !legacyAdmin)
+        if (shell?.Value.Enabled==true && !selectedClientReport && !selectedClientVerification && !tenantAdmin && !legacyAdmin)
             return CoexistenceAccessDecision.Forbidden;
         if (route.Access == CoexistenceAccess.Client)
             return CoexistenceAccessDecision.Forbidden; // Object scope needs a route-specific policy.
