@@ -8,7 +8,7 @@ namespace AuditPlatform.Api.Controllers;
 
 [Route("api/verification")]
 public sealed class VerificationController(VerificationSessionService service, VerificationReviewService review,
-    IOptions<VerificationRuntimeOptions> options) : ControllerBase
+    VerificationEvidenceService evidence, IOptions<VerificationRuntimeOptions> options) : ControllerBase
 {
     private VerifiedSession? Session => HttpContext.Items[typeof(VerifiedSession)] as VerifiedSession;
 
@@ -174,6 +174,47 @@ public sealed class VerificationController(VerificationSessionService service, V
     [RequestSizeLimit(1024)]
     public async Task<IActionResult> Complete([FromBody] VerificationCompleteRequest? request, CancellationToken ct)
     { var blocked = Guard(); return blocked ?? Result(await review.CompleteAsync(Session, request!, ct)); }
+
+    [HttpGet("voucher_line_documents/{voucher_line_id:int}")]
+    public async Task<IActionResult> VoucherLineDocuments(int voucher_line_id, CancellationToken ct)
+    { var blocked = Guard(); return blocked ?? Result(await evidence.GetDocumentsAsync(Session, voucher_line_id, ct)); }
+
+    [HttpPost("assign_document")]
+    [RequestSizeLimit(1024)]
+    public async Task<IActionResult> AssignDocument([FromBody] VerificationDocumentAssignRequest? request, CancellationToken ct)
+    { var blocked = Guard(); return blocked ?? Result(await evidence.AssignDocumentAsync(Session, request!, ct)); }
+
+    [HttpPost("unassign_document")]
+    [RequestSizeLimit(1024)]
+    public async Task<IActionResult> UnassignDocument([FromBody] VerificationUnassignDocumentRequest? request, CancellationToken ct)
+    {
+        var blocked = Guard(); if (blocked is not null) return blocked;
+        return request is null ? BadRequest(new { detail = "assignment_id is required" })
+            : Result(await evidence.UnassignDocumentAsync(Session, request.AssignmentId, ct));
+    }
+
+    [HttpPost("set_signature_exception")]
+    [RequestSizeLimit(1024)]
+    public async Task<IActionResult> SetSignatureException([FromBody] VerificationSignatureExceptionRequest? request, CancellationToken ct)
+    { var blocked = Guard(); return blocked ?? Result(await evidence.SetSignatureExceptionAsync(Session, request!, ct)); }
+
+    [HttpGet("procedure_checks/{voucher_line_id:int}")]
+    public async Task<IActionResult> ProcedureChecks(int voucher_line_id, CancellationToken ct)
+    { var blocked = Guard(); return blocked ?? Result(await evidence.GetProcedureChecksAsync(Session, voucher_line_id, ct)); }
+
+    [HttpPost("procedure_checks")]
+    [RequestSizeLimit(1024)]
+    public async Task<IActionResult> SetProcedureCheck([FromBody] VerificationProcedureCheckRequest? request, CancellationToken ct)
+    { var blocked = Guard(); return blocked ?? Result(await evidence.SetProcedureCheckAsync(Session, request!, ct)); }
+
+    [HttpGet("line_observations/{voucher_line_id:int}")]
+    public async Task<IActionResult> LineObservations(int voucher_line_id, CancellationToken ct)
+    { var blocked = Guard(); return blocked ?? Result(await evidence.GetObservationsAsync(Session, voucher_line_id, ct)); }
+
+    [HttpPost("save_line_observation")]
+    [RequestSizeLimit(65536)]
+    public async Task<IActionResult> SaveLineObservation([FromBody] VerificationObservationSaveRequest? request, CancellationToken ct)
+    { var blocked = Guard(); return blocked ?? Result(await evidence.SaveObservationAsync(Session, request!, ct)); }
 
     private async Task<IActionResult> Discover(int client, string workstream, string start, string end, string? group, CancellationToken ct)
     {

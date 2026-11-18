@@ -44,6 +44,54 @@ public sealed class VerificationProcedureCheckInput
     [JsonPropertyName("is_checked")] public bool IsChecked { get; set; }
 }
 
+public sealed class VerificationObservationInput
+{
+    [JsonPropertyName("voucher_line_id")] public int VoucherLineId { get; set; }
+    [JsonPropertyName("document_id")] public int DocumentId { get; set; }
+    [JsonPropertyName("observation_text")] public string? ObservationText { get; set; }
+}
+
+public sealed class VerificationAccountHeadNoteInput
+{
+    [JsonPropertyName("voucher_line_id")] public int VoucherLineId { get; set; }
+    [JsonPropertyName("observation_text")] public string? ObservationText { get; set; }
+}
+
+public sealed class VerificationLineCorrectnessInput
+{
+    [JsonPropertyName("voucher_line_id")] public int VoucherLineId { get; set; }
+    [JsonPropertyName("is_correct")] public bool IsCorrect { get; set; }
+}
+
+public sealed class VerificationDocumentAssignRequest
+{
+    [JsonPropertyName("voucher_line_id")] public int VoucherLineId { get; set; }
+    [JsonPropertyName("client_data_id")] public int ClientDataId { get; set; }
+    [JsonPropertyName("document_id")] public int DocumentId { get; set; }
+}
+
+public sealed record VerificationUnassignDocumentRequest([property: JsonPropertyName("assignment_id")] int AssignmentId);
+public sealed class VerificationSignatureExceptionRequest
+{
+    [JsonPropertyName("assignment_id")] public int AssignmentId { get; set; }
+    [JsonPropertyName("signature_exception")] public bool SignatureException { get; set; }
+}
+
+public sealed class VerificationProcedureCheckRequest
+{
+    [JsonPropertyName("voucher_line_id")] public int VoucherLineId { get; set; }
+    [JsonPropertyName("document_id")] public int DocumentId { get; set; }
+    [JsonPropertyName("role_name")] public string RoleName { get; set; } = "";
+    [JsonPropertyName("is_checked")] public bool IsChecked { get; set; }
+}
+
+public sealed class VerificationObservationSaveRequest
+{
+    [JsonPropertyName("voucher_line_id")] public int VoucherLineId { get; set; }
+    [JsonPropertyName("document_id")] public int DocumentId { get; set; }
+    [JsonPropertyName("observation_text")] public string? ObservationText { get; set; }
+}
+
 public sealed class VerificationBundleSaveRequest
 {
     [JsonPropertyName("session_id")] public int SessionId { get; set; }
@@ -52,6 +100,9 @@ public sealed class VerificationBundleSaveRequest
     [JsonPropertyName("verify")] public bool Verify { get; set; } = true;
     [JsonPropertyName("procedure_checks")] public List<VerificationProcedureCheckInput> ProcedureChecks { get; set; } = [];
     [JsonPropertyName("voucher_checks")] public List<VerificationVoucherCheckInput> VoucherChecks { get; set; } = [];
+    [JsonPropertyName("observations")] public List<VerificationObservationInput> Observations { get; set; } = [];
+    [JsonPropertyName("account_head_notes")] public List<VerificationAccountHeadNoteInput> AccountHeadNotes { get; set; } = [];
+    [JsonPropertyName("voucher_line_correctness")] public List<VerificationLineCorrectnessInput> VoucherLineCorrectness { get; set; } = [];
 }
 
 public sealed record VerificationSaveAndVerifyRequest(

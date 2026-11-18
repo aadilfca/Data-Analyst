@@ -13,7 +13,8 @@ namespace AuditPlatform.Api.Verification;
 
 /// <summary>Transactional line review and completion operations for an authorized Verification session.</summary>
 public sealed class VerificationReviewService(PostgresTransactions transactions, VerificationSessionService sessions,
-    VerificationStatusService status, PostgresAuditWriter audit, IOptions<VerificationRuntimeOptions> options)
+    VerificationStatusService status, VerificationEvidenceService evidence, PostgresAuditWriter audit,
+    IOptions<VerificationRuntimeOptions> options)
 {
     private sealed record ReviewLine(int Id, int ClientDataId, string? TransactionRef, string? Status,
         string? ValidationStatus, string RowData, string? ExtractAmount, string? LineItems);
@@ -33,6 +34,7 @@ public sealed class VerificationReviewService(PostgresTransactions transactions,
             if (line is null) return NotFound("verification_detail_not_found");
             if (line.Status != "Pending") return Invalid("verification_line_not_pending");
             await SaveLineAsync(db, owner, sessionId.Value, line, request.LineItems, request.TransactionType, request.ProcedureData, inner);
+            await evidence.RefreshBundleObservationRollupsAsync(db, owner, [line.Id], inner);
             var results = await status.RecomputeAsync(db, owner, [line.Id], inner);
             await WriteAuditAsync(db, owner, "VERIFICATION_LINE_SAVED", new { session_id = sessionId, detail_id = line.Id }, inner);
             var response = new Dictionary<string, object?> { ["message"] = "Line items and procedure data saved successfully." };
@@ -165,7 +167,8 @@ public sealed class VerificationReviewService(PostgresTransactions transactions,
     {
         if (request is null || request.SessionId < 1 || request.CurrentDetailId < 1 || request.Lines is null || request.Lines.Count == 0
             || request.Lines.Any(line => line is null || line.DetailId < 1 || !ValidLineItems(line.LineItems))
-            || request.VoucherChecks is null || request.ProcedureChecks is null
+            || request.VoucherChecks is null || request.ProcedureChecks is null || request.Observations is null
+            || request.AccountHeadNotes is null || request.VoucherLineCorrectness is null
             || request.Lines.Select(line => line.DetailId).Distinct().Count() != request.Lines.Count
             || !request.Lines.Any(line => line.DetailId == request.CurrentDetailId)) return Invalid("invalid_verification_bundle");
         return await transactions.ExecuteAsync(async (db, inner) =>
@@ -189,6 +192,10 @@ public sealed class VerificationReviewService(PostgresTransactions transactions,
                 var procedureError = await SaveProcedureChecksAsync(db, owner, request.SessionId,
                     request.ProcedureChecks, eligible.Select(x => x.Id).ToHashSet(), inner);
                 if (procedureError is not null) return procedureError;
+                var observationError = await evidence.SaveBundleObservationsAsync(db, owner,
+                    request.Observations, request.AccountHeadNotes, request.VoucherLineCorrectness,
+                    eligible.Select(x => x.Id).ToHashSet(), inner);
+                if (observationError is not null) return observationError;
                 foreach (var line in eligible)
                 {
                     var payload = request.Lines.Single(item => item.DetailId == line.Id);
@@ -197,6 +204,7 @@ public sealed class VerificationReviewService(PostgresTransactions transactions,
                 }
                 if (!string.IsNullOrWhiteSpace(current.TransactionRef))
                     await FlagVoucherChecksAsync(db, owner, current.TransactionRef, checks.NotDoneIds, checks.DoneIds, inner);
+                await evidence.RefreshBundleObservationRollupsAsync(db, owner, eligible.Select(x => x.Id).ToArray(), inner);
                 var statuses = await status.RecomputeAsync(db, owner, eligible.Select(x => x.Id).ToArray(), inner);
                 await WriteAuditAsync(db, owner, "VERIFICATION_VOUCHER_SAVE_AND_VERIFY", new { session_id = request.SessionId,
                     current_detail_id = request.CurrentDetailId, saved_line_count = eligible.Length }, inner);
@@ -209,12 +217,17 @@ public sealed class VerificationReviewService(PostgresTransactions transactions,
             var checkError = await SaveProcedureChecksAsync(db, owner, request.SessionId,
                 request.ProcedureChecks, eligible.Select(x => x.Id).ToHashSet(), inner);
             if (checkError is not null) return checkError;
+            var noteError = await evidence.SaveBundleObservationsAsync(db, owner,
+                request.Observations, request.AccountHeadNotes, request.VoucherLineCorrectness,
+                eligible.Select(x => x.Id).ToHashSet(), inner);
+            if (noteError is not null) return noteError;
             foreach (var line in eligible)
             {
                 var payload = request.Lines.Single(item => item.DetailId == line.Id);
                 await SaveLineAsync(db, owner, request.SessionId, line, payload.LineItems,
                     payload.TransactionType, payload.ProcedureData, inner);
             }
+            await evidence.RefreshBundleObservationRollupsAsync(db, owner, eligible.Select(x => x.Id).ToArray(), inner);
             var lineStatuses = await status.RecomputeAsync(db, owner, eligible.Select(x => x.Id).ToArray(), inner);
             await WriteAuditAsync(db, owner, "VERIFICATION_VOUCHER_SAVED", new { session_id = request.SessionId,
                 current_detail_id = request.CurrentDetailId, saved_line_count = eligible.Length }, inner);

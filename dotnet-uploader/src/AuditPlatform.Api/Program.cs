@@ -157,6 +157,7 @@ builder.Services.AddOptions<VerificationRuntimeOptions>()
     .Validate(o=>o.Valid(),"Verification runtime settings are invalid.").ValidateOnStart();
 builder.Services.AddSingleton<VerificationSessionService>();
 builder.Services.AddSingleton<VerificationStatusService>();
+builder.Services.AddSingleton<VerificationEvidenceService>();
 builder.Services.AddSingleton<VerificationReviewService>();
 builder.Services.AddOptions<ReconciliationSetupOptions>()
     .Bind(builder.Configuration.GetSection(ReconciliationSetupOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
@@ -239,7 +240,15 @@ foreach (var route in new[]
     ("verification-save-and-verify-bundle", "POST", "/api/verification/save_and_verify_voucher_bundle"),
     ("verification-voucher-checks-verify", "POST", "/api/verification/verify_voucher_checks"),
     ("verification-validate", "POST", "/api/verification/validate"),
-    ("verification-complete", "POST", "/api/verification/complete")
+    ("verification-complete", "POST", "/api/verification/complete"),
+    ("verification-evidence-list", "GET", "/api/verification/voucher_line_documents/{voucher_line_id:int}"),
+    ("verification-evidence-assign", "POST", "/api/verification/assign_document"),
+    ("verification-evidence-unassign", "POST", "/api/verification/unassign_document"),
+    ("verification-signature-exception", "POST", "/api/verification/set_signature_exception"),
+    ("verification-procedure-checks-get", "GET", "/api/verification/procedure_checks/{voucher_line_id:int}"),
+    ("verification-procedure-check-set", "POST", "/api/verification/procedure_checks"),
+    ("verification-observations-get", "GET", "/api/verification/line_observations/{voucher_line_id:int}"),
+    ("verification-observation-save", "POST", "/api/verification/save_line_observation")
 })
     builder.Services.AddSingleton(new CoexistenceRoute(route.Item1, route.Item2, route.Item3,
         verificationOwner, CoexistenceAccess.Authenticated));
