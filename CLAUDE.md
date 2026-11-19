@@ -32,8 +32,8 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/users.py → Admin user management (list/create/edit/deactivate/reactivate/reset password); every endpoint `require_admin`, mutations SQLite-audited. See CHANGELOG_ARCHIVE.md.
 - routers/storage_cleanup.py + services/storage_cleanup.py + static/storage_cleanup.* → Guarded cleanup, native scoped outcomes, legacy allocation diagnostics and separately approved PostgreSQL maintenance. See CHANGELOG_ARCHIVE.md.
 - static/users.html, static/users.js → firm-level Manage Users UI (sortable/searchable rows, add/edit, deactivate, password reset); shared Admin header/tab strip. See CHANGELOG_ARCHIVE.md.
-- static/login.html, static/login.js, static/app_info.html, static/privacy.html, static/terms.html, static/public_info.css → Login and public application/policy pages. See CHANGELOG_ARCHIVE.md.
-- static/client_select.html, static/client_select.js → standalone Client Cards page with guarded selection, admin entry, and loading feedback. See CHANGELOG_ARCHIVE.md.
+- static/login.html, static/login.js, static/app_info.html, static/privacy.html, static/terms.html, static/public_info.css → Login selects a sole workspace before Client Cards; public application and policy pages. See CHANGELOG_ARCHIVE.md.
+- static/client_select.html, static/client_select.js → standalone Client Cards page with guarded selection, admin entry, loading feedback, and conditional workspace footer. See CHANGELOG_ARCHIVE.md.
 - static/procedure_modal.js → shared Verification/Audit Workbook Procedure modal for grouped Data Table search, evidence/Forms, procedures, and observations. See CHANGELOG_ARCHIVE.md.
 - static/audit_workbook.js, static/audit_workbook.html → Audit Workbook: session rows, filtering, totals, shared Procedure Modal, and cached evidence/Form completion badges. See CHANGELOG_ARCHIVE.md.
 - routers/trial_balance.py → Trial Balance import/review, strict code corrections, hierarchy, current saved footings, adjustments and categories. See CHANGELOG_ARCHIVE.md.
@@ -270,6 +270,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-19: C# login selects a sole workspace directly; Client Cards shows footer switching only for multiple-workspace accounts. See CHANGELOG_ARCHIVE.md.
 - 2026-11-19: C# shell/tray configured with writes off; P62 Linux image and local readiness rehearsal passed. Render staging remains. See CHANGELOG_ARCHIVE.md.
 - 2026-11-18: Narrowed P61 to system readiness, deferred feature acceptance to manual P62 staging review, and corrected C# tray/readiness setup. P62/P63 remain separate. See CHANGELOG_ARCHIVE.md.
 - 2026-11-18: Added C# write/rebase blocks and plain-language handling for retained Verification sessions; archive adoption, Ledger and external recovery/provider gates remain. See CHANGELOG_ARCHIVE.md.
@@ -287,10 +288,7 @@ One line per file group: what it is now. Full build history for every entry live
 - 2026-11-12: Added typed .NET workbook reading and synthetic Python/browser parity checks; locally accepted. See CHANGELOG_ARCHIVE.md, Workbook reader P17.
 - 2026-11-12: Added disabled owner-bound .NET upload staging, header discovery and expiry recovery; locally accepted. See CHANGELOG_ARCHIVE.md, Upload staging P16.
 - 2026-11-12: Added disabled tenant configuration backup, preview and guarded restore; locally accepted. See CHANGELOG_ARCHIVE.md, Configuration backup P15.
-- 2026-11-11: Added disabled tenant/client saved mappings with stable bindings, revision checks and guarded Upload controls; locally accepted. See CHANGELOG_ARCHIVE.md, Saved mappings P14.
-- 2026-11-11: Added disabled tenant templates and corrected Python list invalidation; locally accepted. See CHANGELOG_ARCHIVE.md, Tenant templates P13.
-- 2026-11-11: Added disabled tenant columns with immutable keys and editable labels; locally accepted. See CHANGELOG_ARCHIVE.md, Tenant columns P12.
-- 2026-11-11: Added disabled tenant settings/holidays and safe Settings UI; locally accepted. See CHANGELOG_ARCHIVE.md, Tenant settings P11.
+- 2026-11-11: Added default-off tenant settings, columns, templates and saved mappings; corrected Python template-list invalidation. See CHANGELOG_ARCHIVE.md.
 - 2026-11-11: Added .NET tenant/collaboration foundations, engagement and audit-team eligibility (P07A–P07C). See CHANGELOG_ARCHIVE.md.
 - 2026-11-11: Added .NET authentication, tenant users/clients and selected-client shell (P07–P10). See CHANGELOG_ARCHIVE.md.
 - 2026-11-10: Data Bank renders datasets before all-time metrics and derives client size from grouped estimates; local acceptance pending. See CHANGELOG_ARCHIVE.md, Data Bank first-render performance.

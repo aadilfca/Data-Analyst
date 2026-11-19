@@ -77,22 +77,46 @@
         return response;
     };
 
+    let contextRecheck = null;
     async function recheckContext(event) {
         if (!key || location.pathname === '/shell/tenant_select.html') return;
         if (event.type === 'pageshow' && !event.persisted) return;
-        document.documentElement.style.visibility = 'hidden';
-        try {
-            const response = await originalFetch('/api/auth/tenants', { cache: 'no-store' });
-            if (!response.ok) { location.replace('/static/login.html'); return; }
-            const context = await response.json();
-            if (context.context_key !== key || String(context.selected_tenant_id || '') !== tenant) {
-                location.replace('/shell/tenant_select.html'); return;
+        if (contextRecheck) return contextRecheck;
+
+        const priorVisibility = document.documentElement.style.visibility;
+        let hiddenForCheck = false;
+        let redirecting = false;
+        // Focus and visibilitychange commonly fire together. Share one request and
+        // conceal the document only if a healthy-context check takes long enough
+        // to be noticeable, avoiding a flash on every ordinary tab return.
+        const concealTimer = window.setTimeout(() => {
+            document.documentElement.style.visibility = 'hidden';
+            hiddenForCheck = true;
+        }, 200);
+
+        contextRecheck = (async () => {
+            const redirect = path => {
+                redirecting = true;
+                document.documentElement.style.visibility = 'hidden';
+                location.replace(path);
+            };
+            try {
+                const response = await originalFetch('/api/auth/tenants', { cache: 'no-store' });
+                if (!response.ok) { redirect('/static/login.html'); return; }
+                const context = await response.json();
+                if (context.context_key !== key || String(context.selected_tenant_id || '') !== tenant) {
+                    redirect('/shell/tenant_select.html'); return;
+                }
+            } catch (error) {
+                // A saved document cannot certify its context while offline.
+                redirect('/shell/tenant_select.html');
             }
-            document.documentElement.style.visibility = '';
-        } catch (error) {
-            // A saved document cannot certify its context while offline.
-            location.replace('/shell/tenant_select.html');
-        }
+        })().finally(() => {
+            window.clearTimeout(concealTimer);
+            if (!redirecting && hiddenForCheck) document.documentElement.style.visibility = priorVisibility;
+            contextRecheck = null;
+        });
+        return contextRecheck;
     }
     window.addEventListener('pageshow', recheckContext);
     window.addEventListener('focus', recheckContext);
@@ -101,12 +125,8 @@
     });
     document.addEventListener('DOMContentLoaded', () => {
         if (!key || location.pathname === '/shell/tenant_select.html') return;
-        if (typeof NAV_MANIFEST !== 'undefined') NAV_MANIFEST.push({ title: 'Workspace', items: [
-            { label: 'Change workspace', url: '/shell/tenant_select.html', state: 'ready', module: 'Workspace',
-                children: [{ label: 'Select business or CA firm', url: '/shell/tenant_select.html', state: 'ready', keywords: ['tenant', 'firm', 'workspace'] }] }
-        ] });
         // Extend the existing native navigation registry, as Workspace does;
-        // both quick navigation and search continue to read the same manifest.
+        // quick navigation and search continue to read the same manifest.
         if (typeof NAV_MANIFEST !== 'undefined') NAV_MANIFEST.forEach(group => (group.items || []).forEach(item => {
             if (typeof item.url !== 'string') return;
             const path = new URL(item.url, location.href).pathname;
@@ -127,10 +147,5 @@
                 if (!item.children.some(c => c.url === url)) item.children.push({ label: 'Changed/deleted history and downloads', url, state: 'ready', keywords: ['history', 'changed', 'deleted', 'backup', 'export'] });
             }
         }));
-        const nav = document.createElement('nav');
-        nav.setAttribute('aria-label', 'Workspace');
-        const link = document.createElement('a');
-        link.href = '/shell/tenant_select.html'; link.textContent = 'Change workspace';
-        nav.appendChild(link); document.body.prepend(nav);
     });
 })();

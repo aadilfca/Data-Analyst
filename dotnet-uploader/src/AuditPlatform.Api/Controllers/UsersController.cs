@@ -16,8 +16,8 @@ public sealed class UsersController(TenantUserService users, IOptions<UserManage
     public sealed record PasswordInput(string? Password);
 
     [HttpGet]
-    public async Task<IActionResult> List([FromQuery(Name = "include_inactive")] bool includeInactive,
-        CancellationToken cancellationToken)
+    public async Task<IActionResult> List(CancellationToken cancellationToken,
+        [FromQuery(Name = "include_inactive")] bool includeInactive = false)
     {
         var selection = await ContextAsync(cancellationToken);
         if (selection.Error is not null) return selection.Error;

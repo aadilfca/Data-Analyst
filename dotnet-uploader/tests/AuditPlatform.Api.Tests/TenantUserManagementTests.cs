@@ -192,6 +192,10 @@ public sealed class TenantUserManagementTests(PostgresFixture fixture) : IClassF
             Assert.True(first.TryGetProperty("is_active",out _));
             Assert.False(first.TryGetProperty("password_hash",out _));
             Assert.DoesNotContain(json.RootElement.EnumerateArray(), element => element.GetProperty("username").GetString() == "admin-b");
+            using var defaultListed = await client.GetAsync("/api/users",Token);
+            Assert.Equal(HttpStatusCode.OK,defaultListed.StatusCode);
+            using var defaultJson = JsonDocument.Parse(await defaultListed.Content.ReadAsStringAsync(Token));
+            Assert.DoesNotContain(defaultJson.RootElement.EnumerateArray(), element => !element.GetProperty("is_active").GetBoolean());
             using var noOrigin = await client.PostAsJsonAsync("/api/users",new { username="http-user",password="pass",role=(string?)null },Token);
             Assert.Equal(HttpStatusCode.Forbidden,noOrigin.StatusCode);
             client.DefaultRequestHeaders.Add("Origin","http://127.0.0.1:5080");

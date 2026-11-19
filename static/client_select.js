@@ -249,6 +249,20 @@ async function checkAdminAndShowGear() {
     }
 }
 
+async function showWorkspaceSwitchIfAvailable() {
+    const footer = document.getElementById('workspaceSwitchFooter');
+    if (!footer) return;
+
+    try {
+        const res = await fetch('/api/auth/tenants', { cache: 'no-store' });
+        if (!res.ok) return;
+        const result = await res.json();
+        if (Array.isArray(result.tenants) && result.tenants.length > 1) footer.hidden = false;
+    } catch (err) {
+        // Keep the optional native workspace control hidden if this API is unavailable.
+    }
+}
+
 document.getElementById('adminSettingsBtn')?.addEventListener('click', () => {
     const button = document.getElementById('adminSettingsBtn');
     if (!startClientSelectNavigation(button)) return;
@@ -317,4 +331,5 @@ async function logout() {
     renderClientSelectHeader(session.username);
     loadClients();
     checkAdminAndShowGear();
+    showWorkspaceSwitchIfAvailable();
 })();

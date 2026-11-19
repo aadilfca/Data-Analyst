@@ -86,6 +86,35 @@
             font-size: 14px;
             padding: 40px 0;
         }
+
+        .client-select-workspace-footer {
+            max-width: 948px;
+            margin: 0 auto;
+            padding: 0 24px 24px;
+            display: flex;
+            justify-content: flex-end;
+        }
+
+        .client-select-workspace-footer[hidden] {
+            display: none;
+        }
+
+        .client-select-workspace-footer a {
+            color: #64748b;
+            font-size: 13px;
+            text-decoration: none;
+        }
+
+        .client-select-workspace-footer a:hover {
+            color: #1a1a2e;
+            text-decoration: underline;
+        }
+
+        .client-select-workspace-footer a:focus-visible {
+            outline: 2px solid #0369a1;
+            outline-offset: 3px;
+            border-radius: 2px;
+        }
     </style>
 </head>
 
@@ -125,8 +154,12 @@
         <div class="client-select-empty" id="clientSelectEmpty" style="display:none;">No clients match your search.</div>
     </div>
 
+    <footer class="client-select-workspace-footer" id="workspaceSwitchFooter" hidden>
+        <a href="/shell/tenant_select.html">Switch workspace</a>
+    </footer>
+
     <script src="/static/loading_ui.js?v=2"></script>
-    <script src="/static/client_select.js?v=4"></script>
+    <script src="/static/client_select.js?v=5"></script>
 </body>
 
 </html>
