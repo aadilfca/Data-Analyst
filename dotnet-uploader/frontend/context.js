@@ -77,11 +77,17 @@
         return response;
     };
 
+    const contextRecheckCooldownMs = 15_000;
+    let lastContextValidatedAt = 0;
     let contextRecheck = null;
     async function recheckContext(event) {
         if (!key || location.pathname === '/shell/tenant_select.html') return;
         if (event.type === 'pageshow' && !event.persisted) return;
         if (contextRecheck) return contextRecheck;
+        // Rapid tab returns can otherwise repeat a roughly one-second workspace
+        // lookup. A fresh success is reused briefly; protected API requests still
+        // validate their context on the server, and page load starts unvalidated.
+        if (lastContextValidatedAt && performance.now() - lastContextValidatedAt < contextRecheckCooldownMs) return;
 
         // Focus and visibilitychange commonly fire together. Share one request,
         // but keep a valid page visible while its context check is in flight.
@@ -97,6 +103,7 @@
                 if (context.context_key !== key || String(context.selected_tenant_id || '') !== tenant) {
                     redirect('/shell/tenant_select.html'); return;
                 }
+                lastContextValidatedAt = performance.now();
             } catch (error) {
                 // A saved document cannot certify its context while offline.
                 redirect('/shell/tenant_select.html');

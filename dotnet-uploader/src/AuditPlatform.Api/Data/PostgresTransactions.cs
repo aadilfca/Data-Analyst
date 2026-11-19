@@ -1,14 +1,18 @@
 using System.Data;
+using System.Diagnostics;
 using System.Globalization;
 using System.Net.Sockets;
 using AuditPlatform.Api.Configuration;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
 
 namespace AuditPlatform.Api.Data;
 
 public sealed class PostgresTransactions(
-    PostgresDataSourceFactory factory, IOptions<PostgresOptions> options)
+    PostgresDataSourceFactory factory, IOptions<PostgresOptions> options,
+    ILogger<PostgresTransactions>? logger = null, IHostEnvironment? environment = null)
 {
     // The callback owns SQL only. Await all nested work using this context;
     // it must not commit, roll back, dispose, or replace the supplied resources.
@@ -21,20 +25,36 @@ public sealed class PostgresTransactions(
         using var scope = PostgresOperationScope.Enter();
         var source = factory.DataSource
             ?? throw new InvalidOperationException("PostgreSQL is not configured.");
+        var stageStarted = Stopwatch.GetTimestamp();
         await using var connection = await source.OpenConnectionAsync(cancellationToken);
+        var connectionOpenMs = Stopwatch.GetElapsedTime(stageStarted).TotalMilliseconds;
+        stageStarted = Stopwatch.GetTimestamp();
         await using var transaction = await connection.BeginTransactionAsync(
             IsolationLevel.ReadCommitted, cancellationToken);
         var context = new PostgresTransactionContext(connection, transaction);
+        double setupMs = 0;
+        double callbackMs = 0;
+        double verificationMs = 0;
+        double commitMs = 0;
+        var outcome = "failed";
         var commitStarted = false;
 
         try
         {
             await context.ConfigureAsync(options.Value.CommandTimeoutSeconds, readOnly: false, cancellationToken);
+            setupMs = Stopwatch.GetElapsedTime(stageStarted).TotalMilliseconds;
+            stageStarted = Stopwatch.GetTimestamp();
             var result = await operation(context, cancellationToken);
+            callbackMs = Stopwatch.GetElapsedTime(stageStarted).TotalMilliseconds;
             cancellationToken.ThrowIfCancellationRequested();
+            stageStarted = Stopwatch.GetTimestamp();
             await context.VerifyActiveAsync(readOnly: false, cancellationToken);
+            verificationMs = Stopwatch.GetElapsedTime(stageStarted).TotalMilliseconds;
             commitStarted = true;
+            stageStarted = Stopwatch.GetTimestamp();
             await transaction.CommitAsync(cancellationToken);
+            commitMs = Stopwatch.GetElapsedTime(stageStarted).TotalMilliseconds;
+            outcome = "success";
             return result;
         }
         catch (Exception error)
@@ -46,6 +66,14 @@ public sealed class PostgresTransactions(
                 || PostgresOperationScope.IsConnectionFailure(error)))
                 throw new PostgresCommitOutcomeUnknownException(error);
             throw;
+        }
+        finally
+        {
+            if (environment?.IsDevelopment() == true)
+                logger?.LogInformation(
+                    "C# PostgreSQL transaction timing trace_id={TraceId} outcome={Outcome} connection_open_ms={ConnectionOpenMs:F1} setup_ms={SetupMs:F1} callback_ms={CallbackMs:F1} verification_ms={VerificationMs:F1} commit_ms={CommitMs:F1}",
+                    Activity.Current?.TraceId.ToString() ?? "none", outcome, connectionOpenMs,
+                    setupMs, callbackMs, verificationMs, commitMs);
         }
     }
 }

@@ -1,6 +1,9 @@
+using System.Diagnostics;
 using AuditPlatform.Api.Data;
 using AuditPlatform.Api.Logging;
 using AuditPlatform.Api.Configuration;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
 
@@ -11,7 +14,8 @@ public sealed record VerifiedSession(string Token, int UserId, string Username, 
     bool TenantContextRequired = false, int? TenantId = null, long ContextVersion = 0);
 
 public sealed class PostgresSessionStore(PostgresTransactions transactions, PostgresAuditWriter audit,
-    IOptions<ApplicationShellOptions>? shell = null)
+    IOptions<ApplicationShellOptions>? shell = null, ILogger<PostgresSessionStore>? logger = null,
+    IHostEnvironment? environment = null)
 {
     public Task<bool> IsExpiredAsync(string token, CancellationToken cancellationToken) =>
         transactions.ExecuteAsync(async (db, ct) =>
@@ -36,14 +40,26 @@ public sealed class PostgresSessionStore(PostgresTransactions transactions, Post
                 WHERE s.token=$1 AND s.expiry > now() AND u.is_active IS TRUE
                 """);
             command.Parameters.AddWithValue(token);
-            await using var reader = await command.ExecuteReaderAsync(ct);
-            if (!await reader.ReadAsync(ct)) return null;
-            return new VerifiedSession(token, reader.GetInt32(0), reader.GetString(1),
-                reader.IsDBNull(2) ? null : reader.GetString(2), reader.GetDateTime(3),
-                reader.IsDBNull(5) ? null : reader.GetInt32(4),
-                reader.IsDBNull(5) ? null : reader.GetString(5),
-                reader.IsDBNull(6) ? null : reader.GetString(6), scoped,
-                scoped && !reader.IsDBNull(7) ? reader.GetInt32(7) : null, scoped ? reader.GetInt64(8) : 0);
+            var queryStarted = Stopwatch.GetTimestamp();
+            try
+            {
+                await using var reader = await command.ExecuteReaderAsync(ct);
+                if (!await reader.ReadAsync(ct)) return null;
+                return new VerifiedSession(token, reader.GetInt32(0), reader.GetString(1),
+                    reader.IsDBNull(2) ? null : reader.GetString(2), reader.GetDateTime(3),
+                    reader.IsDBNull(5) ? null : reader.GetInt32(4),
+                    reader.IsDBNull(5) ? null : reader.GetString(5),
+                    reader.IsDBNull(6) ? null : reader.GetString(6), scoped,
+                    scoped && !reader.IsDBNull(7) ? reader.GetInt32(7) : null, scoped ? reader.GetInt64(8) : 0);
+            }
+            finally
+            {
+                if (environment?.IsDevelopment() == true)
+                    logger?.LogInformation(
+                        "C# PostgreSQL session lookup timing trace_id={TraceId} query_materialize_ms={QueryMs:F1}",
+                        Activity.Current?.TraceId.ToString() ?? "none",
+                        Stopwatch.GetElapsedTime(queryStarted).TotalMilliseconds);
+            }
         }, cancellationToken);
 
     public Task<(string Result, string? Token, string? Username)> LoginAsync(

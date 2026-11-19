@@ -270,6 +270,8 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-19: C# tab-return workspace checks reuse a successful validation for 15 seconds. See CHANGELOG_ARCHIVE.md, C# tab-return workspace validation cooldown.
+- 2026-11-19: Added development-only C# PostgreSQL stage timings for client reads, session lookup and dashboard snapshots. See CHANGELOG_ARCHIVE.md, C# development PostgreSQL timings.
 - 2026-11-19: C# shell keeps valid pages visible during slow tab-return context checks; changed contexts still conceal and redirect. See CHANGELOG_ARCHIVE.md.
 - 2026-11-19: C# login selects a sole workspace directly; Client Cards shows footer switching only for multiple-workspace accounts. See CHANGELOG_ARCHIVE.md.
 - 2026-11-19: C# shell/tray configured with writes off; P62 Linux image and local readiness rehearsal passed. Render staging remains. See CHANGELOG_ARCHIVE.md.
@@ -346,8 +348,7 @@ One line per file group: what it is now. Full build history for every entry live
 - 2026-10-20: Uploads add raw-source totals, row-aware issue reports, and public privacy/terms pages. See CHANGELOG_ARCHIVE.md.
 - 2026-10-19: Uploads add ledger roles, expiring validation plans, coverage replacement, correction safeguards, Drive archives and readable issue reports; production branding remains pending. See CHANGELOG_ARCHIVE.md.
 - 2026-10-19: Cashflows moves to canonical Client Data with bounded source fetching, coverage diagnostics, browser caches, exports and isolated experiments. See CHANGELOG_ARCHIVE.md.
-- 2026-10-06–12: Upload lifecycle, source coverage, cleanup safeguards and Cashflows preparation advanced. See CHANGELOG_ARCHIVE.md.
-- 2026-09-01–10-02: Database, Reconciliation, Rulebook, Account Sets, Verification, Forms and Cashflows foundations progressed. See CHANGELOG_ARCHIVE.md.
+- 2026-09-01–10-12: Database, Reconciliation, Rulebook, Account Sets, Verification, Forms, Cashflows and upload lifecycle foundations advanced. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

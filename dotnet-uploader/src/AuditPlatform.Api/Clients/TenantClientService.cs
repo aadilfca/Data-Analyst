@@ -1,7 +1,10 @@
 using System.Text.Json;
+using System.Diagnostics;
 using AuditPlatform.Api.Authentication;
 using AuditPlatform.Api.Data;
 using AuditPlatform.Api.Logging;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Npgsql;
 using NpgsqlTypes;
 
@@ -16,7 +19,8 @@ public sealed record ClientResult(ClientStatus Status, IReadOnlyList<TenantClien
 
 // Only home-workspace records are supported. This service grants no access to
 // reports, transaction data or another tenant's engagement.
-public sealed class TenantClientService(PostgresTransactions transactions, PostgresAuditWriter audit)
+public sealed class TenantClientService(PostgresTransactions transactions, PostgresAuditWriter audit,
+    ILogger<TenantClientService>? logger = null, IHostEnvironment? environment = null)
 {
     private sealed record Actor(int TenantId, int UserId, string Username, string Role);
     private const string Columns = "c.id,c.client_code,c.client_name,c.industry,c.contact_person,c.email,c.phone,c.is_active,c.created_at";
@@ -31,8 +35,14 @@ public sealed class TenantClientService(PostgresTransactions transactions, Postg
     public Task<ClientResult> ListAsync(VerifiedSession? session, bool includeInactive, string? search,
         int? limit, int offset, CancellationToken ct = default) => transactions.ExecuteAsync(async (db, token) =>
     {
+        var authorizationStarted = Stopwatch.GetTimestamp();
         var (status, actor) = await AuthorizeAsync(db, session, false, false, token);
-        if (actor is null) return new ClientResult(status);
+        var authorizationMs = Stopwatch.GetElapsedTime(authorizationStarted).TotalMilliseconds;
+        if (actor is null)
+        {
+            LogListTiming(authorizationMs, 0, status.ToString());
+            return new ClientResult(status);
+        }
         if (limit is < 1 or > 200 || offset < 0) return new ClientResult(ClientStatus.Invalid);
         // One statement gives count and page the same snapshot, even when the
         // requested page is empty. No cross-tenant count is exposed.
@@ -52,6 +62,7 @@ public sealed class TenantClientService(PostgresTransactions transactions, Postg
         command.Parameters.AddWithValue(NpgsqlDbType.Text, string.IsNullOrEmpty(search) ? DBNull.Value : "%" + search + "%");
         command.Parameters.AddWithValue(NpgsqlDbType.Integer, (object?)limit ?? DBNull.Value);
         command.Parameters.AddWithValue(offset);
+        var queryStarted = Stopwatch.GetTimestamp();
         await using var reader = await command.ExecuteReaderAsync(token);
         var rows = new List<TenantClient>(); long total = 0;
         while (await reader.ReadAsync(token))
@@ -59,8 +70,17 @@ public sealed class TenantClientService(PostgresTransactions transactions, Postg
             total = reader.GetInt64(0);
             if (!reader.IsDBNull(1)) rows.Add(Read(reader, 1));
         }
+        LogListTiming(authorizationMs, Stopwatch.GetElapsedTime(queryStarted).TotalMilliseconds, "success");
         return new ClientResult(ClientStatus.Success, rows, total);
     }, ct);
+
+    private void LogListTiming(double authorizationMs, double queryMs, string outcome)
+    {
+        if (environment?.IsDevelopment() != true) return;
+        logger?.LogInformation(
+            "C# client list timing trace_id={TraceId} outcome={Outcome} authorization_ms={AuthorizationMs:F1} query_materialize_ms={QueryMs:F1}",
+            Activity.Current?.TraceId.ToString() ?? "none", outcome, authorizationMs, queryMs);
+    }
 
     public async Task<ClientResult> SaveAsync(VerifiedSession? session, int? clientId, ClientProfile input,
         CancellationToken ct = default)
