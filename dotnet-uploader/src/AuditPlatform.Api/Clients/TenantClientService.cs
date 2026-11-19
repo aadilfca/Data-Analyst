@@ -31,7 +31,7 @@ public sealed class TenantClientService(PostgresTransactions transactions, Postg
     public Task<ClientResult> ListAsync(VerifiedSession? session, bool includeInactive, string? search,
         int? limit, int offset, CancellationToken ct = default) => transactions.ExecuteAsync(async (db, token) =>
     {
-        var (status, actor) = await AuthorizeAsync(db, session, false, token);
+        var (status, actor) = await AuthorizeAsync(db, session, false, false, token);
         if (actor is null) return new ClientResult(status);
         if (limit is < 1 or > 200 || offset < 0) return new ClientResult(ClientStatus.Invalid);
         // One statement gives count and page the same snapshot, even when the
@@ -69,10 +69,10 @@ public sealed class TenantClientService(PostgresTransactions transactions, Postg
         {
             return await transactions.ExecuteAsync(async (db, token) =>
             {
-                var (status, actor) = await AuthorizeAsync(db, session, true, token);
+                var (status, actor) = await AuthorizeAsync(db, session, true, true, token);
                 if (actor is null) return new ClientResult(status);
                 if (input.Code is null || input.Name is null) return new ClientResult(ClientStatus.Invalid);
-                if (clientId is not null && await FindAsync(db, actor, clientId.Value, token) is null)
+                if (clientId is not null && await FindAsync(db, actor, clientId.Value, true, token) is null)
                     return new ClientResult(ClientStatus.NotFound);
                 await using var command = db.CreateCommand(clientId is null ? """
                     INSERT INTO public.clients(client_code,client_name,industry,contact_person,email,phone)
@@ -107,9 +107,9 @@ public sealed class TenantClientService(PostgresTransactions transactions, Postg
     public Task<ClientResult> SetActiveAsync(VerifiedSession? session, int id, bool active, CancellationToken ct = default) =>
         transactions.ExecuteAsync(async (db, token) =>
         {
-            var (status, actor) = await AuthorizeAsync(db, session, true, token);
+            var (status, actor) = await AuthorizeAsync(db, session, true, true, token);
             if (actor is null) return new ClientResult(status);
-            var client = await FindAsync(db, actor, id, token);
+            var client = await FindAsync(db, actor, id, true, token);
             if (client is null || client.Profile.IsActive == active) return new ClientResult(ClientStatus.NotFound);
             await using var command = db.CreateCommand("UPDATE public.clients SET is_active=$1 WHERE id=$2");
             command.Parameters.AddWithValue(active); command.Parameters.AddWithValue(id);
@@ -122,16 +122,16 @@ public sealed class TenantClientService(PostgresTransactions transactions, Postg
     public Task<ClientResult> GetAsync(VerifiedSession? session, int id, CancellationToken ct = default) =>
         transactions.ExecuteAsync(async (db, token) =>
         {
-            var (status, actor) = await AuthorizeAsync(db, session, true, token);
+            var (status, actor) = await AuthorizeAsync(db, session, true, false, token);
             if (actor is null) return new ClientResult(status);
-            var client = await FindAsync(db, actor, id, token);
+            var client = await FindAsync(db, actor, id, false, token);
             return client is null ? new(ClientStatus.NotFound) : new ClientResult(ClientStatus.Success, [client]);
         }, ct);
 
     public Task<ClientResult> SelectionAsync(VerifiedSession? session, int? requestedId, CancellationToken ct = default) =>
         transactions.ExecuteAsync(async (db, token) =>
         {
-            var (status, actor) = await AuthorizeAsync(db, session, false, token);
+            var (status, actor) = await AuthorizeAsync(db, session, false, false, token);
             if (actor is null) return new ClientResult(status);
             // Lock the real session; never accept a cached selected-client claim.
             int? selected;
@@ -142,17 +142,17 @@ public sealed class TenantClientService(PostgresTransactions transactions, Postg
                 selected = value is int id ? id : null;
             }
             var targetId = requestedId ?? selected;
-            var client = targetId is null ? null : await FindAsync(db, actor, targetId.Value, token);
+            var client = targetId is null ? null : await FindAsync(db, actor, targetId.Value, false, token);
             if (client is not null && !client.Profile.IsActive) client = null;
-            // For staff, pin the current assignment and engagement until selection
-            // commits. Eligibility allows this client-card operation only.
+            // Verify the current assignment before saving selection. Every later
+            // request rechecks membership and assignment against current data.
             if (client is not null && actor.Role != "admin")
             {
                 await using var assignment = db.CreateCommand("""
                     SELECT a.user_id FROM public.platform_engagement_assignments a
                     JOIN public.platform_audit_engagements e ON e.id=a.engagement_id AND e.firm_tenant_id=a.firm_tenant_id
                     WHERE a.user_id=$1 AND a.firm_tenant_id=$2 AND e.client_id=$3
-                      AND a.is_active IS TRUE AND e.is_active IS TRUE FOR SHARE OF a,e
+                      AND a.is_active IS TRUE AND e.is_active IS TRUE
                     """);
                 assignment.Parameters.AddWithValue(actor.UserId); assignment.Parameters.AddWithValue(actor.TenantId);
                 assignment.Parameters.AddWithValue(client.Id);
@@ -170,7 +170,7 @@ public sealed class TenantClientService(PostgresTransactions transactions, Postg
         }, ct);
 
     private static async Task<(ClientStatus, Actor?)> AuthorizeAsync(PostgresTransactionContext db,
-        VerifiedSession? session, bool admin, CancellationToken ct)
+        VerifiedSession? session, bool admin, bool lockForMutation, CancellationToken ct)
     {
         if (session is null || session.UserId <= 0 || !AuthenticationService.ValidToken(session.Token)) return (ClientStatus.Forbidden, null);
         int tenant;
@@ -193,8 +193,9 @@ public sealed class TenantClientService(PostgresTransactions transactions, Postg
         }
         // Same lock order as tenant user administration; it serializes tenant
         // mutations and prevents role/membership revocation during this action.
-        await using (var tenantLock = db.CreateCommand("SELECT id FROM public.platform_tenants WHERE id=$1 AND is_active IS TRUE FOR UPDATE"))
+        if (lockForMutation)
         {
+            await using var tenantLock = db.CreateCommand("SELECT id FROM public.platform_tenants WHERE id=$1 AND is_active IS TRUE FOR UPDATE");
             tenantLock.Parameters.AddWithValue(tenant);
             if (await tenantLock.ExecuteScalarAsync(ct) is null) return (ClientStatus.Forbidden, null);
         }
@@ -203,7 +204,7 @@ public sealed class TenantClientService(PostgresTransactions transactions, Postg
             SELECT u.id,u.username,m.tenant_role FROM public.sessions s JOIN public.users u ON u.id=s.user_id
             JOIN public.platform_tenant_memberships m ON m.user_id=u.id
             WHERE s.token=$1 AND s.user_id=$2 AND s.expiry>now() AND u.is_active IS TRUE
-                AND m.tenant_id=$3 AND m.is_active IS TRUE {contextCheck} FOR SHARE OF s,u,m
+                AND m.tenant_id=$3 AND m.is_active IS TRUE {contextCheck}{(lockForMutation ? " FOR SHARE OF s,u,m" : " FOR SHARE OF s,u")}
             """);
         command.Parameters.AddWithValue(session.Token); command.Parameters.AddWithValue(session.UserId); command.Parameters.AddWithValue(tenant);
         if (session.TenantContextRequired) command.Parameters.AddWithValue(session.ContextVersion);
@@ -212,9 +213,10 @@ public sealed class TenantClientService(PostgresTransactions transactions, Postg
         return (ClientStatus.Success, new Actor(tenant, actor.GetInt32(0), actor.GetString(1), actor.GetString(2)));
     }
 
-    private static async Task<TenantClient?> FindAsync(PostgresTransactionContext db, Actor actor, int id, CancellationToken ct)
+    private static async Task<TenantClient?> FindAsync(PostgresTransactionContext db, Actor actor, int id,
+        bool lockForMutation, CancellationToken ct)
     {
-        await using var command = db.CreateCommand($"SELECT {Columns} FROM public.clients c JOIN public.platform_tenant_client_homes h ON h.client_id=c.id WHERE {Scope} AND c.id=$4 FOR UPDATE OF c,h");
+        await using var command = db.CreateCommand($"SELECT {Columns} FROM public.clients c JOIN public.platform_tenant_client_homes h ON h.client_id=c.id WHERE {Scope} AND c.id=$4{(lockForMutation ? " FOR UPDATE OF c,h" : "")}");
         AddActor(command, actor); command.Parameters.AddWithValue(id);
         await using var reader = await command.ExecuteReaderAsync(ct);
         return await reader.ReadAsync(ct) ? Read(reader, 0) : null;

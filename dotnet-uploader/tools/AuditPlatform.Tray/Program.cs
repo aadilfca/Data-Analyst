@@ -23,7 +23,7 @@ internal static class Program
 internal sealed class TrayApplication : ApplicationContext
 {
     private static readonly Uri BaseUri = new("http://127.0.0.1:5080/");
-    private static readonly TimeSpan HealthTimeout = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan HealthTimeout = TimeSpan.FromSeconds(10);
     private readonly NotifyIcon _icon;
     private readonly ToolStripMenuItem _status;
     private readonly ToolStripMenuItem _start;

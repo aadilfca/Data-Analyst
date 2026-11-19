@@ -13,6 +13,11 @@ public static class Program
         try
         {
             var options = ParseArguments(args);
+            var target = options.GetValueOrDefault("target", "owned-local");
+            if (target == "supabase-development")
+                return await SupabaseDevelopmentAdoption.RunAsync(options);
+            if (target != "owned-local")
+                throw new InvalidOperationException("Unknown adoption target.");
             var connectionString = Environment.GetEnvironmentVariable("AUDIT_ADOPTION_CONNECTION") ?? "";
             var settings = ValidateLocalConnection(connectionString);
             await using var connection = new NpgsqlConnection(settings.ConnectionString);
@@ -182,7 +187,7 @@ public static class Program
 
     public static Dictionary<string, string> ParseArguments(string[] args)
     {
-        var allowed = new HashSet<string> { "owner-dir", "workspace-name", "unassigned-users", "operation", "expected", "apply", "stage", "tenant-id", "retain-unresolved", "binding-plan", "actor-username" };
+        var allowed = new HashSet<string> { "target", "owner-dir", "workspace-name", "unassigned-users", "operation", "expected", "apply", "stage", "tenant-id", "retain-unresolved", "binding-plan", "actor-username" };
         var options = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var index = 0; index < args.Length; index++)
         {
@@ -191,7 +196,11 @@ public static class Program
             if (!allowed.Contains(key) || options.ContainsKey(key)) throw new InvalidOperationException("Unknown or duplicate option.");
             options[key] = key is "apply" or "retain-unresolved" ? "true" : ++index < args.Length ? args[index] : throw new InvalidOperationException("Missing option value.");
         }
-        if (!options.ContainsKey("owner-dir")) throw new InvalidOperationException("An owned recovery directory is required.");
+        var target = options.GetValueOrDefault("target", "owned-local");
+        if (target == "owned-local" && !options.ContainsKey("owner-dir"))
+            throw new InvalidOperationException("An owned recovery directory is required.");
+        if (target == "supabase-development" && options.ContainsKey("owner-dir"))
+            throw new InvalidOperationException("The remote development target does not accept an owned recovery directory.");
         return options;
     }
 }

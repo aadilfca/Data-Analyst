@@ -47,7 +47,7 @@ public sealed class TenantUserService(PostgresTransactions transactions, Postgre
     public Task<TenantUserList> ListAsync(VerifiedSession? session, int tenantId, bool includeInactive,
         CancellationToken cancellationToken = default) => transactions.ExecuteAsync(async (db, ct) =>
     {
-        var actor = await AuthorizeAsync(db, session, tenantId, ct);
+        var actor = await AuthorizeAsync(db, session, tenantId, false, ct);
         if (actor is null) return new TenantUserList(TenantUserStatus.Forbidden, []);
         await using var command = db.CreateCommand("""
             SELECT u.id,u.username,m.tenant_role,(m.is_active AND u.is_active IS TRUE),u.last_login
@@ -72,7 +72,7 @@ public sealed class TenantUserService(PostgresTransactions transactions, Postgre
         {
             return await transactions.ExecuteAsync<TenantUserResult>(async (db, ct) =>
             {
-                var actor = await AuthorizeAsync(db, session, tenantId, ct);
+                var actor = await AuthorizeAsync(db, session, tenantId, true, ct);
                 if (actor is null) return new(TenantUserStatus.Forbidden);
                 var hash = BCrypt.Net.BCrypt.HashPassword(password);
                 int userId;
@@ -112,7 +112,7 @@ public sealed class TenantUserService(PostgresTransactions transactions, Postgre
         {
             return await transactions.ExecuteAsync<TenantUserResult>(async (db, ct) =>
             {
-                var actor = await AuthorizeAsync(db, session, tenantId, ct);
+                var actor = await AuthorizeAsync(db, session, tenantId, true, ct);
                 if (actor is null) return new(TenantUserStatus.Forbidden);
                 var target = await TargetAsync(db, tenantId, targetId, ct);
                 if (target is null) return new(TenantUserStatus.NotFound);
@@ -145,7 +145,7 @@ public sealed class TenantUserService(PostgresTransactions transactions, Postgre
     public Task<TenantUserResult> SetActiveAsync(VerifiedSession? session, int tenantId, int targetId,
         bool active, CancellationToken cancellationToken = default) => transactions.ExecuteAsync<TenantUserResult>(async (db, ct) =>
     {
-        var actor = await AuthorizeAsync(db, session, tenantId, ct);
+        var actor = await AuthorizeAsync(db, session, tenantId, true, ct);
         if (actor is null) return new(TenantUserStatus.Forbidden);
         var target = await TargetAsync(db, tenantId, targetId, ct);
         if (target is null || target.IsActive == active) return new(TenantUserStatus.NotFound);
@@ -168,7 +168,7 @@ public sealed class TenantUserService(PostgresTransactions transactions, Postgre
         if (!ValidPassword(password) || targetId <= 0) return Task.FromResult(new TenantUserResult(TenantUserStatus.Invalid));
         return transactions.ExecuteAsync<TenantUserResult>(async (db, ct) =>
         {
-            var actor = await AuthorizeAsync(db, session, tenantId, ct);
+            var actor = await AuthorizeAsync(db, session, tenantId, true, ct);
             if (actor is null) return new(TenantUserStatus.Forbidden);
             var target = await TargetAsync(db, tenantId, targetId, ct);
             if (target is null) return new(TenantUserStatus.NotFound);
@@ -190,13 +190,14 @@ public sealed class TenantUserService(PostgresTransactions transactions, Postgre
     }
 
     private static async Task<LogActor?> AuthorizeAsync(PostgresTransactionContext db, VerifiedSession? session,
-        int tenantId, CancellationToken ct)
+        int tenantId, bool lockForMutation, CancellationToken ct)
     {
         if (session is null || session.UserId <= 0 || tenantId <= 0 || !AuthenticationService.ValidToken(session.Token)) return null;
         // Serializes tenant-admin changes. The tenant id is only a selector;
         // the query proves actual membership.
-        await using (var tenantLock = db.CreateCommand("SELECT id FROM public.platform_tenants WHERE id=$1 AND is_active IS TRUE FOR UPDATE"))
+        if (lockForMutation)
         {
+            await using var tenantLock = db.CreateCommand("SELECT id FROM public.platform_tenants WHERE id=$1 AND is_active IS TRUE FOR UPDATE");
             tenantLock.Parameters.AddWithValue(tenantId);
             if (await tenantLock.ExecuteScalarAsync(ct) is null) return null;
         }
@@ -207,7 +208,7 @@ public sealed class TenantUserService(PostgresTransactions transactions, Postgre
             JOIN public.platform_tenant_memberships m ON m.user_id=u.id
             WHERE s.token=$1 AND s.user_id=$2 AND s.expiry>now() AND u.is_active IS TRUE
               AND m.tenant_id=$3 AND m.is_active IS TRUE AND m.tenant_role='admin' {selection}
-            FOR SHARE OF s,u,m
+              {(lockForMutation ? "FOR SHARE OF s,u,m" : "FOR SHARE OF s,u")}
             """);
         command.Parameters.AddWithValue(session.Token); command.Parameters.AddWithValue(session.UserId);
         command.Parameters.AddWithValue(tenantId);

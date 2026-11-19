@@ -5,4 +5,5 @@ public sealed class ClientManagementOptions
 {
     public const string SectionName = "ClientManagement";
     public bool Enabled { get; set; }
+    public bool WriteEnabled { get; set; }
 }

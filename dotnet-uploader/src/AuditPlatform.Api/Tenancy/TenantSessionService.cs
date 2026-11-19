@@ -58,7 +58,7 @@ public sealed class TenantSessionService(PostgresTransactions transactions, Post
                 JOIN public.platform_tenants t ON t.id=m.tenant_id
                 WHERE s.token=$1 AND s.user_id=$2 AND s.expiry>now() AND u.is_active IS TRUE
                   AND m.tenant_id=$3 AND m.is_active IS TRUE AND t.is_active IS TRUE
-                  AND s.context_version=$4 FOR UPDATE OF s FOR SHARE OF u,m,t
+                  AND s.context_version=$4 FOR UPDATE OF s FOR SHARE OF u
                 """))
             {
                 membership.Parameters.AddWithValue(session.Token); membership.Parameters.AddWithValue(session.UserId);

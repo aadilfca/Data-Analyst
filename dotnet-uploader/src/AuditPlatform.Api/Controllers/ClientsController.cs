@@ -44,7 +44,7 @@ public sealed class ClientsController(TenantClientService clients, IOptions<Clie
 
     private async Task<IActionResult> Save(int? id, ClientInput? input, CancellationToken ct)
     {
-        if (Guard() is { } error) return error;
+        if (Guard(write: true) is { } error) return error;
         if (!ModelState.IsValid || input?.Code is null || input.Name is null) return Invalid();
         var result = await clients.SaveAsync(Session, id,
             new(input.Code,input.Name,input.Industry,input.ContactPerson,input.Email,input.Phone,input.IsActive), ct);
@@ -59,17 +59,18 @@ public sealed class ClientsController(TenantClientService clients, IOptions<Clie
     public Task<IActionResult> Restore(int id, CancellationToken ct) => SetActive(id, true, ct);
     private async Task<IActionResult> SetActive(int id, bool active, CancellationToken ct)
     {
-        if (Guard() is { } error) return error;
+        if (Guard(write: true) is { } error) return error;
         var result = await clients.SetActiveAsync(Session, id, active, ct);
         return result.Status == ClientStatus.Success
             ? Ok(new { message = active ? "Client restored successfully" : "Client deleted (soft-delete) successfully" }) : Error(result.Status);
     }
 
     private VerifiedSession? Session => HttpContext.Items[typeof(VerifiedSession)] as VerifiedSession;
-    private IActionResult? Guard()
+    private IActionResult? Guard(bool write = false)
     {
         Response.Headers.CacheControl = "no-store";
         if (!options.Value.Enabled) return StatusCode(503, new { detail = "Client management is unavailable" });
+        if (write && !options.Value.WriteEnabled) return StatusCode(503, new { detail = "Client administration changes are disabled" });
         return Session is null ? Unauthorized(new { detail = "Not authenticated" }) : null;
     }
     private IActionResult Invalid() => UnprocessableEntity(new { detail = new[] {

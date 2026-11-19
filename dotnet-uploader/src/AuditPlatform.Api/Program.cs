@@ -70,7 +70,9 @@ builder.Services.AddOptions<AuthenticationOptions>()
     .Bind(builder.Configuration.GetSection(AuthenticationOptions.SectionName))
     .ValidateDataAnnotations().ValidateOnStart();
 builder.Services.AddOptions<UserManagementOptions>()
-    .Bind(builder.Configuration.GetSection(UserManagementOptions.SectionName)).ValidateOnStart();
+    .Bind(builder.Configuration.GetSection(UserManagementOptions.SectionName))
+    .Validate(o => !o.WriteEnabled || o.Enabled, "User administration writes require UserManagement to be enabled.")
+    .ValidateOnStart();
 builder.Services.AddSingleton<PostgresSessionStore>();
 builder.Services.AddSingleton<AuthenticationService>();
 // Internal foundation only; no public route or database migration is enabled.
@@ -78,7 +80,9 @@ builder.Services.AddSingleton<TenantContextResolver>();
 builder.Services.AddSingleton<EngagementAccessResolver>();
 builder.Services.AddSingleton<TenantUserService>();
 builder.Services.AddOptions<ClientManagementOptions>()
-    .Bind(builder.Configuration.GetSection(ClientManagementOptions.SectionName)).ValidateOnStart();
+    .Bind(builder.Configuration.GetSection(ClientManagementOptions.SectionName))
+    .Validate(o => !o.WriteEnabled || o.Enabled, "Client administration writes require ClientManagement to be enabled.")
+    .ValidateOnStart();
 builder.Services.AddSingleton<TenantClientService>();
 builder.Services.AddOptions<ApplicationShellOptions>()
     .Bind(builder.Configuration.GetSection(ApplicationShellOptions.SectionName)).ValidateOnStart();

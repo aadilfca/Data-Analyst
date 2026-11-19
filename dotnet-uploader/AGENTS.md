@@ -107,7 +107,7 @@ Execution order: P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 (repor
 | P59 — Backups | Implemented default-off local C# full-database ZIP and isolated restore; existing C# current/history workbook proof gates selected-template purge. No Drive integration or live migration. Automated checks pass; Aadil's C# Setup test remains. See CHANGELOG_ARCHIVE.md. |
 | P60 — Operational tools | Added a separate C# tray launcher with actionable readiness diagnostics and per-user local configuration guidance; Python launcher remains the rollback until P63. Manual tray/database check remains. No Python tool retired. |
 | P61 — System readiness | Database foundation 33/33 and backup/recovery 3/3 pass; configured shell/root readiness passes. Full Release build is clean. Tray menu and user-configured local DB remain operator checks; feature acceptance is deferred to P62. |
-| P62 — Deployment rehearsal | Added an inactive Render/Linux Docker candidate; live Python Blueprint unchanged. Build and rehearse only against a dedicated non-production DB; Aadil manually reviews selected app workflows in staging. See OPERATIONS.md. |
+| P62 — Deployment rehearsal | Linux image and local test-Supabase readiness passed; separate Render preview and Aadil's manual feature review remain. See OPERATIONS.md. |
 | P63 — Controlled cutover | Separate production gate: requires staging acceptance, protected recovery copy on a different device, provider baseline and explicit cutover approval. Keep Python rollback available until accepted. |
 
 ## Remaining cutover work packages

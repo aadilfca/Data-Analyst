@@ -5,4 +5,5 @@ public sealed class UserManagementOptions
 {
     public const string SectionName = "UserManagement";
     public bool Enabled { get; set; }
+    public bool WriteEnabled { get; set; }
 }

@@ -270,6 +270,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-19: C# shell/tray configured with writes off; P62 Linux image and local readiness rehearsal passed. Render staging remains. See CHANGELOG_ARCHIVE.md.
 - 2026-11-18: Narrowed P61 to system readiness, deferred feature acceptance to manual P62 staging review, and corrected C# tray/readiness setup. P62/P63 remain separate. See CHANGELOG_ARCHIVE.md.
 - 2026-11-18: Added C# write/rebase blocks and plain-language handling for retained Verification sessions; archive adoption, Ledger and external recovery/provider gates remain. See CHANGELOG_ARCHIVE.md.
 - 2026-11-18: Added default-off C# P57 Dashboard and tenant error administration; candidate migration `0023` remains unapplied. See CHANGELOG_ARCHIVE.md.
@@ -334,10 +335,7 @@ One line per file group: what it is now. Full build history for every entry live
 - 2026-10-25: Reconciliation keeps detail rows during coalesced tab-return checks; stale or unverifiable evidence stays locked. See CHANGELOG_ARCHIVE.md.
 - 2026-10-25: Isolated application recovery verified and locally accepted; complete rows, settings, numbering and object permissions match. See CHANGELOG_ARCHIVE.md.
 - 2026-10-25: Optimised optional voucher profiles in ledger_group_summary.py; main Cashflow unchanged. Local acceptance pending. See CHANGELOG_ARCHIVE.md.
-- 2026-10-23: Accepted selected-account Cashflows through Phase 8C; combined commit/push authorised. Phase 9 follows after limit reset. See CHANGELOG_ARCHIVE.md.
-- 2026-10-23: Integrated selected-account Cashflow APIs, scoped identities, transaction details and both Excel exports; toolbar follows separately. See CHANGELOG_ARCHIVE.md.
-- 2026-10-23: Added selected-account Cashflow backend foundation; derived fetching and All behaviour preserved. Integration/local acceptance pending. See CHANGELOG_ARCHIVE.md.
-- 2026-10-23: Accepted Phase 7 Cashflow/reconciliation and Excel verification; documentation commit/push authorised. See CHANGELOG_ARCHIVE.md.
+- 2026-10-23: Accepted Phase 7 and added selected-account Cashflow data, scoped APIs, details and exports; Phase 9 toolbar followed. See CHANGELOG_ARCHIVE.md.
 - 2026-10-22: Phase 6B adds opt-in ledger-to-Cashflow receipt/payment bridges and voucher support; accepted for commit/push. See CHANGELOG_ARCHIVE.md, Horizontal Cashflow accounting bridge.
 - 2026-10-22: Accepted horizontal Cashflow reconciliation specification and revised phases; accounting bridge follows separate approval. See CHANGELOG_ARCHIVE.md, Horizontal Cashflow reconciliation specification.
 - 2026-10-21: Original Phase 6A adds on-demand ledger/voucher comparisons, complete posting evidence and explicit coverage uncertainty; local acceptance pending. See CHANGELOG_ARCHIVE.md.

@@ -35,6 +35,7 @@ public sealed class UsersController(TenantUserService users, IOptions<UserManage
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] UserInput? input, CancellationToken cancellationToken)
     {
+        if (!options.Value.WriteEnabled) return WritesUnavailable();
         var selection = await ContextAsync(cancellationToken);
         if (selection.Error is not null) return selection.Error;
         if (!ModelState.IsValid || input is null) return InvalidRequest("body");
@@ -51,6 +52,7 @@ public sealed class UsersController(TenantUserService users, IOptions<UserManage
     [HttpPut("{userId:int}")]
     public async Task<IActionResult> Update(int userId, [FromBody] EditInput? input, CancellationToken cancellationToken)
     {
+        if (!options.Value.WriteEnabled) return WritesUnavailable();
         var selection = await ContextAsync(cancellationToken);
         if (selection.Error is not null) return selection.Error;
         if (!ModelState.IsValid || input is null) return InvalidRequest("body");
@@ -69,6 +71,7 @@ public sealed class UsersController(TenantUserService users, IOptions<UserManage
 
     private async Task<IActionResult> SetActive(int userId, bool active, CancellationToken cancellationToken)
     {
+        if (!options.Value.WriteEnabled) return WritesUnavailable();
         var selection = await ContextAsync(cancellationToken);
         if (selection.Error is not null) return selection.Error;
         var result = await users.SetActiveAsync(selection.Session, selection.TenantId, userId, active, cancellationToken);
@@ -79,6 +82,7 @@ public sealed class UsersController(TenantUserService users, IOptions<UserManage
     [HttpPut("{userId:int}/reset-password")]
     public async Task<IActionResult> ResetPassword(int userId, [FromBody] PasswordInput? input, CancellationToken cancellationToken)
     {
+        if (!options.Value.WriteEnabled) return WritesUnavailable();
         var selection = await ContextAsync(cancellationToken);
         if (selection.Error is not null) return selection.Error;
         if (!ModelState.IsValid || input is null) return InvalidRequest("body");
@@ -97,6 +101,8 @@ public sealed class UsersController(TenantUserService users, IOptions<UserManage
             return (null, 0, Error(selection.Status));
         return (session, selection.TenantId.Value, null);
     }
+
+    private IActionResult WritesUnavailable() => StatusCode(503, new { detail = "User administration changes are disabled" });
 
     private static string? ConvertRole(string? role) => role switch
     {
