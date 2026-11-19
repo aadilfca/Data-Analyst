@@ -1,5 +1,9 @@
 # Changelog Archive
 
+## C# tab-return flash diagnosis — 2026-11-19
+
+Playwright measured authenticated workspace checks at 558–810 ms; the prior 200 ms conceal timer hid valid pages while those requests completed. `context.js` now keeps valid pages visible during the coalesced check and conceals/redirects on invalid or unavailable context. A delayed-response harness verified visibility and redirects. After the tray server stopped, the Release API build passed with zero warnings/errors and packaged assets matched source. Live Playwright login reached Client Cards; a 734 ms valid focus check caused no visibility changes. `/api/users` still returns `ERR-UNK-001` with no diagnostic ID because diagnostic persistence is unavailable; its root exception needs a separate investigation. Native Chrome/app-switch and minimize/restore review remains with Aadil. Docker had no running containers; no push occurred.
+
 ## C# deployment scope and readiness — 2026-11-18
 
 P61 is narrowed to database/configuration, reviewed schema state, tray/startup, local backup/recovery, logs and rollback safety. Defer Verification and upload/preview feature acceptance to Aadil's manual P62 staging review; keep unaccepted modules off. P62 remains a non-production rehearsal; P63 remains a separate production gate requiring manual acceptance, a protected recovery copy on another device, provider baseline and explicit authorization.

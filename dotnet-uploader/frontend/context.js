@@ -83,20 +83,10 @@
         if (event.type === 'pageshow' && !event.persisted) return;
         if (contextRecheck) return contextRecheck;
 
-        const priorVisibility = document.documentElement.style.visibility;
-        let hiddenForCheck = false;
-        let redirecting = false;
-        // Focus and visibilitychange commonly fire together. Share one request and
-        // conceal the document only if a healthy-context check takes long enough
-        // to be noticeable, avoiding a flash on every ordinary tab return.
-        const concealTimer = window.setTimeout(() => {
-            document.documentElement.style.visibility = 'hidden';
-            hiddenForCheck = true;
-        }, 200);
-
+        // Focus and visibilitychange commonly fire together. Share one request,
+        // but keep a valid page visible while its context check is in flight.
         contextRecheck = (async () => {
             const redirect = path => {
-                redirecting = true;
                 document.documentElement.style.visibility = 'hidden';
                 location.replace(path);
             };
@@ -112,8 +102,6 @@
                 redirect('/shell/tenant_select.html');
             }
         })().finally(() => {
-            window.clearTimeout(concealTimer);
-            if (!redirecting && hiddenForCheck) document.documentElement.style.visibility = priorVisibility;
             contextRecheck = null;
         });
         return contextRecheck;

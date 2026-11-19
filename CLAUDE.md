@@ -270,6 +270,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-19: C# shell keeps valid pages visible during slow tab-return context checks; changed contexts still conceal and redirect. See CHANGELOG_ARCHIVE.md.
 - 2026-11-19: C# login selects a sole workspace directly; Client Cards shows footer switching only for multiple-workspace accounts. See CHANGELOG_ARCHIVE.md.
 - 2026-11-19: C# shell/tray configured with writes off; P62 Linux image and local readiness rehearsal passed. Render staging remains. See CHANGELOG_ARCHIVE.md.
 - 2026-11-18: Narrowed P61 to system readiness, deferred feature acceptance to manual P62 staging review, and corrected C# tray/readiness setup. P62/P63 remain separate. See CHANGELOG_ARCHIVE.md.
