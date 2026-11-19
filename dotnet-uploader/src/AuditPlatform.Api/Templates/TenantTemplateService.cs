@@ -18,11 +18,11 @@ public sealed class TenantTemplateService(PostgresTransactions transactions,Post
         ("debit","Debit Amount","Numeric"),("credit","Credit Amount","Numeric"),("balance","Balance","Text")];
 
     public Task<TemplateResult> ListAsync(VerifiedSession? session,CancellationToken ct=default)=>
-        RunAsync(session,false,async(db,actor,token)=>new(TemplateStatus.Success,await LoadAsync(db,actor.Tenant,null,token)),ct);
+        RunAsync(session,false,async(db,actor,token)=>new(TemplateStatus.Success,await LoadAsync(db,actor.Tenant,null,token,lockRows:false)),ct);
     public Task<TemplateResult> GetAsync(VerifiedSession? session,int id,CancellationToken ct=default)=>
         RunAsync(session,false,async(db,actor,token)=>
         {
-            var rows=await LoadAsync(db,actor.Tenant,id,token);
+            var rows=await LoadAsync(db,actor.Tenant,id,token,lockRows:false);
             return rows.Count==0 ? new(TemplateStatus.NotFound) : new(TemplateStatus.Success,rows);
         },ct);
 
@@ -182,7 +182,7 @@ public sealed class TenantTemplateService(PostgresTransactions transactions,Post
     public Task<TemplateResult> LedgerPreviewAsync(VerifiedSession? session,CancellationToken ct=default)=>
         RunAsync(session,false,async(db,actor,token)=>
         {
-            var columns=await SelectColumnsAsync(db,actor.Tenant,null,token,true);
+            var columns=await SelectColumnsAsync(db,actor.Tenant,null,token,true,lockRows:false);
             var choices=new List<TemplateColumn>();
             foreach(var (role,name,type) in LedgerRecipe)
             {
@@ -283,8 +283,10 @@ public sealed class TenantTemplateService(PostgresTransactions transactions,Post
             return Task.FromResult(new TemplateResult(TemplateStatus.Forbidden));
         return transactions.ExecuteAsync(async(db,token)=>
         {
-            await using(var config=db.CreateCommand("SELECT pg_advisory_xact_lock(746102)")) await config.ExecuteNonQueryAsync(token);
-            await using(var tenant=db.CreateCommand("SELECT id FROM public.platform_tenants WHERE id=$1 AND is_active IS TRUE FOR UPDATE"))
+            await using(var config=db.CreateCommand(admin
+                ? "SELECT pg_advisory_xact_lock(746102)" : "SELECT pg_advisory_xact_lock_shared(746102)"))
+                await config.ExecuteNonQueryAsync(token);
+            await using(var tenant=db.CreateCommand("SELECT id FROM public.platform_tenants WHERE id=$1 AND is_active IS TRUE"+(admin ? " FOR UPDATE" : "")))
             {
                 tenant.Parameters.AddWithValue(session.TenantId.Value); if(await tenant.ExecuteScalarAsync(token) is null) return new TemplateResult(TemplateStatus.Forbidden);
             }
@@ -293,8 +295,8 @@ public sealed class TenantTemplateService(PostgresTransactions transactions,Post
                 SELECT u.id,u.username,m.tenant_role FROM public.sessions s JOIN public.users u ON u.id=s.user_id
                 JOIN public.platform_tenant_memberships m ON m.user_id=u.id
                 WHERE s.token=$1 AND s.user_id=$2 AND s.expiry>now() AND u.is_active IS TRUE
-                    AND s.selected_tenant_id=$3 AND s.context_version=$4 AND m.tenant_id=$3 AND m.is_active IS TRUE FOR SHARE OF s,u,m
-                """))
+                AND s.selected_tenant_id=$3 AND s.context_version=$4 AND m.tenant_id=$3 AND m.is_active IS TRUE
+                """+(admin ? " FOR SHARE OF s,u,m" : "")))
             {
                 command.Parameters.AddWithValue(session.Token); command.Parameters.AddWithValue(session.UserId);
                 command.Parameters.AddWithValue(session.TenantId.Value); command.Parameters.AddWithValue(session.ContextVersion);
@@ -338,8 +340,7 @@ public sealed class TenantTemplateService(PostgresTransactions transactions,Post
         return null;
     }
 
-    // Operator previews use a read-only snapshot; ordinary runtime callers keep
-    // the existing row locks that protect their following configuration writes.
+    // Read-only calls omit row locks; mutation calls retain locks protecting their writes.
     internal static async Task<List<TemplateDefinition>> LoadAsync(PostgresTransactionContext db,int tenant,int? id,CancellationToken ct,bool lockRows=true)
     {
         var rows=new List<TemplateDefinition>();
@@ -385,13 +386,13 @@ public sealed class TenantTemplateService(PostgresTransactions transactions,Post
         }
         return rows.Select(t=>t with {Columns=columns.GetValueOrDefault(t.Id)??[],UploadBindings=bindings.GetValueOrDefault(t.Id)}).ToList();
     }
-    private static async Task<List<TemplateColumn>> SelectColumnsAsync(PostgresTransactionContext db,int tenant,IReadOnlyList<int>? ids,CancellationToken ct,bool includeInactive=false)
+    private static async Task<List<TemplateColumn>> SelectColumnsAsync(PostgresTransactionContext db,int tenant,IReadOnlyList<int>? ids,CancellationToken ct,bool includeInactive=false,bool lockRows=true)
     {
         await using var command=db.CreateCommand("""
             SELECT m.id,c.display_name,m.column_name,m.data_type,c.category,c.definition_version,m.is_active
             FROM public.platform_tenant_columns c JOIN public.master_columns m ON m.id=c.column_id
-            WHERE c.tenant_id=$1 AND c.binding_origin='native' AND (m.is_active IS TRUE OR $3) AND ($2::integer[] IS NULL OR m.id=ANY($2)) ORDER BY m.id FOR SHARE OF c,m
-            """);
+            WHERE c.tenant_id=$1 AND c.binding_origin='native' AND (m.is_active IS TRUE OR $3) AND ($2::integer[] IS NULL OR m.id=ANY($2)) ORDER BY m.id
+            """+(lockRows ? " FOR SHARE OF c,m" : ""));
         command.Parameters.AddWithValue(tenant); command.Parameters.AddWithValue(NpgsqlDbType.Array|NpgsqlDbType.Integer,(object?)ids?.ToArray()??DBNull.Value);
         command.Parameters.AddWithValue(includeInactive);
         var rows=new List<TemplateColumn>(); await using var reader=await command.ExecuteReaderAsync(ct);

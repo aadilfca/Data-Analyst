@@ -37,28 +37,62 @@ public sealed class PostgresTransactions(
         double verificationMs = 0;
         double commitMs = 0;
         var outcome = "failed";
+        var stage = "transaction_setup";
+        double failureElapsedMs = 0;
+        string? failureType = null;
+        string? failureSqlState = null;
         var commitStarted = false;
 
         try
         {
-            await context.ConfigureAsync(options.Value.CommandTimeoutSeconds, readOnly: false, cancellationToken);
-            setupMs = Stopwatch.GetElapsedTime(stageStarted).TotalMilliseconds;
+            try
+            {
+                await context.ConfigureAsync(options.Value.CommandTimeoutSeconds, readOnly: false, cancellationToken);
+            }
+            finally
+            {
+                setupMs = Stopwatch.GetElapsedTime(stageStarted).TotalMilliseconds;
+            }
+            stage = "callback";
             stageStarted = Stopwatch.GetTimestamp();
-            var result = await operation(context, cancellationToken);
-            callbackMs = Stopwatch.GetElapsedTime(stageStarted).TotalMilliseconds;
+            T result;
+            try
+            {
+                result = await operation(context, cancellationToken);
+            }
+            finally
+            {
+                callbackMs = Stopwatch.GetElapsedTime(stageStarted).TotalMilliseconds;
+            }
             cancellationToken.ThrowIfCancellationRequested();
+            stage = "verification";
             stageStarted = Stopwatch.GetTimestamp();
-            await context.VerifyActiveAsync(readOnly: false, cancellationToken);
-            verificationMs = Stopwatch.GetElapsedTime(stageStarted).TotalMilliseconds;
+            try
+            {
+                await context.VerifyActiveAsync(readOnly: false, cancellationToken);
+            }
+            finally
+            {
+                verificationMs = Stopwatch.GetElapsedTime(stageStarted).TotalMilliseconds;
+            }
             commitStarted = true;
+            stage = "commit";
             stageStarted = Stopwatch.GetTimestamp();
-            await transaction.CommitAsync(cancellationToken);
-            commitMs = Stopwatch.GetElapsedTime(stageStarted).TotalMilliseconds;
+            try
+            {
+                await transaction.CommitAsync(cancellationToken);
+            }
+            finally
+            {
+                commitMs = Stopwatch.GetElapsedTime(stageStarted).TotalMilliseconds;
+            }
             outcome = "success";
             return result;
         }
         catch (Exception error)
         {
+            failureElapsedMs = Stopwatch.GetElapsedTime(stageStarted).TotalMilliseconds;
+            (failureType, failureSqlState) = FailureDetails(error);
             await PostgresOperationScope.RollbackSafelyAsync(transaction);
             // A server SQL rejection is definite; a missing transport response
             // or cancellation during COMMIT cannot establish whether it applied.
@@ -71,10 +105,24 @@ public sealed class PostgresTransactions(
         {
             if (environment?.IsDevelopment() == true)
                 logger?.LogInformation(
-                    "C# PostgreSQL transaction timing trace_id={TraceId} outcome={Outcome} connection_open_ms={ConnectionOpenMs:F1} setup_ms={SetupMs:F1} callback_ms={CallbackMs:F1} verification_ms={VerificationMs:F1} commit_ms={CommitMs:F1}",
-                    Activity.Current?.TraceId.ToString() ?? "none", outcome, connectionOpenMs,
+                    "C# PostgreSQL transaction timing trace_id={TraceId} outcome={Outcome} stage={Stage} failure_elapsed_ms={FailureElapsedMs:F1} exception_type={ExceptionType} postgres_sqlstate={PostgresSqlState} connection_open_ms={ConnectionOpenMs:F1} setup_ms={SetupMs:F1} callback_ms={CallbackMs:F1} verification_ms={VerificationMs:F1} commit_ms={CommitMs:F1}",
+                    Activity.Current?.TraceId.ToString() ?? "none", outcome, stage, failureElapsedMs,
+                    failureType ?? "none", failureSqlState ?? "none", connectionOpenMs,
                     setupMs, callbackMs, verificationMs, commitMs);
         }
+    }
+
+    private static (string Type, string? SqlState) FailureDetails(Exception error)
+    {
+        var current = error;
+        for (var depth = 0; depth < 8; depth++)
+        {
+            if (current is PostgresException postgres)
+                return (error.GetType().Name, postgres.SqlState);
+            if (current.InnerException is null) break;
+            current = current.InnerException;
+        }
+        return (error.GetType().Name, null);
     }
 }
 

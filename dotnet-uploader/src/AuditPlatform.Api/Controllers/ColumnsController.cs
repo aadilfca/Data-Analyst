@@ -59,7 +59,7 @@ public sealed class ColumnsController(TenantColumnService columns,IOptions<Colum
     public Task<IActionResult> Update(int id,[FromBody]Input? input,CancellationToken ct)=>Save(id,input,ct);
     private async Task<IActionResult> Save(int? id,Input? input,CancellationToken ct)
     {
-        if(Guard() is {} error) return error;
+        if(Guard(write:true) is {} error) return error;
         if(!ModelState.IsValid||input?.Name is null||input.Type is null||input.Category is null) return Invalid();
         var active=ActiveValue(input.Active);
         if(id is not null&&active is null) return Invalid();
@@ -71,14 +71,15 @@ public sealed class ColumnsController(TenantColumnService columns,IOptions<Colum
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id,CancellationToken ct)
     {
-        if(Guard() is {} error) return error;
+        if(Guard(write:true) is {} error) return error;
         var result=await columns.DeleteAsync(Session,id,ct);
         return result.Status==ColumnStatus.Success ? Ok(new {message="Column deleted successfully"}) : Error(result);
     }
-    private IActionResult? Guard()
+    private IActionResult? Guard(bool write=false)
     {
         Response.Headers.CacheControl="no-store";
         if(!options.Value.Enabled) return StatusCode(503,new {detail="Column management is unavailable"});
+        if(write&&!options.Value.WriteEnabled) return StatusCode(503,new {detail="Column changes are disabled"});
         return Session is null ? Unauthorized(new {detail="Not authenticated"}) : null;
     }
     private IActionResult Invalid()=>UnprocessableEntity(new {detail=new[] {new {type="invalid_request",loc=new[] {"request"},msg="Invalid column request",input="[redacted]"}}});

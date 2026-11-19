@@ -143,7 +143,7 @@ public sealed class TenantColumnService(PostgresTransactions transactions,Postgr
     public Task<ColumnResult> UsageAsync(VerifiedSession? session,int id,CancellationToken ct=default) =>
         RunAsync(session,false,async(db,actor,token)=>
         {
-            var column=await TargetAsync(db,actor.TenantId,id,token);
+            var column=await TargetAsync(db,actor.TenantId,id,token,lockForMutation:false);
             if(column is null) return new(ColumnStatus.NotFound);
             // Until dependent modules have verified tenant ownership, positive
             // global counts would disclose unscoped information. Never report
@@ -172,8 +172,10 @@ public sealed class TenantColumnService(PostgresTransactions transactions,Postgr
         {
             // Share legacy column/template serialization before any metadata
             // row locks. Future dependent writers must use the same contract.
-            await using(var configuration=db.CreateCommand("SELECT pg_advisory_xact_lock(746102)")) await configuration.ExecuteNonQueryAsync(token);
-            await using(var tenant=db.CreateCommand("SELECT id FROM public.platform_tenants WHERE id=$1 AND is_active IS TRUE FOR UPDATE"))
+            await using(var configuration=db.CreateCommand(admin
+                ? "SELECT pg_advisory_xact_lock(746102)" : "SELECT pg_advisory_xact_lock_shared(746102)"))
+                await configuration.ExecuteNonQueryAsync(token);
+            await using(var tenant=db.CreateCommand("SELECT id FROM public.platform_tenants WHERE id=$1 AND is_active IS TRUE"+(admin ? " FOR UPDATE" : "")))
             {
                 tenant.Parameters.AddWithValue(session.TenantId.Value);
                 if(await tenant.ExecuteScalarAsync(token) is null) return new ColumnResult(ColumnStatus.Forbidden);
@@ -183,9 +185,9 @@ public sealed class TenantColumnService(PostgresTransactions transactions,Postgr
                 SELECT u.id,u.username,m.tenant_role FROM public.sessions s JOIN public.users u ON u.id=s.user_id
                 JOIN public.platform_tenant_memberships m ON m.user_id=u.id
                 WHERE s.token=$1 AND s.user_id=$2 AND s.expiry>now() AND u.is_active IS TRUE
-                  AND s.selected_tenant_id=$3 AND s.context_version=$4
-                  AND m.tenant_id=$3 AND m.is_active IS TRUE FOR SHARE OF s,u,m
-                """))
+                AND s.selected_tenant_id=$3 AND s.context_version=$4
+                AND m.tenant_id=$3 AND m.is_active IS TRUE
+                """+(admin ? " FOR SHARE OF s,u,m" : "")))
             {
                 command.Parameters.AddWithValue(session.Token); command.Parameters.AddWithValue(session.UserId);
                 command.Parameters.AddWithValue(session.TenantId.Value); command.Parameters.AddWithValue(session.ContextVersion);
@@ -197,12 +199,12 @@ public sealed class TenantColumnService(PostgresTransactions transactions,Postgr
         },ct);
     }
 
-    private static async Task<TenantColumn?> TargetAsync(PostgresTransactionContext db,int tenant,int id,CancellationToken ct)
+    private static async Task<TenantColumn?> TargetAsync(PostgresTransactionContext db,int tenant,int id,CancellationToken ct,bool lockForMutation=true)
     {
         await using var command=db.CreateCommand($"""
             SELECT {Fields} FROM public.platform_tenant_columns c JOIN public.master_columns m ON m.id=c.column_id
-            WHERE c.tenant_id=$1 AND m.id=$2 FOR UPDATE OF c,m
-            """);
+            WHERE c.tenant_id=$1 AND m.id=$2
+            """+(lockForMutation ? " FOR UPDATE OF c,m" : ""));
         command.Parameters.AddWithValue(tenant); command.Parameters.AddWithValue(id);
         await using var reader=await command.ExecuteReaderAsync(ct); return await reader.ReadAsync(ct) ? Read(reader) : null;
     }

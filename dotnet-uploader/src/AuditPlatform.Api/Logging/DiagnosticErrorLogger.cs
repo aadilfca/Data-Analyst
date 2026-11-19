@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Microsoft.Extensions.Hosting;
 using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.AspNetCore.Routing;
 using AuditPlatform.Api.Configuration;
@@ -12,7 +13,8 @@ namespace AuditPlatform.Api.Logging;
 public sealed class DiagnosticErrorLogger(
     PostgresTransactions transactions, PostgresDataSourceFactory factory,
     LogSanitizer sanitizer, IOptions<LogPersistenceOptions> options,
-    ILogger<DiagnosticErrorLogger> console, IOptions<ErrorLogManagementOptions>? management = null)
+    ILogger<DiagnosticErrorLogger> console, IOptions<ErrorLogManagementOptions>? management = null,
+    IHostEnvironment? environment = null)
 {
     public const string UnknownCode = "ERR-UNK-001";
     public const string GenericMessage = "An unexpected error occurred. Please try again or contact support.";
@@ -57,7 +59,7 @@ public sealed class DiagnosticErrorLogger(
         {
             Validate(record);
             if (factory.DataSource is null)
-                return Fallback(record, fallback, "not_configured");
+                return Fallback(record, fallback, "not_configured", "configuration", "none", null);
             var metadata = sanitizer.Metadata(record.Metadata);
             return await transactions.ExecuteAsync(async (context, token) =>
             {
@@ -115,7 +117,19 @@ public sealed class DiagnosticErrorLogger(
         }
         catch (Exception error) when (error is not OutOfMemoryException and not StackOverflowException)
         {
-            return Fallback(record, fallback, error is PostgresCommitOutcomeUnknownException ? "unknown" : "unavailable");
+            var (exceptionType, sqlState) = FailureDetails(error);
+            var failureKind = error switch
+            {
+                PostgresCommitOutcomeUnknownException => "unknown_commit",
+                PostgresException => "postgres_server",
+                NpgsqlException => "postgres_transport",
+                OperationCanceledException or TimeoutException => "timeout",
+                ArgumentException => "invalid_record",
+                _ => "other"
+            };
+            return Fallback(record, fallback,
+                error is PostgresCommitOutcomeUnknownException ? "unknown" : "unavailable",
+                failureKind, exceptionType, sqlState);
         }
     }
 
@@ -136,17 +150,36 @@ public sealed class DiagnosticErrorLogger(
         return string.IsNullOrWhiteSpace(safe) || safe == LogSanitizer.Redacted ? fallback : safe;
     }
 
-    private DiagnosticLogResult Fallback(DiagnosticError record, DiagnosticLogResult result, string status)
+    private DiagnosticLogResult Fallback(DiagnosticError record, DiagnosticLogResult result, string status,
+        string failureKind, string exceptionType, string? sqlState)
     {
         // Fixed metadata only. Never pass the exception object or supplied
         // strings into a logger, including its failure/formatting paths.
         try
         {
-            console.LogWarning(new EventId(5001, "DiagnosticPersistence"),
-                "Diagnostic persistence {Persistence}; event {EventId}; status {StatusCode}",
-                status, record.EventId, record.StatusCode);
+            if (environment?.IsDevelopment() == true)
+                console.LogWarning(new EventId(5001, "DiagnosticPersistence"),
+                    "Diagnostic persistence {Persistence}; event {EventId}; correlation_id={CorrelationId}; status {StatusCode}; failure_kind={FailureKind} exception_type={ExceptionType} postgres_sqlstate={PostgresSqlState}",
+                    status, record.EventId, record.CorrelationId, record.StatusCode, failureKind, exceptionType, sqlState ?? "none");
+            else
+                console.LogWarning(new EventId(5001, "DiagnosticPersistence"),
+                    "Diagnostic persistence {Persistence}; event {EventId}; correlation_id={CorrelationId}; status {StatusCode}",
+                    status, record.EventId, record.CorrelationId, record.StatusCode);
         }
         catch (Exception error) when (error is not OutOfMemoryException and not StackOverflowException) { }
         return result with { Persistence = status };
+    }
+
+    private static (string Type, string? SqlState) FailureDetails(Exception error)
+    {
+        var current = error;
+        for (var depth = 0; depth < 8; depth++)
+        {
+            if (current is PostgresException postgres)
+                return (error.GetType().Name, postgres.SqlState);
+            if (current.InnerException is null) break;
+            current = current.InnerException;
+        }
+        return (error.GetType().Name, null);
     }
 }

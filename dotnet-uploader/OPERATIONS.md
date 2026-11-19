@@ -24,6 +24,8 @@ $project = '.\dotnet-uploader\src\AuditPlatform.Api\AuditPlatform.Api.csproj'
 
 These commands do not create or migrate a database. Apply only reviewed migrations to the isolated test database, and use a test account that exists in that database. The login `codex/codex` is usable only if it was created there. Keep both write switches false while Python shares the database; they disable user creation/edit/deactivation/password reset and client create/edit/deactivation. The runtime role also has no user/client administration database writes. After configuration, rebuild Release, close/reopen the tray, choose **Start C# server**, wait for **C# server: running**, then open the app. See Microsoft's [development secret guidance](https://learn.microsoft.com/en-us/aspnet/core/security/app-secrets?view=aspnetcore-10.0).
 
+Column and Template pages are also disabled by default. After their reviewed schema and least-privilege runtime `SELECT` grants are present, set `ColumnManagement:Enabled` and `TemplateManagement:Enabled` to `true` to allow reads; leave each `WriteEnabled` false until the editing workflow is separately accepted. Neither setting applies SQL or changes existing records.
+
 `start_tray.vbs`, `tray_control.py`, and `run.bat` remain the Python rollback launchers until P63. Do not replace their target during P60.
 
 ## P62 Render candidate

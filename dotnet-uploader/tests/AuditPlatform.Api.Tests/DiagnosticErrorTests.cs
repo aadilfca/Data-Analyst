@@ -13,7 +13,10 @@ using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using Xunit;
@@ -221,7 +224,8 @@ public sealed class DiagnosticErrorTests(PostgresFixture fixture) : IClassFixtur
         var lifetime = new LifetimeFeature();
         context.Features.Set<IHttpRequestLifetimeFeature>(lifetime);
         var middleware = new ExceptionLoggingMiddleware(_ => throw new InvalidOperationException("password=PRIVATE_SENTINEL"));
-        await middleware.InvokeAsync(context, Logger(pool, new()));
+        await middleware.InvokeAsync(context, Logger(pool, new()),
+            NullLogger<ExceptionLoggingMiddleware>.Instance, new TestHostEnvironment());
         Assert.True(lifetime.Aborted);
         Assert.Equal(0, feature.Body.Length);
     }
@@ -235,7 +239,8 @@ public sealed class DiagnosticErrorTests(PostgresFixture fixture) : IClassFixtur
         var context = new DefaultHttpContext { RequestAborted = cancellation.Token };
         var output = new CaptureLogger();
         await new ExceptionLoggingMiddleware(_ => throw new OperationCanceledException(cancellation.Token))
-            .InvokeAsync(context, Logger(pool, output));
+            .InvokeAsync(context, Logger(pool, output), NullLogger<ExceptionLoggingMiddleware>.Instance,
+                new TestHostEnvironment());
         Assert.Empty(output.Messages);
         Assert.NotEqual(500, context.Response.StatusCode);
     }
@@ -334,6 +339,14 @@ public sealed class DiagnosticErrorTests(PostgresFixture fixture) : IClassFixtur
         public CancellationToken RequestAborted { get; set; }
         public bool Aborted { get; private set; }
         public void Abort() => Aborted = true;
+    }
+
+    private sealed class TestHostEnvironment : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Environments.Production;
+        public string ApplicationName { get; set; } = nameof(DiagnosticErrorTests);
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+        public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();
     }
 }
 

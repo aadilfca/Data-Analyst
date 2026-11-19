@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- dotnet-uploader/ → Default-off C# backend/reports/jobs, backups/tray, owned-local configuration/Rulebook adoption, provenance-safe specimen and legacy-session retention, and deployment candidates. See CHANGELOG_ARCHIVE.md.
+- dotnet-uploader/ → Default-off C# APIs/jobs, backup/tray, one pooled Postgres source, tenant shell, Development timings and safe failure diagnostics, throttled tab-return checks. See CHANGELOG_ARCHIVE.md.
 - dotnet-uploader/src/AuditPlatform.Api/Verification/VerificationEvidenceService.cs → Scoped evidence links, Form/Physical Bill modal support, procedure checks, and observation persistence. See CHANGELOG_ARCHIVE.md.
 
 - routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, statements, category-role notes with unallocated rows, profit links, reconciliations, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
@@ -270,19 +270,16 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-19: C# Users, Columns and Templates reads avoid write-level locks; native definition writes have separate off-by-default gates. See CHANGELOG_ARCHIVE.md.
 - 2026-11-19: C# tab-return workspace checks reuse a successful validation for 15 seconds. See CHANGELOG_ARCHIVE.md, C# tab-return workspace validation cooldown.
-- 2026-11-19: Added development-only C# PostgreSQL stage timings for client reads, session lookup and dashboard snapshots. See CHANGELOG_ARCHIVE.md, C# development PostgreSQL timings.
+- 2026-11-19: Added Development-only C# database timings and safe request, transaction-stage, and diagnostic-storage failure details. See CHANGELOG_ARCHIVE.md, C# development failure diagnostics.
 - 2026-11-19: C# shell keeps valid pages visible during slow tab-return context checks; changed contexts still conceal and redirect. See CHANGELOG_ARCHIVE.md.
 - 2026-11-19: C# login selects a sole workspace directly; Client Cards shows footer switching only for multiple-workspace accounts. See CHANGELOG_ARCHIVE.md.
 - 2026-11-19: C# shell/tray configured with writes off; P62 Linux image and local readiness rehearsal passed. Render staging remains. See CHANGELOG_ARCHIVE.md.
 - 2026-11-18: Narrowed P61 to system readiness, deferred feature acceptance to manual P62 staging review, and corrected C# tray/readiness setup. P62/P63 remain separate. See CHANGELOG_ARCHIVE.md.
 - 2026-11-18: Added C# write/rebase blocks and plain-language handling for retained Verification sessions; archive adoption, Ledger and external recovery/provider gates remain. See CHANGELOG_ARCHIVE.md.
 - 2026-11-18: Added default-off C# P57 Dashboard and tenant error administration; candidate migration `0023` remains unapplied. See CHANGELOG_ARCHIVE.md.
-- 2026-11-18: Added default-off .NET P52 Verification lookup/check routes and legacy Cashbook print/export; see CHANGELOG_ARCHIVE.md.
-- 2026-11-18: Added default-off C# P50 Forms, Physical Bills and native Rulebook evidence identities; candidate migration `0022` remains unapplied. See CHANGELOG_ARCHIVE.md.
-- 2026-11-18: Added default-off C# P49 Verification evidence links, procedure ticks and observations. Local acceptance remains; see CHANGELOG_ARCHIVE.md.
-- 2026-11-18: Added default-off C# P48 atomic Verification saves, validation/completion, voucher checks and Cleared/Query gates. Local acceptance remains; see CHANGELOG_ARCHIVE.md.
-- 2026-11-17: Added default-off .NET P46–P47 Verification sessions and read models; behavior checks remain for deployment, P48–P52 remain. See CHANGELOG_ARCHIVE.md.
+- 2026-11-17–18: Completed default-off C# Verification sessions, review, evidence, Forms, checks and Audit Workbook APIs; acceptance gates remain. See CHANGELOG_ARCHIVE.md.
 - 2026-11-16–17: Added default-off .NET P37–P40, P53A–P56, and P41–P45 Audit Rules APIs/compiler. Local database acceptance remains. See CHANGELOG_ARCHIVE.md.
 - 2026-11-15: Restored the Python upload page to the last committed layout; uncommitted mapping redesign removed. See CHANGELOG_ARCHIVE.md, Upload mapping rollback.
 - 2026-11-14: Added disabled native Trial Balance review, guarded corrections/classifications and current footings; locally accepted. See CHANGELOG_ARCHIVE.md, Trial Balance review P36.

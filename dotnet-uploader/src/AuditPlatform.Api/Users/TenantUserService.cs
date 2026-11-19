@@ -208,7 +208,7 @@ public sealed class TenantUserService(PostgresTransactions transactions, Postgre
             JOIN public.platform_tenant_memberships m ON m.user_id=u.id
             WHERE s.token=$1 AND s.user_id=$2 AND s.expiry>now() AND u.is_active IS TRUE
               AND m.tenant_id=$3 AND m.is_active IS TRUE AND m.tenant_role='admin' {selection}
-              {(lockForMutation ? "FOR SHARE OF s,u,m" : "FOR SHARE OF s,u")}
+              {(lockForMutation ? "FOR SHARE OF s,u,m" : "")}
             """);
         command.Parameters.AddWithValue(session.Token); command.Parameters.AddWithValue(session.UserId);
         command.Parameters.AddWithValue(tenantId);

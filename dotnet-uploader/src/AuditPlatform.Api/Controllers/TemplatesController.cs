@@ -73,7 +73,7 @@ public sealed class TemplatesController(TenantTemplateService templates,IOptions
     public Task<IActionResult> Update(int id,[FromBody]Input? input,CancellationToken ct)=>Save(id,input,ct);
     private async Task<IActionResult> Save(int? id,Input? input,CancellationToken ct)
     {
-        if(Guard() is {} error) return error;
+        if(Guard(write:true) is {} error) return error;
         if(!ModelState.IsValid||input?.Name is null||input.Columns is null) return Invalid();
         var result=await templates.SaveAsync(Session,id,new(input.Name,input.Columns,input.Purpose,input.Ledger,input.Roles,
             input.Comparisons,input.RateSource,input.Subtotals,Revision,input.ColumnVersions,input.UploadBindings),ct);
@@ -82,14 +82,14 @@ public sealed class TemplatesController(TenantTemplateService templates,IOptions
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id,CancellationToken ct)
     {
-        if(Guard() is {} error) return error;
+        if(Guard(write:true) is {} error) return error;
         var result=await templates.DeleteAsync(Session,id,Revision,ct);
         return result.Status==TemplateStatus.Success ? Ok(new {message="Template deleted successfully (soft-delete)"}):Error(result);
     }
     [HttpPost("{id:int}/reorder")]
     public async Task<IActionResult> Reorder(int id,[FromBody]int[]? columns,CancellationToken ct)
     {
-        if(Guard() is {} error) return error;
+        if(Guard(write:true) is {} error) return error;
         if(!ModelState.IsValid||columns is null) return Invalid();
         var result=await templates.ReorderAsync(Session,id,columns,Revision,ct);
         return result.Status==TemplateStatus.Success ? Ok(new {message="Order updated successfully"}):Error(result);
@@ -97,7 +97,7 @@ public sealed class TemplatesController(TenantTemplateService templates,IOptions
     [HttpDelete("{id:int}/columns/{column:int}")]
     public async Task<IActionResult> Remove(int id,int column,CancellationToken ct)
     {
-        if(Guard() is {} error) return error;
+        if(Guard(write:true) is {} error) return error;
         var result=await templates.RemoveAsync(Session,id,column,Revision,ct);
         return result.Status==TemplateStatus.Success ? Ok(new {message="Column removed from template"}):Error(result);
     }
@@ -113,16 +113,17 @@ public sealed class TemplatesController(TenantTemplateService templates,IOptions
     [HttpPost("ledger-setup")]
     public async Task<IActionResult> LedgerSetup([FromBody]LedgerInput? input,CancellationToken ct)
     {
-        if(Guard() is {} error) return error;
+        if(Guard(write:true) is {} error) return error;
         if(!ModelState.IsValid||input?.Roles is null||input.Name is null) return Invalid();
         var result=await templates.PrepareLedgerAsync(Session,input.Name,input.Roles,input.Comparisons,input.Subtotals,ct);
         return result.Status==TemplateStatus.Success ? Ok(new {message=result.Reused ? "Account Ledger template already configured.":"Account Ledger template created successfully",
             template_id=result.Id,reused=result.Reused}):Error(result);
     }
-    private IActionResult? Guard()
+    private IActionResult? Guard(bool write=false)
     {
         Response.Headers.CacheControl="no-store";
         if(!options.Value.Enabled) return StatusCode(503,new {detail="Template management is unavailable"});
+        if(write&&!options.Value.WriteEnabled) return StatusCode(503,new {detail="Template changes are disabled"});
         return Session is null ? Unauthorized(new {detail="Not authenticated"}):null;
     }
     private IActionResult Invalid()=>UnprocessableEntity(new {detail=new[] {new {type="invalid_request",loc=new[] {"request"},msg="Invalid template request",input="[redacted]"}}});

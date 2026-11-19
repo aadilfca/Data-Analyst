@@ -6,4 +6,5 @@ public sealed class ColumnManagementOptions
 {
     public const string SectionName = "ColumnManagement";
     public bool Enabled { get; set; }
+    public bool WriteEnabled { get; set; }
 }
