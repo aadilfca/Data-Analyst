@@ -28,6 +28,28 @@ Column and Template pages are also disabled by default. After their reviewed sch
 
 `start_tray.vbs`, `tray_control.py`, and `run.bat` remain the Python rollback launchers until P63. Do not replace their target during P60.
 
+### Owned local PostgreSQL
+
+The repository includes portable PostgreSQL 17.11 tools. From the repository root, initialize a persistent local cluster once, then use its lifecycle commands:
+
+```powershell
+& .\dotnet-uploader\scripts\local-postgres.ps1 Initialize
+& .\dotnet-uploader\scripts\local-postgres.ps1 Status
+& .\dotnet-uploader\scripts\local-postgres.ps1 Start
+& .\dotnet-uploader\scripts\local-postgres.ps1 Stop
+```
+
+Initialization creates a loopback-only server on port 55432, a separate non-superuser C# role, and an empty database in ignored `.tools/local-postgres/`. It stores the local connection in .NET User Secrets and an ACL-protected local file; it does not change the selected profile, inspect Python `.env`, or contact Supabase. The database is empty: restore and verify an approved schema/data snapshot before selecting it, or login, users, clients, Columns and Templates will fail because their tables/data are absent.
+
+After that restore is verified, select the local database for the tray-launched app. Switch back to the existing Supabase connection without re-entering its password:
+
+```powershell
+& .\dotnet-uploader\scripts\local-postgres.ps1 UseLocal
+& .\dotnet-uploader\scripts\local-postgres.ps1 UseSupabase
+```
+
+The script never deletes or replaces an existing cluster. Stop it only through its `Stop` action; start it with `Start`. Local and Supabase profile choices are saved separately from their connection strings.
+
 ## P62 Render candidate
 
 The independent workspace-adoption rehearsal is described below; it does not activate this deployment candidate.

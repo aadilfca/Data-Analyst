@@ -261,6 +261,70 @@ public sealed class PostgresFoundationTests(PostgresFixture fixture) : IClassFix
     }
 
     [Fact]
+    public void Local_profile_uses_separate_loopback_secret_and_preserves_supabase_connection()
+    {
+        const string supabase = "Host=db.example;Database=app;Username=runtime;SSL Mode=VerifyFull";
+        const string local = "Host=127.0.0.1;Port=55432;Database=audit_platform_local;Username=audit_platform_runtime;SSL Mode=Disable";
+        var settings = new PostgresOptions
+        {
+            Enabled = true,
+            ConnectionString = supabase,
+            LocalConnectionString = local
+        };
+
+        Assert.Equal("Supabase", settings.Profile);
+        Assert.Equal(supabase, settings.ConnectionString);
+        Assert.True(IsValid(settings));
+
+        settings.Profile = "Local";
+        Assert.Equal(local, settings.ConnectionString);
+        Assert.True(IsValid(settings));
+
+        settings.Profile = "Supabase";
+        Assert.Equal(supabase, settings.ConnectionString);
+    }
+
+    [Theory]
+    [InlineData("Staging")]
+    [InlineData("")]
+    public void Unknown_profiles_are_rejected(string profile)
+    {
+        var settings = Settings();
+        settings.Profile = profile;
+        Assert.False(IsValid(settings));
+    }
+
+    [Fact]
+    public void Local_profile_rejects_remote_hosts()
+    {
+        var settings = new PostgresOptions
+        {
+            Enabled = true,
+            Profile = "Local",
+            LocalConnectionString = "Host=db.example;Database=test;Username=test;SSL Mode=VerifyFull"
+        };
+
+        Assert.False(IsValid(settings));
+    }
+
+    [Fact]
+    public async Task Local_profile_opens_its_selected_database_pool()
+    {
+        var settings = new PostgresOptions
+        {
+            Enabled = true,
+            Profile = "Local",
+            ConnectionString = "Host=remote.example;Database=not_used;Username=not_used;SSL Mode=VerifyFull",
+            LocalConnectionString = fixture.ConnectionString
+        };
+        await using var pool = new PostgresDataSourceFactory(Options.Create(settings));
+        await using var connection = await pool.DataSource!.OpenConnectionAsync(TestCancellation);
+        await using var command = new NpgsqlCommand("SELECT 1", connection);
+
+        Assert.Equal(1, await command.ExecuteScalarAsync(TestCancellation));
+    }
+
+    [Fact]
     public void Invalid_database_settings_prevent_host_startup()
     {
         var app = CreateApp(options => options.MaximumPoolSize = 0);

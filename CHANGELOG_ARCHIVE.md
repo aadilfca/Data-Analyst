@@ -1,5 +1,13 @@
 # Changelog Archive
 
+## C# local PostgreSQL profile — 2026-11-20
+
+Added an explicit `Local`/`Supabase` PostgreSQL profile. Existing `Postgres:ConnectionString` remains the Supabase fallback; Local requires a loopback host and a separate User Secret. `scripts/local-postgres.ps1` safely initializes and manages a private PostgreSQL 17.11 cluster on port 55432, creates a non-superuser runtime role/database, and can switch profiles without changing Supabase credentials. The ignored local folder is ACL-restricted and is never removed by the script.
+
+The local database is intentionally empty. No snapshot restore, schema migration, grant, feature activation, Supabase query/change, or Python setting change occurred. Readiness only proves `SELECT 1`; application pages need the reviewed schema/data snapshot before Local is selected.
+
+Verification: PowerShell parser passed; the Release solution build passed with zero warnings/errors using a separate ignored output path because the tray held the normal API DLL; 38 focused PostgreSQL foundation tests passed with normal local execution. The owned local cluster initialized and reported running; a separately launched C# API using the Local User Secret returned `/health/ready` successfully and was stopped. The tray server and Supabase profile were not changed.
+
 ## C# tab-return flash diagnosis — 2026-11-19
 
 Playwright measured authenticated workspace checks at 558–810 ms; the prior 200 ms conceal timer hid valid pages while those requests completed. `context.js` now keeps valid pages visible during the coalesced check and conceals/redirects on invalid or unavailable context. A delayed-response harness verified visibility and redirects. After the tray server stopped, the Release API build passed with zero warnings/errors and packaged assets matched source. Live Playwright login reached Client Cards; a 734 ms valid focus check caused no visibility changes. `/api/users` still returns `ERR-UNK-001` with no diagnostic ID because diagnostic persistence is unavailable; its root exception needs a separate investigation. Native Chrome/app-switch and minimize/restore review remains with Aadil. Docker had no running containers; no push occurred.
