@@ -6,19 +6,22 @@ using Npgsql;
 
 namespace AuditPlatform.WorkspaceAdoption;
 
-internal static class SupabaseDevelopmentAdoption
+public static class SupabaseDevelopmentAdoption
 {
     private const string ConnectionEnvironmentVariable = "AUDIT_ADOPTION_SUPABASE_CONNECTION";
     private const string CertificateEnvironmentVariable = "AUDIT_ADOPTION_SUPABASE_ROOT_CERT";
     private const string AllowedHost = "aws-0-ap-south-1.pooler.supabase.com";
-    private const string AllowedUsername = "postgres.ddzwlydayusrkosnlsla";
+    private const string AllowedUsername = "postgres.klljugkujxxmtbmbeewn";
     private const string SupportedSettings = "'date_format','amount_grouping','decimal_precision','rate_precision','default_date_range','materiality_threshold','cashflow_fiscal_year_start_month','cashflow_default_period','cashflow_custom_start','cashflow_custom_end','upload_allow_without_backup'";
 
     public static async Task<int> RunAsync(Dictionary<string, string> options)
     {
         try
         {
-            if (options.GetValueOrDefault("stage", "workspace") != "workspace"
+            var stage = options.GetValueOrDefault("stage", "workspace");
+            if (stage == "templates")
+                ValidateTemplateOptions(options);
+            else if (stage != "workspace"
                 || options.ContainsKey("owner-dir") || options.ContainsKey("unassigned-users")
                 || options.ContainsKey("tenant-id") || options.ContainsKey("retain-unresolved")
                 || options.ContainsKey("binding-plan") || options.ContainsKey("actor-username"))
@@ -30,6 +33,27 @@ internal static class SupabaseDevelopmentAdoption
             await using var connection = new NpgsqlConnection(settings.ConnectionString);
             await connection.OpenAsync();
             await VerifyTargetAsync(connection);
+
+            if (stage == "templates")
+            {
+                int? requestedTenant = null;
+                if (options.TryGetValue("tenant-id", out var tenantText))
+                {
+                    if (!int.TryParse(tenantText, out var parsedTenant) || parsedTenant <= 0)
+                        throw new InvalidOperationException("The requested workspace ID is invalid.");
+                    requestedTenant = parsedTenant;
+                }
+                var activeTenants = new List<int>();
+                await using (var tenantCommand = new NpgsqlCommand(
+                    "SELECT id FROM public.platform_tenants WHERE tenant_type='audit_firm' AND is_active ORDER BY id", connection))
+                await using (var tenantReader = await tenantCommand.ExecuteReaderAsync())
+                    while (await tenantReader.ReadAsync()) activeTenants.Add(tenantReader.GetInt32(0));
+
+                var tenantId = TemplateAdoption.ResolveTenantId(activeTenants, requestedTenant);
+                var previewOptions = new Dictionary<string, string>(options, StringComparer.Ordinal)
+                    { ["tenant-id"] = tenantId.ToString(System.Globalization.CultureInfo.InvariantCulture) };
+                return await TemplateAdoption.RunAsync(connection, previewOptions, "supabase_development");
+            }
 
             var name = options.GetValueOrDefault("workspace-name", "Supabase development audit firm").Trim();
             if (name.Length is < 1 or > 200)
@@ -181,10 +205,43 @@ internal static class SupabaseDevelopmentAdoption
                 status = "rejected",
                 error = error.GetType().Name,
                 sqlstate = (error as PostgresException)?.SqlState,
-                reason = error is InvalidOperationException ? error.Message : "Inspect the protected operator input; no automatic retry was made."
+                missingSchema = (error as PostgresException)?.SqlState == "42P01" ? (error as PostgresException)?.SchemaName : null,
+                missingRelation = (error as PostgresException)?.SqlState == "42P01" ? (error as PostgresException)?.TableName : null,
+                reason = error is InvalidOperationException ? error.Message
+                    : error is PostgresException { SqlState: "42P01" } missing ? missing.MessageText
+                    : "Inspect the protected operator input; no automatic retry was made."
             }));
             return 1;
         }
+    }
+
+    public static void ValidateTemplateOptions(IReadOnlyDictionary<string, string> options)
+    {
+        var allowed = new HashSet<string>(StringComparer.Ordinal)
+            { "target", "stage", "tenant-id", "retain-unresolved", "apply", "operation", "expected" };
+        if (options.Keys.Any(key => !allowed.Contains(key))
+            || options.GetValueOrDefault("target") != "supabase-development"
+            || options.GetValueOrDefault("stage") != "templates")
+            throw new InvalidOperationException("The Supabase template stage accepts only its scoped adoption options.");
+
+        var apply = options.ContainsKey("apply");
+        var hasOperation = options.TryGetValue("operation", out var operationText);
+        var hasFingerprint = options.TryGetValue("expected", out var fingerprint);
+        if (!apply)
+        {
+            if (hasOperation || hasFingerprint)
+                throw new InvalidOperationException("Apply identity options require --apply.");
+            return;
+        }
+
+        if (!options.ContainsKey("retain-unresolved"))
+            throw new InvalidOperationException("Apply requires the explicit --retain-unresolved review decision.");
+        if (!hasOperation || !Guid.TryParse(operationText, out var operation) || operation == Guid.Empty)
+            throw new InvalidOperationException("Apply requires a unique, non-empty operation ID.");
+        if (!hasFingerprint || fingerprint is null || fingerprint.Length != 64
+            || fingerprint.Any(character => !Uri.IsHexDigit(character))
+            || !string.Equals(fingerprint, fingerprint.ToLowerInvariant(), StringComparison.Ordinal))
+            throw new InvalidOperationException("Apply requires the lowercase SHA-256 fingerprint from the matching preview.");
     }
 
     private static NpgsqlConnectionStringBuilder ValidateConnection(string value, string certificatePath)

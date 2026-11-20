@@ -6,6 +6,10 @@ Migrate the complete application backend, financial calculations, reports, Excel
 
 Plan dated 2026-11-10; Aadil approved full C# reporting and reports-before-audit sequencing on 2026-11-11. P01–P07 are locally accepted. See [MIGRATION_BASELINE.md](MIGRATION_BASELINE.md), [migration-baseline.json](migration-baseline.json), and [current contracts](MIGRATION_CONTRACTS.md). Each implementation phase requires file/approach approval.
 
+## Local SDK quick start
+
+From this folder, use `.\.dotnet\dotnet.exe`, not `dotnet` from PATH. `global.json` pins SDK `10.0.404`; the repository's SDK and runtime are in ignored `.dotnet\`. Use the detailed environment, restore and build commands below.
+
 ## Agreed technology direction
 
 - **Runtime/API:** .NET 10 LTS and ASP.NET Core Web API, organized as feature-oriented controllers and service classes in one modular service.

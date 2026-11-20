@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- dotnet-uploader/ → Default-off C# APIs/jobs, backup/tray, pooled local/Supabase PostgreSQL profiles, tenant shell, Development timings, safe diagnostics and throttled tab-return checks. See CHANGELOG_ARCHIVE.md.
+- dotnet-uploader/ → Default-off C# APIs/jobs and local operations; empty-schema bootstrap, restricted core grants, and guarded adoption/setup tools. See CHANGELOG_ARCHIVE.md.
 - dotnet-uploader/src/AuditPlatform.Api/Verification/VerificationEvidenceService.cs → Scoped evidence links, Form/Physical Bill modal support, procedure checks, and observation persistence. See CHANGELOG_ARCHIVE.md.
 
 - routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, statements, category-role notes with unallocated rows, profit links, reconciliations, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
@@ -30,7 +30,7 @@ One line per file group: what it is now. Full build history for every entry live
 - database.py (users/sessions) → authenticated users and session records for Login → Client Cards → Dashboard; bcrypt, session-stored selected client, seeded placeholder admin. See CHANGELOG_ARCHIVE.md.
 - routers/auth.py → login/logout, current-session lookup, client selection, `get_current_user()`/`require_admin()` guards; timezone-aware session expiry. See CHANGELOG_ARCHIVE.md.
 - routers/users.py → Admin user management (list/create/edit/deactivate/reactivate/reset password); every endpoint `require_admin`, mutations SQLite-audited. See CHANGELOG_ARCHIVE.md.
-- routers/storage_cleanup.py + services/storage_cleanup.py + static/storage_cleanup.* → Guarded cleanup, native scoped outcomes, legacy allocation diagnostics and separately approved PostgreSQL maintenance. See CHANGELOG_ARCHIVE.md.
+- routers/storage_cleanup.py + services/storage_cleanup.py + static/storage_cleanup.* → Guarded cleanup, test-only linked Verification purge, native outcomes and approved PostgreSQL maintenance. See CHANGELOG_ARCHIVE.md.
 - static/users.html, static/users.js → firm-level Manage Users UI (sortable/searchable rows, add/edit, deactivate, password reset); shared Admin header/tab strip. See CHANGELOG_ARCHIVE.md.
 - static/login.html, static/login.js, static/app_info.html, static/privacy.html, static/terms.html, static/public_info.css → Login selects a sole workspace before Client Cards; public application and policy pages. See CHANGELOG_ARCHIVE.md.
 - static/client_select.html, static/client_select.js → standalone Client Cards page with guarded selection, admin entry, loading feedback, and conditional workspace footer. See CHANGELOG_ARCHIVE.md.
@@ -239,7 +239,7 @@ One line per file group: what it is now. Full build history for every entry live
 - **Every `.md` file in this repo stays brief — this applies to all AI agents (Claude Code, Codex, any other).** Write the shortest version that is still complete and unambiguous: one idea per line, no restating what another `.md` already says, no phase-by-phase narration, no "why we tried X first" prose in a reference file. Detailed history goes only to `CHANGELOG_ARCHIVE.md`; findings go only to `KNOWN_ISSUES.md`; everything else points to those by heading rather than copying. Before adding to any `.md`, first check whether an existing line can be rewritten in place instead. Token budget is a real constraint: these files are read into context every session. When a section outgrows its budget (below), stop and compress before adding more.
 - **Status log budget**: each entry in the Status log below is ONE line, ~25 words max — what changed + file(s) touched, no verification/investigation detail. Full detail always goes to `CHANGELOG_ARCHIVE.md`, referenced by heading name, not repeated here.
 - **Status log self-check**: before appending a Status entry, draft it, then verify the word count with a bash command (e.g. echo "<entry>" | wc -w) rather than eyeballing it. Over ~25? Cut it down, or move the detail to `CHANGELOG_ARCHIVE.md` and leave a one-line pointer here, before committing the entry.
-- **Status log drift trigger**: if an existing entry is found over budget, or the Status log exceeds ~80 lines, stop before starting new work and flag it for a compression pass — don't add another entry to an already-bloated log.
+- **Status log drift trigger**: if an existing entry is found over budget, or the Status log exceeds 80 bullet entries (excluding the heading), stop before starting new work and flag it for a compression pass — don't add another entry to an already-bloated log.
 - **Architecture bullet budget**: each Architecture bullet is ONE line, ~25 words max — `file(s) → what it does now` plus a bare `See CHANGELOG_ARCHIVE.md.` where history exists. No function/table/route inventories, no phase narration, no verification detail. Full build history lives in CHANGELOG_ARCHIVE.md.
 - **Architecture self-check**: when a phase touches a file already listed in Architecture, rewrite that bullet's current-state description in place — never append a new sentence onto it. Anything that isn't current-state (what changed, how it was verified, phase history) moves to CHANGELOG_ARCHIVE.md first, then the bullet is rewritten to reflect only what's true now.
 - **Architecture drift trigger**: if an existing bullet has grown past one line / ~25 words, stop before starting new work and flag it for a compression pass — don't add to an already-bloated bullet.
@@ -271,11 +271,15 @@ One line per file group: what it is now. Full build history for every entry live
 
 ## Status log
 - 2026-11-20: Added separate local PostgreSQL profile and guarded cluster controls; snapshot restore remains pending. See C# local PostgreSQL profile.
+- 2026-11-20: Added guarded Supabase template adoption preview/apply; migrations `0010` and `0024` remain gated. See C# Supabase template adoption preview and guarded apply.
+- 2026-11-20: Added guarded C# first-run setup for an admin, workspace, and blank client; database execution remains separately approved. See CHANGELOG_ARCHIVE.md.
+- 2026-11-20: Added preview-first reusable C# Columns/Templates transfer; client and transaction data remain excluded, and apply stays separately gated. See CHANGELOG_ARCHIVE.md.
+- 2026-11-20: Aligned C# base indexes, prepared restricted grants, and documented passwordless runtime-role setup; grants remain unapplied. See C# empty-schema foundation and core grants.
+- 2026-11-19: Added an off-by-default, test-project-bound purge option for template-linked Verification records and evidence. See CHANGELOG_ARCHIVE.md.
 - 2026-11-19: C# Users, Columns and Templates reads avoid write-level locks; native definition writes have separate off-by-default gates. See CHANGELOG_ARCHIVE.md.
 - 2026-11-19: C# tab-return workspace checks reuse a successful validation for 15 seconds. See CHANGELOG_ARCHIVE.md, C# tab-return workspace validation cooldown.
 - 2026-11-19: Added Development-only C# database timings and safe request, transaction-stage, and diagnostic-storage failure details. See CHANGELOG_ARCHIVE.md, C# development failure diagnostics.
-- 2026-11-19: C# shell keeps valid pages visible during slow tab-return context checks; changed contexts still conceal and redirect. See CHANGELOG_ARCHIVE.md.
-- 2026-11-19: C# login selects a sole workspace directly; Client Cards shows footer switching only for multiple-workspace accounts. See CHANGELOG_ARCHIVE.md.
+- 2026-11-19: C# shell preserves pages during slow context checks; login selects a sole workspace and shows switching only for multiple-workspace accounts. See CHANGELOG_ARCHIVE.md.
 - 2026-11-19: C# shell/tray configured with writes off; P62 Linux image and local readiness rehearsal passed. Render staging remains. See CHANGELOG_ARCHIVE.md.
 - 2026-11-18: Narrowed P61 to system readiness, deferred feature acceptance to manual P62 staging review, and corrected C# tray/readiness setup. P62/P63 remain separate. See CHANGELOG_ARCHIVE.md.
 - 2026-11-18: Added C# write/rebase blocks and plain-language handling for retained Verification sessions; archive adoption, Ledger and external recovery/provider gates remain. See CHANGELOG_ARCHIVE.md.
@@ -338,8 +342,7 @@ One line per file group: what it is now. Full build history for every entry live
 - 2026-10-22: Phase 6B adds opt-in ledger-to-Cashflow receipt/payment bridges and voucher support; accepted for commit/push. See CHANGELOG_ARCHIVE.md, Horizontal Cashflow accounting bridge.
 - 2026-10-22: Accepted horizontal Cashflow reconciliation specification and revised phases; accounting bridge follows separate approval. See CHANGELOG_ARCHIVE.md, Horizontal Cashflow reconciliation specification.
 - 2026-10-21: Original Phase 6A adds on-demand ledger/voucher comparisons, complete posting evidence and explicit coverage uncertainty; local acceptance pending. See CHANGELOG_ARCHIVE.md.
-- 2026-10-21: C6 verifies Combined, Bank, Cash, Split and exports against independent source/ledger controls; locally accepted for commit/push. See CHANGELOG_ARCHIVE.md.
-- 2026-10-21: Added independent Cashflow boundary, carry, role, source-correction and screen/export regression controls; accepted for commit/push. See CHANGELOG_ARCHIVE.md, Independent Cashflow controls.
+- 2026-10-21: C6 verifies Cashflow outputs with independent boundary, carry, role, correction and screen/export controls. See CHANGELOG_ARCHIVE.md, Independent Cashflow controls.
 - 2026-10-21: Cashflows reconciles separate Treasury movements, aligns payment subtotal signs and exports complete deductions; locally accepted. See CHANGELOG_ARCHIVE.md.
 - 2026-10-21: Cashflows preserves signed customer/vendor reversals, adds period details and shared export totals; January–June combined reconciliation verified. See CHANGELOG_ARCHIVE.md.
 - 2026-10-20: Client Data preserves source order; Cashflows, Data Bank and ledger uploads gain scoped balances and account search. See CHANGELOG_ARCHIVE.md.

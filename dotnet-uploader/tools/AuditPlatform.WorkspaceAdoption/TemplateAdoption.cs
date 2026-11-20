@@ -21,6 +21,27 @@ public static class TemplateAdoption
     public sealed record StoredKeys(int TemplateId,string[] Keys);
     public sealed record Source(Column[] Columns,Template[] Templates,Mapping[] Mappings,Header[] Headers,Client[] Clients,StoredKeys[] StoredKeys,long InvalidRows);
 
+    public static int ResolveTenantId(IEnumerable<int> activeAuditFirmTenantIds,int? requestedTenantId)
+    {
+        var ids=activeAuditFirmTenantIds.Distinct().Order().ToArray();
+        if(requestedTenantId is int requested)
+        {
+            if(requested<=0||!ids.Contains(requested))
+                throw new InvalidOperationException("The requested workspace is not an active audit-firm workspace.");
+            return requested;
+        }
+        if(ids.Length!=1)
+            throw new InvalidOperationException("A single active audit-firm workspace is required; specify its ID when more than one exists.");
+        return ids[0];
+    }
+
+    public static string[] RequiredMigrationsForApply(bool savedMappingSchemaReady,bool reviewQueueSchemaReady)
+        => new[]
+        {
+            savedMappingSchemaReady?null:"0010_tenant_saved_mappings.sql",
+            reviewQueueSchemaReady?null:"0024_saved_mapping_adoption_review.sql"
+        }.Where(name=>name is not null).Select(name=>name!).ToArray();
+
     // Ledger Source Notes is already treated separately by both import/identity
     // implementations. Every other stored key must resolve to an existing field.
     public static void ValidateStoredKeys(string purpose,IEnumerable<string> declared,IEnumerable<string> stored)
@@ -81,8 +102,11 @@ public static class TemplateAdoption
         return definitions;
     }
 
-    public static async Task<int> RunAsync(NpgsqlConnection connection,Dictionary<string,string> options)
+    public static async Task<int> RunAsync(NpgsqlConnection connection,Dictionary<string,string> options,
+        string sourceOrigin="owned_local_rehearsal")
     {
+        if(sourceOrigin is not ("owned_local_rehearsal" or "supabase_development"))
+            throw new InvalidOperationException("Unsupported template-adoption origin.");
         if(!options.TryGetValue("tenant-id",out var value)||!int.TryParse(value,out var tenant)||tenant<=0)
             throw new InvalidOperationException("Template adoption requires the rehearsed workspace ID.");
         var apply=options.ContainsKey("apply");
@@ -122,8 +146,19 @@ public static class TemplateAdoption
         await Execute("SET LOCAL TimeZone='UTC'; SET LOCAL extra_float_digits=3; SET LOCAL DateStyle='ISO, YMD'");
         if(await Scalar("SELECT EXISTS(SELECT 1 FROM public.platform_tenants WHERE id=$1 AND tenant_type='audit_firm' AND is_active)",tenant) is not true)
             throw new InvalidOperationException("An active rehearsed firm workspace is required.");
-        if(await Scalar("SELECT EXISTS(SELECT 1 FROM public.platform_tenant_columns) OR EXISTS(SELECT 1 FROM public.platform_tenant_templates) OR EXISTS(SELECT 1 FROM public.platform_tenant_saved_mapping_sets)") is true)
+        var mappingSetsExist=await Scalar("SELECT to_regclass('public.platform_tenant_saved_mapping_sets') IS NOT NULL") is true;
+        var mappingsExist=await Scalar("SELECT to_regclass('public.platform_tenant_saved_mappings') IS NOT NULL") is true;
+        if(mappingSetsExist!=mappingsExist)
+            throw new InvalidOperationException("Saved-mapping schema is only partially present; review migration 0010 before continuing.");
+        var savedMappingSchemaReady=mappingSetsExist&&mappingsExist;
+        if(apply&&!savedMappingSchemaReady)
+            throw new InvalidOperationException("Apply requires reviewed migration 0010_tenant_saved_mappings.sql to be applied separately first.");
+        var hasNativeDefinitions=savedMappingSchemaReady
+            ? await Scalar("SELECT EXISTS(SELECT 1 FROM public.platform_tenant_columns) OR EXISTS(SELECT 1 FROM public.platform_tenant_templates) OR EXISTS(SELECT 1 FROM public.platform_tenant_saved_mapping_sets)") is true
+            : await Scalar("SELECT EXISTS(SELECT 1 FROM public.platform_tenant_columns) OR EXISTS(SELECT 1 FROM public.platform_tenant_templates)") is true;
+        if(hasNativeDefinitions)
             throw new InvalidOperationException("This first configuration adoption requires an empty native definition catalog.");
+        var reviewQueueSchemaReady=await Scalar("SELECT to_regclass('public.platform_saved_mapping_adoption_review') IS NOT NULL") is true;
         var sourceJson=(string)(await Scalar("""
             SELECT jsonb_build_object(
               'columns',(SELECT coalesce(jsonb_agg(to_jsonb(c) ORDER BY id),'[]') FROM
@@ -157,10 +192,14 @@ public static class TemplateAdoption
             templateColumns=source.Mappings.Length,legacySavedMappings=source.Headers.Length,savedMappings=groups.Sum(group=>group.Count()),
             retainedForReview=reviews.Length,savedMappingSets=groups.Length};
         if(!apply)
-        {Console.WriteLine(JsonSerializer.Serialize(new{status="preview",tenantId=tenant,fingerprint,counts}));await transaction.RollbackAsync();return 0;}
+        {
+            var applyPrerequisites=RequiredMigrationsForApply(savedMappingSchemaReady,reviewQueueSchemaReady);
+            Console.WriteLine(JsonSerializer.Serialize(new{status="preview",tenantId=tenant,fingerprint,counts,applyPrerequisites}));
+            await transaction.RollbackAsync();return 0;
+        }
         if(options["expected"]!=fingerprint)throw new InvalidOperationException("Source or selection changed since preview.");
         if(reviews.Length>0&&!retained)throw new InvalidOperationException("Explicitly retain unresolved legacy mappings for review before applying.");
-        if(await Scalar("SELECT to_regclass('public.platform_saved_mapping_adoption_review') IS NOT NULL") is not true)
+        if(!reviewQueueSchemaReady)
             throw new InvalidOperationException("The reviewed saved-mapping adoption queue schema is required.");
         await Execute("INSERT INTO public.platform_tenant_columns(column_id,tenant_id,display_name,category,notes,binding_origin) SELECT id,$1,column_name,category,notes,'native' FROM public.master_columns",tenant);
         foreach(var template in source.Templates)
@@ -197,8 +236,8 @@ public static class TemplateAdoption
         var outcome=JsonSerializer.Serialize(new{status="completed",stage="templates",operation,tenantId=tenant,fingerprint,counts});
         await Execute("""
             INSERT INTO public.audit_log("user",action,module,details,event_id,operation_id,actor_kind,source_origin)
-            VALUES('System','TemplateAdoption','Migration',$1,$2,$3,'system','owned_local_rehearsal')
-            """,outcome,Guid.NewGuid(),operation);
+            VALUES('System','TemplateAdoption','Migration',$1,$2,$3,'system',$4)
+            """,outcome,Guid.NewGuid(),operation,sourceOrigin);
         try{await transaction.CommitAsync();}catch{Console.WriteLine("{\"status\":\"commit_outcome_unknown\"}");return 2;}
         Console.WriteLine(outcome);return 0;
     }

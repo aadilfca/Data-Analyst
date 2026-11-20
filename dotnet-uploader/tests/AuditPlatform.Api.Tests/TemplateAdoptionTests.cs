@@ -6,6 +6,46 @@ namespace AuditPlatform.Api.Tests;
 
 public sealed class TemplateAdoptionTests
 {
+    [Fact]
+    public void Preview_resolves_only_one_active_workspace_unless_explicitly_selected()
+    {
+        Assert.Equal(61,TemplateAdoption.ResolveTenantId([61],null));
+        Assert.Equal(62,TemplateAdoption.ResolveTenantId([61,62],62));
+        Assert.Throws<InvalidOperationException>(()=>TemplateAdoption.ResolveTenantId([],null));
+        Assert.Throws<InvalidOperationException>(()=>TemplateAdoption.ResolveTenantId([61,62],null));
+        Assert.Throws<InvalidOperationException>(()=>TemplateAdoption.ResolveTenantId([61],62));
+    }
+
+    [Fact]
+    public void Read_only_preview_reports_missing_apply_migrations()
+    {
+        Assert.Equal(["0010_tenant_saved_mappings.sql","0024_saved_mapping_adoption_review.sql"],
+            TemplateAdoption.RequiredMigrationsForApply(false,false));
+        Assert.Equal(["0024_saved_mapping_adoption_review.sql"],
+            TemplateAdoption.RequiredMigrationsForApply(true,false));
+        Assert.Empty(TemplateAdoption.RequiredMigrationsForApply(true,true));
+    }
+
+    [Fact]
+    public void Supabase_apply_requires_preview_identity_and_explicit_retention_choice()
+    {
+        var preview=new Dictionary<string,string>{{"target","supabase-development"},{"stage","templates"}};
+        SupabaseDevelopmentAdoption.ValidateTemplateOptions(preview);
+        Assert.Throws<InvalidOperationException>(()=>SupabaseDevelopmentAdoption.ValidateTemplateOptions(
+            new Dictionary<string,string>(preview){{"apply","true"}}));
+        Assert.Throws<InvalidOperationException>(()=>SupabaseDevelopmentAdoption.ValidateTemplateOptions(
+            new Dictionary<string,string>(preview){{"expected",new string('a',64)}}));
+
+        var apply=new Dictionary<string,string>(preview)
+        {
+            ["apply"]="true",["retain-unresolved"]="true",["operation"]="9c9632b6-9f47-42d8-a73c-cfcbad9f45f0",
+            ["expected"]=new string('a',64)
+        };
+        SupabaseDevelopmentAdoption.ValidateTemplateOptions(apply);
+        Assert.Throws<InvalidOperationException>(()=>SupabaseDevelopmentAdoption.ValidateTemplateOptions(
+            new Dictionary<string,string>(apply){{"workspace-name","unexpected"}}));
+    }
+
     private static TemplateAdoption.Source Example() => new(
         [new(11,"Reference","Text","General",null,true)],
         [new(21,"Synthetic",null,new DateTime(2026,1,1,0,0,0,DateTimeKind.Utc),false,false,"standard",[],null,true)],
