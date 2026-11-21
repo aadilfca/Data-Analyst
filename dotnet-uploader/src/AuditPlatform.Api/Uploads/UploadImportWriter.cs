@@ -18,7 +18,11 @@ public sealed class UploadImportWriter(IOptions<UploadImportOptions> options,ICo
     {
         var source=payload.Review.Coverage.Footing.Validation.Source;
         if(payload.ImportProfile is not {} profile||profile.AccountCode is not null) throw new ValidationPlanRejected("import_bindings_review_required");
-        await using(var purpose=db.CreateCommand("SELECT data_purpose,rate_source FROM public.templates WHERE id=$1 FOR SHARE"))
+        // Cashflow and other derived writers remain separately disabled until
+        // their tables, runtime grants and behavior have their own acceptance.
+        if(profile.Derivation is not null) throw new ValidationPlanRejected("import_derived_fields_review_required");
+        // The import transaction already holds configuration advisory lock 746102.
+        await using(var purpose=db.CreateCommand("SELECT data_purpose,rate_source FROM public.templates WHERE id=$1"))
         {
             purpose.Parameters.AddWithValue(source.TemplateId);await using var reader=await purpose.ExecuteReaderAsync(ct);
             if(!await reader.ReadAsync(ct)||reader.GetString(0)!="standard"||!reader.IsDBNull(1)&&profile.Derivation is null)
@@ -26,7 +30,19 @@ public sealed class UploadImportWriter(IOptions<UploadImportOptions> options,ICo
         }
         // Table locks also cover writers which do not yet use our advisory lock.
         // They prevent phantom evidence/identity changes between guards and writes.
-        await using(var locks=db.CreateCommand("LOCK TABLE public.client_data, public.verification_details, public.voucher_line_documents, public.voucher_line_physical_bill_items, public.cashflow_prepared_lines IN SHARE ROW EXCLUSIVE MODE"))
+        var guardTables=new[]{"verification_details","voucher_line_documents","voucher_line_physical_bill_items","cashflow_prepared_lines"};
+        var lockedTables=new List<string>{"public.client_data"};
+        foreach(string table in guardTables)
+        {
+            string column=table switch
+            {
+                "verification_details" or "voucher_line_documents"=>"client_data_id",
+                "voucher_line_physical_bill_items"=>"source_document_row_id",
+                _=>"source_client_data_id"
+            };
+            if(await OptionalGuardTableExists(db,table,column,ct)) lockedTables.Add("public."+table);
+        }
+        await using(var locks=db.CreateCommand($"LOCK TABLE {string.Join(", ",lockedTables)} IN SHARE ROW EXCLUSIVE MODE"))
             await locks.ExecuteNonQueryAsync(ct);
         await RequireIdentityIndex(db,ct);
         var existing=new Dictionary<int,IReadOnlyDictionary<string,IdentityAtom>>();
@@ -81,6 +97,7 @@ public sealed class UploadImportWriter(IOptions<UploadImportOptions> options,ICo
         foreach(var (table,column) in new[]{("verification_details","client_data_id"),("voucher_line_documents","client_data_id"),
             ("voucher_line_physical_bill_items","source_document_row_id"),("cashflow_prepared_lines","source_client_data_id")})
         {
+            if(!await OptionalGuardTableExists(db,table,column,ct)) continue;
             await using var guard=db.CreateCommand($"SELECT EXISTS(SELECT 1 FROM public.{table} WHERE {column}=ANY($1))");
             guard.Parameters.AddWithValue(removed);
             if((bool)(await guard.ExecuteScalarAsync(ct))!) throw new ValidationPlanRejected("import_protected_evidence");
@@ -89,13 +106,11 @@ public sealed class UploadImportWriter(IOptions<UploadImportOptions> options,ICo
         // retired stores are inspected only when present and are never recreated.
         foreach(string table in new[]{"cash_bank_transaction_classifications","cashflow_voucher_occurrences","cashflow_prepared_rollups","cash_bank_summary_read_models","cashflow_ledger_rollup_read_models"})
         {
-            if(profile.Derivation is not null&&(table=="cash_bank_summary_read_models"||table=="cashflow_voucher_occurrences"&&profile.Derivation.CashflowSource)) continue;
             await using var exists=db.CreateCommand("SELECT to_regclass($1) IS NOT NULL");exists.Parameters.AddWithValue("public."+table);
             if(!(bool)(await exists.ExecuteScalarAsync(ct))!) continue;
-            await using(var tableLock=db.CreateCommand($"LOCK TABLE public.{table} IN SHARE ROW EXCLUSIVE MODE")) await tableLock.ExecuteNonQueryAsync(ct);
-            await using var guard=db.CreateCommand($"SELECT EXISTS(SELECT 1 FROM public.{table} WHERE client_id=$1 AND template_id=$2)");
-            guard.Parameters.AddWithValue(source.ClientId);guard.Parameters.AddWithValue(source.TemplateId);
-            if((bool)(await guard.ExecuteScalarAsync(ct))!) throw new ValidationPlanRejected("import_downstream_refresh_required");
+            // Derived modules are default-off. Do not grant their runtime login
+            // table locks or maintenance rights as a side effect of upload.
+            throw new ValidationPlanRejected("import_downstream_refresh_required");
         }
         foreach(var item in payload.Actions)
         {
@@ -148,7 +163,7 @@ public sealed class UploadImportWriter(IOptions<UploadImportOptions> options,ICo
                 """);
             // Mark every existing review of changed financial data Pending, retaining
             // all IDs, evidence and management/audit work for the required re-review.
-            await Execute($"""
+            if(await OptionalGuardTableExists(db,"verification_details","validation_status",ct)) await Execute($"""
                 UPDATE public.verification_details v SET validation_status='Pending' FROM {records}
                 WHERE v.client_data_id=a.id AND a.action='changed' AND EXISTS(SELECT 1 FROM public.client_data c WHERE c.id=a.id AND c.client_id=$2 AND c.template_id=$3)
                 """);
@@ -190,6 +205,18 @@ public sealed class UploadImportWriter(IOptions<UploadImportOptions> options,ICo
             FROM pg_index i WHERE i.indexrelid=to_regclass('public.idx_client_data_active_identity_unique') AND i.indrelid='public.client_data'::regclass
             """);
         if(await command.ExecuteScalarAsync(ct) is not true) throw new ValidationPlanRejected("import_identity_index_required");
+    }
+    private static async Task<bool> OptionalGuardTableExists(PostgresTransactionContext db,string table,string column,CancellationToken ct)
+    {
+        await using(var exists=db.CreateCommand("SELECT to_regclass($1) IS NOT NULL"))
+        {
+            exists.Parameters.AddWithValue("public."+table);
+            if((bool)(await exists.ExecuteScalarAsync(ct))! is false) return false;
+        }
+        await using var shape=db.CreateCommand("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name=$1 AND column_name=$2)");
+        shape.Parameters.AddWithValue(table);shape.Parameters.AddWithValue(column);
+        if((bool)(await shape.ExecuteScalarAsync(ct))! is false) throw new ValidationPlanRejected("import_evidence_schema_review_required");
+        return true;
     }
     private static JsonElement Scalar(IdentityAtom atom)=>JsonSerializer.SerializeToElement(atom.Kind switch {
         "blank"=>null,"text"=>(object?)atom.Text,"boolean"=>atom.Text=="True","number"=>JsonDocument.Parse(atom.Text!).RootElement.Clone(),

@@ -29,6 +29,27 @@ public sealed class UploadJobSourceStore(IOptions<UploadJobOptions> options,Http
             throw new UploadJobRejected("job_storage_access_or_configuration");
         throw new HttpRequestException("Private job storage unavailable",null,response.StatusCode);
     }
+    private static async Task<bool> IsMissingObjectAsync(HttpResponseMessage response,CancellationToken ct)
+    {
+        if(response.StatusCode==HttpStatusCode.NotFound) return true;
+        if(response.StatusCode!=HttpStatusCode.BadRequest) return false;
+
+        // Supabase Storage can wrap a missing-object response as HTTP 400 on
+        // the object-info route. Only its explicit NoSuchKey code is a miss;
+        // other bad requests must still fail closed.
+        await using var stream=await response.Content.ReadAsStreamAsync(ct);
+        using var body=new MemoryStream();var buffer=new byte[1024];int count;
+        while((count=await stream.ReadAsync(buffer,ct))>0)
+        {if(body.Length+count>8192) return false;await body.WriteAsync(buffer.AsMemory(0,count),ct);}
+        try
+        {
+            using var json=JsonDocument.Parse(body.ToArray());
+            return json.RootElement.TryGetProperty("code",out var code)
+                &&code.ValueKind==JsonValueKind.String
+                &&string.Equals(code.GetString(),"NoSuchKey",StringComparison.Ordinal);
+        }
+        catch(JsonException) {return false;}
+    }
     private async Task PrivateAsync(CancellationToken ct)
     {
         using var request=Request(HttpMethod.Get,"bucket/"+options.Value.StorageBucket);
@@ -44,7 +65,7 @@ public sealed class UploadJobSourceStore(IOptions<UploadJobOptions> options,Http
     {
         using var request=Request(HttpMethod.Get,"object/authenticated/"+Object(job.Id));
         using var response=await client.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,ct);
-        if(response.StatusCode==HttpStatusCode.NotFound) return false;Require(response);
+        if(await IsMissingObjectAsync(response,ct)) return false;Require(response);
         if(response.Content.Headers.ContentLength is {} advertised&&advertised!=job.Bytes) throw new UploadJobRejected("job_storage_source_changed");
         await using var input=await response.Content.ReadAsStreamAsync(ct);using var digest=IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         byte[] buffer=new byte[65536];long bytes=0;int count;

@@ -113,7 +113,9 @@ public sealed class UploadImportService(PostgresTransactions transactions,Upload
     {
         // Check both identifiers globally to detect reusing an operation ID for
         // different input, but never return another owner's receipt.
-        await using var command=db.CreateCommand("SELECT operation_id,plan_id,tenant_id,user_id,client_id,template_id,file_id,request_hash,signature,outcome::text FROM public.platform_upload_imports WHERE operation_id=$1 OR plan_id=$2 FOR SHARE");
+        // Native import receipts are immutable; the transaction advisory lock
+        // serializes C# retries without requiring row-update privileges here.
+        await using var command=db.CreateCommand("SELECT operation_id,plan_id,tenant_id,user_id,client_id,template_id,file_id,request_hash,signature,outcome::text FROM public.platform_upload_imports WHERE operation_id=$1 OR plan_id=$2");
         command.Parameters.AddWithValue(input.OperationId);command.Parameters.AddWithValue(input.PlanId);
         await using var reader=await command.ExecuteReaderAsync(ct);UploadImportOutput? result=null;var source=input.Review.Coverage.Footing.Validation.Source;
         while(await reader.ReadAsync(ct))

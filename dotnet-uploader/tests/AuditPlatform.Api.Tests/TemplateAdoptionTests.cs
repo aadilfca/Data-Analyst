@@ -19,11 +19,13 @@ public sealed class TemplateAdoptionTests
     [Fact]
     public void Read_only_preview_reports_missing_apply_migrations()
     {
-        Assert.Equal(["0010_tenant_saved_mappings.sql","0024_saved_mapping_adoption_review.sql"],
-            TemplateAdoption.RequiredMigrationsForApply(false,false));
-        Assert.Equal(["0024_saved_mapping_adoption_review.sql"],
-            TemplateAdoption.RequiredMigrationsForApply(true,false));
-        Assert.Empty(TemplateAdoption.RequiredMigrationsForApply(true,true));
+        Assert.Equal(["0010_tenant_saved_mappings.sql","0024_saved_mapping_adoption_review.sql","0026_legacy_template_promotion.sql"],
+            TemplateAdoption.RequiredMigrationsForApply(false,false,false));
+        Assert.Equal(["0024_saved_mapping_adoption_review.sql","0026_legacy_template_promotion.sql"],
+            TemplateAdoption.RequiredMigrationsForApply(true,false,false));
+        Assert.Equal(["0026_legacy_template_promotion.sql"],
+            TemplateAdoption.RequiredMigrationsForApply(true,true,false));
+        Assert.Empty(TemplateAdoption.RequiredMigrationsForApply(true,true,true));
     }
 
     [Fact]
@@ -61,6 +63,18 @@ public sealed class TemplateAdoptionTests
         Assert.Equal("Reference",result[21].Columns[0].StorageKey);
         Assert.Equal(11,result[21].Columns[0].Id);
         Assert.Equal(" ERP reference ",source.Headers[0].HeaderValue);
+    }
+
+    [Fact]
+    public void Exact_existing_tenant_mapping_is_accepted_but_changed_key_is_rejected()
+    {
+        var source=Example();
+        var adopted=source with {Mappings=[source.Mappings[0] with {Tenant=61,ExistingKey="Reference"}]};
+        Assert.Equal("Reference",TemplateAdoption.Validate(adopted,61)[21].Columns[0].StorageKey);
+        Assert.Throws<InvalidOperationException>(()=>TemplateAdoption.Validate(
+            adopted with {Mappings=[adopted.Mappings[0] with {ExistingKey="Renamed"}]},61));
+        Assert.Throws<InvalidOperationException>(()=>TemplateAdoption.Validate(
+            adopted with {Mappings=[adopted.Mappings[0] with {Tenant=62}]},61));
     }
 
     [Theory]

@@ -95,7 +95,7 @@ The target is the dedicated C# development project `klljugkujxxmtbmbeewn`. Its p
 
 Preview is read-only and fingerprint-bound. Review the new project's schema and preview results before approving any migration or adoption. Transfer only reviewed reusable definitions; never copy client transaction rows. Use the exact preview fingerprint and a fresh operation ID for any separately approved apply. Keep all modules off until their schema, grants and behavior are accepted. Previous-project adoption counts and plans do not describe this target.
 
-The template, upload-binding and Rulebook adoption stages need a fresh source/destination review before use. Preserve unresolved references for review and keep original definitions and transaction data intact. Historical evidence, Ledger import, reports and feature activation remain separate acceptance gates.
+The template, upload-binding and Rulebook adoption stages need a fresh source/destination review before use. For template adoption, apply reviewed migrations `0010`, `0024`, and `0026` separately first. The tool accepts either an empty definition catalog or an exact legacy catalog match; it rejects partial, changed, mixed, or already-native bindings. If the old saved-header table is absent, it treats that source as empty; migration `0024` is still required before apply. Never promote bindings with manual SQL. Preserve unresolved references for review and keep original definitions and transaction data intact. Historical evidence, Ledger import, reports and feature activation remain separate acceptance gates.
 
 ## Cross-project reusable definition transfer
 

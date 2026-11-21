@@ -20,6 +20,9 @@ public static class TemplateAdoption
     public sealed record Client(int Id,bool? Active,int? Tenant);
     public sealed record StoredKeys(int TemplateId,string[] Keys);
     public sealed record Source(Column[] Columns,Template[] Templates,Mapping[] Mappings,Header[] Headers,Client[] Clients,StoredKeys[] StoredKeys,long InvalidRows);
+    private sealed record ColumnBinding(int ColumnId,int TenantId,string DisplayName,string Category,string? Notes,string Origin);
+    private sealed record TemplateBinding(int TemplateId,int TenantId,string DisplayName,string TemplateKind,string Origin);
+    private sealed record ExistingCatalog(ColumnBinding[] Columns,TemplateBinding[] Templates);
 
     public static int ResolveTenantId(IEnumerable<int> activeAuditFirmTenantIds,int? requestedTenantId)
     {
@@ -35,11 +38,12 @@ public static class TemplateAdoption
         return ids[0];
     }
 
-    public static string[] RequiredMigrationsForApply(bool savedMappingSchemaReady,bool reviewQueueSchemaReady)
+    public static string[] RequiredMigrationsForApply(bool savedMappingSchemaReady,bool reviewQueueSchemaReady,bool promotionSchemaReady=true)
         => new[]
         {
             savedMappingSchemaReady?null:"0010_tenant_saved_mappings.sql",
-            reviewQueueSchemaReady?null:"0024_saved_mapping_adoption_review.sql"
+            reviewQueueSchemaReady?null:"0024_saved_mapping_adoption_review.sql",
+            promotionSchemaReady?null:"0026_legacy_template_promotion.sql"
         }.Where(name=>name is not null).Select(name=>name!).ToArray();
 
     // Ledger Source Notes is already treated separately by both import/identity
@@ -71,7 +75,8 @@ public static class TemplateAdoption
         if(source.Templates.Any(template=>string.IsNullOrWhiteSpace(template.Name)||template.Ledger is null)
             ||source.Templates.GroupBy(template=>template.Name,StringComparer.OrdinalIgnoreCase).Any(group=>group.Count()>1))
             throw new InvalidOperationException("Template identities/names require review.");
-        if(source.Mappings.Any(mapping=>mapping.Tenant is not null||mapping.ExistingKey is not null)
+        if(source.Mappings.Any(mapping=>(mapping.Tenant is null)!=(mapping.ExistingKey is null)
+                ||(mapping.Tenant is not null&&mapping.Tenant!=tenant))
             ||source.Mappings.GroupBy(mapping=>(mapping.TemplateId,mapping.ColumnId)).Any(group=>group.Count()>1)
             ||source.Mappings.GroupBy(mapping=>(mapping.TemplateId,mapping.Ordinal)).Any(group=>group.Count()>1))
             throw new InvalidOperationException("Existing or ambiguous template bindings require review.");
@@ -82,6 +87,8 @@ public static class TemplateAdoption
             var fields=source.Mappings.Where(mapping=>mapping.TemplateId==template.Id).OrderBy(mapping=>mapping.Ordinal).Select(mapping=>
             {
                 if(!columns.TryGetValue(mapping.ColumnId,out var column)) throw new InvalidOperationException("Template references an unknown column.");
+                if(mapping.ExistingKey is not null&&mapping.ExistingKey!=column.Name)
+                    throw new InvalidOperationException("An existing mapping key differs from its permanent column key.");
                 return new TemplateColumn(column.Id,column.Name,column.Name,column.Type,column.Category,mapping.Role,mapping.Compare,mapping.Review,mapping.Ordinal,1,column.Active==true);
             }).ToArray();
             if(template.Active==true && (fields.Length==0||fields.Any(field=>!field.Active)))
@@ -153,13 +160,17 @@ public static class TemplateAdoption
         var savedMappingSchemaReady=mappingSetsExist&&mappingsExist;
         if(apply&&!savedMappingSchemaReady)
             throw new InvalidOperationException("Apply requires reviewed migration 0010_tenant_saved_mappings.sql to be applied separately first.");
-        var hasNativeDefinitions=savedMappingSchemaReady
-            ? await Scalar("SELECT EXISTS(SELECT 1 FROM public.platform_tenant_columns) OR EXISTS(SELECT 1 FROM public.platform_tenant_templates) OR EXISTS(SELECT 1 FROM public.platform_tenant_saved_mapping_sets)") is true
-            : await Scalar("SELECT EXISTS(SELECT 1 FROM public.platform_tenant_columns) OR EXISTS(SELECT 1 FROM public.platform_tenant_templates)") is true;
-        if(hasNativeDefinitions)
-            throw new InvalidOperationException("This first configuration adoption requires an empty native definition catalog.");
+        if(savedMappingSchemaReady&&await Scalar("SELECT EXISTS(SELECT 1 FROM public.platform_tenant_saved_mapping_sets)") is true)
+            throw new InvalidOperationException("Existing native saved-mapping sets require separate review before template adoption.");
         var reviewQueueSchemaReady=await Scalar("SELECT to_regclass('public.platform_saved_mapping_adoption_review') IS NOT NULL") is true;
-        var sourceJson=(string)(await Scalar("""
+        var promotionSchemaReady=await Scalar("SELECT to_regclass('public.platform_tenant_columns') IS NOT NULL AND to_regclass('public.platform_tenant_templates') IS NOT NULL AND to_regprocedure('public.platform_guard_column_binding()') IS NOT NULL AND to_regprocedure('public.guard_tenant_template_definition()') IS NOT NULL AND EXISTS(SELECT 1 FROM pg_proc WHERE oid='public.platform_guard_column_binding()'::regprocedure AND prosrc LIKE '%audit.template_adoption_operation%' AND prosrc LIKE '%current_user = ''postgres''%') AND EXISTS(SELECT 1 FROM pg_proc WHERE oid='public.guard_tenant_template_definition()'::regprocedure AND prosrc LIKE '%audit.template_adoption_operation%' AND prosrc LIKE '%current_user = ''postgres''%')") is true;
+        if(apply&&!promotionSchemaReady)
+            throw new InvalidOperationException("Apply requires reviewed migration 0026_legacy_template_promotion.sql to be applied separately first.");
+        var legacyHeadersExist=await Scalar("SELECT to_regclass('public.saved_column_mappings') IS NOT NULL") is true;
+        var legacyHeadersSql=legacyHeadersExist
+            ? "(SELECT coalesce(jsonb_agg(to_jsonb(s) ORDER BY \"clientId\",\"templateId\",\"columnId\"),'[]') FROM (SELECT id,client_id AS \"clientId\",template_id AS \"templateId\",template_column_id AS \"columnId\",excel_column AS \"headerValue\",compare_for_changes AS \"legacyCompare\" FROM public.saved_column_mappings)s)"
+            : "'[]'::jsonb";
+        var sourceJson=(string)(await Scalar($"""
             SELECT jsonb_build_object(
               'columns',(SELECT coalesce(jsonb_agg(to_jsonb(c) ORDER BY id),'[]') FROM
                 (SELECT id,column_name AS name,data_type AS type,category,notes,is_active AS active FROM public.master_columns)c),
@@ -170,9 +181,7 @@ public static class TemplateAdoption
               'mappings',(SELECT coalesce(jsonb_agg(to_jsonb(p) ORDER BY "templateId",ordinal,id),'[]') FROM
                 (SELECT id,template_id AS "templateId",column_id AS "columnId",sort_order AS ordinal,reconciliation_role AS role,
                   compare_for_changes AS compare,comparison_review_required AS review,tenant_id AS tenant,storage_key AS "existingKey" FROM public.template_column_mappings)p),
-              'headers',(SELECT coalesce(jsonb_agg(to_jsonb(s) ORDER BY "clientId","templateId","columnId"),'[]') FROM
-                (SELECT id,client_id AS "clientId",template_id AS "templateId",template_column_id AS "columnId",excel_column AS "headerValue",
-                  compare_for_changes AS "legacyCompare" FROM public.saved_column_mappings)s),
+              'headers',{legacyHeadersSql},
               'clients',(SELECT coalesce(jsonb_agg(to_jsonb(c) ORDER BY id),'[]') FROM
                 (SELECT c.id,c.is_active AS active,h.tenant_id AS tenant FROM public.clients c LEFT JOIN public.platform_tenant_client_homes h ON h.client_id=c.id)c),
               'storedKeys',(SELECT coalesce(jsonb_agg(to_jsonb(k) ORDER BY "templateId"),'[]') FROM
@@ -184,6 +193,16 @@ public static class TemplateAdoption
             """)??throw new InvalidOperationException("Missing source inventory."));
         var source=JsonSerializer.Deserialize<Source>(sourceJson,Json)??throw new InvalidOperationException("Invalid inventory.");
         var proposed=Validate(source,tenant);
+        var catalogJson=(string)(await Scalar("""
+            SELECT jsonb_build_object(
+              'columns',(SELECT coalesce(jsonb_agg(jsonb_build_object('columnId',column_id,'tenantId',tenant_id,'displayName',display_name,'category',category,'notes',notes,'origin',binding_origin) ORDER BY column_id),'[]') FROM public.platform_tenant_columns),
+              'templates',(SELECT coalesce(jsonb_agg(jsonb_build_object('templateId',template_id,'tenantId',tenant_id,'displayName',display_name,'templateKind',template_kind,'origin',binding_origin) ORDER BY template_id),'[]') FROM public.platform_tenant_templates))::text
+            """)??throw new InvalidOperationException("Missing destination catalog."));
+        var existingCatalog=JsonSerializer.Deserialize<ExistingCatalog>(catalogJson,Json)??throw new InvalidOperationException("Invalid destination catalog.");
+        var emptyCatalog=existingCatalog.Columns.Length==0&&existingCatalog.Templates.Length==0;
+        var exactLegacyCatalog=MatchesLegacyCatalog(existingCatalog,source,tenant);
+        if(!emptyCatalog&&!exactLegacyCatalog)
+            throw new InvalidOperationException("The existing definition catalog is partial, changed, or already native; review it before adoption.");
         var reviews=source.Headers.Select(header=>(Header:header,Reason:ReviewReason(header,source,proposed,tenant))).Where(item=>item.Reason is not null).ToArray();
         var retained=options.ContainsKey("retain-unresolved");
         var fingerprint=Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(sourceJson+"\n"+tenant+"\n"+retained)));
@@ -193,7 +212,7 @@ public static class TemplateAdoption
             retainedForReview=reviews.Length,savedMappingSets=groups.Length};
         if(!apply)
         {
-            var applyPrerequisites=RequiredMigrationsForApply(savedMappingSchemaReady,reviewQueueSchemaReady);
+            var applyPrerequisites=RequiredMigrationsForApply(savedMappingSchemaReady,reviewQueueSchemaReady,promotionSchemaReady);
             Console.WriteLine(JsonSerializer.Serialize(new{status="preview",tenantId=tenant,fingerprint,counts,applyPrerequisites}));
             await transaction.RollbackAsync();return 0;
         }
@@ -201,10 +220,19 @@ public static class TemplateAdoption
         if(reviews.Length>0&&!retained)throw new InvalidOperationException("Explicitly retain unresolved legacy mappings for review before applying.");
         if(!reviewQueueSchemaReady)
             throw new InvalidOperationException("The reviewed saved-mapping adoption queue schema is required.");
-        await Execute("INSERT INTO public.platform_tenant_columns(column_id,tenant_id,display_name,category,notes,binding_origin) SELECT id,$1,column_name,category,notes,'native' FROM public.master_columns",tenant);
-        foreach(var template in source.Templates)
-            await Execute("INSERT INTO public.platform_tenant_templates(template_id,tenant_id,display_name,template_kind,binding_origin) VALUES($1,$2,$3,$4,'native')",
-                template.Id,tenant,template.Name,TenantTemplateService.KindForNew(template.Name));
+        if(emptyCatalog)
+        {
+            await Execute("INSERT INTO public.platform_tenant_columns(column_id,tenant_id,display_name,category,notes,binding_origin) SELECT id,$1,column_name,category,notes,'native' FROM public.master_columns",tenant);
+            foreach(var template in source.Templates)
+                await Execute("INSERT INTO public.platform_tenant_templates(template_id,tenant_id,display_name,template_kind,binding_origin) VALUES($1,$2,$3,$4,'native')",
+                    template.Id,tenant,template.Name,TenantTemplateService.KindForNew(template.Name));
+        }
+        else
+        {
+            await Scalar("SELECT set_config('audit.template_adoption_operation',$1,true)",operation.ToString("D"));
+            await Execute("UPDATE public.platform_tenant_columns SET binding_origin='native' WHERE tenant_id=$1 AND binding_origin='legacy'",tenant);
+            await Execute("UPDATE public.platform_tenant_templates SET binding_origin='native' WHERE tenant_id=$1 AND binding_origin='legacy'",tenant);
+        }
         await Execute("UPDATE public.template_column_mappings p SET tenant_id=$1,storage_key=m.column_name FROM public.master_columns m WHERE m.id=p.column_id",tenant);
         var context=new PostgresTransactionContext(connection,transaction);
         var definitions=(await TenantTemplateService.LoadAsync(context,tenant,null,CancellationToken.None)).ToDictionary(template=>template.Id);
@@ -240,5 +268,19 @@ public static class TemplateAdoption
             """,outcome,Guid.NewGuid(),operation,sourceOrigin);
         try{await transaction.CommitAsync();}catch{Console.WriteLine("{\"status\":\"commit_outcome_unknown\"}");return 2;}
         Console.WriteLine(outcome);return 0;
+    }
+
+    private static bool MatchesLegacyCatalog(ExistingCatalog catalog,Source source,int tenant)
+    {
+        if(catalog.Columns.Length!=source.Columns.Length||catalog.Templates.Length!=source.Templates.Length)return false;
+        var columns=catalog.Columns.ToDictionary(row=>row.ColumnId);
+        foreach(var sourceColumn in source.Columns)
+            if(!columns.TryGetValue(sourceColumn.Id,out var binding)||binding.TenantId!=tenant||binding.Origin!="legacy"
+                ||binding.DisplayName!=sourceColumn.Name||binding.Category!=sourceColumn.Category||binding.Notes!=sourceColumn.Notes)return false;
+        var templates=catalog.Templates.ToDictionary(row=>row.TemplateId);
+        foreach(var sourceTemplate in source.Templates)
+            if(!templates.TryGetValue(sourceTemplate.Id,out var binding)||binding.TenantId!=tenant||binding.Origin!="legacy"
+                ||binding.DisplayName!=sourceTemplate.Name||binding.TemplateKind!=TenantTemplateService.KindForNew(sourceTemplate.Name))return false;
+        return true;
     }
 }

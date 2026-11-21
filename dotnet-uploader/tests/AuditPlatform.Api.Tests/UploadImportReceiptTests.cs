@@ -122,6 +122,17 @@ public sealed class UploadImportReceiptTests(ReceiptGoldenFixture golden) : ICla
             INSERT INTO public.client_data(client_id,row_data) VALUES(20,'{"sentinel":"unchanged"}');
             """);
         using var pool=fixture.CreatePool(timeoutSeconds:10);var tx=new PostgresTransactions(pool,Options.Create(new PostgresOptions()));
+        await Sql("CREATE ROLE p27_receipt_reader NOLOGIN; GRANT USAGE ON SCHEMA public TO p27_receipt_reader; GRANT SELECT ON public.templates,public.platform_tenant_templates,public.template_column_mappings,public.master_columns,public.platform_tenant_columns TO p27_receipt_reader; DO $$ BEGIN IF to_regclass('public.platform_template_upload_bindings') IS NOT NULL THEN GRANT SELECT ON public.platform_template_upload_bindings TO p27_receipt_reader; END IF; END $$");
+        await tx.ExecuteAsync(async(db,ct)=>
+        {
+            await using(var role=db.CreateCommand("SET LOCAL ROLE p27_receipt_reader")) await role.ExecuteNonQueryAsync(ct);
+            await using(var savepoint=db.CreateCommand("SAVEPOINT p27_receipt_lock")) await savepoint.ExecuteNonQueryAsync(ct);
+            var denied=await Assert.ThrowsAsync<PostgresException>(()=>TenantTemplateService.LoadAsync(db,101,1,ct));
+            Assert.Equal("42501",denied.SqlState);
+            await using(var rollback=db.CreateCommand("ROLLBACK TO SAVEPOINT p27_receipt_lock")) await rollback.ExecuteNonQueryAsync(ct);
+            var definition=Assert.Single(await TenantTemplateService.LoadAsync(db,101,1,ct,lockRows:false));
+            Assert.Equal(1,definition.Id);return true;
+        },Token);
         var logs=Options.Create(new LogPersistenceOptions());var audit=new PostgresAuditWriter(new LogSanitizer(logs),logs);
         var sessions=new PostgresSessionStore(tx,audit,Options.Create(new ApplicationShellOptions{Enabled=true}));
         var owner=(await sessions.FindAsync(new string('a',64),Token))!;var staff=(await sessions.FindAsync(new string('c',64),Token))!;

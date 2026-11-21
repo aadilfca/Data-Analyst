@@ -131,7 +131,9 @@ public sealed class UploadImportReceiptService(PostgresTransactions transactions
 
     private static async Task<(UploadImportReceipt Receipt,string Hash)?> Read(PostgresTransactionContext db,VerifiedSession actor,int file,Guid id,CancellationToken ct)
     {
-        await using var command=db.CreateCommand("SELECT receipt,request_hash,client_id,template_id,kind FROM public.platform_upload_import_receipts WHERE receipt_id=$1 AND file_id=$2 AND tenant_id=$3 AND user_id=$4 FOR SHARE");
+        // Receipts are immutable. Read their fixed owner scope without asking
+        // the runtime role for update privileges on the receipt table.
+        await using var command=db.CreateCommand("SELECT receipt,request_hash,client_id,template_id,kind FROM public.platform_upload_import_receipts WHERE receipt_id=$1 AND file_id=$2 AND tenant_id=$3 AND user_id=$4");
         command.Parameters.AddWithValue(id);command.Parameters.AddWithValue(file);command.Parameters.AddWithValue(actor.TenantId??0);command.Parameters.AddWithValue(actor.UserId);
         await using var reader=await command.ExecuteReaderAsync(ct);if(!await reader.ReadAsync(ct)) return null;
         var receipt=JsonSerializer.Deserialize<UploadImportReceipt>(reader.GetString(0))??throw new ValidationPlanRejected("receipt_invalid");
@@ -144,8 +146,9 @@ public sealed class UploadImportReceiptService(PostgresTransactions transactions
     {
         var source=payload.Review.Coverage.Footing.Validation.Source;
         var controls=payload.SourceControls??throw new ValidationPlanRejected("receipt_source_evidence_required");
-        var definition=(await TenantTemplateService.LoadAsync(db,actor.TenantId!.Value,source.TemplateId,ct)).Single();
-        if(controls.DocumentKey!=payload.ImportProfile!.DocumentKey||controls.Footings.Any(c=>!definition.Columns.Any(d=>d.Id==c.Id&&d.StorageKey==c.Key&&d.Role=="footing")))
+        var definition=(await TenantTemplateService.LoadAsync(db,actor.TenantId!.Value,source.TemplateId,ct,lockRows:false)).Single();
+        if(definition.ConfigurationKey!=source.ConfigurationKey||controls.DocumentKey!=payload.ImportProfile!.DocumentKey
+            ||controls.Footings.Any(c=>!definition.Columns.Any(d=>d.Id==c.Id&&d.StorageKey==c.Key&&d.Role=="footing")))
             throw new ValidationPlanRejected("receipt_configuration_changed");
         var reconciliation=await UploadStoredControlService.VerifyAsync(db,controls,source.ClientId,source.TemplateId,now,ct);
         var groups=payload.Actions.Select(a=>a.Action.DocumentGroup).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
@@ -218,7 +221,7 @@ public sealed class UploadImportReceiptService(PostgresTransactions transactions
         {
             await using var command=db.CreateCommand(old?"""
                 SELECT client_data_id,source_metadata->>'document_group_id',source_metadata->>'extract_date',row_data::text,(source_metadata->>'source_row_number')::int,(source_metadata->>'upload_id')::int,(source_metadata->>'source_order_upload_id')::int FROM public.client_data_history
-                WHERE client_id=$1 AND template_id=$2 AND import_operation_id=$3 AND source_metadata->>'document_group_id'=ANY($4) ORDER BY client_data_id LIMIT $5 FOR SHARE
+                WHERE client_id=$1 AND template_id=$2 AND import_operation_id=$3 AND source_metadata->>'document_group_id'=ANY($4) ORDER BY client_data_id LIMIT $5
                 """:"""
                 SELECT id,document_group_id,extract_date::text,row_data::text,source_row_number,upload_id,source_order_upload_id FROM public.client_data
                 WHERE client_id=$1 AND template_id=$2 AND $3::uuid IS NOT NULL AND document_group_id=ANY($4) AND is_deleted IS FALSE AND change_detection_status<>'deleted'

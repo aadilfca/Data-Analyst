@@ -136,15 +136,22 @@ public sealed class UploadIdentityService(UploadCoverageService coverage,Postgre
         bool complete=input.Coverage.Footing.Validation.ComparisonMode=="replace_range";
         string[] groups=incoming.Select(r=>UploadIdentityValue.Group(profile,r.Values)).Distinct(StringComparer.Ordinal).ToArray();
         var source=input.Coverage.Footing.Validation.Source;var period=proof.DeclaredPeriod;
+        // The deployed schema has no upload-account binding for ordinary
+        // transaction templates. Keep that read path independent of the
+        // optional account-scope column; account-scoped ledger reads remain
+        // fail-closed until the binding is available.
+        string accountScope=profile.AccountCode is null
+            ?"($5::text IS NULL OR FALSE)"
+            :"($5::text IS NULL OR EXISTS(SELECT 1 FROM public.uploaded_files u WHERE u.id=cd.upload_id AND u.ledger_account_code=$5))";
         while(true)
         {
-            await using var command=db.CreateCommand("""
+            await using var command=db.CreateCommand($"""
                 SELECT cd.id,CASE WHEN octet_length(cd.row_data::text)<=$8 THEN cd.row_data::text END,
                     COALESCE(cd.version,1),cd.document_group_id,cd.source_identity,cd.source_row_number,cd.source_order_upload_id,cd.extract_date::text,cd.change_detection_status,to_jsonb(cd)->>'derived_configuration_hash'
                 FROM public.client_data cd
                 WHERE cd.id>$1 AND cd.client_id=$2 AND cd.template_id=$3 AND cd.is_deleted IS FALSE
                   AND EXISTS(SELECT 1 FROM public.platform_tenant_client_homes h WHERE h.client_id=cd.client_id AND h.tenant_id=$4)
-                  AND ($5::text IS NULL OR EXISTS(SELECT 1 FROM public.uploaded_files u WHERE u.id=cd.upload_id AND u.ledger_account_code=$5))
+                  AND {accountScope}
                   AND ($6::date IS NULL OR cd.extract_date BETWEEN $6::date AND $7::date OR ($5::text IS NULL AND cd.document_group_id=ANY($9)))
                 ORDER BY cd.id LIMIT 1000
                 """);
@@ -201,13 +208,13 @@ public sealed class UploadIdentityService(UploadCoverageService coverage,Postgre
             var selected=result.Select(r=>r.Id).ToHashSet();
             if(members.Length>0)
             {
-                await using var command=db.CreateCommand("""
+                await using var command=db.CreateCommand($"""
                     SELECT cd.id,cd.document_group_id,COALESCE(cd.version,1),cd.extract_date::text
                     FROM public.client_data cd
                     WHERE cd.client_id=$1 AND cd.template_id=$2 AND cd.is_deleted IS FALSE
                       AND cd.document_group_id=ANY($3)
                       AND EXISTS(SELECT 1 FROM public.platform_tenant_client_homes h WHERE h.client_id=cd.client_id AND h.tenant_id=$4)
-                      AND ($5::text IS NULL OR EXISTS(SELECT 1 FROM public.uploaded_files u WHERE u.id=cd.upload_id AND u.ledger_account_code=$5))
+                      AND {accountScope}
                     ORDER BY cd.id LIMIT $6
                     """);
                 command.Parameters.AddWithValue(source.ClientId);command.Parameters.AddWithValue(source.TemplateId);

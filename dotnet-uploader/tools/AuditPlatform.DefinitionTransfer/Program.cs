@@ -49,8 +49,8 @@ public static class Program
             await using var target = new NpgsqlConnection(targetSettings.ConnectionString);
             await source.OpenAsync();
             await target.OpenAsync();
-            await VerifyTlsDatabaseAsync(source);
-            await VerifyTlsDatabaseAsync(target);
+            await VerifyDatabaseAsync(source);
+            await VerifyDatabaseAsync(target);
 
             await using var sourceSnapshot = await source.BeginTransactionAsync(IsolationLevel.RepeatableRead);
             await SetReadOnlyAsync(source, sourceSnapshot);
@@ -187,15 +187,16 @@ public static class Program
         PersistSecurityInfo = false
     };
 
-    private static async Task VerifyTlsDatabaseAsync(NpgsqlConnection connection)
+    private static async Task VerifyDatabaseAsync(NpgsqlConnection connection)
     {
-        await using var command = new NpgsqlCommand("""
-            SELECT current_database(), EXISTS (
-                SELECT 1 FROM pg_stat_ssl WHERE pid=pg_backend_pid() AND ssl IS TRUE)
-            """, connection);
+        // VerifiedConnection configures VerifyFull and the supplied root certificate.
+        // A successful OpenAsync therefore already proves the client TLS handshake and
+        // certificate/hostname validation. pg_stat_ssl can be false behind Supabase's
+        // Session Pooler, so it is not a reliable check of the client-to-pooler TLS link.
+        await using var command = new NpgsqlCommand("SELECT current_database()", connection);
         await using var reader = await command.ExecuteReaderAsync();
-        if (!await reader.ReadAsync() || reader.GetString(0) != "postgres" || !reader.GetBoolean(1))
-            throw new TransferValidationException("A connection did not reach the postgres database over verified TLS.");
+        if (!await reader.ReadAsync() || reader.GetString(0) != "postgres")
+            throw new TransferValidationException("A connection did not reach the expected postgres database.");
     }
 
     private static async Task SetReadOnlyAsync(NpgsqlConnection connection, NpgsqlTransaction transaction)

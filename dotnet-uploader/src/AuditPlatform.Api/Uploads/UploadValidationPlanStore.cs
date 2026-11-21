@@ -26,12 +26,12 @@ public sealed class UploadValidationPlanStore(PostgresTransactions transactions,
         return await AuthorizeScopeAsync(db,session,source.ClientId,source.TemplateId,async(_,__)=>
         {
             if(!requireSource) return await action(db,DateTimeOffset.MaxValue,token);
-            var definition=(await TenantTemplateService.LoadAsync(db,session.TenantId!.Value,source.TemplateId,token)).SingleOrDefault();
+            var definition=(await TenantTemplateService.LoadAsync(db,session.TenantId!.Value,source.TemplateId,token,lockRows:false)).SingleOrDefault();
             if(definition is null||definition.Origin!="native"||definition.Columns.Any(c=>!c.Active||c.Review)||definition.ConfigurationKey!=source.ConfigurationKey)
                 throw new ValidationPlanRejected("plan_configuration_changed");
             await using(var revision=db.CreateCommand("""
                 SELECT definition_version FROM public.platform_tenant_saved_mapping_sets
-                WHERE tenant_id=$1 AND client_id=$2 AND template_id=$3 FOR SHARE
+                WHERE tenant_id=$1 AND client_id=$2 AND template_id=$3
                 """))
             {
                 revision.Parameters.AddWithValue(session.TenantId.Value);revision.Parameters.AddWithValue(source.ClientId);revision.Parameters.AddWithValue(source.TemplateId);
@@ -60,11 +60,12 @@ public sealed class UploadValidationPlanStore(PostgresTransactions transactions,
         Func<PostgresTransactionContext,CancellationToken,Task<T>> action,CancellationToken token)
     {
         if(!session.TenantContextRequired||session.TenantId is not >0||!AuthenticationService.ValidToken(session.Token)) throw new ValidationPlanRejected("plan_access_denied");
-        // Match existing configuration writers, then the Python import scope lock.
+        // Serialize in-app membership/client mutations, then take the per-scope
+        // lock shared with upload validation/import paths.
         await using(var config=db.CreateCommand("SELECT pg_advisory_xact_lock(746102)")) await config.ExecuteNonQueryAsync(token);
         await using(var scope=db.CreateCommand("SELECT pg_advisory_xact_lock(hashtext($1))"))
         {scope.Parameters.AddWithValue($"upload-validation:{client}:{template}");await scope.ExecuteNonQueryAsync(token);}
-        await using(var tenant=db.CreateCommand("SELECT id FROM public.platform_tenants WHERE id=$1 AND is_active IS TRUE FOR UPDATE"))
+        await using(var tenant=db.CreateCommand("SELECT id FROM public.platform_tenants WHERE id=$1 AND is_active IS TRUE"))
         {tenant.Parameters.AddWithValue(session.TenantId.Value);if(await tenant.ExecuteScalarAsync(token) is null) throw new ValidationPlanRejected("plan_access_denied");}
         string role;
         await using(var access=db.CreateCommand("""
@@ -74,7 +75,7 @@ public sealed class UploadValidationPlanStore(PostgresTransactions transactions,
             JOIN public.platform_tenant_client_homes h ON h.client_id=c.id AND h.tenant_id=$3
             WHERE s.token=$1 AND s.user_id=$2 AND s.expiry>now() AND u.is_active IS TRUE AND m.is_active IS TRUE
               AND s.selected_tenant_id=$3 AND s.context_version=$4 AND s.selected_client_id=$5 AND c.is_active IS TRUE
-            FOR SHARE OF s,u,m,c,h
+            FOR SHARE OF s,u
             """))
         {
             access.Parameters.AddWithValue(session.Token);access.Parameters.AddWithValue(session.UserId);access.Parameters.AddWithValue(session.TenantId.Value);
@@ -87,7 +88,7 @@ public sealed class UploadValidationPlanStore(PostgresTransactions transactions,
                 SELECT a.user_id FROM public.platform_engagement_assignments a JOIN public.platform_audit_engagements e
                 ON e.id=a.engagement_id AND e.firm_tenant_id=a.firm_tenant_id
                 WHERE a.firm_tenant_id=$1 AND a.user_id=$2 AND e.client_id=$3 AND a.is_active IS TRUE AND e.is_active IS TRUE
-                  AND a.team_role IN('manager','internee') FOR SHARE OF a,e
+                  AND a.team_role IN('manager','internee')
                 """);
             assignment.Parameters.AddWithValue(session.TenantId.Value);assignment.Parameters.AddWithValue(session.UserId);assignment.Parameters.AddWithValue(client);
             if(await assignment.ExecuteScalarAsync(token) is null) throw new ValidationPlanRejected("plan_access_denied");
@@ -105,7 +106,6 @@ public sealed class UploadValidationPlanStore(PostgresTransactions transactions,
                 p.file_sha256,p.request_signature,p.expires_at,p.plan_json->>'format'
             FROM public.platform_upload_validation_plans n LEFT JOIN public.upload_validation_plans p ON p.plan_id=n.plan_id
             WHERE n.tenant_id=$1 AND n.user_id=$2 AND (($3::uuid IS NOT NULL AND n.request_id=$3) OR ($4::text IS NOT NULL AND n.plan_id=$4))
-            FOR UPDATE OF n
             """);
         command.Parameters.AddWithValue(actor.TenantId!.Value);command.Parameters.AddWithValue(actor.UserId);
         command.Parameters.AddWithValue(NpgsqlDbType.Uuid,(object?)request??DBNull.Value);command.Parameters.AddWithValue(NpgsqlDbType.Text,(object?)id??DBNull.Value);

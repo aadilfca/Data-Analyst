@@ -319,5 +319,15 @@ public sealed class UploadImportTests(ImportGoldenFixture golden) : IClassFixtur
         // Recovery does not depend on source availability or unexpired plans.
         foreach(string path in Directory.GetFiles(directory,"*.bin")) File.Delete(path);
         clock.Current=clock.Current.AddHours(3);Assert.Equal("success",(await Import(lost)).Status);clock.Current=DateTimeOffset.UtcNow;
+
+        // A new C# database may not yet have legacy Verification/evidence tables.
+        // The ordinary upload path must still work while absent optional guards
+        // are skipped, and must not create those tables as a side effect.
+        await Reset();
+        var withoutOptionalEvidence=await Plan("Changed");
+        await Sql("DROP TABLE public.cashflow_prepared_lines, public.voucher_line_physical_bill_items, public.voucher_line_documents, public.verification_details");
+        var optionalEvidenceResult=await Import(withoutOptionalEvidence);
+        Assert.True(optionalEvidenceResult.Status=="success",optionalEvidenceResult.Code);
+        Assert.Equal(0L,await Count("SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN('cashflow_prepared_lines','voucher_line_physical_bill_items','voucher_line_documents','verification_details')"));
     }
 }

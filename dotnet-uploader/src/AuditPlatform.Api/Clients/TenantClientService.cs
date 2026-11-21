@@ -193,6 +193,13 @@ public sealed class TenantClientService(PostgresTransactions transactions, Postg
         VerifiedSession? session, bool admin, bool lockForMutation, CancellationToken ct)
     {
         if (session is null || session.UserId <= 0 || !AuthenticationService.ValidToken(session.Token)) return (ClientStatus.Forbidden, null);
+        if (lockForMutation)
+        {
+            // Serialize tenant/client scope changes with upload authorization
+            // checks before resolving the selected tenant.
+            await using var serial = db.CreateCommand("SELECT pg_advisory_xact_lock(746102)");
+            await serial.ExecuteNonQueryAsync(ct);
+        }
         int tenant;
         if (session.TenantContextRequired)
         {

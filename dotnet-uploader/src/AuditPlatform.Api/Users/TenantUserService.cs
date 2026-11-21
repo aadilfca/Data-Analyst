@@ -197,6 +197,10 @@ public sealed class TenantUserService(PostgresTransactions transactions, Postgre
         // the query proves actual membership.
         if (lockForMutation)
         {
+            // Serialize membership changes with upload/mapping authorization
+            // checks before locking the tenant row.
+            await using var serial = db.CreateCommand("SELECT pg_advisory_xact_lock(746102)");
+            await serial.ExecuteNonQueryAsync(ct);
             await using var tenantLock = db.CreateCommand("SELECT id FROM public.platform_tenants WHERE id=$1 AND is_active IS TRUE FOR UPDATE");
             tenantLock.Parameters.AddWithValue(tenantId);
             if (await tenantLock.ExecuteScalarAsync(ct) is null) return null;

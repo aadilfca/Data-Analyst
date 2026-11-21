@@ -10442,3 +10442,19 @@ The focused API and test-project Release-equivalent build passed with zero warni
 The upload picker fix is present in the Release shell package; its SHA-256 matches the frontend source. The tray icon is now green only when API readiness and the app shell pass, and gray otherwise. Stop remains enabled only for an API process launched by that tray.
 
 Tray and API Release builds passed with zero warnings or errors. The tray-launched API failed its database readiness check and was shut down; a separate TCP probe reached the database port, but the login/SSL cause was not isolated. Browser upload and tray-menu acceptance remain pending. No tests, SQL changes, commit or push occurred.
+
+## C# legacy template promotion for upload adoption — 2026-11-21
+
+Template adoption accepts an empty catalog or an exact match of the existing legacy tenant columns/templates. It checks tenant ownership, names, column metadata, template kinds, and mapping keys before changing origin; partial, changed, already-native, or saved-mapping-set states remain blocked. A missing legacy saved-header table is treated as an empty source. Migration `0024` records saved-mapping review; `0026` permits only transaction-scoped, operation-ID-backed legacy-to-native promotion by the `postgres` setup owner. Preview is read-only and apply remains fingerprint/receipt-bound.
+
+Migrations `0024` and `0026` were applied to the development Supabase project. Exact-definition checks passed: 78 tenant columns, 10 templates and 93 mappings were promoted; restricted definition-read and upload grants were applied. The focused Release build and 11 adoption tests passed. Transaction rows and feature flags were not changed by adoption.
+
+## C# non-ledger upload identity schema compatibility — 2026-11-21
+
+The correction review queried `uploaded_files.ledger_account_code` even for unscoped Transaction Report uploads. That optional field is absent from the development schema, and PostgreSQL's undefined-column error was translated to the generic `canonical_store_review_required` gate. The identity review now uses the account-scope predicate only when a ledger account is selected; unscoped templates no longer depend on that column. Account-scoped ledger reads keep their existing fail-closed behavior. No schema or permission change was made.
+
+The synthetic Transaction Report staged with 7/7 columns mapped, two eligible detail rows, matching debit/credit totals of 100, and confirmed 2026-11-20 coverage. No transaction rows were imported. The Release API build passed with zero warnings/errors after stopping the locked local server; tray restart and final import receipt remain pending.
+
+## C# import receipt template permissions — 2026-11-21
+
+Receipt creation now reads the current template definition without row locks, matching the restricted runtime role's read-only grants, and compares its configuration key with the validated source before recording evidence. The focused test adds a SELECT-only role and checks that definition reads work while lock requests fail. The test-project build passed with zero warnings/errors; the integration test could not start its local PostgreSQL fixture because `pg_ctl` failed. Fresh upload acceptance remains pending.

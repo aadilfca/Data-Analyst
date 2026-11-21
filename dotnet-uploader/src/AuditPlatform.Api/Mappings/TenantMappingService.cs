@@ -89,17 +89,17 @@ public sealed class TenantMappingService(PostgresTransactions transactions,Postg
             return Task.FromResult(new MappingResult(MappingStatus.Forbidden));
         return transactions.ExecuteAsync(async(db,token)=>
         {
-            // Same ordering as the column/template writers. Authorization,
-            // metadata reads, version checks and mutation use this one context.
+            // Membership/client mutations take this same lock, so in-app
+            // revocation cannot race this authorization and mapping write.
             await using(var config=db.CreateCommand("SELECT pg_advisory_xact_lock(746102)")) await config.ExecuteNonQueryAsync(token);
-            await using(var tenant=db.CreateCommand("SELECT id FROM public.platform_tenants WHERE id=$1 AND is_active IS TRUE FOR UPDATE"))
+            await using(var tenant=db.CreateCommand("SELECT id FROM public.platform_tenants WHERE id=$1 AND is_active IS TRUE"))
             { tenant.Parameters.AddWithValue(session.TenantId.Value); if(await tenant.ExecuteScalarAsync(token) is null) return new MappingResult(MappingStatus.Forbidden); }
             Actor actor; string role;
             await using(var command=db.CreateCommand("""
                 SELECT u.id,u.username,m.tenant_role,s.selected_client_id FROM public.sessions s JOIN public.users u ON u.id=s.user_id
                 JOIN public.platform_tenant_memberships m ON m.user_id=u.id
                 WHERE s.token=$1 AND s.user_id=$2 AND s.expiry>now() AND u.is_active IS TRUE
-                    AND s.selected_tenant_id=$3 AND s.context_version=$4 AND m.tenant_id=$3 AND m.is_active IS TRUE FOR SHARE OF s,u,m
+                    AND s.selected_tenant_id=$3 AND s.context_version=$4 AND m.tenant_id=$3 AND m.is_active IS TRUE FOR SHARE OF s,u
                 """))
             {
                 command.Parameters.AddWithValue(session.Token); command.Parameters.AddWithValue(session.UserId);
@@ -110,23 +110,24 @@ public sealed class TenantMappingService(PostgresTransactions transactions,Postg
             }
             await using(var home=db.CreateCommand("""
                 SELECT c.id FROM public.clients c JOIN public.platform_tenant_client_homes h ON h.client_id=c.id
-                WHERE c.id=$1 AND h.tenant_id=$2 AND c.is_active IS TRUE FOR SHARE OF c,h
+                WHERE c.id=$1 AND h.tenant_id=$2 AND c.is_active IS TRUE
                 """))
             { home.Parameters.AddWithValue(client); home.Parameters.AddWithValue(actor.Tenant); if(await home.ExecuteScalarAsync(token) is null) return new MappingResult(MappingStatus.NotFound); }
             if(role!="admin")
             {
                 // This is the P14 action grant, not an inherited upload/report
-                // permission. Pin the live assignment/engagement until commit.
+                // permission. Assignment changes outside this app affect later
+                // requests; an already-authorized transaction may finish.
                 await using var assignment=db.CreateCommand("""
                     SELECT a.user_id FROM public.platform_engagement_assignments a
                     JOIN public.platform_audit_engagements e ON e.id=a.engagement_id AND e.firm_tenant_id=a.firm_tenant_id
                     WHERE a.firm_tenant_id=$1 AND a.user_id=$2 AND e.client_id=$3
-                        AND a.team_role IN ('manager','internee') AND a.is_active IS TRUE AND e.is_active IS TRUE FOR SHARE OF a,e
+                        AND a.team_role IN ('manager','internee') AND a.is_active IS TRUE AND e.is_active IS TRUE
                     """);
                 assignment.Parameters.AddWithValue(actor.Tenant); assignment.Parameters.AddWithValue(actor.User); assignment.Parameters.AddWithValue(client);
                 if(await assignment.ExecuteScalarAsync(token) is null) return new MappingResult(MappingStatus.Forbidden);
             }
-            var definition=(await TenantTemplateService.LoadAsync(db,actor.Tenant,template,token)).SingleOrDefault();
+            var definition=(await TenantTemplateService.LoadAsync(db,actor.Tenant,template,token,lockRows:false)).SingleOrDefault();
             if(definition is null) return new MappingResult(MappingStatus.NotFound);
             if(definition.Origin!="native" || definition.Columns.Count==0 || definition.Columns.Any(c=>!c.Active))
                 return new MappingResult(MappingStatus.Review,Detail:"Template column bindings need migration review.");
@@ -158,7 +159,7 @@ public sealed class TenantMappingService(PostgresTransactions transactions,Postg
         long revision=0; string? binding=null;
         await using(var header=db.CreateCommand("""
             SELECT definition_version,template_binding_key FROM public.platform_tenant_saved_mapping_sets
-            WHERE tenant_id=$1 AND client_id=$2 AND template_id=$3 FOR UPDATE
+            WHERE tenant_id=$1 AND client_id=$2 AND template_id=$3
             """))
         {
             AddScope(header,tenant,client,template); await using var reader=await header.ExecuteReaderAsync(ct);
@@ -167,7 +168,7 @@ public sealed class TenantMappingService(PostgresTransactions transactions,Postg
         var entries=new List<SavedHeader>();
         await using(var command=db.CreateCommand("""
             SELECT column_id,excel_column,storage_key FROM public.platform_tenant_saved_mappings
-            WHERE tenant_id=$1 AND client_id=$2 AND template_id=$3 ORDER BY column_id FOR SHARE
+            WHERE tenant_id=$1 AND client_id=$2 AND template_id=$3 ORDER BY column_id
             """))
         {
             AddScope(command,tenant,client,template); await using var reader=await command.ExecuteReaderAsync(ct);
