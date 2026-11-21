@@ -572,7 +572,7 @@
         if (!Array.isArray(catalog)) throw new Error('Template metadata is unavailable.'); state.catalog = catalog;
         $('templateDropdown').replaceChildren(node('option', '-- Select Template --', { value: '' }), ...catalog.map(t => node('option', t.template_name, { value: t.id })));
         const events = { templateDropdown: ['change', selectTemplate], fileInput: ['change', async () => { const file = $('fileInput').files[0]; $('fileInput').value = ''; await stage(file); }],
-            uploadFileBtn: ['click', async () => $('fileInput').click()], clearBtn: ['click', async () => { clearSource(); message('Source selection cleared.'); }],
+            clearBtn: ['click', async () => { clearSource(); message('Source selection cleared.'); }],
             resetBtn: ['click', async () => { clearSource(); message('Review reset.'); }],
             sheetSelector: ['change', async () => { state.sheet = $('sheetSelector').value; await prepare(); }], importBtn: ['click', validate],
             saveMappingBtn: ['click', () => mappingSave()], clearMappingBtn: ['click', () => mappingSave(true)], previewBtn: ['click', rows],
@@ -582,6 +582,12 @@
                 download(XLSX.write(book, { bookType: 'xlsx', type: 'array' }), `template-${state.template}.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
             }], dateFormatTriggerBtn: ['click', async () => $('dateFormatPopover').style.display = $('dateFormatPopover').style.display === 'none' ? 'block' : 'none'] };
         Object.entries(events).forEach(([id, [event, action]]) => $(id).addEventListener(event, () => void guarded($(id), action)));
+        // Open the picker before guarded() marks the page busy and disables the
+        // hidden input. Browsers ignore programmatic clicks on disabled inputs.
+        $('uploadFileBtn').addEventListener('click', () => {
+            if (state.busy || activeJob() || !state.template) return;
+            $('fileInput').click();
+        });
         ['dateDelimiterDropdown', 'dateOrderDropdown', 'comparisonModeDropdown', 'sourceControlRow', 'sourceControlConfirmed', 'uploadCoverageStart', 'uploadCoverageEnd', 'uploadConfirmCoverage', 'uploadConfirmEmpty'].forEach(id => {
             $(id).addEventListener('change', () => {
                 invalidate();

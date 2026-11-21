@@ -1,6 +1,9 @@
 using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Net;
 using System.Net.Http;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading;
 using System.Windows.Forms;
@@ -31,6 +34,7 @@ internal sealed class TrayApplication : ApplicationContext
     private readonly HttpClient _http = new() { Timeout = HealthTimeout };
     private readonly System.Windows.Forms.Timer _poll = new() { Interval = 2000 };
     private Process? _server;
+    private bool? _iconReady;
     private bool _busy;
     private bool _exiting;
 
@@ -50,11 +54,12 @@ internal sealed class TrayApplication : ApplicationContext
 
         _icon = new NotifyIcon
         {
-            Icon = SystemIcons.Application,
+            Icon = CreateStatusIcon(false),
             Text = "Audit Platform — C#",
             ContextMenuStrip = menu,
             Visible = true
         };
+        _iconReady = false;
         _icon.DoubleClick += (_, _) => OpenApp();
         _poll.Tick += async (_, _) => await RefreshAsync();
         _poll.Start();
@@ -215,8 +220,40 @@ internal sealed class TrayApplication : ApplicationContext
         _status.Text = text;
         _start.Enabled = !_busy && !healthy;
         _stop.Enabled = !_busy && _server is { HasExited: false };
+        if (_iconReady != healthy)
+        {
+            var previous = _icon.Icon;
+            _icon.Icon = CreateStatusIcon(healthy);
+            _iconReady = healthy;
+            previous?.Dispose();
+        }
         _icon.Text = healthy ? "Audit Platform C# — running" : "Audit Platform C# — stopped";
     }
+
+    private static Icon CreateStatusIcon(bool ready)
+    {
+        using var bitmap = new Bitmap(16, 16);
+        using (var graphics = Graphics.FromImage(bitmap))
+        using (var brush = new SolidBrush(ready ? Color.ForestGreen : Color.Gray))
+        using (var border = new Pen(Color.White, 1))
+        {
+            graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            graphics.Clear(Color.Transparent);
+            graphics.FillEllipse(brush, 1, 1, 14, 14);
+            graphics.DrawEllipse(border, 1, 1, 14, 14);
+        }
+
+        var handle = bitmap.GetHicon();
+        try
+        {
+            using var temporary = Icon.FromHandle(handle);
+            return (Icon)temporary.Clone();
+        }
+        finally { _ = DestroyIcon(handle); }
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool DestroyIcon(IntPtr handle);
 
     private static void OpenApp()
     {

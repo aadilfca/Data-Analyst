@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- dotnet-uploader/ → Default-off C# APIs/jobs and local operations; empty-schema bootstrap, restricted core grants, and guarded adoption/setup tools. See CHANGELOG_ARCHIVE.md.
+- dotnet-uploader/ → Default-off C# APIs/jobs; guarded schema, workspace definitions, restricted core/upload grant plans, and setup tools. See CHANGELOG_ARCHIVE.md.
 - dotnet-uploader/src/AuditPlatform.Api/Verification/VerificationEvidenceService.cs → Scoped evidence links, Form/Physical Bill modal support, procedure checks, and observation persistence. See CHANGELOG_ARCHIVE.md.
 
 - routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, statements, category-role notes with unallocated rows, profit links, reconciliations, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
@@ -274,7 +274,8 @@ One line per file group: what it is now. Full build history for every entry live
 - 2026-11-20: Added guarded Supabase template adoption preview/apply; migrations `0010` and `0024` remain gated. See C# Supabase template adoption preview and guarded apply.
 - 2026-11-20: Added guarded C# first-run setup for an admin, workspace, and blank client; database execution remains separately approved. See CHANGELOG_ARCHIVE.md.
 - 2026-11-20: Added preview-first reusable C# Columns/Templates transfer; client and transaction data remain excluded, and apply stays separately gated. See CHANGELOG_ARCHIVE.md.
-- 2026-11-20: Aligned C# base indexes, prepared restricted grants, and documented passwordless runtime-role setup; grants remain unapplied. See C# empty-schema foundation and core grants.
+- 2026-11-21: Applied restricted C# upload grants; optional evidence stays guarded, and in-app membership/client changes serialize with uploads. Import acceptance remains open.
+- 2026-11-21: Added green/gray C# tray readiness and rebuilt upload assets; local server acceptance remains blocked by database readiness.
 - 2026-11-19: Added an off-by-default, test-project-bound purge option for template-linked Verification records and evidence. See CHANGELOG_ARCHIVE.md.
 - 2026-11-19: C# Users, Columns and Templates reads avoid write-level locks; native definition writes have separate off-by-default gates. See CHANGELOG_ARCHIVE.md.
 - 2026-11-19: C# tab-return workspace checks reuse a successful validation for 15 seconds. See CHANGELOG_ARCHIVE.md, C# tab-return workspace validation cooldown.
@@ -345,11 +346,7 @@ One line per file group: what it is now. Full build history for every entry live
 - 2026-10-21: C6 verifies Cashflow outputs with independent boundary, carry, role, correction and screen/export controls. See CHANGELOG_ARCHIVE.md, Independent Cashflow controls.
 - 2026-10-21: Cashflows reconciles separate Treasury movements, aligns payment subtotal signs and exports complete deductions; locally accepted. See CHANGELOG_ARCHIVE.md.
 - 2026-10-21: Cashflows preserves signed customer/vendor reversals, adds period details and shared export totals; January–June combined reconciliation verified. See CHANGELOG_ARCHIVE.md.
-- 2026-10-20: Client Data preserves source order; Cashflows, Data Bank and ledger uploads gain scoped balances and account search. See CHANGELOG_ARCHIVE.md.
-- 2026-10-20: Uploads add raw-source totals, row-aware issue reports, and public privacy/terms pages. See CHANGELOG_ARCHIVE.md.
-- 2026-10-19: Uploads add ledger roles, expiring validation plans, coverage replacement, correction safeguards, Drive archives and readable issue reports; production branding remains pending. See CHANGELOG_ARCHIVE.md.
-- 2026-10-19: Cashflows moves to canonical Client Data with bounded source fetching, coverage diagnostics, browser caches, exports and isolated experiments. See CHANGELOG_ARCHIVE.md.
-- 2026-09-01–10-12: Database, Reconciliation, Rulebook, Account Sets, Verification, Forms, Cashflows and upload lifecycle foundations advanced. See CHANGELOG_ARCHIVE.md.
+- 2026-09-01–10-20: Consolidated database, uploads, Cashflows, Reconciliation and public-policy foundations. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
