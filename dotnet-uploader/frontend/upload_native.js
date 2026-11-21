@@ -294,10 +294,19 @@
         if (generation !== state.generation) return;
         $('dateFormatPreview').replaceChildren(...(data.samples || []).map(sample => node('span', `Row ${sample.row}: ${cellValue(sample.source)} → ${sample.parsed || sample.error || 'blank'}`)));
         $('dateFormatPreview').style.display = 'flex';
-        $('dateFormatTriggerLabel').textContent = `${$('dateOrderDropdown').value} (${$('dateDelimiterDropdown').value})`;
+        updateDateFormatLabel();
         $('documentDateSuggestion').textContent = data.dateSuggestion?.status === 'await_footing_validation'
             ? 'Validated transaction-date suggestions are available after checking Footing.'
             : `Suggested source dates: ${data.dateSuggestion?.start || 'unavailable'} to ${data.dateSuggestion?.end || 'unavailable'}. Confirm the full report period separately.`;
+    }
+    function updateDateFormatLabel() {
+        const delimiter = $('dateDelimiterDropdown').value;
+        $('dateFormatTriggerLabel').textContent = `${$('dateOrderDropdown').value} (${delimiter || 'none'})`;
+    }
+    function markDatePreviewStale() {
+        const preview = $('dateFormatPreview');
+        preview.replaceChildren(node('span', 'Format changed. Select “Preview dates” to check it.'));
+        preview.style.display = 'flex';
     }
     function showCoverage(output) {
         if (!output) return; state.coverage = output;
@@ -559,6 +568,7 @@
         $('clientSelectionWarning').style.display = 'none';
         ['uploadCoverageStart', 'uploadCoverageEnd'].forEach(id => { $(id).type = 'date'; $(id).removeAttribute('placeholder'); });
         $('dateOrderDropdown').replaceChildren(...['DMY', 'MDY', 'YMD'].map(order => node('option', order, { value: order })));
+        button('nativePreviewDateFormat', 'Preview dates', dates, $('dateFormatPopover'));
         if (!window.AppNativeUpload?.enabled) {
             $('nativeCheckStaging').hidden = true;
             document.querySelectorAll('#mainUploadPage input, #mainUploadPage select, #mainUploadPage button').forEach(el => el.disabled = true);
@@ -591,10 +601,16 @@
         ['dateDelimiterDropdown', 'dateOrderDropdown', 'comparisonModeDropdown', 'sourceControlRow', 'sourceControlConfirmed', 'uploadCoverageStart', 'uploadCoverageEnd', 'uploadConfirmCoverage', 'uploadConfirmEmpty'].forEach(id => {
             $(id).addEventListener('change', () => {
                 invalidate();
+                if (id === 'dateDelimiterDropdown' || id === 'dateOrderDropdown') {
+                    updateDateFormatLabel();
+                    markDatePreviewStale();
+                    controls();
+                    return;
+                }
                 if (id === 'comparisonModeDropdown') { state.excluded.clear(); state.forced.clear(); $('uploadConfirmCoverage').checked = false; $('uploadConfirmEmpty').checked = false; }
                 if (id === 'sourceControlRow') $('sourceControlConfirmed').checked = false;
                 controls();
-                if (state.context && ['dateDelimiterDropdown', 'dateOrderDropdown', 'comparisonModeDropdown'].includes(id)) void guarded($(id), async () => { await rows(); await dates(); });
+                if (state.context && id === 'comparisonModeDropdown') void guarded($(id), async () => { await rows(); await dates(); });
             });
         });
         ['uploadCoverageStart', 'uploadCoverageEnd', 'sourceControlRow'].forEach(id => $(id).addEventListener('input', () => { invalidate(); if (id === 'sourceControlRow') $('sourceControlConfirmed').checked = false; controls(); }));
