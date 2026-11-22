@@ -189,6 +189,40 @@ class PermanentDataDeletionTests(unittest.TestCase):
         preview["counts"]["client_data"] = 4
         self.assertNotEqual(first, storage_cleanup._purge_preview_hash(preview))
 
+    def test_preview_hash_binds_linked_verification_choice_and_counts(self):
+        base = {
+            "scope": {"client_id": 5, "template_id": 1},
+            "upload_ids": [],
+            "counts": {"client_data": 3},
+            "protected": {},
+            "include_linked_verification": False,
+            "linked_verification": {},
+        }
+        ordinary_hash = storage_cleanup._purge_preview_hash(base)
+        reset = {**base, "include_linked_verification": True,
+                 "linked_verification": {"verification_details": 78}}
+        self.assertNotEqual(ordinary_hash, storage_cleanup._purge_preview_hash(reset))
+
+    def test_test_verification_purge_requires_matching_explicit_supabase_ref(self):
+        with patch.dict(os.environ, {
+            "ALLOW_TEST_VERIFICATION_DATA_PURGE": "true",
+            "TEST_DATA_RESET_SUPABASE_PROJECT_REF": "testproject123",
+            "DATABASE_URL": "postgresql://postgres:secret@db.testproject123.supabase.co:5432/postgres",
+        }, clear=False):
+            self.assertTrue(storage_cleanup._test_verification_purge_is_enabled())
+        with patch.dict(os.environ, {
+            "ALLOW_TEST_VERIFICATION_DATA_PURGE": "true",
+            "TEST_DATA_RESET_SUPABASE_PROJECT_REF": "testproject123",
+            "DATABASE_URL": "postgresql://postgres:secret@db.production123.supabase.co:5432/postgres",
+        }, clear=False):
+            self.assertFalse(storage_cleanup._test_verification_purge_is_enabled())
+        with patch.dict(os.environ, {
+            "ALLOW_TEST_VERIFICATION_DATA_PURGE": "true",
+            "TEST_DATA_RESET_SUPABASE_PROJECT_REF": "testproject123",
+            "DATABASE_URL": "postgresql://postgres.testproject123:secret@aws-0-ap-south-1.pooler.supabase.com:6543/postgres",
+        }, clear=False):
+            self.assertTrue(storage_cleanup._test_verification_purge_is_enabled())
+
     def test_apply_rejects_wrong_confirmation_before_reading_preview(self):
         with patch.object(storage_cleanup, "get_client_data_purge_preview") as preview:
             with self.assertRaises(storage_cleanup.CleanupConfirmationError):
@@ -264,12 +298,52 @@ class PermanentDataDeletionTests(unittest.TestCase):
                         sql_text.index("DELETE FROM public.client_data cd"))
         self.assertLess(sql_text.index("DELETE FROM public.client_data cd"), sql_text.index("uploaded_files"))
 
+    def test_test_reset_deletes_only_scoped_verification_children_before_source(self):
+        preview = {
+            "preview_hash": "same",
+            "can_apply": True,
+            "scope": {"client_id": 5, "template_id": 1},
+            "upload_ids": [],
+            "audit_log_ids": [],
+        }
+        transaction = MagicMock()
+        transaction.__enter__.return_value = transaction
+        transaction.__exit__.return_value = False
+        delete_sql = []
+
+        def count(query, params=None):
+            if query.lstrip().startswith("WITH deleted AS"):
+                delete_sql.append(query)
+            return 0
+
+        with patch.dict(os.environ, {"DATABASE_URL": "postgresql://test"}), \
+                patch.object(storage_cleanup, "get_client_data_purge_preview", side_effect=[preview, preview, preview]), \
+                patch.object(storage_cleanup, "_purge_target_uploads", return_value=[]), \
+                patch.object(storage_cleanup, "pg_transaction", return_value=transaction), \
+                patch.object(storage_cleanup, "_count", side_effect=count), \
+                patch.object(storage_cleanup, "execute_query_pg", return_value=[]), \
+                patch.object(storage_cleanup, "execute_write_pg"), \
+                patch.object(storage_cleanup, "_remove_staged_upload_files", return_value=[]):
+            storage_cleanup.apply_client_data_purge(
+                "same", "admin", storage_cleanup.PERMANENT_DATA_DELETE_CONFIRMATION,
+                5, 1, include_linked_verification=True,
+            )
+
+        sql_text = "\n".join(delete_sql)
+        self.assertIn("DELETE FROM public.voucher_line_form_values", sql_text)
+        self.assertIn("DELETE FROM public.voucher_line_form_entries", sql_text)
+        self.assertIn("DELETE FROM public.voucher_check_status", sql_text)
+        self.assertIn("DELETE FROM public.verification_details", sql_text)
+        self.assertLess(sql_text.index("voucher_line_form_values"), sql_text.index("voucher_line_form_entries"))
+        self.assertLess(sql_text.index("voucher_line_form_entries"), sql_text.index("verification_details"))
+        self.assertLess(sql_text.index("verification_details"), sql_text.index("DELETE FROM public.client_data cd"))
+
     def test_preview_route_is_admin_scoped_and_read_only(self):
         expected = {"mode": "permanent_data_delete_dry_run"}
         with patch.object(clients, "get_client_data_purge_preview", return_value=expected) as preview:
-            result = clients.client_data_purge_preview(5, 1, {"role": "admin"})
+            result = clients.client_data_purge_preview(5, 1, session={"role": "admin"})
         self.assertEqual(result, expected)
-        preview.assert_called_once_with(5, 1)
+        preview.assert_called_once_with(5, 1, False)
 
     def test_apply_route_maps_protected_reference_to_conflict(self):
         payload = clients.ClientDataPurgeRequest(
@@ -284,6 +358,18 @@ class PermanentDataDeletionTests(unittest.TestCase):
             with self.assertRaises(HTTPException) as error:
                 clients.client_data_purge(5, payload, {"username": "admin", "role": "admin"})
         self.assertEqual(error.exception.status_code, 409)
+
+    def test_apply_route_forwards_explicit_linked_verification_choice(self):
+        payload = clients.ClientDataPurgeRequest(
+            preview_hash="same",
+            confirmation=storage_cleanup.PERMANENT_DATA_DELETE_CONFIRMATION,
+            template_id=1,
+            include_linked_verification=True,
+        )
+        with patch.object(clients, "apply_client_data_purge", return_value={"ok": True}) as apply:
+            result = clients.client_data_purge(5, payload, {"username": "admin", "role": "admin"})
+        self.assertEqual(result, {"ok": True})
+        self.assertTrue(apply.call_args.kwargs["include_linked_verification"])
 
 
 def test_replacement_purge_blocks_evidence_before_any_delete():

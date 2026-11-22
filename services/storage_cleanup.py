@@ -10,6 +10,7 @@ import json
 import logging
 import os
 from typing import Any, Dict, List
+from urllib.parse import unquote, urlparse
 from psycopg2 import sql
 from services.upload_lifecycle import unbacked_receipt_matches
 
@@ -88,6 +89,7 @@ class CleanupPreviewStaleError(ValueError):
 
 
 PERMANENT_DATA_DELETE_CONFIRMATION = "PERMANENTLY DELETE SELECTED DATA"
+_VOUCHER_ID_FROM_ROW = "COALESCE(cd.row_data->>'Voucher ID', cd.row_data->>'Voucher No', cd.row_data->>'Voucher Number', cd.row_data->>'Voucher')"
 
 
 class DataPurgeProtectedError(ValueError):
@@ -96,6 +98,36 @@ class DataPurgeProtectedError(ValueError):
 
 class DataPurgePreviewStaleError(ValueError):
     """The permanent-data-delete preview no longer matches PostgreSQL."""
+
+
+def _active_supabase_project_ref() -> str | None:
+    """Read the Supabase project ref from a direct or session-pooler DATABASE_URL."""
+    parsed = urlparse(os.environ.get("DATABASE_URL", ""))
+    host = (parsed.hostname or "").lower()
+    if host.startswith("db.") and host.endswith(".supabase.co"):
+        return host[3:].split(".", 1)[0]
+    if host.endswith(".pooler.supabase.com"):
+        user = unquote(parsed.username or "")
+        if user.startswith("postgres."):
+            return user.split(".", 1)[1]
+    return None
+
+
+def _test_verification_purge_is_enabled() -> bool:
+    """Require an explicit opt-in and a project-ref match before deleting linked reviews."""
+    allowed_ref = os.environ.get("TEST_DATA_RESET_SUPABASE_PROJECT_REF", "").strip()
+    return (
+        os.environ.get("ALLOW_TEST_VERIFICATION_DATA_PURGE", "").strip().lower() == "true"
+        and bool(allowed_ref)
+        and _active_supabase_project_ref() == allowed_ref
+    )
+
+
+def _require_test_verification_purge_enabled() -> None:
+    if not _test_verification_purge_is_enabled():
+        raise DataPurgeProtectedError(
+            "Deleting linked Verification data is disabled. It requires an explicit test-project setting that matches the active Supabase project."
+        )
 
 
 class IndexMaintenanceBlockedError(ValueError):
@@ -917,35 +949,145 @@ def finalize_reviewed_template_cleanup(client_id: int, template_id: int, audit_l
             "protected_controls": after, "verification": "passed"}
 
 
-def _purge_protected_counts(client_id: int, template_id: int | None = None) -> Dict[str, int]:
-    predicate, params = _purge_scope_predicate("cd", client_id, template_id)
-    protected = {
+def _linked_verification_counts(client_id: int, template_id: int) -> Dict[str, int]:
+    """Count Verification records that a template-scoped test reset will remove."""
+    target_details = """
+        SELECT vd.id
+        FROM public.verification_details vd
+        JOIN public.client_data cd ON cd.id = vd.client_data_id
+        WHERE cd.client_id = %s AND cd.template_id = %s
+    """
+    refs = """
+        SELECT DISTINCT vd.transaction_ref
+        FROM public.verification_details vd
+        JOIN public.client_data cd ON cd.id = vd.client_data_id
+        WHERE cd.client_id = %s AND cd.template_id = %s
+          AND vd.transaction_ref IS NOT NULL
+    """
+    params = (client_id, template_id)
+    base = {
         "verification_details": _count(
-            f"""
-            SELECT COUNT(*) AS count
-            FROM public.verification_details vd
-            JOIN public.client_data cd ON cd.id = vd.client_data_id
-            WHERE {predicate}
-            """,
-            params,
+            f"SELECT COUNT(*) AS count FROM ({target_details}) scoped", params
         ),
         "voucher_line_documents": _count(
-            f"""
+            f"SELECT COUNT(*) AS count FROM public.voucher_line_documents vld WHERE vld.voucher_line_id IN ({target_details})",
+            params,
+        ),
+        "voucher_line_procedure_checks": _count(
+            f"SELECT COUNT(*) AS count FROM public.voucher_line_procedure_checks c WHERE c.voucher_line_id IN ({target_details})",
+            params,
+        ),
+        "voucher_line_observations": _count(
+            f"SELECT COUNT(*) AS count FROM public.voucher_line_observations o WHERE o.voucher_line_id IN ({target_details})",
+            params,
+        ),
+        "voucher_line_form_entries": _count(
+            f"SELECT COUNT(*) AS count FROM public.voucher_line_form_entries e WHERE e.voucher_line_id IN ({target_details})",
+            params,
+        ),
+        "voucher_line_physical_bills": _count(
+            f"SELECT COUNT(*) AS count FROM public.voucher_line_physical_bills b WHERE b.voucher_line_id IN ({target_details})",
+            params,
+        ),
+        "voucher_line_physical_bill_items": _count(
+            f"SELECT COUNT(*) AS count FROM public.voucher_line_physical_bill_items i JOIN public.voucher_line_physical_bills b ON b.id = i.bill_id WHERE b.voucher_line_id IN ({target_details})",
+            params,
+        ),
+        "voucher_line_form_values": _count(
+            f"SELECT COUNT(*) AS count FROM public.voucher_line_form_values v JOIN public.voucher_line_form_entries e ON e.id = v.entry_id WHERE e.voucher_line_id IN ({target_details})",
+            params,
+        ),
+        "voucher_check_status_to_delete": _count(
+            f"""SELECT COUNT(*) AS count
+                FROM public.voucher_check_status vcs
+                WHERE vcs.client_id = %s AND vcs.transaction_ref IN ({refs})
+                  AND NOT EXISTS (
+                    SELECT 1 FROM public.client_data other_cd
+                    WHERE other_cd.client_id = %s
+                      AND other_cd.template_id <> %s
+                      AND {_VOUCHER_ID_FROM_ROW.replace('cd.', 'other_cd.')} = vcs.transaction_ref
+                  )""",
+            (client_id, client_id, template_id, client_id, template_id),
+        ),
+        "voucher_check_status_retained_for_other_templates": _count(
+            f"""SELECT COUNT(*) AS count
+                FROM public.voucher_check_status vcs
+                WHERE vcs.client_id = %s AND vcs.transaction_ref IN ({refs})
+                  AND EXISTS (
+                    SELECT 1 FROM public.client_data other_cd
+                    WHERE other_cd.client_id = %s
+                      AND other_cd.template_id <> %s
+                      AND {_VOUCHER_ID_FROM_ROW.replace('cd.', 'other_cd.')} = vcs.transaction_ref
+                  )""",
+            (client_id, client_id, template_id, client_id, template_id),
+        ),
+    }
+    return base
+
+
+def _purge_protected_counts(
+    client_id: int,
+    template_id: int | None = None,
+    include_linked_verification: bool = False,
+) -> Dict[str, int]:
+    predicate, params = _purge_scope_predicate("cd", client_id, template_id)
+    if include_linked_verification and template_id is not None:
+        _require_test_verification_purge_enabled()
+        target_details = """
+            SELECT vd.id
+            FROM public.verification_details vd
+            JOIN public.client_data target_cd ON target_cd.id = vd.client_data_id
+            WHERE target_cd.client_id = %s AND target_cd.template_id = %s
+        """
+        # Keep mismatched links protected: the review line must itself belong to this scope.
+        params_for_details = (client_id, template_id)
+        verification_count_sql = "SELECT 0 AS count"
+        verification_count_params = ()
+        document_sql = f"""
             SELECT COUNT(*) AS count
             FROM public.voucher_line_documents vld
             JOIN public.client_data cd ON cd.id = vld.client_data_id
             WHERE {predicate}
-            """,
-            params,
-        ),
-        "physical_bill_items": _count(
-            f"""
+              AND vld.voucher_line_id NOT IN ({target_details})
+        """
+        document_params = (*params, *params_for_details)
+        physical_item_sql = f"""
+            SELECT COUNT(*) AS count
+            FROM public.voucher_line_physical_bill_items item
+            JOIN public.client_data cd ON cd.id = item.source_document_row_id
+            JOIN public.voucher_line_physical_bills bill ON bill.id = item.bill_id
+            WHERE {predicate}
+              AND bill.voucher_line_id NOT IN ({target_details})
+        """
+        physical_item_params = (*params, *params_for_details)
+    else:
+        verification_count_sql = f"""
+            SELECT COUNT(*) AS count
+            FROM public.verification_details vd
+            JOIN public.client_data cd ON cd.id = vd.client_data_id
+            WHERE {predicate}
+        """
+        verification_count_params = params
+        document_sql = f"""
+            SELECT COUNT(*) AS count
+            FROM public.voucher_line_documents vld
+            JOIN public.client_data cd ON cd.id = vld.client_data_id
+            WHERE {predicate}
+        """
+        document_params = params
+        physical_item_sql = f"""
             SELECT COUNT(*) AS count
             FROM public.voucher_line_physical_bill_items item
             JOIN public.client_data cd ON cd.id = item.source_document_row_id
             WHERE {predicate}
-            """,
-            params,
+        """
+        physical_item_params = params
+    protected = {
+        "verification_details": _count(verification_count_sql, verification_count_params),
+        "voucher_line_documents": _count(document_sql, document_params),
+        "physical_bill_items": _count(
+            physical_item_sql,
+            physical_item_params,
         ),
         "prepared_lines": _count(
             f"""
@@ -1039,6 +1181,8 @@ def _purge_preview_hash(preview: Dict[str, Any]) -> str:
         "upload_ids": preview["upload_ids"],
         "counts": preview["counts"],
         "protected": preview["protected"],
+        "include_linked_verification": bool(preview.get("include_linked_verification")),
+        "linked_verification": preview.get("linked_verification", {}),
         "source_fingerprint": preview.get("source_fingerprint"),
         "audit_log_ids": preview.get("audit_log_ids", []),
     }
@@ -1049,6 +1193,7 @@ def _purge_preview_hash(preview: Dict[str, Any]) -> str:
 def get_client_data_purge_preview(
     client_id: int,
     template_id: int | None = None,
+    include_linked_verification: bool = False,
 ) -> Dict[str, Any]:
     """Return a read-only, exact-scope preview for permanent source-data deletion."""
     if not os.environ.get("DATABASE_URL"):
@@ -1065,6 +1210,12 @@ def get_client_data_purge_preview(
         (template_id,),
     ):
         raise ValueError("Template not found")
+    if include_linked_verification:
+        if template_id is None:
+            raise DataPurgeProtectedError(
+                "Linked Verification cleanup must be limited to one template."
+            )
+        _require_test_verification_purge_enabled()
 
     uploads = _purge_target_uploads(client_id, template_id)
     upload_ids = [int(row["id"]) for row in uploads]
@@ -1135,7 +1286,14 @@ def get_client_data_purge_preview(
             ),
         })
 
-    protected = _purge_protected_counts(client_id, template_id)
+    linked_verification = (
+        _linked_verification_counts(client_id, template_id)
+        if include_linked_verification and template_id is not None
+        else {}
+    )
+    protected = _purge_protected_counts(
+        client_id, template_id, include_linked_verification
+    )
     # Counts alone cannot detect a correction made after backup/preview.
     source_fingerprint = _first(
         "SELECT md5(string_agg(cd.id::text || '|' || COALESCE(cd.source_fingerprint, '') || '|' || COALESCE(cd.source_identity, ''), ',' ORDER BY cd.id)) AS fingerprint FROM public.client_data cd WHERE " + predicate,
@@ -1154,11 +1312,17 @@ def get_client_data_purge_preview(
         "staged_file_names": [row["file_name"] for row in uploads],
         "counts": counts,
         "protected": protected,
+        "include_linked_verification": include_linked_verification,
+        "linked_verification": linked_verification,
         "source_fingerprint": source_fingerprint,
         "can_apply": not any(protected.values()),
         "safety": [
             "This preview performs no INSERT, UPDATE, DELETE, or VACUUM operation.",
-            "Any verification, evidence, physical-bill, or prepared-line reference blocks deletion.",
+            (
+                "Linked Verification records are included only in the explicit test-project reset mode; other linked evidence and prepared-line blockers remain protected."
+                if include_linked_verification else
+                "Any verification, evidence, physical-bill, or prepared-line reference blocks deletion."
+            ),
             "The apply operation re-runs this exact preview hash inside a transaction.",
             "Staged source files are removed only after the database transaction commits.",
         ],
@@ -1202,6 +1366,7 @@ def apply_client_data_purge(
     confirmation: str,
     client_id: int,
     template_id: int | None = None,
+    include_linked_verification: bool = False,
 ) -> Dict[str, Any]:
     """Permanently remove one client/template source-data scope after preview approval."""
     if confirmation != PERMANENT_DATA_DELETE_CONFIRMATION:
@@ -1209,7 +1374,9 @@ def apply_client_data_purge(
             f"Type exactly: {PERMANENT_DATA_DELETE_CONFIRMATION}"
         )
 
-    fresh_preview = get_client_data_purge_preview(client_id, template_id)
+    fresh_preview = get_client_data_purge_preview(
+        client_id, template_id, include_linked_verification
+    )
     if preview_hash != fresh_preview["preview_hash"]:
         raise DataPurgePreviewStaleError(
             "The permanent-delete preview is stale. Refresh the preview before applying it."
@@ -1232,10 +1399,19 @@ def apply_client_data_purge(
             "SELECT pg_advisory_xact_lock(hashtext(%s))",
             (f"permanent-data-delete:{client_id}:{template_id or 'all'}",),
         )
+        if include_linked_verification:
+            # These tables are not fully tied to source rows by foreign keys; block
+            # concurrent writers while the fresh preview and exact scoped deletes run.
+            execute_query_pg(
+                "LOCK TABLE public.voucher_check_status, public.voucher_line_form_entries "
+                "IN SHARE ROW EXCLUSIVE MODE"
+            )
         # Protect the preview through deletion, including concurrent FK checks.
         _count("SELECT COUNT(*) AS count FROM (SELECT cd.id FROM public.client_data cd WHERE "
                + predicate + " ORDER BY cd.id FOR UPDATE) locked_source", params)
-        locked_preview = get_client_data_purge_preview(client_id, template_id)
+        locked_preview = get_client_data_purge_preview(
+            client_id, template_id, include_linked_verification
+        )
         if preview_hash != locked_preview["preview_hash"]:
             raise DataPurgePreviewStaleError(
                 "The permanent-delete preview changed while waiting for the deletion lock."
@@ -1245,7 +1421,73 @@ def apply_client_data_purge(
                 "Protected verification or evidence references appeared; deletion was rolled back."
             )
 
-        delete_specs = [
+        delete_specs = []
+        if include_linked_verification:
+            target_details = """
+                SELECT vd.id
+                FROM public.verification_details vd
+                JOIN public.client_data cd ON cd.id = vd.client_data_id
+                WHERE cd.client_id = %s AND cd.template_id = %s
+            """
+            details_params = (client_id, template_id)
+            delete_specs.extend([
+                ("voucher_line_form_values", f"""
+                    DELETE FROM public.voucher_line_form_values v
+                    WHERE v.entry_id IN (
+                        SELECT e.id FROM public.voucher_line_form_entries e
+                        WHERE e.voucher_line_id IN ({target_details})
+                    )
+                """),
+                ("voucher_line_form_entries", f"""
+                    DELETE FROM public.voucher_line_form_entries e
+                    WHERE e.voucher_line_id IN ({target_details})
+                """),
+                ("voucher_line_observations", f"""
+                    DELETE FROM public.voucher_line_observations o
+                    WHERE o.voucher_line_id IN ({target_details})
+                """),
+                ("voucher_line_procedure_checks", f"""
+                    DELETE FROM public.voucher_line_procedure_checks c
+                    WHERE c.voucher_line_id IN ({target_details})
+                """),
+                ("voucher_line_documents", f"""
+                    DELETE FROM public.voucher_line_documents vld
+                    WHERE vld.voucher_line_id IN ({target_details})
+                """),
+                ("voucher_line_physical_bill_items", f"""
+                    DELETE FROM public.voucher_line_physical_bill_items i
+                    WHERE i.bill_id IN (
+                        SELECT b.id FROM public.voucher_line_physical_bills b
+                        WHERE b.voucher_line_id IN ({target_details})
+                    )
+                """),
+                ("voucher_line_physical_bills", f"""
+                    DELETE FROM public.voucher_line_physical_bills b
+                    WHERE b.voucher_line_id IN ({target_details})
+                """),
+                ("voucher_check_status", f"""
+                    DELETE FROM public.voucher_check_status vcs
+                    WHERE vcs.client_id = %s
+                      AND vcs.transaction_ref IN (
+                        SELECT DISTINCT vd.transaction_ref
+                        FROM public.verification_details vd
+                        JOIN public.client_data cd ON cd.id = vd.client_data_id
+                        WHERE cd.client_id = %s AND cd.template_id = %s
+                          AND vd.transaction_ref IS NOT NULL
+                      )
+                      AND NOT EXISTS (
+                        SELECT 1 FROM public.client_data other_cd
+                        WHERE other_cd.client_id = %s
+                          AND other_cd.template_id <> %s
+                          AND {_VOUCHER_ID_FROM_ROW.replace('cd.', 'other_cd.')} = vcs.transaction_ref
+                      )
+                """),
+                ("verification_details", f"""
+                    DELETE FROM public.verification_details vd
+                    WHERE vd.id IN ({target_details})
+                """),
+            ])
+        delete_specs.extend([
             ("cashflow_prepared_lines", f"DELETE FROM public.cashflow_prepared_lines p WHERE {predicate.replace('cd.', 'p.')}"),
             ("cashflow_prepared_rollups", f"DELETE FROM public.cashflow_prepared_rollups p WHERE {predicate.replace('cd.', 'p.')}"),
             ("cash_bank_summary_read_models", f"DELETE FROM public.cash_bank_summary_read_models s WHERE {predicate.replace('cd.', 's.')}"),
@@ -1260,7 +1502,7 @@ def apply_client_data_purge(
             """),
             ("upload_validation_plans", f"DELETE FROM public.upload_validation_plans p WHERE {predicate.replace('cd.', 'p.')}"),
             ("upload_lifecycle_runs", f"DELETE FROM public.upload_lifecycle_runs l WHERE {predicate.replace('cd.', 'l.')}"),
-        ]
+        ])
         if upload_ids:
             delete_specs.append((
                 "verifications",
@@ -1272,7 +1514,22 @@ def apply_client_data_purge(
             ).get("table_name"):
                 deleted_counts[name] = 0
                 continue
-            sql_params = (upload_ids,) if name == "verifications" else params
+            if name == "verifications":
+                sql_params = (upload_ids,)
+            elif name in {
+                "voucher_line_form_values", "voucher_line_form_entries",
+                "voucher_line_observations", "voucher_line_procedure_checks",
+                "voucher_line_documents", "voucher_line_physical_bill_items",
+                "voucher_line_physical_bills", "verification_details",
+            }:
+                sql_params = details_params
+            elif name == "voucher_check_status":
+                sql_params = (
+                    client_id, client_id, template_id, client_id, template_id
+                )
+            else:
+                sql_params = params
+
             deleted_counts[name] = _delete_count(sql.replace("%s", "%s")) if not sql_params else _count(
                 "WITH deleted AS (" + sql.rstrip() + " RETURNING 1) SELECT COUNT(*) AS count FROM deleted",
                 sql_params,
@@ -1327,7 +1584,9 @@ def apply_client_data_purge(
         "scope": fresh_preview["scope"],
         "deleted_counts": deleted_counts,
         "staged_file_cleanup_failures": file_cleanup_failures,
-        "verification": get_client_data_purge_preview(client_id, template_id),
+        "verification": get_client_data_purge_preview(
+            client_id, template_id, include_linked_verification
+        ),
     }
 
 

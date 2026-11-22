@@ -1695,6 +1695,10 @@ async function initClientContext() {
 window.getSelectedClientId = getSelectedClientId;
 window.getSelectedClientName = getSelectedClientName;
 window.getSelectedClientCode = getSelectedClientCode;
+window.refreshSelectedClientContext = async function () {
+    const sessionValid = await loadSessionClient();
+    return sessionValid ? getSelectedClientId() : null;
+};
 window.isClientSelected = isClientSelected;
 window.confirmSwitchClient = confirmSwitchClient;
 window.goToDashboard = goToDashboard;

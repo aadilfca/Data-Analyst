@@ -53,6 +53,7 @@ class ClientDataPurgeRequest(BaseModel):
     preview_hash: str
     confirmation: str
     template_id: Optional[int] = None
+    include_linked_verification: bool = False
 
 # ---------- HELPER ----------
 def row_to_client(row: dict) -> dict:
@@ -176,10 +177,19 @@ def delete_client(client_id: int, session=Depends(require_admin)):
 
 
 @router.get("/api/clients/{client_id}/data-purge-preview")
-def client_data_purge_preview(client_id: int, template_id: Optional[int] = None, session=Depends(require_admin)):
+def client_data_purge_preview(
+    client_id: int,
+    template_id: Optional[int] = None,
+    include_linked_verification: bool = False,
+    session=Depends(require_admin),
+):
     """Return an exact, read-only preview for permanent client-data deletion."""
     try:
-        return get_client_data_purge_preview(client_id, template_id)
+        return get_client_data_purge_preview(
+            client_id, template_id, include_linked_verification
+        )
+    except DataPurgeProtectedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -196,6 +206,7 @@ def client_data_purge(client_id: int, payload: ClientDataPurgeRequest, session=D
             confirmation=payload.confirmation,
             client_id=client_id,
             template_id=payload.template_id,
+            include_linked_verification=payload.include_linked_verification,
         )
     except CleanupConfirmationError as exc:
         raise HTTPException(

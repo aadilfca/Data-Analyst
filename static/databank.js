@@ -337,6 +337,29 @@ const templateDeleteStatus = document.getElementById('templateDeleteStatus');
 const backupAndDeleteTemplateBtn = document.getElementById('backupAndDeleteTemplateBtn');
 const cancelTemplateDeleteBtn = document.getElementById('cancelTemplateDeleteBtn');
 const closeTemplateDeleteBtn = document.getElementById('closeTemplateDeleteBtn');
+let linkedVerificationPurgeCheckbox = null;
+function ensureLinkedVerificationPurgeOption() {
+    if (nativeDataBank || linkedVerificationPurgeCheckbox) return linkedVerificationPurgeCheckbox;
+    const label = document.createElement('label');
+    label.className = 'template-delete-verification-option';
+    label.style.display = 'block';
+    label.style.margin = '12px 0';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.id = 'includeLinkedVerificationPurge';
+    checkbox.style.marginRight = '8px';
+    label.appendChild(checkbox);
+    label.appendChild(document.createTextNode(
+        'Also permanently delete this template’s linked test Verification details and evidence. These are not in the Excel backup; session headers remain.'
+    ));
+    templateDeleteStatus.parentElement.insertBefore(label, templateDeleteStatus);
+    const storageNote = document.createElement('small');
+    storageNote.className = 'template-delete-storage-note';
+    storageNote.textContent = 'Deleting makes database space reusable, but may not immediately reduce Supabase’s displayed database size.';
+    templateDeleteStatus.parentElement.insertBefore(storageNote, templateDeleteStatus);
+    linkedVerificationPurgeCheckbox = checkbox;
+    return checkbox;
+}
 const historyModal = document.getElementById('historyModal');
 const closeHistoryBtn = document.getElementById('closeHistoryBtn');
 const historyTitle = document.getElementById('historyTitle');
@@ -1621,6 +1644,8 @@ function deleteTemplateData(templateId, templateName, triggerTarget = null) {
         triggerTarget,
     };
     templateDeleteTitle.textContent = `Back up and delete ${pendingTemplateDelete.templateName}`;
+    const linkedVerificationOption = ensureLinkedVerificationPurgeOption();
+    if (linkedVerificationOption) linkedVerificationOption.checked = false;
     templateDeleteStatus.textContent = '';
     templateDeleteStatus.style.display = 'none';
     backupAndDeleteTemplateBtn.disabled = false;
@@ -1720,6 +1745,8 @@ async function runTemplateBackupAndDelete() {
     if (nativeDataBank) { await runNativeTemplatePurge(); return; }
     if (!pendingTemplateDelete) return;
     const { clientId, templateId, templateName, triggerTarget } = pendingTemplateDelete;
+    const includeLinkedVerification = !nativeDataBank
+        && !!linkedVerificationPurgeCheckbox?.checked;
     const key = String(templateId);
     if (deleteTemplateInFlight.has(key)) return;
     deleteTemplateInFlight.add(key);
@@ -1733,6 +1760,7 @@ async function runTemplateBackupAndDelete() {
         : null;
     let downloadStarted = false;
     let deletionApplied = false;
+    let linkedVerificationSummary = '';
 
     try {
         templateDeleteStatus.textContent = 'Checking the deletion scope…';
@@ -1741,9 +1769,20 @@ async function runTemplateBackupAndDelete() {
 
         const previewResponse = await fetch(
             `${API_BASE}/api/clients/${clientId}/data-purge-preview?template_id=${templateId}`
+            + (includeLinkedVerification ? '&include_linked_verification=true' : '')
         );
         const preview = await previewResponse.json();
         if (!previewResponse.ok) throw new Error(preview.detail || 'Could not check the deletion scope.');
+        if (includeLinkedVerification) {
+            const linkedSummary = Object.entries(preview.linked_verification || {})
+                .filter(([, count]) => Number(count) > 0)
+                .map(([name, count]) => `${name.replaceAll('_', ' ')}: ${Number(count).toLocaleString()}`)
+                .join(', ');
+            linkedVerificationSummary = linkedSummary
+                ? `The Excel backup does not contain Verification data. This action will also permanently remove: ${linkedSummary}.`
+                : 'The Excel backup does not contain Verification data. No linked Verification records were found.';
+            templateDeleteStatus.textContent = linkedVerificationSummary;
+        }
         if (!preview.can_apply) {
             const protectedItems = Object.entries(preview.protected || {})
                 .filter(([, count]) => Number(count) > 0)
@@ -1752,7 +1791,7 @@ async function runTemplateBackupAndDelete() {
             throw new Error(`Deletion is blocked by linked verification or evidence${protectedItems ? ` (${protectedItems})` : ''}.`);
         }
 
-        templateDeleteStatus.textContent = 'Collecting all current data and changed/deleted history…';
+        templateDeleteStatus.textContent = `${linkedVerificationSummary ? `${linkedVerificationSummary} ` : ''}Collecting all current data and changed/deleted history…`;
         const [current, history] = await Promise.all([
             fetchTemplateBackupRows(clientId, templateId),
             fetchTemplateBackupHistory(clientId, templateId),
@@ -1760,7 +1799,7 @@ async function runTemplateBackupAndDelete() {
         const columns = current.columns.length ? current.columns : history.columns;
         downloadTemplateBackup(templateName, columns, current.rows, history.rows);
         downloadStarted = true;
-        templateDeleteStatus.textContent = 'Backup download started. Deleting the template data…';
+        templateDeleteStatus.textContent = `${linkedVerificationSummary ? `${linkedVerificationSummary} ` : ''}Backup download started. Deleting the template data…`;
         showStatus('⏳ Backup prepared; deleting template data…', 'loading');
         await new Promise((resolve) => window.setTimeout(resolve, 150));
 
@@ -1771,6 +1810,7 @@ async function runTemplateBackupAndDelete() {
                 preview_hash: preview.preview_hash,
                 confirmation: 'PERMANENTLY DELETE SELECTED DATA',
                 template_id: templateId,
+                include_linked_verification: includeLinkedVerification,
             }),
         });
         const result = await response.json();
