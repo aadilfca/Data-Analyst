@@ -29,6 +29,28 @@ public sealed class FinancialStatementCalculationTests
     }
 
     [Fact]
+    public void BalanceSheetMatchesLegacyGoldenAmountsForTheControlledTrialBalance()
+    {
+        // Golden values were captured from Python's build_balance_sheet using this same synthetic source.
+        // Keep them here as data so the C# runtime and tests never call Python.
+        var result=new FinancialStatementCalculationService().Calculate(BalancedSnapshot(),
+            FinancialStatementSection.BalanceSheet,TestContext.Current.CancellationToken);
+
+        Assert.Equal(("90","90"),(Category(result.Statement,1).RawNet,Category(result.Statement,1).Amount));
+        Assert.Equal(("-20","20"),(Category(result.Statement,2).RawNet,Category(result.Statement,2).Amount));
+        Assert.Equal(("-50","70"),(Category(result.Statement,3).RawNet,Category(result.Statement,3).Amount));
+        Assert.Equal("90",result.Statement.Calculations.Single(row=>row.Id==10).Amount);
+        Assert.Equal("90",result.Statement.Calculations.Single(row=>row.Id==11).Amount);
+        Assert.Equal("80",Category(result.Comparative!,1).Amount);
+        Assert.Equal("20",Category(result.Comparative!,2).Amount);
+        Assert.Equal("40",Category(result.Comparative!,3).Amount);
+        Assert.Equal("0",result.ProfitLink!.Difference);
+        Assert.True(result.ProfitLink.Reconciled);
+        Assert.Equal("reconciled",result.TransferReconciliation!.Status);
+        Assert.Equal("0",result.TransferReconciliation.UnexplainedDifference);
+    }
+
+    [Fact]
     public void IncomeStatementUsesCreditPositiveIncomeAndDebitNegativeExpense()
     {
         var result=new FinancialStatementCalculationService().Calculate(BalancedSnapshot(),

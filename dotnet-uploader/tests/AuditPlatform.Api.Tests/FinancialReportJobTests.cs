@@ -56,6 +56,66 @@ public sealed class FinancialReportJobTests
         Assert.Equal("cancelled",(await store.CancelAsync(actor,created.Job.Id,Ct)).Job!.State);
         Assert.Null(await store.DownloadAsync(actor,created.Job.Id,Ct));
         Assert.Equal("not_found",(await store.CancelAsync(actor,Guid.NewGuid(),Ct)).Status);
+
+        var recoveryRequest = request with { RequestId = Guid.NewGuid(), Report = "income_statement" };
+        var recoveryJob = await store.CreateAsync(actor, recoveryRequest, new string('d', 64), Ct);
+        var firstLease = await store.ClaimAsync(Ct);
+        Assert.Equal(recoveryJob.Job!.Id, firstLease!.Job.Id);
+        Assert.Equal(1, firstLease.Job.Attempts);
+        await SetLeaseExpired(connection, firstLease.Job.Id);
+        // A new store represents the service process after restart; persisted work remains discoverable.
+        var restartedStore = new FinancialReportJobStore(
+            new PostgresTransactions(pool, Options.Create(new PostgresOptions())),
+            Options.Create(new FinancialReportJobOptions()));
+        Assert.Equal("preparing_inputs", (await restartedStore.GetAsync(actor, firstLease.Job.Id, Ct)).Job!.State);
+        var reclaimed = await restartedStore.ClaimAsync(Ct);
+        Assert.Equal(firstLease.Job.Id, reclaimed!.Job.Id);
+        Assert.Equal(2, reclaimed.Job.Attempts);
+        await restartedStore.CompleteAsync(reclaimed, [1, 2, 3, 4], "report.xlsx", Ct);
+        await using (var expire = new NpgsqlCommand(
+            "UPDATE public.financial_report_jobs SET expires_at=now()-interval '1 second' WHERE job_id=$1", connection))
+        { expire.Parameters.AddWithValue(reclaimed.Job.Id); await expire.ExecuteNonQueryAsync(Ct); }
+        await store.CleanupAsync(Ct);
+        var expired = await store.GetAsync(actor, reclaimed.Job.Id, Ct);
+        Assert.Equal("expired", expired.Job!.State);
+        Assert.Null(await store.DownloadAsync(actor, reclaimed.Job.Id, Ct));
+
+        var revokedRequest = request with { RequestId = Guid.NewGuid(), Report = "balance_sheet" };
+        var revoked = await store.CreateAsync(actor, revokedRequest, new string('e', 64), Ct);
+        var revokedLease = await store.ClaimAsync(Ct);
+        Assert.Equal(revoked.Job!.Id, revokedLease!.Job.Id);
+        await SetLeaseExpired(connection, revokedLease.Job.Id);
+        await Sql(connection, "UPDATE public.sessions SET expiry=now()-interval '1 second' WHERE token=repeat('a',64)");
+        Assert.Null(await store.ClaimAsync(Ct));
+        Assert.Equal(("failed", "job_session_revoked"), await JobState(connection, revoked.Job.Id));
+
+        await Sql(connection, "UPDATE public.sessions SET expiry=now()+interval '1 hour' WHERE token=repeat('a',64)");
+        var concurrentA = await store.CreateAsync(actor,
+            request with { RequestId = Guid.NewGuid(), Report = "balance_sheet" }, new string('f', 64), Ct);
+        var concurrentB = await store.CreateAsync(actor,
+            request with { RequestId = Guid.NewGuid(), Report = "income_statement" }, new string('1', 64), Ct);
+        var claims = await Task.WhenAll(store.ClaimAsync(Ct), store.ClaimAsync(Ct));
+        Assert.All(claims, lease => Assert.NotNull(lease));
+        Assert.Equal(new[] { concurrentA.Job!.Id, concurrentB.Job!.Id }.Order(),
+            claims.Select(lease => lease!.Job.Id).Order());
+        foreach (var lease in claims) await store.FailAsync(lease!, "acceptance_cleanup", false, Ct);
+    }
+
+    private static async Task SetLeaseExpired(NpgsqlConnection connection, Guid jobId)
+    {
+        await using var command = new NpgsqlCommand(
+            "UPDATE public.financial_report_jobs SET lease_until=now()-interval '1 second' WHERE job_id=$1", connection);
+        command.Parameters.AddWithValue(jobId); await command.ExecuteNonQueryAsync(Ct);
+    }
+
+    private static async Task<(string State, string? Code)> JobState(NpgsqlConnection connection, Guid jobId)
+    {
+        await using var command = new NpgsqlCommand(
+            "SELECT state,code FROM public.financial_report_jobs WHERE job_id=$1", connection);
+        command.Parameters.AddWithValue(jobId);
+        await using var reader = await command.ExecuteReaderAsync(Ct);
+        Assert.True(await reader.ReadAsync(Ct));
+        return (reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1));
     }
 
     private static async Task Sql(NpgsqlConnection connection,string sql)
