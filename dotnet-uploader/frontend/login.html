@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login</title>
+    <link rel="stylesheet" href="/static/style.css?v=76">
+    <link rel="stylesheet" href="/static/public_info.css?v=1">
+    <style>
+        html, body {
+            height: 100%;
+        }
+
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .login-card {
+            background: white;
+            border-radius: 12px;
+            padding: 32px 36px;
+            width: 100%;
+            max-width: 360px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+        }
+
+        .login-card h1 {
+            font-size: 20px;
+            color: #1a1a2e;
+            margin-bottom: 4px;
+        }
+
+        .login-card p.subtitle {
+            font-size: 13px;
+            color: #94a3b8;
+            margin-bottom: 24px;
+        }
+
+        .login-field {
+            margin-bottom: 16px;
+        }
+
+        .login-field label {
+            display: block;
+            font-weight: 600;
+            font-size: 14px;
+            color: #475569;
+            margin-bottom: 6px;
+        }
+
+        .login-field input {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #d0d5dd;
+            border-radius: 6px;
+            font-size: 14px;
+            background: white;
+        }
+
+        .login-submit-btn {
+            width: 100%;
+            padding: 10px 24px;
+            background: #22c55e;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 14px;
+            cursor: pointer;
+            margin-top: 4px;
+        }
+
+        .login-submit-btn:hover {
+            background: #16a34a;
+        }
+
+        .login-submit-btn:disabled {
+            background: #94a3b8;
+            cursor: not-allowed;
+        }
+
+        #loginError {
+            margin-top: 16px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="login-card">
+        <h1>Internal Audit App</h1>
+        <p class="subtitle">Sign in to continue</p>
+
+        <form id="loginForm">
+            <div class="login-field">
+                <label for="usernameInput">Username</label>
+                <input type="text" id="usernameInput" autocomplete="username" required>
+            </div>
+            <div class="login-field">
+                <label for="passwordInput">Password</label>
+                <input type="password" id="passwordInput" autocomplete="current-password" required>
+            </div>
+            <button type="submit" class="login-submit-btn" id="loginSubmitBtn">Log In</button>
+        </form>
+
+        <div id="loginError" class="upload-status error" style="display:none;"></div>
+        <nav class="public-login-links" aria-label="Application information">
+            <a href="/static/app_info.html">About this app</a>
+            <a href="/static/privacy.html">Privacy</a>
+            <a href="/static/terms.html">Terms</a>
+        </nav>
+    </div>
+
+    <script src="/static/loading_ui.js?v=2"></script>
+    <script src="/static/login.js"></script>
+</body>
+
+</html>

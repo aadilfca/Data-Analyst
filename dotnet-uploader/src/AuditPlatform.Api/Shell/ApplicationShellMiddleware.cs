@@ -82,7 +82,10 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
         if (file.Length==0 || file[0]=='.' || file.Any(c=>!char.IsAsciiLetterOrDigit(c) && c is not ('_' or '-' or '.'))
             || extension is not (".html" or ".js" or ".css" or ".svg" or ".png"))
         { context.Response.StatusCode=404; return; }
-        var fullPath=Path.Combine(AppContext.BaseDirectory,shell ? "ShellFrontend" : "ShellStatic",file);
+        var frontendPath=Path.Combine(AppContext.BaseDirectory,"ShellFrontend",file);
+        var fullPath=shell || File.Exists(frontendPath)
+            ? frontendPath
+            : Path.Combine(AppContext.BaseDirectory,"ShellStatic",file);
         if (!File.Exists(fullPath)) { context.Response.StatusCode=404; return; }
         var html=extension==".html";
         var picker=shell && file=="tenant_select.html";

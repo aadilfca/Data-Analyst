@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## C# frontend ownership — shell assets — 2026-11-22
+
+Added C#-owned login/client-selection pages and their shared styles/loading assets under `dotnet-uploader/frontend`. The shell middleware now prefers packaged frontend copies for matching `/static/` requests and retains the packaged legacy fallback for assets not yet migrated. URLs, API calls and shell authorization gates are unchanged. Remaining pages still package from the repository-level `static/` directory; public information pages were not copied because their Google Drive archive claims need review.
+
+Verification: isolated .NET 10 Release API build passed with zero warnings/errors; all seven copied assets match their source SHA-256 hashes; an isolated host served login, shared CSS and the legacy public information page successfully. No authenticated client-selection flow or full browser session was exercised in this phase.
+
 ## C# local PostgreSQL profile — 2026-11-20
 
 Added an explicit `Local`/`Supabase` PostgreSQL profile. Existing `Postgres:ConnectionString` remains the Supabase fallback; Local requires a loopback host and a separate User Secret. `scripts/local-postgres.ps1` safely initializes and manages a private PostgreSQL 17.11 cluster on port 55432, creates a non-superuser runtime role/database, and can switch profiles without changing Supabase credentials. The ignored local folder is ACL-restricted and is never removed by the script.

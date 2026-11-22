@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Select Client</title>
+    <link rel="stylesheet" href="/static/style.css?v=76">
+    <style>
+        /* Standalone page (no client_context.js/navbar — no client is selected yet, which is
+           this page's whole job), same page-specific-style approach as login.html. */
+
+        /* Page padding lives on the two content wrappers below, NOT on body — the header
+           navbar must run flush to the window edges the way it does on every other page,
+           and body padding would inset it. */
+        body {
+            padding: 0;
+        }
+
+        /* 948px = the old 900px content width + the 48px of horizontal padding moved here off
+           body. box-sizing is border-box app-wide (style.css reset), so this keeps the content
+           column exactly as wide as it was before the header was added. */
+        .client-select-header {
+            max-width: 948px;
+            margin: 0 auto 28px;
+            padding: 40px 24px 0;
+        }
+
+        .client-select-header h1 {
+            font-size: 24px;
+            color: #1a1a2e;
+            margin-bottom: 4px;
+        }
+
+        .client-select-header p.subtitle {
+            font-size: 14px;
+            color: #94a3b8;
+            margin-bottom: 20px;
+        }
+
+        #clientSearchInput {
+            width: 100%;
+            max-width: 420px;
+            padding: 10px 14px;
+            border: 1px solid #d0d5dd;
+            border-radius: 8px;
+            font-size: 14px;
+            background: white;
+        }
+
+        .client-select-grid-wrap {
+            max-width: 948px;
+            margin: 0 auto;
+            padding: 0 24px 40px;
+        }
+
+        /* Card content is custom to this page; card shell (.module-card) is reused as-is. */
+        .client-card-avatar {
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            background: #e0f2fe;
+            color: #0369a1;
+            font-size: 22px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 14px;
+        }
+
+        .client-card-code {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 600;
+            background: #f1f5f9;
+            color: #475569;
+            margin-bottom: 8px;
+        }
+
+        .client-select-empty {
+            text-align: center;
+            color: #94a3b8;
+            font-size: 14px;
+            padding: 40px 0;
+        }
+
+        .client-select-workspace-footer {
+            max-width: 948px;
+            margin: 0 auto;
+            padding: 0 24px 24px;
+            display: flex;
+            justify-content: flex-end;
+        }
+
+        .client-select-workspace-footer[hidden] {
+            display: none;
+        }
+
+        .client-select-workspace-footer a {
+            color: #64748b;
+            font-size: 13px;
+            text-decoration: none;
+        }
+
+        .client-select-workspace-footer a:hover {
+            color: #1a1a2e;
+            text-decoration: underline;
+        }
+
+        .client-select-workspace-footer a:focus-visible {
+            outline: 2px solid #0369a1;
+            outline-offset: 3px;
+            border-radius: 2px;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Lightweight header. Uses the SAME shell and CSS classes as the Admin pages' firm-level
+         navbar (settings/users/clients), but is filled by this page's own renderClientSelectHeader()
+         rather than client_context.js's renderFirmLevelNav().
+
+         That is deliberate and must not be "fixed" back: this page cannot load client_context.js at
+         all. initClientContext() runs on DOMContentLoaded, and client_select.html is neither the
+         dashboard nor in FIRM_LEVEL_PAGES - so enforceClientSelection() would alert "please select a
+         client first" and redirect to index.html, bouncing the user off the very page whose job is
+         selecting a client. Only the ~10 lines of markup are local; all styling is the shared
+         .firm-nav-* family in style.css. -->
+    <nav class="navbar firm-navbar">
+        <div class="nav-container" id="clientSelectNav">
+            <!-- Will be rendered by client_select.js -->
+        </div>
+    </nav>
+
+    <div class="client-select-header">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; max-width:900px; margin:0 auto;">
+            <div>
+                <h1>Select a Client</h1>
+                <p class="subtitle">Choose a client to continue to the dashboard.</p>
+            </div>
+            <!-- Admin-only Settings entry point (Admin area, Phase 7 of 8) - hidden until
+                 checkAdminAndShowGear() confirms the session is an admin. -->
+            <button type="button" id="adminSettingsBtn" title="Admin Settings" aria-label="Admin Settings"
+                style="display:none; background:none; border:none; font-size:24px; cursor:pointer; padding:4px;">⚙️</button>
+        </div>
+        <input type="text" id="clientSearchInput" placeholder="Search by name or code">
+    </div>
+
+    <div class="client-select-grid-wrap">
+        <div class="module-grid" id="clientCardGrid"></div>
+        <div class="client-select-empty" id="clientSelectEmpty" style="display:none;">No clients match your search.</div>
+    </div>
+
+    <footer class="client-select-workspace-footer" id="workspaceSwitchFooter" hidden>
+        <a href="/shell/tenant_select.html">Switch workspace</a>
+    </footer>
+
+    <script src="/static/loading_ui.js?v=2"></script>
+    <script src="/static/client_select.js?v=5"></script>
+</body>
+
+</html>
