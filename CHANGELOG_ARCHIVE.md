@@ -1,10 +1,14 @@
 # Changelog Archive
 
+## C# local report and Verification acceptance — 2026-11-22
+
+Expanded local C# acceptance coverage for Cashflows reversals/transfers and net/gross receipts, independent-ledger reconciliation, workbook order/styles/text/size limits, report-job lease recovery/expiry/revocation/concurrent claims, and Verification's default-off and tenant-scoped runtime. The Release test project build passed with zero warnings or errors; the five focused test classes passed 15/15 using disposable local PostgreSQL. No production code, feature switches, migrations, Supabase data, Render resources, or Python rollback files changed.
+
 ## P62 local rehearsal and Supabase isolation — 2026-11-22
 
 Built and ran `audit-platform-csharp:p62` locally as a non-root Linux container. `/health/app-ready`, `/health/ready`, and `/healthz` returned 200; `/` redirected to the login page, its asset returned 200, and anonymous current-client access returned 401. The connected C# Supabase project was already Data API-off. Applied `runtime_api_isolation.sql`; afterward `anon` and `authenticated` had zero public table, sequence, or routine grants, while `audit_platform_runtime` retained its app grants. The Windows app's readiness endpoints returned 200. No Render service, deployment, migration, or user data was changed.
 
-API and tray Release builds passed separately with zero warnings/errors. A full solution build remained unavailable because NuGet access was denied and the running tray executable was locked. Supabase's advisor still reports RLS disabled on 48 tables; with the Data API off and API-role grants removed, do not enable it blindly. Render preview and Aadil's selected-feature acceptance remain open. See P62 — Linux/Render deployment preparation and C# Supabase API access isolation.
+API and tray Release builds passed separately with zero warnings/errors. A full solution build remained unavailable because NuGet access was denied and the running tray executable was locked. Supabase's advisor still reports RLS disabled on 48 tables; with the Data API off and API-role grants removed, do not enable it blindly. Aadil confirmed local feature acceptance; Render hosting is postponed. See P62 — Linux/Render deployment preparation and C# Supabase API access isolation.
 
 ## C# Supabase API access isolation — 2026-11-22
 

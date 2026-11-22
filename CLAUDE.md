@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- dotnet-uploader/ → Gated C# APIs/jobs, owned shell/dashboard, and restricted Supabase API-role grants; other pages use the packaged static fallback. See CHANGELOG_ARCHIVE.md.
+- dotnet-uploader/ → Gated C# APIs/jobs, owned shell/dashboard, acceptance tests and restricted Supabase access; remaining pages use packaged root static fallback. See CHANGELOG_ARCHIVE.md.
 - dotnet-uploader/src/AuditPlatform.Api/Verification/VerificationEvidenceService.cs → Scoped evidence links, Form/Physical Bill modal support, procedure checks, and observation persistence. See CHANGELOG_ARCHIVE.md.
 
 - routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, statements, category-role notes with unallocated rows, profit links, reconciliations, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
@@ -270,7 +270,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
-- 2026-11-22: P62 Linux rehearsal passed and Supabase API-role grants are isolated; Render and manual feature acceptance remain. See P62 local rehearsal and Supabase isolation.
+- 2026-11-22: P62 local readiness, Supabase isolation and Aadil's feature acceptance passed; Render is postponed. See C# local report and Verification acceptance.
 - 2026-11-22: Added the C#-owned dashboard and shared assets; other module pages still use the packaged static fallback. See C# frontend ownership — dashboard.
 - 2026-11-22: Removed C# Python forwarding and bridge ownership switches; Python remains a separate rollback app. See C# bridge retirement.
 - 2026-11-22: Added C#-owned login and client-selection shell assets with an incremental legacy static fallback. See C# frontend ownership.
@@ -279,8 +279,8 @@ One line per file group: what it is now. Full build history for every entry live
 - 2026-11-20–21: Applied migrations `0024`/`0026` and promoted verified legacy template definitions for the C# upload workspace. See CHANGELOG_ARCHIVE.md.
 - 2026-11-20: Added guarded C# first-run setup for an admin, workspace, and blank client; database execution remains separately approved. See CHANGELOG_ARCHIVE.md.
 - 2026-11-20: Added preview-first reusable C# Columns/Templates transfer; client and transaction data remain excluded, and apply stays separately gated. See CHANGELOG_ARCHIVE.md.
-- 2026-11-21: Restricted C# upload grants and identity checks; import receipts now use read-only template snapshots and reject stale definitions. Fresh import acceptance remains pending.
-- 2026-11-21: Added green/gray C# tray readiness and rebuilt upload assets; local server acceptance remains blocked by database readiness.
+- 2026-11-21: Restricted C# upload grants and identity checks; import receipts now use read-only template snapshots and reject stale definitions. See CHANGELOG_ARCHIVE.md.
+- 2026-11-21: Added green/gray C# tray readiness and rebuilt upload assets; local C# readiness passed. See CHANGELOG_ARCHIVE.md.
 - 2026-11-19: Added an off-by-default, test-project-bound purge option for template-linked Verification records and evidence. See CHANGELOG_ARCHIVE.md.
 - 2026-11-19: C# Users, Columns and Templates reads avoid write-level locks; native definition writes have separate off-by-default gates. See CHANGELOG_ARCHIVE.md.
 - 2026-11-19: C# tab-return workspace checks reuse a successful validation for 15 seconds. See CHANGELOG_ARCHIVE.md, C# tab-return workspace validation cooldown.

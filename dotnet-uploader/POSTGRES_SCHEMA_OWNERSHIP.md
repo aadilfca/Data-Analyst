@@ -12,6 +12,8 @@ Existing configured PostgreSQL inspected using the repository venv driver direct
 - `pg_database_size` reports 461,106,323 bytes (461.1 decimal MB). This is not Supabase quota-meter evidence. Confirm provider metering and peak space for additive tables/indexes/backfills; perform no deletion or compaction based on this measurement.
 - The inspected role can create databases/roles and bypass RLS; plan a separately provisioned C# runtime role with reviewed minimum grants. Object-level grants, TLS certificate verification and provider dashboard settings still need acceptance.
 
+The 2026-11-22 C# project review found public API grants for `anon` and `authenticated` across 48 application tables, 30 sequences, and 15 trigger routines. `runtime_api_isolation.sql` removes current access and future `postgres` defaults without changing the restricted runtime grants. `postgres` cannot change `supabase_admin` defaults, so P62 requires the Supabase Data API to stay disabled. RLS remains off until safe runtime-role policies are designed.
+
 ## Schema reconciliation — execution prerequisites
 
 Offline comparison of the captured catalog against all 23 candidates records source checksums privately; this is not an applied-migration ledger. All 44 explicit legacy-column type guards in `0001` match. Native audit metadata is absent apart from existing `error_log.client_id`; retain old rows/IDs and rehearse additive metadata/index creation. The candidates' explicit table prerequisites resolve in numeric order over the existing schema, but dynamic SQL, full definitions, record-dependent checks and runtime access still require restored-database execution.
