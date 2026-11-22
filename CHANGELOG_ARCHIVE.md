@@ -12,6 +12,12 @@ Added C#-owned login/client-selection pages and their shared styles/loading asse
 
 Verification: isolated .NET 10 Release API build passed with zero warnings/errors; all seven copied assets match their source SHA-256 hashes; an isolated host served login, shared CSS and the legacy public information page successfully. No authenticated client-selection flow or full browser session was exercised in this phase.
 
+## C# frontend ownership — dashboard — 2026-11-22
+
+Added C#-owned dashboard HTML/logic and client-context, utility and API utility scripts under `dotnet-uploader/frontend`. Existing package rules and host priority serve these at the same `/static/` URLs; other page assets still use the root static fallback. Routes, links and API gates remain unchanged. Existing stylesheet and loading helper are byte-identical. The copied context describes same-origin C# hosting.
+
+Verification: API and test-project CodexReview builds passed with zero warnings/errors. A separate local host on port 5081 returned HTTP 200 for the dashboard and its six dependencies and served the owned context copy. The focused shell test could not initialize its PostgreSQL fixture because `pg_ctl` timed out; authenticated card click-through was not exercised. No database writes occurred.
+
 ## C# local PostgreSQL profile — 2026-11-20
 
 Added an explicit `Local`/`Supabase` PostgreSQL profile. Existing `Postgres:ConnectionString` remains the Supabase fallback; Local requires a loopback host and a separate User Secret. `scripts/local-postgres.ps1` safely initializes and manages a private PostgreSQL 17.11 cluster on port 55432, creates a non-superuser runtime role/database, and can switch profiles without changing Supabase credentials. The ignored local folder is ACL-restricted and is never removed by the script.

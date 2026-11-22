@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>System Analyst Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css?v=76">
+</head>
+
+<body data-nav-module="Dashboard">
+    <!-- Top Navigation Bar -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <!-- Populated by renderNavLeft() in client_context.js: 🏢 home link + brand text.
+                 No back arrow on the dashboard - there's nothing above it to go back to. -->
+            <div id="navLeft"></div>
+            <div class="nav-client" id="clientControl">
+                <!-- Will be rendered by client_context.js -->
+            </div>
+            <div class="nav-user"></div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="main-container">
+        <!-- Module cards, grouped into three labelled sections (Phase 2 dashboard regrouping).
+             Reuses the .hub-group/.hub-group-title classes built for verification.html's hub —
+             same "labelled groups of module cards" concept, shared styling in style.css.
+             No inline handlers anywhere (Phase 3): navigating cards are wired by id in
+             script.js; only genuinely unavailable cards remain inert via the .coming-soon class. -->
+
+        <!-- Section 1: Audit work -->
+        <div class="hub-group">
+            <h2 class="hub-group-title">Audit work</h2>
+            <div class="module-grid">
+                <!-- Verification: single entry to the verification hub (replaces the former
+                     Cash/Bank card pair — the hub itself is the Cash-vs-Bank chooser now).
+                     Navigation wired in script.js, no inline onclick. -->
+                <div class="module-card" id="verificationCard">
+                    <div class="module-icon">✅</div>
+                    <h3>Verification</h3>
+                    <p>All voucher and process checks</p>
+                    <span class="module-status">Ready</span>
+                </div>
+
+                <!-- Reports -->
+                <div class="module-card" id="reportsCard">
+                    <div class="module-icon">📊</div>
+                    <h3>Reports</h3>
+                    <p>Generate analysis reports</p>
+                    <span class="module-status">Ready</span>
+                </div>
+
+                <!-- Analysis -->
+                <div class="module-card coming-soon">
+                    <div class="module-icon">🔍</div>
+                    <h3>Analysis</h3>
+                    <p>Deep dive analytics</p>
+                    <span class="module-status coming">Coming Soon</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Section 2: Client data -->
+        <div class="hub-group">
+            <h2 class="hub-group-title">Client data</h2>
+            <div class="module-grid">
+                <!-- Upload Client Data (navigation wired in script.js) -->
+                <div class="module-card" id="uploadCard">
+                    <div class="module-icon">📤</div>
+                    <h3>Upload Client Data</h3>
+                    <p>Upload Excel/CSV files</p>
+                    <span class="module-status">Ready</span>
+                </div>
+
+                <!-- Client Data Bank (navigation wired in script.js) -->
+                <div class="module-card" id="dataBankCard">
+                    <div class="module-icon">📊</div>
+                    <h3>Client Data Bank</h3>
+                    <p>View and manage all uploaded data sets</p>
+                    <span class="module-status">Ready</span>
+                </div>
+
+                <!-- Trial Balance (navigation wired in script.js) -->
+                <div class="module-card" id="trialBalanceCard">
+                    <div class="module-icon">🧮</div>
+                    <h3>Trial Balance</h3>
+                    <p>Upload and classify trial balance accounts</p>
+                    <span class="module-status">Ready</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Section 3: Administration — configuration/utility cards. Deliberately quieter
+             styling (.admin-card) and no status badges, per the approved visual hierarchy. -->
+        <div class="hub-group">
+            <h2 class="hub-group-title">Administration</h2>
+            <div class="module-grid">
+                <!-- Setup (navigation wired in script.js) -->
+                <div class="module-card admin-card" id="setupCard">
+                    <div class="module-icon">🔧</div>
+                    <h3>Setup</h3>
+                    <p>Manage columns and templates</p>
+                </div>
+
+                <!-- Manage Clients, Settings, and Users cards removed (Admin area, Phase 8 of 8,
+                     FINAL) - the Admin area (Settings tabs incl. Manage Clients/Manage Users) is
+                     now reached exclusively via the admin-only gear icon on client_select.html,
+                     not from inside a client's own workspace. Routes/pages themselves are
+                     untouched and fully functional, just unlinked from here. -->
+
+                <!-- Audit Log (system activity viewer — a utility, not client audit work) -->
+                <div class="module-card admin-card coming-soon">
+                    <div class="module-icon">📋</div>
+                    <h3>Audit Log</h3>
+                    <p>View system activity</p>
+                </div>
+
+                <!-- Audit Rules (Phase 8 of 9 — activated: links to the completed Documents/
+                     Cross-checks/Categories module at audit_rules.html. Navigation wired in
+                     script.js, no inline onclick. No status badge, matching Setup/Manage Clients. -->
+                <div class="module-card admin-card" id="auditRulesCard">
+                    <div class="module-icon">📋</div>
+                    <h3>Audit Rules</h3>
+                    <p>Define and manage audit rule sets</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Quick Stats Section -->
+        <section class="quick-stats">
+            <h2>📈 Quick Overview</h2>
+            <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));">
+                <div class="stat-card">
+                    <span class="stat-label">Allocated Database Size</span>
+                    <span class="stat-value" id="dbSize">0</span>
+                </div>
+                <a class="stat-card" id="dataIntegrityCard" href="/static/data_integrity.html"
+                    aria-label="Open Data Integrity check"
+                    style="display:flex; flex-direction:column; color:inherit; text-decoration:none; cursor:pointer;">
+                    <span class="stat-label">Data Integrity</span>
+                    <span class="stat-value" id="dataIntegrityStatus" aria-live="polite">Checking</span>
+                </a>
+                <div class="stat-card">
+                    <span class="stat-label">Open Queries</span>
+                    <span class="stat-value" id="openQueries">0</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Verification Progress</span>
+                    <span class="stat-value" id="verificationProgress">0%</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Unresolved Errors</span>
+                    <span class="stat-value" id="unresolvedErrors">0</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Last Upload</span>
+                    <span class="stat-value" id="lastUploadDate" style="font-size:16px;">Never</span>
+                </div>
+                <!-- Overdue Uploads (Phase D2): clickable card toggling the drill-down
+                     panel below, count from GET /api/dashboard/overdue-uploads. -->
+                <div class="stat-card" id="overdueUploadsCard" style="cursor:pointer;">
+                    <span class="stat-label">Overdue Uploads</span>
+                    <span class="stat-value" id="overdueUploadsCount">0</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Overdue Uploads drill-down panel (Phase D2, FINAL) — hidden until the
+             card above is clicked. All-clients list, most-overdue-first (backend-sorted,
+             no client-side re-sort). Row-click-to-jump deferred per brief. -->
+        <section id="overdueUploadsPanel" style="display:none; margin-top:16px;">
+            <div style="background:white; border-radius:16px; overflow:auto; box-shadow:0 2px 8px rgba(0,0,0,0.06);">
+                <table style="width:100%; border-collapse:collapse; font-size:14px;">
+                    <thead>
+                        <tr>
+                            <th style="text-align:left; padding:12px 16px; background:#f8fafc; border-bottom:2px solid #e2e8f0; color:#475569;">Client</th>
+                            <th style="text-align:left; padding:12px 16px; background:#f8fafc; border-bottom:2px solid #e2e8f0; color:#475569;">Template</th>
+                            <th style="text-align:left; padding:12px 16px; background:#f8fafc; border-bottom:2px solid #e2e8f0; color:#475569;">Last Upload</th>
+                            <th style="text-align:left; padding:12px 16px; background:#f8fafc; border-bottom:2px solid #e2e8f0; color:#475569;">Frequency</th>
+                            <th style="text-align:left; padding:12px 16px; background:#f8fafc; border-bottom:2px solid #e2e8f0; color:#475569;">Days Overdue</th>
+                        </tr>
+                    </thead>
+                    <tbody id="overdueUploadsTableBody"></tbody>
+                </table>
+                <div id="overdueUploadsNoData" class="no-data" style="display:none; padding:40px; text-align:center; color:#94a3b8;">
+                    ✅ No overdue uploads.
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <script src="/static/client_context.js?v=30"></script>
+    <script src="/static/utils.js?v=2"></script>
+    <script src="/static/loading_ui.js?v=2"></script>
+    <script src="/static/api_utils.js?v=1"></script>
+    <script src="/static/script.js?v=9"></script>
+</body>
+
+</html>

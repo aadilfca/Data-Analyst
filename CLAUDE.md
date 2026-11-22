@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- dotnet-uploader/ → Gated C# APIs/jobs and owned shell frontend; remaining static assets use a temporary fallback, with no Python request forwarding. See CHANGELOG_ARCHIVE.md.
+- dotnet-uploader/ → Gated C# APIs/jobs and owned login, client-selection, and dashboard frontend; other assets still use the packaged static fallback. See CHANGELOG_ARCHIVE.md.
 - dotnet-uploader/src/AuditPlatform.Api/Verification/VerificationEvidenceService.cs → Scoped evidence links, Form/Physical Bill modal support, procedure checks, and observation persistence. See CHANGELOG_ARCHIVE.md.
 
 - routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, statements, category-role notes with unallocated rows, profit links, reconciliations, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
@@ -270,6 +270,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-22: Added the C#-owned dashboard and shared assets; other module pages still use the packaged static fallback. See C# frontend ownership — dashboard.
 - 2026-11-22: Removed C# Python forwarding and bridge ownership switches; Python remains a separate rollback app. See C# bridge retirement.
 - 2026-11-22: Added C#-owned login and client-selection shell assets with an incremental legacy static fallback. See C# frontend ownership.
 - 2026-11-22: Enabled local C# Data Bank current reads; missing frequency defaults safely and holiday access stays column-limited. History and exports remain off. See CHANGELOG_ARCHIVE.md.
