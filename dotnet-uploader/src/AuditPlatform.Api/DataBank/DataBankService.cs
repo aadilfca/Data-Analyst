@@ -182,6 +182,11 @@ public sealed class DataBankService(PostgresReadSnapshot snapshots, IOptions<Dat
         : bytes < 1073741824 ? (bytes / 1048576d).ToString("F1", CultureInfo.InvariantCulture) + " MB" : (bytes / 1073741824d).ToString("F1", CultureInfo.InvariantCulture) + " GB";
     private static async Task<Dictionary<int, string>> Frequencies(PostgresTransactionContext db, int client, CancellationToken ct)
     {
+        // Upload frequency is optional client metadata. Older/development
+        // schemas may not have the table; Availability already supplies the
+        // established Daily default when this dictionary has no entry.
+        await using (var exists = db.CreateCommand("SELECT to_regclass('public.client_template_upload_frequency') IS NOT NULL"))
+            if (await exists.ExecuteScalarAsync(ct) is not true) return [];
         await using var command = db.CreateCommand("SELECT template_id,frequency FROM public.client_template_upload_frequency WHERE client_id=$1");
         command.Parameters.AddWithValue(client); var result = new Dictionary<int, string>();
         await using var reader = await command.ExecuteReaderAsync(ct); while (await reader.ReadAsync(ct)) result[reader.GetInt32(0)] = reader.GetString(1); return result;

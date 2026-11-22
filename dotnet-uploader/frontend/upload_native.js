@@ -97,7 +97,11 @@
         } finally { clearTimeout(timer); controllers.delete(controller); }
     }
     function requireOk(result) { if (!result.ok) throw new Error(errorText(result.data, result.status)); return result.data; }
-    function query() { return `client_id=${state.client}&template_id=${state.template}`; }
+    function query() {
+        if (!Number.isSafeInteger(state.client) || state.client < 1 || !Number.isSafeInteger(state.template) || state.template < 1)
+            throw new Error('The selected client and template must be confirmed before continuing.');
+        return `client_id=${state.client}&template_id=${state.template}`;
+    }
     function filePath(suffix) { return `/api/upload/file/${state.file}/${suffix}`; }
     function activeJob() { return !!state.handle && (!state.job || !terminal.has(state.job.state)); }
     function invalidate() {
@@ -574,8 +578,20 @@
             document.querySelectorAll('#mainUploadPage input, #mainUploadPage select, #mainUploadPage button').forEach(el => el.disabled = true);
             message('Native uploads are disabled. Continue using the accepted Python application.'); return;
         }
-        if (window.clientContextReady) await window.clientContextReady;
-        state.client = Number(window.getSelectedClientId?.());
+        if (window.clientContextReady) {
+            let timeout;
+            await Promise.race([
+                window.clientContextReady,
+                new Promise(resolve => { timeout = setTimeout(resolve, 10000); })
+            ]);
+            clearTimeout(timeout);
+        }
+        let selectedClientId = window.getSelectedClientId?.();
+        if ((!Number.isSafeInteger(Number(selectedClientId)) || Number(selectedClientId) < 1)
+            && typeof window.refreshSelectedClientContext === 'function') {
+            selectedClientId = await window.refreshSelectedClientContext();
+        }
+        state.client = Number(selectedClientId);
         if (!Number.isSafeInteger(state.client) || state.client < 1) { message('Select a client before uploading.', 'error'); return; }
         $('clientSelectionWarning').style.display = 'none';
         const catalog = requireOk(await request('/api/templates', { maximum: 2097152 }));
