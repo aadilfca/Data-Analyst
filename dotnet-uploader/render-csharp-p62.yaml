@@ -11,7 +11,6 @@ services:
     dockerContext: .
     healthCheckPath: /health/app-ready
     autoDeployTrigger: "off"
-    maxShutdownDelaySeconds: 60
     envVars:
       - key: ASPNETCORE_ENVIRONMENT
         value: Production
