@@ -1,5 +1,19 @@
 # Changelog Archive
 
+## P62 local rehearsal and Supabase isolation — 2026-11-22
+
+Built and ran `audit-platform-csharp:p62` locally as a non-root Linux container. `/health/app-ready`, `/health/ready`, and `/healthz` returned 200; `/` redirected to the login page, its asset returned 200, and anonymous current-client access returned 401. The connected C# Supabase project was already Data API-off. Applied `runtime_api_isolation.sql`; afterward `anon` and `authenticated` had zero public table, sequence, or routine grants, while `audit_platform_runtime` retained its app grants. The Windows app's readiness endpoints returned 200. No Render service, deployment, migration, or user data was changed.
+
+API and tray Release builds passed separately with zero warnings/errors. A full solution build remained unavailable because NuGet access was denied and the running tray executable was locked. Supabase's advisor still reports RLS disabled on 48 tables; with the Data API off and API-role grants removed, do not enable it blindly. Render preview and Aadil's selected-feature acceptance remain open. See P62 — Linux/Render deployment preparation and C# Supabase API access isolation.
+
+## C# Supabase API access isolation — 2026-11-22
+
+Read-only checks of the dedicated C# Supabase project confirmed that `anon` and `authenticated` had full table access on all 48 public application tables, access to 30 sequences, and `EXECUTE` on 15 trigger routines. The restricted `audit_platform_runtime` login is non-superuser, non-inheriting, and cannot bypass RLS. Supabase default ACLs grant new public objects to API roles under both `postgres` and `supabase_admin`; the connected `postgres` role cannot alter `supabase_admin` defaults.
+
+Added `dotnet-uploader/database/permissions/runtime_api_isolation.sql` to revoke current API-role grants, remove `postgres` future table/sequence/routine grants, and revoke PostgreSQL's future routine `PUBLIC EXECUTE` default. It preserves the C# runtime's explicit grants and does not enable RLS. An isolated PostgreSQL 17.11 rehearsal passed existing-object revocation, future-object defaults, runtime-grant preservation, trigger execution, and repeat application. No Supabase SQL, project setting, Render service, or deployment was changed.
+
+P62 remains blocked until the dedicated project's Data API is disabled and a separate approval authorizes applying and verifying this script. Keep the Data API off because `supabase_admin` defaults cannot be changed by the connected owner; do not enable RLS until compatible runtime-role policies are reviewed.
+
 ## C# bridge retirement — 2026-11-22
 
 Removed the C# host's legacy forwarding middleware, route ownership table, access gate, HTTP forwarder, configuration and registrations. Native C# routes remain governed by their own authentication, CSRF and module gates; removed the obsolete route-ownership flags from Audit Rules, Dashboard, Error Log and Verification options. The standalone host test retains health and unmapped-route checks. The separate Python app remains available as rollback until P63 acceptance; the accepted bridge contract remains historical.
