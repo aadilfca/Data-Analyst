@@ -4,7 +4,6 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using AuditPlatform.Api.Authentication;
 using AuditPlatform.Api.Clients;
-using AuditPlatform.Api.Coexistence;
 using AuditPlatform.Api.Configuration;
 using AuditPlatform.Api.Data;
 using AuditPlatform.Api.Logging;
@@ -84,11 +83,6 @@ public sealed class ApplicationShellTests(PostgresFixture fixture) : IClassFixtu
         Assert.True(await service.SelectAsync(initial,101,choices.ContextKey!,Token));
         var inA=(await store.FindAsync(initial.Token,Token))!;
         Assert.Equal(101,inA.TenantId); Assert.Null(inA.ClientId); Assert.Equal(1,inA.ContextVersion);
-        var gate=new SessionCoexistenceGate(Options.Create(new AuthenticationOptions {Enabled=true}),
-            Options.Create(new ApplicationShellOptions {Enabled=true}));
-        var context=new DefaultHttpContext(); context.Items[typeof(VerifiedSession)]=inA with {Role="admin"};
-        Assert.Equal(CoexistenceAccessDecision.Forbidden,await gate.AuthorizeAsync(context,
-            new CoexistenceRoute("legacy-admin","GET","/api/legacy",CoexistenceOwner.Legacy,CoexistenceAccess.Administrator),Token));
         var users=new TenantUserService(tx,audit);
         var clients=new TenantClientService(tx,audit);
         Assert.Equal(101,(await users.ResolveSoleTenantAsync(inA,Token)).TenantId);

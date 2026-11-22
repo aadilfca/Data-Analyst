@@ -9,7 +9,7 @@ namespace AuditPlatform.Api.Controllers;
 
 [Route("api/audit-rules")]
 public sealed class AuditRulesController(AuditRuleService service, IOptions<AuditRulesOptions> options,
-    IOptions<CoexistenceOptions> coexistence, IOptions<ApplicationShellOptions> applicationShell) : ControllerBase
+    IOptions<ApplicationShellOptions> applicationShell) : ControllerBase
 {
     private VerifiedSession? Session => HttpContext.Items[typeof(VerifiedSession)] as VerifiedSession;
 
@@ -202,8 +202,7 @@ public sealed class AuditRulesController(AuditRuleService service, IOptions<Audi
     private async Task<IActionResult> Run(Task<AuditRuleResult> operation)
     {
         Response.Headers.CacheControl = "no-store";
-        if (!options.Value.Enabled || !options.Value.RouteOwnershipEnabled || !options.Value.Valid()
-            || !coexistence.Value.Enabled || !applicationShell.Value.Enabled)
+        if (!options.Value.Enabled || !options.Value.Valid() || !applicationShell.Value.Enabled)
             return StatusCode(503, new { detail = "Audit Rules are unavailable" });
         if (Session is null) return Unauthorized(new { detail = "Not authenticated" });
         var result = await operation;

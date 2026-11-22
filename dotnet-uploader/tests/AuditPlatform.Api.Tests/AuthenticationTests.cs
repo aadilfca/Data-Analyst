@@ -3,7 +3,6 @@ using System.Net;
 using System.Net.Http.Json;
 using AuditPlatform.Api.Authentication;
 using AuditPlatform.Api.Configuration;
-using AuditPlatform.Api.Coexistence;
 using AuditPlatform.Api.Data;
 using AuditPlatform.Api.Logging;
 using Microsoft.AspNetCore.Http;
@@ -18,23 +17,6 @@ namespace AuditPlatform.Api.Tests;
 
 public sealed class AuthenticationTests
 {
-    [Fact]
-    public async Task Gate_requires_verified_session_and_blocks_unproven_client_scope()
-    {
-        var gate = new SessionCoexistenceGate(Options.Create(new AuthenticationOptions { Enabled = true }));
-        var context = new DefaultHttpContext();
-        var route = new CoexistenceRoute("test", "GET", "/api/test", CoexistenceOwner.Legacy, CoexistenceAccess.Administrator);
-        Assert.Equal(CoexistenceAccessDecision.Unauthenticated, await gate.AuthorizeAsync(context, route, TestContext.Current.CancellationToken));
-        context.Items[typeof(VerifiedSession)] = new VerifiedSession(new string('a', 64), 7, "User", "analyst",
-            DateTime.UtcNow.AddHours(1), 5, "Client", "C");
-        Assert.Equal(CoexistenceAccessDecision.Forbidden, await gate.AuthorizeAsync(context, route, TestContext.Current.CancellationToken));
-        Assert.Equal(CoexistenceAccessDecision.Forbidden, await gate.AuthorizeAsync(context,
-            route with { Access = CoexistenceAccess.Client }, TestContext.Current.CancellationToken));
-        context.Items[typeof(VerifiedSession)] = new VerifiedSession(new string('a', 64), 7, "Admin", "admin",
-            DateTime.UtcNow.AddHours(1), 5, "Client", "C");
-        Assert.Equal(CoexistenceAccessDecision.Allowed, await gate.AuthorizeAsync(context, route, TestContext.Current.CancellationToken));
-    }
-
     [Theory]
     [InlineData("https://audit.example", true)]
     [InlineData("https://evil.example", false)]
@@ -95,7 +77,7 @@ public sealed class AuthenticationDatabaseTests(PostgresFixture fixture) : IClas
     }
 
     [Fact]
-    public async Task Python_hash_session_compatibility_expiry_deactivation_and_logout()
+    public async Task Bcrypt_compatible_hash_session_expiry_deactivation_and_logout()
     {
         Assert.Equal("invalid", (await store.LoginAsync("synthetic", "wrong", Token)).Result);
         Assert.Equal("invalid", (await store.LoginAsync("missing", "wrong", Token)).Result);

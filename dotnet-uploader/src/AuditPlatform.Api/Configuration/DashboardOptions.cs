@@ -6,7 +6,6 @@ public class DashboardOptions
 {
     public const string SectionName = "Dashboard";
     public bool Enabled { get; set; }
-    public bool RouteOwnershipEnabled { get; set; }
     [Range(1, 60)] public int TimeoutSeconds { get; set; } = 30;
     [Range(1, 8)] public int MaximumConcurrentRequests { get; set; } = 2;
     [Range(4096, 2097152)] public int MaximumResponseBytes { get; set; } = 262144;

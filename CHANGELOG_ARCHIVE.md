@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## C# bridge retirement — 2026-11-22
+
+Removed the C# host's legacy forwarding middleware, route ownership table, access gate, HTTP forwarder, configuration and registrations. Native C# routes remain governed by their own authentication, CSRF and module gates; removed the obsolete route-ownership flags from Audit Rules, Dashboard, Error Log and Verification options. The standalone host test retains health and unmapped-route checks. The separate Python app remains available as rollback until P63 acceptance; the accepted bridge contract remains historical.
+
+Verification: isolated API Release build passed with zero warnings/errors; the standalone host test passed (1/1), and authentication checks passed (9/9). Full-solution build could not complete because NuGet access was blocked and the tray held its executable. The serial suite was stopped after repeated local `pg_ctl` fixture failures; four separate Upload configuration/auth status assertions also failed, so a full-suite pass is not established.
+
 ## C# frontend ownership — shell assets — 2026-11-22
 
 Added C#-owned login/client-selection pages and their shared styles/loading assets under `dotnet-uploader/frontend`. The shell middleware now prefers packaged frontend copies for matching `/static/` requests and retains the packaged legacy fallback for assets not yet migrated. URLs, API calls and shell authorization gates are unchanged. Remaining pages still package from the repository-level `static/` directory; public information pages were not copied because their Google Drive archive claims need review.
